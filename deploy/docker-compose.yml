@@ -1,8 +1,19 @@
 version: "3.8"
 
 services:
-  # 关系数据库 + 业务后端数据持久化
-  # 生产环境建议替换为 PostgreSQL
+  postgres:
+    image: postgres:16-alpine
+    container_name: rsdp-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: rsdp
+      POSTGRES_USER: rsdp
+      POSTGRES_PASSWORD: rsdp
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../database/init_db_postgresql.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ../database/seed_data_postgresql.sql:/docker-entrypoint-initdb.d/02-seed.sql
 
   ollama:
     image: ollama/ollama:latest
@@ -61,6 +72,11 @@ services:
       - "8080:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=prod
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=rsdp
+      - DB_USERNAME=rsdp
+      - DB_PASSWORD=rsdp
       - OLLAMA_URL=http://ollama:11434
       - CHROMADB_URL=http://chromadb:8000
       - REDIS_HOST=redis
@@ -68,6 +84,7 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
     depends_on:
+      - postgres
       - ollama
       - chromadb
       - redis
@@ -98,6 +115,7 @@ services:
       - web
 
 volumes:
+  postgres-data:
   ollama-models:
   chroma-data:
   redis-data:

@@ -1,7 +1,9 @@
 spring:
   datasource:
-    driver-class-name: org.sqlite.JDBC
-    url: jdbc:sqlite:/data/rsdp.db?journal_mode=WAL
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:rsdp}
+    username: ${DB_USERNAME:rsdp}
+    password: ${DB_PASSWORD:rsdp}
   data:
     redis:
       host: ${REDIS_HOST:redis}
