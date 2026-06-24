@@ -97,8 +97,8 @@ services:
       context: ../web
       dockerfile: Dockerfile
     container_name: rsdp-web
-    ports:
-      - "80:80"
+    expose:
+      - "80"
     depends_on:
       - server
 
