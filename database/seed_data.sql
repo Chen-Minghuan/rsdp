@@ -77,3 +77,33 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('review_status', '已确认', '已确认', 2),
 ('review_status', '存疑', '存疑', 3)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 尺寸码
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('size', 'S', '小号', 1),
+('size', 'M', '中号', 2),
+('size', 'L', '大号', 3),
+('size', 'SINGLE', '单人位', 4),
+('size', 'DOUBLE', '双人位', 5),
+('size', 'TRIPLE', '三人位', 6)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 颜色码
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('color', 'CARAMEL', '焦糖棕', 1),
+('color', 'BEIGE', '米白', 2),
+('color', 'NATURAL', '原木色', 3),
+('color', 'BLACK', '黑色', 4),
+('color', 'GRAY', '灰色', 5),
+('color', 'NAVY', '藏青', 6)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 场景标签
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('scene', 'LIVING', '客厅', 1),
+('scene', 'STUDY', '书房', 2),
+('scene', 'BEDROOM', '卧室', 3),
+('scene', 'CAFE', '咖啡厅', 4),
+('scene', 'OFFICE', '办公室', 5),
+('scene', 'HOTEL', '酒店', 6)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
