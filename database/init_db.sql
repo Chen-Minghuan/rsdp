@@ -31,6 +31,26 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     deleted_at TIMESTAMP
 );
 
+-- 工厂档案表
+CREATE TABLE IF NOT EXISTS factory_master (
+    factory_code VARCHAR(16) PRIMARY KEY,
+    factory_name VARCHAR(128) NOT NULL,
+    factory_level VARCHAR(8) NOT NULL,
+    home_commercial_tag VARCHAR(16),
+    certification TEXT,
+    engineering_cases TEXT,
+    region VARCHAR(64),
+    address TEXT,
+    contact_person VARCHAR(64),
+    contact_phone VARCHAR(32),
+    first_audit_date DATE,
+    next_visit_date DATE,
+    notes TEXT,
+    status VARCHAR(16) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
 -- RSKU 供应单元子表
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
@@ -57,26 +77,6 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     updated_at TIMESTAMP,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
-);
-
--- 工厂档案表
-CREATE TABLE IF NOT EXISTS factory_master (
-    factory_code VARCHAR(16) PRIMARY KEY,
-    factory_name VARCHAR(128) NOT NULL,
-    factory_level VARCHAR(8) NOT NULL,
-    home_commercial_tag VARCHAR(16),
-    certification TEXT,
-    engineering_cases TEXT,
-    region VARCHAR(64),
-    address TEXT,
-    contact_person VARCHAR(64),
-    contact_phone VARCHAR(32),
-    first_audit_date DATE,
-    next_visit_date DATE,
-    notes TEXT,
-    status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP
 );
 
 -- 图片资源表
