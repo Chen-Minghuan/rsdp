@@ -1,0 +1,47 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: rsdp-backend
+  profiles:
+    active: dev
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 100MB
+
+# 异步任务线程池
+async:
+  executor:
+    core-pool-size: 4
+    max-pool-size: 16
+    queue-capacity: 100
+    thread-name-prefix: rsdp-task-
+
+# Ollama 本地配置
+ollama:
+  base-url: http://localhost:11434
+  embedding-model: nomic-embed-text
+  vision-model: qwen2.5-vl:7b
+
+# ChromaDB 配置
+chromadb:
+  base-url: http://localhost:8000
+  collection: rsdp_products
+
+# MinIO 配置
+minio:
+  endpoint: http://localhost:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket-name: rsdp
+
+# 价格加密密钥（生产环境请改为强密钥并从环境变量读取）
+encrypt:
+  aes-key: ${AES_KEY:RsdpDefaultKey1234567890123456}
+
+# 日志
+logging:
+  level:
+    com.rsdp: debug
