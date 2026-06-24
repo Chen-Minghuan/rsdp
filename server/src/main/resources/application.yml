@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: rsdp-backend
+    name: rsdp-server
   profiles:
     active: dev
   servlet:

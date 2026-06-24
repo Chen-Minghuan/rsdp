@@ -41,20 +41,20 @@
 
 ```
 .
-├── backend/                  # SpringBoot 后端
+├── server/                   # SpringBoot 后端服务
 │   ├── src/main/java/        # Java 源码
 │   ├── src/main/resources/   # 配置文件
 │   ├── pom.xml               # Maven 配置
 │   └── Dockerfile
-├── frontend/                 # Vue3 前端
+├── web/                      # Vue3 前端应用
 │   ├── src/                  # 源码
 │   ├── package.json          # 依赖
 │   ├── vite.config.ts
 │   └── Dockerfile
-├── docker/                   # Docker 部署配置
+├── deploy/                   # 部署配置（Docker / K8s / CI）
 │   ├── docker-compose.yml
 │   └── nginx/nginx.conf
-├── scripts/                  # 数据库脚本
+├── database/                 # 数据库脚本与迁移
 │   ├── init_db.sql
 │   └── seed_data.sql
 ├── docs/                     # 项目文档
@@ -87,9 +87,9 @@ cd rsdp
 ### 2. 初始化数据库
 
 ```bash
-mkdir -p backend/data
-sqlite3 backend/data/rsdp_dev.db < scripts/init_db.sql
-sqlite3 backend/data/rsdp_dev.db < scripts/seed_data.sql
+mkdir -p server/data
+sqlite3 server/data/rsdp_dev.db < database/init_db.sql
+sqlite3 server/data/rsdp_dev.db < database/seed_data.sql
 ```
 
 ### 3. 启动 Ollama 并拉取模型
@@ -102,14 +102,14 @@ ollama pull nomic-embed-text
 ### 4. 启动后端
 
 ```bash
-cd backend
+cd server
 ./mvnw spring-boot:run
 ```
 
 ### 5. 启动前端
 
 ```bash
-cd frontend
+cd web
 pnpm install
 pnpm dev
 ```
@@ -119,7 +119,7 @@ pnpm dev
 ## Docker 部署
 
 ```bash
-cd docker
+cd deploy
 docker compose up -d
 ```
 

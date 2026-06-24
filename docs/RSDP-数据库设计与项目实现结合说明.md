@@ -830,7 +830,7 @@ private BigDecimal qualityReturnRate;
 ### Q4：字典表数据怎么初始化？
 
 **答**：
-- 作为种子数据写入 `scripts/seed_data.sql`
+- 作为种子数据写入 `database/seed_data.sql`
 - 系统启动时如果字典表为空，自动初始化
 - 管理员可在后台维护
 

@@ -336,7 +336,7 @@ public class RestClientConfig {
 
 ```
 rsdp/
-├── backend-java/                              # SpringBoot 业务主后端
+├── server/                                    # SpringBoot 业务主后端
 │   ├── src/main/java/com/rsdp/
 │   │   ├── RsdpApplication.java              # 启动类
 │   │   │
@@ -458,7 +458,7 @@ rsdp/
 │   └── Dockerfile
 │
 
-├── frontend/                                  # Vue 3 前端
+├── web/                                       # Vue 3 前端
 │   ├── src/
 │   │   ├── main.ts                            # 入口
 │   │   ├── App.vue                            # 根组件（布局壳）
@@ -534,24 +534,23 @@ rsdp/
 │   ├── package.json
 │   └── Dockerfile
 │
-├── docker/
+├── deploy/                                    # 部署配置
 │   ├── docker-compose.yml                     # 全服务编排
-│   ├── nginx/
-│   │   └── nginx.conf                         # Nginx 配置
-│   ├── chromadb/
-│   │   └── Dockerfile                         # ChromaDB 镜像（如有定制）
-│   └── ollama/
-│       └── Dockerfile                         # 预装 Qwen 2.5-VL 7B
+│   └── nginx/
+│       └── nginx.conf                         # Nginx 配置
 │
-├── scripts/
+├── database/                                  # 数据库脚本与迁移
 │   ├── init_db.sql                            # 建表 DDL + 枚举数据 SQL
 │   ├── seed_data.sql                          # 测试种子数据
+│   └── migrations/                            # 后续数据库迁移脚本
+│
+├── ops/                                       # 运维脚本
 │   └── anchor_encode.sh                       # 锚点图批量编码脚本（调用 SpringBoot 批量接口或 Ollama /api/embeddings）
 │
 ├── .github/
 │   └── workflows/
-│       ├── backend-java-ci.yml                # Java: mvn verify (checkstyle + test)
-│       └── frontend-ci.yml                    # 前端: pnpm lint + pnpm type-check + vitest
+│       ├── server-ci.yml                      # Java: mvn verify (checkstyle + test)
+│       └── web-ci.yml                         # 前端: pnpm lint + pnpm type-check + vitest
 │
 ├── .gitignore
 ├── .pre-commit-config.yaml
@@ -1411,7 +1410,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - frontend_dist:/usr/share/nginx/html:ro
+      - web_dist:/usr/share/nginx/html:ro
     depends_on:
       - springboot
     restart: unless-stopped
@@ -1426,7 +1425,7 @@ services:
   # ═══════════════════════════════════════════
   springboot:
     build:
-      context: ../backend-java
+      context: ../server
       dockerfile: Dockerfile
     container_name: rsdp-api
     ports:
@@ -1544,13 +1543,13 @@ volumes:
   redis_data:
   minio_data:
   product_images:
-  frontend_dist:
+  web_dist:
 ```
 
 ### Nginx 配置
 
 ```nginx
-# docker/nginx/nginx.conf
+# deploy/nginx/nginx.conf
 upstream springboot {
     server springboot:8080;
 }
@@ -1599,7 +1598,7 @@ server {
     </parent>
 
     <groupId>com.rsdp</groupId>
-    <artifactId>rsdp-backend</artifactId>
+    <artifactId>rsdp-server</artifactId>
     <version>1.0.0</version>
     <name>RSDP Backend</name>
 

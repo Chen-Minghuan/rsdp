@@ -1,9 +1,9 @@
 # 编译输出
-backend/target/
-backend/*.jar
-frontend/dist/
-frontend/node_modules/
-frontend/.vite/
+server/target/
+server/*.jar
+web/dist/
+web/node_modules/
+web/.vite/
 
 # 依赖目录
 node_modules/
@@ -19,7 +19,7 @@ node_modules/
 
 # 数据库和上传文件（本地开发数据）
 data/
-backend/data/
+server/data/
 *.db
 *.db-journal
 *.db-wal
@@ -43,7 +43,7 @@ Thumbs.db
 
 # Docker
 .dockerignore
-docker/data/
+deploy/data/
 
 # 测试报告
 coverage/

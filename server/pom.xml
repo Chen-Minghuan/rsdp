@@ -12,10 +12,10 @@
     </parent>
 
     <groupId>com.rsdp</groupId>
-    <artifactId>rsdp-backend</artifactId>
+    <artifactId>rsdp-server</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>rsdp-backend</name>
-    <description>RSDP 多模态家具数据录入平台后端</description>
+    <name>rsdp-server</name>
+    <description>RSDP 多模态家具数据录入平台后端服务</description>
 
     <properties>
         <java.version>21</java.version>

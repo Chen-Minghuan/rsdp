@@ -1,7 +1,7 @@
 {
-  "name": "rsdp-frontend",
+  "name": "rsdp-web",
   "version": "0.0.1",
-  "description": "RSDP 多模态家具数据录入平台前端",
+  "description": "RSDP 多模态家具数据录入平台 Web 前端",
   "type": "module",
   "scripts": {
     "dev": "vite",
