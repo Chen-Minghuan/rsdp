@@ -13,7 +13,7 @@
                                                     │
         ┌───────────────────┬───────────────────────┼───────────────────────┐
         ▼                   ▼                       ▼                       ▼
-    SQLite              ChromaDB                  MinIO                   Redis
+  PostgreSQL          ChromaDB                  MinIO                   Redis
    (元数据)             (向量索引)                (文件存储)               (缓存/任务)
         │                   │
         │    ┌──────────────┘
@@ -30,7 +30,7 @@
 |:---|:-----|
 | 前端 | Vue 3 + TypeScript + Vite + Naive UI + Pinia |
 | 后端 | SpringBoot 3.4 + Java 21 + MyBatis-Plus |
-| 数据库 | PostgreSQL（主数据库）/ SQLite（本地开发可选）|
+| 数据库 | PostgreSQL 16+ |
 | 向量库 | ChromaDB |
 | AI 推理 | Ollama（本地 Qwen 2.5-VL 7B + 嵌入模型）|
 | 文件存储 | MinIO（生产）/ 本地磁盘（开发）|
@@ -54,11 +54,9 @@
 ├── deploy/                   # 部署配置（Docker / K8s / CI）
 │   ├── docker-compose.yml
 │   └── nginx/nginx.conf
-├── database/                 # 数据库脚本与迁移
-│   ├── init_db.sql                 # SQLite 建表脚本（开发可选）
-│   ├── seed_data.sql               # SQLite 种子数据
-│   ├── init_db_postgresql.sql      # PostgreSQL 建表脚本
-│   └── seed_data_postgresql.sql    # PostgreSQL 种子数据
+├── database/                 # 数据库脚本与迁移（PostgreSQL）
+│   ├── init_db.sql           # 建表脚本
+│   └── seed_data.sql         # 种子数据
 ├── docs/                     # 项目文档
 │   ├── RSDP-技术架构方案.md
 │   ├── RSDP-多模态录入数据库设计.md
@@ -75,6 +73,7 @@
 
 - JDK 21+
 - Node.js 20+ + pnpm
+- PostgreSQL 16+
 - Ollama
 - Docker Desktop（可选，用于 ChromaDB/Redis/MinIO）
 - NVIDIA RTX 3060/4060 或更高（推荐，用于加速 AI 推理）
@@ -88,26 +87,26 @@ cd rsdp
 
 ### 2. 初始化数据库
 
-#### 方式 A：SQLite（本地开发，零配置）
-
-```bash
-mkdir -p server/data
-sqlite3 server/data/rsdp_dev.db < database/init_db.sql
-sqlite3 server/data/rsdp_dev.db < database/seed_data.sql
-```
-
-#### 方式 B：PostgreSQL（推荐，与生产环境一致）
+项目使用 **PostgreSQL 16+**。
 
 ```bash
 # 1. 安装 PostgreSQL 16+ 并创建数据库
 createdb -U postgres rsdp
 
 # 2. 执行建表脚本
-psql -U postgres -d rsdp < database/init_db_postgresql.sql
-psql -U postgres -d rsdp < database/seed_data_postgresql.sql
+psql -U postgres -d rsdp < database/init_db.sql
+psql -U postgres -d rsdp < database/seed_data.sql
+```
 
-# 3. 修改 server/src/main/resources/application-dev.yml
-# 注释 SQLite 配置，取消 PostgreSQL 配置的注释
+数据库连接配置在 `server/src/main/resources/application-dev.yml`：
+
+```yaml
+spring:
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://localhost:5432/rsdp
+    username: rsdp
+    password: rsdp
 ```
 
 ### 3. 启动 Ollama 并拉取模型
@@ -143,7 +142,7 @@ cd deploy
 docker compose up -d
 ```
 
-首次启动时，PostgreSQL 会自动执行 `database/init_db_postgresql.sql` 和 `database/seed_data_postgresql.sql` 完成数据库初始化。
+首次启动时，PostgreSQL 会自动执行 `database/init_db.sql` 和 `database/seed_data.sql` 完成数据库初始化。
 
 访问：http://localhost
 

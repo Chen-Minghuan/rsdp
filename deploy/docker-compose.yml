@@ -12,8 +12,8 @@ services:
       POSTGRES_PASSWORD: rsdp
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ../database/init_db_postgresql.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ../database/seed_data_postgresql.sql:/docker-entrypoint-initdb.d/02-seed.sql
+      - ../database/init_db.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ../database/seed_data.sql:/docker-entrypoint-initdb.d/02-seed.sql
 
   ollama:
     image: ollama/ollama:latest

@@ -20,10 +20,6 @@ node_modules/
 # 数据库和上传文件（本地开发数据）
 data/
 server/data/
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
 uploads/
 
 # 日志
