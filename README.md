@@ -66,7 +66,7 @@
 
 ### 环境要求
 
-- JDK 17+（推荐 21）
+- JDK 21 LTS
 - Node.js 20+ + pnpm
 - Maven 3.9+
 - Docker Desktop（可选，用于 PostgreSQL / Ollama / ChromaDB / Redis / MinIO）

@@ -1,7 +1,7 @@
 spring:
   datasource:
     driver-class-name: org.postgresql.Driver
-    url: jdbc:postgresql://localhost:5432/rsdp?currentSchema=public
+    url: jdbc:postgresql://localhost:5433/rsdp?currentSchema=public
     username: ${DB_USERNAME:rsdp}
     password: ${DB_PASSWORD:rsdp}
   data:
