@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     style_vector JSONB,                            -- 512维向量备份：由 SpringBoot 调用 Ollama /api/embeddings 生成
     reference_price_band VARCHAR(16),              -- 参考价格带 low/mid/high
     budget_range JSONB,                            -- 预算区间 [800, 3500]
-    warranty_years INTEGER,                        -- 典型质保年限
+    warranty_years INTEGER,                        -- 款式级典型质保年限
     key_specs JSONB,                               -- 关键规格：框架材质、海绵密度等
     status VARCHAR(16) DEFAULT 'active',           -- active/discontinued/draft
     review_status VARCHAR(16) DEFAULT '待复核',     -- 待复核/已确认/存疑
@@ -59,10 +59,13 @@ CREATE TABLE IF NOT EXISTS rspu_scene (
 );
 
 -- RSPU 变体表（尺寸 × 颜色 × 材质 的具体组合）
+-- 建议变体编码使用无业务含义顺序号，如 {rspu_id}-V001，避免尺寸/材质变化导致编码变更
+-- 可读名称存入 display_name 字段，尺寸/材质等业务属性存入对应字段
 CREATE TABLE IF NOT EXISTS rspu_variant (
-    variant_id VARCHAR(64) PRIMARY KEY,
+    variant_id VARCHAR(64) PRIMARY KEY,            -- 建议格式：{rspu_id}-V001/V002，不嵌入尺寸/材质
     rspu_id VARCHAR(64) NOT NULL,
-    variant_code VARCHAR(32),                      -- 变体编码，如 单人位/S/M/L
+    display_name VARCHAR(128),                     -- 变体显示名称，如"兰卡沙发 2450mm A级布"
+    variant_code VARCHAR(32),                      -- 业务变体编码，如 单人位/S/M/L
     size_code VARCHAR(32),                         -- 尺寸码
     dimensions JSONB,                              -- 具体尺寸 {"w":560,"d":580,"h":780,"unit":"mm"}
     color_code VARCHAR(32),                        -- 颜色码
@@ -97,6 +100,40 @@ CREATE TABLE IF NOT EXISTS factory_master (
     deleted_at TIMESTAMP
 );
 
+-- 工厂仓库表（一个工厂可有多个发货仓库）
+CREATE TABLE IF NOT EXISTS factory_warehouse (
+    warehouse_id VARCHAR(64) PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    warehouse_name VARCHAR(128),
+    province VARCHAR(64),
+    city VARCHAR(64),
+    district VARCHAR(64),
+    address TEXT,
+    contact_person VARCHAR(64),
+    contact_phone VARCHAR(32),
+    is_default BOOLEAN DEFAULT FALSE,
+    status VARCHAR(16) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+
+-- 工厂-变体产能表（记录工厂对某变体的产能能力）
+CREATE TABLE IF NOT EXISTS factory_variant_capacity (
+    factory_code VARCHAR(16) NOT NULL,
+    variant_id VARCHAR(64) NOT NULL,
+    monthly_capacity INTEGER,                      -- 月产能（件）
+    current_booked INTEGER DEFAULT 0,              -- 已占用产能
+    max_batch_size INTEGER,                        -- 单次最大接单量
+    capacity_unit VARCHAR(16) DEFAULT '件',         -- 件 / 套 / 立方米
+    lead_time_batch_days INTEGER,                  -- 大批量额外交期
+    notes TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (factory_code, variant_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
+);
+
 -- RSKU 供应单元子表（工厂对某变体的报价）
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
@@ -109,6 +146,9 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     material_description TEXT,                     -- 工厂提供的详细材质说明
     lead_time_days INTEGER,                        -- 交期
     moq INTEGER,                                   -- 最小起订量
+    warranty_years INTEGER,                        -- 工厂对该变体的质保年限
+    shipping_from VARCHAR(128),                    -- 发货地（省/市，快速展示用）
+    shipping_warehouse_id VARCHAR(64),             -- 关联 factory_warehouse
     structure_strength_rating VARCHAR(32),         -- 家用结构/商用结构/需验证
     flame_retardant_capability VARCHAR(32),        -- 可做有案例/可做无案例/不可做
     factory_photo_path TEXT,                       -- 该厂实拍图路径
@@ -124,7 +164,8 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     deleted_at TIMESTAMP,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id)
 );
 
 -- 价格历史表
@@ -242,10 +283,18 @@ CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);
 CREATE INDEX IF NOT EXISTS idx_variant_material ON rspu_variant(material_code);
 CREATE INDEX IF NOT EXISTS idx_variant_size ON rspu_variant(size_code);
 
+-- 工厂仓库索引
+CREATE INDEX IF NOT EXISTS idx_factory_warehouse_factory ON factory_warehouse(factory_code, status);
+
+-- 工厂产能索引
+CREATE INDEX IF NOT EXISTS idx_capacity_variant ON factory_variant_capacity(variant_id);
+CREATE INDEX IF NOT EXISTS idx_capacity_factory ON factory_variant_capacity(factory_code);
+
 -- RSKU 索引
 CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
+CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code);
 
 -- 价格历史索引

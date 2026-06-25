@@ -7,6 +7,8 @@ DROP TABLE IF EXISTS ai_recognition CASCADE;
 DROP TABLE IF EXISTS image_assets CASCADE;
 DROP TABLE IF EXISTS price_history CASCADE;
 DROP TABLE IF EXISTS rsku_supply CASCADE;
+DROP TABLE IF EXISTS factory_variant_capacity CASCADE;
+DROP TABLE IF EXISTS factory_warehouse CASCADE;
 DROP TABLE IF EXISTS rspu_variant CASCADE;
 DROP TABLE IF EXISTS factory_master CASCADE;
 DROP TABLE IF EXISTS rspu_scene CASCADE;
@@ -76,9 +78,12 @@ CREATE TABLE IF NOT EXISTS rspu_scene (
 );
 
 -- RSPU 变体表
+-- 建议变体编码使用无业务含义顺序号，如 {rspu_id}-V001，避免尺寸/材质变化导致编码变更
+-- 可读名称存入 display_name 字段，尺寸/材质等业务属性存入对应字段
 CREATE TABLE IF NOT EXISTS rspu_variant (
-    variant_id VARCHAR(64) PRIMARY KEY,
+    variant_id VARCHAR(64) PRIMARY KEY,            -- 建议格式：{rspu_id}-V001/V002，不嵌入尺寸/材质
     rspu_id VARCHAR(64) NOT NULL,
+    display_name VARCHAR(128),                     -- 变体显示名称，如"兰卡沙发 2450mm A级布"
     variant_code VARCHAR(32),
     size_code VARCHAR(32),
     dimensions JSONB,
@@ -114,6 +119,40 @@ CREATE TABLE IF NOT EXISTS factory_master (
     deleted_at TIMESTAMP
 );
 
+-- 工厂仓库表
+CREATE TABLE IF NOT EXISTS factory_warehouse (
+    warehouse_id VARCHAR(64) PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    warehouse_name VARCHAR(128),
+    province VARCHAR(64),
+    city VARCHAR(64),
+    district VARCHAR(64),
+    address TEXT,
+    contact_person VARCHAR(64),
+    contact_phone VARCHAR(32),
+    is_default BOOLEAN DEFAULT FALSE,
+    status VARCHAR(16) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+
+-- 工厂-变体产能表
+CREATE TABLE IF NOT EXISTS factory_variant_capacity (
+    factory_code VARCHAR(16) NOT NULL,
+    variant_id VARCHAR(64) NOT NULL,
+    monthly_capacity INTEGER,
+    current_booked INTEGER DEFAULT 0,
+    max_batch_size INTEGER,
+    capacity_unit VARCHAR(16) DEFAULT '件',
+    lead_time_batch_days INTEGER,
+    notes TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (factory_code, variant_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
+);
+
 -- RSKU 供应单元子表
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
@@ -126,6 +165,9 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     material_description TEXT,
     lead_time_days INTEGER,
     moq INTEGER,
+    warranty_years INTEGER,
+    shipping_from VARCHAR(128),
+    shipping_warehouse_id VARCHAR(64),
     structure_strength_rating VARCHAR(32),
     flame_retardant_capability VARCHAR(32),
     factory_photo_path TEXT,
@@ -141,7 +183,8 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     deleted_at TIMESTAMP,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id)
 );
 
 -- 价格历史表
@@ -255,9 +298,14 @@ CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);
 CREATE INDEX IF NOT EXISTS idx_variant_material ON rspu_variant(material_code);
 CREATE INDEX IF NOT EXISTS idx_variant_size ON rspu_variant(size_code);
 
+CREATE INDEX IF NOT EXISTS idx_factory_warehouse_factory ON factory_warehouse(factory_code, status);
+CREATE INDEX IF NOT EXISTS idx_capacity_variant ON factory_variant_capacity(variant_id);
+CREATE INDEX IF NOT EXISTS idx_capacity_factory ON factory_variant_capacity(factory_code);
+
 CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
+CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code);
 
 CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_at);
