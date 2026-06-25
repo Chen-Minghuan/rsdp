@@ -1,6 +1,6 @@
 # RSDP - 家具产品数字化管理平台
 
-> RSDP（Room/Retail Scene Data Platform）是一个基于多模态 AI 的家具产品数据录入与分类平台。
+> RSDP（Retail/Sourcing Data Platform）是一个基于多模态 AI 的家具产品数据录入与分类平台。
 > 核心目标：员工上传产品图片，AI 自动识别款式、风格、六维标签、颜色、材质，并判定是否与已有款式重复。
 
 ## 项目架构
@@ -19,9 +19,9 @@
         │    ┌──────────────┘
         │    │
         ▼    ▼
-   Ollama :11434
-   /api/embeddings  向量编码
-   /api/generate    标签生成 / 同款终审
+   AI 推理服务
+   - MVP：DashScope qwen3-vl-plus
+   - 目标：本地 Ollama
 ```
 
 ## 技术栈
@@ -32,8 +32,8 @@
 | 后端 | SpringBoot 3.4 + Java 21 + MyBatis-Plus |
 | 数据库 | PostgreSQL 16+ |
 | 向量库 | ChromaDB |
-| AI 推理 | Ollama（本地 Qwen 2.5-VL 7B + 嵌入模型）|
-| 文件存储 | MinIO（生产）/ 本地磁盘（开发）|
+| AI 推理 | DashScope `qwen3-vl-plus`（MVP）/ Ollama（目标） |
+| 文件存储 | MinIO（生产）/ 本地磁盘（开发） |
 | 缓存 | Redis |
 | 部署 | Docker Compose |
 
@@ -41,101 +41,38 @@
 
 ```
 .
-├── server/                   # SpringBoot 后端服务
-│   ├── src/main/java/        # Java 源码
-│   ├── src/main/resources/   # 配置文件
-│   ├── pom.xml               # Maven 配置
-│   └── Dockerfile
-├── web/                      # Vue3 前端应用
-│   ├── src/                  # 源码
-│   ├── package.json          # 依赖
-│   ├── vite.config.ts
-│   └── Dockerfile
-├── deploy/                   # 部署配置（Docker / K8s / CI）
-│   ├── docker-compose.yml
-│   └── nginx/nginx.conf
-├── database/                 # 数据库脚本与迁移（PostgreSQL）
-│   ├── init_db.sql           # 建表脚本
-│   └── seed_data.sql         # 种子数据
-├── docs/                     # 项目文档
-│   ├── RSDP-技术架构方案.md
-│   ├── RSDP-多模态录入数据库设计.md
-│   ├── RSDP-数据库设计与项目实现结合说明.md
-│   ├── 双层编码体系.md
-│   └── 双层编码体系-整合分析报告.md
-├── .gitignore
-└── README.md
+├── AGENTS.md                  # 项目级指令（AI 宪法）
+├── .ai-rules                  # AI 协作补充规则
+├── README.md                  # 本文件
+├── Makefile                   # 统一命令入口
+├── KimiCode-大型项目协作指南.md # Kimi Code 大型项目协作指南
+├── server/                    # SpringBoot 后端服务
+├── web/                       # Vue3 前端应用
+├── deploy/                    # Docker Compose / Nginx 部署配置
+├── database/                  # PostgreSQL 脚本
+├── docs/                      # 项目文档（按主题编号）
+│   ├── 01-requirements/       # 需求文档
+│   ├── 02-architecture/       # 架构 / 数据库 / API 设计
+│   ├── 03-guides/             # 开发指南
+│   ├── 04-decisions/          # 决策记录（ADR）
+│   ├── 05-status/             # 当前进度 / 待办事项
+│   ├── 06-reference/          # 业务规则 / 双层编码体系
+│   └── 07-issues/             # 问题排障日志
+├── scripts/                   # 常用脚本（setup / test / backup）
+└── ops/                       # 运维脚本
 ```
 
 ## 快速开始
 
 ### 环境要求
 
-- JDK 21+
+- JDK 17+（推荐 21）
 - Node.js 20+ + pnpm
-- PostgreSQL 16+
-- Ollama
-- Docker Desktop（可选，用于 ChromaDB/Redis/MinIO）
-- NVIDIA RTX 3060/4060 或更高（推荐，用于加速 AI 推理）
+- Maven 3.9+
+- Docker Desktop（可选，用于 PostgreSQL / Ollama / ChromaDB / Redis / MinIO）
+- NVIDIA RTX 3060/4060 或更高（推荐，用于本地 AI 推理加速）
 
-### 1. 克隆仓库
-
-```bash
-git clone https://github.com/your-username/rsdp.git
-cd rsdp
-```
-
-### 2. 初始化数据库
-
-项目使用 **PostgreSQL 16+**。
-
-```bash
-# 1. 安装 PostgreSQL 16+ 并创建数据库
-createdb -U postgres rsdp
-
-# 2. 执行建表脚本
-psql -U postgres -d rsdp < database/init_db.sql
-psql -U postgres -d rsdp < database/seed_data.sql
-```
-
-数据库连接配置在 `server/src/main/resources/application-dev.yml`：
-
-```yaml
-spring:
-  datasource:
-    driver-class-name: org.postgresql.Driver
-    url: jdbc:postgresql://localhost:5432/rsdp
-    username: rsdp
-    password: rsdp
-```
-
-### 3. 启动 Ollama 并拉取模型
-
-```bash
-ollama pull qwen2.5-vl:7b
-ollama pull nomic-embed-text
-```
-
-### 4. 启动后端
-
-```bash
-cd server
-./mvnw spring-boot:run
-```
-
-### 5. 启动前端
-
-```bash
-cd web
-pnpm install
-pnpm dev
-```
-
-访问 http://localhost:5173
-
-## Docker 部署
-
-Docker Compose 已内置 PostgreSQL、Ollama、ChromaDB、Redis、MinIO、后端和前端服务。
+### 方式一：Docker Compose 一键启动
 
 ```bash
 cd deploy
@@ -145,6 +82,45 @@ docker compose up -d
 首次启动时，PostgreSQL 会自动执行 `database/init_db.sql` 和 `database/seed_data.sql` 完成数据库初始化。
 
 访问：http://localhost
+
+### 方式二：本地开发（推荐）
+
+```bash
+# 1. 复制环境变量模板并配置 DASHSCOPE_API_KEY
+cp deploy/.env.example deploy/.env
+
+# 2. 启动基础设施 + 初始化数据库
+make dev
+
+# 3. 启动后端
+cd server && mvn spring-boot:run -Dspring-boot.run.profiles=dev
+
+# 4. 启动前端
+cd web && pnpm install && pnpm dev
+```
+
+访问：http://localhost:5173
+
+> 若使用本地 Ollama，请进入容器拉取模型：
+> ```bash
+> docker exec -it rsdp-ollama ollama pull qwen2.5-vl:7b
+> docker exec -it rsdp-ollama ollama pull nomic-embed-text
+> ```
+
+## 常用命令
+
+| 命令 | 说明 |
+|:---|:---|
+| `make help` | 显示所有可用命令 |
+| `make infra` | 启动基础设施容器 |
+| `make init-db` | 初始化数据库 |
+| `make seed` | 导入种子数据 |
+| `make dev` | 启动基础设施 + 初始化数据库 |
+| `make backend` | 启动后端 |
+| `make frontend` | 启动前端开发服务器 |
+| `make test` | 运行全量测试 |
+| `make build` | 构建前后端 |
+| `make clean` | 清理容器与构建产物 |
 
 ## 核心功能
 
@@ -159,16 +135,22 @@ docker compose up -d
 
 详见 `docs/` 目录：
 
-- [RSDP-技术架构方案.md](docs/RSDP-技术架构方案.md)
-- [RSDP-多模态录入数据库设计.md](docs/RSDP-多模态录入数据库设计.md)
-- [RSDP-数据库设计与项目实现结合说明.md](docs/RSDP-数据库设计与项目实现结合说明.md)
-- [双层编码体系.md](docs/双层编码体系.md)
-- [双层编码体系-整合分析报告.md](docs/双层编码体系-整合分析报告.md)
+- [整体架构](docs/02-architecture/整体架构.md)
+- [数据库设计](docs/02-architecture/数据库设计.md)
+- [数据库实现说明](docs/02-architecture/数据库实现说明.md)
+- [API 设计](docs/02-architecture/API设计.md)
+- [本地开发环境搭建](docs/03-guides/本地开发环境搭建.md)
+- [编码规范](docs/03-guides/编码规范.md)
+- [测试指南](docs/03-guides/测试指南.md)
+- [当前进度](docs/05-status/当前进度.md)
+- [待办事项](docs/05-status/待办事项.md)
+- [业务规则说明](docs/06-reference/业务规则说明.md)
+- [双层编码体系](docs/06-reference/双层编码体系.md)
 
 ## 开发路线
 
 1. ✅ 项目骨架 + 数据库设计
-2. 🔄 图片上传 + AI 识别（Ollama）
+2. 🔄 图片上传 + AI 识别（DashScope → Ollama）
 3. ⏳ 人工复核 + RSPU/RSKU 录入
 4. ⏳ 同款判定 + 向量检索
 5. ⏳ 工厂报价 + 比价

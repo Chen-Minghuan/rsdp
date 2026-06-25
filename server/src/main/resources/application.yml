@@ -1,6 +1,8 @@
 spring:
   application:
     name: rsdp-server
+  profiles:
+    active: dev
   servlet:
     multipart:
       max-file-size: 20MB

@@ -80,7 +80,7 @@ public class ProductService {
         imageAsset.setRspuId(rspuId);
         imageAsset.setImageType("white_bg");
         imageAsset.setStoragePath(filePath.toString().replace("\\", "/"));
-        imageAsset.setIsPrimary(true);
+        imageAsset.setPrimary(true);
         imageAsset.setAiProcessed(false);
         imageAsset.setUploadedBy("admin");
         imageAsset.setCreatedAt(LocalDateTime.now());
