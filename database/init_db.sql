@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
     six_dim_tags JSONB,                            -- 六维标签 JSON：{"A":"A字架形","B":"编织镂空",...}
     style_vector JSONB,                            -- 512维向量备份：由 SpringBoot 调用 Ollama /api/embeddings 生成
+    color_primary_name VARCHAR(64),                -- AI识别主色名称
+    color_primary_hsv JSONB,                       -- AI识别主色HSV值 [H,S,V]
+    color_secondary VARCHAR(64),                   -- AI识别辅色名称
+    material_tags JSONB,                           -- AI识别材质标签
+    scene_tags JSONB,                              -- AI识别适用场景标签
     reference_price_band VARCHAR(16),              -- 参考价格带 low/mid/high
     budget_range JSONB,                            -- 预算区间 [800, 3500]
     warranty_years INTEGER,                        -- 款式级典型质保年限
