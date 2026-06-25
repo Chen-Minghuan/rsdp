@@ -12,12 +12,10 @@
 
 ```
 POST   /api/v1/products/entry
-       # 新品录入（异步）
+       # 新品录入
        # Request:  multipart/form-data
        #   image: File (必填, ≤20MB, jpg/png/webp)
-       #   category_code: String (必填, FS/SF/TB/...)
-       #   style_override: String (可选, 人工指定风格，跳过AI判定)
-       # Response: { taskId: "task-abc123", status: "processing" }
+       # Response: { rspuId, taskId, message, records[] }
 
 GET    /api/v1/products/entry/{taskId}
        # 查询录入任务进度
