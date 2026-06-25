@@ -29,7 +29,7 @@ password: ${POSTGRES_PASSWORD:rsdp}
 
 Spring Boot 优先读取环境变量，若环境变量为 `123456`，则实际连接密码为 `123456`，而数据库中 `rsdp` 用户密码可能仍为 `rsdp`，导致不匹配。
 
-从 Windows 宿主机通过 `localhost:5432` 连接 Docker 容器中的 PostgreSQL 时，源 IP 为 Docker 网桥地址（如 `172.17.0.1`），命中 `pg_hba.conf` 末尾的 `host all all all scram-sha-256` 规则，必须验证密码。
+从 Windows 宿主机通过 `localhost:5433` 连接 Docker 容器中的 PostgreSQL 时，源 IP 为 Docker 网桥地址（如 `172.17.0.1`），命中 `pg_hba.conf` 末尾的 `host all all all scram-sha-256` 规则，必须验证密码。
 
 ---
 

@@ -15,7 +15,7 @@
 ## 二、主技术栈
 
 ### 后端
-- **语言**：Java 17+（推荐 21 LTS）
+- **语言**：Java 21 LTS
 - **框架**：Spring Boot 3.4+
 - **ORM**：MyBatis-Plus 3.5+
 - **数据库**：PostgreSQL 16
