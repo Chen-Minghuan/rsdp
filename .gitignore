@@ -8,6 +8,7 @@ web/.vite/
 # 依赖目录
 node_modules/
 .pnpm-store/
+web/.pnpm-store/
 
 # IDE
 .idea/
@@ -32,6 +33,10 @@ logs/
 .env.*.local
 application-local.yml
 application-local.properties
+
+# 备份与脚本输出
+backups/
+*.dump
 
 # 操作系统文件
 .DS_Store

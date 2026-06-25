@@ -1,5 +1,6 @@
 package com.rsdp.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -21,7 +22,10 @@ public class ImageAssets {
     private Integer width;
     private Integer height;
     private String format;
-    private Boolean isPrimary;
+
+    @TableField(value = "is_primary")
+    private Boolean primary;
+
     private Boolean aiProcessed;
     private Double qualityScore;
     private String uploadedBy;
