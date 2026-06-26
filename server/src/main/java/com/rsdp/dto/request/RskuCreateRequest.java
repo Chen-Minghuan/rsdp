@@ -17,6 +17,7 @@ public class RskuCreateRequest {
     @NotBlank(message = "工厂代码不能为空")
     private String factoryCode;
 
+    @NotBlank(message = "变体 ID 不能为空")
     private String variantId;
     private String factorySku;
 

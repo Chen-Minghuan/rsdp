@@ -1,15 +1,20 @@
 package com.rsdp.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuScene;
+import com.rsdp.entity.RspuStyle;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuSceneMapper;
+import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.service.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.InputStream;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -35,9 +41,12 @@ public class AsyncTaskProcessor {
     private final AsyncTaskMapper asyncTaskMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final AiRecognitionMapper aiRecognitionMapper;
+    private final RspuStyleMapper rspuStyleMapper;
+    private final RspuSceneMapper rspuSceneMapper;
     private final VisionService visionService;
     private final StorageService storageService;
     private final AuditLogService auditLogService;
+    private final DictResolverService dictResolverService;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.ai.model}")
@@ -107,15 +116,21 @@ public class AsyncTaskProcessor {
     private void persistSuccessResult(String taskId, String rspuId, String imageId,
                                         String recognitionId, String modelName,
                                         AiLabels labels, int processingTime) {
+        // 解析风格/场景/材质字典码
+        String styleCode = dictResolverService.resolveCodeByName("style", labels.getStyle());
+        List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
+        List<String> materialCodes = dictResolverService.resolveCodesByNames("material", labels.getMaterialTags());
+
         // 更新 RSPU
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu != null) {
             RspuMaster oldSnapshot = snapshot(rspu);
-            rspu.setPositioningLabel(labels.getStyle());
+            // 优先保存风格码；无法解析时回退保存原始中文名
+            rspu.setPositioningLabel(styleCode != null ? styleCode : labels.getStyle());
             rspu.setSixDimTags(toJson(labels.getSixDimTags()));
             rspu.setColorPrimaryName(labels.getColorPrimaryName());
             rspu.setColorPrimaryHsv(toJson(labels.getColorPrimaryHsv()));
-            rspu.setMaterialTags(toJson(labels.getMaterialTags()));
+            rspu.setMaterialTags(toJson(materialCodes));
             rspu.setSceneTags(toJson(labels.getSceneTags()));
             rspu.setAestheticsConfidence(labels.getConfidence());
             rspu.setSourceAgentVersion(modelName);
@@ -123,6 +138,10 @@ public class AsyncTaskProcessor {
             rspu.setUpdatedAt(LocalDateTime.now());
             rspuMapper.updateById(rspu);
             auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, "admin");
+
+            // 刷新风格/场景关联表
+            refreshStyleAssociations(rspuId, styleCode);
+            refreshSceneAssociations(rspuId, sceneCodes);
         }
 
         // 更新图片为已识别
@@ -151,6 +170,35 @@ public class AsyncTaskProcessor {
         rec.setStatus("success");
         rec.setCreatedAt(LocalDateTime.now());
         aiRecognitionMapper.insert(rec);
+    }
+
+    private void refreshStyleAssociations(String rspuId, String styleCode) {
+        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        if (styleCode == null || styleCode.isBlank()) {
+            return;
+        }
+        RspuStyle style = new RspuStyle();
+        style.setRspuId(rspuId);
+        style.setDictType("style");
+        style.setStyleCode(styleCode);
+        style.setIsPrimary(true);
+        style.setCreatedAt(LocalDateTime.now());
+        rspuStyleMapper.insert(style);
+    }
+
+    private void refreshSceneAssociations(String rspuId, List<String> sceneCodes) {
+        rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
+        if (sceneCodes == null || sceneCodes.isEmpty()) {
+            return;
+        }
+        for (String sceneCode : sceneCodes) {
+            RspuScene scene = new RspuScene();
+            scene.setRspuId(rspuId);
+            scene.setDictType("scene");
+            scene.setSceneCode(sceneCode);
+            scene.setCreatedAt(LocalDateTime.now());
+            rspuSceneMapper.insert(scene);
+        }
     }
 
     private void persistFailureResult(String taskId, String rspuId, String imageId,

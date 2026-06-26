@@ -78,6 +78,46 @@ public class FactoryService {
         auditLogService.logCreate("factory_master", factory.getFactoryCode(), factory, "admin");
     }
 
+    /**
+     * 更新工厂等级，工厂代码保持不变。
+     *
+     * @param factoryCode 工厂代码
+     * @param newLevel    新等级，如 S/A/B/C
+     */
+    public void updateFactoryLevel(String factoryCode, String newLevel) {
+        FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
+        if (factory == null || factory.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
+        }
+        if (newLevel == null || newLevel.isBlank()) {
+            throw new BusinessException("工厂等级不能为空");
+        }
+
+        FactoryMaster oldSnapshot = snapshot(factory);
+        factory.setFactoryLevel(newLevel);
+        factory.setUpdatedAt(LocalDateTime.now());
+        factoryMasterMapper.updateById(factory);
+
+        auditLogService.logUpdate("factory_master", factoryCode, oldSnapshot, factory, "admin");
+    }
+
+    private FactoryMaster snapshot(FactoryMaster source) {
+        FactoryMaster copy = new FactoryMaster();
+        copy.setFactoryCode(source.getFactoryCode());
+        copy.setFactoryName(source.getFactoryName());
+        copy.setFactoryLevel(source.getFactoryLevel());
+        copy.setHomeCommercialTag(source.getHomeCommercialTag());
+        copy.setRegion(source.getRegion());
+        copy.setAddress(source.getAddress());
+        copy.setContactPerson(source.getContactPerson());
+        copy.setContactPhone(source.getContactPhone());
+        copy.setNotes(source.getNotes());
+        copy.setStatus(source.getStatus());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        return copy;
+    }
+
     private FactoryResponse toResponse(FactoryMaster factory) {
         FactoryResponse response = new FactoryResponse();
         response.setFactoryCode(factory.getFactoryCode());

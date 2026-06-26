@@ -10,11 +10,17 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NDataTable,
-  NTag
+  NTag,
+  NModal,
+  NForm,
+  NFormItem,
+  NSelect
 } from 'naive-ui'
-import { getFactory, listRskuByFactory } from '@/api/factory'
+import { getFactory, listRskuByFactory, updateFactoryLevel } from '@/api/factory'
+import { listDicts } from '@/api/dict'
 import type { Factory } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
+import type { DictItem } from '@/types/dict'
 
 const route = useRoute()
 const router = useRouter()
@@ -23,12 +29,19 @@ const factoryCode = route.params.factoryCode as string
 const loading = ref(false)
 const rskuLoading = ref(false)
 const errorMessage = ref('')
+const successMessage = ref('')
 const factory = ref<Factory | null>(null)
 const rskuList = ref<Rsku[]>([])
+
+const showLevelModal = ref(false)
+const submittingLevel = ref(false)
+const newLevel = ref<string | null>(null)
+const levelOptions = ref<DictItem[]>([])
 
 const rskuColumns = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '产品 RSPU', key: 'rspuId', width: 160 },
+  { title: '变体 ID', key: 'variantId', width: 160 },
   { title: '工厂SKU', key: 'factorySku' },
   { title: '出厂价', key: 'factoryPrice', width: 120 },
   { title: '价格带', key: 'priceBand', width: 100 },
@@ -72,6 +85,41 @@ async function loadRskuList() {
   }
 }
 
+async function loadLevels() {
+  try {
+    levelOptions.value = await listDicts('factory_level')
+  } catch (e) {
+    console.error('加载工厂等级字典失败', e)
+  }
+}
+
+function openLevelModal() {
+  newLevel.value = factory.value?.factoryLevel || null
+  showLevelModal.value = true
+}
+
+async function handleUpdateLevel() {
+  if (!newLevel.value) {
+    errorMessage.value = '请选择新等级'
+    return
+  }
+
+  submittingLevel.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await updateFactoryLevel(factoryCode, { factoryLevel: newLevel.value })
+    successMessage.value = '工厂等级更新成功'
+    showLevelModal.value = false
+    await loadFactory()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '更新工厂等级失败'
+  } finally {
+    submittingLevel.value = false
+  }
+}
+
 function handleRskuClick(row: Rsku) {
   router.push(`/products/${row.rspuId}/rsku/${row.rskuId}`)
 }
@@ -79,6 +127,7 @@ function handleRskuClick(row: Rsku) {
 onMounted(() => {
   loadFactory()
   loadRskuList()
+  loadLevels()
 })
 </script>
 
@@ -92,6 +141,10 @@ onMounted(() => {
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
           {{ errorMessage }}
+        </n-alert>
+
+        <n-alert v-if="successMessage" type="success" :show-icon="true">
+          {{ successMessage }}
         </n-alert>
 
         <n-spin v-if="loading" size="large" />
@@ -124,6 +177,10 @@ onMounted(() => {
             </n-descriptions-item>
           </n-descriptions>
 
+          <n-space>
+            <n-button type="primary" @click="openLevelModal">变更等级</n-button>
+          </n-space>
+
           <n-card title="该工厂报价（RSKU）" size="small">
             <n-data-table
               :columns="rskuColumns"
@@ -144,6 +201,30 @@ onMounted(() => {
         </template>
       </n-space>
     </n-card>
+
+    <n-modal
+      v-model:show="showLevelModal"
+      title="变更工厂等级"
+      preset="card"
+      style="width: 400px;"
+    >
+      <n-form label-placement="left" label-width="80">
+        <n-form-item label="新等级" required>
+          <n-select
+            v-model:value="newLevel"
+            :options="levelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择新等级"
+          />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showLevelModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingLevel" @click="handleUpdateLevel">
+          确认变更
+        </n-button>
+      </n-space>
+    </n-modal>
   </n-space>
 </template>
 

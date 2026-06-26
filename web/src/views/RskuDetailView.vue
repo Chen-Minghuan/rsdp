@@ -9,10 +9,16 @@ import {
   NSpin,
   NDescriptions,
   NDescriptionsItem,
-  NTag
+  NTag,
+  NModal,
+  NForm,
+  NFormItem,
+  NInputNumber,
+  NInput,
+  NDataTable
 } from 'naive-ui'
-import { getRsku } from '@/api/rsku'
-import type { Rsku } from '@/types/rsku'
+import { getRsku, listPriceHistory, updateRskuPrice } from '@/api/rsku'
+import type { PriceHistory, Rsku } from '@/types/rsku'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,7 +27,24 @@ const rskuId = route.params.rskuId as string
 
 const loading = ref(false)
 const errorMessage = ref('')
+const successMessage = ref('')
 const rsku = ref<Rsku | null>(null)
+
+const priceHistory = ref<PriceHistory[]>([])
+const historyLoading = ref(false)
+const showPriceModal = ref(false)
+const submittingPrice = ref(false)
+const newPrice = ref<number | null>(null)
+const changeReason = ref('')
+
+const historyColumns = [
+  { title: '历史 ID', key: 'historyId', width: 100 },
+  { title: '旧价格', key: 'oldPrice' },
+  { title: '新价格', key: 'newPrice' },
+  { title: '变更人', key: 'changedBy' },
+  { title: '变更原因', key: 'changeReason' },
+  { title: '变更时间', key: 'createdAt', width: 180 }
+]
 
 async function loadRsku() {
   loading.value = true
@@ -35,6 +58,49 @@ async function loadRsku() {
   }
 }
 
+async function loadPriceHistory() {
+  historyLoading.value = true
+  try {
+    priceHistory.value = await listPriceHistory(rskuId)
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '加载价格历史失败'
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function openPriceModal() {
+  newPrice.value = rsku.value?.factoryPrice ?? null
+  changeReason.value = ''
+  showPriceModal.value = true
+}
+
+async function handleUpdatePrice() {
+  if (newPrice.value === null || newPrice.value < 0) {
+    errorMessage.value = '请填写有效的价格'
+    return
+  }
+
+  submittingPrice.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await updateRskuPrice(rspuId, rskuId, {
+      factoryPrice: newPrice.value,
+      changeReason: changeReason.value || undefined
+    })
+    successMessage.value = '价格更新成功'
+    showPriceModal.value = false
+    await loadRsku()
+    await loadPriceHistory()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '更新价格失败'
+  } finally {
+    submittingPrice.value = false
+  }
+}
+
 function reviewStatusType(status: string) {
   if (status === '已确认') return 'success'
   if (status === '存疑') return 'error'
@@ -43,6 +109,7 @@ function reviewStatusType(status: string) {
 
 onMounted(() => {
   loadRsku()
+  loadPriceHistory()
 })
 </script>
 
@@ -58,6 +125,10 @@ onMounted(() => {
           {{ errorMessage }}
         </n-alert>
 
+        <n-alert v-if="successMessage" type="success" :show-icon="true">
+          {{ successMessage }}
+        </n-alert>
+
         <n-spin v-if="loading" size="large" />
 
         <template v-if="rsku && !loading">
@@ -67,6 +138,9 @@ onMounted(() => {
             </n-descriptions-item>
             <n-descriptions-item label="所属 RSPU">
               {{ rsku.rspuId }}
+            </n-descriptions-item>
+            <n-descriptions-item label="变体 ID">
+              {{ rsku.variantId || '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="工厂">
               {{ rsku.factoryName || '-' }} ({{ rsku.factoryCode }})
@@ -110,8 +184,56 @@ onMounted(() => {
               {{ rsku.diffNotes || '-' }}
             </n-descriptions-item>
           </n-descriptions>
+
+          <n-card title="价格历史" size="small">
+            <n-space vertical>
+              <n-space>
+                <n-button type="primary" @click="openPriceModal">更新价格</n-button>
+              </n-space>
+              <n-data-table
+                :columns="historyColumns"
+                :data="priceHistory"
+                :loading="historyLoading"
+                :bordered="true"
+                :single-line="false"
+              >
+                <template #empty>
+                  <n-space justify="center" style="padding: 24px;">
+                    暂无价格变更记录
+                  </n-space>
+                </template>
+              </n-data-table>
+            </n-space>
+          </n-card>
         </template>
       </n-space>
     </n-card>
+
+    <n-modal
+      v-model:show="showPriceModal"
+      title="更新出厂价"
+      preset="card"
+      style="width: 500px;"
+    >
+      <n-form label-placement="left" label-width="100">
+        <n-form-item label="新价格" required>
+          <n-input-number v-model:value="newPrice" :min="0" placeholder="新出厂价" />
+        </n-form-item>
+        <n-form-item label="变更原因">
+          <n-input
+            v-model:value="changeReason"
+            type="textarea"
+            placeholder="如：原材料涨价、工艺调整"
+          />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showPriceModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingPrice" @click="handleUpdatePrice">
+          确认更新
+        </n-button>
+      </n-space>
+    </n-modal>
   </n-space>
 </template>

@@ -2,6 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.RskuCreateRequest;
+import com.rsdp.dto.request.RskuPriceUpdateRequest;
 import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.service.RskuService;
 import jakarta.validation.Valid;
@@ -9,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -61,6 +63,22 @@ public class RskuController {
                                @Valid @RequestBody RskuCreateRequest request) {
         request.setRspuId(rspuId);
         rskuService.createRsku(request);
+        return Result.ok();
+    }
+
+    /**
+     * 更新 RSKU 出厂价。
+     *
+     * @param rspuId  RSPU ID
+     * @param rskuId  RSKU ID
+     * @param request 价格更新请求
+     * @return 空结果
+     */
+    @PutMapping("/{rskuId}/price")
+    public Result<Void> updatePrice(@PathVariable String rspuId,
+                                    @PathVariable String rskuId,
+                                    @Valid @RequestBody RskuPriceUpdateRequest request) {
+        rskuService.updateRskuPrice(rskuId, request.getFactoryPrice(), request.getChangeReason());
         return Result.ok();
     }
 }

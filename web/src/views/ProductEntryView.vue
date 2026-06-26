@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import {
   NCard,
   NButton,
@@ -12,16 +12,21 @@ import {
   NImage,
   NDescriptions,
   NDescriptionsItem,
+  NSelect,
   type UploadFileInfo
 } from 'naive-ui'
 import { uploadProductImages } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
+import { listDicts } from '@/api/dict'
 import type { TaskItem } from '@/types/task'
+import type { DictItem } from '@/types/dict'
 
 const fileList = ref<UploadFileInfo[]>([])
 const taskList = ref<TaskItem[]>([])
 const uploading = ref(false)
 const errorMessage = ref('')
+const categoryCode = ref<string | null>(null)
+const categoryOptions = ref<DictItem[]>([])
 
 const selectedFiles = computed(() =>
   fileList.value.map(item => item.file).filter((f): f is File => f !== null)
@@ -74,6 +79,14 @@ async function pollTask(taskItem: TaskItem) {
   }
 }
 
+async function loadCategoryDicts() {
+  try {
+    categoryOptions.value = await listDicts('category')
+  } catch (e) {
+    console.error('加载品类字典失败', e)
+  }
+}
+
 async function handleStartUpload() {
   const files = selectedFiles.value
   if (files.length === 0) {
@@ -85,7 +98,7 @@ async function handleStartUpload() {
   uploading.value = true
 
   try {
-    const result = await uploadProductImages(files)
+    const result = await uploadProductImages(files, categoryCode.value ?? undefined)
 
     const newTask: TaskItem = {
       taskId: result.taskId,
@@ -120,6 +133,10 @@ function clearAll() {
   errorMessage.value = ''
   stopPolling()
 }
+
+onMounted(() => {
+  loadCategoryDicts()
+})
 
 onUnmounted(() => {
   stopPolling()
@@ -157,6 +174,13 @@ function statusText(status: TaskItem['status']) {
 
         <n-space v-if="hasSelectedFiles" align="center">
           <span>已选择 {{ selectedFiles.length }} 张图片</span>
+          <n-select
+            v-model:value="categoryCode"
+            :options="categoryOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择品类（默认座椅）"
+            clearable
+            style="width: 180px;"
+          />
           <n-button
             type="primary"
             :loading="uploading"

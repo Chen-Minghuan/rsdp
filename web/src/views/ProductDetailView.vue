@@ -22,10 +22,14 @@ import {
 } from 'naive-ui'
 import { getProductDetail, reviewProduct } from '@/api/product'
 import { listRskuByRspu, createRsku } from '@/api/rsku'
+import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
+import { listDicts } from '@/api/dict'
 import type { ProductDetail } from '@/types/product'
+import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuCreateRequest } from '@/types/rsku'
 import type { Factory } from '@/types/factory'
+import type { RspuVariant, RspuVariantCreateRequest } from '@/types/variant'
 
 const route = useRoute()
 const router = useRouter()
@@ -45,6 +49,7 @@ const submittingRsku = ref(false)
 
 const rskuForm = ref<RskuCreateRequest>({
   factoryCode: '',
+  variantId: '',
   factorySku: '',
   factoryPrice: 0,
   materialDescription: '',
@@ -56,11 +61,33 @@ const rskuForm = ref<RskuCreateRequest>({
   quoteConfidence: ''
 })
 
-const quoteConfidenceOptions = [
-  { label: '高', value: 'high' },
-  { label: '中', value: 'mid' },
-  { label: '低', value: 'low' }
-]
+const quoteConfidenceOptions = ref<DictItem[]>([])
+
+const variantList = ref<RspuVariant[]>([])
+const variantLoading = ref(false)
+const showVariantModal = ref(false)
+const submittingVariant = ref(false)
+
+const variantForm = ref<RspuVariantCreateRequest>({
+  displayName: '',
+  variantCode: '',
+  sizeCode: '',
+  dimensions: '',
+  colorCode: '',
+  materialCode: '',
+  materialMix: [],
+  referencePriceBand: ''
+})
+
+const sizeOptions = ref<DictItem[]>([])
+const colorOptions = ref<DictItem[]>([])
+const materialOptions = ref<DictItem[]>([])
+const styleOptions = ref<DictItem[]>([])
+const priceBandOptions = ref<DictItem[]>([
+  { dictCode: 'low', dictName: '低', sortOrder: 1 },
+  { dictCode: 'mid', dictName: '中', sortOrder: 2 },
+  { dictCode: 'high', dictName: '高', sortOrder: 3 }
+])
 
 const rskuColumns = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
@@ -81,6 +108,26 @@ const rskuColumns = [
           ? 'error'
           : 'warning'
       return h(NTag, { type, size: 'small' }, { default: () => row.reviewStatus })
+    }
+  }
+]
+
+const variantColumns = [
+  { title: '变体 ID', key: 'variantId', width: 180 },
+  { title: '显示名称', key: 'displayName' },
+  { title: '变体编码', key: 'variantCode', width: 120 },
+  { title: '尺寸码', key: 'sizeCode', width: 100 },
+  { title: '颜色码', key: 'colorCode', width: 100 },
+  { title: '材质码', key: 'materialCode', width: 100 },
+  { title: '参考价格带', key: 'referencePriceBand', width: 120 },
+  {
+    title: '状态',
+    key: 'status',
+    width: 100,
+    render(row: RspuVariant) {
+      return h(NTag, { type: row.status === 'active' ? 'success' : 'default', size: 'small' }, {
+        default: () => (row.status === 'active' ? '有效' : row.status)
+      })
     }
   }
 ]
@@ -108,12 +155,51 @@ async function loadRskuList() {
   }
 }
 
+async function loadVariants() {
+  variantLoading.value = true
+  try {
+    variantList.value = await listVariantsByRspu(rspuId)
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '加载变体失败'
+  } finally {
+    variantLoading.value = false
+  }
+}
+
 async function loadFactories() {
   try {
     factories.value = await listFactories()
   } catch (e) {
     console.error('加载工厂列表失败', e)
   }
+}
+
+async function loadDicts() {
+  try {
+    const [quoteConfidence, sizes, colors, materials, styles] = await Promise.all([
+      listDicts('quote_confidence'),
+      listDicts('size'),
+      listDicts('color'),
+      listDicts('material'),
+      listDicts('style')
+    ])
+    quoteConfidenceOptions.value = quoteConfidence
+    sizeOptions.value = sizes
+    colorOptions.value = colors
+    materialOptions.value = materials
+    styleOptions.value = styles
+  } catch (e) {
+    console.error('加载字典失败', e)
+  }
+}
+
+function resolveStyleName(code: string) {
+  return styleOptions.value.find(s => s.dictCode === code)?.dictName || code
+}
+
+function resolveMaterialNames(codes: string[]) {
+  if (!Array.isArray(codes)) return []
+  return codes.map(code => materialOptions.value.find(m => m.dictCode === code)?.dictName || code)
 }
 
 async function handleReview(status: '已确认' | '存疑') {
@@ -135,6 +221,7 @@ async function handleReview(status: '已确认' | '存疑') {
 function openRskuModal() {
   rskuForm.value = {
     factoryCode: '',
+    variantId: '',
     factorySku: '',
     factoryPrice: 0,
     materialDescription: '',
@@ -149,9 +236,9 @@ function openRskuModal() {
 }
 
 async function handleCreateRsku() {
-  if (!rskuForm.value.factoryCode || rskuForm.value.factoryPrice <= 0) {
+  if (!rskuForm.value.factoryCode || !rskuForm.value.variantId || rskuForm.value.factoryPrice <= 0) {
     successMessage.value = ''
-    errorMessage.value = '请选择工厂并填写有效的出厂价'
+    errorMessage.value = '请选择工厂、变体并填写有效的出厂价'
     return
   }
 
@@ -178,10 +265,50 @@ async function handleCreateRsku() {
   }
 }
 
+function openVariantModal() {
+  variantForm.value = {
+    displayName: '',
+    variantCode: '',
+    sizeCode: '',
+    dimensions: '',
+    colorCode: '',
+    materialCode: '',
+    materialMix: [],
+    referencePriceBand: ''
+  }
+  showVariantModal.value = true
+}
+
+async function handleCreateVariant() {
+  if (!variantForm.value.displayName.trim() || !variantForm.value.materialCode) {
+    successMessage.value = ''
+    errorMessage.value = '请填写变体显示名称并选择主材质'
+    return
+  }
+
+  submittingVariant.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await createVariant(rspuId, variantForm.value)
+    successMessage.value = '变体添加成功'
+    showVariantModal.value = false
+    await loadVariants()
+  } catch (e) {
+    successMessage.value = ''
+    errorMessage.value = e instanceof Error ? e.message : '添加变体失败'
+  } finally {
+    submittingVariant.value = false
+  }
+}
+
 onMounted(() => {
   loadDetail()
   loadRskuList()
+  loadVariants()
   loadFactories()
+  loadDicts()
 })
 </script>
 
@@ -212,7 +339,7 @@ onMounted(() => {
               {{ detail.rspu.categoryPath }}
             </n-descriptions-item>
             <n-descriptions-item label="风格">
-              {{ detail.rspu.positioningLabel }}
+              {{ resolveStyleName(detail.rspu.positioningLabel) }}
             </n-descriptions-item>
             <n-descriptions-item label="主色">
               {{ detail.rspu.colorPrimaryName || '-' }}
@@ -246,7 +373,7 @@ onMounted(() => {
           <n-card title="AI 识别标签" size="small">
             <n-descriptions bordered :column="1" size="small">
               <n-descriptions-item label="材质">
-                {{ Array.isArray(detail.rspu.materialTags) ? detail.rspu.materialTags.join('、') : '-' }}
+                {{ resolveMaterialNames(detail.rspu.materialTags).join('、') || '-' }}
               </n-descriptions-item>
               <n-descriptions-item label="场景">
                 {{ Array.isArray(detail.rspu.sceneTags) ? detail.rspu.sceneTags.join('、') : '-' }}
@@ -292,6 +419,27 @@ onMounted(() => {
             </n-space>
           </n-card>
 
+          <n-card title="变体管理" size="small">
+            <n-space vertical>
+              <n-space>
+                <n-button type="primary" @click="openVariantModal">新增变体</n-button>
+              </n-space>
+              <n-data-table
+                :columns="variantColumns"
+                :data="variantList"
+                :loading="variantLoading"
+                :bordered="true"
+                :single-line="false"
+              >
+                <template #empty>
+                  <n-space justify="center" style="padding: 24px;">
+                    暂无变体，点击“新增变体”录入
+                  </n-space>
+                </template>
+              </n-data-table>
+            </n-space>
+          </n-card>
+
           <n-card title="工厂报价（RSKU）" size="small">
             <n-space vertical>
               <n-space>
@@ -332,6 +480,13 @@ onMounted(() => {
             placeholder="选择工厂"
           />
         </n-form-item>
+        <n-form-item label="变体" required>
+          <n-select
+            v-model:value="rskuForm.variantId"
+            :options="variantList.map(v => ({ label: `${v.displayName} (${v.variantId})`, value: v.variantId }))"
+            placeholder="选择变体"
+          />
+        </n-form-item>
         <n-form-item label="工厂SKU">
           <n-input
             v-model:value="rskuForm.factorySku"
@@ -362,7 +517,7 @@ onMounted(() => {
         <n-form-item label="报价置信度">
           <n-select
             v-model:value="rskuForm.quoteConfidence"
-            :options="quoteConfidenceOptions"
+            :options="quoteConfidenceOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
             placeholder="报价置信度"
             clearable
           />
@@ -373,6 +528,69 @@ onMounted(() => {
         <n-button @click="showRskuModal = false">取消</n-button>
         <n-button type="primary" :loading="submittingRsku" @click="handleCreateRsku">
           提交报价
+        </n-button>
+      </n-space>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showVariantModal"
+      title="新增变体"
+      preset="card"
+      style="width: 600px;"
+    >
+      <n-form label-placement="left" label-width="100">
+        <n-form-item label="显示名称" required>
+          <n-input
+            v-model:value="variantForm.displayName"
+            placeholder="如：兰卡沙发 2450mm 布艺版"
+          />
+        </n-form-item>
+        <n-form-item label="变体编码">
+          <n-input v-model:value="variantForm.variantCode" placeholder="如：单人位 / S / M / L" />
+        </n-form-item>
+        <n-form-item label="尺寸码">
+          <n-select
+            v-model:value="variantForm.sizeCode"
+            :options="sizeOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择尺寸码"
+            clearable
+          />
+        </n-form-item>
+        <n-form-item label="具体尺寸">
+          <n-input
+            v-model:value="variantForm.dimensions"
+            placeholder="{&quot;w&quot;:560,&quot;d&quot;:580,&quot;h&quot;:780,&quot;unit&quot;:&quot;mm&quot;}"
+          />
+        </n-form-item>
+        <n-form-item label="颜色码">
+          <n-select
+            v-model:value="variantForm.colorCode"
+            :options="colorOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择颜色码"
+            clearable
+          />
+        </n-form-item>
+        <n-form-item label="主材质" required>
+          <n-select
+            v-model:value="variantForm.materialCode"
+            :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择主材质"
+          />
+        </n-form-item>
+        <n-form-item label="参考价格带">
+          <n-select
+            v-model:value="variantForm.referencePriceBand"
+            :options="priceBandOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择参考价格带"
+            clearable
+          />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showVariantModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingVariant" @click="handleCreateVariant">
+          提交变体
         </n-button>
       </n-space>
     </n-modal>

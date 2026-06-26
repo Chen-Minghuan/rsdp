@@ -38,13 +38,15 @@ public class ProductController {
     /**
      * 新品录入，支持为一个 RSPU 上传多张图片。
      *
-     * @param images 产品图片列表，第一张为主图
+     * @param images       产品图片列表，第一张为主图
+     * @param categoryCode 品类码，如 FS/DT/CB；为空时默认 FS
      * @return 任务信息
      * @throws IOException 文件保存失败
      */
     @PostMapping("/entry")
-    public Result<Map<String, Object>> entry(@RequestParam("images") List<MultipartFile> images) throws IOException {
-        Map<String, Object> result = productService.createEntry(images);
+    public Result<Map<String, Object>> entry(@RequestParam("images") List<MultipartFile> images,
+                                             @RequestParam(value = "categoryCode", required = false) String categoryCode) throws IOException {
+        Map<String, Object> result = productService.createEntry(images, categoryCode);
         return Result.ok(result);
     }
 

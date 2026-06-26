@@ -1,5 +1,5 @@
 import { apiClient, type ApiResult } from './client'
-import type { Factory, FactoryCreateRequest } from '@/types/factory'
+import type { Factory, FactoryCreateRequest, FactoryLevelUpdateRequest } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 
 /**
@@ -23,6 +23,13 @@ export async function getFactory(factoryCode: string): Promise<Factory> {
  */
 export async function createFactory(request: FactoryCreateRequest): Promise<void> {
   await apiClient.post<ApiResult<void>>('/v1/factories', request)
+}
+
+/**
+ * 更新工厂等级。
+ */
+export async function updateFactoryLevel(factoryCode: string, request: FactoryLevelUpdateRequest): Promise<void> {
+  await apiClient.put<ApiResult<void>>(`/v1/factories/${factoryCode}/level`, request)
 }
 
 /**

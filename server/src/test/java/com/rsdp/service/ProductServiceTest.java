@@ -80,7 +80,7 @@ class ProductServiceTest {
         );
         when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
 
-        Map<String, Object> result = productService.createEntry(List.of(image));
+        Map<String, Object> result = productService.createEntry(List.of(image), null);
 
         assertThat(result).containsKeys("taskId", "rspuId", "imageIds", "message");
         assertThat(result.get("imageIds")).asList().hasSize(1);
@@ -88,6 +88,7 @@ class ProductServiceTest {
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
         assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("processing");
+        assertThat(rspuCaptor.getValue().getCategoryCode()).isEqualTo("FS");
 
         ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
         verify(imageAssetsMapper, times(1)).insert(imageCaptor.capture());
@@ -116,12 +117,15 @@ class ProductServiceTest {
         );
         when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
 
-        Map<String, Object> result = productService.createEntry(List.of(primary, detail));
+        Map<String, Object> result = productService.createEntry(List.of(primary, detail), "DT");
 
         assertThat(result).containsKeys("taskId", "rspuId", "imageIds", "message");
         assertThat(result.get("imageIds")).asList().hasSize(2);
 
-        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
+        assertThat(rspuCaptor.getValue().getCategoryCode()).isEqualTo("DT");
+        assertThat(rspuCaptor.getValue().getCategoryPath()).contains("桌子");
         verify(imageAssetsMapper, times(2)).insert(any(ImageAssets.class));
         verify(asyncTaskMapper, times(1)).insert(any(AsyncTask.class));
         verify(asyncTaskProcessor, times(1))
@@ -134,7 +138,7 @@ class ProductServiceTest {
             "image", "empty.jpg", "image/jpeg", new byte[0]
         );
 
-        assertThatThrownBy(() -> productService.createEntry(List.of(emptyFile)))
+        assertThatThrownBy(() -> productService.createEntry(List.of(emptyFile), null))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("请上传图片文件");
 
@@ -147,14 +151,14 @@ class ProductServiceTest {
             "image", "readme.txt", "text/plain", "hello".getBytes()
         );
 
-        assertThatThrownBy(() -> productService.createEntry(List.of(textFile)))
+        assertThatThrownBy(() -> productService.createEntry(List.of(textFile), null))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("图片格式");
     }
 
     @Test
     void createEntry_shouldRejectEmptyImageList() {
-        assertThatThrownBy(() -> productService.createEntry(List.of()))
+        assertThatThrownBy(() -> productService.createEntry(List.of(), null))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("请至少上传一张图片");
 

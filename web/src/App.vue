@@ -43,6 +43,18 @@ function navigate(path: string) {
             >
               工厂管理
             </n-button>
+            <n-button
+              :type="route.path === '/quotes/build' ? 'primary' : 'default'"
+              @click="navigate('/quotes/build')"
+            >
+              报价单生成器
+            </n-button>
+            <n-button
+              :type="route.path.startsWith('/matching') ? 'primary' : 'default'"
+              @click="navigate('/matching/room-scheme')"
+            >
+              AI 搭配方案
+            </n-button>
           </n-space>
         </n-space>
       </n-layout-header>

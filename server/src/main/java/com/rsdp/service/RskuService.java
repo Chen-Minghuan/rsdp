@@ -4,11 +4,14 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.entity.FactoryMaster;
+import com.rsdp.entity.PriceHistory;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
+import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +34,8 @@ public class RskuService {
     private final RskuSupplyMapper rskuSupplyMapper;
     private final RspuMapper rspuMapper;
     private final FactoryMasterMapper factoryMasterMapper;
+    private final RspuVariantService rspuVariantService;
+    private final PriceHistoryMapper priceHistoryMapper;
     private final AuditLogService auditLogService;
 
     /**
@@ -99,15 +104,16 @@ public class RskuService {
             throw new ResourceNotFoundException("工厂不存在: " + request.getFactoryCode());
         }
 
+        RspuVariant variant = rspuVariantService.findById(request.getVariantId());
+        if (!request.getRspuId().equals(variant.getRspuId())) {
+            throw new BusinessException("变体不属于该产品: " + request.getVariantId());
+        }
+
         QueryWrapper<RskuSupply> duplicateQuery = new QueryWrapper<RskuSupply>()
             .eq("rspu_id", request.getRspuId())
             .eq("factory_code", request.getFactoryCode())
+            .eq("variant_id", request.getVariantId())
             .isNull("deleted_at");
-        if (request.getVariantId() != null) {
-            duplicateQuery.eq("variant_id", request.getVariantId());
-        } else {
-            duplicateQuery.isNull("variant_id");
-        }
         Long count = rskuSupplyMapper.selectCount(duplicateQuery);
         if (count != null && count > 0) {
             throw new BusinessException("该工厂对该变体已有报价");
@@ -135,6 +141,66 @@ public class RskuService {
         rskuSupplyMapper.insert(rsku);
 
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, "admin");
+    }
+
+    /**
+     * 更新 RSKU 出厂价，并记录价格历史。
+     *
+     * @param rskuId      RSKU ID
+     * @param newPrice    新价格
+     * @param changeReason 变更原因
+     */
+    public void updateRskuPrice(String rskuId, BigDecimal newPrice, String changeReason) {
+        RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
+        if (rsku == null || rsku.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
+        if (newPrice == null || newPrice.compareTo(java.math.BigDecimal.ZERO) < 0) {
+            throw new BusinessException("价格不能为负数");
+        }
+
+        RskuSupply oldSnapshot = snapshot(rsku);
+        BigDecimal oldPrice = rsku.getFactoryPrice();
+
+        rsku.setFactoryPrice(newPrice);
+        rsku.setPriceBand(resolvePriceBand(newPrice));
+        rsku.setPriceUpdated(LocalDate.now());
+        rsku.setUpdatedAt(LocalDateTime.now());
+        rskuSupplyMapper.updateById(rsku);
+
+        PriceHistory history = new PriceHistory();
+        history.setRskuId(rskuId);
+        history.setOldPrice(oldPrice);
+        history.setNewPrice(newPrice);
+        history.setChangedBy("admin");
+        history.setChangeReason(changeReason);
+        history.setCreatedAt(LocalDateTime.now());
+        priceHistoryMapper.insert(history);
+
+        auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, rsku, "admin");
+    }
+
+    private RskuSupply snapshot(RskuSupply source) {
+        RskuSupply copy = new RskuSupply();
+        copy.setRskuId(source.getRskuId());
+        copy.setRspuId(source.getRspuId());
+        copy.setVariantId(source.getVariantId());
+        copy.setFactoryCode(source.getFactoryCode());
+        copy.setFactorySku(source.getFactorySku());
+        copy.setFactoryPrice(source.getFactoryPrice());
+        copy.setPriceBand(source.getPriceBand());
+        copy.setMaterialDescription(source.getMaterialDescription());
+        copy.setLeadTimeDays(source.getLeadTimeDays());
+        copy.setMoq(source.getMoq());
+        copy.setWarrantyYears(source.getWarrantyYears());
+        copy.setShippingFrom(source.getShippingFrom());
+        copy.setDiffNotes(source.getDiffNotes());
+        copy.setQuoteConfidence(source.getQuoteConfidence());
+        copy.setReviewStatus(source.getReviewStatus());
+        copy.setPriceUpdated(source.getPriceUpdated());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        return copy;
     }
 
     private String resolvePriceBand(BigDecimal price) {

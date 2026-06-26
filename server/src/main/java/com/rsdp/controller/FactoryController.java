@@ -2,6 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.FactoryCreateRequest;
+import com.rsdp.dto.request.FactoryLevelUpdateRequest;
 import com.rsdp.dto.response.FactoryResponse;
 import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.service.FactoryService;
@@ -11,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -58,6 +60,20 @@ public class FactoryController {
     @PostMapping
     public Result<Void> create(@Valid @RequestBody FactoryCreateRequest request) {
         factoryService.createFactory(request);
+        return Result.ok();
+    }
+
+    /**
+     * 更新工厂等级，工厂代码保持不变。
+     *
+     * @param factoryCode 工厂代码
+     * @param request     等级更新请求
+     * @return 空结果
+     */
+    @PutMapping("/{factoryCode}/level")
+    public Result<Void> updateLevel(@PathVariable String factoryCode,
+                                    @Valid @RequestBody FactoryLevelUpdateRequest request) {
+        factoryService.updateFactoryLevel(factoryCode, request.getFactoryLevel());
         return Result.ok();
     }
 

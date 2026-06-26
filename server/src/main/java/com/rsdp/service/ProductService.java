@@ -55,12 +55,13 @@ public class ProductService {
      * <p>支持一次上传多张图片：第一张图作为主图（{@code white_bg}）参与 AI 识别，
      * 其余图作为非主图（{@code detail}）仅做存档展示。
      *
-     * @param images 产品图片列表，第一张为主图
+     * @param images       产品图片列表，第一张为主图
+     * @param categoryCode 品类码，如 FS/DT/CB；为空时默认 FS
      * @return 包含 taskId、rspuId、imageIds 的映射
      * @throws IOException 文件保存失败
      */
     @Transactional
-    public Map<String, Object> createEntry(List<MultipartFile> images) throws IOException {
+    public Map<String, Object> createEntry(List<MultipartFile> images, String categoryCode) throws IOException {
         long start = System.currentTimeMillis();
 
         if (images == null || images.isEmpty()) {
@@ -75,11 +76,13 @@ public class ProductService {
         String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
+        String effectiveCategoryCode = (categoryCode == null || categoryCode.isBlank()) ? "FS" : categoryCode.trim().toUpperCase();
+
         // 创建 RSPU 草稿
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
-        rspu.setCategoryCode("FS");
-        rspu.setCategoryPath("[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]");
+        rspu.setCategoryCode(effectiveCategoryCode);
+        rspu.setCategoryPath(resolveCategoryPath(effectiveCategoryCode));
         rspu.setPositioningLabel("待识别");
         rspu.setStatus("processing");
         rspu.setReviewStatus("待复核");
@@ -161,6 +164,20 @@ public class ProductService {
         } else {
             asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
         }
+    }
+
+    private String resolveCategoryPath(String categoryCode) {
+        return switch (categoryCode) {
+            case "SF" -> "[\"家具\",\"沙发\"]";
+            case "TB" -> "[\"家具\",\"茶几\"]";
+            case "FC" -> "[\"家具\",\"柜类\"]";
+            case "BS" -> "[\"家具\",\"吧椅\"]";
+            case "DT" -> "[\"家具\",\"桌子\"]";
+            case "CB" -> "[\"家具\",\"柜子\"]";
+            case "BD" -> "[\"家具\",\"床\"]";
+            case "OF" -> "[\"办公家具\"]";
+            default -> "[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]";
+        };
     }
 
     private String getExtension(String filename) {

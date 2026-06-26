@@ -8,7 +8,10 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'TB', '茶几', 3),
 ('category', 'FC', '柜类', 4),
 ('category', 'BS', '吧椅', 5),
-('category', 'OF', '办公家具', 6)
+('category', 'DT', '桌子', 6),
+('category', 'CB', '柜子', 7),
+('category', 'BD', '床', 8),
+('category', 'OF', '办公家具', 9)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 家装风格
@@ -106,4 +109,27 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('scene', 'CAFE', '咖啡厅', 4),
 ('scene', 'OFFICE', '办公室', 5),
 ('scene', 'HOTEL', '酒店', 6)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 空间类型（用于 AI 搭配方案）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('room_type', 'LIVING_ROOM', '客厅', 1),
+('room_type', 'BEDROOM', '卧室', 2),
+('room_type', 'DINING_ROOM', '餐厅', 3),
+('room_type', 'STUDY', '书房', 4),
+('room_type', 'OFFICE', '办公室', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 报价置信度
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('quote_confidence', 'high', '高', 1),
+('quote_confidence', 'mid', '中', 2),
+('quote_confidence', 'low', '低', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 产品状态
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('product_status', 'active', '在售', 1),
+('product_status', 'discontinued', '停产', 2),
+('product_status', 'draft', '草稿', 3)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;

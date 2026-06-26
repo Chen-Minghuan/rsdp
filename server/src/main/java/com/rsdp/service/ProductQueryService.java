@@ -9,10 +9,14 @@ import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuScene;
+import com.rsdp.entity.RspuStyle;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuSceneMapper;
+import com.rsdp.mapper.RspuStyleMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -31,6 +35,8 @@ public class ProductQueryService {
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final AiRecognitionMapper aiRecognitionMapper;
+    private final RspuStyleMapper rspuStyleMapper;
+    private final RspuSceneMapper rspuSceneMapper;
     private final AuditLogService auditLogService;
 
     /**
@@ -48,7 +54,26 @@ public class ProductQueryService {
             wrapper.eq("category_code", request.getCategoryCode());
         }
         if (StringUtils.hasText(request.getPositioningLabel())) {
-            wrapper.eq("positioning_label", request.getPositioningLabel());
+            List<String> styleRspuIds = rspuStyleMapper.selectList(
+                new QueryWrapper<RspuStyle>().eq("style_code", request.getPositioningLabel())
+            ).stream().map(RspuStyle::getRspuId).distinct().collect(Collectors.toList());
+            if (styleRspuIds.isEmpty()) {
+                styleRspuIds.add("__NO_MATCH__");
+            }
+            wrapper.in("rspu_id", styleRspuIds);
+        }
+        if (StringUtils.hasText(request.getSceneCode())) {
+            List<String> sceneRspuIds = rspuSceneMapper.selectList(
+                new QueryWrapper<RspuScene>().eq("scene_code", request.getSceneCode())
+            ).stream().map(RspuScene::getRspuId).distinct().collect(Collectors.toList());
+            if (sceneRspuIds.isEmpty()) {
+                sceneRspuIds.add("__NO_MATCH__");
+            }
+            wrapper.in("rspu_id", sceneRspuIds);
+        }
+        if (StringUtils.hasText(request.getMaterialTag())) {
+            String tagJson = "[\"" + request.getMaterialTag().trim() + "\"]";
+            wrapper.apply("material_tags @> {0}::jsonb", tagJson);
         }
         if (StringUtils.hasText(request.getStatus())) {
             wrapper.eq("status", request.getStatus());
@@ -58,7 +83,7 @@ public class ProductQueryService {
         }
         if (StringUtils.hasText(request.getKeyword())) {
             String keyword = "%" + request.getKeyword().trim() + "%";
-            wrapper.and(w -> w.like("category_path", keyword).or().like("positioning_label", keyword));
+            wrapper.and(w -> w.like("category_path", keyword).or().like("rspu_id", keyword));
         }
 
         wrapper.orderByDesc("created_at");

@@ -7,10 +7,14 @@ import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuScene;
+import com.rsdp.entity.RspuStyle;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuSceneMapper;
+import com.rsdp.mapper.RspuStyleMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -41,6 +45,12 @@ class ProductQueryServiceTest {
     private AiRecognitionMapper aiRecognitionMapper;
 
     @Mock
+    private RspuStyleMapper rspuStyleMapper;
+
+    @Mock
+    private RspuSceneMapper rspuSceneMapper;
+
+    @Mock
     private AuditLogService auditLogService;
 
     @InjectMocks
@@ -56,7 +66,7 @@ class ProductQueryServiceTest {
         rspu.setRspuId("RSPU-TEST01");
         rspu.setCategoryCode("FS");
         rspu.setCategoryPath("[\"家具\",\"座椅\"]");
-        rspu.setPositioningLabel("中古风");
+        rspu.setPositioningLabel("MC");
         rspu.setStatus("active");
         rspu.setReviewStatus("待复核");
 
@@ -69,6 +79,91 @@ class ProductQueryServiceTest {
         PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
 
         assertThat(result.getTotal()).isEqualTo(1);
+        assertThat(result.getRows()).hasSize(1);
+        assertThat(result.getRows().get(0).getRspuId()).isEqualTo("RSPU-TEST01");
+    }
+
+    @Test
+    void listProducts_shouldFilterByStyleCode() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setPositioningLabel("MC");
+
+        RspuStyle style = new RspuStyle();
+        style.setRspuId("RSPU-TEST01");
+        style.setStyleCode("MC");
+        when(rspuStyleMapper.selectList(any())).thenReturn(List.of(style));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("MC");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows()).hasSize(1);
+        assertThat(result.getRows().get(0).getPositioningLabel()).isEqualTo("MC");
+    }
+
+    @Test
+    void listProducts_shouldFilterByMaterialTag() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setMaterialTag("WO");
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("MC");
+        rspu.setMaterialTags("[\"WO\",\"LI\"]");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows()).hasSize(1);
+    }
+
+    @Test
+    void listProducts_shouldFilterBySceneCode() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setSceneCode("LIVING");
+
+        RspuScene scene = new RspuScene();
+        scene.setRspuId("RSPU-TEST01");
+        scene.setSceneCode("LIVING");
+        when(rspuSceneMapper.selectList(any())).thenReturn(List.of(scene));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("MC");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
         assertThat(result.getRows()).hasSize(1);
         assertThat(result.getRows().get(0).getRspuId()).isEqualTo("RSPU-TEST01");
     }

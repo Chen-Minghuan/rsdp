@@ -1,5 +1,5 @@
 import { apiClient, type ApiResult } from './client'
-import type { Rsku, RskuCreateRequest } from '@/types/rsku'
+import type { PriceHistory, Rsku, RskuCreateRequest, RskuPriceUpdateRequest } from '@/types/rsku'
 
 /**
  * 查询某 RSPU 下的 RSKU 报价列表。
@@ -22,4 +22,19 @@ export async function getRsku(rspuId: string, rskuId: string): Promise<Rsku> {
  */
 export async function createRsku(rspuId: string, request: RskuCreateRequest): Promise<void> {
   await apiClient.post<ApiResult<void>>(`/v1/products/${rspuId}/rsku`, request)
+}
+
+/**
+ * 更新 RSKU 出厂价。
+ */
+export async function updateRskuPrice(rspuId: string, rskuId: string, request: RskuPriceUpdateRequest): Promise<void> {
+  await apiClient.put<ApiResult<void>>(`/v1/products/${rspuId}/rsku/${rskuId}/price`, request)
+}
+
+/**
+ * 查询 RSKU 价格历史。
+ */
+export async function listPriceHistory(rskuId: string): Promise<PriceHistory[]> {
+  const { data: result } = await apiClient.get<ApiResult<PriceHistory[]>>(`/v1/rsku/${rskuId}/price-history`)
+  return result.data
 }

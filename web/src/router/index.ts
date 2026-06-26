@@ -35,6 +35,21 @@ const routes = [
     path: '/products/:rspuId/rsku/:rskuId',
     name: 'RskuDetail',
     component: () => import('@/views/RskuDetailView.vue')
+  },
+  {
+    path: '/quotes/build',
+    name: 'QuoteBuilder',
+    component: () => import('@/views/QuoteBuilderView.vue')
+  },
+  {
+    path: '/matching/room-scheme',
+    name: 'RoomScheme',
+    component: () => import('@/views/RoomSchemeView.vue')
+  },
+  {
+    path: '/matching/anchor',
+    name: 'AnchorMatching',
+    component: () => import('@/views/AnchorMatchingView.vue')
   }
 ]
 

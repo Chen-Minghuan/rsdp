@@ -6,18 +6,22 @@ import type { ProductEntryResult } from '@/types/task'
  * 新品录入：上传多张产品图片。
  *
  * @param files 图片文件列表，第一张作为主图
+ * @param categoryCode 品类码，如 FS/DT/CB
  * @returns 任务信息
  */
-export async function uploadProductImages(files: File[]): Promise<ProductEntryResult> {
+export async function uploadProductImages(files: File[], categoryCode?: string): Promise<ProductEntryResult> {
   const formData = new FormData()
   files.forEach(file => formData.append('images', file))
+  if (categoryCode) {
+    formData.append('categoryCode', categoryCode)
+  }
 
   const { data: result } = await apiClient.post<ApiResult<ProductEntryResult>>(
     '/v1/products/entry',
     formData,
     {
       headers: {
-        'Content-Type': 'multipart/form-data'
+        'Content-Type': 'multipart/form/form-data'
       }
     }
   )

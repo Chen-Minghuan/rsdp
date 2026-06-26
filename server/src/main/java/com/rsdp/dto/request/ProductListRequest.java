@@ -12,6 +12,8 @@ public class ProductListRequest {
     private Long size = 10L;
     private String categoryCode;
     private String positioningLabel;
+    private String sceneCode;
+    private String materialTag;
     private String status;
     private String reviewStatus;
     private String keyword;

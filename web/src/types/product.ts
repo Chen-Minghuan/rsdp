@@ -6,6 +6,8 @@ export interface ProductListParams {
   size?: number
   categoryCode?: string
   positioningLabel?: string
+  sceneCode?: string
+  materialTag?: string
   status?: string
   reviewStatus?: string
   keyword?: string

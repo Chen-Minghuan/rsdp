@@ -28,7 +28,7 @@ export interface Rsku {
  */
 export interface RskuCreateRequest {
   factoryCode: string
-  variantId?: string
+  variantId: string
   factorySku?: string
   factoryPrice: number
   materialDescription?: string
@@ -38,4 +38,25 @@ export interface RskuCreateRequest {
   shippingFrom?: string
   diffNotes?: string
   quoteConfidence?: string
+}
+
+/**
+ * RSKU 价格更新请求。
+ */
+export interface RskuPriceUpdateRequest {
+  factoryPrice: number
+  changeReason?: string
+}
+
+/**
+ * 价格历史记录。
+ */
+export interface PriceHistory {
+  historyId: number
+  rskuId: string
+  oldPrice?: number
+  newPrice: number
+  changedBy?: string
+  changeReason?: string
+  createdAt: string
 }

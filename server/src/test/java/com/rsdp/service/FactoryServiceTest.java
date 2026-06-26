@@ -82,4 +82,20 @@ class FactoryServiceTest {
         assertThatThrownBy(() -> factoryService.getFactory("F999"))
             .isInstanceOf(ResourceNotFoundException.class);
     }
+
+    @Test
+    void updateFactoryLevel_shouldUpdateLevelWithoutChangingCode() {
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("B007");
+        factory.setFactoryName("测试工厂");
+        factory.setFactoryLevel("B");
+
+        when(factoryMasterMapper.selectById("B007")).thenReturn(factory);
+
+        factoryService.updateFactoryLevel("B007", "A");
+
+        assertThat(factory.getFactoryLevel()).isEqualTo("A");
+        assertThat(factory.getFactoryCode()).isEqualTo("B007");
+        verify(factoryMasterMapper).updateById(factory);
+    }
 }

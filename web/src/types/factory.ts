@@ -30,3 +30,10 @@ export interface FactoryCreateRequest {
   contactPhone?: string
   notes?: string
 }
+
+/**
+ * 工厂等级更新请求。
+ */
+export interface FactoryLevelUpdateRequest {
+  factoryLevel: string
+}

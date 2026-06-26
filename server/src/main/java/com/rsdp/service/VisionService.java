@@ -67,36 +67,56 @@ public class VisionService {
                 .temperature(0.3)
                 .build();
 
-            long start = System.currentTimeMillis();
-            OpenAiChatResponse response = aiRestClient.post()
-                .uri("/chat/completions")
-                .body(request)
-                .retrieve()
-                .body(OpenAiChatResponse.class);
-            long cost = System.currentTimeMillis() - start;
-
-            log.info("AI 识别完成，耗时 {}ms", cost);
-
-            if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
-                throw new RuntimeException("API 返回为空");
-            }
-
-            String content = response.getChoices().get(0).getMessage().getContent();
-
-            // 清理可能的 markdown 代码块标记
-            String json = content
-                .replaceAll("```json\\s*", "")
-                .replaceAll("```\\s*", "")
-                .trim();
-
+            String json = executeChat(request, "AI 识别");
             return objectMapper.readValue(json, AiLabels.class);
 
         } catch (IOException e) {
             log.error("读取图片流失败", e);
             throw new RuntimeException("读取图片流失败", e);
-        } catch (Exception e) {
-            log.error("AI 识别失败", e);
-            throw new RuntimeException("AI 识别失败: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 纯文本对话，用于非图片类 AI 任务（如搭配推荐）。
+     *
+     * @param systemPrompt 系统提示词
+     * @param userPrompt   用户提示词
+     * @return AI 返回的文本内容
+     */
+    public String chatText(String systemPrompt, String userPrompt) {
+        OpenAiChatRequest request = OpenAiChatRequest.builder()
+            .model(model)
+            .messages(List.of(
+                OpenAiChatMessage.text("system", systemPrompt),
+                OpenAiChatMessage.text("user", userPrompt)
+            ))
+            .temperature(0.5)
+            .build();
+
+        return executeChat(request, "AI 文本对话");
+    }
+
+    private String executeChat(OpenAiChatRequest request, String taskName) {
+        long start = System.currentTimeMillis();
+        OpenAiChatResponse response = aiRestClient.post()
+            .uri("/chat/completions")
+            .body(request)
+            .retrieve()
+            .body(OpenAiChatResponse.class);
+        long cost = System.currentTimeMillis() - start;
+
+        log.info("{}完成，耗时 {}ms", taskName, cost);
+
+        if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
+            throw new RuntimeException("API 返回为空");
+        }
+
+        String content = response.getChoices().get(0).getMessage().getContent();
+
+        // 清理可能的 markdown 代码块标记
+        return content
+            .replaceAll("```json\\s*", "")
+            .replaceAll("```\\s*", "")
+            .trim();
     }
 }
