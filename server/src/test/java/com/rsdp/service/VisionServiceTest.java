@@ -9,8 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.web.client.RestClient;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,8 +24,7 @@ class VisionServiceTest {
     private WireMockServer wireMockServer;
     private VisionService visionService;
 
-    @TempDir
-    Path tempDir;
+
 
     @BeforeEach
     void setUp() {
@@ -84,10 +83,9 @@ class VisionServiceTest {
                 .withHeader("Content-Type", "application/json")
                 .withBody(buildChatCompletionResponseBody(aiJson))));
 
-        Path imagePath = tempDir.resolve("test.jpg");
-        Files.write(imagePath, "fake-image".getBytes());
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
 
-        AiLabels labels = visionService.recognizeImage(imagePath);
+        AiLabels labels = visionService.recognizeImage(imageStream);
 
         assertThat(labels.getStyle()).isEqualTo("中古风");
         assertThat(labels.getColorPrimaryName()).isEqualTo("焦糖棕");
@@ -103,10 +101,9 @@ class VisionServiceTest {
                 .withHeader("Content-Type", "application/json")
                 .withBody("{\"choices\": []}")));
 
-        Path imagePath = tempDir.resolve("test.jpg");
-        Files.write(imagePath, "fake-image".getBytes());
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
 
-        assertThatThrownBy(() -> visionService.recognizeImage(imagePath))
+        assertThatThrownBy(() -> visionService.recognizeImage(imageStream))
             .isInstanceOf(RuntimeException.class)
             .hasMessageContaining("API 返回为空");
     }

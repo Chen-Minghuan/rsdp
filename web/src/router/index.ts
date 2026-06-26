@@ -20,6 +20,11 @@ const routes = [
     path: '/products/:rspuId',
     name: 'ProductDetail',
     component: () => import('@/views/ProductDetailView.vue')
+  },
+  {
+    path: '/factories',
+    name: 'FactoryList',
+    component: () => import('@/views/FactoryListView.vue')
   }
 ]
 

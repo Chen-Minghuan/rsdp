@@ -1,4 +1,4 @@
-> 本文档描述 RSDP 的目标 API 契约。当前 MVP 已实现 `POST /api/v1/products/entry`，其余接口为后续开发的设计基准。
+> 本文档描述 RSDP 的目标 API 契约。当前 MVP 已实现产品录入、产品库、复核、图片访问、工厂管理与 RSKU 报价录入接口。
 
 ## 通用约定
 
@@ -47,24 +47,37 @@ PUT    /api/v1/products/{rspuId}
 
 DELETE /api/v1/products/{rspuId}
        # 软删除（待实现）
+
+### 图片访问
+
+```
+GET    /api/v1/images/{imageId}
+       # 根据图片 ID 获取图片文件流
+       # 底层存储由 StorageService 统一封装，支持 local / minio 两种实现
+       # Response: image/jpeg | image/png | image/webp 等二进制流
 ```
 
 ### 供应管理
 
 ```
-POST   /api/v1/products/{rspuId}/sku
-       # 为该 RSPU 新增工厂报价
-       # Request: { factory_code, material_code, factory_price,
-       #            lead_time_days, moq, diff_notes, ... }
+GET    /api/v1/products/{rspuId}/rsku
+       # 查询某 RSPU 下的 RSKU 工厂报价列表（已实现）
+       # Response: [RskuSupply...]
+
+POST   /api/v1/products/{rspuId}/rsku
+       # 为该 RSPU 新增工厂报价（已实现）
+       # Request: { factoryCode, factorySku?, factoryPrice, materialDescription?,
+       #            leadTimeDays?, moq?, warrantyYears?, shippingFrom?, diffNotes?, quoteConfidence? }
+       # Response: void
 
 PUT    /api/v1/sku/{rskuId}
-       # 更新报价（价格变动时）
+       # 更新报价（价格变动时，待实现）
 
 DELETE /api/v1/sku/{rskuId}
-       # 删除报价（该厂不再供应）
+       # 删除报价（该厂不再供应，待实现）
 
 GET    /api/v1/sku/compare/{rspuId}
-       # 同款多厂比价列表
+       # 同款多厂比价列表（待实现）
 ```
 
 ### 检索
@@ -110,9 +123,20 @@ POST   /api/v1/spatial/floor-plan
 
 ```
 GET    /api/v1/factories
+       # 工厂列表（已实现）
+       # Query: keyword（搜 factory_name / factory_code）
+       # Response: [FactoryMaster...]
+
 POST   /api/v1/factories
+       # 新增工厂（已实现）
+       # Request: { factoryCode, factoryName, contactPerson?, contactPhone?,
+       #            address?, city?, province?, country?, website?, tags? }
+
 PUT    /api/v1/factories/{code}
+       # 更新工厂（已实现）
+
 GET    /api/v1/factories/{code}
+       # 工厂详情（已实现）
 ```
 
 ### 导出

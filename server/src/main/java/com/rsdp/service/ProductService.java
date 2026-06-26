@@ -7,6 +7,7 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.ImageUploadValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,9 +19,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
@@ -38,10 +36,8 @@ public class ProductService {
     private final ImageAssetsMapper imageAssetsMapper;
     private final AsyncTaskProcessor asyncTaskProcessor;
     private final ImageUploadValidator imageUploadValidator;
+    private final StorageService storageService;
     private final ObjectMapper objectMapper;
-
-    @Value("${rsdp.upload.path}")
-    private String uploadPath;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
     private String maxFileSize;
@@ -66,9 +62,9 @@ public class ProductService {
         String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
-        // 保存图片到本地
-        Path filePath = saveImage(image, imageId);
-        String storagePath = filePath.toString().replace("\\", "/");
+        // 保存图片到存储后端
+        String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
+        String storagePath = storageService.store(image, objectKey);
 
         // 创建 RSPU 草稿
         RspuMaster rspu = new RspuMaster();
@@ -105,14 +101,14 @@ public class ProductService {
         task.setInputData(objectMapper.writeValueAsString(Map.of(
             "rspuId", rspuId,
             "imageId", imageId,
-            "imagePath", storagePath,
+            "objectKey", storagePath,
             "originalFilename", image.getOriginalFilename()
         )));
         task.setCreatedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
 
         // 触发后台 AI 识别：若处于事务中，则在事务提交后触发；否则立即触发
-        triggerAsyncProcess(taskId, rspuId, imageId, filePath);
+        triggerAsyncProcess(taskId, rspuId, imageId, storagePath);
 
         log.info("产品录入任务已创建，总耗时 {}ms，taskId={}",
             System.currentTimeMillis() - start, taskId);
@@ -125,32 +121,17 @@ public class ProductService {
         );
     }
 
-    private void triggerAsyncProcess(String taskId, String rspuId, String imageId, Path filePath) {
+    private void triggerAsyncProcess(String taskId, String rspuId, String imageId, String objectKey) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, filePath);
+                    asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
                 }
             });
         } else {
-            asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, filePath);
+            asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
         }
-    }
-
-    private Path saveImage(MultipartFile image, String imageId) throws IOException {
-        Path dir = Paths.get(uploadPath);
-        if (!dir.isAbsolute()) {
-            dir = Paths.get(System.getProperty("user.dir"), uploadPath);
-        }
-        if (!Files.exists(dir)) {
-            Files.createDirectories(dir);
-        }
-        String ext = getExtension(image.getOriginalFilename());
-        String fileName = imageId + "." + ext;
-        Path filePath = dir.resolve(fileName);
-        image.transferTo(filePath.toFile());
-        return filePath;
     }
 
     private String getExtension(String filename) {

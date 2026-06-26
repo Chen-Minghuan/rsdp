@@ -11,9 +11,6 @@ spring:
       database: 0
       enabled: false
 
-minio:
-  enabled: false
-
 # 开发环境文件先存本地磁盘
 storage:
   type: local

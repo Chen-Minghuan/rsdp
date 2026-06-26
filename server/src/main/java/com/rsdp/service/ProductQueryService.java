@@ -136,8 +136,12 @@ public class ProductQueryService {
                 .last("LIMIT 1")
         );
         if (primaryImage != null) {
-            summary.setPrimaryImageUrl(primaryImage.getStoragePath());
+            summary.setPrimaryImageUrl(buildImageUrl(primaryImage.getImageId()));
         }
         return summary;
+    }
+
+    private String buildImageUrl(String imageId) {
+        return "/api/v1/images/" + imageId;
     }
 }

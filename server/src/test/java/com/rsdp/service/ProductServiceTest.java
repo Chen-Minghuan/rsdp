@@ -8,11 +8,11 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.ImageUploadValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -20,7 +20,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.lang.reflect.Field;
-import java.nio.file.Path;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,21 +45,21 @@ class ProductServiceTest {
     @Mock
     private AsyncTaskProcessor asyncTaskProcessor;
 
+    @Mock
+    private StorageService storageService;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private ProductService productService;
 
-    @TempDir
-    Path tempDir;
-
     @BeforeEach
     void setUp() throws Exception {
-        setField("uploadPath", tempDir.toString());
         setField("maxFileSize", "20MB");
         setField("imageUploadValidator", imageUploadValidator);
         setField("objectMapper", objectMapper);
+        setField("storageService", storageService);
     }
 
     private void setField(String name, Object value) throws Exception {
@@ -74,6 +73,7 @@ class ProductServiceTest {
         MockMultipartFile image = new MockMultipartFile(
             "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
         );
+        when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
 
         Map<String, Object> result = productService.createEntry(image);
 
@@ -87,13 +87,15 @@ class ProductServiceTest {
         verify(imageAssetsMapper, times(1)).insert(imageCaptor.capture());
         assertThat(imageCaptor.getValue().getFormat()).isEqualTo("jpg");
         assertThat(imageCaptor.getValue().getAiProcessed()).isFalse();
+        assertThat(imageCaptor.getValue().getStoragePath()).startsWith("images/");
 
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper, times(1)).insert(taskCaptor.capture());
         assertThat(taskCaptor.getValue().getStatus()).isEqualTo("pending");
 
+        verify(storageService, times(1)).store(any(), anyString());
         verify(asyncTaskProcessor, times(1))
-            .processProductEntry(anyString(), anyString(), anyString(), any(Path.class));
+            .processProductEntry(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test

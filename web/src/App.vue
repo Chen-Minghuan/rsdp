@@ -37,6 +37,12 @@ function navigate(path: string) {
             >
               产品库
             </n-button>
+            <n-button
+              :type="route.path === '/factories' ? 'primary' : 'default'"
+              @click="navigate('/factories')"
+            >
+              工厂管理
+            </n-button>
           </n-space>
         </n-space>
       </n-layout-header>

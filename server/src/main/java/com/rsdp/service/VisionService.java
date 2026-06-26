@@ -12,8 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.InputStream;
 import java.util.Base64;
 import java.util.List;
 
@@ -54,9 +53,9 @@ public class VisionService {
         如果无法判断某个字段，填"unknown"。
         """;
 
-    public AiLabels recognizeImage(Path imagePath) {
+    public AiLabels recognizeImage(InputStream imageStream) {
         try {
-            byte[] imageBytes = Files.readAllBytes(imagePath);
+            byte[] imageBytes = imageStream.readAllBytes();
             String base64 = Base64.getEncoder().encodeToString(imageBytes);
 
             OpenAiChatRequest request = OpenAiChatRequest.builder()
@@ -93,8 +92,8 @@ public class VisionService {
             return objectMapper.readValue(json, AiLabels.class);
 
         } catch (IOException e) {
-            log.error("读取图片失败", e);
-            throw new RuntimeException("读取图片失败", e);
+            log.error("读取图片流失败", e);
+            throw new RuntimeException("读取图片流失败", e);
         } catch (Exception e) {
             log.error("AI 识别失败", e);
             throw new RuntimeException("AI 识别失败: " + e.getMessage(), e);

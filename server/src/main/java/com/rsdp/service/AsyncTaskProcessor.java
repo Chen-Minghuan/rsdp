@@ -10,6 +10,7 @@ import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.service.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,7 +18,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.file.Path;
+import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
@@ -35,6 +36,7 @@ public class AsyncTaskProcessor {
     private final ImageAssetsMapper imageAssetsMapper;
     private final AiRecognitionMapper aiRecognitionMapper;
     private final VisionService visionService;
+    private final StorageService storageService;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.ai.model}")
@@ -43,14 +45,14 @@ public class AsyncTaskProcessor {
     /**
      * 异步处理产品录入任务：AI 视觉识别并更新相关记录。
      *
-     * @param taskId   任务 ID
-     * @param rspuId   RSPU ID
-     * @param imageId  图片 ID
-     * @param imagePath 图片本地路径
+     * @param taskId    任务 ID
+     * @param rspuId    RSPU ID
+     * @param imageId   图片 ID
+     * @param objectKey 存储对象键
      */
     @Async
     @Transactional
-    public void processProductEntry(String taskId, String rspuId, String imageId, Path imagePath) {
+    public void processProductEntry(String taskId, String rspuId, String imageId, String objectKey) {
         log.info("开始异步处理产品录入任务，taskId={}", taskId);
         updateTaskStatus(taskId, "processing", 10, null, null);
 
@@ -61,9 +63,9 @@ public class AsyncTaskProcessor {
         AiLabels labels = null;
         int processingTime = 0;
 
-        try {
+        try (InputStream imageStream = storageService.get(objectKey)) {
             long aiStart = System.currentTimeMillis();
-            labels = visionService.recognizeImage(imagePath);
+            labels = visionService.recognizeImage(imageStream);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
             updateTaskStatus(taskId, "processing", 60, null, null);

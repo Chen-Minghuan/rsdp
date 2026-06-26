@@ -15,9 +15,11 @@ spring:
 server:
   port: 8081
 
+storage:
+  type: local
+  local-path: ./data/uploads
+
 rsdp:
-  upload:
-    path: ./data/uploads/
   ai:
     # 通义千问 VL 兼容 OpenAI 格式
     base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
