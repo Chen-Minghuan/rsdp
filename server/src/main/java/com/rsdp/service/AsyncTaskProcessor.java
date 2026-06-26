@@ -60,7 +60,7 @@ public class AsyncTaskProcessor {
      * @param imageId   图片 ID
      * @param objectKey 存储对象键
      */
-    @Async
+    @Async("taskExecutor")
     @Transactional
     public void processProductEntry(String taskId, String rspuId, String imageId, String objectKey) {
         log.info("开始异步处理产品录入任务，taskId={}", taskId);
@@ -131,7 +131,7 @@ public class AsyncTaskProcessor {
             rspu.setColorPrimaryName(labels.getColorPrimaryName());
             rspu.setColorPrimaryHsv(toJson(labels.getColorPrimaryHsv()));
             rspu.setMaterialTags(toJson(materialCodes));
-            rspu.setSceneTags(toJson(labels.getSceneTags()));
+            rspu.setSceneTags(toJson(sceneCodes));
             rspu.setAestheticsConfidence(labels.getConfidence());
             rspu.setSourceAgentVersion(modelName);
             rspu.setStatus("active");
@@ -242,6 +242,7 @@ public class AsyncTaskProcessor {
         copy.setSixDimTags(source.getSixDimTags());
         copy.setStatus(source.getStatus());
         copy.setReviewStatus(source.getReviewStatus());
+        copy.setReviewComment(source.getReviewComment());
         copy.setAestheticsConfidence(source.getAestheticsConfidence());
         copy.setSourceAgentVersion(source.getSourceAgentVersion());
         copy.setCreatedAt(source.getCreatedAt());

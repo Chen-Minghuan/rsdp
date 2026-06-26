@@ -6,8 +6,10 @@ import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
+import com.rsdp.mapper.VariantCodeMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,6 +18,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -36,12 +39,30 @@ class RspuVariantServiceTest {
     private RspuMapper rspuMapper;
 
     @Mock
+    private VariantCodeMapper variantCodeMapper;
+
+    @Mock
+    private DictService dictService;
+
+    @Mock
     private AuditLogService auditLogService;
 
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private RspuVariantService variantService;
+
+    private List<CategoryDict> materialDicts(String... codes) {
+        return java.util.Arrays.stream(codes)
+            .map(c -> {
+                CategoryDict d = new CategoryDict();
+                d.setDictType("material");
+                d.setDictCode(c);
+                d.setDictName(c);
+                return d;
+            })
+            .toList();
+    }
 
     private String rspuId;
 
@@ -56,7 +77,8 @@ class RspuVariantServiceTest {
         rspu.setRspuId(rspuId);
         rspu.setStatus("active");
         when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
-        when(variantMapper.selectCount(any())).thenReturn(0L);
+        when(variantCodeMapper.allocateSequence(rspuId)).thenReturn(1L);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
 
         RspuVariantCreateRequest request = new RspuVariantCreateRequest();
         request.setDisplayName("兰卡沙发 2450mm 布艺版");
@@ -89,7 +111,8 @@ class RspuVariantServiceTest {
         rspu.setRspuId(rspuId);
         rspu.setStatus("active");
         when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
-        when(variantMapper.selectCount(any())).thenReturn(2L);
+        when(variantCodeMapper.allocateSequence(rspuId)).thenReturn(3L);
+        when(dictService.listByType("material")).thenReturn(materialDicts("TN"));
 
         RspuVariantCreateRequest request = new RspuVariantCreateRequest();
         request.setDisplayName("第三个变体");

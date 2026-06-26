@@ -15,7 +15,9 @@ import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -93,6 +95,7 @@ public class RskuService {
      *
      * @param request 报价请求
      */
+    @Transactional
     public void createRsku(RskuCreateRequest request) {
         RspuMaster rspu = rspuMapper.selectById(request.getRspuId());
         if (rspu == null || rspu.getDeletedAt() != null) {
@@ -107,16 +110,6 @@ public class RskuService {
         RspuVariant variant = rspuVariantService.findById(request.getVariantId());
         if (!request.getRspuId().equals(variant.getRspuId())) {
             throw new BusinessException("变体不属于该产品: " + request.getVariantId());
-        }
-
-        QueryWrapper<RskuSupply> duplicateQuery = new QueryWrapper<RskuSupply>()
-            .eq("rspu_id", request.getRspuId())
-            .eq("factory_code", request.getFactoryCode())
-            .eq("variant_id", request.getVariantId())
-            .isNull("deleted_at");
-        Long count = rskuSupplyMapper.selectCount(duplicateQuery);
-        if (count != null && count > 0) {
-            throw new BusinessException("该工厂对该变体已有报价");
         }
 
         RskuSupply rsku = new RskuSupply();
@@ -138,7 +131,12 @@ public class RskuService {
         rsku.setPriceUpdated(LocalDate.now());
         rsku.setCreatedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
-        rskuSupplyMapper.insert(rsku);
+
+        try {
+            rskuSupplyMapper.insert(rsku);
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException("该工厂对该变体已有报价");
+        }
 
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, "admin");
     }
@@ -150,6 +148,7 @@ public class RskuService {
      * @param newPrice    新价格
      * @param changeReason 变更原因
      */
+    @Transactional
     public void updateRskuPrice(String rskuId, BigDecimal newPrice, String changeReason) {
         RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
         if (rsku == null || rsku.getDeletedAt() != null) {

@@ -5,8 +5,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.AbstractMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -74,9 +76,15 @@ public class DictResolverService {
             return List.of();
         }
         Map<String, String> nameToCode = dictService.listByType(dictType).stream()
+            .flatMap(d -> {
+                String code = d.getDictCode();
+                return java.util.stream.Stream.of(d.getDictName(), d.getDictNameEn())
+                    .filter(Objects::nonNull)
+                    .map(k -> new AbstractMap.SimpleEntry<>(k.trim(), code));
+            })
             .collect(Collectors.toMap(
-                d -> d.getDictName() != null ? d.getDictName() : "",
-                CategoryDict::getDictCode,
+                Map.Entry::getKey,
+                Map.Entry::getValue,
                 (a, b) -> a
             ));
 

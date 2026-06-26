@@ -9,6 +9,7 @@ import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -22,6 +23,7 @@ import java.util.stream.Collectors;
 public class FactoryService {
 
     private final FactoryMasterMapper factoryMasterMapper;
+    private final DictService dictService;
     private final AuditLogService auditLogService;
 
     /**
@@ -55,10 +57,12 @@ public class FactoryService {
      *
      * @param request 创建请求
      */
+    @Transactional
     public void createFactory(FactoryCreateRequest request) {
         if (factoryMasterMapper.selectById(request.getFactoryCode()) != null) {
             throw new BusinessException("工厂代码已存在: " + request.getFactoryCode());
         }
+        validateFactoryLevel(request.getFactoryLevel());
 
         FactoryMaster factory = new FactoryMaster();
         factory.setFactoryCode(request.getFactoryCode());
@@ -84,6 +88,7 @@ public class FactoryService {
      * @param factoryCode 工厂代码
      * @param newLevel    新等级，如 S/A/B/C
      */
+    @Transactional
     public void updateFactoryLevel(String factoryCode, String newLevel) {
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
         if (factory == null || factory.getDeletedAt() != null) {
@@ -92,6 +97,7 @@ public class FactoryService {
         if (newLevel == null || newLevel.isBlank()) {
             throw new BusinessException("工厂等级不能为空");
         }
+        validateFactoryLevel(newLevel);
 
         FactoryMaster oldSnapshot = snapshot(factory);
         factory.setFactoryLevel(newLevel);
@@ -99,6 +105,14 @@ public class FactoryService {
         factoryMasterMapper.updateById(factory);
 
         auditLogService.logUpdate("factory_master", factoryCode, oldSnapshot, factory, "admin");
+    }
+
+    private void validateFactoryLevel(String level) {
+        boolean exists = dictService.listByType("factory_level").stream()
+            .anyMatch(d -> level.equals(d.getDictCode()) || level.equals(d.getDictName()));
+        if (!exists) {
+            throw new BusinessException("工厂等级不存在: " + level);
+        }
     }
 
     private FactoryMaster snapshot(FactoryMaster source) {

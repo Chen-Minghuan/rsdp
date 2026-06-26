@@ -19,6 +19,7 @@ import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -129,6 +130,7 @@ public class ProductQueryService {
      * @param reviewStatus   复核状态
      * @param reviewComment  复核备注
      */
+    @Transactional
     public void reviewProduct(String rspuId, String reviewStatus, String reviewComment) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null || rspu.getDeletedAt() != null) {
@@ -137,6 +139,7 @@ public class ProductQueryService {
 
         RspuMaster oldSnapshot = snapshot(rspu);
         rspu.setReviewStatus(reviewStatus);
+        rspu.setReviewComment(reviewComment);
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
@@ -156,6 +159,7 @@ public class ProductQueryService {
         copy.setSixDimTags(source.getSixDimTags());
         copy.setStatus(source.getStatus());
         copy.setReviewStatus(source.getReviewStatus());
+        copy.setReviewComment(source.getReviewComment());
         copy.setAestheticsConfidence(source.getAestheticsConfidence());
         copy.setSourceAgentVersion(source.getSourceAgentVersion());
         copy.setCreatedAt(source.getCreatedAt());

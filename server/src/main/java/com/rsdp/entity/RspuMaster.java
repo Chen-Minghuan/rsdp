@@ -47,6 +47,7 @@ public class RspuMaster {
     private String keySpecs;
     private String status;
     private String reviewStatus;
+    private String reviewComment;
     private String aestheticsConfidence;
     private String sourceAgentVersion;
     private LocalDateTime createdAt;

@@ -19,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -87,7 +88,6 @@ class RskuServiceTest {
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(new RspuMaster());
         when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
         when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
-        when(rskuSupplyMapper.selectCount(any())).thenReturn(0L);
 
         rskuService.createRsku(request);
 
@@ -130,7 +130,7 @@ class RskuServiceTest {
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(new RspuMaster());
         when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
         when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
-        when(rskuSupplyMapper.selectCount(any())).thenReturn(1L);
+        doThrow(new DataIntegrityViolationException("duplicate")).when(rskuSupplyMapper).insert(any(RskuSupply.class));
 
         assertThatThrownBy(() -> rskuService.createRsku(request))
             .isInstanceOf(BusinessException.class)

@@ -26,3 +26,8 @@ rsdp:
     model: qwen3-vl-plus
     api-key: ${DASHSCOPE_API_KEY:your-api-key-here}
     timeout-seconds: 60
+  async:
+    core-pool-size: 4
+    max-pool-size: 16
+    queue-capacity: 200
+    thread-name-prefix: rsdp-async-

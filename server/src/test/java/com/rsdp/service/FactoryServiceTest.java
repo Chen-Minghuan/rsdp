@@ -2,6 +2,7 @@ package com.rsdp.service;
 
 import com.rsdp.dto.request.FactoryCreateRequest;
 import com.rsdp.dto.response.FactoryResponse;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
@@ -29,10 +30,21 @@ class FactoryServiceTest {
     private FactoryMasterMapper factoryMasterMapper;
 
     @Mock
+    private DictService dictService;
+
+    @Mock
     private AuditLogService auditLogService;
 
     @InjectMocks
     private FactoryService factoryService;
+
+    private List<CategoryDict> factoryLevelDicts() {
+        CategoryDict a = new CategoryDict();
+        a.setDictType("factory_level");
+        a.setDictCode("A");
+        a.setDictName("A级");
+        return List.of(a);
+    }
 
     @Test
     void listFactories_shouldReturnActiveFactories() {
@@ -57,6 +69,7 @@ class FactoryServiceTest {
         request.setFactoryLevel("A");
 
         when(factoryMasterMapper.selectById("F001")).thenReturn(null);
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
 
         factoryService.createFactory(request);
 
@@ -91,6 +104,7 @@ class FactoryServiceTest {
         factory.setFactoryLevel("B");
 
         when(factoryMasterMapper.selectById("B007")).thenReturn(factory);
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
 
         factoryService.updateFactoryLevel("B007", "A");
 

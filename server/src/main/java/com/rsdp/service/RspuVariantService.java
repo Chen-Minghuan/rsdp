@@ -6,9 +6,11 @@ import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
+import com.rsdp.mapper.VariantCodeMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,6 +31,8 @@ public class RspuVariantService {
 
     private final RspuVariantMapper variantMapper;
     private final RspuMapper rspuMapper;
+    private final VariantCodeMapper variantCodeMapper;
+    private final DictService dictService;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
@@ -45,6 +49,8 @@ public class RspuVariantService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
+
+        validateVariantCodes(request);
 
         String variantId = generateVariantId(rspuId);
 
@@ -114,10 +120,28 @@ public class RspuVariantService {
     }
 
     private String generateVariantId(String rspuId) {
-        long count = variantMapper.selectCount(
-            new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId)
-        );
-        return String.format("%s-V%03d", rspuId, count + 1);
+        Long nextSeq = variantCodeMapper.allocateSequence(rspuId);
+        if (nextSeq == null) {
+            throw new BusinessException("无法生成变体编码流水号: " + rspuId);
+        }
+        return String.format("%s-V%03d", rspuId, nextSeq);
+    }
+
+    private void validateVariantCodes(RspuVariantCreateRequest request) {
+        validateDictCode("size", request.getSizeCode(), "尺寸码");
+        validateDictCode("color", request.getColorCode(), "颜色码");
+        validateDictCode("material", request.getMaterialCode(), "材质码");
+    }
+
+    private void validateDictCode(String dictType, String code, String label) {
+        if (!StringUtils.hasText(code)) {
+            return;
+        }
+        boolean exists = dictService.listByType(dictType).stream()
+            .anyMatch(d -> code.equals(d.getDictCode()));
+        if (!exists) {
+            throw new BusinessException(label + "不存在: " + code);
+        }
     }
 
     private RspuVariantResponse toResponse(RspuVariant variant) {

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     key_specs JSONB,                               -- 关键规格：框架材质、海绵密度等
     status VARCHAR(16) DEFAULT 'active',           -- active/discontinued/draft
     review_status VARCHAR(16) DEFAULT '待复核',     -- 待复核/已确认/存疑
+    review_comment TEXT,                           -- 复核备注
     aesthetics_confidence VARCHAR(16),             -- high/mid/low
     source_agent_version VARCHAR(64),              -- Ollama 模型版本
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -255,6 +256,13 @@ CREATE TABLE IF NOT EXISTS rspu_code_counter (
     PRIMARY KEY (category_code, style_code)
 );
 
+-- 变体编码流水号计数器（按 RSPU 维度，保证变体 ID 并发唯一）
+CREATE TABLE IF NOT EXISTS variant_code_counter (
+    rspu_id VARCHAR(64) PRIMARY KEY,
+    sequence_value BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_log (
     id SERIAL PRIMARY KEY,
@@ -327,6 +335,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_rspu ON ai_recognition(rspu_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
 
--- JSONB GIN 索引（按需启用，可加速标签查询）
+-- JSONB GIN 索引（material_tags 用于精确包含查询）
+CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
 -- CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
 -- CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
