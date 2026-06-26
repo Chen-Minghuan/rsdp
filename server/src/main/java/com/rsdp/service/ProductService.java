@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -20,6 +21,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -37,6 +40,7 @@ public class ProductService {
     private final AsyncTaskProcessor asyncTaskProcessor;
     private final ImageUploadValidator imageUploadValidator;
     private final StorageService storageService;
+    private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
@@ -48,23 +52,28 @@ public class ProductService {
      * <p>同步完成：图片校验、本地落盘、RSPU 草稿、图片记录、异步任务记录。
      * AI 识别在后台异步执行，调用方通过返回的 {@code taskId} 轮询任务状态。
      *
-     * @param image 产品图片
-     * @return 包含 taskId、rspuId、imageId 的映射
+     * <p>支持一次上传多张图片：第一张图作为主图（{@code white_bg}）参与 AI 识别，
+     * 其余图作为非主图（{@code detail}）仅做存档展示。
+     *
+     * @param images 产品图片列表，第一张为主图
+     * @return 包含 taskId、rspuId、imageIds 的映射
      * @throws IOException 文件保存失败
      */
     @Transactional
-    public Map<String, Object> createEntry(MultipartFile image) throws IOException {
+    public Map<String, Object> createEntry(List<MultipartFile> images) throws IOException {
         long start = System.currentTimeMillis();
 
-        imageUploadValidator.validate(image, parseMaxFileSize(maxFileSize));
+        if (images == null || images.isEmpty()) {
+            throw new BusinessException("请至少上传一张图片");
+        }
+
+        long maxSize = parseMaxFileSize(maxFileSize);
+        for (MultipartFile image : images) {
+            imageUploadValidator.validate(image, maxSize);
+        }
 
         String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-
-        // 保存图片到存储后端
-        String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
-        String storagePath = storageService.store(image, objectKey);
 
         // 创建 RSPU 草稿
         RspuMaster rspu = new RspuMaster();
@@ -77,46 +86,66 @@ public class ProductService {
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
+        auditLogService.logCreate("rspu_master", rspuId, rspu, "admin");
 
-        // 创建图片资源记录
-        ImageAssets imageAsset = new ImageAssets();
-        imageAsset.setImageId(imageId);
-        imageAsset.setRspuId(rspuId);
-        imageAsset.setImageType("white_bg");
-        imageAsset.setStoragePath(storagePath);
-        imageAsset.setPrimary(true);
-        imageAsset.setAiProcessed(false);
-        imageAsset.setFileSize(image.getSize());
-        imageAsset.setFormat(getExtension(image.getOriginalFilename()));
-        imageAsset.setUploadedBy("admin");
-        imageAsset.setCreatedAt(LocalDateTime.now());
-        imageAssetsMapper.insert(imageAsset);
+        List<String> imageIds = new ArrayList<>();
+        String primaryImageId = null;
+        String primaryObjectKey = null;
 
-        // 创建异步任务
+        for (int i = 0; i < images.size(); i++) {
+            MultipartFile image = images.get(i);
+            String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+            String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
+            String storagePath = storageService.store(image, objectKey);
+
+            boolean isPrimary = i == 0;
+            ImageAssets imageAsset = new ImageAssets();
+            imageAsset.setImageId(imageId);
+            imageAsset.setRspuId(rspuId);
+            imageAsset.setImageType(isPrimary ? "white_bg" : "detail");
+            imageAsset.setStoragePath(storagePath);
+            imageAsset.setPrimary(isPrimary);
+            imageAsset.setAiProcessed(false);
+            imageAsset.setFileSize(image.getSize());
+            imageAsset.setFormat(getExtension(image.getOriginalFilename()));
+            imageAsset.setUploadedBy("admin");
+            imageAsset.setCreatedAt(LocalDateTime.now());
+            imageAssetsMapper.insert(imageAsset);
+            auditLogService.logCreate("image_assets", imageId, imageAsset, "admin");
+
+            imageIds.add(imageId);
+            if (isPrimary) {
+                primaryImageId = imageId;
+                primaryObjectKey = storagePath;
+            }
+        }
+
+        // 创建异步任务（仅针对主图做 AI 识别）
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);
         task.setTaskType("product_entry");
         task.setStatus("pending");
         task.setProgress(0);
+        MultipartFile primaryImage = images.get(0);
         task.setInputData(objectMapper.writeValueAsString(Map.of(
             "rspuId", rspuId,
-            "imageId", imageId,
-            "objectKey", storagePath,
-            "originalFilename", image.getOriginalFilename()
+            "imageId", primaryImageId,
+            "objectKey", primaryObjectKey,
+            "originalFilename", primaryImage.getOriginalFilename()
         )));
         task.setCreatedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
 
         // 触发后台 AI 识别：若处于事务中，则在事务提交后触发；否则立即触发
-        triggerAsyncProcess(taskId, rspuId, imageId, storagePath);
+        triggerAsyncProcess(taskId, rspuId, primaryImageId, primaryObjectKey);
 
-        log.info("产品录入任务已创建，总耗时 {}ms，taskId={}",
-            System.currentTimeMillis() - start, taskId);
+        log.info("产品录入任务已创建，共 {} 张图片，总耗时 {}ms，taskId={}",
+            images.size(), System.currentTimeMillis() - start, taskId);
 
         return Map.of(
             "taskId", taskId,
             "rspuId", rspuId,
-            "imageId", imageId,
+            "imageIds", imageIds,
             "message", "任务已创建，正在后台识别中"
         );
     }

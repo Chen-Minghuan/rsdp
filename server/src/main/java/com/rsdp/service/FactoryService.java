@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 public class FactoryService {
 
     private final FactoryMasterMapper factoryMasterMapper;
+    private final AuditLogService auditLogService;
 
     /**
      * 查询所有有效工厂。
@@ -73,6 +74,8 @@ public class FactoryService {
         factory.setCreatedAt(LocalDateTime.now());
         factory.setUpdatedAt(LocalDateTime.now());
         factoryMasterMapper.insert(factory);
+
+        auditLogService.logCreate("factory_master", factory.getFactoryCode(), factory, "admin");
     }
 
     private FactoryResponse toResponse(FactoryMaster factory) {

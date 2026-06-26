@@ -28,6 +28,9 @@ class FactoryServiceTest {
     @Mock
     private FactoryMasterMapper factoryMasterMapper;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private FactoryService factoryService;
 

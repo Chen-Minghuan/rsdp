@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -35,15 +36,15 @@ public class ProductController {
     private final ProductQueryService productQueryService;
 
     /**
-     * 新品录入。
+     * 新品录入，支持为一个 RSPU 上传多张图片。
      *
-     * @param image 产品图片
+     * @param images 产品图片列表，第一张为主图
      * @return 任务信息
      * @throws IOException 文件保存失败
      */
     @PostMapping("/entry")
-    public Result<Map<String, Object>> entry(@RequestParam("image") MultipartFile image) throws IOException {
-        Map<String, Object> result = productService.createEntry(image);
+    public Result<Map<String, Object>> entry(@RequestParam("images") List<MultipartFile> images) throws IOException {
+        Map<String, Object> result = productService.createEntry(images);
         return Result.ok(result);
     }
 

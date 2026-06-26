@@ -1,5 +1,6 @@
 import { apiClient, type ApiResult } from './client'
 import type { Factory, FactoryCreateRequest } from '@/types/factory'
+import type { Rsku } from '@/types/rsku'
 
 /**
  * 查询工厂列表。
@@ -22,4 +23,12 @@ export async function getFactory(factoryCode: string): Promise<Factory> {
  */
 export async function createFactory(request: FactoryCreateRequest): Promise<void> {
   await apiClient.post<ApiResult<void>>('/v1/factories', request)
+}
+
+/**
+ * 查询某工厂的所有 RSKU 报价。
+ */
+export async function listRskuByFactory(factoryCode: string): Promise<Rsku[]> {
+  const { data: result } = await apiClient.get<ApiResult<Rsku[]>>(`/v1/factories/${factoryCode}/rsku`)
+  return result.data
 }

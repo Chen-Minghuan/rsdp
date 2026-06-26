@@ -3,14 +3,14 @@ import type { PageResult, ProductDetail, ProductListParams, ProductReviewRequest
 import type { ProductEntryResult } from '@/types/task'
 
 /**
- * 新品录入：上传产品图片。
+ * 新品录入：上传多张产品图片。
  *
- * @param file 图片文件
+ * @param files 图片文件列表，第一张作为主图
  * @returns 任务信息
  */
-export async function uploadProductImage(file: File): Promise<ProductEntryResult> {
+export async function uploadProductImages(files: File[]): Promise<ProductEntryResult> {
   const formData = new FormData()
-  formData.append('image', file)
+  files.forEach(file => formData.append('images', file))
 
   const { data: result } = await apiClient.post<ApiResult<ProductEntryResult>>(
     '/v1/products/entry',

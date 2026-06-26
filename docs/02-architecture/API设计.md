@@ -14,8 +14,8 @@
 POST   /api/v1/products/entry
        # 新品录入（同步完成图片保存与任务创建，AI 识别在后台异步执行）
        # Request:  multipart/form-data
-       #   image: File (必填, ≤20MB, jpg/png/webp/gif/bmp)
-       # Response: { taskId, rspuId, imageId, message }
+       #   images: File[] (必填, 第一张为主图, 其余为非主图/detail, 单张 ≤20MB)
+       # Response: { taskId, rspuId, imageIds: string[], message }
 
 GET    /api/v1/tasks/{taskId}
        # 查询异步任务状态（前端轮询用）
@@ -63,6 +63,10 @@ GET    /api/v1/images/{imageId}
 GET    /api/v1/products/{rspuId}/rsku
        # 查询某 RSPU 下的 RSKU 工厂报价列表（已实现）
        # Response: [RskuSupply...]
+
+GET    /api/v1/products/{rspuId}/rsku/{rskuId}
+       # 查询单个 RSKU 报价详情（已实现）
+       # Response: RskuSupply
 
 POST   /api/v1/products/{rspuId}/rsku
        # 为该 RSPU 新增工厂报价（已实现）
@@ -137,6 +141,10 @@ PUT    /api/v1/factories/{code}
 
 GET    /api/v1/factories/{code}
        # 工厂详情（已实现）
+
+GET    /api/v1/factories/{code}/rsku
+       # 查询某工厂的所有 RSKU 报价（已实现）
+       # Response: [RskuSupply...]
 ```
 
 ### 导出

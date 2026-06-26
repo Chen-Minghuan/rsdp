@@ -31,6 +31,7 @@ public class RskuService {
     private final RskuSupplyMapper rskuSupplyMapper;
     private final RspuMapper rspuMapper;
     private final FactoryMasterMapper factoryMasterMapper;
+    private final AuditLogService auditLogService;
 
     /**
      * 查询某 RSPU 下的所有 RSKU 报价。
@@ -42,6 +43,40 @@ public class RskuService {
         List<RskuSupply> list = rskuSupplyMapper.selectList(
             new QueryWrapper<RskuSupply>()
                 .eq("rspu_id", rspuId)
+                .isNull("deleted_at")
+                .orderByDesc("created_at")
+        );
+        return list.stream().map(this::toResponse).collect(Collectors.toList());
+    }
+
+    /**
+     * 查询单个 RSKU 报价详情。
+     *
+     * @param rspuId RSPU ID
+     * @param rskuId RSKU ID
+     * @return RSKU 报价详情
+     */
+    public RskuResponse getRsku(String rspuId, String rskuId) {
+        RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
+        if (rsku == null || rsku.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
+        if (!rspuId.equals(rsku.getRspuId())) {
+            throw new ResourceNotFoundException("RSKU 不属于该产品: " + rskuId);
+        }
+        return toResponse(rsku);
+    }
+
+    /**
+     * 查询某工厂的所有 RSKU 报价。
+     *
+     * @param factoryCode 工厂代码
+     * @return RSKU 报价列表
+     */
+    public List<RskuResponse> listByFactory(String factoryCode) {
+        List<RskuSupply> list = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>()
+                .eq("factory_code", factoryCode)
                 .isNull("deleted_at")
                 .orderByDesc("created_at")
         );
@@ -98,6 +133,8 @@ public class RskuService {
         rsku.setCreatedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
         rskuSupplyMapper.insert(rsku);
+
+        auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, "admin");
     }
 
     private String resolvePriceBand(BigDecimal price) {

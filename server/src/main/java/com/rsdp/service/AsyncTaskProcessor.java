@@ -37,6 +37,7 @@ public class AsyncTaskProcessor {
     private final AiRecognitionMapper aiRecognitionMapper;
     private final VisionService visionService;
     private final StorageService storageService;
+    private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.ai.model}")
@@ -109,6 +110,7 @@ public class AsyncTaskProcessor {
         // 更新 RSPU
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu != null) {
+            RspuMaster oldSnapshot = snapshot(rspu);
             rspu.setPositioningLabel(labels.getStyle());
             rspu.setSixDimTags(toJson(labels.getSixDimTags()));
             rspu.setColorPrimaryName(labels.getColorPrimaryName());
@@ -120,6 +122,7 @@ public class AsyncTaskProcessor {
             rspu.setStatus("active");
             rspu.setUpdatedAt(LocalDateTime.now());
             rspuMapper.updateById(rspu);
+            auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, "admin");
         }
 
         // 更新图片为已识别
@@ -169,11 +172,33 @@ public class AsyncTaskProcessor {
         // RSPU 保持 active，但 review_status 为存疑
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu != null) {
+            RspuMaster oldSnapshot = snapshot(rspu);
             rspu.setStatus("active");
             rspu.setReviewStatus("存疑");
             rspu.setUpdatedAt(LocalDateTime.now());
             rspuMapper.updateById(rspu);
+            auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, "admin");
         }
+    }
+
+    private RspuMaster snapshot(RspuMaster source) {
+        RspuMaster copy = new RspuMaster();
+        copy.setRspuId(source.getRspuId());
+        copy.setCategoryCode(source.getCategoryCode());
+        copy.setCategoryPath(source.getCategoryPath());
+        copy.setPositioningLabel(source.getPositioningLabel());
+        copy.setColorPrimaryName(source.getColorPrimaryName());
+        copy.setColorPrimaryHsv(source.getColorPrimaryHsv());
+        copy.setMaterialTags(source.getMaterialTags());
+        copy.setSceneTags(source.getSceneTags());
+        copy.setSixDimTags(source.getSixDimTags());
+        copy.setStatus(source.getStatus());
+        copy.setReviewStatus(source.getReviewStatus());
+        copy.setAestheticsConfidence(source.getAestheticsConfidence());
+        copy.setSourceAgentVersion(source.getSourceAgentVersion());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        return copy;
     }
 
     private String toJson(Object value) {

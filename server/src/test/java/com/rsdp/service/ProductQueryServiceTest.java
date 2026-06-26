@@ -40,6 +40,9 @@ class ProductQueryServiceTest {
     @Mock
     private AiRecognitionMapper aiRecognitionMapper;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private ProductQueryService productQueryService;
 

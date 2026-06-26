@@ -6,7 +6,7 @@ export interface TaskStatus {
   taskType: string
   status: 'pending' | 'processing' | 'done' | 'failed'
   progress: number
-  result: Record<string, any>
+  result: Record<string, unknown>
   errorMessage: string
   createdAt: string
   completedAt?: string
@@ -18,7 +18,8 @@ export interface TaskStatus {
 export interface ProductEntryResult {
   taskId: string
   rspuId: string
-  imageId: string
+  imageId?: string
+  imageIds: string[]
   message: string
 }
 
@@ -29,9 +30,10 @@ export interface TaskItem {
   taskId: string
   rspuId: string
   fileName: string
+  imageIds: string[]
   status: 'pending' | 'processing' | 'done' | 'failed'
   progress: number
-  result: Record<string, any>
+  result: Record<string, unknown>
   errorMessage: string
   createdAt?: string
   completedAt?: string

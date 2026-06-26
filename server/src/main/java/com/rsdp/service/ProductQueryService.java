@@ -31,6 +31,7 @@ public class ProductQueryService {
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final AiRecognitionMapper aiRecognitionMapper;
+    private final AuditLogService auditLogService;
 
     /**
      * 分页查询产品列表。
@@ -109,11 +110,32 @@ public class ProductQueryService {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 
+        RspuMaster oldSnapshot = snapshot(rspu);
         rspu.setReviewStatus(reviewStatus);
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
-        // 复核备注暂不单独建表，可写入 audit_log（后续实现审计时补充）
+        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, "admin");
+    }
+
+    private RspuMaster snapshot(RspuMaster source) {
+        RspuMaster copy = new RspuMaster();
+        copy.setRspuId(source.getRspuId());
+        copy.setCategoryCode(source.getCategoryCode());
+        copy.setCategoryPath(source.getCategoryPath());
+        copy.setPositioningLabel(source.getPositioningLabel());
+        copy.setColorPrimaryName(source.getColorPrimaryName());
+        copy.setColorPrimaryHsv(source.getColorPrimaryHsv());
+        copy.setMaterialTags(source.getMaterialTags());
+        copy.setSceneTags(source.getSceneTags());
+        copy.setSixDimTags(source.getSixDimTags());
+        copy.setStatus(source.getStatus());
+        copy.setReviewStatus(source.getReviewStatus());
+        copy.setAestheticsConfidence(source.getAestheticsConfidence());
+        copy.setSourceAgentVersion(source.getSourceAgentVersion());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        return copy;
     }
 
     private ProductSummaryResponse toSummary(RspuMaster rspu) {

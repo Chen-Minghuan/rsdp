@@ -9,11 +9,12 @@ import {
   NUpload,
   NSpin,
   NTag,
+  NImage,
   NDescriptions,
   NDescriptionsItem,
   type UploadFileInfo
 } from 'naive-ui'
-import { uploadProductImage } from '@/api/product'
+import { uploadProductImages } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import type { TaskItem } from '@/types/task'
 
@@ -84,52 +85,28 @@ async function handleStartUpload() {
   uploading.value = true
 
   try {
-    const settledResults = await Promise.allSettled(
-      files.map(async (file) => {
-        const result = await uploadProductImage(file)
-        return { file, result }
-      })
-    )
+    const result = await uploadProductImages(files)
 
-    const newTasks: TaskItem[] = []
-    let failedCount = 0
-
-    for (const settled of settledResults) {
-      if (settled.status === 'fulfilled') {
-        const { file, result } = settled.value
-        newTasks.push({
-          taskId: result.taskId,
-          rspuId: result.rspuId,
-          fileName: file.name,
-          status: 'pending',
-          progress: 0,
-          result: {},
-          errorMessage: ''
-        })
-      } else {
-        failedCount++
-      }
+    const newTask: TaskItem = {
+      taskId: result.taskId,
+      rspuId: result.rspuId,
+      fileName: files.length === 1 ? files[0].name : `${files[0].name} 等 ${files.length} 张`,
+      imageIds: result.imageIds,
+      status: 'pending',
+      progress: 0,
+      result: {},
+      errorMessage: ''
     }
 
-    if (failedCount > 0) {
-      if (newTasks.length === 0) {
-        errorMessage.value = '所有图片上传失败，请检查网络后重试'
-      } else {
-        errorMessage.value = `${failedCount} 张图片上传失败，${newTasks.length} 张已提交识别`
-      }
-    }
+    // 新任务放到列表前面，方便看最新追加的
+    taskList.value.unshift(newTask)
 
-    if (newTasks.length > 0) {
-      // 新任务放到列表前面，方便看最新追加的
-      taskList.value.unshift(...newTasks)
+    // 清空已选文件，允许继续选择下一批
+    fileList.value = []
 
-      // 清空已选文件，允许继续选择下一批
-      fileList.value = []
-
-      // 立即轮询一次，然后开启定时轮询
-      await pollAllTasks()
-      ensurePolling()
-    }
+    // 立即轮询一次，然后开启定时轮询
+    await pollAllTasks()
+    ensurePolling()
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '上传失败'
   } finally {
@@ -200,7 +177,7 @@ function statusText(status: TaskItem['status']) {
           :show-icon="true"
           style="margin-top: 8px;"
         >
-          还有 {{ pendingTaskCount }} 个任务正在识别中，您可以继续选择图片追加录入。
+          还有 {{ pendingTaskCount }} 个产品正在识别中，您可以继续选择图片追加录入。
         </n-alert>
 
         <n-space v-if="hasTasks" justify="end">
@@ -236,6 +213,22 @@ function statusText(status: TaskItem['status']) {
             <n-alert v-if="task.status === 'failed'" type="error" :show-icon="true">
               {{ task.errorMessage }}
             </n-alert>
+
+            <n-space
+              v-if="task.imageIds && task.imageIds.length > 0"
+              align="center"
+              style="margin-top: 8px;"
+            >
+              <n-image
+                v-for="imageId in task.imageIds"
+                :key="imageId"
+                :src="`/api/v1/images/${imageId}`"
+                width="80"
+                height="80"
+                object-fit="cover"
+                style="border-radius: 4px;"
+              />
+            </n-space>
 
             <n-descriptions
               v-if="task.status === 'done' && task.result"

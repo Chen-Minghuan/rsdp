@@ -155,6 +155,12 @@ async function handleCreateRsku() {
     return
   }
 
+  if (rskuForm.value.factorySku && rskuForm.value.factorySku.length > 64) {
+    successMessage.value = ''
+    errorMessage.value = '工厂SKU 长度不能超过 64 个字符'
+    return
+  }
+
   submittingRsku.value = true
   errorMessage.value = ''
   successMessage.value = ''
@@ -297,6 +303,8 @@ onMounted(() => {
                 :loading="rskuLoading"
                 :bordered="true"
                 :single-line="false"
+                row-class-name="clickable-row"
+                @row-click="(row: Rsku) => router.push(`/products/${rspuId}/rsku/${row.rskuId}`)"
               >
                 <template #empty>
                   <n-space justify="center" style="padding: 24px;">
@@ -325,7 +333,10 @@ onMounted(() => {
           />
         </n-form-item>
         <n-form-item label="工厂SKU">
-          <n-input v-model:value="rskuForm.factorySku" placeholder="工厂原始编码" />
+          <n-input
+            v-model:value="rskuForm.factorySku"
+            placeholder="如 A001-CH-2024-07（工厂内部型号）"
+          />
         </n-form-item>
         <n-form-item label="出厂价" required>
           <n-input-number v-model:value="rskuForm.factoryPrice" :min="0" placeholder="出厂价" />
@@ -367,3 +378,12 @@ onMounted(() => {
     </n-modal>
   </n-space>
 </template>
+
+<style scoped>
+:deep(.clickable-row) {
+  cursor: pointer;
+}
+:deep(.clickable-row:hover) {
+  background-color: #f5f5f5;
+}
+</style>

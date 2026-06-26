@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,6 +49,9 @@ class ProductServiceTest {
     @Mock
     private StorageService storageService;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -60,6 +64,7 @@ class ProductServiceTest {
         setField("imageUploadValidator", imageUploadValidator);
         setField("objectMapper", objectMapper);
         setField("storageService", storageService);
+        setField("auditLogService", auditLogService);
     }
 
     private void setField(String name, Object value) throws Exception {
@@ -75,9 +80,10 @@ class ProductServiceTest {
         );
         when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
 
-        Map<String, Object> result = productService.createEntry(image);
+        Map<String, Object> result = productService.createEntry(List.of(image));
 
-        assertThat(result).containsKeys("taskId", "rspuId", "imageId", "message");
+        assertThat(result).containsKeys("taskId", "rspuId", "imageIds", "message");
+        assertThat(result.get("imageIds")).asList().hasSize(1);
 
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
@@ -88,6 +94,8 @@ class ProductServiceTest {
         assertThat(imageCaptor.getValue().getFormat()).isEqualTo("jpg");
         assertThat(imageCaptor.getValue().getAiProcessed()).isFalse();
         assertThat(imageCaptor.getValue().getStoragePath()).startsWith("images/");
+        assertThat(imageCaptor.getValue().getPrimary()).isTrue();
+        assertThat(imageCaptor.getValue().getImageType()).isEqualTo("white_bg");
 
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper, times(1)).insert(taskCaptor.capture());
@@ -99,12 +107,34 @@ class ProductServiceTest {
     }
 
     @Test
+    void createEntry_withMultipleImages_shouldCreateOneRspuAndMultipleImages() throws Exception {
+        MockMultipartFile primary = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        MockMultipartFile detail = new MockMultipartFile(
+            "image", "chair-detail.jpg", "image/jpeg", "fake-detail".getBytes()
+        );
+        when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
+
+        Map<String, Object> result = productService.createEntry(List.of(primary, detail));
+
+        assertThat(result).containsKeys("taskId", "rspuId", "imageIds", "message");
+        assertThat(result.get("imageIds")).asList().hasSize(2);
+
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        verify(imageAssetsMapper, times(2)).insert(any(ImageAssets.class));
+        verify(asyncTaskMapper, times(1)).insert(any(AsyncTask.class));
+        verify(asyncTaskProcessor, times(1))
+            .processProductEntry(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
     void createEntry_shouldRejectEmptyFile() {
         MockMultipartFile emptyFile = new MockMultipartFile(
             "image", "empty.jpg", "image/jpeg", new byte[0]
         );
 
-        assertThatThrownBy(() -> productService.createEntry(emptyFile))
+        assertThatThrownBy(() -> productService.createEntry(List.of(emptyFile)))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("请上传图片文件");
 
@@ -117,8 +147,17 @@ class ProductServiceTest {
             "image", "readme.txt", "text/plain", "hello".getBytes()
         );
 
-        assertThatThrownBy(() -> productService.createEntry(textFile))
+        assertThatThrownBy(() -> productService.createEntry(List.of(textFile)))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("图片格式");
+    }
+
+    @Test
+    void createEntry_shouldRejectEmptyImageList() {
+        assertThatThrownBy(() -> productService.createEntry(List.of()))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("请至少上传一张图片");
+
+        verifyNoInteractions(rspuMapper, asyncTaskMapper, imageAssetsMapper, asyncTaskProcessor);
     }
 }

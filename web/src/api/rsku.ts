@@ -10,6 +10,14 @@ export async function listRskuByRspu(rspuId: string): Promise<Rsku[]> {
 }
 
 /**
+ * 查询单个 RSKU 报价详情。
+ */
+export async function getRsku(rspuId: string, rskuId: string): Promise<Rsku> {
+  const { data: result } = await apiClient.get<ApiResult<Rsku>>(`/v1/products/${rspuId}/rsku/${rskuId}`)
+  return result.data
+}
+
+/**
  * 为 RSPU 新增 RSKU 报价。
  */
 export async function createRsku(rspuId: string, request: RskuCreateRequest): Promise<void> {

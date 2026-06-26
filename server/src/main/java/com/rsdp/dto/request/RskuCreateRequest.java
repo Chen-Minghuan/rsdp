@@ -12,7 +12,6 @@ import java.math.BigDecimal;
 @Data
 public class RskuCreateRequest {
 
-    @NotBlank(message = "RSPU ID 不能为空")
     private String rspuId;
 
     @NotBlank(message = "工厂代码不能为空")

@@ -25,6 +25,16 @@ const routes = [
     path: '/factories',
     name: 'FactoryList',
     component: () => import('@/views/FactoryListView.vue')
+  },
+  {
+    path: '/factories/:factoryCode',
+    name: 'FactoryDetail',
+    component: () => import('@/views/FactoryDetailView.vue')
+  },
+  {
+    path: '/products/:rspuId/rsku/:rskuId',
+    name: 'RskuDetail',
+    component: () => import('@/views/RskuDetailView.vue')
   }
 ]
 

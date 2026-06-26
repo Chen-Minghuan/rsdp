@@ -3,7 +3,9 @@ package com.rsdp.controller;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.FactoryCreateRequest;
 import com.rsdp.dto.response.FactoryResponse;
+import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.service.FactoryService;
+import com.rsdp.service.RskuService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,6 +26,7 @@ import java.util.List;
 public class FactoryController {
 
     private final FactoryService factoryService;
+    private final RskuService rskuService;
 
     /**
      * 查询工厂列表。
@@ -56,5 +59,16 @@ public class FactoryController {
     public Result<Void> create(@Valid @RequestBody FactoryCreateRequest request) {
         factoryService.createFactory(request);
         return Result.ok();
+    }
+
+    /**
+     * 查询某工厂的所有 RSKU 报价。
+     *
+     * @param factoryCode 工厂代码
+     * @return RSKU 列表
+     */
+    @GetMapping("/{factoryCode}/rsku")
+    public Result<List<RskuResponse>> listRsku(@PathVariable String factoryCode) {
+        return Result.ok(rskuService.listByFactory(factoryCode));
     }
 }

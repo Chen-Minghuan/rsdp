@@ -38,6 +38,9 @@ class RskuServiceTest {
     @Mock
     private FactoryMasterMapper factoryMasterMapper;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private RskuService rskuService;
 
@@ -88,5 +91,51 @@ class RskuServiceTest {
         assertThatThrownBy(() -> rskuService.createRsku(request))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("已有报价");
+    }
+
+    @Test
+    void getRsku_shouldReturnDetailWhenValid() {
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setRspuId("RSPU-TEST01");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("2500"));
+
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(null);
+
+        RskuResponse result = rskuService.getRsku("RSPU-TEST01", "RSKU-TEST01");
+
+        assertThat(result.getRskuId()).isEqualTo("RSKU-TEST01");
+    }
+
+    @Test
+    void getRsku_shouldThrowWhenRspuMismatch() {
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setRspuId("RSPU-OTHER");
+
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+
+        assertThatThrownBy(() -> rskuService.getRsku("RSPU-TEST01", "RSKU-TEST01"))
+            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class)
+            .hasMessageContaining("不属于");
+    }
+
+    @Test
+    void listByFactory_shouldReturnRskuList() {
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setRspuId("RSPU-TEST01");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("2500"));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
+        when(factoryMasterMapper.selectById("F001")).thenReturn(null);
+
+        List<RskuResponse> result = rskuService.listByFactory("F001");
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getRskuId()).isEqualTo("RSKU-TEST01");
     }
 }

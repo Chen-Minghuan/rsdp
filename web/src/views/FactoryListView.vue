@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -14,6 +15,8 @@ import {
 } from 'naive-ui'
 import { listFactories, createFactory } from '@/api/factory'
 import type { Factory, FactoryCreateRequest } from '@/types/factory'
+
+const router = useRouter()
 
 const factories = ref<Factory[]>([])
 const loading = ref(false)
@@ -162,8 +165,19 @@ onMounted(() => {
           :loading="loading"
           :bordered="true"
           :single-line="false"
+          row-class-name="clickable-row"
+          @row-click="(row: Factory) => router.push(`/factories/${row.factoryCode}`)"
         />
       </n-space>
     </n-card>
   </n-space>
 </template>
+
+<style scoped>
+:deep(.clickable-row) {
+  cursor: pointer;
+}
+:deep(.clickable-row:hover) {
+  background-color: #f5f5f5;
+}
+</style>

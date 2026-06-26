@@ -37,6 +37,19 @@ public class RskuController {
     }
 
     /**
+     * 查询单个 RSKU 报价详情。
+     *
+     * @param rspuId RSPU ID
+     * @param rskuId RSKU ID
+     * @return RSKU 详情
+     */
+    @GetMapping("/{rskuId}")
+    public Result<RskuResponse> detail(@PathVariable String rspuId,
+                                       @PathVariable String rskuId) {
+        return Result.ok(rskuService.getRsku(rspuId, rskuId));
+    }
+
+    /**
      * 为 RSPU 新增 RSKU 报价。
      *
      * @param rspuId  RSPU ID
