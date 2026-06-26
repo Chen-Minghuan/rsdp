@@ -1,20 +1,20 @@
 package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rsdp.dto.AiLabels;
-import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
-import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.util.ImageUploadValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -25,6 +25,9 @@ import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * 产品录入服务，负责接收图片、创建 RSPU 草稿和异步任务，并触发后台 AI 识别。
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -33,36 +36,41 @@ public class ProductService {
     private final RspuMapper rspuMapper;
     private final AsyncTaskMapper asyncTaskMapper;
     private final ImageAssetsMapper imageAssetsMapper;
-    private final AiRecognitionMapper aiRecognitionMapper;
-    private final VisionService visionService;
+    private final AsyncTaskProcessor asyncTaskProcessor;
+    private final ImageUploadValidator imageUploadValidator;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.upload.path}")
     private String uploadPath;
 
-    @Value("${rsdp.ai.model}")
-    private String aiModel;
+    @Value("${spring.servlet.multipart.max-file-size:20MB}")
+    private String maxFileSize;
 
+    /**
+     * 新品录入入口。
+     *
+     * <p>同步完成：图片校验、本地落盘、RSPU 草稿、图片记录、异步任务记录。
+     * AI 识别在后台异步执行，调用方通过返回的 {@code taskId} 轮询任务状态。
+     *
+     * @param image 产品图片
+     * @return 包含 taskId、rspuId、imageId 的映射
+     * @throws IOException 文件保存失败
+     */
     @Transactional
     public Map<String, Object> createEntry(MultipartFile image) throws IOException {
-        long totalStart = System.currentTimeMillis();
+        long start = System.currentTimeMillis();
 
-        // 1. 生成 ID
+        imageUploadValidator.validate(image, parseMaxFileSize(maxFileSize));
+
         String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
-        // 2. 保存图片到本地
-        Path dir = Paths.get(System.getProperty("user.dir"), uploadPath);
-        if (!Files.exists(dir)) {
-            Files.createDirectories(dir);
-        }
-        String ext = getExtension(image.getOriginalFilename());
-        String fileName = imageId + "." + ext;
-        Path filePath = dir.resolve(fileName);
-        image.transferTo(filePath.toFile());
+        // 保存图片到本地
+        Path filePath = saveImage(image, imageId);
+        String storagePath = filePath.toString().replace("\\", "/");
 
-        // 3. 写入 RSPU 草稿（必须先于 image_assets，因为外键约束）
+        // 创建 RSPU 草稿
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
         rspu.setCategoryCode("FS");
@@ -74,118 +82,75 @@ public class ProductService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
 
-        // 4. 写入图片资源记录
+        // 创建图片资源记录
         ImageAssets imageAsset = new ImageAssets();
         imageAsset.setImageId(imageId);
         imageAsset.setRspuId(rspuId);
         imageAsset.setImageType("white_bg");
-        imageAsset.setStoragePath(filePath.toString().replace("\\", "/"));
+        imageAsset.setStoragePath(storagePath);
         imageAsset.setPrimary(true);
         imageAsset.setAiProcessed(false);
+        imageAsset.setFileSize(image.getSize());
+        imageAsset.setFormat(getExtension(image.getOriginalFilename()));
         imageAsset.setUploadedBy("admin");
         imageAsset.setCreatedAt(LocalDateTime.now());
         imageAssetsMapper.insert(imageAsset);
 
-        // 5. 调用 AI 视觉模型识别
-        AiLabels labels = null;
-        String recognitionId = "REC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String status = "success";
-        String errorMessage = null;
-
-        try {
-            long aiStart = System.currentTimeMillis();
-            labels = visionService.recognizeImage(filePath);
-            int processingTime = (int) (System.currentTimeMillis() - aiStart);
-
-            // 更新 RSPU
-            rspu.setPositioningLabel(labels.getStyle());
-            rspu.setSixDimTags(objectMapper.writeValueAsString(labels.getSixDimTags()));
-            rspu.setColorPrimaryName(labels.getColorPrimaryName());
-            rspu.setColorPrimaryHsv(objectMapper.writeValueAsString(labels.getColorPrimaryHsv()));
-            rspu.setMaterialTags(objectMapper.writeValueAsString(labels.getMaterialTags()));
-            rspu.setSceneTags(objectMapper.writeValueAsString(labels.getSceneTags()));
-            rspu.setAestheticsConfidence(labels.getConfidence());
-            rspu.setSourceAgentVersion(aiModel);
-            rspu.setStatus("active");
-            rspu.setUpdatedAt(LocalDateTime.now());
-            rspuMapper.updateById(rspu);
-
-            // 更新图片为已识别
-            imageAsset.setAiProcessed(true);
-            imageAssetsMapper.updateById(imageAsset);
-
-            // 写入 AI 识别记录
-            AiRecognition rec = new AiRecognition();
-            rec.setRecognitionId(recognitionId);
-            rec.setImageId(imageId);
-            rec.setRspuId(rspuId);
-            rec.setTaskId(taskId);
-            rec.setModelName(aiModel);
-            rec.setRecognitionType("label");
-            rec.setEndpoint("/chat/completions");
-            rec.setOutputData(objectMapper.writeValueAsString(labels));
-            rec.setParsedStyle(labels.getStyle());
-            rec.setParsedSixDim(objectMapper.writeValueAsString(labels.getSixDimTags()));
-            rec.setParsedColorHsv(objectMapper.writeValueAsString(labels.getColorPrimaryHsv()));
-            rec.setParsedSceneTags(objectMapper.writeValueAsString(labels.getSceneTags()));
-            rec.setConfidence(labels.getConfidence());
-            rec.setProcessingTimeMs(processingTime);
-            rec.setStatus(status);
-            rec.setCreatedAt(LocalDateTime.now());
-            aiRecognitionMapper.insert(rec);
-
-        } catch (Exception e) {
-            log.error("AI 识别失败", e);
-            status = "failed";
-            errorMessage = e.getMessage();
-
-            // 识别失败也记录
-            AiRecognition rec = new AiRecognition();
-            rec.setRecognitionId(recognitionId);
-            rec.setImageId(imageId);
-            rec.setRspuId(rspuId);
-            rec.setTaskId(taskId);
-            rec.setModelName(aiModel);
-            rec.setRecognitionType("label");
-            rec.setEndpoint("/chat/completions");
-            rec.setStatus(status);
-            rec.setErrorMessage(errorMessage);
-            rec.setCreatedAt(LocalDateTime.now());
-            aiRecognitionMapper.insert(rec);
-
-            // RSPU 保持 active，但 review_status 为存疑
-            rspu.setStatus("active");
-            rspu.setReviewStatus("存疑");
-            rspu.setUpdatedAt(LocalDateTime.now());
-            rspuMapper.updateById(rspu);
-        }
-
-        // 6. 写入异步任务
+        // 创建异步任务
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);
         task.setTaskType("product_entry");
-        task.setStatus("done");
-        task.setProgress(100);
-        task.setResultData(objectMapper.writeValueAsString(Map.of(
+        task.setStatus("pending");
+        task.setProgress(0);
+        task.setInputData(objectMapper.writeValueAsString(Map.of(
             "rspuId", rspuId,
             "imageId", imageId,
-            "imagePath", filePath.toString().replace("\\", "/"),
-            "aiLabels", labels != null ? labels : Map.of("error", errorMessage)
+            "imagePath", storagePath,
+            "originalFilename", image.getOriginalFilename()
         )));
         task.setCreatedAt(LocalDateTime.now());
-        task.setCompletedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
 
-        int totalTime = (int) (System.currentTimeMillis() - totalStart);
-        log.info("产品录入完成，总耗时 {}ms，rspuId={}", totalTime, rspuId);
+        // 触发后台 AI 识别：若处于事务中，则在事务提交后触发；否则立即触发
+        triggerAsyncProcess(taskId, rspuId, imageId, filePath);
+
+        log.info("产品录入任务已创建，总耗时 {}ms，taskId={}",
+            System.currentTimeMillis() - start, taskId);
 
         return Map.of(
             "taskId", taskId,
             "rspuId", rspuId,
             "imageId", imageId,
-            "imagePath", filePath.toString().replace("\\", "/"),
-            "aiLabels", labels != null ? labels : Map.of("error", errorMessage)
+            "message", "任务已创建，正在后台识别中"
         );
+    }
+
+    private void triggerAsyncProcess(String taskId, String rspuId, String imageId, Path filePath) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, filePath);
+                }
+            });
+        } else {
+            asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, filePath);
+        }
+    }
+
+    private Path saveImage(MultipartFile image, String imageId) throws IOException {
+        Path dir = Paths.get(uploadPath);
+        if (!dir.isAbsolute()) {
+            dir = Paths.get(System.getProperty("user.dir"), uploadPath);
+        }
+        if (!Files.exists(dir)) {
+            Files.createDirectories(dir);
+        }
+        String ext = getExtension(image.getOriginalFilename());
+        String fileName = imageId + "." + ext;
+        Path filePath = dir.resolve(fileName);
+        image.transferTo(filePath.toFile());
+        return filePath;
     }
 
     private String getExtension(String filename) {
@@ -193,5 +158,29 @@ public class ProductService {
             return "jpg";
         }
         return filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
+    }
+
+    private long parseMaxFileSize(String size) {
+        if (size == null || size.isBlank()) {
+            return 20 * 1024 * 1024;
+        }
+        String value = size.trim().toUpperCase();
+        long multiplier = 1;
+        if (value.endsWith("MB")) {
+            multiplier = 1024 * 1024;
+            value = value.substring(0, value.length() - 2);
+        } else if (value.endsWith("KB")) {
+            multiplier = 1024;
+            value = value.substring(0, value.length() - 2);
+        } else if (value.endsWith("GB")) {
+            multiplier = 1024L * 1024 * 1024;
+            value = value.substring(0, value.length() - 2);
+        }
+        try {
+            return Long.parseLong(value.trim()) * multiplier;
+        } catch (NumberFormatException e) {
+            log.warn("无法解析 max-file-size: {}", size);
+            return 20 * 1024 * 1024;
+        }
     }
 }

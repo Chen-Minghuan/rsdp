@@ -1,0 +1,185 @@
+package com.rsdp.service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.dto.AiLabels;
+import com.rsdp.entity.AiRecognition;
+import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.RspuMaster;
+import com.rsdp.mapper.AiRecognitionMapper;
+import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.RspuMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * 异步任务处理器，负责在后台执行 AI 识别等耗时操作。
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class AsyncTaskProcessor {
+
+    private final RspuMapper rspuMapper;
+    private final AsyncTaskMapper asyncTaskMapper;
+    private final ImageAssetsMapper imageAssetsMapper;
+    private final AiRecognitionMapper aiRecognitionMapper;
+    private final VisionService visionService;
+    private final ObjectMapper objectMapper;
+
+    @Value("${rsdp.ai.model}")
+    private String aiModel;
+
+    /**
+     * 异步处理产品录入任务：AI 视觉识别并更新相关记录。
+     *
+     * @param taskId   任务 ID
+     * @param rspuId   RSPU ID
+     * @param imageId  图片 ID
+     * @param imagePath 图片本地路径
+     */
+    @Async
+    @Transactional
+    public void processProductEntry(String taskId, String rspuId, String imageId, Path imagePath) {
+        log.info("开始异步处理产品录入任务，taskId={}", taskId);
+        updateTaskStatus(taskId, "processing", 10, null, null);
+
+        String recognitionId = "REC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String modelName = aiModel;
+        String status = "success";
+        String errorMessage = null;
+        AiLabels labels = null;
+        int processingTime = 0;
+
+        try {
+            long aiStart = System.currentTimeMillis();
+            labels = visionService.recognizeImage(imagePath);
+            processingTime = (int) (System.currentTimeMillis() - aiStart);
+
+            updateTaskStatus(taskId, "processing", 60, null, null);
+            persistSuccessResult(taskId, rspuId, imageId, recognitionId, modelName, labels, processingTime);
+            updateTaskStatus(taskId, "done", 100, objectMapper.writeValueAsString(labels), null);
+
+            log.info("产品录入异步任务完成，taskId={}", taskId);
+        } catch (Exception e) {
+            log.error("AI 识别失败，taskId={}", taskId, e);
+            status = "failed";
+            errorMessage = e.getMessage();
+
+            persistFailureResult(taskId, rspuId, imageId, recognitionId, modelName, errorMessage);
+            try {
+                updateTaskStatus(taskId, "failed", 100, null, errorMessage);
+            } catch (Exception ex) {
+                log.error("更新任务失败状态异常，taskId={}", taskId, ex);
+            }
+        }
+    }
+
+    private void updateTaskStatus(String taskId, String status, int progress, String resultData, String errorMessage) {
+        AsyncTask task = asyncTaskMapper.selectById(taskId);
+        if (task == null) {
+            log.warn("任务不存在，taskId={}", taskId);
+            return;
+        }
+        task.setStatus(status);
+        task.setProgress(progress);
+        task.setResultData(resultData);
+        task.setErrorMessage(errorMessage);
+        if ("done".equals(status) || "failed".equals(status)) {
+            task.setCompletedAt(LocalDateTime.now());
+        }
+        asyncTaskMapper.updateById(task);
+    }
+
+    private void persistSuccessResult(String taskId, String rspuId, String imageId,
+                                        String recognitionId, String modelName,
+                                        AiLabels labels, int processingTime) {
+        // 更新 RSPU
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu != null) {
+            rspu.setPositioningLabel(labels.getStyle());
+            rspu.setSixDimTags(toJson(labels.getSixDimTags()));
+            rspu.setColorPrimaryName(labels.getColorPrimaryName());
+            rspu.setColorPrimaryHsv(toJson(labels.getColorPrimaryHsv()));
+            rspu.setMaterialTags(toJson(labels.getMaterialTags()));
+            rspu.setSceneTags(toJson(labels.getSceneTags()));
+            rspu.setAestheticsConfidence(labels.getConfidence());
+            rspu.setSourceAgentVersion(modelName);
+            rspu.setStatus("active");
+            rspu.setUpdatedAt(LocalDateTime.now());
+            rspuMapper.updateById(rspu);
+        }
+
+        // 更新图片为已识别
+        ImageAssets imageAsset = imageAssetsMapper.selectById(imageId);
+        if (imageAsset != null) {
+            imageAsset.setAiProcessed(true);
+            imageAssetsMapper.updateById(imageAsset);
+        }
+
+        // 写入 AI 识别记录
+        AiRecognition rec = new AiRecognition();
+        rec.setRecognitionId(recognitionId);
+        rec.setImageId(imageId);
+        rec.setRspuId(rspuId);
+        rec.setTaskId(taskId);
+        rec.setModelName(modelName);
+        rec.setRecognitionType("label");
+        rec.setEndpoint("/chat/completions");
+        rec.setOutputData(toJson(labels));
+        rec.setParsedStyle(labels.getStyle());
+        rec.setParsedSixDim(toJson(labels.getSixDimTags()));
+        rec.setParsedColorHsv(toJson(labels.getColorPrimaryHsv()));
+        rec.setParsedSceneTags(toJson(labels.getSceneTags()));
+        rec.setConfidence(labels.getConfidence());
+        rec.setProcessingTimeMs(processingTime);
+        rec.setStatus("success");
+        rec.setCreatedAt(LocalDateTime.now());
+        aiRecognitionMapper.insert(rec);
+    }
+
+    private void persistFailureResult(String taskId, String rspuId, String imageId,
+                                        String recognitionId, String modelName, String errorMessage) {
+        // 记录 AI 识别失败
+        AiRecognition rec = new AiRecognition();
+        rec.setRecognitionId(recognitionId);
+        rec.setImageId(imageId);
+        rec.setRspuId(rspuId);
+        rec.setTaskId(taskId);
+        rec.setModelName(modelName);
+        rec.setRecognitionType("label");
+        rec.setEndpoint("/chat/completions");
+        rec.setStatus("failed");
+        rec.setErrorMessage(errorMessage);
+        rec.setCreatedAt(LocalDateTime.now());
+        aiRecognitionMapper.insert(rec);
+
+        // RSPU 保持 active，但 review_status 为存疑
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu != null) {
+            rspu.setStatus("active");
+            rspu.setReviewStatus("存疑");
+            rspu.setUpdatedAt(LocalDateTime.now());
+            rspuMapper.updateById(rspu);
+        }
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.warn("JSON 序列化失败", e);
+            return "{}";
+        }
+    }
+}

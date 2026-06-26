@@ -12,17 +12,19 @@
 
 ```
 POST   /api/v1/products/entry
-       # 新品录入
+       # 新品录入（同步完成图片保存与任务创建，AI 识别在后台异步执行）
        # Request:  multipart/form-data
-       #   image: File (必填, ≤20MB, jpg/png/webp)
-       # Response: { rspuId, taskId, message, records[] }
+       #   image: File (必填, ≤20MB, jpg/png/webp/gif/bmp)
+       # Response: { taskId, rspuId, imageId, message }
 
-GET    /api/v1/products/entry/{taskId}
-       # 查询录入任务进度
+GET    /api/v1/tasks/{taskId}
+       # 查询异步任务状态（前端轮询用）
        # Response: {
-       #   taskId, status: "processing"|"done"|"failed",
-       #   progress: { step: "labeling", percent: 60 },
-       #   result: { aiLabels, similarProducts[], verdict }  // status=done时
+       #   taskId, taskType, status: "pending"|"processing"|"done"|"failed",
+       #   progress: 0..100,
+       #   result: { aiLabels }  // status=done 时
+       #   errorMessage: ""       // status=failed 时
+       #   createdAt, completedAt
        # }
 
 GET    /api/v1/products
