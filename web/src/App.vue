@@ -1,10 +1,50 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN } from 'naive-ui'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace } from 'naive-ui'
+import { useRoute, useRouter } from 'vue-router'
+
+const router = useRouter()
+const route = useRoute()
+
+function navigate(path: string) {
+  router.push(path)
+}
 </script>
 
 <template>
   <n-config-provider :locale="zhCN" :date-locale="dateZhCN">
-    <router-view />
+    <n-layout style="height: 100vh;">
+      <n-layout-header bordered style="padding: 12px 24px;">
+        <n-space align="center" justify="space-between">
+          <div style="font-size: 18px; font-weight: bold; cursor: pointer;" @click="navigate('/')">
+            RSDP 家具数据平台
+          </div>
+          <n-space>
+            <n-button
+              :type="route.path === '/' ? 'primary' : 'default'"
+              @click="navigate('/')"
+            >
+              首页
+            </n-button>
+            <n-button
+              :type="route.path === '/entry' ? 'primary' : 'default'"
+              @click="navigate('/entry')"
+            >
+              新品录入
+            </n-button>
+            <n-button
+              :type="route.path.startsWith('/products') ? 'primary' : 'default'"
+              @click="navigate('/products')"
+            >
+              产品库
+            </n-button>
+          </n-space>
+        </n-space>
+      </n-layout-header>
+
+      <n-layout content-style="overflow-y: auto;">
+        <router-view />
+      </n-layout>
+    </n-layout>
   </n-config-provider>
 </template>
 

@@ -28,21 +28,25 @@ GET    /api/v1/tasks/{taskId}
        # }
 
 GET    /api/v1/products
-       # 产品列表（分页+多条件筛选）
-       # Query: page, size, category_code, style_label, status,
-       #        price_band, keyword（搜 category_path 或 six_dim_tags）
-       # Response: { total, page, rows: [RspuSummary...] }
+       # 产品列表（分页+多条件筛选，已实现）
+       # Query: page, size, category_code, positioning_label, status,
+       #        review_status, keyword（搜 category_path 或 positioning_label）
+       # Response: { total, page, size, rows: [ProductSummary...] }
 
 GET    /api/v1/products/{rspuId}
-       # 产品详情（含关联的所有 RSKU 报价）
-       # Response: { rspu: RspuDetail, rsku_list: [RskuInfo...], factory_count: 4 }
+       # 产品详情（含图片和 AI 识别记录，已实现）
+       # Response: { rspu: RspuMaster, images: [ImageAssets...], recognitions: [AiRecognition...] }
+
+PUT    /api/v1/products/{rspuId}/review
+       # 人工复核确认/存疑（已实现）
+       # Request: { reviewStatus: "已确认"|"存疑", reviewComment? }
 
 PUT    /api/v1/products/{rspuId}
-       # 更新产品元数据（六维标签、场景、尺寸等）
+       # 更新产品元数据（六维标签、场景、尺寸等，待实现）
        # Request: JSON Body（只传要更新的字段）
 
 DELETE /api/v1/products/{rspuId}
-       # 软删除
+       # 软删除（待实现）
 ```
 
 ### 供应管理

@@ -10,6 +10,16 @@ const routes = [
     path: '/entry',
     name: 'ProductEntry',
     component: () => import('@/views/ProductEntryView.vue')
+  },
+  {
+    path: '/products',
+    name: 'ProductList',
+    component: () => import('@/views/ProductListView.vue')
+  },
+  {
+    path: '/products/:rspuId',
+    name: 'ProductDetail',
+    component: () => import('@/views/ProductDetailView.vue')
   }
 ]
 

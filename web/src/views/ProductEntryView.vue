@@ -84,32 +84,52 @@ async function handleStartUpload() {
   uploading.value = true
 
   try {
-    const results = await Promise.all(
+    const settledResults = await Promise.allSettled(
       files.map(async (file) => {
         const result = await uploadProductImage(file)
         return { file, result }
       })
     )
 
-    const newTasks: TaskItem[] = results.map(({ file, result }) => ({
-      taskId: result.taskId,
-      rspuId: result.rspuId,
-      fileName: file.name,
-      status: 'pending',
-      progress: 0,
-      result: {},
-      errorMessage: ''
-    }))
+    const newTasks: TaskItem[] = []
+    let failedCount = 0
 
-    // 新任务放到列表前面，方便看最新追加的
-    taskList.value.unshift(...newTasks)
+    for (const settled of settledResults) {
+      if (settled.status === 'fulfilled') {
+        const { file, result } = settled.value
+        newTasks.push({
+          taskId: result.taskId,
+          rspuId: result.rspuId,
+          fileName: file.name,
+          status: 'pending',
+          progress: 0,
+          result: {},
+          errorMessage: ''
+        })
+      } else {
+        failedCount++
+      }
+    }
 
-    // 清空已选文件，允许继续选择下一批
-    fileList.value = []
+    if (failedCount > 0) {
+      if (newTasks.length === 0) {
+        errorMessage.value = '所有图片上传失败，请检查网络后重试'
+      } else {
+        errorMessage.value = `${failedCount} 张图片上传失败，${newTasks.length} 张已提交识别`
+      }
+    }
 
-    // 立即轮询一次，然后开启定时轮询
-    await pollAllTasks()
-    ensurePolling()
+    if (newTasks.length > 0) {
+      // 新任务放到列表前面，方便看最新追加的
+      taskList.value.unshift(...newTasks)
+
+      // 清空已选文件，允许继续选择下一批
+      fileList.value = []
+
+      // 立即轮询一次，然后开启定时轮询
+      await pollAllTasks()
+      ensurePolling()
+    }
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '上传失败'
   } finally {

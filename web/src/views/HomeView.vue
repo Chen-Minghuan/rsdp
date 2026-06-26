@@ -10,6 +10,9 @@ import { NButton, NCard, NSpace } from 'naive-ui'
         <router-link to="/entry">
           <n-button type="primary">开始录入</n-button>
         </router-link>
+        <router-link to="/products">
+          <n-button>产品库</n-button>
+        </router-link>
       </n-space>
     </n-card>
   </n-space>
