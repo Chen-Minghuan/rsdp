@@ -37,9 +37,21 @@ export interface QuoteSummary {
 }
 
 /**
+ * 价格变动提示项。
+ */
+export interface PriceChange {
+  rspuId: string
+  rspuName: string
+  rskuId: string
+  oldPrice: number
+  newPrice: number
+}
+
+/**
  * 报价单响应。
  */
 export interface QuoteResponse {
   items: QuoteItem[]
   summary: QuoteSummary
+  priceChanges?: PriceChange[]
 }

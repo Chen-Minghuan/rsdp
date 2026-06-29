@@ -45,8 +45,21 @@ public class QuoteService {
             throw new BusinessException("请选择至少一个 RSKU");
         }
 
-        List<QuoteItemResponse> items = rskuIds.stream()
-            .distinct()
+        List<String> distinctRskuIds = rskuIds.stream().distinct().toList();
+
+        // 批量校验 RSKU 有效性，一次性返回所有失效项
+        List<String> invalidRskuIds = distinctRskuIds.stream()
+            .filter(id -> {
+                RskuSupply rsku = rskuSupplyMapper.selectById(id);
+                return rsku == null || rsku.getDeletedAt() != null;
+            })
+            .toList();
+        if (!invalidRskuIds.isEmpty()) {
+            throw new BusinessException(
+                "以下 RSKU 已失效或不存在，请重新选择产品：" + String.join(", ", invalidRskuIds));
+        }
+
+        List<QuoteItemResponse> items = distinctRskuIds.stream()
             .map(this::buildItem)
             .collect(Collectors.toList());
 

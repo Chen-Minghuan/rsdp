@@ -2,6 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.SchemeCreateRequest;
+import com.rsdp.dto.request.SchemeUpdateRequest;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -58,6 +60,19 @@ public class SchemeController {
     @GetMapping("/{schemeId}")
     public Result<SchemeResponse> detail(@PathVariable String schemeId) {
         return Result.ok(schemeService.getSchemeDetail(schemeId));
+    }
+
+    /**
+     * 更新搭配方案。
+     *
+     * @param schemeId 方案 ID
+     * @param request  更新请求
+     * @return 更新后的方案详情
+     */
+    @PutMapping("/{schemeId}")
+    public Result<SchemeResponse> update(@PathVariable String schemeId,
+                                         @Valid @RequestBody SchemeUpdateRequest request) {
+        return Result.ok(schemeService.updateScheme(schemeId, request));
     }
 
     /**

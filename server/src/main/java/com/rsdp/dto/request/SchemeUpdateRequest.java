@@ -10,10 +10,10 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * 创建搭配方案请求。
+ * 更新搭配方案请求。
  */
 @Data
-public class SchemeCreateRequest {
+public class SchemeUpdateRequest {
 
     /** 方案名称。 */
     @NotBlank(message = "方案名称不能为空")

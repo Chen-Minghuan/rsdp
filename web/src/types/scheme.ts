@@ -18,6 +18,11 @@ export interface SchemeCreateRequest {
 }
 
 /**
+ * 更新搭配方案请求（字段与创建相同，但语义独立）。
+ */
+export type SchemeUpdateRequest = SchemeCreateRequest
+
+/**
  * 搭配方案项。
  */
 export interface SchemeItem {

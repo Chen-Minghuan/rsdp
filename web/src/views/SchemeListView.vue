@@ -59,7 +59,7 @@ const columns: DataTableColumns<SchemeSummary> = [
   {
     title: '操作',
     key: 'actions',
-    width: 180,
+    width: 240,
     render(row: SchemeSummary) {
       return h(
         NSpace,
@@ -70,6 +70,11 @@ const columns: DataTableColumns<SchemeSummary> = [
               NButton,
               { size: 'small', onClick: () => router.push(`/schemes/${row.schemeId}`) },
               { default: () => '详情' }
+            ),
+            h(
+              NButton,
+              { size: 'small', onClick: () => router.push(`/quotes/build?editSchemeId=${row.schemeId}`) },
+              { default: () => '编辑' }
             ),
             h(
               NPopconfirm,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, h } from 'vue'
+import { ref, onMounted, h, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NCard,
@@ -16,7 +16,7 @@ import {
 } from 'naive-ui'
 import { getSchemeDetail, generateQuoteFromScheme } from '@/api/scheme'
 import type { Scheme, SchemeItem } from '@/types/scheme'
-import type { QuoteResponse } from '@/types/quote'
+import type { PriceChange, QuoteResponse } from '@/types/quote'
 
 const route = useRoute()
 const router = useRouter()
@@ -27,6 +27,20 @@ const generating = ref(false)
 const errorMessage = ref('')
 const scheme = ref<Scheme | null>(null)
 const quoteResult = ref<QuoteResponse | null>(null)
+
+const duplicateRspuIds = computed(() => {
+  if (!scheme.value) return []
+  const seen = new Set<string>()
+  const duplicates = new Set<string>()
+  for (const item of scheme.value.items) {
+    if (seen.has(item.rspuId)) {
+      duplicates.add(item.rspuId)
+    } else {
+      seen.add(item.rspuId)
+    }
+  }
+  return Array.from(duplicates)
+})
 
 const itemColumns = [
   {
@@ -60,6 +74,41 @@ const quoteColumns = [
   { title: '出厂价', key: 'factoryPrice', width: 120 },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 }
+]
+
+const priceChangeColumns = [
+  { title: 'RSPU', key: 'rspuName' },
+  { title: 'RSKU ID', key: 'rskuId', width: 160 },
+  {
+    title: '保存时价格',
+    key: 'oldPrice',
+    width: 140,
+    render(row: PriceChange) {
+      return `¥${row.oldPrice.toFixed(2)}`
+    }
+  },
+  {
+    title: '当前价格',
+    key: 'newPrice',
+    width: 140,
+    render(row: PriceChange) {
+      return `¥${row.newPrice.toFixed(2)}`
+    }
+  },
+  {
+    title: '变动',
+    key: 'diff',
+    width: 120,
+    render(row: PriceChange) {
+      const diff = row.newPrice - row.oldPrice
+      const sign = diff > 0 ? '+' : ''
+      return h(
+        'span',
+        { style: `color: ${diff > 0 ? '#d03050' : '#18a058'}; font-weight: 500;` },
+        `${sign}¥${diff.toFixed(2)}`
+      )
+    }
+  }
 ]
 
 async function loadDetail() {
@@ -97,6 +146,9 @@ onMounted(() => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/schemes')">返回方案列表</n-button>
+          <n-button size="small" @click="router.push(`/quotes/build?editSchemeId=${schemeId}`)">
+            编辑方案
+          </n-button>
           <n-button type="primary" :loading="generating" @click="handleGenerateQuote">
             生成报价单
           </n-button>
@@ -130,6 +182,14 @@ onMounted(() => {
             </n-descriptions-item>
           </n-descriptions>
 
+          <n-alert
+            v-if="duplicateRspuIds.length > 0"
+            type="info"
+            :show-icon="true"
+          >
+            以下产品选择了多个 RSKU（不同工厂/材质报价）：{{ duplicateRspuIds.join('、') }}
+          </n-alert>
+
           <n-card title="方案产品" size="small">
             <n-data-table
               :columns="itemColumns"
@@ -142,6 +202,21 @@ onMounted(() => {
               </template>
             </n-data-table>
           </n-card>
+
+          <template v-if="quoteResult && quoteResult.priceChanges && quoteResult.priceChanges.length > 0">
+            <n-divider />
+            <n-card title="价格变动提示" size="small">
+              <n-alert type="warning" :show-icon="true" style="margin-bottom: 12px;">
+                以下产品的出厂价较方案保存时发生变化，报价单已按最新价格计算。
+              </n-alert>
+              <n-data-table
+                :columns="priceChangeColumns"
+                :data="quoteResult.priceChanges"
+                :bordered="true"
+                :single-line="false"
+              />
+            </n-card>
+          </template>
 
           <template v-if="quoteResult">
             <n-divider />

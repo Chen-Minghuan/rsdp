@@ -1,5 +1,5 @@
 import { apiClient, type ApiResult } from './client'
-import type { Scheme, SchemeCreateRequest, SchemeSummary } from '@/types/scheme'
+import type { Scheme, SchemeCreateRequest, SchemeSummary, SchemeUpdateRequest } from '@/types/scheme'
 import type { QuoteResponse } from '@/types/quote'
 
 /**
@@ -7,6 +7,14 @@ import type { QuoteResponse } from '@/types/quote'
  */
 export async function createScheme(request: SchemeCreateRequest): Promise<Scheme> {
   const { data: result } = await apiClient.post<ApiResult<Scheme>>('/v1/schemes', request)
+  return result.data
+}
+
+/**
+ * 更新搭配方案。
+ */
+export async function updateScheme(schemeId: string, request: SchemeUpdateRequest): Promise<Scheme> {
+  const { data: result } = await apiClient.put<ApiResult<Scheme>>(`/v1/schemes/${schemeId}`, request)
   return result.data
 }
 

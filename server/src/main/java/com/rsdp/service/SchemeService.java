@@ -3,6 +3,8 @@ package com.rsdp.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
+import com.rsdp.dto.request.SchemeUpdateRequest;
+import com.rsdp.dto.response.PriceChangeResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.SchemeItemResponse;
 import com.rsdp.dto.response.SchemeResponse;
@@ -107,6 +109,9 @@ public class SchemeService {
             schemeItems.add(schemeItem);
         }
 
+        // 同一创建人下不允许存在同名活动方案
+        assertSchemeNameUnique(request.getSchemeName().trim(), null);
+
         // 先写入主表，再写入子表，避免外键约束异常
         Scheme scheme = new Scheme();
         scheme.setSchemeId(schemeId);
@@ -122,11 +127,114 @@ public class SchemeService {
         scheme.setCreatedAt(LocalDateTime.now());
         schemeMapper.insert(scheme);
 
-        for (SchemeItem schemeItem : schemeItems) {
-            schemeItemMapper.insert(schemeItem);
+        if (!schemeItems.isEmpty()) {
+            schemeItemMapper.insertBatch(schemeItems);
         }
 
         return getSchemeDetail(schemeId);
+    }
+
+    /**
+     * 更新搭配方案。
+     * 采用"先删除旧子项、再写入新子项"的简单策略，保证幂等且避免脏数据。
+     *
+     * @param schemeId 方案 ID
+     * @param request  更新请求
+     * @return 更新后的方案详情
+     */
+    @Transactional
+    public SchemeResponse updateScheme(String schemeId, SchemeUpdateRequest request) {
+        Scheme scheme = schemeMapper.selectById(schemeId);
+        if (scheme == null || scheme.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("方案不存在: " + schemeId);
+        }
+
+        // 按 rskuId 去重，保留第一次出现的顺序
+        List<SchemeItemRequest> distinctItems = new java.util.ArrayList<>();
+        Set<String> seenRskuIds = new HashSet<>();
+        for (SchemeItemRequest item : request.getItems()) {
+            if (item.getRskuId() != null && seenRskuIds.add(item.getRskuId())) {
+                distinctItems.add(item);
+            }
+        }
+
+        BigDecimal totalPrice = BigDecimal.ZERO;
+        int maxLeadTimeDays = 0;
+        Set<String> factoryCodes = new HashSet<>();
+
+        List<SchemeItem> schemeItems = new java.util.ArrayList<>();
+        for (int i = 0; i < distinctItems.size(); i++) {
+            SchemeItemRequest itemRequest = distinctItems.get(i);
+            RskuSupply rsku = rskuSupplyMapper.selectById(itemRequest.getRskuId());
+            if (rsku == null || rsku.getDeletedAt() != null) {
+                throw new ResourceNotFoundException("RSKU 不存在: " + itemRequest.getRskuId());
+            }
+            if (!rsku.getRspuId().equals(itemRequest.getRspuId())) {
+                throw new BusinessException(
+                    "RSKU 与 RSPU 不匹配: " + itemRequest.getRskuId());
+            }
+
+            if (rsku.getFactoryPrice() != null) {
+                totalPrice = totalPrice.add(rsku.getFactoryPrice());
+            }
+            if (rsku.getLeadTimeDays() != null && rsku.getLeadTimeDays() > maxLeadTimeDays) {
+                maxLeadTimeDays = rsku.getLeadTimeDays();
+            }
+            if (rsku.getFactoryCode() != null) {
+                factoryCodes.add(rsku.getFactoryCode());
+            }
+
+            SchemeItem schemeItem = new SchemeItem();
+            schemeItem.setSchemeId(schemeId);
+            schemeItem.setRspuId(itemRequest.getRspuId());
+            schemeItem.setRskuId(itemRequest.getRskuId());
+            schemeItem.setFactoryCode(rsku.getFactoryCode());
+            schemeItem.setFactoryPrice(rsku.getFactoryPrice());
+            schemeItem.setLeadTimeDays(rsku.getLeadTimeDays());
+            schemeItem.setMoq(rsku.getMoq());
+            schemeItem.setSortOrder(itemRequest.getSortOrder() != null ? itemRequest.getSortOrder() : i);
+            schemeItem.setCreatedAt(LocalDateTime.now());
+            schemeItems.add(schemeItem);
+        }
+
+        // 同一创建人下不允许存在同名活动方案（排除当前方案自身）
+        assertSchemeNameUnique(request.getSchemeName().trim(), schemeId);
+
+        // 物理删除旧子项
+        schemeItemMapper.delete(
+            new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId)
+        );
+
+        scheme.setSchemeName(request.getSchemeName().trim());
+        scheme.setRoomType(request.getRoomType());
+        scheme.setBudgetLimit(request.getBudgetLimit());
+        scheme.setTotalPrice(totalPrice);
+        scheme.setFactoryCount(factoryCodes.size());
+        scheme.setMaxLeadTimeDays(maxLeadTimeDays);
+        scheme.setItemCount(distinctItems.size());
+        scheme.setUpdatedAt(LocalDateTime.now());
+        schemeMapper.updateById(scheme);
+
+        if (!schemeItems.isEmpty()) {
+            schemeItemMapper.insertBatch(schemeItems);
+        }
+
+        return getSchemeDetail(schemeId);
+    }
+
+    private void assertSchemeNameUnique(String schemeName, String excludeSchemeId) {
+        QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
+            .eq("scheme_name", schemeName)
+            .eq("status", "active")
+            .eq("created_by", "admin")
+            .isNull("deleted_at");
+        if (excludeSchemeId != null) {
+            wrapper.ne("scheme_id", excludeSchemeId);
+        }
+        Long count = schemeMapper.selectCount(wrapper);
+        if (count != null && count > 0) {
+            throw new BusinessException("已存在同名方案：" + schemeName);
+        }
     }
 
     /**
@@ -227,7 +335,34 @@ public class SchemeService {
             .map(SchemeItem::getRskuId)
             .collect(Collectors.toList());
 
-        return quoteService.generateQuote(rskuIds);
+        QuoteResponse quote = quoteService.generateQuote(rskuIds);
+
+        // 快照模式：对比方案保存时的价格与当前最新价格
+        List<PriceChangeResponse> priceChanges = items.stream()
+            .map(item -> {
+                RskuSupply currentRsku = rskuSupplyMapper.selectById(item.getRskuId());
+                if (currentRsku == null) {
+                    return null;
+                }
+                BigDecimal oldPrice = item.getFactoryPrice();
+                BigDecimal newPrice = currentRsku.getFactoryPrice();
+                if (oldPrice == null || newPrice == null || oldPrice.compareTo(newPrice) == 0) {
+                    return null;
+                }
+                RspuMaster rspu = rspuMapper.selectById(item.getRspuId());
+                PriceChangeResponse change = new PriceChangeResponse();
+                change.setRspuId(item.getRspuId());
+                change.setRspuName(rspu != null ? rspu.getPositioningLabel() : null);
+                change.setRskuId(item.getRskuId());
+                change.setOldPrice(oldPrice);
+                change.setNewPrice(newPrice);
+                return change;
+            })
+            .filter(java.util.Objects::nonNull)
+            .collect(Collectors.toList());
+
+        quote.setPriceChanges(priceChanges);
+        return quote;
     }
 
     private SchemeItemResponse buildItemResponse(SchemeItem item) {

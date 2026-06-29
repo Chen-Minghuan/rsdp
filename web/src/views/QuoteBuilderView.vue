@@ -23,15 +23,45 @@ import {
 import { getProductDetail } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
 import { generateQuote } from '@/api/quote'
-import { createScheme } from '@/api/scheme'
+import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
 import type { ProductDetail } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
 import type { QuoteResponse } from '@/types/quote'
+import type { Scheme } from '@/types/scheme'
 
 const route = useRoute()
 const router = useRouter()
 
-const rspuIds = ((route.query.rspuIds as string) || '').split(',').filter(Boolean)
+const editSchemeId = (route.query.editSchemeId as string) || ''
+const isEditMode = computed(() => Boolean(editSchemeId))
+
+const rawRspuIds = computed(() => {
+  const ids = (route.query.rspuIds as string) || ''
+  return ids.split(',').filter(Boolean)
+})
+
+const duplicateRspuIds = computed(() => {
+  const seen = new Set<string>()
+  const duplicates = new Set<string>()
+  for (const id of rawRspuIds.value) {
+    if (seen.has(id)) {
+      duplicates.add(id)
+    } else {
+      seen.add(id)
+    }
+  }
+  return Array.from(duplicates)
+})
+
+const rspuIds = computed(() => {
+  // 去重，保留第一次出现的顺序
+  const seen = new Set<string>()
+  return rawRspuIds.value.filter(id => {
+    if (seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+})
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -44,10 +74,14 @@ const schemeName = ref('')
 const products = ref<ProductDetail[]>([])
 const rskuMap = ref<Record<string, Rsku[]>>({})
 const selectedRskuMap = ref<Record<string, string>>({})
+const originalScheme = ref<Scheme | null>(null)
+
+const MAX_ITEMS = 50
+const isItemsLimitReached = computed(() => products.value.length >= MAX_ITEMS)
 
 const totalPrice = computed(() => {
   let total = 0
-  for (const rspuId of rspuIds) {
+  for (const rspuId of rspuIds.value) {
     const rskuId = selectedRskuMap.value[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
@@ -58,7 +92,7 @@ const totalPrice = computed(() => {
 
 const maxLeadTimeDays = computed(() => {
   let max = 0
-  for (const rspuId of rspuIds) {
+  for (const rspuId of rspuIds.value) {
     const rskuId = selectedRskuMap.value[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
@@ -70,24 +104,44 @@ const maxLeadTimeDays = computed(() => {
 })
 
 async function loadData() {
-  if (rspuIds.length === 0) {
-    errorMessage.value = '未选择任何产品'
-    return
-  }
-
   loading.value = true
   errorMessage.value = ''
   try {
-    const detailResults = await Promise.all(rspuIds.map(id => getProductDetail(id)))
+    let ids: string[] = []
+
+    if (isEditMode.value) {
+      const scheme = await getSchemeDetail(editSchemeId)
+      originalScheme.value = scheme
+      schemeName.value = scheme.schemeName
+      ids = scheme.items.map(item => item.rspuId)
+      // 预先回填用户上次选择的 RSKU
+      scheme.items.forEach(item => {
+        selectedRskuMap.value[item.rspuId] = item.rskuId
+      })
+    } else {
+      ids = rspuIds.value
+    }
+
+    if (ids.length === 0) {
+      errorMessage.value = '未选择任何产品'
+      return
+    }
+
+    const detailResults = await Promise.all(ids.map(id => getProductDetail(id)))
     products.value = detailResults
 
-    const rskuResults = await Promise.all(rspuIds.map(id => listRskuByRspu(id)))
+    const rskuResults = await Promise.all(ids.map(id => listRskuByRspu(id)))
     const map: Record<string, Rsku[]> = {}
-    rspuIds.forEach((id, index) => {
+    ids.forEach((id, index) => {
       const list = rskuResults[index]
       map[id] = list
-      // 默认选中价格最低的 RSKU
-      if (list.length > 0) {
+      // 非编辑模式下默认选中价格最低的 RSKU
+      if (!isEditMode.value && list.length > 0 && !selectedRskuMap.value[id]) {
+        const cheapest = list.reduce((min, r) => (r.factoryPrice < min.factoryPrice ? r : min), list[0])
+        selectedRskuMap.value[id] = cheapest.rskuId
+      }
+      // 编辑模式下如果上次选中的 RSKU 已不在列表中，则 fallback 到最低价
+      if (isEditMode.value && list.length > 0 && !list.some(r => r.rskuId === selectedRskuMap.value[id])) {
         const cheapest = list.reduce((min, r) => (r.factoryPrice < min.factoryPrice ? r : min), list[0])
         selectedRskuMap.value[id] = cheapest.rskuId
       }
@@ -146,12 +200,23 @@ async function handleSaveAsScheme() {
   saving.value = true
   errorMessage.value = ''
   try {
-    await createScheme({
-      schemeName: schemeName.value.trim(),
-      items
-    })
-    showSaveModal.value = false
-    router.push('/schemes')
+    if (isEditMode.value) {
+      await updateScheme(editSchemeId, {
+        schemeName: schemeName.value.trim(),
+        roomType: originalScheme.value?.roomType,
+        budgetLimit: originalScheme.value?.budgetLimit,
+        items
+      })
+      showSaveModal.value = false
+      router.push(`/schemes/${editSchemeId}`)
+    } else {
+      await createScheme({
+        schemeName: schemeName.value.trim(),
+        items
+      })
+      showSaveModal.value = false
+      router.push('/schemes')
+    }
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '保存方案失败'
   } finally {
@@ -175,7 +240,7 @@ onMounted(() => {
 
 <template>
   <n-space vertical style="padding: 24px;">
-    <n-card title="报价单生成器">
+    <n-card :title="isEditMode ? '编辑搭配方案' : '报价单生成器'">
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回产品库</n-button>
@@ -185,7 +250,23 @@ onMounted(() => {
           {{ errorMessage }}
         </n-alert>
 
+        <n-alert
+          v-if="!isEditMode && duplicateRspuIds.length > 0"
+          type="warning"
+          :show-icon="true"
+        >
+          以下产品被重复选择，已自动去重：{{ duplicateRspuIds.join('、') }}
+        </n-alert>
+
         <n-spin v-if="loading" size="large" />
+
+        <n-alert
+          v-if="!loading && isItemsLimitReached"
+          type="warning"
+          :show-icon="true"
+        >
+          方案最多支持 {{ MAX_ITEMS }} 个产品，当前已达到上限。
+        </n-alert>
 
         <template v-if="!loading && products.length > 0">
           <n-card
@@ -237,7 +318,7 @@ onMounted(() => {
               确认生成报价单
             </n-button>
             <n-button @click="openSaveModal">
-              保存为方案
+              {{ isEditMode ? '更新方案' : '保存为方案' }}
             </n-button>
           </n-space>
         </template>
@@ -276,20 +357,26 @@ onMounted(() => {
 
     <n-modal
       v-model:show="showSaveModal"
-      title="保存为搭配方案"
+      :title="isEditMode ? '更新搭配方案' : '保存为搭配方案'"
       preset="card"
       style="width: 480px;"
     >
       <n-form label-placement="left" label-width="80">
         <n-form-item label="方案名称" required>
-          <n-input v-model:value="schemeName" placeholder="如：客厅中古风搭配" />
+          <n-input
+            v-model:value="schemeName"
+            placeholder="如：客厅中古风搭配"
+            maxlength="128"
+            show-count
+            clearable
+          />
         </n-form-item>
       </n-form>
 
       <n-space justify="end">
         <n-button @click="showSaveModal = false">取消</n-button>
         <n-button type="primary" :loading="saving" @click="handleSaveAsScheme">
-          保存
+          {{ isEditMode ? '更新' : '保存' }}
         </n-button>
       </n-space>
     </n-modal>

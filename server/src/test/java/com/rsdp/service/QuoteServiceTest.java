@@ -89,7 +89,23 @@ class QuoteServiceTest {
         when(rskuSupplyMapper.selectById("RSKU-NOT-FOUND")).thenReturn(null);
 
         assertThatThrownBy(() -> quoteService.generateQuote(List.of("RSKU-NOT-FOUND")))
-            .isInstanceOf(ResourceNotFoundException.class)
-            .hasMessageContaining("不存在");
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("已失效或不存在")
+            .hasMessageContaining("RSKU-NOT-FOUND");
+    }
+
+    @Test
+    void generateQuote_shouldCollectAllInvalidRskuIds() {
+        when(rskuSupplyMapper.selectById("RSKU-A")).thenReturn(null);
+
+        RskuSupply deletedRsku = new RskuSupply();
+        deletedRsku.setRskuId("RSKU-B");
+        deletedRsku.setDeletedAt(java.time.LocalDateTime.now());
+        when(rskuSupplyMapper.selectById("RSKU-B")).thenReturn(deletedRsku);
+
+        assertThatThrownBy(() -> quoteService.generateQuote(List.of("RSKU-A", "RSKU-B")))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("RSKU-A")
+            .hasMessageContaining("RSKU-B");
     }
 }

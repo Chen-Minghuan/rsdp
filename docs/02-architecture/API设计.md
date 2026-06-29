@@ -205,7 +205,12 @@ POST   /api/v1/quotes/generate
 ```
 POST   /api/v1/schemes
        # 创建搭配方案（已实现）
-       # Request: { schemeName, roomType?, budgetLimit?, items: [{ rspuId, rskuId, sortOrder? }] }
+       # Request: {
+       #   schemeName (max 128 字符),
+       #   roomType?,
+       #   budgetLimit?,
+       #   items: [{ rspuId, rskuId, sortOrder? }] (1..50 项)
+       # }
        # Response: SchemeResponse
 
 GET    /api/v1/schemes
@@ -216,12 +221,27 @@ GET    /api/v1/schemes/{schemeId}
        # 查询搭配方案详情（已实现）
        # Response: SchemeResponse
 
+PUT    /api/v1/schemes/{schemeId}
+       # 更新搭配方案（已实现）
+       # Request: {
+       #   schemeName (max 128 字符),
+       #   roomType?,
+       #   budgetLimit?,
+       #   items: [{ rspuId, rskuId, sortOrder? }] (1..50 项)
+       # }
+       # Response: SchemeResponse
+       # 说明：会物理删除旧子项并重新写入，保证幂等
+
 DELETE /api/v1/schemes/{schemeId}
        # 删除搭配方案（已实现）
 
 POST   /api/v1/schemes/{schemeId}/quote
        # 根据搭配方案生成报价单（已实现）
        # Response: QuoteResponse
+       # 说明：采用快照模式，scheme_item 保存创建/更新时的 factory_price。
+       #      重新生成报价单时，报价单按 RSKU 最新价格计算；若与快照不一致，
+       #      会在 response.priceChanges 中列出变动项：
+       #      [{ rspuId, rspuName, rskuId, oldPrice, newPrice }]
 ```
 
 ### 系统
