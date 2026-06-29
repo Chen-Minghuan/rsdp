@@ -1,8 +1,10 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.ProductListRequest;
+import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.ImageAssets;
@@ -19,14 +21,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -52,6 +57,9 @@ class ProductQueryServiceTest {
 
     @Mock
     private AuditLogService auditLogService;
+
+    @Spy
+    private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private ProductQueryService productQueryService;
@@ -204,5 +212,72 @@ class ProductQueryServiceTest {
         productQueryService.reviewProduct("RSPU-TEST01", "已确认", "人工复核通过");
 
         assertThat(rspu.getReviewStatus()).isEqualTo("已确认");
+    }
+
+    @Test
+    void updateProduct_shouldUpdateFieldsAndRelations() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setPositioningLabel("OLD");
+        rspu.setSceneTags("[]");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setPositioningLabel("MC");
+        request.setColorPrimaryName("原木色");
+        request.setMaterialTags(List.of("WO"));
+        request.setSceneTags(List.of("LIVING"));
+        request.setSixDimTags(Map.of("A", "现代"));
+        request.setReferencePriceBand("mid");
+        request.setWarrantyYears(3);
+        request.setKeySpecs(Map.of("width", "80cm"));
+
+        productQueryService.updateProduct("RSPU-TEST01", request);
+
+        assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
+        assertThat(rspu.getColorPrimaryName()).isEqualTo("原木色");
+        assertThat(rspu.getMaterialTags()).isEqualTo("[\"WO\"]");
+        assertThat(rspu.getSceneTags()).isEqualTo("[\"LIVING\"]");
+        assertThat(rspu.getSixDimTags()).isEqualTo("{\"A\":\"现代\"}");
+        assertThat(rspu.getReferencePriceBand()).isEqualTo("mid");
+        assertThat(rspu.getWarrantyYears()).isEqualTo(3);
+        assertThat(rspu.getKeySpecs()).isEqualTo("{\"width\":\"80cm\"}");
+
+        verify(rspuStyleMapper).delete(any());
+        verify(rspuStyleMapper).insert(any(RspuStyle.class));
+        verify(rspuSceneMapper).delete(any());
+        verify(rspuSceneMapper).insert(any(RspuScene.class));
+        verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq(rspu), eq("admin"));
+    }
+
+    @Test
+    void updateProduct_shouldIgnoreNullFields() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setPositioningLabel("MC");
+        rspu.setColorPrimaryName("原木色");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setWarrantyYears(5);
+
+        productQueryService.updateProduct("RSPU-TEST01", request);
+
+        assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
+        assertThat(rspu.getColorPrimaryName()).isEqualTo("原木色");
+        assertThat(rspu.getWarrantyYears()).isEqualTo(5);
+    }
+
+    @Test
+    void updateProduct_shouldThrowWhenNotFound() {
+        when(rspuMapper.selectById(eq("RSPU-NOTEXIST"))).thenReturn(null);
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setColorPrimaryName("黑色");
+
+        assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-NOTEXIST", request))
+            .isInstanceOf(ResourceNotFoundException.class);
     }
 }

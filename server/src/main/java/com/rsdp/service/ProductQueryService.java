@@ -2,8 +2,10 @@ package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.ProductListRequest;
+import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.AiRecognition;
@@ -18,17 +20,20 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
  * 产品查询与复核服务。
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProductQueryService {
@@ -39,6 +44,7 @@ public class ProductQueryService {
     private final RspuStyleMapper rspuStyleMapper;
     private final RspuSceneMapper rspuSceneMapper;
     private final AuditLogService auditLogService;
+    private final ObjectMapper objectMapper;
 
     /**
      * 分页查询产品列表。
@@ -144,6 +150,111 @@ public class ProductQueryService {
         rspuMapper.updateById(rspu);
 
         auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, "admin");
+    }
+
+    /**
+     * 更新产品元数据。
+     *
+     * <p>只更新请求中非 {@code null} 的字段；风格/场景变更会同步维护
+     * {@code rspu_style} / {@code rspu_scene} 关联表。
+     *
+     * @param rspuId  RSPU ID
+     * @param request 更新请求
+     */
+    @Transactional
+    public void updateProduct(String rspuId, ProductUpdateRequest request) {
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null || rspu.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+
+        RspuMaster oldSnapshot = snapshot(rspu);
+        String oldPositioningLabel = rspu.getPositioningLabel();
+        String oldSceneTagsJson = rspu.getSceneTags();
+
+        if (StringUtils.hasText(request.getPositioningLabel())) {
+            rspu.setPositioningLabel(request.getPositioningLabel().trim());
+        }
+        if (request.getColorPrimaryName() != null) {
+            rspu.setColorPrimaryName(request.getColorPrimaryName().trim());
+        }
+        if (request.getColorPrimaryHsv() != null) {
+            rspu.setColorPrimaryHsv(writeJson(request.getColorPrimaryHsv()));
+        }
+        if (request.getMaterialTags() != null) {
+            rspu.setMaterialTags(writeJson(request.getMaterialTags()));
+        }
+        if (request.getSceneTags() != null) {
+            rspu.setSceneTags(writeJson(request.getSceneTags()));
+        }
+        if (request.getSixDimTags() != null) {
+            rspu.setSixDimTags(writeJson(request.getSixDimTags()));
+        }
+        if (request.getReferencePriceBand() != null) {
+            rspu.setReferencePriceBand(request.getReferencePriceBand().trim());
+        }
+        if (request.getWarrantyYears() != null) {
+            rspu.setWarrantyYears(request.getWarrantyYears());
+        }
+        if (request.getKeySpecs() != null) {
+            rspu.setKeySpecs(writeJson(request.getKeySpecs()));
+        }
+
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.updateById(rspu);
+
+        if (StringUtils.hasText(request.getPositioningLabel())
+            && !request.getPositioningLabel().trim().equals(oldPositioningLabel)) {
+            updatePrimaryStyle(rspuId, request.getPositioningLabel().trim());
+        }
+
+        if (request.getSceneTags() != null
+            && !writeJson(request.getSceneTags()).equals(oldSceneTagsJson)) {
+            updateScenes(rspuId, request.getSceneTags());
+        }
+
+        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, "admin");
+    }
+
+    private void updatePrimaryStyle(String rspuId, String styleCode) {
+        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        RspuStyle style = new RspuStyle();
+        style.setRspuId(rspuId);
+        style.setDictType("style");
+        style.setStyleCode(styleCode);
+        style.setIsPrimary(true);
+        style.setCreatedAt(LocalDateTime.now());
+        rspuStyleMapper.insert(style);
+    }
+
+    private void updateScenes(String rspuId, List<String> sceneCodes) {
+        rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
+        if (sceneCodes == null || sceneCodes.isEmpty()) {
+            return;
+        }
+        for (String code : sceneCodes) {
+            if (!StringUtils.hasText(code)) {
+                continue;
+            }
+            RspuScene scene = new RspuScene();
+            scene.setRspuId(rspuId);
+            scene.setDictType("scene");
+            scene.setSceneCode(code.trim());
+            scene.setCreatedAt(LocalDateTime.now());
+            rspuSceneMapper.insert(scene);
+        }
+    }
+
+    private String writeJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.error("JSON 序列化失败: {}", value, e);
+            throw new com.rsdp.exception.BusinessException("JSON 序列化失败: " + e.getMessage());
+        }
     }
 
     private RspuMaster snapshot(RspuMaster source) {

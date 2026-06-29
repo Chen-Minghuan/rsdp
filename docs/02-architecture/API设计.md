@@ -47,8 +47,8 @@ PUT    /api/v1/products/{rspuId}/review
        # Request: { reviewStatus: "已确认"|"存疑", reviewComment? }
 
 PUT    /api/v1/products/{rspuId}
-       # 更新产品元数据（六维标签、场景、尺寸等，待实现）
-       # Request: JSON Body（只传要更新的字段）
+       # 更新产品元数据（定位标签、颜色、材质、场景、六维标签、价格带、保修年限等，已实现）
+       # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）
 
 DELETE /api/v1/products/{rspuId}
        # 软删除（待实现）
@@ -101,7 +101,7 @@ DELETE /api/v1/sku/{rskuId}
        # 删除报价（该厂不再供应，待实现）
 
 GET    /api/v1/sku/compare/{rspuId}
-       # 同款多厂比价列表（待实现）
+       # 同款多厂比价列表（产品详情页 RSKU 列表已覆盖该能力，独立接口待评估）
 ```
 
 ### 检索

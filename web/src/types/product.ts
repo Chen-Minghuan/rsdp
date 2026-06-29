@@ -54,6 +54,9 @@ export interface ProductDetail {
     colorPrimaryHsv: number[]
     materialTags: string[]
     sceneTags: string[]
+    referencePriceBand: string
+    warrantyYears: number
+    keySpecs: Record<string, string>
     status: string
     reviewStatus: string
     aestheticsConfidence: string
@@ -84,4 +87,21 @@ export interface ProductDetail {
 export interface ProductReviewRequest {
   reviewStatus: '已确认' | '存疑'
   reviewComment?: string
+}
+
+/**
+ * 产品元数据更新请求。
+ *
+ * 所有字段可选，未传字段保持不变。
+ */
+export interface ProductUpdateRequest {
+  positioningLabel?: string
+  colorPrimaryName?: string
+  colorPrimaryHsv?: number[]
+  materialTags?: string[]
+  sceneTags?: string[]
+  sixDimTags?: Record<string, string>
+  referencePriceBand?: string
+  warrantyYears?: number
+  keySpecs?: Record<string, string>
 }

@@ -1,5 +1,5 @@
 import { apiClient, type ApiResult } from './client'
-import type { PageResult, ProductDetail, ProductListParams, ProductReviewRequest, ProductSummary } from '@/types/product'
+import type { PageResult, ProductDetail, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 /**
@@ -58,4 +58,14 @@ export async function getProductDetail(rspuId: string): Promise<ProductDetail> {
  */
 export async function reviewProduct(rspuId: string, request: ProductReviewRequest): Promise<void> {
   await apiClient.put<ApiResult<void>>(`/v1/products/${rspuId}/review`, request)
+}
+
+/**
+ * 更新产品元数据。
+ *
+ * @param rspuId RSPU ID
+ * @param request 更新请求
+ */
+export async function updateProduct(rspuId: string, request: ProductUpdateRequest): Promise<void> {
+  await apiClient.put<ApiResult<void>>(`/v1/products/${rspuId}`, request)
 }

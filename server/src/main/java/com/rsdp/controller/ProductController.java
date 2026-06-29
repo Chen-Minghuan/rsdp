@@ -4,6 +4,7 @@ import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductReviewRequest;
+import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.service.ProductQueryService;
@@ -83,6 +84,20 @@ public class ProductController {
     public Result<Void> review(@PathVariable String rspuId,
                                @Valid @RequestBody ProductReviewRequest request) {
         productQueryService.reviewProduct(rspuId, request.getReviewStatus(), request.getReviewComment());
+        return Result.ok();
+    }
+
+    /**
+     * 更新产品元数据。
+     *
+     * @param rspuId  RSPU ID
+     * @param request 更新请求
+     * @return 空结果
+     */
+    @PutMapping("/{rspuId}")
+    public Result<Void> update(@PathVariable String rspuId,
+                               @Valid @RequestBody ProductUpdateRequest request) {
+        productQueryService.updateProduct(rspuId, request);
         return Result.ok();
     }
 }

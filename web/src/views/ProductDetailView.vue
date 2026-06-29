@@ -20,12 +20,12 @@ import {
   NInput,
   NInputNumber
 } from 'naive-ui'
-import { getProductDetail, reviewProduct } from '@/api/product'
+import { getProductDetail, reviewProduct, updateProduct } from '@/api/product'
 import { listRskuByRspu, createRsku } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
 import { listDicts } from '@/api/dict'
-import type { ProductDetail } from '@/types/product'
+import type { ProductDetail, ProductUpdateRequest } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuCreateRequest } from '@/types/rsku'
 import type { Factory } from '@/types/factory'
@@ -83,11 +83,21 @@ const sizeOptions = ref<DictItem[]>([])
 const colorOptions = ref<DictItem[]>([])
 const materialOptions = ref<DictItem[]>([])
 const styleOptions = ref<DictItem[]>([])
+const sceneOptions = ref<DictItem[]>([])
 const priceBandOptions = ref<DictItem[]>([
   { dictCode: 'low', dictName: '低', sortOrder: 1 },
   { dictCode: 'mid', dictName: '中', sortOrder: 2 },
   { dictCode: 'high', dictName: '高', sortOrder: 3 }
 ])
+
+interface ProductEditForm extends ProductUpdateRequest {
+  sixDimTagsJson?: string
+  keySpecsJson?: string
+}
+
+const showEditModal = ref(false)
+const submittingEdit = ref(false)
+const editForm = ref<ProductEditForm>({})
 
 const rskuColumns = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
@@ -176,18 +186,20 @@ async function loadFactories() {
 
 async function loadDicts() {
   try {
-    const [quoteConfidence, sizes, colors, materials, styles] = await Promise.all([
+    const [quoteConfidence, sizes, colors, materials, styles, scenes] = await Promise.all([
       listDicts('quote_confidence'),
       listDicts('size'),
       listDicts('color'),
       listDicts('material'),
-      listDicts('style')
+      listDicts('style'),
+      listDicts('scene')
     ])
     quoteConfidenceOptions.value = quoteConfidence
     sizeOptions.value = sizes
     colorOptions.value = colors
     materialOptions.value = materials
     styleOptions.value = styles
+    sceneOptions.value = scenes
   } catch (e) {
     console.error('加载字典失败', e)
   }
@@ -200,6 +212,11 @@ function resolveStyleName(code: string) {
 function resolveMaterialNames(codes: string[]) {
   if (!Array.isArray(codes)) return []
   return codes.map(code => materialOptions.value.find(m => m.dictCode === code)?.dictName || code)
+}
+
+function resolveSceneNames(codes: string[]) {
+  if (!Array.isArray(codes)) return []
+  return codes.map(code => sceneOptions.value.find(s => s.dictCode === code)?.dictName || code)
 }
 
 async function handleReview(status: '已确认' | '存疑') {
@@ -215,6 +232,73 @@ async function handleReview(status: '已确认' | '存疑') {
     errorMessage.value = e instanceof Error ? e.message : '复核失败'
   } finally {
     reviewing.value = false
+  }
+}
+
+function openEditModal() {
+  if (!detail.value) return
+  const r = detail.value.rspu
+  editForm.value = {
+    positioningLabel: r.positioningLabel,
+    colorPrimaryName: r.colorPrimaryName,
+    colorPrimaryHsv: Array.isArray(r.colorPrimaryHsv) ? [...r.colorPrimaryHsv] : [],
+    materialTags: Array.isArray(r.materialTags) ? [...r.materialTags] : [],
+    sceneTags: Array.isArray(r.sceneTags) ? [...r.sceneTags] : [],
+    referencePriceBand: r.referencePriceBand,
+    warrantyYears: r.warrantyYears,
+    sixDimTagsJson: r.sixDimTags ? JSON.stringify(r.sixDimTags, null, 2) : '{}',
+    keySpecsJson: r.keySpecs ? JSON.stringify(r.keySpecs, null, 2) : '{}'
+  }
+  showEditModal.value = true
+}
+
+async function handleUpdateProduct() {
+  if (!editForm.value.positioningLabel) {
+    errorMessage.value = '请选择风格/定位标签'
+    return
+  }
+
+  let sixDimTags: Record<string, string> | undefined
+  let keySpecs: Record<string, string> | undefined
+
+  try {
+    if (editForm.value.sixDimTagsJson?.trim()) {
+      sixDimTags = JSON.parse(editForm.value.sixDimTagsJson.trim())
+    }
+    if (editForm.value.keySpecsJson?.trim()) {
+      keySpecs = JSON.parse(editForm.value.keySpecsJson.trim())
+    }
+  } catch {
+    errorMessage.value = '六维标签或关键规格 JSON 格式不正确'
+    return
+  }
+
+  const request: ProductUpdateRequest = {
+    positioningLabel: editForm.value.positioningLabel,
+    colorPrimaryName: editForm.value.colorPrimaryName,
+    colorPrimaryHsv: editForm.value.colorPrimaryHsv,
+    materialTags: editForm.value.materialTags,
+    sceneTags: editForm.value.sceneTags,
+    sixDimTags,
+    referencePriceBand: editForm.value.referencePriceBand,
+    warrantyYears: editForm.value.warrantyYears,
+    keySpecs
+  }
+
+  submittingEdit.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await updateProduct(rspuId, request)
+    successMessage.value = '产品元数据已更新'
+    showEditModal.value = false
+    await loadDetail()
+  } catch (e) {
+    successMessage.value = ''
+    errorMessage.value = e instanceof Error ? e.message : '更新失败'
+  } finally {
+    submittingEdit.value = false
   }
 }
 
@@ -376,7 +460,7 @@ onMounted(() => {
                 {{ resolveMaterialNames(detail.rspu.materialTags).join('、') || '-' }}
               </n-descriptions-item>
               <n-descriptions-item label="场景">
-                {{ Array.isArray(detail.rspu.sceneTags) ? detail.rspu.sceneTags.join('、') : '-' }}
+                {{ resolveSceneNames(detail.rspu.sceneTags).join('、') || '-' }}
               </n-descriptions-item>
               <n-descriptions-item label="六维标签">
                 <pre style="margin: 0;">{{ JSON.stringify(detail.rspu.sixDimTags, null, 2) }}</pre>
@@ -415,6 +499,9 @@ onMounted(() => {
                 @click="handleReview('存疑')"
               >
                 标记存疑
+              </n-button>
+              <n-button @click="openEditModal">
+                编辑元数据
               </n-button>
             </n-space>
           </n-card>
@@ -591,6 +678,76 @@ onMounted(() => {
         <n-button @click="showVariantModal = false">取消</n-button>
         <n-button type="primary" :loading="submittingVariant" @click="handleCreateVariant">
           提交变体
+        </n-button>
+      </n-space>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showEditModal"
+      title="编辑产品元数据"
+      preset="card"
+      style="width: 640px;"
+    >
+      <n-form label-placement="left" label-width="100">
+        <n-form-item label="风格/定位" required>
+          <n-select
+            v-model:value="editForm.positioningLabel"
+            :options="styleOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择风格"
+          />
+        </n-form-item>
+        <n-form-item label="主色名">
+          <n-input v-model:value="editForm.colorPrimaryName" placeholder="如：原木色" />
+        </n-form-item>
+        <n-form-item label="材质标签">
+          <n-select
+            v-model:value="editForm.materialTags"
+            :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择材质"
+            multiple
+            filterable
+          />
+        </n-form-item>
+        <n-form-item label="场景标签">
+          <n-select
+            v-model:value="editForm.sceneTags"
+            :options="sceneOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择场景"
+            multiple
+            filterable
+          />
+        </n-form-item>
+        <n-form-item label="参考价格带">
+          <n-select
+            v-model:value="editForm.referencePriceBand"
+            :options="priceBandOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择价格带"
+            clearable
+          />
+        </n-form-item>
+        <n-form-item label="保修年限">
+          <n-input-number v-model:value="editForm.warrantyYears" :min="0" placeholder="保修年限" />
+        </n-form-item>
+        <n-form-item label="六维标签">
+          <n-input
+            v-model:value="editForm.sixDimTagsJson"
+            type="textarea"
+            placeholder="{&quot;A&quot;:&quot;现代&quot;,&quot;B&quot;:&quot;简约&quot;}"
+          />
+        </n-form-item>
+        <n-form-item label="关键规格">
+          <n-input
+            v-model:value="editForm.keySpecsJson"
+            type="textarea"
+            placeholder="{&quot;width&quot;:&quot;80cm&quot;,&quot;depth&quot;:&quot;80cm&quot;}"
+          />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showEditModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingEdit" @click="handleUpdateProduct">
+          保存
         </n-button>
       </n-space>
     </n-modal>
