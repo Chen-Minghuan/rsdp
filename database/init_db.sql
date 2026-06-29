@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     material_tags JSONB,                           -- AI识别材质标签
     scene_tags JSONB,                              -- AI识别适用场景标签
     reference_price_band VARCHAR(16),              -- 参考价格带 low/mid/high
+    product_level VARCHAR(8),                      -- 产品等级 S/A/B/C，继承自 factory_level 字典
     budget_range JSONB,                            -- 预算区间 [800, 3500]
     warranty_years INTEGER,                        -- 款式级典型质保年限
     key_specs JSONB,                               -- 关键规格：框架材质、海绵密度等
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     material_code VARCHAR(32),                     -- 主材质码
     material_mix JSONB,                            -- 多种材质组合 ["实木框架","布艺座包"]
     reference_price_band VARCHAR(16),              -- 该变体的参考价格带
+    product_level VARCHAR(8),                      -- 产品等级覆盖，为空时继承 rspu_master.product_level
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
@@ -160,6 +162,7 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     factory_sku VARCHAR(64),                       -- 工厂原始编码
     factory_price DECIMAL(18, 2),                  -- 出厂价（建议 AES 加密存储）
     price_band VARCHAR(16),                        -- low/mid/high
+    product_level VARCHAR(8),                      -- 产品等级，继承自 RSPU/变体
     material_description TEXT,                     -- 工厂提供的详细材质说明
     lead_time_days INTEGER,                        -- 交期
     moq INTEGER,                                   -- 最小起订量

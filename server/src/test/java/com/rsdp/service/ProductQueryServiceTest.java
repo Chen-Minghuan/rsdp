@@ -58,11 +58,26 @@ class ProductQueryServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private DictService dictService;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private ProductQueryService productQueryService;
+
+    private List<com.rsdp.entity.CategoryDict> factoryLevelDicts() {
+        com.rsdp.entity.CategoryDict s = new com.rsdp.entity.CategoryDict();
+        s.setDictType("factory_level");
+        s.setDictCode("S");
+        s.setDictName("S级");
+        com.rsdp.entity.CategoryDict c = new com.rsdp.entity.CategoryDict();
+        c.setDictType("factory_level");
+        c.setDictCode("C");
+        c.setDictName("C级");
+        return List.of(s, c);
+    }
 
     @Test
     void listProducts_shouldReturnPageResult() {
@@ -249,6 +264,24 @@ class ProductQueryServiceTest {
         verify(rspuSceneMapper).delete(any());
         verify(rspuSceneMapper).insert(any(RspuScene.class));
         verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq(rspu), eq("admin"));
+    }
+
+
+    @Test
+    void updateProduct_shouldUpdateProductLevel() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setPositioningLabel("MC");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setProductLevel("C");
+
+        productQueryService.updateProduct("RSPU-TEST01", request);
+
+        assertThat(rspu.getProductLevel()).isEqualTo("C");
     }
 
     @Test

@@ -31,6 +31,7 @@ const reviewStatus = ref<string | null>(null)
 const styleFilter = ref<string | null>(null)
 const sceneFilter = ref<string | null>(null)
 const materialFilter = ref<string | null>(null)
+const productLevelFilter = ref<string | null>(null)
 const selectedRowKeys = ref<string[]>([])
 
 const reviewStatusOptions = ref<{ label: string; value: string }[]>([
@@ -39,6 +40,7 @@ const reviewStatusOptions = ref<{ label: string; value: string }[]>([
 const styleOptions = ref<{ label: string; value: string }[]>([])
 const sceneOptions = ref<{ label: string; value: string }[]>([])
 const materialOptions = ref<{ label: string; value: string }[]>([])
+const productLevelOptions = ref<{ label: string; value: string }[]>([])
 
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
 
@@ -76,6 +78,14 @@ const columns: DataTableColumns<ProductSummary> = [
   },
   { title: '主色', key: 'colorPrimaryName', width: 100 },
   {
+    title: '产品等级',
+    key: 'productLevel',
+    width: 100,
+    render(row: ProductSummary) {
+      return row.productLevel || '-'
+    }
+  },
+  {
     title: '复核状态',
     key: 'reviewStatus',
     width: 100,
@@ -107,11 +117,12 @@ const columns: DataTableColumns<ProductSummary> = [
 
 async function loadDicts() {
   try {
-    const [reviewDicts, styleDicts, sceneDicts, materialDicts] = await Promise.all([
+    const [reviewDicts, styleDicts, sceneDicts, materialDicts, levelDicts] = await Promise.all([
       listDicts('review_status'),
       listDicts('style'),
       listDicts('scene'),
-      listDicts('material')
+      listDicts('material'),
+      listDicts('factory_level')
     ])
     reviewStatusOptions.value = [
       { label: '全部复核状态', value: '' },
@@ -128,6 +139,10 @@ async function loadDicts() {
     materialOptions.value = [
       { label: '全部材质', value: '' },
       ...materialDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
+    ]
+    productLevelOptions.value = [
+      { label: '全部等级', value: '' },
+      ...levelDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     ]
   } catch (e) {
     console.error('加载字典失败', e)
@@ -149,7 +164,8 @@ async function loadProducts() {
       reviewStatus: reviewStatus.value || undefined,
       positioningLabel: styleFilter.value || undefined,
       sceneCode: sceneFilter.value || undefined,
-      materialTag: materialFilter.value || undefined
+      materialTag: materialFilter.value || undefined,
+      productLevel: productLevelFilter.value || undefined
     })
     products.value = result.rows
     total.value = result.total
@@ -180,7 +196,7 @@ onMounted(() => {
   loadProducts()
 })
 
-watch([reviewStatus, styleFilter, sceneFilter, materialFilter], () => {
+watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilter], () => {
   page.value = 1
   loadProducts()
 })
@@ -225,6 +241,13 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter], () => {
             clearable
             style="width: 160px;"
             placeholder="材质"
+          />
+          <n-select
+            v-model:value="productLevelFilter"
+            :options="productLevelOptions"
+            clearable
+            style="width: 160px;"
+            placeholder="产品等级"
           />
           <n-button type="primary" @click="handleSearch">搜索</n-button>
         </n-space>

@@ -64,6 +64,18 @@ class RspuVariantServiceTest {
             .toList();
     }
 
+    private List<CategoryDict> factoryLevelDicts() {
+        CategoryDict s = new CategoryDict();
+        s.setDictType("factory_level");
+        s.setDictCode("S");
+        s.setDictName("S级");
+        CategoryDict c = new CategoryDict();
+        c.setDictType("factory_level");
+        c.setDictCode("C");
+        c.setDictName("C级");
+        return List.of(s, c);
+    }
+
     private String rspuId;
 
     @BeforeEach
@@ -121,6 +133,26 @@ class RspuVariantServiceTest {
         RspuVariantResponse response = variantService.createVariant(rspuId, request);
 
         assertEquals("RSPU-TEST01-V003", response.getVariantId());
+    }
+
+    @Test
+    void createVariant_shouldSetProductLevel() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(variantCodeMapper.allocateSequence(rspuId)).thenReturn(1L);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("C 级床垫标准版");
+        request.setMaterialCode("LI");
+        request.setProductLevel("C");
+
+        RspuVariantResponse response = variantService.createVariant(rspuId, request);
+
+        assertEquals("C", response.getProductLevel());
     }
 
     @Test

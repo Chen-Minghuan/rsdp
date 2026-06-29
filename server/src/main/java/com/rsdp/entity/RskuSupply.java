@@ -23,6 +23,7 @@ public class RskuSupply {
     private String factorySku;
     private BigDecimal factoryPrice;
     private String priceBand;
+    private String productLevel;
     private String materialDescription;
     private Integer leadTimeDays;
     private Integer moq;

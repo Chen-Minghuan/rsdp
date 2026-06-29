@@ -10,6 +10,7 @@ export interface ProductListParams {
   materialTag?: string
   status?: string
   reviewStatus?: string
+  productLevel?: string
   keyword?: string
 }
 
@@ -25,6 +26,7 @@ export interface ProductSummary {
   status: string
   reviewStatus: string
   aestheticsConfidence: string
+  productLevel?: string
   primaryImageUrl: string
   createdAt: string
   updatedAt: string
@@ -55,6 +57,7 @@ export interface ProductDetail {
     materialTags: string[]
     sceneTags: string[]
     referencePriceBand: string
+    productLevel?: string
     warrantyYears: number
     keySpecs: Record<string, string>
     status: string
@@ -102,6 +105,7 @@ export interface ProductUpdateRequest {
   sceneTags?: string[]
   sixDimTags?: Record<string, string>
   referencePriceBand?: string
+  productLevel?: string
   warrantyYears?: number
   keySpecs?: Record<string, string>
 }

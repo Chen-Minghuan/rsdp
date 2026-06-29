@@ -38,6 +38,8 @@ public class RspuVariant {
 
     private String referencePriceBand;
 
+    private String productLevel;
+
     private String status;
 
     private LocalDateTime createdAt;

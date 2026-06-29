@@ -31,4 +31,10 @@ public class RskuCreateRequest {
     private String shippingFrom;
     private String diffNotes;
     private String quoteConfidence;
+
+    /** 产品等级，为空时按 变体 > RSPU 继承。 */
+    private String productLevel;
+
+    /** 工厂无对应能力等级时，是否自动扩展工厂能力。 */
+    private Boolean autoExtendCapability;
 }

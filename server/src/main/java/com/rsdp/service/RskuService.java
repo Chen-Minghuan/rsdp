@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -36,6 +37,8 @@ public class RskuService {
     private final RskuSupplyMapper rskuSupplyMapper;
     private final RspuMapper rspuMapper;
     private final FactoryMasterMapper factoryMasterMapper;
+    private final FactoryService factoryService;
+    private final DictService dictService;
     private final RspuVariantService rspuVariantService;
     private final PriceHistoryMapper priceHistoryMapper;
     private final AuditLogService auditLogService;
@@ -112,6 +115,20 @@ public class RskuService {
             throw new BusinessException("变体不属于该产品: " + request.getVariantId());
         }
 
+        String productLevel = resolveProductLevel(request, rspu, variant);
+        validateProductLevel(productLevel);
+
+        List<String> capableLevels = factoryService.getFactoryCapableLevels(request.getFactoryCode());
+        if (!capableLevels.contains(productLevel)) {
+            if (Boolean.TRUE.equals(request.getAutoExtendCapability())) {
+                factoryService.extendCapability(request.getFactoryCode(), productLevel);
+            } else {
+                throw new BusinessException(
+                    String.format("工厂 %s 未声明 %s 级能力，无法录入该等级产品报价。请先更新工厂能力等级或开启自动扩展。",
+                        request.getFactoryCode(), productLevel));
+            }
+        }
+
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         rsku.setRspuId(request.getRspuId());
@@ -120,6 +137,7 @@ public class RskuService {
         rsku.setFactorySku(request.getFactorySku());
         rsku.setFactoryPrice(request.getFactoryPrice());
         rsku.setPriceBand(resolvePriceBand(request.getFactoryPrice()));
+        rsku.setProductLevel(productLevel);
         rsku.setMaterialDescription(request.getMaterialDescription());
         rsku.setLeadTimeDays(request.getLeadTimeDays());
         rsku.setMoq(request.getMoq());
@@ -139,6 +157,27 @@ public class RskuService {
         }
 
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, "admin");
+    }
+
+    private String resolveProductLevel(RskuCreateRequest request, RspuMaster rspu, RspuVariant variant) {
+        if (StringUtils.hasText(request.getProductLevel())) {
+            return request.getProductLevel().trim();
+        }
+        if (StringUtils.hasText(variant.getProductLevel())) {
+            return variant.getProductLevel();
+        }
+        if (StringUtils.hasText(rspu.getProductLevel())) {
+            return rspu.getProductLevel();
+        }
+        throw new BusinessException("请为产品或变体设置产品等级，或在报价中指定产品等级");
+    }
+
+    private void validateProductLevel(String level) {
+        boolean exists = dictService.listByType("factory_level").stream()
+            .anyMatch(d -> level.equals(d.getDictCode()) || level.equals(d.getDictName()));
+        if (!exists) {
+            throw new BusinessException("产品等级不存在: " + level);
+        }
     }
 
     /**
@@ -188,6 +227,7 @@ public class RskuService {
         copy.setFactorySku(source.getFactorySku());
         copy.setFactoryPrice(source.getFactoryPrice());
         copy.setPriceBand(source.getPriceBand());
+        copy.setProductLevel(source.getProductLevel());
         copy.setMaterialDescription(source.getMaterialDescription());
         copy.setLeadTimeDays(source.getLeadTimeDays());
         copy.setMoq(source.getMoq());
@@ -224,6 +264,7 @@ public class RskuService {
         response.setFactorySku(rsku.getFactorySku());
         response.setFactoryPrice(rsku.getFactoryPrice());
         response.setPriceBand(rsku.getPriceBand());
+        response.setProductLevel(rsku.getProductLevel());
         response.setMaterialDescription(rsku.getMaterialDescription());
         response.setLeadTimeDays(rsku.getLeadTimeDays());
         response.setMoq(rsku.getMoq());

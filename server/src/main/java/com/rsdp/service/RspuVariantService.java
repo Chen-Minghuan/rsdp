@@ -51,6 +51,9 @@ public class RspuVariantService {
         }
 
         validateVariantCodes(request);
+        if (StringUtils.hasText(request.getProductLevel())) {
+            validateDictCode("factory_level", request.getProductLevel(), "产品等级");
+        }
 
         String variantId = generateVariantId(rspuId);
 
@@ -65,6 +68,7 @@ public class RspuVariantService {
         variant.setMaterialCode(request.getMaterialCode());
         variant.setMaterialMix(toJson(request.getMaterialMix()));
         variant.setReferencePriceBand(request.getReferencePriceBand());
+        variant.setProductLevel(request.getProductLevel());
         variant.setStatus("active");
         variant.setCreatedAt(LocalDateTime.now());
         variant.setUpdatedAt(LocalDateTime.now());
@@ -156,6 +160,7 @@ public class RspuVariantService {
         response.setMaterialCode(variant.getMaterialCode());
         response.setMaterialMix(parseJsonList(variant.getMaterialMix()));
         response.setReferencePriceBand(variant.getReferencePriceBand());
+        response.setProductLevel(variant.getProductLevel());
         response.setStatus(variant.getStatus());
         response.setCreatedAt(variant.getCreatedAt());
         response.setUpdatedAt(variant.getUpdatedAt());

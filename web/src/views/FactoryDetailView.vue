@@ -58,6 +58,7 @@ const rskuColumns = [
   { title: '工厂SKU', key: 'factorySku' },
   { title: '出厂价', key: 'factoryPrice', width: 120 },
   { title: '价格带', key: 'priceBand', width: 100 },
+  { title: '产品等级', key: 'productLevel', width: 100 },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 },
   {

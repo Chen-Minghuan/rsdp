@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, h } from 'vue'
+import { ref, onMounted, h, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NCard,
   NButton,
   NSpace,
   NAlert,
+  NCheckbox,
   NDescriptions,
   NDescriptionsItem,
   NImage,
@@ -68,6 +69,25 @@ const variantLoading = ref(false)
 const showVariantModal = ref(false)
 const submittingVariant = ref(false)
 
+const selectedVariant = computed(() =>
+  variantList.value.find(v => v.variantId === rskuForm.value.variantId)
+)
+
+const rskuProductLevel = computed(() => {
+  return selectedVariant.value?.productLevel || detail.value?.rspu.productLevel
+})
+
+const selectedFactory = computed(() =>
+  factories.value.find(f => f.factoryCode === rskuForm.value.factoryCode)
+)
+
+const isFactoryCapable = computed(() => {
+  const level = rskuProductLevel.value
+  if (!level) return true
+  const capableLevels = selectedFactory.value?.capableLevels || []
+  return capableLevels.includes(level)
+})
+
 const variantForm = ref<RspuVariantCreateRequest>({
   displayName: '',
   variantCode: '',
@@ -84,6 +104,7 @@ const colorOptions = ref<DictItem[]>([])
 const materialOptions = ref<DictItem[]>([])
 const styleOptions = ref<DictItem[]>([])
 const sceneOptions = ref<DictItem[]>([])
+const productLevelOptions = ref<DictItem[]>([])
 const priceBandOptions = ref<DictItem[]>([
   { dictCode: 'low', dictName: '低', sortOrder: 1 },
   { dictCode: 'mid', dictName: '中', sortOrder: 2 },
@@ -105,6 +126,7 @@ const rskuColumns = [
   { title: '工厂代码', key: 'factoryCode', width: 120 },
   { title: '出厂价', key: 'factoryPrice', width: 120 },
   { title: '价格带', key: 'priceBand', width: 100 },
+  { title: '产品等级', key: 'productLevel', width: 100 },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 },
   {
@@ -129,6 +151,7 @@ const variantColumns = [
   { title: '尺寸码', key: 'sizeCode', width: 100 },
   { title: '颜色码', key: 'colorCode', width: 100 },
   { title: '材质码', key: 'materialCode', width: 100 },
+  { title: '产品等级', key: 'productLevel', width: 100 },
   { title: '参考价格带', key: 'referencePriceBand', width: 120 },
   {
     title: '状态',
@@ -186,13 +209,14 @@ async function loadFactories() {
 
 async function loadDicts() {
   try {
-    const [quoteConfidence, sizes, colors, materials, styles, scenes] = await Promise.all([
+    const [quoteConfidence, sizes, colors, materials, styles, scenes, levels] = await Promise.all([
       listDicts('quote_confidence'),
       listDicts('size'),
       listDicts('color'),
       listDicts('material'),
       listDicts('style'),
-      listDicts('scene')
+      listDicts('scene'),
+      listDicts('factory_level')
     ])
     quoteConfidenceOptions.value = quoteConfidence
     sizeOptions.value = sizes
@@ -200,6 +224,7 @@ async function loadDicts() {
     materialOptions.value = materials
     styleOptions.value = styles
     sceneOptions.value = scenes
+    productLevelOptions.value = levels
   } catch (e) {
     console.error('加载字典失败', e)
   }
@@ -245,6 +270,7 @@ function openEditModal() {
     materialTags: Array.isArray(r.materialTags) ? [...r.materialTags] : [],
     sceneTags: Array.isArray(r.sceneTags) ? [...r.sceneTags] : [],
     referencePriceBand: r.referencePriceBand,
+    productLevel: r.productLevel,
     warrantyYears: r.warrantyYears,
     sixDimTagsJson: r.sixDimTags ? JSON.stringify(r.sixDimTags, null, 2) : '{}',
     keySpecsJson: r.keySpecs ? JSON.stringify(r.keySpecs, null, 2) : '{}'
@@ -281,6 +307,7 @@ async function handleUpdateProduct() {
     sceneTags: editForm.value.sceneTags,
     sixDimTags,
     referencePriceBand: editForm.value.referencePriceBand,
+    productLevel: editForm.value.productLevel,
     warrantyYears: editForm.value.warrantyYears,
     keySpecs
   }
@@ -314,7 +341,9 @@ function openRskuModal() {
     warrantyYears: undefined,
     shippingFrom: '',
     diffNotes: '',
-    quoteConfidence: ''
+    quoteConfidence: '',
+    productLevel: undefined,
+    autoExtendCapability: false
   }
   showRskuModal.value = true
 }
@@ -323,6 +352,13 @@ async function handleCreateRsku() {
   if (!rskuForm.value.factoryCode || !rskuForm.value.variantId || rskuForm.value.factoryPrice <= 0) {
     successMessage.value = ''
     errorMessage.value = '请选择工厂、变体并填写有效的出厂价'
+    return
+  }
+
+  const level = rskuProductLevel.value
+  if (!level) {
+    successMessage.value = ''
+    errorMessage.value = '请先为产品或变体设置产品等级'
     return
   }
 
@@ -358,7 +394,8 @@ function openVariantModal() {
     colorCode: '',
     materialCode: '',
     materialMix: [],
-    referencePriceBand: ''
+    referencePriceBand: '',
+    productLevel: undefined
   }
   showVariantModal.value = true
 }
@@ -424,6 +461,9 @@ onMounted(() => {
             </n-descriptions-item>
             <n-descriptions-item label="风格">
               {{ resolveStyleName(detail.rspu.positioningLabel) }}
+            </n-descriptions-item>
+            <n-descriptions-item label="产品等级">
+              {{ detail.rspu.productLevel || '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="主色">
               {{ detail.rspu.colorPrimaryName || '-' }}
@@ -574,6 +614,21 @@ onMounted(() => {
             placeholder="选择变体"
           />
         </n-form-item>
+        <n-form-item label="产品等级">
+          <n-input :value="rskuProductLevel || '未设置'" disabled />
+        </n-form-item>
+        <n-alert
+          v-if="rskuForm.factoryCode && rskuProductLevel && !isFactoryCapable"
+          type="error"
+          :show-icon="true"
+        >
+          工厂 {{ selectedFactory?.factoryName }} 未声明 {{ rskuProductLevel }} 级能力，无法录入该等级报价。
+        </n-alert>
+        <n-form-item v-if="rskuForm.factoryCode && rskuProductLevel && !isFactoryCapable">
+          <n-checkbox v-model:checked="rskuForm.autoExtendCapability">
+            同时将 {{ rskuProductLevel }} 级加入该工厂能力等级
+          </n-checkbox>
+        </n-form-item>
         <n-form-item label="工厂SKU">
           <n-input
             v-model:value="rskuForm.factorySku"
@@ -672,6 +727,14 @@ onMounted(() => {
             clearable
           />
         </n-form-item>
+        <n-form-item label="产品等级">
+          <n-select
+            v-model:value="variantForm.productLevel"
+            :options="productLevelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择产品等级（覆盖 RSPU 默认等级）"
+            clearable
+          />
+        </n-form-item>
       </n-form>
 
       <n-space justify="end">
@@ -722,6 +785,14 @@ onMounted(() => {
             v-model:value="editForm.referencePriceBand"
             :options="priceBandOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
             placeholder="选择价格带"
+            clearable
+          />
+        </n-form-item>
+        <n-form-item label="产品等级">
+          <n-select
+            v-model:value="editForm.productLevel"
+            :options="productLevelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="选择产品等级"
             clearable
           />
         </n-form-item>

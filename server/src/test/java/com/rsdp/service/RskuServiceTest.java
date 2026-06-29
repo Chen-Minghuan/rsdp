@@ -1,8 +1,8 @@
 package com.rsdp.service;
 
 import com.rsdp.dto.request.RskuCreateRequest;
-import com.rsdp.dto.request.RskuPriceUpdateRequest;
 import com.rsdp.dto.response.RskuResponse;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.PriceHistory;
 import com.rsdp.entity.RspuMaster;
@@ -45,6 +45,12 @@ class RskuServiceTest {
     private FactoryMasterMapper factoryMasterMapper;
 
     @Mock
+    private FactoryService factoryService;
+
+    @Mock
+    private DictService dictService;
+
+    @Mock
     private RspuVariantService rspuVariantService;
 
     @Mock
@@ -55,6 +61,18 @@ class RskuServiceTest {
 
     @InjectMocks
     private RskuService rskuService;
+
+    private List<CategoryDict> factoryLevelDicts() {
+        CategoryDict s = new CategoryDict();
+        s.setDictType("factory_level");
+        s.setDictCode("S");
+        s.setDictName("S级");
+        CategoryDict c = new CategoryDict();
+        c.setDictType("factory_level");
+        c.setDictCode("C");
+        c.setDictName("C级");
+        return List.of(s, c);
+    }
 
     @Test
     void listByRspu_shouldReturnRskuList() {
@@ -81,17 +99,113 @@ class RskuServiceTest {
         request.setVariantId("RSPU-TEST01-V001");
         request.setFactoryPrice(new BigDecimal("2500"));
 
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setProductLevel("S");
+
         RspuVariant variant = new RspuVariant();
         variant.setVariantId("RSPU-TEST01-V001");
         variant.setRspuId("RSPU-TEST01");
 
-        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(new RspuMaster());
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
         when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
         when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
 
         rskuService.createRsku(request);
 
-        verify(rskuSupplyMapper, times(1)).insert(any(RskuSupply.class));
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper, times(1)).insert(captor.capture());
+        assertThat(captor.getValue().getProductLevel()).isEqualTo("S");
+    }
+
+    @Test
+    void createRsku_shouldInheritVariantLevel() {
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2500"));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setProductLevel("S");
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+        variant.setProductLevel("C");
+
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "C"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        rskuService.createRsku(request);
+
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getProductLevel()).isEqualTo("C");
+    }
+
+    @Test
+    void createRsku_shouldThrowWhenFactoryNotCapable() {
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2500"));
+        request.setProductLevel("C");
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        assertThatThrownBy(() -> rskuService.createRsku(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("未声明 C 级能力");
+    }
+
+    @Test
+    void createRsku_shouldAutoExtendCapabilityWhenRequested() {
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2500"));
+        request.setProductLevel("C");
+        request.setAutoExtendCapability(true);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        rskuService.createRsku(request);
+
+        verify(factoryService).extendCapability("F001", "C");
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getProductLevel()).isEqualTo("C");
     }
 
     @Test
@@ -123,13 +237,19 @@ class RskuServiceTest {
         request.setVariantId("RSPU-TEST01-V001");
         request.setFactoryPrice(new BigDecimal("2500"));
 
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setProductLevel("S");
+
         RspuVariant variant = new RspuVariant();
         variant.setVariantId("RSPU-TEST01-V001");
         variant.setRspuId("RSPU-TEST01");
 
-        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(new RspuMaster());
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
         when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
         when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         doThrow(new DataIntegrityViolationException("duplicate")).when(rskuSupplyMapper).insert(any(RskuSupply.class));
 
         assertThatThrownBy(() -> rskuService.createRsku(request))

@@ -17,6 +17,7 @@ export interface Rsku {
   shippingFrom?: string
   diffNotes?: string
   quoteConfidence?: string
+  productLevel?: string
   reviewStatus: string
   priceUpdated?: string
   createdAt: string
@@ -38,6 +39,8 @@ export interface RskuCreateRequest {
   shippingFrom?: string
   diffNotes?: string
   quoteConfidence?: string
+  productLevel?: string
+  autoExtendCapability?: boolean
 }
 
 /**

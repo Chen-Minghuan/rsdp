@@ -38,6 +38,8 @@ public class RspuMaster {
 
     private String referencePriceBand;
 
+    private String productLevel;
+
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String budgetRange;
 

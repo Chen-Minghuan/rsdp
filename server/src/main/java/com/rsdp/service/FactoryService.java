@@ -251,6 +251,47 @@ public class FactoryService {
         return response;
     }
 
+    /**
+     * 查询工厂的能力等级列表。
+     *
+     * @param factoryCode 工厂代码
+     * @return 能力等级代码列表
+     */
+    public List<String> getFactoryCapableLevels(String factoryCode) {
+        return listCapableLevels(factoryCode);
+    }
+
+    /**
+     * 为工厂扩展一个能力等级。
+     *
+     * @param factoryCode 工厂代码
+     * @param level       等级代码
+     */
+    @Transactional
+    public void extendCapability(String factoryCode, String level) {
+        FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
+        if (factory == null || factory.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
+        }
+        validateFactoryLevel(level);
+
+        FactoryLevelCapability existing = capabilityMapper.selectOne(
+            new QueryWrapper<FactoryLevelCapability>()
+                .eq("factory_code", factoryCode)
+                .eq("level_code", level)
+        );
+        if (existing != null) {
+            return;
+        }
+
+        FactoryLevelCapability capability = new FactoryLevelCapability();
+        capability.setFactoryCode(factoryCode);
+        capability.setLevelCode(level);
+        capability.setIsPrimary(level.equals(factory.getFactoryLevel()));
+        capability.setCreatedAt(LocalDateTime.now());
+        capabilityMapper.insert(capability);
+    }
+
     private List<String> listCapableLevels(String factoryCode) {
         return capabilityMapper.selectList(
             new QueryWrapper<FactoryLevelCapability>()

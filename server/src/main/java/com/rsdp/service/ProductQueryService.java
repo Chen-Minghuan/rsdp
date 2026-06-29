@@ -44,6 +44,7 @@ public class ProductQueryService {
     private final RspuStyleMapper rspuStyleMapper;
     private final RspuSceneMapper rspuSceneMapper;
     private final AuditLogService auditLogService;
+    private final DictService dictService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -87,6 +88,9 @@ public class ProductQueryService {
         }
         if (StringUtils.hasText(request.getReviewStatus())) {
             wrapper.eq("review_status", request.getReviewStatus());
+        }
+        if (StringUtils.hasText(request.getProductLevel())) {
+            wrapper.eq("product_level", request.getProductLevel());
         }
         if (StringUtils.hasText(request.getKeyword())) {
             String keyword = "%" + request.getKeyword().trim() + "%";
@@ -193,6 +197,10 @@ public class ProductQueryService {
         if (request.getReferencePriceBand() != null) {
             rspu.setReferencePriceBand(request.getReferencePriceBand().trim());
         }
+        if (StringUtils.hasText(request.getProductLevel())) {
+            validateProductLevel(request.getProductLevel().trim());
+            rspu.setProductLevel(request.getProductLevel().trim());
+        }
         if (request.getWarrantyYears() != null) {
             rspu.setWarrantyYears(request.getWarrantyYears());
         }
@@ -245,6 +253,14 @@ public class ProductQueryService {
         }
     }
 
+    private void validateProductLevel(String level) {
+        boolean exists = dictService.listByType("factory_level").stream()
+            .anyMatch(d -> level.equals(d.getDictCode()) || level.equals(d.getDictName()));
+        if (!exists) {
+            throw new com.rsdp.exception.BusinessException("产品等级不存在: " + level);
+        }
+    }
+
     private String writeJson(Object value) {
         if (value == null) {
             return null;
@@ -272,6 +288,7 @@ public class ProductQueryService {
         copy.setReviewStatus(source.getReviewStatus());
         copy.setReviewComment(source.getReviewComment());
         copy.setAestheticsConfidence(source.getAestheticsConfidence());
+        copy.setProductLevel(source.getProductLevel());
         copy.setSourceAgentVersion(source.getSourceAgentVersion());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
@@ -288,6 +305,7 @@ public class ProductQueryService {
         summary.setStatus(rspu.getStatus());
         summary.setReviewStatus(rspu.getReviewStatus());
         summary.setAestheticsConfidence(rspu.getAestheticsConfidence());
+        summary.setProductLevel(rspu.getProductLevel());
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());
 

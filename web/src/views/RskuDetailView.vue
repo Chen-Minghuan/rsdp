@@ -151,6 +151,9 @@ onMounted(() => {
             <n-descriptions-item label="出厂价">
               {{ rsku.factoryPrice }}
             </n-descriptions-item>
+            <n-descriptions-item label="产品等级">
+              {{ rsku.productLevel || '-' }}
+            </n-descriptions-item>
             <n-descriptions-item label="价格带">
               {{ rsku.priceBand }}
             </n-descriptions-item>

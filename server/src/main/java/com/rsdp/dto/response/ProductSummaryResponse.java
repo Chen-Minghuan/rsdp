@@ -18,6 +18,7 @@ public class ProductSummaryResponse {
     private String status;
     private String reviewStatus;
     private String aestheticsConfidence;
+    private String productLevel;
     private String primaryImageUrl;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

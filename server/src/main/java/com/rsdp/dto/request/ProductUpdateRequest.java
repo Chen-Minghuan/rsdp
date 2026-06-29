@@ -34,6 +34,9 @@ public class ProductUpdateRequest {
     /** 参考价格带。 */
     private String referencePriceBand;
 
+    /** 产品等级，如 S/A/B/C。 */
+    private String productLevel;
+
     /** 保修年限。 */
     private Integer warrantyYears;
 

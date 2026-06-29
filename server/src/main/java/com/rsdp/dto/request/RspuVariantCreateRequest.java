@@ -36,4 +36,7 @@ public class RspuVariantCreateRequest {
     private List<String> materialMix;
 
     private String referencePriceBand;
+
+    /** 产品等级覆盖，为空时继承 RSPU。 */
+    private String productLevel;
 }

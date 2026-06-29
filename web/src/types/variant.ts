@@ -12,6 +12,7 @@ export interface RspuVariant {
   materialCode: string
   materialMix?: string[]
   referencePriceBand?: string
+  productLevel?: string
   status: string
   createdAt: string
   updatedAt: string
@@ -29,4 +30,5 @@ export interface RspuVariantCreateRequest {
   materialCode: string
   materialMix?: string[]
   referencePriceBand?: string
+  productLevel?: string
 }

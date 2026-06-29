@@ -16,5 +16,6 @@ public class ProductListRequest {
     private String materialTag;
     private String status;
     private String reviewStatus;
+    private String productLevel;
     private String keyword;
 }
