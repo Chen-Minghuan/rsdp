@@ -1,5 +1,5 @@
 import { apiClient, type ApiResult } from './client'
-import type { AnchorMatchingRequest, RoomSchemeRequest, RoomSchemeResponse } from '@/types/matching'
+import type { AnchorMatchingRequest, AnchorMatchingResponse, RoomSchemeRequest, RoomSchemeResponse } from '@/types/matching'
 
 /**
  * 根据空间类型和预算生成 AI 搭配方案。
@@ -10,9 +10,9 @@ export async function generateRoomScheme(request: RoomSchemeRequest): Promise<Ro
 }
 
 /**
- * 以某个产品为锚点推荐搭配产品（预留接口）。
+ * 以某个产品为锚点推荐搭配产品。
  */
-export async function recommendByAnchor(request: AnchorMatchingRequest): Promise<unknown> {
-  const { data: result } = await apiClient.post<ApiResult<unknown>>('/v1/matching/recommend', request)
+export async function recommendByAnchor(request: AnchorMatchingRequest): Promise<AnchorMatchingResponse> {
+  const { data: result } = await apiClient.post<ApiResult<AnchorMatchingResponse>>('/v1/matching/recommend', request)
   return result.data
 }

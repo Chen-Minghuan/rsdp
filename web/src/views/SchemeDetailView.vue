@@ -1,0 +1,175 @@
+<script setup lang="ts">
+import { ref, onMounted, h } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  NCard,
+  NButton,
+  NSpace,
+  NSpin,
+  NAlert,
+  NDescriptions,
+  NDescriptionsItem,
+  NDataTable,
+  NImage,
+  NEmpty,
+  NDivider
+} from 'naive-ui'
+import { getSchemeDetail, generateQuoteFromScheme } from '@/api/scheme'
+import type { Scheme, SchemeItem } from '@/types/scheme'
+import type { QuoteResponse } from '@/types/quote'
+
+const route = useRoute()
+const router = useRouter()
+const schemeId = route.params.schemeId as string
+
+const loading = ref(false)
+const generating = ref(false)
+const errorMessage = ref('')
+const scheme = ref<Scheme | null>(null)
+const quoteResult = ref<QuoteResponse | null>(null)
+
+const itemColumns = [
+  {
+    title: '图片',
+    key: 'image',
+    width: 100,
+    render(row: SchemeItem) {
+      return row.primaryImageUrl
+        ? h(NImage, {
+            src: row.primaryImageUrl,
+            width: 80,
+            height: 80,
+            objectFit: 'cover',
+            style: 'border-radius: 4px;'
+          })
+        : '-'
+    }
+  },
+  { title: 'RSPU', key: 'rspuId', width: 160 },
+  { title: '名称', key: 'rspuName' },
+  { title: '工厂', key: 'factoryName' },
+  { title: '出厂价', key: 'factoryPrice', width: 120 },
+  { title: '交期(天)', key: 'leadTimeDays', width: 100 },
+  { title: 'MOQ', key: 'moq', width: 100 }
+]
+
+const quoteColumns = [
+  { title: 'RSPU', key: 'rspuName' },
+  { title: 'RSKU ID', key: 'rskuId', width: 160 },
+  { title: '工厂', key: 'factoryName' },
+  { title: '出厂价', key: 'factoryPrice', width: 120 },
+  { title: '交期(天)', key: 'leadTimeDays', width: 100 },
+  { title: 'MOQ', key: 'moq', width: 100 }
+]
+
+async function loadDetail() {
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    scheme.value = await getSchemeDetail(schemeId)
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '加载方案详情失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleGenerateQuote() {
+  generating.value = true
+  errorMessage.value = ''
+  try {
+    quoteResult.value = await generateQuoteFromScheme(schemeId)
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '生成报价单失败'
+  } finally {
+    generating.value = false
+  }
+}
+
+onMounted(() => {
+  loadDetail()
+})
+</script>
+
+<template>
+  <n-space vertical style="padding: 24px;">
+    <n-card title="方案详情">
+      <n-space vertical>
+        <n-space>
+          <n-button size="small" @click="router.push('/schemes')">返回方案列表</n-button>
+          <n-button type="primary" :loading="generating" @click="handleGenerateQuote">
+            生成报价单
+          </n-button>
+        </n-space>
+
+        <n-alert v-if="errorMessage" type="error" :show-icon="true">
+          {{ errorMessage }}
+        </n-alert>
+
+        <n-spin v-if="loading" size="large" />
+
+        <template v-if="scheme && !loading">
+          <n-descriptions bordered :column="3" label-placement="left">
+            <n-descriptions-item label="方案名称">
+              {{ scheme.schemeName }}
+            </n-descriptions-item>
+            <n-descriptions-item label="项数">
+              {{ scheme.itemCount }}
+            </n-descriptions-item>
+            <n-descriptions-item label="总价">
+              ¥{{ scheme.totalPrice.toFixed(2) }}
+            </n-descriptions-item>
+            <n-descriptions-item label="涉及工厂">
+              {{ scheme.factoryCount }} 家
+            </n-descriptions-item>
+            <n-descriptions-item label="最大交期">
+              {{ scheme.maxLeadTimeDays || '-' }} 天
+            </n-descriptions-item>
+            <n-descriptions-item label="创建时间">
+              {{ scheme.createdAt }}
+            </n-descriptions-item>
+          </n-descriptions>
+
+          <n-card title="方案产品" size="small">
+            <n-data-table
+              :columns="itemColumns"
+              :data="scheme.items"
+              :bordered="true"
+              :single-line="false"
+            >
+              <template #empty>
+                <n-empty description="方案中暂无产品" />
+              </template>
+            </n-data-table>
+          </n-card>
+
+          <template v-if="quoteResult">
+            <n-divider />
+            <n-card title="报价单" size="small">
+              <n-data-table
+                :columns="quoteColumns"
+                :data="quoteResult.items"
+                :bordered="true"
+                :single-line="false"
+              />
+              <n-descriptions bordered :column="4" label-placement="left" style="margin-top: 16px;">
+                <n-descriptions-item label="总价">
+                  ¥{{ quoteResult.summary.totalPrice.toFixed(2) }}
+                </n-descriptions-item>
+                <n-descriptions-item label="项数">
+                  {{ quoteResult.summary.itemCount }}
+                </n-descriptions-item>
+                <n-descriptions-item label="涉及工厂">
+                  {{ quoteResult.summary.factoryCount }} 家
+                </n-descriptions-item>
+                <n-descriptions-item label="最大交期">
+                  {{ quoteResult.summary.maxLeadTimeDays || '-' }} 天
+                </n-descriptions-item>
+              </n-descriptions>
+            </n-card>
+          </template>
+        </template>
+      </n-space>
+    </n-card>
+  </n-space>
+</template>

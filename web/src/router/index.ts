@@ -42,6 +42,16 @@ const routes = [
     component: () => import('@/views/QuoteBuilderView.vue')
   },
   {
+    path: '/schemes',
+    name: 'SchemeList',
+    component: () => import('@/views/SchemeListView.vue')
+  },
+  {
+    path: '/schemes/:schemeId',
+    name: 'SchemeDetail',
+    component: () => import('@/views/SchemeDetailView.vue')
+  },
+  {
     path: '/matching/room-scheme',
     name: 'RoomScheme',
     component: () => import('@/views/RoomSchemeView.vue')

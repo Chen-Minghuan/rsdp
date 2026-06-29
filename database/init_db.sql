@@ -339,3 +339,41 @@ CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
 -- CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
 -- CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
+
+-- 搭配方案主表
+CREATE TABLE IF NOT EXISTS scheme (
+    scheme_id VARCHAR(64) PRIMARY KEY,
+    scheme_name VARCHAR(128) NOT NULL,
+    room_type VARCHAR(32),
+    budget_limit DECIMAL(18, 2),
+    total_price DECIMAL(18, 2) NOT NULL DEFAULT 0,
+    factory_count INTEGER NOT NULL DEFAULT 0,
+    max_lead_time_days INTEGER NOT NULL DEFAULT 0,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
+-- 搭配方案项表
+CREATE TABLE IF NOT EXISTS scheme_item (
+    scheme_item_id SERIAL PRIMARY KEY,
+    scheme_id VARCHAR(64) NOT NULL,
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16),
+    factory_price DECIMAL(18, 2),
+    lead_time_days INTEGER,
+    moq INTEGER,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
+);
+
+-- 方案索引
+CREATE INDEX IF NOT EXISTS idx_scheme_status ON scheme(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);

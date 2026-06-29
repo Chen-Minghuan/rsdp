@@ -14,11 +14,16 @@ import {
   NImage,
   NTag,
   NEmpty,
-  NDivider
+  NDivider,
+  NModal,
+  NForm,
+  NFormItem,
+  NInput
 } from 'naive-ui'
 import { getProductDetail } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
 import { generateQuote } from '@/api/quote'
+import { createScheme } from '@/api/scheme'
 import type { ProductDetail } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
 import type { QuoteResponse } from '@/types/quote'
@@ -31,7 +36,10 @@ const rspuIds = ((route.query.rspuIds as string) || '').split(',').filter(Boolea
 const loading = ref(false)
 const errorMessage = ref('')
 const generating = ref(false)
+const saving = ref(false)
 const quoteResult = ref<QuoteResponse | null>(null)
+const showSaveModal = ref(false)
+const schemeName = ref('')
 
 const products = ref<ProductDetail[]>([])
 const rskuMap = ref<Record<string, Rsku[]>>({})
@@ -107,6 +115,47 @@ async function handleGenerateQuote() {
     errorMessage.value = e instanceof Error ? e.message : '生成报价单失败'
   } finally {
     generating.value = false
+  }
+}
+
+function openSaveModal() {
+  const rskuIds = Object.values(selectedRskuMap.value).filter(Boolean)
+  if (rskuIds.length === 0) {
+    errorMessage.value = '请为每个产品选择一个 RSKU'
+    return
+  }
+  errorMessage.value = ''
+  schemeName.value = ''
+  showSaveModal.value = true
+}
+
+async function handleSaveAsScheme() {
+  if (!schemeName.value.trim()) {
+    errorMessage.value = '请输入方案名称'
+    return
+  }
+
+  const items = Object.entries(selectedRskuMap.value)
+    .filter(([, rskuId]) => rskuId)
+    .map(([rspuId, rskuId], index) => ({
+      rspuId,
+      rskuId: rskuId!,
+      sortOrder: index
+    }))
+
+  saving.value = true
+  errorMessage.value = ''
+  try {
+    await createScheme({
+      schemeName: schemeName.value.trim(),
+      items
+    })
+    showSaveModal.value = false
+    router.push('/schemes')
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '保存方案失败'
+  } finally {
+    saving.value = false
   }
 }
 
@@ -187,6 +236,9 @@ onMounted(() => {
             <n-button type="primary" :loading="generating" @click="handleGenerateQuote">
               确认生成报价单
             </n-button>
+            <n-button @click="openSaveModal">
+              保存为方案
+            </n-button>
           </n-space>
         </template>
 
@@ -221,5 +273,25 @@ onMounted(() => {
         </template>
       </n-space>
     </n-card>
+
+    <n-modal
+      v-model:show="showSaveModal"
+      title="保存为搭配方案"
+      preset="card"
+      style="width: 480px;"
+    >
+      <n-form label-placement="left" label-width="80">
+        <n-form-item label="方案名称" required>
+          <n-input v-model:value="schemeName" placeholder="如：客厅中古风搭配" />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showSaveModal = false">取消</n-button>
+        <n-button type="primary" :loading="saving" @click="handleSaveAsScheme">
+          保存
+        </n-button>
+      </n-space>
+    </n-modal>
   </n-space>
 </template>

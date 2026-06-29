@@ -5,11 +5,12 @@ import lombok.Data;
 import java.math.BigDecimal;
 
 /**
- * 搭配方案单项。
+ * 搭配方案项响应。
  */
 @Data
 public class SchemeItemResponse {
 
+    private Long schemeItemId;
     private String rspuId;
     private String rspuName;
     private String primaryImageUrl;
@@ -22,4 +23,5 @@ public class SchemeItemResponse {
     private BigDecimal factoryPrice;
     private Integer leadTimeDays;
     private Integer moq;
+    private Integer sortOrder;
 }

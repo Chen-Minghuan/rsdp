@@ -50,6 +50,12 @@ function navigate(path: string) {
               报价单生成器
             </n-button>
             <n-button
+              :type="route.path.startsWith('/schemes') ? 'primary' : 'default'"
+              @click="navigate('/schemes')"
+            >
+              搭配方案
+            </n-button>
+            <n-button
               :type="route.path.startsWith('/matching') ? 'primary' : 'default'"
               @click="navigate('/matching/room-scheme')"
             >

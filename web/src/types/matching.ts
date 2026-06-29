@@ -42,3 +42,13 @@ export interface AnchorMatchingRequest {
   existingRspuId: string
   targetCategoryCode: string
 }
+
+/**
+ * 锚点搭配响应。
+ */
+export interface AnchorMatchingResponse {
+  existingRspuId: string
+  targetCategoryCode: string
+  reasoning: string
+  items: SchemeItem[]
+}

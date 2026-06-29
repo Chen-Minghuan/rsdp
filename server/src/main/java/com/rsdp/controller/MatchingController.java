@@ -1,7 +1,9 @@
 package com.rsdp.controller;
 
 import com.rsdp.common.Result;
+import com.rsdp.dto.request.AnchorMatchingRequest;
 import com.rsdp.dto.request.RoomSchemeRequest;
+import com.rsdp.dto.response.AnchorMatchingResponse;
 import com.rsdp.dto.response.RoomSchemeResponse;
 import com.rsdp.service.AiMatchingService;
 import jakarta.validation.Valid;
@@ -10,9 +12,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.Collections;
-import java.util.Map;
 
 /**
  * 搭配推荐接口。
@@ -36,13 +35,13 @@ public class MatchingController {
     }
 
     /**
-     * 以某个产品为锚点推荐搭配产品（预留接口）。
+     * 以某个产品为锚点推荐搭配产品。
      *
      * @param request 请求
-     * @return 占位响应
+     * @return 推荐结果
      */
     @PostMapping("/recommend")
-    public Result<Map<String, Object>> recommend(@RequestBody Map<String, String> request) {
-        return Result.ok(Collections.singletonMap("message", "功能开发中，后续接入智能体推荐"));
+    public Result<AnchorMatchingResponse> recommend(@Valid @RequestBody AnchorMatchingRequest request) {
+        return Result.ok(aiMatchingService.recommendByAnchor(request));
     }
 }

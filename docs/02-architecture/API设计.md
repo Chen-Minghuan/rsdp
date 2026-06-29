@@ -126,9 +126,9 @@ POST   /api/v1/matching/room-scheme
        # Response: { roomType, budgetLimit, totalPrice, itemCount, reasoning, items: [SchemeItem...] }
 
 POST   /api/v1/matching/recommend
-       # 以某个产品为锚点推荐搭配产品（预留接口）
+       # 以某个产品为锚点推荐搭配产品（已实现）
        # Request: { existingRspuId, targetCategoryCode }
-       # Response: { message: "功能开发中..." }
+       # Response: { existingRspuId, targetCategoryCode, reasoning, items: [SchemeItem...] }
 ```
 
 ### 空间校验
@@ -198,6 +198,30 @@ POST   /api/v1/quotes/generate
        # 根据选中的 RSKU 列表生成报价单（已实现）
        # Request: { rskuIds: ["RSKU-001", ...] }
        # Response: { items: [QuoteItem...], summary: { totalPrice, itemCount, factoryCount, maxLeadTimeDays } }
+```
+
+### 搭配方案
+
+```
+POST   /api/v1/schemes
+       # 创建搭配方案（已实现）
+       # Request: { schemeName, roomType?, budgetLimit?, items: [{ rspuId, rskuId, sortOrder? }] }
+       # Response: SchemeResponse
+
+GET    /api/v1/schemes
+       # 查询搭配方案列表（已实现）
+       # Response: [SchemeSummary...]
+
+GET    /api/v1/schemes/{schemeId}
+       # 查询搭配方案详情（已实现）
+       # Response: SchemeResponse
+
+DELETE /api/v1/schemes/{schemeId}
+       # 删除搭配方案（已实现）
+
+POST   /api/v1/schemes/{schemeId}/quote
+       # 根据搭配方案生成报价单（已实现）
+       # Response: QuoteResponse
 ```
 
 ### 系统
