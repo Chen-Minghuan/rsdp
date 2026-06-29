@@ -124,11 +124,17 @@ public class RspuVariantService {
     }
 
     private String generateVariantId(String rspuId) {
-        Long nextSeq = variantCodeMapper.allocateSequence(rspuId);
-        if (nextSeq == null) {
-            throw new BusinessException("无法生成变体编码流水号: " + rspuId);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            Long nextSeq = variantCodeMapper.allocateSequence(rspuId);
+            if (nextSeq == null) {
+                throw new BusinessException("无法生成变体编码流水号: " + rspuId);
+            }
+            String candidate = String.format("%s-V%03d", rspuId, nextSeq);
+            if (variantMapper.selectById(candidate) == null) {
+                return candidate;
+            }
         }
-        return String.format("%s-V%03d", rspuId, nextSeq);
+        throw new BusinessException("变体编码冲突，请重试: " + rspuId);
     }
 
     private void validateVariantCodes(RspuVariantCreateRequest request) {

@@ -46,6 +46,7 @@ public class ProductQueryService {
     private final AuditLogService auditLogService;
     private final DictService dictService;
     private final ObjectMapper objectMapper;
+    private final RspuRelationService rspuRelationService;
 
     /**
      * 分页查询产品列表。
@@ -130,6 +131,8 @@ public class ProductQueryService {
         response.setRspu(rspu);
         response.setImages(images);
         response.setRecognitions(recognitions);
+        response.setOfficialMatches(rspuRelationService.listByAnchor(rspuId));
+        response.setMatchedBy(rspuRelationService.listByRelated(rspuId));
         return response;
     }
 

@@ -17,6 +17,7 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.dto.response.RspuRelationResponse;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -60,6 +61,9 @@ class ProductQueryServiceTest {
 
     @Mock
     private DictService dictService;
+
+    @Mock
+    private RspuRelationService rspuRelationService;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -200,12 +204,42 @@ class ProductQueryServiceTest {
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
         when(aiRecognitionMapper.selectList(any())).thenReturn(List.of());
+        when(rspuRelationService.listByAnchor("RSPU-TEST01")).thenReturn(List.of());
+        when(rspuRelationService.listByRelated("RSPU-TEST01")).thenReturn(List.of());
 
         ProductDetailResponse detail = productQueryService.getProductDetail("RSPU-TEST01");
 
         assertThat(detail.getRspu()).isNotNull();
         assertThat(detail.getImages()).isEmpty();
         assertThat(detail.getRecognitions()).isEmpty();
+    }
+
+    @Test
+    void getProductDetail_shouldIncludeRelations() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-BED");
+        rspu.setStatus("active");
+
+        RspuRelationResponse match = new RspuRelationResponse();
+        match.setRelationId("REL-001");
+        match.setRelatedRspuId("RSPU-MATTRESS");
+
+        RspuRelationResponse matchedBy = new RspuRelationResponse();
+        matchedBy.setRelationId("REL-002");
+        matchedBy.setAnchorRspuId("RSPU-TABLE");
+
+        when(rspuMapper.selectById(eq("RSPU-BED"))).thenReturn(rspu);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(aiRecognitionMapper.selectList(any())).thenReturn(List.of());
+        when(rspuRelationService.listByAnchor("RSPU-BED")).thenReturn(List.of(match));
+        when(rspuRelationService.listByRelated("RSPU-BED")).thenReturn(List.of(matchedBy));
+
+        ProductDetailResponse detail = productQueryService.getProductDetail("RSPU-BED");
+
+        assertThat(detail.getOfficialMatches()).hasSize(1);
+        assertThat(detail.getOfficialMatches().get(0).getRelatedRspuId()).isEqualTo("RSPU-MATTRESS");
+        assertThat(detail.getMatchedBy()).hasSize(1);
+        assertThat(detail.getMatchedBy().get(0).getAnchorRspuId()).isEqualTo("RSPU-TABLE");
     }
 
     @Test

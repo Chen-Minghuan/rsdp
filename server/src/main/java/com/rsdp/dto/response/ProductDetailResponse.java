@@ -16,4 +16,14 @@ public class ProductDetailResponse {
     private RspuMaster rspu;
     private List<ImageAssets> images;
     private List<AiRecognition> recognitions;
+
+    /**
+     * 官方搭配：本产品搭配了哪些其他产品。
+     */
+    private List<RspuRelationResponse> officialMatches;
+
+    /**
+     * 适配来源：哪些其他产品把本产品作为搭配。
+     */
+    private List<RspuRelationResponse> matchedBy;
 }

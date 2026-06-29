@@ -65,6 +65,32 @@ CREATE TABLE IF NOT EXISTS rspu_scene (
     FOREIGN KEY (dict_type, scene_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
+-- RSPU 产品间关系表（原厂搭配 / AI 确认搭配 / 互斥排除）
+CREATE TABLE IF NOT EXISTS rspu_relation (
+    relation_id VARCHAR(64) PRIMARY KEY,
+    anchor_rspu_id VARCHAR(64) NOT NULL,           -- 锚点产品
+    related_rspu_id VARCHAR(64) NOT NULL,          -- 搭配产品
+    relation_type VARCHAR(32) NOT NULL DEFAULT 'official', -- official / ai_verified / exclude
+    reason TEXT,                                   -- 搭配说明，如"同厂配套床垫"
+    sort_order INTEGER DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',           -- active / inactive
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    FOREIGN KEY (anchor_rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (related_rspu_id) REFERENCES rspu_master(rspu_id)
+);
+
+-- 部分唯一索引：仅在未删除的记录上保证 (anchor, related) 唯一，
+-- 软删除的关系可以重新建立。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rspu_relation_unique_active
+    ON rspu_relation(anchor_rspu_id, related_rspu_id)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu_id, status, sort_order);
+CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, status);
+
 -- RSPU 变体表（尺寸 × 颜色 × 材质 的具体组合）
 -- 建议变体编码使用无业务含义顺序号，如 {rspu_id}-V001，避免尺寸/材质变化导致编码变更
 -- 可读名称存入 display_name 字段，尺寸/材质等业务属性存入对应字段

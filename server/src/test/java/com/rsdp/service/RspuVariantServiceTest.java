@@ -176,4 +176,27 @@ class RspuVariantServiceTest {
         assertEquals(2, result.size());
         assertEquals("变体一", result.get(0).getDisplayName());
     }
+
+    @Test
+    void createVariant_shouldRetryWhenGeneratedIdConflicts() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(variantCodeMapper.allocateSequence(rspuId)).thenReturn(1L, 2L);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+
+        RspuVariant existing = new RspuVariant();
+        existing.setVariantId(rspuId + "-V001");
+        when(variantMapper.selectById(rspuId + "-V001")).thenReturn(existing);
+        when(variantMapper.selectById(rspuId + "-V002")).thenReturn(null);
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("自动跳过冲突 ID");
+        request.setMaterialCode("LI");
+
+        RspuVariantResponse response = variantService.createVariant(rspuId, request);
+
+        assertEquals("RSPU-TEST01-V002", response.getVariantId());
+    }
 }

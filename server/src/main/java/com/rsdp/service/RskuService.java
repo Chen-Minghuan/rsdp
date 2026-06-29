@@ -174,7 +174,7 @@ public class RskuService {
 
     private void validateProductLevel(String level) {
         boolean exists = dictService.listByType("factory_level").stream()
-            .anyMatch(d -> level.equals(d.getDictCode()) || level.equals(d.getDictName()));
+            .anyMatch(d -> level.equals(d.getDictCode()));
         if (!exists) {
             throw new BusinessException("产品等级不存在: " + level);
         }

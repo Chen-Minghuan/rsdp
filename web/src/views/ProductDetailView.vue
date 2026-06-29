@@ -19,18 +19,21 @@ import {
   NFormItem,
   NSelect,
   NInput,
-  NInputNumber
+  NInputNumber,
+  type DataTableColumns
 } from 'naive-ui'
-import { getProductDetail, reviewProduct, updateProduct } from '@/api/product'
+import { getProductDetail, listProducts, reviewProduct, updateProduct } from '@/api/product'
 import { listRskuByRspu, createRsku } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
 import { listDicts } from '@/api/dict'
-import type { ProductDetail, ProductUpdateRequest } from '@/types/product'
+import { createRelation, deleteRelation } from '@/api/relation'
+import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuCreateRequest } from '@/types/rsku'
 import type { Factory } from '@/types/factory'
 import type { RspuVariant, RspuVariantCreateRequest } from '@/types/variant'
+import type { RspuRelationCreateRequest } from '@/types/relation'
 
 const route = useRoute()
 const router = useRouter()
@@ -111,6 +114,23 @@ const priceBandOptions = ref<DictItem[]>([
   { dictCode: 'high', dictName: '高', sortOrder: 3 }
 ])
 
+const showRelationModal = ref(false)
+const submittingRelation = ref(false)
+const relationSearchKeyword = ref('')
+const relationSearchLoading = ref(false)
+const relationSearchResults = ref<ProductSummary[]>([])
+const relationForm = ref<RspuRelationCreateRequest>({
+  relatedRspuId: '',
+  relationType: 'official',
+  reason: '',
+  sortOrder: 0
+})
+const relationTypeOptions = ref<{ label: string; value: string }[]>([
+  { label: '官方搭配', value: 'official' },
+  { label: 'AI 确认', value: 'ai_verified' },
+  { label: '互斥排除', value: 'exclude' }
+])
+
 interface ProductEditForm extends ProductUpdateRequest {
   sixDimTagsJson?: string
   keySpecsJson?: string
@@ -164,6 +184,73 @@ const variantColumns = [
     }
   }
 ]
+
+function createRelationColumns(showDelete: boolean) {
+  const columns: DataTableColumns<RelatedProduct> = [
+    {
+      title: '图片',
+      key: 'image',
+      width: 80,
+      render(row: RelatedProduct) {
+        return row.targetImageUrl
+          ? h(NImage, {
+              src: row.targetImageUrl,
+              width: 60,
+              height: 60,
+              objectFit: 'cover',
+              style: 'border-radius: 4px;'
+            })
+          : '-'
+      }
+    },
+    {
+      title: '产品',
+      key: 'targetDisplayName',
+      render(row: RelatedProduct) {
+        return row.targetDisplayName || row.targetRspuId
+      }
+    },
+    { title: '品类', key: 'targetCategoryPath', ellipsis: { tooltip: true } },
+    {
+      title: '关系',
+      key: 'relationType',
+      width: 120,
+      render(row: RelatedProduct) {
+        const typeMap: Record<string, string> = {
+          official: '官方搭配',
+          ai_verified: 'AI 确认',
+          exclude: '互斥排除'
+        }
+        const type = row.relationType === 'exclude' ? 'error' : row.relationType === 'ai_verified' ? 'warning' : 'success'
+        return h(NTag, { type, size: 'small' }, { default: () => typeMap[row.relationType] || row.relationType })
+      }
+    },
+    { title: '说明', key: 'reason', ellipsis: { tooltip: true } },
+    {
+      title: '最低报价',
+      key: 'targetMinPrice',
+      width: 120,
+      render(row: RelatedProduct) {
+        return row.targetMinPrice !== undefined ? `¥${row.targetMinPrice}` : '-'
+      }
+    }
+  ]
+  if (showDelete) {
+    columns.push({
+      title: '操作',
+      key: 'actions',
+      width: 100,
+      render(row: RelatedProduct) {
+        return h(
+          NButton,
+          { size: 'small', type: 'error', onClick: () => handleDeleteRelation(row.relationId) },
+          { default: () => '删除' }
+        )
+      }
+    })
+  }
+  return columns
+}
 
 async function loadDetail() {
   loading.value = true
@@ -424,6 +511,71 @@ async function handleCreateVariant() {
   }
 }
 
+function openRelationModal() {
+  relationForm.value = {
+    relatedRspuId: '',
+    relationType: 'official',
+    reason: '',
+    sortOrder: 0
+  }
+  relationSearchKeyword.value = ''
+  relationSearchResults.value = []
+  showRelationModal.value = true
+}
+
+async function searchRelationProducts() {
+  if (!relationSearchKeyword.value.trim()) return
+  relationSearchLoading.value = true
+  try {
+    const result = await listProducts({
+      keyword: relationSearchKeyword.value.trim(),
+      page: 1,
+      size: 10
+    })
+    relationSearchResults.value = result.rows.filter(r => r.rspuId !== rspuId)
+  } catch (e) {
+    console.error('搜索产品失败', e)
+  } finally {
+    relationSearchLoading.value = false
+  }
+}
+
+async function handleCreateRelation() {
+  if (!relationForm.value.relatedRspuId) {
+    errorMessage.value = '请选择要关联的产品'
+    return
+  }
+
+  submittingRelation.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await createRelation(rspuId, relationForm.value)
+    successMessage.value = '搭配关系添加成功'
+    showRelationModal.value = false
+    await loadDetail()
+  } catch (e) {
+    successMessage.value = ''
+    errorMessage.value = e instanceof Error ? e.message : '添加搭配关系失败'
+  } finally {
+    submittingRelation.value = false
+  }
+}
+
+async function handleDeleteRelation(relationId: string) {
+  if (!confirm('确定删除该搭配关系？')) return
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    await deleteRelation(rspuId, relationId)
+    successMessage.value = '搭配关系已删除'
+    await loadDetail()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '删除搭配关系失败'
+  }
+}
+
 onMounted(() => {
   loadDetail()
   loadRskuList()
@@ -522,72 +674,115 @@ onMounted(() => {
             </n-space>
           </n-card>
 
-          <n-card title="复核操作" size="small">
-            <n-space>
-              <n-button
-                type="success"
-                :loading="reviewing"
-                :disabled="detail.rspu.reviewStatus === '已确认'"
-                @click="handleReview('已确认')"
-              >
-                确认通过
-              </n-button>
-              <n-button
-                type="error"
-                :loading="reviewing"
-                :disabled="detail.rspu.reviewStatus === '存疑'"
-                @click="handleReview('存疑')"
-              >
-                标记存疑
-              </n-button>
-              <n-button @click="openEditModal">
-                编辑元数据
-              </n-button>
-            </n-space>
-          </n-card>
-
-          <n-card title="变体管理" size="small">
+          <n-card title="官方搭配" size="small">
             <n-space vertical>
               <n-space>
-                <n-button type="primary" @click="openVariantModal">新增变体</n-button>
+                <n-button type="primary" @click="openRelationModal">添加搭配</n-button>
               </n-space>
               <n-data-table
-                :columns="variantColumns"
-                :data="variantList"
-                :loading="variantLoading"
-                :bordered="true"
-                :single-line="false"
-              >
-                <template #empty>
-                  <n-space justify="center" style="padding: 24px;">
-                    暂无变体，点击“新增变体”录入
-                  </n-space>
-                </template>
-              </n-data-table>
-            </n-space>
-          </n-card>
-
-          <n-card title="工厂报价（RSKU）" size="small">
-            <n-space vertical>
-              <n-space>
-                <n-button type="primary" @click="openRskuModal">新增报价</n-button>
-              </n-space>
-              <n-data-table
-                :columns="rskuColumns"
-                :data="rskuList"
-                :loading="rskuLoading"
+                :columns="createRelationColumns(true)"
+                :data="detail.officialMatches || []"
                 :bordered="true"
                 :single-line="false"
                 row-class-name="clickable-row"
-                @row-click="(row: Rsku) => router.push(`/products/${rspuId}/rsku/${row.rskuId}`)"
+                @row-click="(row: RelatedProduct) => router.push(`/products/${row.targetRspuId}`)"
               >
                 <template #empty>
                   <n-space justify="center" style="padding: 24px;">
-                    暂无工厂报价，点击“新增报价”录入
+                    暂无官方搭配，点击“添加搭配”建立关系
                   </n-space>
                 </template>
               </n-data-table>
             </n-space>
+          </n-card>
+
+          <n-card title="适配来源" size="small">
+            <n-space vertical>
+              <n-data-table
+                :columns="createRelationColumns(false)"
+                :data="detail.matchedBy || []"
+                :bordered="true"
+                :single-line="false"
+                row-class-name="clickable-row"
+                @row-click="(row: RelatedProduct) => router.push(`/products/${row.targetRspuId}`)"
+              >
+                <template #empty>
+                  <n-space justify="center" style="padding: 24px;">
+                    暂无其他产品将本品作为搭配
+                  </n-space>
+                </template>
+              </n-data-table>
+            </n-space>
+          </n-card>
+
+          <n-card title="复核操作" size="small">
+            <n-card title="复核操作" size="small">
+              <n-space>
+                <n-button
+                  type="success"
+                  :loading="reviewing"
+                  :disabled="detail.rspu.reviewStatus === '已确认'"
+                  @click="handleReview('已确认')"
+                >
+                  确认通过
+                </n-button>
+                <n-button
+                  type="error"
+                  :loading="reviewing"
+                  :disabled="detail.rspu.reviewStatus === '存疑'"
+                  @click="handleReview('存疑')"
+                >
+                  标记存疑
+                </n-button>
+                <n-button @click="openEditModal">
+                  编辑元数据
+                </n-button>
+              </n-space>
+            </n-card>
+
+            <n-card title="变体管理" size="small">
+              <n-space vertical>
+                <n-space>
+                  <n-button type="primary" @click="openVariantModal">新增变体</n-button>
+                </n-space>
+                <n-data-table
+                  :columns="variantColumns"
+                  :data="variantList"
+                  :loading="variantLoading"
+                  :bordered="true"
+                  :single-line="false"
+                >
+                  <template #empty>
+                    <n-space justify="center" style="padding: 24px;">
+                      暂无变体，点击“新增变体”录入
+                    </n-space>
+                  </template>
+                </n-data-table>
+              </n-space>
+            </n-card>
+
+            <n-card title="工厂报价（RSKU）" size="small">
+              <n-space vertical>
+                <n-space>
+                  <n-button type="primary" @click="openRskuModal">新增报价</n-button>
+                </n-space>
+                <n-data-table
+                  :columns="rskuColumns"
+                  :data="rskuList"
+                  :loading="rskuLoading"
+                  :bordered="true"
+                  :single-line="false"
+                  row-class-name="clickable-row"
+                  @row-click="(row: Rsku) => router.push(`/products/${rspuId}/rsku/${row.rskuId}`)"
+                >
+                  <template #empty>
+                    <n-space justify="center" style="padding: 24px;">
+                      暂无工厂报价，点击“新增报价”录入
+                    </n-space>
+                  </template>
+                </n-data-table>
+              </n-space>
+            </n-card>
           </n-card>
         </template>
       </n-space>
@@ -819,6 +1014,63 @@ onMounted(() => {
         <n-button @click="showEditModal = false">取消</n-button>
         <n-button type="primary" :loading="submittingEdit" @click="handleUpdateProduct">
           保存
+        </n-button>
+      </n-space>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showRelationModal"
+      title="添加搭配关系"
+      preset="card"
+      style="width: 600px;"
+    >
+      <n-form label-placement="left" label-width="100">
+        <n-form-item label="搜索产品">
+          <n-space>
+            <n-input
+              v-model:value="relationSearchKeyword"
+              placeholder="输入 RSPU ID 或品类/风格"
+              style="width: 320px;"
+              @keydown.enter="searchRelationProducts"
+            />
+            <n-button :loading="relationSearchLoading" @click="searchRelationProducts">
+              搜索
+            </n-button>
+          </n-space>
+        </n-form-item>
+
+        <n-form-item label="选择产品" required>
+          <n-select
+            v-model:value="relationForm.relatedRspuId"
+            :options="relationSearchResults.map(r => ({ label: `${r.categoryPath || r.rspuId} (${r.rspuId})`, value: r.rspuId }))"
+            placeholder="先搜索并选择要搭配的产品"
+          />
+        </n-form-item>
+
+        <n-form-item label="关系类型">
+          <n-select
+            v-model:value="relationForm.relationType"
+            :options="relationTypeOptions"
+          />
+        </n-form-item>
+
+        <n-form-item label="搭配说明">
+          <n-input
+            v-model:value="relationForm.reason"
+            type="textarea"
+            placeholder="如：同厂配套床垫，木色一致"
+          />
+        </n-form-item>
+
+        <n-form-item label="排序">
+          <n-input-number v-model:value="relationForm.sortOrder" :min="0" placeholder="越小越靠前" />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showRelationModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingRelation" @click="handleCreateRelation">
+          添加
         </n-button>
       </n-space>
     </n-modal>

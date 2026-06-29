@@ -1,0 +1,280 @@
+package com.rsdp.service;
+
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.rsdp.dto.request.RspuRelationCreateRequest;
+import com.rsdp.dto.request.RspuRelationUpdateRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.dto.response.RspuRelationResponse;
+import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuRelation;
+import com.rsdp.entity.RskuSupply;
+import com.rsdp.exception.BusinessException;
+import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuRelationMapper;
+import com.rsdp.mapper.RskuSupplyMapper;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+/**
+ * RSPU 产品间关系服务，管理原厂搭配、AI 确认搭配等关系。
+ */
+@Service
+@RequiredArgsConstructor
+public class RspuRelationService {
+
+    private final RspuRelationMapper relationMapper;
+    private final RspuMapper rspuMapper;
+    private final ImageAssetsMapper imageAssetsMapper;
+    private final RskuSupplyMapper rskuSupplyMapper;
+    private final AuditLogService auditLogService;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * 查询某产品作为锚点的有效搭配关系。
+     *
+     * @param anchorRspuId 锚点产品 ID
+     * @return 搭配关系列表
+     */
+    public List<RspuRelationResponse> listByAnchor(String anchorRspuId) {
+        validateRspuExists(anchorRspuId);
+        List<RspuRelation> relations = relationMapper.selectList(
+            new QueryWrapper<RspuRelation>()
+                .eq("anchor_rspu_id", anchorRspuId)
+                .eq("status", "active")
+                .isNull("deleted_at")
+                .orderByAsc("sort_order", "created_at")
+        );
+        return relations.stream().map(r -> toResponse(r, r.getRelatedRspuId())).collect(Collectors.toList());
+    }
+
+    /**
+     * 查询某产品作为搭配产品的有效反向关系。
+     *
+     * @param relatedRspuId 搭配产品 ID
+     * @return 被搭配关系列表
+     */
+    public List<RspuRelationResponse> listByRelated(String relatedRspuId) {
+        validateRspuExists(relatedRspuId);
+        List<RspuRelation> relations = relationMapper.selectList(
+            new QueryWrapper<RspuRelation>()
+                .eq("related_rspu_id", relatedRspuId)
+                .eq("status", "active")
+                .isNull("deleted_at")
+                .orderByAsc("sort_order", "created_at")
+        );
+        return relations.stream().map(r -> toResponse(r, r.getAnchorRspuId())).collect(Collectors.toList());
+    }
+
+    /**
+     * 为某产品创建搭配关系。
+     *
+     * @param anchorRspuId 锚点产品 ID
+     * @param request      创建请求
+     */
+    @Transactional
+    public void createRelation(String anchorRspuId, RspuRelationCreateRequest request) {
+        validateRspuExists(anchorRspuId);
+        validateRspuExists(request.getRelatedRspuId());
+        if (anchorRspuId.equals(request.getRelatedRspuId())) {
+            throw new BusinessException("产品不能与自己建立搭配关系");
+        }
+        validateRelationType(request.getRelationType());
+
+        RspuRelation existing = relationMapper.selectOne(
+            new QueryWrapper<RspuRelation>()
+                .eq("anchor_rspu_id", anchorRspuId)
+                .eq("related_rspu_id", request.getRelatedRspuId())
+                .isNull("deleted_at")
+        );
+        if (existing != null) {
+            throw new BusinessException("搭配关系已存在");
+        }
+
+        RspuRelation relation = new RspuRelation();
+        relation.setRelationId("REL-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        relation.setAnchorRspuId(anchorRspuId);
+        relation.setRelatedRspuId(request.getRelatedRspuId());
+        relation.setRelationType(StringUtils.hasText(request.getRelationType())
+            ? request.getRelationType().trim()
+            : "official");
+        relation.setReason(request.getReason());
+        relation.setSortOrder(request.getSortOrder() != null ? request.getSortOrder() : 0);
+        relation.setStatus("active");
+        relation.setCreatedBy("admin");
+        relation.setCreatedAt(LocalDateTime.now());
+        relation.setUpdatedAt(LocalDateTime.now());
+
+        relationMapper.insert(relation);
+        auditLogService.logCreate("rspu_relation", relation.getRelationId(), relation, "admin");
+    }
+
+    /**
+     * 更新搭配关系。
+     *
+     * @param anchorRspuId 锚点产品 ID
+     * @param relationId   关系 ID
+     * @param request      更新请求
+     */
+    @Transactional
+    public void updateRelation(String anchorRspuId, String relationId, RspuRelationUpdateRequest request) {
+        RspuRelation relation = relationMapper.selectById(relationId);
+        if (relation == null || relation.getDeletedAt() != null
+            || !anchorRspuId.equals(relation.getAnchorRspuId())) {
+            throw new ResourceNotFoundException("搭配关系不存在: " + relationId);
+        }
+
+        RspuRelation oldSnapshot = snapshot(relation);
+        if (StringUtils.hasText(request.getRelationType())) {
+            validateRelationType(request.getRelationType());
+            relation.setRelationType(request.getRelationType().trim());
+        }
+        if (request.getReason() != null) {
+            relation.setReason(request.getReason());
+        }
+        if (request.getSortOrder() != null) {
+            relation.setSortOrder(request.getSortOrder());
+        }
+        if (StringUtils.hasText(request.getStatus())) {
+            relation.setStatus(request.getStatus().trim());
+        }
+        relation.setUpdatedAt(LocalDateTime.now());
+
+        relationMapper.updateById(relation);
+        auditLogService.logUpdate("rspu_relation", relationId, oldSnapshot, relation, "admin");
+    }
+
+    /**
+     * 软删除搭配关系。
+     *
+     * @param anchorRspuId 锚点产品 ID
+     * @param relationId   关系 ID
+     */
+    @Transactional
+    public void deleteRelation(String anchorRspuId, String relationId) {
+        RspuRelation relation = relationMapper.selectById(relationId);
+        if (relation == null || relation.getDeletedAt() != null
+            || !anchorRspuId.equals(relation.getAnchorRspuId())) {
+            throw new ResourceNotFoundException("搭配关系不存在: " + relationId);
+        }
+
+        RspuRelation oldSnapshot = snapshot(relation);
+        relation.setStatus("inactive");
+        relation.setDeletedAt(LocalDateTime.now());
+        relation.setUpdatedAt(LocalDateTime.now());
+        relationMapper.updateById(relation);
+        auditLogService.logUpdate("rspu_relation", relationId, oldSnapshot, relation, "admin");
+    }
+
+    private void validateRspuExists(String rspuId) {
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null || rspu.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+    }
+
+    private void validateRelationType(String type) {
+        if (!StringUtils.hasText(type)) {
+            return;
+        }
+        if (!List.of("official", "ai_verified", "exclude").contains(type.trim())) {
+            throw new BusinessException("无效的关系类型: " + type);
+        }
+    }
+
+    private RspuRelationResponse toResponse(RspuRelation relation, String targetRspuId) {
+        RspuRelationResponse response = new RspuRelationResponse();
+        response.setRelationId(relation.getRelationId());
+        response.setAnchorRspuId(relation.getAnchorRspuId());
+        response.setRelatedRspuId(relation.getRelatedRspuId());
+        response.setRelationType(relation.getRelationType());
+        response.setReason(relation.getReason());
+        response.setSortOrder(relation.getSortOrder());
+        response.setStatus(relation.getStatus());
+        response.setCreatedAt(relation.getCreatedAt());
+        response.setUpdatedAt(relation.getUpdatedAt());
+        response.setTargetRspuId(targetRspuId);
+
+        RspuMaster target = rspuMapper.selectById(targetRspuId);
+        if (target != null) {
+            response.setTargetDisplayName(buildDisplayName(target));
+            response.setTargetCategoryPath(formatCategoryPath(target.getCategoryPath()));
+        }
+
+        ImageAssets primaryImage = imageAssetsMapper.selectOne(
+            new QueryWrapper<ImageAssets>()
+                .eq("rspu_id", targetRspuId)
+                .eq("is_primary", true)
+                .last("LIMIT 1")
+        );
+        if (primaryImage != null) {
+            response.setTargetImageUrl("/api/v1/images/" + primaryImage.getImageId());
+        }
+
+        response.setTargetMinPrice(resolveMinPrice(targetRspuId));
+        return response;
+    }
+
+    private String buildDisplayName(RspuMaster rspu) {
+        String categoryPath = formatCategoryPath(rspu.getCategoryPath());
+        if (StringUtils.hasText(categoryPath)) {
+            return categoryPath;
+        }
+        return rspu.getRspuId();
+    }
+
+    private String formatCategoryPath(String categoryPathJson) {
+        if (!StringUtils.hasText(categoryPathJson)) {
+            return null;
+        }
+        try {
+            List<String> path = objectMapper.readValue(
+                categoryPathJson,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, String.class)
+            );
+            return String.join(" / ", path);
+        } catch (Exception e) {
+            return categoryPathJson;
+        }
+    }
+
+    private BigDecimal resolveMinPrice(String rspuId) {
+        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>()
+                .eq("rspu_id", rspuId)
+                .isNull("deleted_at")
+                .orderByAsc("factory_price")
+                .last("LIMIT 1")
+        );
+        if (rskus.isEmpty()) {
+            return null;
+        }
+        return rskus.get(0).getFactoryPrice();
+    }
+
+    private RspuRelation snapshot(RspuRelation source) {
+        RspuRelation copy = new RspuRelation();
+        copy.setRelationId(source.getRelationId());
+        copy.setAnchorRspuId(source.getAnchorRspuId());
+        copy.setRelatedRspuId(source.getRelatedRspuId());
+        copy.setRelationType(source.getRelationType());
+        copy.setReason(source.getReason());
+        copy.setSortOrder(source.getSortOrder());
+        copy.setStatus(source.getStatus());
+        copy.setCreatedBy(source.getCreatedBy());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        copy.setDeletedAt(source.getDeletedAt());
+        return copy;
+    }
+}

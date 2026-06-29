@@ -11,6 +11,7 @@ DROP TABLE IF EXISTS factory_level_capability CASCADE;
 DROP TABLE IF EXISTS factory_variant_capacity CASCADE;
 DROP TABLE IF EXISTS factory_warehouse CASCADE;
 DROP TABLE IF EXISTS rspu_variant CASCADE;
+DROP TABLE IF EXISTS rspu_relation CASCADE;
 DROP TABLE IF EXISTS factory_master CASCADE;
 DROP TABLE IF EXISTS rspu_scene CASCADE;
 DROP TABLE IF EXISTS rspu_style CASCADE;
@@ -83,6 +84,27 @@ CREATE TABLE IF NOT EXISTS rspu_scene (
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (dict_type, scene_code) REFERENCES category_dict(dict_type, dict_code)
 );
+
+-- RSPU 产品间关系表（原厂搭配 / AI 确认搭配 / 互斥排除）
+CREATE TABLE IF NOT EXISTS rspu_relation (
+    relation_id VARCHAR(64) PRIMARY KEY,
+    anchor_rspu_id VARCHAR(64) NOT NULL,
+    related_rspu_id VARCHAR(64) NOT NULL,
+    relation_type VARCHAR(32) NOT NULL DEFAULT 'official',
+    reason TEXT,
+    sort_order INTEGER DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    FOREIGN KEY (anchor_rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (related_rspu_id) REFERENCES rspu_master(rspu_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rspu_relation_unique_active
+    ON rspu_relation(anchor_rspu_id, related_rspu_id)
+    WHERE deleted_at IS NULL;
 
 -- RSPU 变体表
 -- 建议变体编码使用无业务含义顺序号，如 {rspu_id}-V001，避免尺寸/材质变化导致编码变更
@@ -312,6 +334,8 @@ CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioni
 
 CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_scene ON rspu_scene(scene_code);
+CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu_id, status, sort_order);
+CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_variant_rspu ON rspu_variant(rspu_id, status);
 CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);

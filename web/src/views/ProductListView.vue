@@ -82,7 +82,7 @@ const columns: DataTableColumns<ProductSummary> = [
     key: 'productLevel',
     width: 100,
     render(row: ProductSummary) {
-      return row.productLevel || '-'
+      return resolveLevelName(row.productLevel)
     }
   },
   {
@@ -151,6 +151,11 @@ async function loadDicts() {
 
 function resolveStyleName(code: string) {
   return styleOptions.value.find(s => s.value === code)?.label || code
+}
+
+function resolveLevelName(code: string | undefined) {
+  if (!code) return '-'
+  return productLevelOptions.value.find(l => l.value === code)?.label || code
 }
 
 async function loadProducts() {

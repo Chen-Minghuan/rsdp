@@ -82,6 +82,28 @@ export interface ProductDetail {
     errorMessage: string
     createdAt: string
   }>
+  officialMatches?: RelatedProduct[]
+  matchedBy?: RelatedProduct[]
+}
+
+/**
+ * 关联/搭配产品。
+ */
+export interface RelatedProduct {
+  relationId: string
+  anchorRspuId: string
+  relatedRspuId: string
+  relationType: string
+  reason?: string
+  sortOrder: number
+  status: string
+  targetRspuId: string
+  targetDisplayName?: string
+  targetImageUrl?: string
+  targetCategoryPath?: string
+  targetMinPrice?: number
+  createdAt: string
+  updatedAt: string
 }
 
 /**

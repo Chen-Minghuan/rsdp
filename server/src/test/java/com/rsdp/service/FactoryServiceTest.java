@@ -190,4 +190,67 @@ class FactoryServiceTest {
             .anyMatch(c -> "S".equals(c.getLevelCode()) && Boolean.TRUE.equals(c.getIsPrimary()))
             .anyMatch(c -> "A".equals(c.getLevelCode()) && Boolean.FALSE.equals(c.getIsPrimary()));
     }
+
+    @Test
+    void getFactoryCapableLevels_shouldFallbackToPrimaryLevelForLegacyData() {
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        factory.setFactoryLevel("S");
+
+        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+        when(capabilityMapper.selectList(any())).thenReturn(List.of());
+
+        List<String> result = factoryService.getFactoryCapableLevels("F001");
+
+        assertThat(result).containsExactly("S");
+    }
+
+    @Test
+    void extendCapability_shouldInsertPrimaryLevelFirstForLegacyFactory() {
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        factory.setFactoryLevel("S");
+
+        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(capabilityMapper.selectOne(any())).thenReturn(null);
+        when(capabilityMapper.selectCount(any())).thenReturn(0L);
+
+        factoryService.extendCapability("F001", "A");
+
+        ArgumentCaptor<FactoryLevelCapability> captor = ArgumentCaptor.forClass(FactoryLevelCapability.class);
+        verify(capabilityMapper, times(2)).insert(captor.capture());
+        List<FactoryLevelCapability> capabilities = captor.getAllValues();
+        assertThat(capabilities)
+            .anyMatch(c -> "S".equals(c.getLevelCode()) && Boolean.TRUE.equals(c.getIsPrimary()))
+            .anyMatch(c -> "A".equals(c.getLevelCode()) && Boolean.FALSE.equals(c.getIsPrimary()));
+    }
+
+    @Test
+    void listFactories_shouldReturnCapabilitiesInBusinessOrder() {
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        factory.setFactoryName("测试工厂");
+        factory.setFactoryLevel("A");
+        factory.setStatus("active");
+
+        FactoryLevelCapability c = new FactoryLevelCapability();
+        c.setFactoryCode("F001");
+        c.setLevelCode("C");
+        FactoryLevelCapability s = new FactoryLevelCapability();
+        s.setFactoryCode("F001");
+        s.setLevelCode("S");
+        FactoryLevelCapability a = new FactoryLevelCapability();
+        a.setFactoryCode("F001");
+        a.setLevelCode("A");
+        a.setIsPrimary(true);
+
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of(factory));
+        when(capabilityMapper.selectList(any())).thenReturn(List.of(c, s, a));
+
+        List<FactoryResponse> result = factoryService.listFactories();
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getCapableLevels()).containsExactly("S", "A", "C");
+    }
 }

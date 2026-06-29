@@ -39,8 +39,32 @@ GET    /api/v1/products
        # 说明：positioningLabel / sceneCode / materialTag 均按字典码精确查询
 
 GET    /api/v1/products/{rspuId}
-       # 产品详情（含图片和 AI 识别记录，已实现）
-       # Response: { rspu: RspuMaster, images: [ImageAssets...], recognitions: [AiRecognition...] }
+       # 产品详情（含图片、AI 识别记录、官方搭配与适配来源，已实现）
+       # Response: {
+       #   rspu: RspuMaster,
+       #   images: [ImageAssets...],
+       #   recognitions: [AiRecognition...],
+       #   officialMatches: [RspuRelationResponse...],  // 本产品搭配了谁
+       #   matchedBy: [RspuRelationResponse...]          // 谁把本产品作为搭配
+       # }
+
+GET    /api/v1/products/{rspuId}/relations
+       # 查询某产品作为锚点的搭配关系列表（已实现）
+       # Response: [RspuRelationResponse...]
+
+POST   /api/v1/products/{rspuId}/relations
+       # 为某产品创建搭配关系（已实现）
+       # Request: { relatedRspuId, relationType?: "official"|"ai_verified"|"exclude", reason?, sortOrder? }
+       # Response: void
+
+PUT    /api/v1/products/{rspuId}/relations/{relationId}
+       # 更新搭配关系（已实现）
+       # Request: { relationType?, reason?, sortOrder?, status? }
+       # Response: void
+
+DELETE /api/v1/products/{rspuId}/relations/{relationId}
+       # 删除搭配关系（软删除，已实现）
+       # Response: void
 
 PUT    /api/v1/products/{rspuId}/review
        # 人工复核确认/存疑（已实现）

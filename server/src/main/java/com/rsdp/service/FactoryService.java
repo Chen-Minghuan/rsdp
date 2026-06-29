@@ -258,7 +258,17 @@ public class FactoryService {
      * @return 能力等级代码列表
      */
     public List<String> getFactoryCapableLevels(String factoryCode) {
-        return listCapableLevels(factoryCode);
+        FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
+        if (factory == null || factory.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
+        }
+
+        List<String> levels = listCapableLevels(factoryCode);
+        // 老数据兼容： capability 表无记录时，默认至少具备主等级能力
+        if (levels.isEmpty()) {
+            return List.of(factory.getFactoryLevel());
+        }
+        return levels;
     }
 
     /**
@@ -284,6 +294,19 @@ public class FactoryService {
             return;
         }
 
+        // 老数据兼容：若 capability 表为空，先把工厂主等级写入，避免扩展后丢失主等级
+        long capabilityCount = capabilityMapper.selectCount(
+            new QueryWrapper<FactoryLevelCapability>().eq("factory_code", factoryCode)
+        );
+        if (capabilityCount == 0) {
+            FactoryLevelCapability primary = new FactoryLevelCapability();
+            primary.setFactoryCode(factoryCode);
+            primary.setLevelCode(factory.getFactoryLevel());
+            primary.setIsPrimary(true);
+            primary.setCreatedAt(LocalDateTime.now());
+            capabilityMapper.insert(primary);
+        }
+
         FactoryLevelCapability capability = new FactoryLevelCapability();
         capability.setFactoryCode(factoryCode);
         capability.setLevelCode(level);
@@ -292,13 +315,26 @@ public class FactoryService {
         capabilityMapper.insert(capability);
     }
 
+    private static final List<String> LEVEL_ORDER = List.of("S", "A", "B", "C");
+
     private List<String> listCapableLevels(String factoryCode) {
-        return capabilityMapper.selectList(
+        List<String> levels = capabilityMapper.selectList(
             new QueryWrapper<FactoryLevelCapability>()
                 .eq("factory_code", factoryCode)
-                .orderByAsc("level_code")
         ).stream()
             .map(FactoryLevelCapability::getLevelCode)
+            .distinct()
             .collect(Collectors.toList());
+
+        // 按业务等级 S > A > B > C 排序，未定义的等级放末尾
+        levels.sort((a, b) -> {
+            int idxA = LEVEL_ORDER.indexOf(a);
+            int idxB = LEVEL_ORDER.indexOf(b);
+            if (idxA >= 0 && idxB >= 0) {
+                return Integer.compare(idxA, idxB);
+            }
+            return idxA >= 0 ? -1 : (idxB >= 0 ? 1 : a.compareTo(b));
+        });
+        return levels;
     }
 }
