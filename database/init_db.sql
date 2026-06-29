@@ -106,6 +106,17 @@ CREATE TABLE IF NOT EXISTS factory_master (
     deleted_at TIMESTAMP
 );
 
+-- 工厂能力等级表（记录工厂可承接的所有等级，主评级 is_primary=true）
+CREATE TABLE IF NOT EXISTS factory_level_capability (
+    id           BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    level_code   VARCHAR(8)  NOT NULL,
+    is_primary   BOOLEAN DEFAULT FALSE,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (factory_code, level_code),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+
 -- 工厂仓库表（一个工厂可有多个发货仓库）
 CREATE TABLE IF NOT EXISTS factory_warehouse (
     warehouse_id VARCHAR(64) PRIMARY KEY,

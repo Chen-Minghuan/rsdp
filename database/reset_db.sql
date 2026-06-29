@@ -7,6 +7,7 @@ DROP TABLE IF EXISTS ai_recognition CASCADE;
 DROP TABLE IF EXISTS image_assets CASCADE;
 DROP TABLE IF EXISTS price_history CASCADE;
 DROP TABLE IF EXISTS rsku_supply CASCADE;
+DROP TABLE IF EXISTS factory_level_capability CASCADE;
 DROP TABLE IF EXISTS factory_variant_capacity CASCADE;
 DROP TABLE IF EXISTS factory_warehouse CASCADE;
 DROP TABLE IF EXISTS rspu_variant CASCADE;
@@ -122,6 +123,17 @@ CREATE TABLE IF NOT EXISTS factory_master (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP
+);
+
+-- 工厂能力等级表（记录工厂可承接的所有等级，主评级 is_primary=true）
+CREATE TABLE IF NOT EXISTS factory_level_capability (
+    id           BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    level_code   VARCHAR(8)  NOT NULL,
+    is_primary   BOOLEAN DEFAULT FALSE,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (factory_code, level_code),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 
 -- 工厂仓库表

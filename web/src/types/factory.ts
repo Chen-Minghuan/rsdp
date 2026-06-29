@@ -5,6 +5,7 @@ export interface Factory {
   factoryCode: string
   factoryName: string
   factoryLevel: string
+  capableLevels?: string[]
   homeCommercialTag?: string
   region?: string
   address?: string
@@ -23,6 +24,7 @@ export interface FactoryCreateRequest {
   factoryCode: string
   factoryName: string
   factoryLevel: string
+  capableLevels?: string[]
   homeCommercialTag?: string
   region?: string
   address?: string
@@ -36,4 +38,11 @@ export interface FactoryCreateRequest {
  */
 export interface FactoryLevelUpdateRequest {
   factoryLevel: string
+}
+
+/**
+ * 工厂兼做等级更新请求。
+ */
+export interface FactoryLevelCapabilityUpdateRequest {
+  capableLevels: string[]
 }

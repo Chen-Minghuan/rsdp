@@ -1,5 +1,10 @@
 import { apiClient, type ApiResult } from './client'
-import type { Factory, FactoryCreateRequest, FactoryLevelUpdateRequest } from '@/types/factory'
+import type {
+  Factory,
+  FactoryCreateRequest,
+  FactoryLevelCapabilityUpdateRequest,
+  FactoryLevelUpdateRequest
+} from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 
 /**
@@ -30,6 +35,16 @@ export async function createFactory(request: FactoryCreateRequest): Promise<void
  */
 export async function updateFactoryLevel(factoryCode: string, request: FactoryLevelUpdateRequest): Promise<void> {
   await apiClient.put<ApiResult<void>>(`/v1/factories/${factoryCode}/level`, request)
+}
+
+/**
+ * 更新工厂兼做等级。
+ */
+export async function updateCapableLevels(
+  factoryCode: string,
+  request: FactoryLevelCapabilityUpdateRequest
+): Promise<void> {
+  await apiClient.put<ApiResult<void>>(`/v1/factories/${factoryCode}/capable-levels`, request)
 }
 
 /**

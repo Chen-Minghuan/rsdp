@@ -150,23 +150,35 @@ POST   /api/v1/spatial/floor-plan
 GET    /api/v1/factories
        # 工厂列表（已实现）
        # Query: keyword（搜 factory_name / factory_code）
-       # Response: [FactoryMaster...]
+       # Response: [FactoryResponse...]
+       # FactoryResponse 增加 capableLevels: 可承接的所有等级
 
 POST   /api/v1/factories
        # 新增工厂（已实现）
-       # Request: { factoryCode, factoryName, contactPerson?, contactPhone?,
-       #            address?, city?, province?, country?, website?, tags? }
+       # Request: {
+       #   factoryCode, factoryName, factoryLevel（主等级）,
+       #   capableLevels?（兼做等级列表，默认自动包含主等级）,
+       #   contactPerson?, contactPhone?, address?, region?, notes?
+       # }
 
 PUT    /api/v1/factories/{code}
        # 更新工厂（已实现）
 
 PUT    /api/v1/factories/{code}/level
-       # 更新工厂等级，工厂代码保持不变（已实现）
+       # 更新工厂主等级，工厂代码保持不变（已实现）
        # Request: { factoryLevel: "S"|"A"|"B"|"C" }
        # Response: void
+       # 说明：修改主等级后会同步更新 factory_level_capability 表中的 is_primary 标记
+
+PUT    /api/v1/factories/{code}/capable-levels
+       # 更新工厂兼做等级列表（已实现）
+       # Request: { capableLevels: ["S", "A", ...] }
+       # Response: void
+       # 说明：列表必须包含当前主等级，后端会自动确保主等级存在
 
 GET    /api/v1/factories/{code}
        # 工厂详情（已实现）
+       # Response: FactoryResponse
 
 GET    /api/v1/factories/{code}/rsku
        # 查询某工厂的所有 RSKU 报价（已实现）

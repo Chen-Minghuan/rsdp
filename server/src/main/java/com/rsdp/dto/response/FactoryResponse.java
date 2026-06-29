@@ -3,6 +3,7 @@ package com.rsdp.dto.response;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 工厂响应。
@@ -12,7 +13,17 @@ public class FactoryResponse {
 
     private String factoryCode;
     private String factoryName;
+
+    /**
+     * 主评级。
+     */
     private String factoryLevel;
+
+    /**
+     * 可承接的所有等级（包含主等级）。
+     */
+    private List<String> capableLevels;
+
     private String homeCommercialTag;
     private String region;
     private String address;

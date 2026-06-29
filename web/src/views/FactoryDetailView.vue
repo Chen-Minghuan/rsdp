@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, h } from 'vue'
+import { ref, onMounted, h, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NCard,
@@ -16,7 +16,7 @@ import {
   NFormItem,
   NSelect
 } from 'naive-ui'
-import { getFactory, listRskuByFactory, updateFactoryLevel } from '@/api/factory'
+import { getFactory, listRskuByFactory, updateFactoryLevel, updateCapableLevels } from '@/api/factory'
 import { listDicts } from '@/api/dict'
 import type { Factory } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
@@ -37,6 +37,19 @@ const showLevelModal = ref(false)
 const submittingLevel = ref(false)
 const newLevel = ref<string | null>(null)
 const levelOptions = ref<DictItem[]>([])
+
+const showCapableModal = ref(false)
+const submittingCapable = ref(false)
+const newCapableLevels = ref<string[]>([])
+
+const levelSelectOptions = computed(() =>
+  levelOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+)
+
+const otherCapableLevels = computed(() => {
+  if (!factory.value) return []
+  return (factory.value.capableLevels || []).filter(l => l !== factory.value?.factoryLevel)
+})
 
 const rskuColumns = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
@@ -110,13 +123,40 @@ async function handleUpdateLevel() {
 
   try {
     await updateFactoryLevel(factoryCode, { factoryLevel: newLevel.value })
-    successMessage.value = '工厂等级更新成功'
+    successMessage.value = '工厂主等级更新成功'
     showLevelModal.value = false
     await loadFactory()
   } catch (e) {
-    errorMessage.value = e instanceof Error ? e.message : '更新工厂等级失败'
+    errorMessage.value = e instanceof Error ? e.message : '更新工厂主等级失败'
   } finally {
     submittingLevel.value = false
+  }
+}
+
+function openCapableModal() {
+  newCapableLevels.value = factory.value?.capableLevels || []
+  showCapableModal.value = true
+}
+
+async function handleUpdateCapableLevels() {
+  if (newCapableLevels.value.length === 0) {
+    errorMessage.value = '请至少选择一个能力等级'
+    return
+  }
+
+  submittingCapable.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await updateCapableLevels(factoryCode, { capableLevels: newCapableLevels.value })
+    successMessage.value = '工厂兼做等级更新成功'
+    showCapableModal.value = false
+    await loadFactory()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '更新工厂兼做等级失败'
+  } finally {
+    submittingCapable.value = false
   }
 }
 
@@ -157,8 +197,16 @@ onMounted(() => {
             <n-descriptions-item label="工厂名称">
               {{ factory.factoryName }}
             </n-descriptions-item>
-            <n-descriptions-item label="等级">
+            <n-descriptions-item label="主等级">
               {{ factory.factoryLevel }}
+            </n-descriptions-item>
+            <n-descriptions-item label="兼做等级">
+              <n-space v-if="otherCapableLevels.length > 0" size="small">
+                <n-tag v-for="level in otherCapableLevels" :key="level" type="info" size="small">
+                  {{ level }}
+                </n-tag>
+              </n-space>
+              <span v-else>-</span>
             </n-descriptions-item>
             <n-descriptions-item label="地区">
               {{ factory.region || '-' }}
@@ -178,7 +226,8 @@ onMounted(() => {
           </n-descriptions>
 
           <n-space>
-            <n-button type="primary" @click="openLevelModal">变更等级</n-button>
+            <n-button type="primary" @click="openLevelModal">变更主等级</n-button>
+            <n-button @click="openCapableModal">编辑兼做等级</n-button>
           </n-space>
 
           <n-card title="该工厂报价（RSKU）" size="small">
@@ -204,7 +253,7 @@ onMounted(() => {
 
     <n-modal
       v-model:show="showLevelModal"
-      title="变更工厂等级"
+      title="变更工厂主等级"
       preset="card"
       style="width: 400px;"
     >
@@ -212,7 +261,7 @@ onMounted(() => {
         <n-form-item label="新等级" required>
           <n-select
             v-model:value="newLevel"
-            :options="levelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            :options="levelSelectOptions"
             placeholder="选择新等级"
           />
         </n-form-item>
@@ -222,6 +271,31 @@ onMounted(() => {
         <n-button @click="showLevelModal = false">取消</n-button>
         <n-button type="primary" :loading="submittingLevel" @click="handleUpdateLevel">
           确认变更
+        </n-button>
+      </n-space>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showCapableModal"
+      title="编辑兼做等级"
+      preset="card"
+      style="width: 500px;"
+    >
+      <n-form label-placement="left" label-width="80">
+        <n-form-item label="能力等级" required>
+          <n-select
+            v-model:value="newCapableLevels"
+            :options="levelSelectOptions"
+            multiple
+            placeholder="选择该工厂可承接的所有等级（必须包含主等级）"
+          />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showCapableModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingCapable" @click="handleUpdateCapableLevels">
+          确认保存
         </n-button>
       </n-space>
     </n-modal>

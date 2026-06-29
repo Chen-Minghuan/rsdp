@@ -3,6 +3,8 @@ package com.rsdp.dto.request;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * 工厂创建请求。
  */
@@ -17,6 +19,11 @@ public class FactoryCreateRequest {
 
     @NotBlank(message = "工厂等级不能为空")
     private String factoryLevel;
+
+    /**
+     * 兼做等级列表，不包含主等级时会自动把主等级加入。
+     */
+    private List<String> capableLevels;
 
     private String homeCommercialTag;
     private String region;

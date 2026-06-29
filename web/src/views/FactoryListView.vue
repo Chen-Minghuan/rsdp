@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, h } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NCard,
@@ -11,10 +11,14 @@ import {
   NFormItem,
   NGrid,
   NGridItem,
-  NAlert
+  NAlert,
+  NSelect,
+  NTag
 } from 'naive-ui'
 import { listFactories, createFactory } from '@/api/factory'
+import { listDicts } from '@/api/dict'
 import type { Factory, FactoryCreateRequest } from '@/types/factory'
+import type { DictItem } from '@/types/dict'
 
 const router = useRouter()
 
@@ -23,11 +27,13 @@ const loading = ref(false)
 const submitting = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
+const levelOptions = ref<DictItem[]>([])
 
 const form = ref<FactoryCreateRequest>({
   factoryCode: '',
   factoryName: '',
   factoryLevel: '',
+  capableLevels: [],
   region: '',
   address: '',
   contactPerson: '',
@@ -35,10 +41,40 @@ const form = ref<FactoryCreateRequest>({
   notes: ''
 })
 
+const levelSelectOptions = computed(() =>
+  levelOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+)
+
 const columns = [
   { title: '工厂代码', key: 'factoryCode', width: 120 },
   { title: '工厂名称', key: 'factoryName' },
-  { title: '等级', key: 'factoryLevel', width: 100 },
+  {
+    title: '主等级',
+    key: 'factoryLevel',
+    width: 100,
+    render(row: Factory) {
+      return row.factoryLevel
+    }
+  },
+  {
+    title: '兼做等级',
+    key: 'capableLevels',
+    width: 200,
+    render(row: Factory) {
+      const others = (row.capableLevels || []).filter(l => l !== row.factoryLevel)
+      if (others.length === 0) return '-'
+      return h(
+        NSpace,
+        { size: 4 },
+        {
+          default: () =>
+            others.map(level =>
+              h(NTag, { size: 'small', type: 'info' }, { default: () => level })
+            )
+        }
+      )
+    }
+  },
   { title: '地区', key: 'region', width: 120 },
   { title: '联系人', key: 'contactPerson', width: 120 },
   { title: '联系电话', key: 'contactPhone', width: 140 }
@@ -53,6 +89,14 @@ async function loadFactories() {
     errorMessage.value = e instanceof Error ? e.message : '加载工厂列表失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadLevels() {
+  try {
+    levelOptions.value = await listDicts('factory_level')
+  } catch (e) {
+    console.error('加载工厂等级字典失败', e)
   }
 }
 
@@ -74,6 +118,7 @@ async function handleSubmit() {
       factoryCode: '',
       factoryName: '',
       factoryLevel: '',
+      capableLevels: [],
       region: '',
       address: '',
       contactPerson: '',
@@ -91,6 +136,7 @@ async function handleSubmit() {
 
 onMounted(() => {
   loadFactories()
+  loadLevels()
 })
 </script>
 
@@ -112,8 +158,24 @@ onMounted(() => {
                 </n-form-item>
               </n-grid-item>
               <n-grid-item>
-                <n-form-item label="等级" required>
-                  <n-input v-model:value="form.factoryLevel" placeholder="如 A/B/C" />
+                <n-form-item label="主等级" required>
+                  <n-select
+                    v-model:value="form.factoryLevel"
+                    :options="levelSelectOptions"
+                    placeholder="选择主等级"
+                    clearable
+                  />
+                </n-form-item>
+              </n-grid-item>
+              <n-grid-item :span="3">
+                <n-form-item label="兼做等级">
+                  <n-select
+                    v-model:value="form.capableLevels"
+                    :options="levelSelectOptions"
+                    multiple
+                    placeholder="选择该工厂可兼做的等级（默认包含主等级）"
+                    clearable
+                  />
                 </n-form-item>
               </n-grid-item>
               <n-grid-item>

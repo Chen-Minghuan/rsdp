@@ -2,17 +2,23 @@ package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.FactoryCreateRequest;
+import com.rsdp.dto.request.FactoryLevelCapabilityUpdateRequest;
 import com.rsdp.dto.response.FactoryResponse;
+import com.rsdp.entity.FactoryLevelCapability;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.mapper.FactoryLevelCapabilityMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -23,6 +29,7 @@ import java.util.stream.Collectors;
 public class FactoryService {
 
     private final FactoryMasterMapper factoryMasterMapper;
+    private final FactoryLevelCapabilityMapper capabilityMapper;
     private final DictService dictService;
     private final AuditLogService auditLogService;
 
@@ -33,7 +40,10 @@ public class FactoryService {
      */
     public List<FactoryResponse> listFactories() {
         List<FactoryMaster> factories = factoryMasterMapper.selectList(
-            new QueryWrapper<FactoryMaster>().eq("status", "active").isNull("deleted_at").orderByDesc("created_at")
+            new QueryWrapper<FactoryMaster>()
+                .eq("status", "active")
+                .isNull("deleted_at")
+                .orderByDesc("created_at")
         );
         return factories.stream().map(this::toResponse).collect(Collectors.toList());
     }
@@ -62,12 +72,17 @@ public class FactoryService {
         if (factoryMasterMapper.selectById(request.getFactoryCode()) != null) {
             throw new BusinessException("工厂代码已存在: " + request.getFactoryCode());
         }
-        validateFactoryLevel(request.getFactoryLevel());
+
+        String primaryLevel = request.getFactoryLevel();
+        validateFactoryLevel(primaryLevel);
+
+        Set<String> capableLevels = normalizeCapableLevels(request.getCapableLevels(), primaryLevel);
+        capableLevels.forEach(this::validateFactoryLevel);
 
         FactoryMaster factory = new FactoryMaster();
         factory.setFactoryCode(request.getFactoryCode());
         factory.setFactoryName(request.getFactoryName());
-        factory.setFactoryLevel(request.getFactoryLevel());
+        factory.setFactoryLevel(primaryLevel);
         factory.setHomeCommercialTag(request.getHomeCommercialTag());
         factory.setRegion(request.getRegion());
         factory.setAddress(request.getAddress());
@@ -79,14 +94,16 @@ public class FactoryService {
         factory.setUpdatedAt(LocalDateTime.now());
         factoryMasterMapper.insert(factory);
 
+        saveCapabilities(factory.getFactoryCode(), primaryLevel, capableLevels);
+
         auditLogService.logCreate("factory_master", factory.getFactoryCode(), factory, "admin");
     }
 
     /**
-     * 更新工厂等级，工厂代码保持不变。
+     * 更新工厂主等级。
      *
      * @param factoryCode 工厂代码
-     * @param newLevel    新等级，如 S/A/B/C
+     * @param newLevel    新主等级，如 S/A/B/C
      */
     @Transactional
     public void updateFactoryLevel(String factoryCode, String newLevel) {
@@ -104,7 +121,91 @@ public class FactoryService {
         factory.setUpdatedAt(LocalDateTime.now());
         factoryMasterMapper.updateById(factory);
 
+        syncPrimaryCapability(factoryCode, newLevel);
+
         auditLogService.logUpdate("factory_master", factoryCode, oldSnapshot, factory, "admin");
+    }
+
+    /**
+     * 更新工厂兼做等级列表。
+     *
+     * @param factoryCode 工厂代码
+     * @param request     兼做等级更新请求
+     */
+    @Transactional
+    public void updateCapableLevels(String factoryCode, FactoryLevelCapabilityUpdateRequest request) {
+        FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
+        if (factory == null || factory.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
+        }
+
+        String primaryLevel = factory.getFactoryLevel();
+        Set<String> capableLevels = normalizeCapableLevels(request.getCapableLevels(), primaryLevel);
+        capableLevels.forEach(this::validateFactoryLevel);
+
+        saveCapabilities(factoryCode, primaryLevel, capableLevels);
+    }
+
+    private Set<String> normalizeCapableLevels(List<String> capableLevels, String primaryLevel) {
+        Set<String> levels = new HashSet<>();
+        if (capableLevels != null) {
+            levels.addAll(capableLevels);
+        }
+        levels.add(primaryLevel);
+        return levels;
+    }
+
+    private void saveCapabilities(String factoryCode, String primaryLevel, Set<String> capableLevels) {
+        capabilityMapper.delete(
+            new QueryWrapper<FactoryLevelCapability>().eq("factory_code", factoryCode)
+        );
+
+        LocalDateTime now = LocalDateTime.now();
+        for (String level : capableLevels) {
+            FactoryLevelCapability capability = new FactoryLevelCapability();
+            capability.setFactoryCode(factoryCode);
+            capability.setLevelCode(level);
+            capability.setIsPrimary(level.equals(primaryLevel));
+            capability.setCreatedAt(now);
+            capabilityMapper.insert(capability);
+        }
+    }
+
+    private void syncPrimaryCapability(String factoryCode, String newPrimaryLevel) {
+        List<FactoryLevelCapability> capabilities = capabilityMapper.selectList(
+            new QueryWrapper<FactoryLevelCapability>().eq("factory_code", factoryCode)
+        );
+
+        // 若 capability 表为空（老数据），则把新主等级作为唯一能力写入
+        if (capabilities.isEmpty()) {
+            FactoryLevelCapability capability = new FactoryLevelCapability();
+            capability.setFactoryCode(factoryCode);
+            capability.setLevelCode(newPrimaryLevel);
+            capability.setIsPrimary(true);
+            capability.setCreatedAt(LocalDateTime.now());
+            capabilityMapper.insert(capability);
+            return;
+        }
+
+        for (FactoryLevelCapability capability : capabilities) {
+            boolean shouldBePrimary = capability.getLevelCode().equals(newPrimaryLevel);
+            if (Boolean.TRUE.equals(capability.getIsPrimary()) != shouldBePrimary) {
+                capability.setIsPrimary(shouldBePrimary);
+                capabilityMapper.updateById(capability);
+            }
+        }
+
+        // 确保新主等级一定在 capability 表中
+        boolean primaryExists = capabilities.stream()
+            .anyMatch(c -> c.getLevelCode().equals(newPrimaryLevel));
+        if (!primaryExists) {
+            FactoryLevelCapability capability = new FactoryLevelCapability();
+            capability.setFactoryCode(factoryCode);
+            capability.setLevelCode(newPrimaryLevel);
+            capability.setIsPrimary(true);
+            capability.setCreatedAt(LocalDateTime.now());
+            capabilityMapper.insert(capability);
+        }
     }
 
     private void validateFactoryLevel(String level) {
@@ -137,6 +238,7 @@ public class FactoryService {
         response.setFactoryCode(factory.getFactoryCode());
         response.setFactoryName(factory.getFactoryName());
         response.setFactoryLevel(factory.getFactoryLevel());
+        response.setCapableLevels(listCapableLevels(factory.getFactoryCode()));
         response.setHomeCommercialTag(factory.getHomeCommercialTag());
         response.setRegion(factory.getRegion());
         response.setAddress(factory.getAddress());
@@ -147,5 +249,15 @@ public class FactoryService {
         response.setCreatedAt(factory.getCreatedAt());
         response.setUpdatedAt(factory.getUpdatedAt());
         return response;
+    }
+
+    private List<String> listCapableLevels(String factoryCode) {
+        return capabilityMapper.selectList(
+            new QueryWrapper<FactoryLevelCapability>()
+                .eq("factory_code", factoryCode)
+                .orderByAsc("level_code")
+        ).stream()
+            .map(FactoryLevelCapability::getLevelCode)
+            .collect(Collectors.toList());
     }
 }
