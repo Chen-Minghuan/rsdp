@@ -290,6 +290,32 @@ POST   /api/v1/schemes/{schemeId}/quote
        #      [{ rspuId, rspuName, rskuId, oldPrice, newPrice }]
 ```
 
+### 视觉/语义检索
+
+```
+POST   /api/v1/retrieval/similar
+       # 以图搜图 / 以文搜图（已实现）
+       # Request: multipart/form-data
+       #   image: File (可选，与 text 二选一)
+       #   text: string (可选，与 image 二选一)
+       #   categoryCode: string (可选，按类别过滤)
+       #   positioningLabel: string (可选，按风格/定位过滤)
+       #   topK: number (可选，默认 20)
+       # Response: [{ rspuId, categoryCode, positioningLabel, mainImageUrl, vectorScore, finalScore, matchReasons }]
+       # 说明：三层检索：① DashScope 多模态 embedding 生成查询向量；
+       #      ② ChromaDB 向量召回 + metadata 过滤；③ 按 RSPU 聚合 + 规则重排。
+```
+
+### 管理后台
+
+```
+POST   /api/v1/admin/vectors/backfill
+       # 存量图片向量回填（已实现）
+       # Query: batchSize (默认 100，最大 1000)
+       # Response: { successCount, failedCount }
+       # 说明：为已 AI 识别但缺少向量的存量图片生成 embedding，并写入 ChromaDB。
+```
+
 ### 系统
 
 ```

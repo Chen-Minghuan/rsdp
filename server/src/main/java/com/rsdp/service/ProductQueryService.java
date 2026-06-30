@@ -19,6 +19,7 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.service.chroma.ChromaDbClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -47,6 +48,7 @@ public class ProductQueryService {
     private final DictService dictService;
     private final ObjectMapper objectMapper;
     private final RspuRelationService rspuRelationService;
+    private final ChromaDbClient chromaDbClient;
 
     /**
      * 分页查询产品列表。
@@ -176,7 +178,26 @@ public class ProductQueryService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
+        deleteVectorsByRspu(rspuId);
+
         auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, "admin");
+    }
+
+    private void deleteVectorsByRspu(String rspuId) {
+        try {
+            List<ImageAssets> images = imageAssetsMapper.selectList(
+                new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId)
+            );
+            List<String> imageIds = images.stream()
+                .map(ImageAssets::getImageId)
+                .toList();
+            if (!imageIds.isEmpty()) {
+                chromaDbClient.delete(imageIds);
+                log.info("已删除 RSPU 向量，rspuId={}，数量={}", rspuId, imageIds.size());
+            }
+        } catch (Exception e) {
+            log.error("删除 RSPU 向量失败，rspuId={}", rspuId, e);
+        }
     }
 
     /**

@@ -11,6 +11,7 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -57,6 +59,12 @@ class AsyncTaskProcessorTest {
 
     @Mock
     private VisionService visionService;
+
+    @Mock
+    private EmbeddingService embeddingService;
+
+    @Mock
+    private ChromaDbClient chromaDbClient;
 
     @Mock
     private StorageService storageService;
@@ -111,6 +119,7 @@ class AsyncTaskProcessorTest {
         labels.setColorPrimaryName("焦糖棕");
         labels.setConfidence("high");
         when(visionService.recognizeImage(any())).thenReturn(labels);
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f, 0.3f});
 
         when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
         when(dictResolverService.resolveCodesByNames("scene", List.of("客厅", "书房"))).thenReturn(List.of("LIVING", "STUDY"));
@@ -125,6 +134,16 @@ class AsyncTaskProcessorTest {
         assertThat(rspuCaptor.getValue().getPositioningLabel()).isEqualTo("MC");
         assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("active");
         assertThat(rspuCaptor.getValue().getMaterialTags()).contains("WO", "LI");
+        assertThat(rspuCaptor.getValue().getStyleVector()).contains("0.1", "0.2", "0.3");
+
+        ArgumentCaptor<List<String>> idsCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List<float[]>> embeddingsCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List<Map<String, Object>>> metadataCaptor = ArgumentCaptor.forClass(List.class);
+        verify(chromaDbClient).upsert(idsCaptor.capture(), embeddingsCaptor.capture(), metadataCaptor.capture(), any());
+        assertThat(idsCaptor.getValue()).containsExactly(imageId);
+        assertThat(embeddingsCaptor.getValue()).hasSize(1);
+        assertThat(embeddingsCaptor.getValue().get(0)).containsExactly(0.1f, 0.2f, 0.3f);
+        assertThat(metadataCaptor.getValue().get(0)).containsEntry("rspu_id", rspuId);
 
         ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
         verify(rspuStyleMapper, times(1)).insert(styleCaptor.capture());

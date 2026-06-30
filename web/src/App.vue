@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace } from 'naive-ui'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -61,12 +61,20 @@ function navigate(path: string) {
             >
               AI 搭配方案
             </n-button>
+            <n-button
+              :type="route.path === '/visual-search' ? 'primary' : 'default'"
+              @click="navigate('/visual-search')"
+            >
+              以图搜图
+            </n-button>
           </n-space>
         </n-space>
       </n-layout-header>
 
       <n-layout content-style="overflow-y: auto;">
-        <router-view />
+        <n-dialog-provider>
+          <router-view />
+        </n-dialog-provider>
       </n-layout>
     </n-layout>
   </n-config-provider>

@@ -15,6 +15,7 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,8 +24,10 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -44,6 +47,8 @@ public class AsyncTaskProcessor {
     private final RspuStyleMapper rspuStyleMapper;
     private final RspuSceneMapper rspuSceneMapper;
     private final VisionService visionService;
+    private final EmbeddingService embeddingService;
+    private final ChromaDbClient chromaDbClient;
     private final StorageService storageService;
     private final AuditLogService auditLogService;
     private final DictResolverService dictResolverService;
@@ -68,32 +73,45 @@ public class AsyncTaskProcessor {
 
         String recognitionId = "REC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String modelName = aiModel;
-        String status = "success";
-        String errorMessage = null;
+        String errorMessage;
         AiLabels labels = null;
         int processingTime = 0;
 
+        byte[] imageBytes;
         try (InputStream imageStream = storageService.get(objectKey)) {
+            imageBytes = imageStream.readAllBytes();
+        } catch (Exception e) {
+            log.error("读取图片失败，taskId={}", taskId, e);
+            errorMessage = e.getMessage();
+            persistFailureResult(taskId, rspuId, imageId, recognitionId, modelName, errorMessage);
+            safeUpdateTaskStatus(taskId, "failed", 100, null, errorMessage);
+            return;
+        }
+
+        try (InputStream imageStream = new ByteArrayInputStream(imageBytes)) {
             long aiStart = System.currentTimeMillis();
             labels = visionService.recognizeImage(imageStream);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
             updateTaskStatus(taskId, "processing", 60, null, null);
-            persistSuccessResult(taskId, rspuId, imageId, recognitionId, modelName, labels, processingTime);
+            persistSuccessResult(taskId, rspuId, imageId, recognitionId, modelName, labels, processingTime, imageBytes);
             updateTaskStatus(taskId, "done", 100, objectMapper.writeValueAsString(labels), null);
 
             log.info("产品录入异步任务完成，taskId={}", taskId);
         } catch (Exception e) {
             log.error("AI 识别失败，taskId={}", taskId, e);
-            status = "failed";
             errorMessage = e.getMessage();
 
             persistFailureResult(taskId, rspuId, imageId, recognitionId, modelName, errorMessage);
-            try {
-                updateTaskStatus(taskId, "failed", 100, null, errorMessage);
-            } catch (Exception ex) {
-                log.error("更新任务失败状态异常，taskId={}", taskId, ex);
-            }
+            safeUpdateTaskStatus(taskId, "failed", 100, null, errorMessage);
+        }
+    }
+
+    private void safeUpdateTaskStatus(String taskId, String status, int progress, String resultData, String errorMessage) {
+        try {
+            updateTaskStatus(taskId, status, progress, resultData, errorMessage);
+        } catch (Exception ex) {
+            log.error("更新任务状态异常，taskId={}", taskId, ex);
         }
     }
 
@@ -115,11 +133,19 @@ public class AsyncTaskProcessor {
 
     private void persistSuccessResult(String taskId, String rspuId, String imageId,
                                         String recognitionId, String modelName,
-                                        AiLabels labels, int processingTime) {
+                                        AiLabels labels, int processingTime, byte[] imageBytes) {
         // 解析风格/场景/材质字典码
         String styleCode = dictResolverService.resolveCodeByName("style", labels.getStyle());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
         List<String> materialCodes = dictResolverService.resolveCodesByNames("material", labels.getMaterialTags());
+
+        // 生成图片 embedding
+        float[] embedding = null;
+        try {
+            embedding = embeddingService.embedImage(new ByteArrayInputStream(imageBytes));
+        } catch (Exception e) {
+            log.error("生成图片 embedding 失败，rspuId={}", rspuId, e);
+        }
 
         // 更新 RSPU
         RspuMaster rspu = rspuMapper.selectById(rspuId);
@@ -132,6 +158,9 @@ public class AsyncTaskProcessor {
             rspu.setColorPrimaryHsv(toJson(labels.getColorPrimaryHsv()));
             rspu.setMaterialTags(toJson(materialCodes));
             rspu.setSceneTags(toJson(sceneCodes));
+            if (embedding != null) {
+                rspu.setStyleVector(toJson(embedding));
+            }
             rspu.setAestheticsConfidence(labels.getConfidence());
             rspu.setSourceAgentVersion(modelName);
             rspu.setStatus("active");
@@ -142,6 +171,11 @@ public class AsyncTaskProcessor {
             // 刷新风格/场景关联表
             refreshStyleAssociations(rspuId, styleCode);
             refreshSceneAssociations(rspuId, sceneCodes);
+
+            // 写入 ChromaDB
+            if (embedding != null) {
+                persistVector(imageId, rspu, embedding, imageBytes.length);
+            }
         }
 
         // 更新图片为已识别
@@ -198,6 +232,30 @@ public class AsyncTaskProcessor {
             scene.setSceneCode(sceneCode);
             scene.setCreatedAt(LocalDateTime.now());
             rspuSceneMapper.insert(scene);
+        }
+    }
+
+    private void persistVector(String imageId, RspuMaster rspu, float[] embedding, int imageSize) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("rspu_id", rspu.getRspuId());
+            metadata.put("category_code", rspu.getCategoryCode());
+            metadata.put("positioning_label", rspu.getPositioningLabel());
+            metadata.put("color_primary_name", rspu.getColorPrimaryName());
+            metadata.put("material_tags", rspu.getMaterialTags());
+            metadata.put("scene_tags", rspu.getSceneTags());
+            metadata.put("status", rspu.getStatus());
+            metadata.put("image_size", imageSize);
+
+            chromaDbClient.upsert(
+                List.of(imageId),
+                List.of(embedding),
+                List.of(metadata),
+                null
+            );
+            log.info("向量已写入 ChromaDB，imageId={}", imageId);
+        } catch (Exception e) {
+            log.error("写入 ChromaDB 失败，imageId={}", imageId, e);
         }
     }
 

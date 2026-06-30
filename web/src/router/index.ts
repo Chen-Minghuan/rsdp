@@ -60,6 +60,11 @@ const routes = [
     path: '/matching/anchor',
     name: 'AnchorMatching',
     component: () => import('@/views/AnchorMatchingView.vue')
+  },
+  {
+    path: '/visual-search',
+    name: 'VisualSearch',
+    component: () => import('@/views/VisualSearchView.vue')
   }
 ]
 
