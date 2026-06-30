@@ -38,3 +38,12 @@ export async function listPriceHistory(rskuId: string): Promise<PriceHistory[]> 
   const { data: result } = await apiClient.get<ApiResult<PriceHistory[]>>(`/v1/rsku/${rskuId}/price-history`)
   return result.data
 }
+
+/**
+ * 软删除 RSKU 报价。
+ *
+ * @param rskuId RSKU ID
+ */
+export async function deleteRsku(rskuId: string): Promise<void> {
+  await apiClient.delete<ApiResult<void>>(`/v1/sku/${rskuId}`)
+}

@@ -20,10 +20,11 @@ import {
   NSelect,
   NInput,
   NInputNumber,
+  useDialog,
   type DataTableColumns
 } from 'naive-ui'
-import { getProductDetail, listProducts, reviewProduct, updateProduct } from '@/api/product'
-import { listRskuByRspu, createRsku } from '@/api/rsku'
+import { getProductDetail, listProducts, reviewProduct, updateProduct, deleteProduct } from '@/api/product'
+import { listRskuByRspu, createRsku, deleteRsku } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
 import { listDicts } from '@/api/dict'
@@ -37,6 +38,7 @@ import type { RspuRelationCreateRequest } from '@/types/relation'
 
 const route = useRoute()
 const router = useRouter()
+const dialog = useDialog()
 const rspuId = route.params.rspuId as string
 
 const loading = ref(false)
@@ -140,7 +142,7 @@ const showEditModal = ref(false)
 const submittingEdit = ref(false)
 const editForm = ref<ProductEditForm>({})
 
-const rskuColumns = [
+const rskuColumns: DataTableColumns<Rsku> = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
   { title: '工厂代码', key: 'factoryCode', width: 120 },
@@ -160,6 +162,18 @@ const rskuColumns = [
           ? 'error'
           : 'warning'
       return h(NTag, { type, size: 'small' }, { default: () => row.reviewStatus })
+    }
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 100,
+    render(row: Rsku) {
+      return h(
+        NButton,
+        { size: 'small', type: 'error', onClick: (e: MouseEvent) => { e.stopPropagation(); handleDeleteRsku(row.rskuId) } },
+        { default: () => '删除' }
+      )
     }
   }
 ]
@@ -243,7 +257,14 @@ function createRelationColumns(showDelete: boolean) {
       render(row: RelatedProduct) {
         return h(
           NButton,
-          { size: 'small', type: 'error', onClick: () => handleDeleteRelation(row.relationId) },
+          {
+            size: 'small',
+            type: 'error',
+            onClick: (e: MouseEvent) => {
+              e.stopPropagation()
+              handleDeleteRelation(row.relationId)
+            }
+          },
           { default: () => '删除' }
         )
       }
@@ -563,17 +584,63 @@ async function handleCreateRelation() {
   }
 }
 
-async function handleDeleteRelation(relationId: string) {
-  if (!confirm('确定删除该搭配关系？')) return
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    await deleteRelation(rspuId, relationId)
-    successMessage.value = '搭配关系已删除'
-    await loadDetail()
-  } catch (e) {
-    errorMessage.value = e instanceof Error ? e.message : '删除搭配关系失败'
-  }
+function handleDeleteRelation(relationId: string) {
+  dialog.warning({
+    title: '确认删除搭配关系',
+    content: '确定要删除该搭配关系吗？删除后可在数据库中恢复。',
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      errorMessage.value = ''
+      successMessage.value = ''
+      return deleteRelation(rspuId, relationId)
+        .then(() => {
+          successMessage.value = '搭配关系已删除'
+          return loadDetail()
+        })
+        .catch((e) => {
+          errorMessage.value = e instanceof Error ? e.message : '删除搭配关系失败'
+        })
+    }
+  })
+}
+
+function handleDeleteProduct() {
+  dialog.warning({
+    title: '确认删除产品',
+    content: `确定要删除产品「${detail.value?.rspu.positioningLabel || rspuId}」吗？删除后可在数据库中恢复。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      return deleteProduct(rspuId)
+        .then(() => {
+          dialog.success({ title: '删除成功', content: '产品已删除', positiveText: '确定' })
+          router.push('/products')
+        })
+        .catch((e) => {
+          errorMessage.value = e instanceof Error ? e.message : '删除产品失败'
+        })
+    }
+  })
+}
+
+function handleDeleteRsku(rskuId: string) {
+  dialog.warning({
+    title: '确认删除报价',
+    content: '确定要删除该工厂报价吗？删除后可在数据库中恢复。',
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      return deleteRsku(rskuId)
+        .then(() => {
+          successMessage.value = '报价已删除'
+          return loadRskuList()
+        })
+        .catch((e) => {
+          errorMessage.value = e instanceof Error ? e.message : '删除报价失败'
+        })
+    }
+  })
 }
 
 onMounted(() => {
@@ -591,6 +658,9 @@ onMounted(() => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回列表</n-button>
+          <n-button size="small" type="error" @click="handleDeleteProduct">
+            删除产品
+          </n-button>
         </n-space>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
@@ -715,7 +785,7 @@ onMounted(() => {
             </n-space>
           </n-card>
 
-          <n-card title="复核操作" size="small">
+          <n-card size="small">
             <n-card title="复核操作" size="small">
               <n-space>
                 <n-button

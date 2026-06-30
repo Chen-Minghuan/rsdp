@@ -325,4 +325,41 @@ class RskuServiceTest {
         assertThat(historyCaptor.getValue().getNewPrice()).isEqualTo(new BigDecimal("1500"));
         assertThat(historyCaptor.getValue().getChangeReason()).isEqualTo("原材料涨价");
     }
+
+    @Test
+    void deleteRsku_shouldMarkDeletedAt() {
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setRspuId("RSPU-TEST01");
+        rsku.setFactoryCode("F001");
+
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+
+        rskuService.deleteRsku("RSKU-TEST01");
+
+        assertThat(rsku.getDeletedAt()).isNotNull();
+        assertThat(rsku.getUpdatedAt()).isNotNull();
+        verify(rskuSupplyMapper).updateById(rsku);
+        verify(auditLogService).logDelete(eq("rsku_supply"), eq("RSKU-TEST01"), any(), eq("admin"));
+    }
+
+    @Test
+    void deleteRsku_shouldThrowWhenAlreadyDeleted() {
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setDeletedAt(java.time.LocalDateTime.now());
+
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+
+        assertThatThrownBy(() -> rskuService.deleteRsku("RSKU-TEST01"))
+            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class);
+    }
+
+    @Test
+    void deleteRsku_shouldThrowWhenNotFound() {
+        when(rskuSupplyMapper.selectById("RSKU-NOTEXIST")).thenReturn(null);
+
+        assertThatThrownBy(() -> rskuService.deleteRsku("RSKU-NOTEXIST"))
+            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class);
+    }
 }

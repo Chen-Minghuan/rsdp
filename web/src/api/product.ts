@@ -21,7 +21,7 @@ export async function uploadProductImages(files: File[], categoryCode?: string):
     formData,
     {
       headers: {
-        'Content-Type': 'multipart/form/form-data'
+        'Content-Type': 'multipart/form-data'
       }
     }
   )
@@ -68,4 +68,13 @@ export async function reviewProduct(rspuId: string, request: ProductReviewReques
  */
 export async function updateProduct(rspuId: string, request: ProductUpdateRequest): Promise<void> {
   await apiClient.put<ApiResult<void>>(`/v1/products/${rspuId}`, request)
+}
+
+/**
+ * 软删除产品。
+ *
+ * @param rspuId RSPU ID
+ */
+export async function deleteProduct(rspuId: string): Promise<void> {
+  await apiClient.delete<ApiResult<void>>(`/v1/products/${rspuId}`)
 }

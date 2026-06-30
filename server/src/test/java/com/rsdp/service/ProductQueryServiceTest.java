@@ -347,4 +347,40 @@ class ProductQueryServiceTest {
         assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-NOTEXIST", request))
             .isInstanceOf(ResourceNotFoundException.class);
     }
+
+    @Test
+    void deleteProduct_shouldMarkDeletedAt() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setStatus("active");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        productQueryService.deleteProduct("RSPU-TEST01");
+
+        assertThat(rspu.getDeletedAt()).isNotNull();
+        assertThat(rspu.getUpdatedAt()).isNotNull();
+        verify(rspuMapper).updateById(rspu);
+        verify(auditLogService).logDelete(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq("admin"));
+    }
+
+    @Test
+    void deleteProduct_shouldThrowWhenAlreadyDeleted() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setDeletedAt(java.time.LocalDateTime.now());
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        assertThatThrownBy(() -> productQueryService.deleteProduct("RSPU-TEST01"))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void deleteProduct_shouldThrowWhenNotFound() {
+        when(rspuMapper.selectById(eq("RSPU-NOTEXIST"))).thenReturn(null);
+
+        assertThatThrownBy(() -> productQueryService.deleteProduct("RSPU-NOTEXIST"))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
 }

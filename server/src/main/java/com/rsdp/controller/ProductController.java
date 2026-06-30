@@ -11,6 +11,7 @@ import com.rsdp.service.ProductQueryService;
 import com.rsdp.service.ProductService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -98,6 +99,18 @@ public class ProductController {
     public Result<Void> update(@PathVariable String rspuId,
                                @Valid @RequestBody ProductUpdateRequest request) {
         productQueryService.updateProduct(rspuId, request);
+        return Result.ok();
+    }
+
+    /**
+     * 软删除产品。
+     *
+     * @param rspuId RSPU ID
+     * @return 空结果
+     */
+    @DeleteMapping("/{rspuId}")
+    public Result<Void> delete(@PathVariable String rspuId) {
+        productQueryService.deleteProduct(rspuId);
         return Result.ok();
     }
 }

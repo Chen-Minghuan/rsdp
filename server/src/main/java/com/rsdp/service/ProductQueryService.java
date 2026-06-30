@@ -160,6 +160,26 @@ public class ProductQueryService {
     }
 
     /**
+     * 软删除产品。
+     *
+     * @param rspuId RSPU ID
+     */
+    @Transactional
+    public void deleteProduct(String rspuId) {
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null || rspu.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+
+        RspuMaster oldSnapshot = snapshot(rspu);
+        rspu.setDeletedAt(LocalDateTime.now());
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.updateById(rspu);
+
+        auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, "admin");
+    }
+
+    /**
      * 更新产品元数据。
      *
      * <p>只更新请求中非 {@code null} 的字段；风格/场景变更会同步维护

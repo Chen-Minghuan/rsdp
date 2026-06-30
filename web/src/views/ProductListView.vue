@@ -12,13 +12,15 @@ import {
   NTag,
   NImage,
   NAlert,
+  useDialog,
   type DataTableColumns
 } from 'naive-ui'
-import { listProducts } from '@/api/product'
+import { listProducts, deleteProduct } from '@/api/product'
 import { listDicts } from '@/api/dict'
 import type { ProductSummary } from '@/types/product'
 
 const router = useRouter()
+const dialog = useDialog()
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -101,15 +103,32 @@ const columns: DataTableColumns<ProductSummary> = [
   {
     title: '操作',
     key: 'actions',
-    width: 120,
+    width: 180,
     render(row: ProductSummary) {
       return h(
-        NButton,
+        NSpace,
+        { size: 'small' },
         {
-          size: 'small',
-          onClick: () => router.push(`/products/${row.rspuId}`)
-        },
-        { default: () => '详情' }
+          default: () => [
+            h(
+              NButton,
+              {
+                size: 'small',
+                onClick: () => router.push(`/products/${row.rspuId}`)
+              },
+              { default: () => '详情' }
+            ),
+            h(
+              NButton,
+              {
+                size: 'small',
+                type: 'error',
+                onClick: () => handleDelete(row.rspuId, row.positioningLabel)
+              },
+              { default: () => '删除' }
+            )
+          ]
+        }
       )
     }
   }
@@ -194,6 +213,25 @@ function handlePageChange(newPage: number) {
 function handleBuildQuote() {
   if (selectedRowKeys.value.length === 0) return
   router.push(`/quotes/build?rspuIds=${selectedRowKeys.value.join(',')}`)
+}
+
+function handleDelete(rspuId: string, label?: string) {
+  dialog.warning({
+    title: '确认删除',
+    content: `确定要删除产品「${label || rspuId}」吗？删除后可在数据库中恢复，前端列表将不再展示。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      return deleteProduct(rspuId)
+        .then(() => {
+          dialog.success({ title: '删除成功', content: '产品已删除', positiveText: '确定' })
+          loadProducts()
+        })
+        .catch((e) => {
+          errorMessage.value = e instanceof Error ? e.message : '删除产品失败'
+        })
+    }
+  })
 }
 
 onMounted(() => {

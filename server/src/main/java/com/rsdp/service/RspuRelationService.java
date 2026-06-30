@@ -55,7 +55,10 @@ public class RspuRelationService {
                 .isNull("deleted_at")
                 .orderByAsc("sort_order", "created_at")
         );
-        return relations.stream().map(r -> toResponse(r, r.getRelatedRspuId())).collect(Collectors.toList());
+        return relations.stream()
+            .map(r -> toResponse(r, r.getRelatedRspuId()))
+            .filter(java.util.Objects::nonNull)
+            .collect(Collectors.toList());
     }
 
     /**
@@ -73,7 +76,10 @@ public class RspuRelationService {
                 .isNull("deleted_at")
                 .orderByAsc("sort_order", "created_at")
         );
-        return relations.stream().map(r -> toResponse(r, r.getAnchorRspuId())).collect(Collectors.toList());
+        return relations.stream()
+            .map(r -> toResponse(r, r.getAnchorRspuId()))
+            .filter(java.util.Objects::nonNull)
+            .collect(Collectors.toList());
     }
 
     /**
@@ -193,6 +199,12 @@ public class RspuRelationService {
     }
 
     private RspuRelationResponse toResponse(RspuRelation relation, String targetRspuId) {
+        RspuMaster target = rspuMapper.selectById(targetRspuId);
+        // 目标产品已软删除时，不在搭配列表中展示
+        if (target == null || target.getDeletedAt() != null) {
+            return null;
+        }
+
         RspuRelationResponse response = new RspuRelationResponse();
         response.setRelationId(relation.getRelationId());
         response.setAnchorRspuId(relation.getAnchorRspuId());
@@ -205,11 +217,8 @@ public class RspuRelationService {
         response.setUpdatedAt(relation.getUpdatedAt());
         response.setTargetRspuId(targetRspuId);
 
-        RspuMaster target = rspuMapper.selectById(targetRspuId);
-        if (target != null) {
-            response.setTargetDisplayName(buildDisplayName(target));
-            response.setTargetCategoryPath(formatCategoryPath(target.getCategoryPath()));
-        }
+        response.setTargetDisplayName(buildDisplayName(target));
+        response.setTargetCategoryPath(formatCategoryPath(target.getCategoryPath()));
 
         ImageAssets primaryImage = imageAssetsMapper.selectOne(
             new QueryWrapper<ImageAssets>()

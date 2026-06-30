@@ -181,6 +181,26 @@ public class RskuService {
     }
 
     /**
+     * 软删除 RSKU 报价。
+     *
+     * @param rskuId RSKU ID
+     */
+    @Transactional
+    public void deleteRsku(String rskuId) {
+        RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
+        if (rsku == null || rsku.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
+
+        RskuSupply oldSnapshot = snapshot(rsku);
+        rsku.setDeletedAt(LocalDateTime.now());
+        rsku.setUpdatedAt(LocalDateTime.now());
+        rskuSupplyMapper.updateById(rsku);
+
+        auditLogService.logDelete("rsku_supply", rskuId, oldSnapshot, "admin");
+    }
+
+    /**
      * 更新 RSKU 出厂价，并记录价格历史。
      *
      * @param rskuId      RSKU ID

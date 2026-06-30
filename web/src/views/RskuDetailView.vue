@@ -15,13 +15,15 @@ import {
   NFormItem,
   NInputNumber,
   NInput,
-  NDataTable
+  NDataTable,
+  useDialog
 } from 'naive-ui'
-import { getRsku, listPriceHistory, updateRskuPrice } from '@/api/rsku'
+import { getRsku, listPriceHistory, updateRskuPrice, deleteRsku } from '@/api/rsku'
 import type { PriceHistory, Rsku } from '@/types/rsku'
 
 const route = useRoute()
 const router = useRouter()
+const dialog = useDialog()
 const rspuId = route.params.rspuId as string
 const rskuId = route.params.rskuId as string
 
@@ -107,6 +109,25 @@ function reviewStatusType(status: string) {
   return 'warning'
 }
 
+function handleDeleteRsku() {
+  dialog.warning({
+    title: '确认删除报价',
+    content: `确定要删除报价「${rsku.value?.rskuId || rskuId}」吗？删除后可在数据库中恢复。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      return deleteRsku(rskuId)
+        .then(() => {
+          dialog.success({ title: '删除成功', content: '报价已删除', positiveText: '确定' })
+          router.push(`/products/${rspuId}`)
+        })
+        .catch((e) => {
+          errorMessage.value = e instanceof Error ? e.message : '删除报价失败'
+        })
+    }
+  })
+}
+
 onMounted(() => {
   loadRsku()
   loadPriceHistory()
@@ -119,6 +140,9 @@ onMounted(() => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push(`/products/${rspuId}`)">返回产品详情</n-button>
+          <n-button size="small" type="error" @click="handleDeleteRsku">
+            删除报价
+          </n-button>
         </n-space>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">

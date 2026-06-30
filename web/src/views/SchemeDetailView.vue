@@ -15,6 +15,7 @@ import {
   NDivider
 } from 'naive-ui'
 import { getSchemeDetail, generateQuoteFromScheme } from '@/api/scheme'
+import { exportQuote } from '@/api/quote'
 import type { Scheme, SchemeItem } from '@/types/scheme'
 import type { PriceChange, QuoteResponse } from '@/types/quote'
 
@@ -24,6 +25,7 @@ const schemeId = route.params.schemeId as string
 
 const loading = ref(false)
 const generating = ref(false)
+const exporting = ref(false)
 const errorMessage = ref('')
 const scheme = ref<Scheme | null>(null)
 const quoteResult = ref<QuoteResponse | null>(null)
@@ -135,6 +137,24 @@ async function handleGenerateQuote() {
   }
 }
 
+async function handleExportQuote() {
+  if (!scheme.value || scheme.value.items.length === 0) {
+    errorMessage.value = '方案中暂无产品，无法导出'
+    return
+  }
+
+  exporting.value = true
+  errorMessage.value = ''
+  try {
+    const rskuIds = scheme.value.items.map(item => item.rskuId)
+    await exportQuote({ rskuIds })
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '导出报价单失败'
+  } finally {
+    exporting.value = false
+  }
+}
+
 onMounted(() => {
   loadDetail()
 })
@@ -151,6 +171,9 @@ onMounted(() => {
           </n-button>
           <n-button type="primary" :loading="generating" @click="handleGenerateQuote">
             生成报价单
+          </n-button>
+          <n-button :loading="exporting" @click="handleExportQuote">
+            导出 Excel
           </n-button>
         </n-space>
 

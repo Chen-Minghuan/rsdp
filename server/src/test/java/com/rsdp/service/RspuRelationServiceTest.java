@@ -92,6 +92,9 @@ class RspuRelationServiceTest {
         relation.setRelationType("official");
         relation.setStatus("active");
 
+        RspuMaster anchor = new RspuMaster();
+        anchor.setRspuId("RSPU-BED");
+        when(rspuMapper.selectById("RSPU-BED")).thenReturn(anchor);
         when(rspuMapper.selectById("RSPU-MATTRESS")).thenReturn(new RspuMaster());
         when(relationMapper.selectList(any())).thenReturn(List.of(relation));
         when(imageAssetsMapper.selectOne(any())).thenReturn(null);
@@ -101,6 +104,24 @@ class RspuRelationServiceTest {
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getAnchorRspuId()).isEqualTo("RSPU-BED");
+    }
+
+    @Test
+    void listByAnchor_shouldFilterDeletedTargetRspu() {
+        RspuRelation relation = new RspuRelation();
+        relation.setRelationId("REL-001");
+        relation.setAnchorRspuId("RSPU-BED");
+        relation.setRelatedRspuId("RSPU-DELETED");
+        relation.setRelationType("official");
+        relation.setStatus("active");
+
+        when(rspuMapper.selectById("RSPU-BED")).thenReturn(new RspuMaster());
+        when(rspuMapper.selectById("RSPU-DELETED")).thenReturn(null);
+        when(relationMapper.selectList(any())).thenReturn(List.of(relation));
+
+        List<RspuRelationResponse> result = relationService.listByAnchor("RSPU-BED");
+
+        assertThat(result).isEmpty();
     }
 
     @Test

@@ -75,7 +75,9 @@ PUT    /api/v1/products/{rspuId}
        # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）
 
 DELETE /api/v1/products/{rspuId}
-       # 软删除（待实现）
+       # 软删除（已实现）
+       # Response: void
+       # 说明：仅设置 rspu_master.deleted_at，数据库中保留数据；已关联的 RSKU / 变体 / 关系不级联删除
 
 ### 图片访问
 
@@ -122,7 +124,9 @@ GET    /api/v1/rsku/{rskuId}/price-history
        # Response: [PriceHistory...]
 
 DELETE /api/v1/sku/{rskuId}
-       # 删除报价（该厂不再供应，待实现）
+       # 软删除报价（该厂不再供应，已实现）
+       # Response: void
+       # 说明：仅设置 rsku_supply.deleted_at，数据库中保留数据
 
 GET    /api/v1/sku/compare/{rspuId}
        # 同款多厂比价列表（产品详情页 RSKU 列表已覆盖该能力，独立接口待评估）
@@ -234,6 +238,12 @@ POST   /api/v1/quotes/generate
        # 根据选中的 RSKU 列表生成报价单（已实现）
        # Request: { rskuIds: ["RSKU-001", ...] }
        # Response: { items: [QuoteItem...], summary: { totalPrice, itemCount, factoryCount, maxLeadTimeDays } }
+
+POST   /api/v1/quotes/export
+       # 根据选中的 RSKU 列表导出 Excel 报价单（已实现）
+       # Request: { rskuIds: ["RSKU-001", ...] }
+       # Response: application/octet-stream，Content-Disposition: attachment; filename="quote_<timestamp>.xlsx"
+       # 说明：工作簿包含两个 sheet："报价明细"（逐项报价）和"汇总"（总价、项数、工厂数、最大交期、价格变动提示）
 ```
 
 ### 搭配方案

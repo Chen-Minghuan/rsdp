@@ -22,7 +22,7 @@ import {
 } from 'naive-ui'
 import { getProductDetail } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
-import { generateQuote } from '@/api/quote'
+import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
 import type { ProductDetail } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
@@ -65,7 +65,9 @@ const rspuIds = computed(() => {
 
 const loading = ref(false)
 const errorMessage = ref('')
+const successMessage = ref('')
 const generating = ref(false)
+const exporting = ref(false)
 const saving = ref(false)
 const quoteResult = ref<QuoteResponse | null>(null)
 const showSaveModal = ref(false)
@@ -81,7 +83,8 @@ const isItemsLimitReached = computed(() => products.value.length >= MAX_ITEMS)
 
 const totalPrice = computed(() => {
   let total = 0
-  for (const rspuId of rspuIds.value) {
+  for (const product of products.value) {
+    const rspuId = product.rspu.rspuId
     const rskuId = selectedRskuMap.value[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
@@ -92,7 +95,8 @@ const totalPrice = computed(() => {
 
 const maxLeadTimeDays = computed(() => {
   let max = 0
-  for (const rspuId of rspuIds.value) {
+  for (const product of products.value) {
+    const rspuId = product.rspu.rspuId
     const rskuId = selectedRskuMap.value[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
@@ -106,6 +110,7 @@ const maxLeadTimeDays = computed(() => {
 async function loadData() {
   loading.value = true
   errorMessage.value = ''
+  successMessage.value = ''
   try {
     let ids: string[] = []
 
@@ -157,12 +162,13 @@ async function loadData() {
 async function handleGenerateQuote() {
   const rskuIds = Object.values(selectedRskuMap.value).filter(Boolean)
   if (rskuIds.length === 0) {
-    errorMessage.value = '请为每个产品选择一个 RSKU'
+    errorMessage.value = '请至少选择一个 RSKU'
     return
   }
 
   generating.value = true
   errorMessage.value = ''
+  successMessage.value = ''
   try {
     quoteResult.value = await generateQuote({ rskuIds })
   } catch (e) {
@@ -172,13 +178,34 @@ async function handleGenerateQuote() {
   }
 }
 
+async function handleExportQuote() {
+  const rskuIds = Object.values(selectedRskuMap.value).filter(Boolean)
+  if (rskuIds.length === 0) {
+    errorMessage.value = '请至少选择一个 RSKU'
+    return
+  }
+
+  exporting.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    await exportQuote({ rskuIds })
+    successMessage.value = '报价单已开始下载'
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '导出报价单失败'
+  } finally {
+    exporting.value = false
+  }
+}
+
 function openSaveModal() {
   const rskuIds = Object.values(selectedRskuMap.value).filter(Boolean)
   if (rskuIds.length === 0) {
-    errorMessage.value = '请为每个产品选择一个 RSKU'
+    errorMessage.value = '请至少选择一个 RSKU'
     return
   }
   errorMessage.value = ''
+  successMessage.value = ''
   schemeName.value = ''
   showSaveModal.value = true
 }
@@ -250,6 +277,10 @@ onMounted(() => {
           {{ errorMessage }}
         </n-alert>
 
+        <n-alert v-if="successMessage" type="success" :show-icon="true">
+          {{ successMessage }}
+        </n-alert>
+
         <n-alert
           v-if="!isEditMode && duplicateRspuIds.length > 0"
           type="warning"
@@ -316,6 +347,9 @@ onMounted(() => {
           <n-space>
             <n-button type="primary" :loading="generating" @click="handleGenerateQuote">
               确认生成报价单
+            </n-button>
+            <n-button :loading="exporting" @click="handleExportQuote">
+              导出 Excel
             </n-button>
             <n-button @click="openSaveModal">
               {{ isEditMode ? '更新方案' : '保存为方案' }}
