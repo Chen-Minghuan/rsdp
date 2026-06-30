@@ -8,9 +8,10 @@ import org.springframework.web.client.RestClient;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * ChromaDB REST API 客户端。
+ * ChromaDB REST API 客户端（v2 API）。
  */
 @Slf4j
 @Component
@@ -20,44 +21,59 @@ public class ChromaDbClient {
     private final RestClient chromaRestClient;
     private final ChromaDbProperties properties;
 
+    private final AtomicReference<String> collectionIdCache = new AtomicReference<>();
+
+    private String baseCollectionPath() {
+        return "/api/v2/tenants/default_tenant/databases/default_database/collections";
+    }
+
     /**
-     * 确保集合存在，不存在则创建。
+     * 获取或创建集合并返回集合 ID。
      */
-    public void ensureCollection() {
+    private String getOrCreateCollectionId() {
+        String cached = collectionIdCache.get();
+        if (cached != null) {
+            return cached;
+        }
+
+        String collectionName = properties.getCollection();
         try {
-            chromaRestClient.get()
-                .uri("/api/v1/collections/{name}", properties.getCollection())
+            Map<String, Object> collection = chromaRestClient.get()
+                .uri(baseCollectionPath() + "/{name}", collectionName)
                 .retrieve()
-                .toBodilessEntity();
-            log.debug("ChromaDB 集合已存在: {}", properties.getCollection());
+                .body(Map.class);
+            String id = (String) collection.get("id");
+            collectionIdCache.set(id);
+            log.debug("ChromaDB 集合已存在: {} -> {}", collectionName, id);
+            return id;
         } catch (Exception e) {
-            log.info("ChromaDB 集合不存在，正在创建: {}", properties.getCollection());
-            createCollection();
+            log.info("ChromaDB 集合不存在，正在创建: {}", collectionName);
+            return createCollection(collectionName);
         }
     }
 
-    private void createCollection() {
+    private String createCollection(String collectionName) {
         Map<String, Object> body = new HashMap<>();
-        body.put("name", properties.getCollection());
+        body.put("name", collectionName);
         body.put("metadata", Map.of("hnsw:space", "cosine"));
 
-        chromaRestClient.post()
-            .uri("/api/v1/collections")
+        Map<String, Object> collection = chromaRestClient.post()
+            .uri(baseCollectionPath())
             .body(body)
             .retrieve()
-            .toBodilessEntity();
+            .body(Map.class);
+
+        String id = (String) collection.get("id");
+        collectionIdCache.set(id);
+        log.info("ChromaDB 集合创建完成: {} -> {}", collectionName, id);
+        return id;
     }
 
     /**
      * 批量写入或更新向量记录。
-     *
-     * @param ids          记录 ID 列表
-     * @param embeddings   向量列表
-     * @param metadatas    元数据列表
-     * @param documents    文档列表（可为 null）
      */
     public void upsert(List<String> ids, List<float[]> embeddings, List<Map<String, Object>> metadatas, List<String> documents) {
-        ensureCollection();
+        String collectionId = getOrCreateCollectionId();
 
         Map<String, Object> body = new HashMap<>();
         body.put("ids", ids);
@@ -68,7 +84,7 @@ public class ChromaDbClient {
         }
 
         chromaRestClient.post()
-            .uri("/api/v1/collections/{name}/upsert", properties.getCollection())
+            .uri(baseCollectionPath() + "/{id}/upsert", collectionId)
             .body(body)
             .retrieve()
             .toBodilessEntity();
@@ -76,15 +92,10 @@ public class ChromaDbClient {
 
     /**
      * 根据向量查询相似记录。
-     *
-     * @param queryEmbedding 查询向量
-     * @param topK           返回数量
-     * @param where          元数据过滤条件（可为 null）
-     * @return 查询结果
      */
     @SuppressWarnings("unchecked")
     public QueryResult query(float[] queryEmbedding, int topK, Map<String, Object> where) {
-        ensureCollection();
+        String collectionId = getOrCreateCollectionId();
 
         Map<String, Object> body = new HashMap<>();
         body.put("query_embeddings", List.of(queryEmbedding));
@@ -95,7 +106,7 @@ public class ChromaDbClient {
         }
 
         Map<String, Object> response = chromaRestClient.post()
-            .uri("/api/v1/collections/{name}/query", properties.getCollection())
+            .uri(baseCollectionPath() + "/{id}/query", collectionId)
             .body(body)
             .retrieve()
             .body(Map.class);
@@ -105,17 +116,15 @@ public class ChromaDbClient {
 
     /**
      * 删除指定记录。
-     *
-     * @param ids 记录 ID 列表
      */
     public void delete(List<String> ids) {
-        ensureCollection();
+        String collectionId = getOrCreateCollectionId();
 
         Map<String, Object> body = new HashMap<>();
         body.put("ids", ids);
 
         chromaRestClient.post()
-            .uri("/api/v1/collections/{name}/delete", properties.getCollection())
+            .uri(baseCollectionPath() + "/{id}/delete", collectionId)
             .body(body)
             .retrieve()
             .toBodilessEntity();
@@ -134,17 +143,17 @@ public class ChromaDbClient {
 
         @SuppressWarnings("unchecked")
         public List<List<String>> getIds() {
-            return (List<List<String>>) raw.get("ids");
+            return raw != null ? (List<List<String>>) raw.get("ids") : null;
         }
 
         @SuppressWarnings("unchecked")
         public List<List<Double>> getDistances() {
-            return (List<List<Double>>) raw.get("distances");
+            return raw != null ? (List<List<Double>>) raw.get("distances") : null;
         }
 
         @SuppressWarnings("unchecked")
         public List<List<Map<String, Object>>> getMetadatas() {
-            return (List<List<Map<String, Object>>>) raw.get("metadatas");
+            return raw != null ? (List<List<Map<String, Object>>>) raw.get("metadatas") : null;
         }
     }
 }
