@@ -87,17 +87,19 @@ const originalScheme = ref<Scheme | null>(null)
 const MAX_ITEMS = 50
 const isItemsLimitReached = computed(() => products.value.length >= MAX_ITEMS)
 
-const totalPrice = computed(() => {
+const totalPriceCents = computed(() => {
   let total = 0
   for (const product of products.value) {
     const rspuId = product.rspu.rspuId
     const rskuId = selectedRskuMap.value[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
-    if (rsku) total += rsku.factoryPrice
+    if (rsku) total += Math.round(rsku.factoryPrice * 100)
   }
   return total
 })
+
+const totalPrice = computed(() => totalPriceCents.value / 100)
 
 const maxLeadTimeDays = computed(() => {
   let max = 0
@@ -134,6 +136,11 @@ async function loadData() {
       if (uniqueRawCount.value > MAX_ITEMS) {
         errorMessage.value = `URL 中产品数量超过 ${MAX_ITEMS}，已自动截断前 ${MAX_ITEMS} 个`
       }
+    }
+
+    if (ids.length > MAX_ITEMS) {
+      errorMessage.value = `最多支持 ${MAX_ITEMS} 个产品，已自动截断前 ${MAX_ITEMS} 个`
+      ids = ids.slice(0, MAX_ITEMS)
     }
 
     if (ids.length === 0) {
@@ -328,7 +335,7 @@ onMounted(() => {
                 <n-select
                   v-model:value="selectedRskuMap[product.rspu.rspuId]"
                   :options="rskuMap[product.rspu.rspuId]?.map(r => ({
-                    label: `${r.factoryName || r.factoryCode} - ¥${r.factoryPrice}`,
+                    label: `${r.factoryName || r.factoryCode} - ¥${r.factoryPrice.toFixed(2)}`,
                     value: r.rskuId
                   })) || []"
                   placeholder="选择工厂报价"
@@ -336,7 +343,7 @@ onMounted(() => {
                 />
               </n-space>
               <n-tag type="info" size="small">
-                已选：¥{{ rskuMap[product.rspu.rspuId]?.find(r => r.rskuId === selectedRskuMap[product.rspu.rspuId])?.factoryPrice || '-' }}
+                已选：¥{{ (rskuMap[product.rspu.rspuId]?.find(r => r.rskuId === selectedRskuMap[product.rspu.rspuId])?.factoryPrice ?? 0).toFixed(2) }}
               </n-tag>
             </n-space>
           </n-card>

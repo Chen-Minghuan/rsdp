@@ -26,6 +26,7 @@ import com.rsdp.mapper.SchemeMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -58,6 +59,13 @@ public class SchemeService {
      */
     @Transactional
     public SchemeResponse createScheme(SchemeCreateRequest request) {
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            throw new BusinessException("方案项不能为空");
+        }
+        if (!StringUtils.hasText(request.getSchemeName())) {
+            throw new BusinessException("方案名称不能为空");
+        }
+
         String schemeId = "SCHEME-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
         // 按 rskuId 去重，保留第一次出现的顺序
@@ -142,6 +150,13 @@ public class SchemeService {
      */
     @Transactional
     public SchemeResponse updateScheme(String schemeId, SchemeUpdateRequest request) {
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            throw new BusinessException("方案项不能为空");
+        }
+        if (!StringUtils.hasText(request.getSchemeName())) {
+            throw new BusinessException("方案名称不能为空");
+        }
+
         Scheme scheme = schemeMapper.selectById(schemeId);
         if (scheme == null || scheme.getDeletedAt() != null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);

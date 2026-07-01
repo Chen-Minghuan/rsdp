@@ -76,7 +76,16 @@ const rskuColumns = [
   }
 ]
 
+function validateFactoryCode(): boolean {
+  if (!factoryCode?.trim()) {
+    errorMessage.value = '缺少工厂代码'
+    return false
+  }
+  return true
+}
+
 async function loadFactory() {
+  if (!validateFactoryCode()) return
   loading.value = true
   errorMessage.value = ''
   try {
@@ -89,6 +98,7 @@ async function loadFactory() {
 }
 
 async function loadRskuList() {
+  if (!validateFactoryCode()) return
   rskuLoading.value = true
   try {
     rskuList.value = await listRskuByFactory(factoryCode)

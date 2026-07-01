@@ -13,6 +13,7 @@ import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -73,7 +74,12 @@ public class RspuVariantService {
         variant.setCreatedAt(LocalDateTime.now());
         variant.setUpdatedAt(LocalDateTime.now());
 
-        variantMapper.insert(variant);
+        try {
+            variantMapper.insert(variant);
+        } catch (DataIntegrityViolationException e) {
+            // variant_id 为主键，冲突说明并发生成了重复编码，提示重试
+            throw new BusinessException("变体编码冲突，请重试: " + variantId);
+        }
         auditLogService.logCreate("rspu_variant", variantId, variant, "admin");
 
         return toResponse(variant);

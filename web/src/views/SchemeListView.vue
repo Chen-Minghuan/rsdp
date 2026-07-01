@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, h, onMounted } from 'vue'
+import { ref, h, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NCard,
@@ -10,6 +10,7 @@ import {
   NEmpty,
   NAlert,
   NPopconfirm,
+  NPagination,
   type DataTableColumns
 } from 'naive-ui'
 import { listSchemes, deleteScheme } from '@/api/scheme'
@@ -20,6 +21,13 @@ const router = useRouter()
 const loading = ref(false)
 const errorMessage = ref('')
 const schemes = ref<SchemeSummary[]>([])
+
+const page = ref(1)
+const pageSize = ref(10)
+const pagedSchemes = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return schemes.value.slice(start, start + pageSize.value)
+})
 
 const rowKey = (row: SchemeSummary) => row.schemeId
 
@@ -96,6 +104,7 @@ async function loadSchemes() {
   errorMessage.value = ''
   try {
     schemes.value = await listSchemes()
+    page.value = 1
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载方案列表失败'
   } finally {
@@ -135,7 +144,7 @@ onMounted(() => {
         <n-data-table
           v-if="!loading"
           :columns="columns"
-          :data="schemes"
+          :data="pagedSchemes"
           :row-key="rowKey"
           :bordered="true"
           :single-line="false"
@@ -144,6 +153,15 @@ onMounted(() => {
             <n-empty description="暂无搭配方案，去产品库选择产品生成报价单后保存" />
           </template>
         </n-data-table>
+
+        <n-pagination
+          v-if="!loading && schemes.length > pageSize"
+          v-model:page="page"
+          v-model:page-size="pageSize"
+          :item-count="schemes.length"
+          :page-sizes="[10, 20, 50]"
+          show-size-picker
+        />
       </n-space>
     </n-card>
   </n-space>

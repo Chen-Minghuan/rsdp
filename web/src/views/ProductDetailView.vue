@@ -273,7 +273,16 @@ function createRelationColumns(showDelete: boolean) {
   return columns
 }
 
+function validateRspuId(): boolean {
+  if (!rspuId.value?.trim()) {
+    errorMessage.value = '缺少产品 ID'
+    return false
+  }
+  return true
+}
+
 async function loadDetail() {
+  if (!validateRspuId()) return
   loading.value = true
   errorMessage.value = ''
   try {
@@ -286,6 +295,7 @@ async function loadDetail() {
 }
 
 async function loadRskuList() {
+  if (!validateRspuId()) return
   rskuLoading.value = true
   try {
     rskuList.value = await listRskuByRspu(rspuId.value)
@@ -297,6 +307,7 @@ async function loadRskuList() {
 }
 
 async function loadVariants() {
+  if (!validateRspuId()) return
   variantLoading.value = true
   try {
     variantList.value = await listVariantsByRspu(rspuId.value)
@@ -652,8 +663,12 @@ onMounted(() => {
 })
 
 onBeforeRouteUpdate((to, from) => {
-  const nextId = to.params.rspuId as string
-  if (nextId && nextId !== from.params.rspuId) {
+  const nextId = (to.params.rspuId as string)?.trim()
+  if (!nextId) {
+    errorMessage.value = '缺少产品 ID'
+    return
+  }
+  if (nextId !== from.params.rspuId) {
     rspuId.value = nextId
     loadDetail()
     loadRskuList()

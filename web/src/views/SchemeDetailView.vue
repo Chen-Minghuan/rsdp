@@ -113,7 +113,16 @@ const priceChangeColumns = [
   }
 ]
 
+function validateSchemeId(): boolean {
+  if (!schemeId?.trim()) {
+    errorMessage.value = '缺少方案 ID'
+    return false
+  }
+  return true
+}
+
 async function loadDetail() {
+  if (!validateSchemeId()) return
   loading.value = true
   errorMessage.value = ''
   try {
@@ -126,6 +135,7 @@ async function loadDetail() {
 }
 
 async function handleGenerateQuote() {
+  if (!validateSchemeId()) return
   generating.value = true
   errorMessage.value = ''
   try {
@@ -138,6 +148,7 @@ async function handleGenerateQuote() {
 }
 
 async function handleExportQuote() {
+  if (!validateSchemeId()) return
   if (!scheme.value || scheme.value.items.length === 0) {
     errorMessage.value = '方案中暂无产品，无法导出'
     return

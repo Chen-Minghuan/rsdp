@@ -13,7 +13,8 @@ import {
   NGridItem,
   NAlert,
   NSelect,
-  NTag
+  NTag,
+  NPagination
 } from 'naive-ui'
 import { listFactories, createFactory } from '@/api/factory'
 import { listDicts } from '@/api/dict'
@@ -28,6 +29,13 @@ const submitting = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const levelOptions = ref<DictItem[]>([])
+
+const page = ref(1)
+const pageSize = ref(10)
+const pagedFactories = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return factories.value.slice(start, start + pageSize.value)
+})
 
 const form = ref<FactoryCreateRequest>({
   factoryCode: '',
@@ -85,6 +93,7 @@ async function loadFactories() {
   errorMessage.value = ''
   try {
     factories.value = await listFactories()
+    page.value = 1
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载工厂列表失败'
   } finally {
@@ -223,12 +232,21 @@ onMounted(() => {
 
         <n-data-table
           :columns="columns"
-          :data="factories"
+          :data="pagedFactories"
           :loading="loading"
           :bordered="true"
           :single-line="false"
           row-class-name="clickable-row"
           @row-click="(row: Factory) => router.push(`/factories/${row.factoryCode}`)"
+        />
+
+        <n-pagination
+          v-if="factories.length > pageSize"
+          v-model:page="page"
+          v-model:page-size="pageSize"
+          :item-count="factories.length"
+          :page-sizes="[10, 20, 50]"
+          show-size-picker
         />
       </n-space>
     </n-card>

@@ -87,10 +87,37 @@ async function loadCategoryDicts() {
   }
 }
 
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+const MAX_FILE_COUNT = 20
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml']
+
+function isImageFile(file: File): boolean {
+  // 浏览器通过文件头或扩展名推断的 MIME 类型必须以 image/ 开头
+  // 额外白名单兜底部分特殊图片类型（如 svg 在某些浏览器中可能识别为 image/svg+xml）
+  return file.type.startsWith('image/') || ALLOWED_IMAGE_TYPES.includes(file.type)
+}
+
 async function handleStartUpload() {
   const files = selectedFiles.value
   if (files.length === 0) {
     errorMessage.value = '请先选择图片文件'
+    return
+  }
+
+  if (files.length > MAX_FILE_COUNT) {
+    errorMessage.value = `单次最多上传 ${MAX_FILE_COUNT} 张图片，当前已选择 ${files.length} 张`
+    return
+  }
+
+  const oversizedFiles = files.filter(f => f.size > MAX_FILE_SIZE_BYTES)
+  if (oversizedFiles.length > 0) {
+    errorMessage.value = `以下文件超过 10MB：${oversizedFiles.map(f => f.name).join('、')}`
+    return
+  }
+
+  const invalidTypeFiles = files.filter(f => !isImageFile(f))
+  if (invalidTypeFiles.length > 0) {
+    errorMessage.value = `以下文件不是图片：${invalidTypeFiles.map(f => f.name).join('、')}`
     return
   }
 

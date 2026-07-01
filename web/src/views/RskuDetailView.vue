@@ -48,7 +48,16 @@ const historyColumns = [
   { title: '变更时间', key: 'createdAt', width: 180 }
 ]
 
+function validateParams(): boolean {
+  if (!rspuId?.trim() || !rskuId?.trim()) {
+    errorMessage.value = '缺少产品 ID 或报价 ID'
+    return false
+  }
+  return true
+}
+
 async function loadRsku() {
+  if (!validateParams()) return
   loading.value = true
   errorMessage.value = ''
   try {
@@ -61,6 +70,10 @@ async function loadRsku() {
 }
 
 async function loadPriceHistory() {
+  if (!rskuId?.trim()) {
+    errorMessage.value = '缺少报价 ID'
+    return
+  }
   historyLoading.value = true
   try {
     priceHistory.value = await listPriceHistory(rskuId)

@@ -12,6 +12,7 @@ import com.rsdp.mapper.FactoryLevelCapabilityMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -277,10 +278,14 @@ public class FactoryService {
     /**
      * 为工厂扩展一个能力等级。
      *
+     * <p>显式使用 {@link Propagation#REQUIRED}，确保在 {@link RskuService#createRsku}
+     * 等调用方事务内执行，与 RSKU 创建同属一个事务，避免能力扩展成功但报价创建失败的
+     * 数据不一致。</p>
+     *
      * @param factoryCode 工厂代码
      * @param level       等级代码
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRED)
     public void extendCapability(String factoryCode, String level) {
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
         if (factory == null || factory.getDeletedAt() != null) {

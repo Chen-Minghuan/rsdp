@@ -1,4 +1,4 @@
-import { apiClient, type ApiResult } from './client'
+import { apiClient, uploadClient, type ApiResult } from './client'
 import type { PageResult, ProductDetail, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
@@ -16,7 +16,7 @@ export async function uploadProductImages(files: File[], categoryCode?: string):
     formData.append('categoryCode', categoryCode)
   }
 
-  const { data: result } = await apiClient.post<ApiResult<ProductEntryResult>>(
+  const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult>>(
     '/v1/products/entry',
     formData,
     {
