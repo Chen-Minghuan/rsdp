@@ -20,6 +20,8 @@ DROP TABLE IF EXISTS async_task CASCADE;
 DROP TABLE IF EXISTS audit_log CASCADE;
 DROP TABLE IF EXISTS user_operator CASCADE;
 DROP TABLE IF EXISTS category_dict CASCADE;
+DROP TABLE IF EXISTS scheme_item CASCADE;
+DROP TABLE IF EXISTS scheme CASCADE;
 
 -- =================== 2. 创建字典表 ===================
 CREATE TABLE IF NOT EXISTS category_dict (
@@ -55,6 +57,7 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     key_specs JSONB,
     status VARCHAR(16) DEFAULT 'active',
     review_status VARCHAR(16) DEFAULT '待复核',
+    review_comment TEXT,                           -- 复核备注
     aesthetics_confidence VARCHAR(16),
     source_agent_version VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -201,7 +204,7 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     variant_id VARCHAR(64),
     factory_code VARCHAR(16) NOT NULL,
     factory_sku VARCHAR(64),
-    factory_price DECIMAL(18, 2),
+    factory_price TEXT,                            -- 出厂价（AES-256-GCM 加密存储，Base64 密文）
     price_band VARCHAR(16),
     product_level VARCHAR(8),
     material_description TEXT,
@@ -302,6 +305,22 @@ CREATE TABLE IF NOT EXISTS async_task (
     completed_at TIMESTAMP
 );
 
+-- RSPU 业务编码流水号计数器（按品类+风格组合）
+CREATE TABLE IF NOT EXISTS rspu_code_counter (
+    category_code VARCHAR(16) NOT NULL,
+    style_code VARCHAR(16) NOT NULL,
+    sequence_value BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (category_code, style_code)
+);
+
+-- 变体编码流水号计数器（按 RSPU 维度，保证变体 ID 并发唯一）
+CREATE TABLE IF NOT EXISTS variant_code_counter (
+    rspu_id VARCHAR(64) PRIMARY KEY,
+    sequence_value BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_log (
     id SERIAL PRIMARY KEY,
@@ -363,6 +382,47 @@ CREATE INDEX IF NOT EXISTS idx_ai_rspu ON ai_recognition(rspu_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
+
+-- JSONB GIN 索引（material_tags 用于精确包含查询）
+CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
+
+-- 搭配方案主表
+CREATE TABLE IF NOT EXISTS scheme (
+    scheme_id VARCHAR(64) PRIMARY KEY,
+    scheme_name VARCHAR(128) NOT NULL,
+    room_type VARCHAR(32),
+    budget_limit DECIMAL(18, 2),
+    total_price DECIMAL(18, 2) NOT NULL DEFAULT 0,
+    factory_count INTEGER NOT NULL DEFAULT 0,
+    max_lead_time_days INTEGER NOT NULL DEFAULT 0,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
+-- 搭配方案项表
+CREATE TABLE IF NOT EXISTS scheme_item (
+    scheme_item_id SERIAL PRIMARY KEY,
+    scheme_id VARCHAR(64) NOT NULL,
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16),
+    factory_price TEXT,                            -- 出厂价（AES-256-GCM 加密存储，Base64 密文）
+    lead_time_days INTEGER,
+    moq INTEGER,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
+);
+
+-- 方案索引
+CREATE INDEX IF NOT EXISTS idx_scheme_status ON scheme(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);
 
 -- =================== 5. 插入种子数据 ===================
 

@@ -79,13 +79,19 @@ class FactoryServiceTest {
         request.setFactoryCode("F001");
         request.setFactoryName("测试工厂");
         request.setFactoryLevel("S");
+        request.setCertification("[\"ISO9001\"]");
+        request.setEngineeringCases("[{\"name\":\"案例1\"}]");
 
         when(factoryMasterMapper.selectById("F001")).thenReturn(null);
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
 
         factoryService.createFactory(request);
 
-        verify(factoryMasterMapper, times(1)).insert(any(FactoryMaster.class));
+        ArgumentCaptor<FactoryMaster> factoryCaptor = ArgumentCaptor.forClass(FactoryMaster.class);
+        verify(factoryMasterMapper, times(1)).insert(factoryCaptor.capture());
+        assertThat(factoryCaptor.getValue().getCertification()).isEqualTo("[\"ISO9001\"]");
+        assertThat(factoryCaptor.getValue().getEngineeringCases()).isEqualTo("[{\"name\":\"案例1\"}]");
+
         ArgumentCaptor<FactoryLevelCapability> captor = ArgumentCaptor.forClass(FactoryLevelCapability.class);
         verify(capabilityMapper, times(1)).insert(captor.capture());
         assertThat(captor.getValue().getLevelCode()).isEqualTo("S");

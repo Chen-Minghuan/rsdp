@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     variant_id VARCHAR(64),                        -- 关联具体变体
     factory_code VARCHAR(16) NOT NULL,
     factory_sku VARCHAR(64),                       -- 工厂原始编码
-    factory_price DECIMAL(18, 2),                  -- 出厂价（建议 AES 加密存储）
+    factory_price TEXT,                            -- 出厂价（AES-256-GCM 加密存储，Base64 密文）
     price_band VARCHAR(16),                        -- low/mid/high
     product_level VARCHAR(8),                      -- 产品等级，继承自 RSPU/变体
     material_description TEXT,                     -- 工厂提供的详细材质说明
@@ -404,7 +404,7 @@ CREATE TABLE IF NOT EXISTS scheme_item (
     rspu_id VARCHAR(64) NOT NULL,
     rsku_id VARCHAR(64) NOT NULL,
     factory_code VARCHAR(16),
-    factory_price DECIMAL(18, 2),
+    factory_price TEXT,                            -- 出厂价（AES-256-GCM 加密存储，Base64 密文）
     lead_time_days INTEGER,
     moq INTEGER,
     sort_order INTEGER DEFAULT 0,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, h, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -39,7 +39,7 @@ import type { RspuRelationCreateRequest } from '@/types/relation'
 const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
-const rspuId = route.params.rspuId as string
+const rspuId = ref(route.params.rspuId as string)
 
 const loading = ref(false)
 const reviewing = ref(false)
@@ -277,7 +277,7 @@ async function loadDetail() {
   loading.value = true
   errorMessage.value = ''
   try {
-    detail.value = await getProductDetail(rspuId)
+    detail.value = await getProductDetail(rspuId.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载产品详情失败'
   } finally {
@@ -288,7 +288,7 @@ async function loadDetail() {
 async function loadRskuList() {
   rskuLoading.value = true
   try {
-    rskuList.value = await listRskuByRspu(rspuId)
+    rskuList.value = await listRskuByRspu(rspuId.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载报价失败'
   } finally {
@@ -299,7 +299,7 @@ async function loadRskuList() {
 async function loadVariants() {
   variantLoading.value = true
   try {
-    variantList.value = await listVariantsByRspu(rspuId)
+    variantList.value = await listVariantsByRspu(rspuId.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载变体失败'
   } finally {
@@ -357,7 +357,7 @@ async function handleReview(status: '已确认' | '存疑') {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    await reviewProduct(rspuId, { reviewStatus: status })
+    await reviewProduct(rspuId.value, { reviewStatus: status })
     successMessage.value = `已标记为「${status}」`
     await loadDetail()
   } catch (e) {
@@ -425,7 +425,7 @@ async function handleUpdateProduct() {
   successMessage.value = ''
 
   try {
-    await updateProduct(rspuId, request)
+    await updateProduct(rspuId.value, request)
     successMessage.value = '产品元数据已更新'
     showEditModal.value = false
     await loadDetail()
@@ -481,7 +481,7 @@ async function handleCreateRsku() {
   successMessage.value = ''
 
   try {
-    await createRsku(rspuId, rskuForm.value)
+    await createRsku(rspuId.value, rskuForm.value)
     successMessage.value = '报价添加成功'
     showRskuModal.value = false
     await loadRskuList()
@@ -520,7 +520,7 @@ async function handleCreateVariant() {
   successMessage.value = ''
 
   try {
-    await createVariant(rspuId, variantForm.value)
+    await createVariant(rspuId.value, variantForm.value)
     successMessage.value = '变体添加成功'
     showVariantModal.value = false
     await loadVariants()
@@ -553,7 +553,7 @@ async function searchRelationProducts() {
       page: 1,
       size: 10
     })
-    relationSearchResults.value = result.rows.filter(r => r.rspuId !== rspuId)
+    relationSearchResults.value = result.rows.filter(r => r.rspuId !== rspuId.value)
   } catch (e) {
     console.error('搜索产品失败', e)
   } finally {
@@ -572,7 +572,7 @@ async function handleCreateRelation() {
   successMessage.value = ''
 
   try {
-    await createRelation(rspuId, relationForm.value)
+    await createRelation(rspuId.value, relationForm.value)
     successMessage.value = '搭配关系添加成功'
     showRelationModal.value = false
     await loadDetail()
@@ -593,7 +593,7 @@ function handleDeleteRelation(relationId: string) {
     onPositiveClick: () => {
       errorMessage.value = ''
       successMessage.value = ''
-      return deleteRelation(rspuId, relationId)
+      return deleteRelation(rspuId.value, relationId)
         .then(() => {
           successMessage.value = '搭配关系已删除'
           return loadDetail()
@@ -608,11 +608,11 @@ function handleDeleteRelation(relationId: string) {
 function handleDeleteProduct() {
   dialog.warning({
     title: '确认删除产品',
-    content: `确定要删除产品「${detail.value?.rspu.positioningLabel || rspuId}」吗？删除后可在数据库中恢复。`,
+    content: `确定要删除产品「${detail.value?.rspu.positioningLabel || rspuId.value}」吗？删除后可在数据库中恢复。`,
     positiveText: '确认删除',
     negativeText: '取消',
     onPositiveClick: () => {
-      return deleteProduct(rspuId)
+      return deleteProduct(rspuId.value)
         .then(() => {
           dialog.success({ title: '删除成功', content: '产品已删除', positiveText: '确定' })
           router.push('/products')
@@ -649,6 +649,18 @@ onMounted(() => {
   loadVariants()
   loadFactories()
   loadDicts()
+})
+
+onBeforeRouteUpdate((to, from) => {
+  const nextId = to.params.rspuId as string
+  if (nextId && nextId !== from.params.rspuId) {
+    rspuId.value = nextId
+    loadDetail()
+    loadRskuList()
+    loadVariants()
+    loadFactories()
+    loadDicts()
+  }
 })
 </script>
 

@@ -1,7 +1,9 @@
 package com.rsdp.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.rsdp.config.typehandler.EncryptTypeHandler;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -21,7 +23,10 @@ public class RskuSupply {
     private String variantId;
     private String factoryCode;
     private String factorySku;
+
+    @TableField(typeHandler = EncryptTypeHandler.class)
     private BigDecimal factoryPrice;
+
     private String priceBand;
     private String productLevel;
     private String materialDescription;

@@ -2,15 +2,9 @@ package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.RspuMaster;
-import com.rsdp.entity.RspuScene;
-import com.rsdp.entity.RspuStyle;
-import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.AsyncTaskMapper;
-import com.rsdp.mapper.ImageAssetsMapper;
-import com.rsdp.mapper.RspuMapper;
-import com.rsdp.mapper.RspuSceneMapper;
-import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +23,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -40,22 +35,7 @@ import static org.mockito.Mockito.when;
 class AsyncTaskProcessorTest {
 
     @Mock
-    private RspuMapper rspuMapper;
-
-    @Mock
     private AsyncTaskMapper asyncTaskMapper;
-
-    @Mock
-    private ImageAssetsMapper imageAssetsMapper;
-
-    @Mock
-    private AiRecognitionMapper aiRecognitionMapper;
-
-    @Mock
-    private RspuStyleMapper rspuStyleMapper;
-
-    @Mock
-    private RspuSceneMapper rspuSceneMapper;
 
     @Mock
     private VisionService visionService;
@@ -70,10 +50,7 @@ class AsyncTaskProcessorTest {
     private StorageService storageService;
 
     @Mock
-    private AuditLogService auditLogService;
-
-    @Mock
-    private DictResolverService dictResolverService;
+    private AiRecognitionPersistenceService persistenceService;
 
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -101,13 +78,9 @@ class AsyncTaskProcessorTest {
     }
 
     @Test
-    void processProductEntry_shouldPersistStyleAndSceneAssociations() throws Exception {
+    void processProductEntry_shouldCallPersistenceServiceAndChromaDb() throws Exception {
         // Given
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setStatus("processing");
-        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
-        when(asyncTaskMapper.selectById(anyString())).thenReturn(new com.rsdp.entity.AsyncTask());
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
 
         InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
         when(storageService.get(objectKey)).thenReturn(imageStream);
@@ -119,22 +92,30 @@ class AsyncTaskProcessorTest {
         labels.setColorPrimaryName("焦糖棕");
         labels.setConfidence("high");
         when(visionService.recognizeImage(any())).thenReturn(labels);
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f, 0.3f});
 
-        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
-        when(dictResolverService.resolveCodesByNames("scene", List.of("客厅", "书房"))).thenReturn(List.of("LIVING", "STUDY"));
-        when(dictResolverService.resolveCodesByNames("material", List.of("实木", "布艺"))).thenReturn(List.of("WO", "LI"));
+        float[] embedding = new float[]{0.1f, 0.2f, 0.3f};
+        when(embeddingService.embedImage(any())).thenReturn(embedding);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("MC");
+        rspu.setMaterialTags("[\"WO\",\"LI\"]");
+        rspu.setSceneTags("[\"LIVING\",\"STUDY\"]");
+        rspu.setStatus("active");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
 
         // Then
-        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
-        verify(rspuMapper).updateById(rspuCaptor.capture());
-        assertThat(rspuCaptor.getValue().getPositioningLabel()).isEqualTo("MC");
-        assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("active");
-        assertThat(rspuCaptor.getValue().getMaterialTags()).contains("WO", "LI");
-        assertThat(rspuCaptor.getValue().getStyleVector()).contains("0.1", "0.2", "0.3");
+        ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
+        ArgumentCaptor<float[]> embeddingCaptor = ArgumentCaptor.forClass(float[].class);
+        verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
+            org.mockito.ArgumentMatchers.anyInt(), embeddingCaptor.capture());
+        assertThat(labelsCaptor.getValue().getStyle()).isEqualTo("中古风");
+        assertThat(embeddingCaptor.getValue()).containsExactly(0.1f, 0.2f, 0.3f);
 
         ArgumentCaptor<List<String>> idsCaptor = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<List<float[]>> embeddingsCaptor = ArgumentCaptor.forClass(List.class);
@@ -145,15 +126,38 @@ class AsyncTaskProcessorTest {
         assertThat(embeddingsCaptor.getValue().get(0)).containsExactly(0.1f, 0.2f, 0.3f);
         assertThat(metadataCaptor.getValue().get(0)).containsEntry("rspu_id", rspuId);
 
-        ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
-        verify(rspuStyleMapper, times(1)).insert(styleCaptor.capture());
-        assertThat(styleCaptor.getValue().getRspuId()).isEqualTo(rspuId);
-        assertThat(styleCaptor.getValue().getStyleCode()).isEqualTo("MC");
-        assertThat(styleCaptor.getValue().getIsPrimary()).isTrue();
+        verify(asyncTaskMapper, times(3)).updateById(any(AsyncTask.class));
+    }
 
-        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
-        verify(rspuSceneMapper, times(2)).insert(sceneCaptor.capture());
-        List<RspuScene> scenes = sceneCaptor.getAllValues();
-        assertThat(scenes).extracting(RspuScene::getSceneCode).containsExactly("LIVING", "STUDY");
+    @Test
+    void processProductEntry_shouldCallFailureWhenVisionFails() throws Exception {
+        // Given
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+        when(visionService.recognizeImage(any())).thenThrow(new RuntimeException("AI 服务异常"));
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        verify(persistenceService).saveFailure(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), eq("AI 服务异常"));
+        verify(chromaDbClient, times(0)).upsert(any(), any(), any(), any());
+    }
+
+    @Test
+    void processProductEntry_shouldCallFailureWhenStorageFails() throws Exception {
+        // Given
+        when(storageService.get(objectKey)).thenThrow(new RuntimeException("存储读取失败"));
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        verify(persistenceService).saveFailure(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), eq("存储读取失败"));
+        verify(visionService, times(0)).recognizeImage(any());
     }
 }

@@ -13,15 +13,16 @@ import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
+import com.rsdp.event.RspuDeletedEvent;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
-import com.rsdp.service.chroma.ChromaDbClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -48,7 +49,7 @@ public class ProductQueryService {
     private final DictService dictService;
     private final ObjectMapper objectMapper;
     private final RspuRelationService rspuRelationService;
-    private final ChromaDbClient chromaDbClient;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 分页查询产品列表。
@@ -164,6 +165,9 @@ public class ProductQueryService {
     /**
      * 软删除产品。
      *
+     * <p>数据库软删除和审计日志在事务内完成；ChromaDB 向量清理通过
+     * {@link RspuDeletedEvent} 异步解耦执行，避免外部 IO 拖长事务。</p>
+     *
      * @param rspuId RSPU ID
      */
     @Transactional
@@ -178,26 +182,19 @@ public class ProductQueryService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
-        deleteVectorsByRspu(rspuId);
-
         auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, "admin");
+
+        publishRspuDeletedEvent(rspuId);
     }
 
-    private void deleteVectorsByRspu(String rspuId) {
-        try {
-            List<ImageAssets> images = imageAssetsMapper.selectList(
-                new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId)
-            );
-            List<String> imageIds = images.stream()
-                .map(ImageAssets::getImageId)
-                .toList();
-            if (!imageIds.isEmpty()) {
-                chromaDbClient.delete(imageIds);
-                log.info("已删除 RSPU 向量，rspuId={}，数量={}", rspuId, imageIds.size());
-            }
-        } catch (Exception e) {
-            log.error("删除 RSPU 向量失败，rspuId={}", rspuId, e);
-        }
+    private void publishRspuDeletedEvent(String rspuId) {
+        List<ImageAssets> images = imageAssetsMapper.selectList(
+            new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId)
+        );
+        List<String> imageIds = images.stream()
+            .map(ImageAssets::getImageId)
+            .toList();
+        eventPublisher.publishEvent(new RspuDeletedEvent(rspuId, imageIds));
     }
 
     /**

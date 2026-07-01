@@ -1,8 +1,10 @@
 package com.rsdp.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.rsdp.config.typehandler.EncryptTypeHandler;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -21,7 +23,10 @@ public class SchemeItem {
     private String rspuId;
     private String rskuId;
     private String factoryCode;
+
+    @TableField(typeHandler = EncryptTypeHandler.class)
     private BigDecimal factoryPrice;
+
     private Integer leadTimeDays;
     private Integer moq;
     private Integer sortOrder;

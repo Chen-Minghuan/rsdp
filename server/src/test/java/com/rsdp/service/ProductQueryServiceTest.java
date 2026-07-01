@@ -18,12 +18,15 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.dto.response.RspuRelationResponse;
+import com.rsdp.event.RspuDeletedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 import java.util.Map;
@@ -64,6 +67,9 @@ class ProductQueryServiceTest {
 
     @Mock
     private RspuRelationService rspuRelationService;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -349,12 +355,13 @@ class ProductQueryServiceTest {
     }
 
     @Test
-    void deleteProduct_shouldMarkDeletedAt() {
+    void deleteProduct_shouldMarkDeletedAtAndPublishEvent() {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setStatus("active");
 
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         productQueryService.deleteProduct("RSPU-TEST01");
 
@@ -362,6 +369,31 @@ class ProductQueryServiceTest {
         assertThat(rspu.getUpdatedAt()).isNotNull();
         verify(rspuMapper).updateById(rspu);
         verify(auditLogService).logDelete(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq("admin"));
+
+        ArgumentCaptor<RspuDeletedEvent> eventCaptor = ArgumentCaptor.forClass(RspuDeletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getRspuId()).isEqualTo("RSPU-TEST01");
+        assertThat(eventCaptor.getValue().getImageIds()).isEmpty();
+    }
+
+    @Test
+    void deleteProduct_shouldPublishEventWithImageIds() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setStatus("active");
+
+        ImageAssets image = new ImageAssets();
+        image.setImageId("IMG-01");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
+
+        productQueryService.deleteProduct("RSPU-TEST01");
+
+        ArgumentCaptor<RspuDeletedEvent> eventCaptor = ArgumentCaptor.forClass(RspuDeletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getRspuId()).isEqualTo("RSPU-TEST01");
+        assertThat(eventCaptor.getValue().getImageIds()).containsExactly("IMG-01");
     }
 
     @Test

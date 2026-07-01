@@ -11,6 +11,11 @@ spring:
       database: 0
       enabled: false
 
+# 开发环境默认 AES-256 密钥（仅本地使用，生产环境必须注入 RSDP_ENCRYPTION_KEY）
+rsdp:
+  encryption:
+    key: ${RSDP_ENCRYPTION_KEY:WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=}
+
 # 开发环境文件先存本地磁盘
 storage:
   type: local

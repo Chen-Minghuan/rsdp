@@ -89,6 +89,8 @@ public class FactoryService {
         factory.setContactPerson(request.getContactPerson());
         factory.setContactPhone(request.getContactPhone());
         factory.setNotes(request.getNotes());
+        factory.setCertification(request.getCertification());
+        factory.setEngineeringCases(request.getEngineeringCases());
         factory.setStatus("active");
         factory.setCreatedAt(LocalDateTime.now());
         factory.setUpdatedAt(LocalDateTime.now());
@@ -245,6 +247,8 @@ public class FactoryService {
         response.setContactPerson(factory.getContactPerson());
         response.setContactPhone(factory.getContactPhone());
         response.setNotes(factory.getNotes());
+        response.setCertification(factory.getCertification());
+        response.setEngineeringCases(factory.getEngineeringCases());
         response.setStatus(factory.getStatus());
         response.setCreatedAt(factory.getCreatedAt());
         response.setUpdatedAt(factory.getUpdatedAt());

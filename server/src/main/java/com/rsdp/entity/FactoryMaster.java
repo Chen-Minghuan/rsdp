@@ -1,7 +1,9 @@
 package com.rsdp.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.rsdp.handler.JsonbTypeHandler;
 import lombok.Data;
 
 import java.time.LocalDate;
@@ -19,8 +21,13 @@ public class FactoryMaster {
     private String factoryName;
     private String factoryLevel;
     private String homeCommercialTag;
+
+    @TableField(typeHandler = JsonbTypeHandler.class)
     private String certification;
+
+    @TableField(typeHandler = JsonbTypeHandler.class)
     private String engineeringCases;
+
     private String region;
     private String address;
     private String contactPerson;

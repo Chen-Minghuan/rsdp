@@ -30,6 +30,17 @@ public class FactoryResponse {
     private String contactPerson;
     private String contactPhone;
     private String notes;
+
+    /**
+     * 资质认证（JSON 字符串）。
+     */
+    private String certification;
+
+    /**
+     * 工程案例（JSON 字符串）。
+     */
+    private String engineeringCases;
+
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

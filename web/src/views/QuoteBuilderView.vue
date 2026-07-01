@@ -53,15 +53,21 @@ const duplicateRspuIds = computed(() => {
   return Array.from(duplicates)
 })
 
+const uniqueRawCount = computed(() => new Set(rawRspuIds.value).size)
+
 const rspuIds = computed(() => {
-  // 去重，保留第一次出现的顺序
+  // 去重并截断，保留第一次出现的顺序
   const seen = new Set<string>()
-  return rawRspuIds.value.filter(id => {
-    if (seen.has(id)) return false
-    seen.add(id)
-    return true
-  })
+  return rawRspuIds.value
+    .filter(id => {
+      if (seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    .slice(0, MAX_ITEMS)
 })
+
+const exceedingCount = computed(() => Math.max(0, uniqueRawCount.value - MAX_ITEMS))
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -125,6 +131,9 @@ async function loadData() {
       })
     } else {
       ids = rspuIds.value
+      if (uniqueRawCount.value > MAX_ITEMS) {
+        errorMessage.value = `URL 中产品数量超过 ${MAX_ITEMS}，已自动截断前 ${MAX_ITEMS} 个`
+      }
     }
 
     if (ids.length === 0) {
@@ -296,7 +305,7 @@ onMounted(() => {
           type="warning"
           :show-icon="true"
         >
-          方案最多支持 {{ MAX_ITEMS }} 个产品，当前已达到上限。
+          方案最多支持 {{ MAX_ITEMS }} 个产品，当前已达到上限（已忽略 {{ exceedingCount }} 个重复/超额产品）。
         </n-alert>
 
         <template v-if="!loading && products.length > 0">

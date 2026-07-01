@@ -37,6 +37,9 @@ rsdp:
   chromadb:
     base-url: ${CHROMADB_URL:http://localhost:8000}
     collection: rsdp_products
+  encryption:
+    # Base64 编码的 32 字节 AES-256 密钥，生产环境必须通过 RSDP_ENCRYPTION_KEY 注入
+    key: ${RSDP_ENCRYPTION_KEY:}
   async:
     core-pool-size: 4
     max-pool-size: 16

@@ -31,4 +31,14 @@ public class FactoryCreateRequest {
     private String contactPerson;
     private String contactPhone;
     private String notes;
+
+    /**
+     * 资质认证（JSON 字符串，如 ["ISO9001","FSC"]）。
+     */
+    private String certification;
+
+    /**
+     * 工程案例（JSON 字符串，如 [{"name":"案例1"}]）。
+     */
+    private String engineeringCases;
 }
