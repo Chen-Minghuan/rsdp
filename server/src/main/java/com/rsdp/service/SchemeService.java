@@ -127,9 +127,7 @@ public class SchemeService {
         scheme.setCreatedAt(LocalDateTime.now());
         schemeMapper.insert(scheme);
 
-        if (!schemeItems.isEmpty()) {
-            schemeItemMapper.insertBatch(schemeItems);
-        }
+        schemeItemMapper.insertBatchSafe(schemeItems);
 
         return getSchemeDetail(schemeId);
     }
@@ -215,9 +213,7 @@ public class SchemeService {
         scheme.setUpdatedAt(LocalDateTime.now());
         schemeMapper.updateById(scheme);
 
-        if (!schemeItems.isEmpty()) {
-            schemeItemMapper.insertBatch(schemeItems);
-        }
+        schemeItemMapper.insertBatchSafe(schemeItems);
 
         return getSchemeDetail(schemeId);
     }
@@ -226,8 +222,7 @@ public class SchemeService {
         QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
             .eq("scheme_name", schemeName)
             .eq("status", "active")
-            .eq("created_by", "admin")
-            .isNull("deleted_at");
+            .eq("created_by", "admin");
         if (excludeSchemeId != null) {
             wrapper.ne("scheme_id", excludeSchemeId);
         }
@@ -246,7 +241,6 @@ public class SchemeService {
         List<Scheme> schemes = schemeMapper.selectList(
             new QueryWrapper<Scheme>()
                 .eq("status", "active")
-                .isNull("deleted_at")
                 .orderByDesc("created_at")
         );
 

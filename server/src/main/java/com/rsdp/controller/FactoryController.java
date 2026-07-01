@@ -9,7 +9,9 @@ import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.service.FactoryService;
 import com.rsdp.service.RskuService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,6 +28,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/factories")
 @RequiredArgsConstructor
+@Validated
 public class FactoryController {
 
     private final FactoryService factoryService;
@@ -48,7 +51,7 @@ public class FactoryController {
      * @return 工厂详情
      */
     @GetMapping("/{factoryCode}")
-    public Result<FactoryResponse> detail(@PathVariable String factoryCode) {
+    public Result<FactoryResponse> detail(@PathVariable @NotBlank(message = "工厂代码不能为空") String factoryCode) {
         return Result.ok(factoryService.getFactory(factoryCode));
     }
 
@@ -72,7 +75,7 @@ public class FactoryController {
      * @return 空结果
      */
     @PutMapping("/{factoryCode}/level")
-    public Result<Void> updateLevel(@PathVariable String factoryCode,
+    public Result<Void> updateLevel(@PathVariable @NotBlank(message = "工厂代码不能为空") String factoryCode,
                                     @Valid @RequestBody FactoryLevelUpdateRequest request) {
         factoryService.updateFactoryLevel(factoryCode, request.getFactoryLevel());
         return Result.ok();
@@ -86,7 +89,7 @@ public class FactoryController {
      * @return 空结果
      */
     @PutMapping("/{factoryCode}/capable-levels")
-    public Result<Void> updateCapableLevels(@PathVariable String factoryCode,
+    public Result<Void> updateCapableLevels(@PathVariable @NotBlank(message = "工厂代码不能为空") String factoryCode,
                                             @Valid @RequestBody FactoryLevelCapabilityUpdateRequest request) {
         factoryService.updateCapableLevels(factoryCode, request);
         return Result.ok();
@@ -99,7 +102,7 @@ public class FactoryController {
      * @return RSKU 列表
      */
     @GetMapping("/{factoryCode}/rsku")
-    public Result<List<RskuResponse>> listRsku(@PathVariable String factoryCode) {
+    public Result<List<RskuResponse>> listRsku(@PathVariable @NotBlank(message = "工厂代码不能为空") String factoryCode) {
         return Result.ok(rskuService.listByFactory(factoryCode));
     }
 }

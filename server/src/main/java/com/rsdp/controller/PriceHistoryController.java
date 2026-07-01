@@ -3,7 +3,9 @@ package com.rsdp.controller;
 import com.rsdp.common.Result;
 import com.rsdp.entity.PriceHistory;
 import com.rsdp.service.PriceHistoryService;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,6 +19,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/rsku/{rskuId}/price-history")
 @RequiredArgsConstructor
+@Validated
 public class PriceHistoryController {
 
     private final PriceHistoryService priceHistoryService;
@@ -28,7 +31,7 @@ public class PriceHistoryController {
      * @return 价格历史列表
      */
     @GetMapping
-    public Result<List<PriceHistory>> listPriceHistory(@PathVariable String rskuId) {
+    public Result<List<PriceHistory>> listPriceHistory(@PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId) {
         return Result.ok(priceHistoryService.listByRsku(rskuId));
     }
 }

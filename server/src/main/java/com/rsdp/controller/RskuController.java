@@ -6,7 +6,9 @@ import com.rsdp.dto.request.RskuPriceUpdateRequest;
 import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.service.RskuService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,6 +25,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/products/{rspuId}/rsku")
 @RequiredArgsConstructor
+@Validated
 public class RskuController {
 
     private final RskuService rskuService;
@@ -34,7 +37,7 @@ public class RskuController {
      * @return RSKU 列表
      */
     @GetMapping
-    public Result<List<RskuResponse>> list(@PathVariable String rspuId) {
+    public Result<List<RskuResponse>> list(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
         return Result.ok(rskuService.listByRspu(rspuId));
     }
 
@@ -46,8 +49,8 @@ public class RskuController {
      * @return RSKU 详情
      */
     @GetMapping("/{rskuId}")
-    public Result<RskuResponse> detail(@PathVariable String rspuId,
-                                       @PathVariable String rskuId) {
+    public Result<RskuResponse> detail(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
+                                       @PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId) {
         return Result.ok(rskuService.getRsku(rspuId, rskuId));
     }
 
@@ -59,7 +62,7 @@ public class RskuController {
      * @return 空结果
      */
     @PostMapping
-    public Result<Void> create(@PathVariable String rspuId,
+    public Result<Void> create(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                @Valid @RequestBody RskuCreateRequest request) {
         request.setRspuId(rspuId);
         rskuService.createRsku(request);
@@ -75,8 +78,8 @@ public class RskuController {
      * @return 空结果
      */
     @PutMapping("/{rskuId}/price")
-    public Result<Void> updatePrice(@PathVariable String rspuId,
-                                    @PathVariable String rskuId,
+    public Result<Void> updatePrice(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
+                                    @PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId,
                                     @Valid @RequestBody RskuPriceUpdateRequest request) {
         rskuService.updateRskuPrice(rskuId, request.getFactoryPrice(), request.getChangeReason());
         return Result.ok();

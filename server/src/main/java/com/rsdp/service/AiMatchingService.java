@@ -142,7 +142,6 @@ public class AiMatchingService {
         List<RspuMaster> all = rspuMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuMaster>()
                 .eq("status", "active")
-                .isNull("deleted_at")
                 .orderByDesc("created_at")
         );
 
@@ -158,7 +157,6 @@ public class AiMatchingService {
         List<RspuMaster> all = rspuMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuMaster>()
                 .eq("status", "active")
-                .isNull("deleted_at")
                 .eq("category_code", categoryCode)
                 .orderByDesc("created_at")
         );
@@ -170,6 +168,10 @@ public class AiMatchingService {
     }
 
     private String buildPrompt(String roomTypeName, BigDecimal budgetLimit, String styleName, List<RspuMaster> candidates) {
+        Map<String, BigDecimal> minPriceMap = batchMinPrices(
+            candidates.stream().map(RspuMaster::getRspuId).toList()
+        );
+
         StringBuilder sb = new StringBuilder();
         sb.append("请为以下空间生成家具搭配方案。\n");
         sb.append("空间类型：").append(roomTypeName).append("\n");
@@ -180,7 +182,7 @@ public class AiMatchingService {
         sb.append("\n候选产品（请从中挑选）：\n");
 
         for (RspuMaster rspu : candidates) {
-            BigDecimal minPrice = findMinPrice(rspu.getRspuId());
+            BigDecimal minPrice = minPriceMap.get(rspu.getRspuId());
             sb.append("- ").append(rspu.getRspuId())
                 .append(" | 风格：").append(rspu.getPositioningLabel())
                 .append(" | 主色：").append(rspu.getColorPrimaryName())
@@ -194,17 +196,26 @@ public class AiMatchingService {
         return sb.toString();
     }
 
-    private BigDecimal findMinPrice(String rspuId) {
+    private Map<String, BigDecimal> batchMinPrices(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
         List<RskuSupply> rskus = rskuSupplyMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
-                .eq("rspu_id", rspuId)
-                .isNull("deleted_at")
+                .in("rspu_id", rspuIds)
         );
         return rskus.stream()
-            .map(RskuSupply::getFactoryPrice)
-            .filter(Objects::nonNull)
-            .min(Comparator.naturalOrder())
-            .orElse(null);
+            .filter(r -> r.getFactoryPrice() != null)
+            .collect(Collectors.groupingBy(
+                RskuSupply::getRspuId,
+                Collectors.mapping(
+                    RskuSupply::getFactoryPrice,
+                    Collectors.minBy(Comparator.naturalOrder())
+                )
+            ))
+            .entrySet().stream()
+            .filter(e -> e.getValue().isPresent())
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().get()));
     }
 
     private AiSchemeRecommendation parseRecommendation(String aiJson) {
@@ -228,25 +239,29 @@ public class AiMatchingService {
             .distinct()
             .collect(Collectors.toList());
 
+        Map<String, RspuMaster> rspuMap = candidates.stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+        Map<String, RskuSupply> cheapestRskuMap = batchCheapestRskus(selectedIds);
+        Map<String, String> imageUrlMap = batchPrimaryImageUrls(selectedIds);
+        Map<String, FactoryMaster> factoryMap = batchFactoryMap(cheapestRskuMap.values().stream()
+            .map(RskuSupply::getFactoryCode).distinct().toList());
+
         List<SchemeItemResponse> items = new ArrayList<>();
         BigDecimal totalPrice = BigDecimal.ZERO;
 
         for (String rspuId : selectedIds) {
-            RskuSupply cheapest = findCheapestRsku(rspuId);
+            RskuSupply cheapest = cheapestRskuMap.get(rspuId);
             if (cheapest == null) continue;
 
-            RspuMaster rspu = candidates.stream()
-                .filter(r -> r.getRspuId().equals(rspuId))
-                .findFirst()
-                .orElse(null);
+            RspuMaster rspu = rspuMap.get(rspuId);
             if (rspu == null) continue;
 
-            FactoryMaster factory = factoryMasterMapper.selectById(cheapest.getFactoryCode());
+            FactoryMaster factory = factoryMap.get(cheapest.getFactoryCode());
 
             SchemeItemResponse item = new SchemeItemResponse();
             item.setRspuId(rspuId);
             item.setRspuName(rspu.getPositioningLabel());
-            item.setPrimaryImageUrl(findPrimaryImageUrl(rspuId));
+            item.setPrimaryImageUrl(imageUrlMap.get(rspuId));
             item.setRskuId(cheapest.getRskuId());
             item.setFactoryCode(cheapest.getFactoryCode());
             item.setFactoryName(factory != null ? factory.getFactoryName() : null);
@@ -270,6 +285,11 @@ public class AiMatchingService {
     }
 
     private String buildAnchorPrompt(RspuMaster anchor, List<RspuMaster> candidates) {
+        List<String> allRspuIds = new ArrayList<>(candidates.size() + 1);
+        allRspuIds.add(anchor.getRspuId());
+        allRspuIds.addAll(candidates.stream().map(RspuMaster::getRspuId).toList());
+        Map<String, BigDecimal> minPriceMap = batchMinPrices(allRspuIds);
+
         StringBuilder sb = new StringBuilder();
         sb.append("锚点产品信息：\n");
         sb.append("- ").append(anchor.getRspuId())
@@ -277,12 +297,12 @@ public class AiMatchingService {
             .append(" | 主色：").append(anchor.getColorPrimaryName())
             .append(" | 材质：").append(anchor.getMaterialTags())
             .append(" | 场景：").append(anchor.getSceneTags())
-            .append(" | 最低报价：").append(findMinPrice(anchor.getRspuId()))
+            .append(" | 最低报价：").append(minPriceMap.get(anchor.getRspuId()) != null ? minPriceMap.get(anchor.getRspuId()) : "无")
             .append(" 元\n\n");
 
         sb.append("目标品类候选产品（请从中挑选 1~3 个最搭配的）：\n");
         for (RspuMaster rspu : candidates) {
-            BigDecimal minPrice = findMinPrice(rspu.getRspuId());
+            BigDecimal minPrice = minPriceMap.get(rspu.getRspuId());
             sb.append("- ").append(rspu.getRspuId())
                 .append(" | 风格：").append(rspu.getPositioningLabel())
                 .append(" | 主色：").append(rspu.getColorPrimaryName())
@@ -306,23 +326,27 @@ public class AiMatchingService {
             .limit(3)
             .collect(Collectors.toList());
 
+        Map<String, RspuMaster> rspuMap = candidates.stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+        Map<String, RskuSupply> cheapestRskuMap = batchCheapestRskus(selectedIds);
+        Map<String, String> imageUrlMap = batchPrimaryImageUrls(selectedIds);
+        Map<String, FactoryMaster> factoryMap = batchFactoryMap(cheapestRskuMap.values().stream()
+            .map(RskuSupply::getFactoryCode).distinct().toList());
+
         List<SchemeItemResponse> items = new ArrayList<>();
         for (String rspuId : selectedIds) {
-            RskuSupply cheapest = findCheapestRsku(rspuId);
+            RskuSupply cheapest = cheapestRskuMap.get(rspuId);
             if (cheapest == null) continue;
 
-            RspuMaster rspu = candidates.stream()
-                .filter(r -> r.getRspuId().equals(rspuId))
-                .findFirst()
-                .orElse(null);
+            RspuMaster rspu = rspuMap.get(rspuId);
             if (rspu == null) continue;
 
-            FactoryMaster factory = factoryMasterMapper.selectById(cheapest.getFactoryCode());
+            FactoryMaster factory = factoryMap.get(cheapest.getFactoryCode());
 
             SchemeItemResponse item = new SchemeItemResponse();
             item.setRspuId(rspuId);
             item.setRspuName(rspu.getPositioningLabel());
-            item.setPrimaryImageUrl(findPrimaryImageUrl(rspuId));
+            item.setPrimaryImageUrl(imageUrlMap.get(rspuId));
             item.setRskuId(cheapest.getRskuId());
             item.setFactoryCode(cheapest.getFactoryCode());
             item.setFactoryName(factory != null ? factory.getFactoryName() : null);
@@ -341,29 +365,48 @@ public class AiMatchingService {
         return response;
     }
 
-    private RskuSupply findCheapestRsku(String rspuId) {
+    private Map<String, RskuSupply> batchCheapestRskus(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
         List<RskuSupply> rskus = rskuSupplyMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
-                .eq("rspu_id", rspuId)
-                .isNull("deleted_at")
+                .in("rspu_id", rspuIds)
         );
         return rskus.stream()
             .filter(r -> r.getFactoryPrice() != null)
-            .min(Comparator.comparing(RskuSupply::getFactoryPrice))
-            .orElse(null);
+            .collect(Collectors.groupingBy(
+                RskuSupply::getRspuId,
+                Collectors.minBy(Comparator.comparing(RskuSupply::getFactoryPrice))
+            ))
+            .entrySet().stream()
+            .filter(e -> e.getValue().isPresent())
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().get()));
     }
 
-    private String findPrimaryImageUrl(String rspuId) {
+    private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
         List<ImageAssets> images = imageAssetsMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ImageAssets>()
-                .eq("rspu_id", rspuId)
+                .in("rspu_id", rspuIds)
                 .eq("is_primary", true)
-                .last("LIMIT 1")
         );
-        if (images == null || images.isEmpty()) {
-            return null;
+        return images.stream()
+            .collect(Collectors.toMap(
+                ImageAssets::getRspuId,
+                img -> "/api/v1/images/" + img.getImageId(),
+                (a, b) -> a
+            ));
+    }
+
+    private Map<String, FactoryMaster> batchFactoryMap(List<String> factoryCodes) {
+        if (factoryCodes.isEmpty()) {
+            return Map.of();
         }
-        return "/api/v1/images/" + images.get(0).getImageId();
+        return factoryMasterMapper.selectBatchIds(factoryCodes).stream()
+            .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
     }
 
     private String getDictName(String dictType, String dictCode) {

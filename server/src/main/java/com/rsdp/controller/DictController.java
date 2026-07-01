@@ -4,7 +4,9 @@ import com.rsdp.common.Result;
 import com.rsdp.dto.response.DictItemResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.service.DictService;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -19,6 +21,7 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/v1/dicts")
 @RequiredArgsConstructor
+@Validated
 public class DictController {
 
     private final DictService dictService;
@@ -30,7 +33,7 @@ public class DictController {
      * @return 字典列表
      */
     @GetMapping("/{dictType}")
-    public Result<List<DictItemResponse>> listByType(@PathVariable String dictType) {
+    public Result<List<DictItemResponse>> listByType(@PathVariable @NotBlank(message = "字典类型不能为空") String dictType) {
         List<CategoryDict> dicts = dictService.listByType(dictType);
         return Result.ok(dicts.stream().map(this::toResponse).collect(Collectors.toList()));
     }

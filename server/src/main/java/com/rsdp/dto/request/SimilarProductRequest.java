@@ -1,5 +1,7 @@
 package com.rsdp.dto.request;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.Data;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -32,5 +34,7 @@ public class SimilarProductRequest {
     /**
      * 返回数量，默认 20。
      */
+    @Min(value = 1, message = "topK 不能小于 1")
+    @Max(value = 100, message = "topK 不能超过 100")
     private Integer topK = 20;
 }

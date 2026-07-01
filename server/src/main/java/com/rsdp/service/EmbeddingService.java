@@ -2,6 +2,7 @@ package com.rsdp.service;
 
 import com.rsdp.dto.DashScopeEmbeddingRequest;
 import com.rsdp.dto.DashScopeEmbeddingResponse;
+import com.rsdp.exception.ExternalServiceException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,11 +38,14 @@ public class EmbeddingService {
     public float[] embedImage(InputStream imageStream) {
         try {
             byte[] bytes = imageStream.readAllBytes();
+            if (bytes.length == 0) {
+                throw new ExternalServiceException("图片流为空");
+            }
             String base64 = Base64.getEncoder().encodeToString(bytes);
             return embedImageBase64(base64);
         } catch (IOException e) {
             log.error("读取图片流失败", e);
-            throw new RuntimeException("读取图片流失败", e);
+            throw new ExternalServiceException("读取图片流失败", e);
         }
     }
 
@@ -75,20 +79,28 @@ public class EmbeddingService {
 
     private float[] executeEmbedding(DashScopeEmbeddingRequest request) {
         long start = System.currentTimeMillis();
-        DashScopeEmbeddingResponse response = embeddingRestClient.post()
-            .body(request)
-            .retrieve()
-            .body(DashScopeEmbeddingResponse.class);
+        DashScopeEmbeddingResponse response;
+        try {
+            response = embeddingRestClient.post()
+                .body(request)
+                .retrieve()
+                .body(DashScopeEmbeddingResponse.class);
+        } catch (Exception e) {
+            throw new ExternalServiceException("Embedding API 调用失败: " + e.getMessage(), e);
+        }
         long cost = System.currentTimeMillis() - start;
         log.info("Embedding 生成完成，耗时 {}ms", cost);
 
         if (response == null || response.getOutput() == null
             || response.getOutput().getEmbeddings() == null
             || response.getOutput().getEmbeddings().isEmpty()) {
-            throw new RuntimeException("Embedding API 返回为空");
+            throw new ExternalServiceException("Embedding API 返回为空");
         }
 
         List<Double> values = response.getOutput().getEmbeddings().get(0).getEmbedding();
+        if (values == null || values.isEmpty()) {
+            throw new ExternalServiceException("Embedding API 返回向量值为空");
+        }
         float[] result = new float[values.size()];
         for (int i = 0; i < values.size(); i++) {
             result[i] = values.get(i).floatValue();

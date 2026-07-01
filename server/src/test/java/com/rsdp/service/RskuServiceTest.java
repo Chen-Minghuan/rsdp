@@ -83,7 +83,7 @@ class RskuServiceTest {
         rsku.setFactoryPrice(new BigDecimal("2500"));
 
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
-        when(factoryMasterMapper.selectById("F001")).thenReturn(null);
+        when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of());
 
         List<RskuResponse> result = rskuService.listByRspu("RSPU-TEST01");
 
@@ -266,7 +266,7 @@ class RskuServiceTest {
         rsku.setFactoryPrice(new BigDecimal("2500"));
 
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
-        when(factoryMasterMapper.selectById("F001")).thenReturn(null);
+        when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of());
 
         RskuResponse result = rskuService.getRsku("RSPU-TEST01", "RSKU-TEST01");
 
@@ -295,7 +295,7 @@ class RskuServiceTest {
         rsku.setFactoryPrice(new BigDecimal("2500"));
 
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
-        when(factoryMasterMapper.selectById("F001")).thenReturn(null);
+        when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of());
 
         List<RskuResponse> result = rskuService.listByFactory("F001");
 

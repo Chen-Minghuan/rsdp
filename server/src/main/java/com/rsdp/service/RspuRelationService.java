@@ -22,8 +22,11 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -52,13 +55,9 @@ public class RspuRelationService {
             new QueryWrapper<RspuRelation>()
                 .eq("anchor_rspu_id", anchorRspuId)
                 .eq("status", "active")
-                .isNull("deleted_at")
                 .orderByAsc("sort_order", "created_at")
         );
-        return relations.stream()
-            .map(r -> toResponse(r, r.getRelatedRspuId()))
-            .filter(java.util.Objects::nonNull)
-            .collect(Collectors.toList());
+        return toResponses(relations, RspuRelation::getRelatedRspuId);
     }
 
     /**
@@ -73,13 +72,9 @@ public class RspuRelationService {
             new QueryWrapper<RspuRelation>()
                 .eq("related_rspu_id", relatedRspuId)
                 .eq("status", "active")
-                .isNull("deleted_at")
                 .orderByAsc("sort_order", "created_at")
         );
-        return relations.stream()
-            .map(r -> toResponse(r, r.getAnchorRspuId()))
-            .filter(java.util.Objects::nonNull)
-            .collect(Collectors.toList());
+        return toResponses(relations, RspuRelation::getAnchorRspuId);
     }
 
     /**
@@ -101,7 +96,6 @@ public class RspuRelationService {
             new QueryWrapper<RspuRelation>()
                 .eq("anchor_rspu_id", anchorRspuId)
                 .eq("related_rspu_id", request.getRelatedRspuId())
-                .isNull("deleted_at")
         );
         if (existing != null) {
             throw new BusinessException("搭配关系已存在");
@@ -198,8 +192,72 @@ public class RspuRelationService {
         }
     }
 
-    private RspuRelationResponse toResponse(RspuRelation relation, String targetRspuId) {
-        RspuMaster target = rspuMapper.selectById(targetRspuId);
+    private List<RspuRelationResponse> toResponses(List<RspuRelation> relations,
+                                                   Function<RspuRelation, String> targetRspuIdExtractor) {
+        if (relations.isEmpty()) {
+            return List.of();
+        }
+
+        List<String> targetRspuIds = relations.stream()
+            .map(targetRspuIdExtractor)
+            .distinct()
+            .toList();
+
+        Map<String, RspuMaster> rspuMap = rspuMapper.selectBatchIds(targetRspuIds).stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+        Map<String, String> imageUrlMap = batchPrimaryImageUrls(targetRspuIds);
+        Map<String, BigDecimal> minPriceMap = batchMinPrices(targetRspuIds);
+
+        return relations.stream()
+            .map(r -> toResponse(r, targetRspuIdExtractor.apply(r), rspuMap, imageUrlMap, minPriceMap))
+            .filter(java.util.Objects::nonNull)
+            .collect(Collectors.toList());
+    }
+
+    private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<ImageAssets> images = imageAssetsMapper.selectList(
+            new QueryWrapper<ImageAssets>()
+                .in("rspu_id", rspuIds)
+                .eq("is_primary", true)
+        );
+        return images.stream()
+            .collect(Collectors.toMap(
+                ImageAssets::getRspuId,
+                img -> "/api/v1/images/" + img.getImageId(),
+                (a, b) -> a
+            ));
+    }
+
+    private Map<String, BigDecimal> batchMinPrices(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>()
+                .in("rspu_id", rspuIds)
+        );
+        return rskus.stream()
+            .filter(r -> r.getFactoryPrice() != null)
+            .collect(Collectors.groupingBy(
+                RskuSupply::getRspuId,
+                Collectors.mapping(
+                    RskuSupply::getFactoryPrice,
+                    Collectors.minBy(Comparator.naturalOrder())
+                )
+            ))
+            .entrySet().stream()
+            .filter(e -> e.getValue().isPresent())
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().get()));
+    }
+
+    private RspuRelationResponse toResponse(RspuRelation relation, String targetRspuId,
+                                            Map<String, RspuMaster> rspuMap,
+                                            Map<String, String> imageUrlMap,
+                                            Map<String, BigDecimal> minPriceMap) {
+        RspuMaster target = rspuMap.get(targetRspuId);
         // 目标产品已软删除时，不在搭配列表中展示
         if (target == null || target.getDeletedAt() != null) {
             return null;
@@ -219,18 +277,8 @@ public class RspuRelationService {
 
         response.setTargetDisplayName(buildDisplayName(target));
         response.setTargetCategoryPath(formatCategoryPath(target.getCategoryPath()));
-
-        ImageAssets primaryImage = imageAssetsMapper.selectOne(
-            new QueryWrapper<ImageAssets>()
-                .eq("rspu_id", targetRspuId)
-                .eq("is_primary", true)
-                .last("LIMIT 1")
-        );
-        if (primaryImage != null) {
-            response.setTargetImageUrl("/api/v1/images/" + primaryImage.getImageId());
-        }
-
-        response.setTargetMinPrice(resolveMinPrice(targetRspuId));
+        response.setTargetImageUrl(imageUrlMap.get(targetRspuId));
+        response.setTargetMinPrice(minPriceMap.get(targetRspuId));
         return response;
     }
 
@@ -255,20 +303,6 @@ public class RspuRelationService {
         } catch (Exception e) {
             return categoryPathJson;
         }
-    }
-
-    private BigDecimal resolveMinPrice(String rspuId) {
-        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
-            new QueryWrapper<RskuSupply>()
-                .eq("rspu_id", rspuId)
-                .isNull("deleted_at")
-                .orderByAsc("factory_price")
-                .last("LIMIT 1")
-        );
-        if (rskus.isEmpty()) {
-            return null;
-        }
-        return rskus.get(0).getFactoryPrice();
     }
 
     private RspuRelation snapshot(RspuRelation source) {

@@ -31,12 +31,17 @@ rsdp:
     model: qwen3-vl-plus
     api-key: ${DASHSCOPE_API_KEY:your-api-key-here}
     timeout-seconds: 60
+    max-retries: 2
     # 多模态 embedding 模型，用于以图搜图
     embedding-model: multimodal-embedding-v1
     embedding-base-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding
+    embedding-timeout-seconds: 30
+    embedding-max-retries: 2
   chromadb:
     base-url: ${CHROMADB_URL:http://localhost:8000}
     collection: rsdp_products
+    timeout-seconds: 10
+    max-retries: 2
   encryption:
     # Base64 编码的 32 字节 AES-256 密钥，生产环境必须通过 RSDP_ENCRYPTION_KEY 注入
     key: ${RSDP_ENCRYPTION_KEY:}

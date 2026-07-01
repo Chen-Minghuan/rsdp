@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -47,10 +48,15 @@ public class QuoteService {
 
         List<String> distinctRskuIds = rskuIds.stream().distinct().toList();
 
+        // 批量查询 RSKU
+        List<RskuSupply> rskus = rskuSupplyMapper.selectBatchIds(distinctRskuIds);
+        Map<String, RskuSupply> rskuMap = rskus.stream()
+            .collect(Collectors.toMap(RskuSupply::getRskuId, r -> r));
+
         // 批量校验 RSKU 有效性，一次性返回所有失效项
         List<String> invalidRskuIds = distinctRskuIds.stream()
             .filter(id -> {
-                RskuSupply rsku = rskuSupplyMapper.selectById(id);
+                RskuSupply rsku = rskuMap.get(id);
                 return rsku == null || rsku.getDeletedAt() != null;
             })
             .toList();
@@ -59,8 +65,14 @@ public class QuoteService {
                 "以下 RSKU 已失效或不存在，请重新选择产品：" + String.join(", ", invalidRskuIds));
         }
 
+        // 批量查询 RSPU、工厂、主图
+        Map<String, RspuMaster> rspuMap = batchRspuMap(rskus);
+        Map<String, FactoryMaster> factoryMap = batchFactoryMap(rskus);
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuMap.values().stream()
+            .map(RspuMaster::getRspuId).toList());
+
         List<QuoteItemResponse> items = distinctRskuIds.stream()
-            .map(this::buildItem)
+            .map(id -> buildItem(rskuMap.get(id), rspuMap, factoryMap, primaryImageUrlMap))
             .collect(Collectors.toList());
 
         QuoteSummaryResponse summary = computeSummary(items);
@@ -71,23 +83,56 @@ public class QuoteService {
         return response;
     }
 
-    private QuoteItemResponse buildItem(String rskuId) {
-        RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
-        if (rsku == null || rsku.getDeletedAt() != null) {
-            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
-        }
+    private Map<String, RspuMaster> batchRspuMap(List<RskuSupply> rskus) {
+        List<String> rspuIds = rskus.stream()
+            .map(RskuSupply::getRspuId)
+            .distinct()
+            .toList();
+        return rspuMapper.selectBatchIds(rspuIds).stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+    }
 
-        RspuMaster rspu = rspuMapper.selectById(rsku.getRspuId());
+    private Map<String, FactoryMaster> batchFactoryMap(List<RskuSupply> rskus) {
+        List<String> factoryCodes = rskus.stream()
+            .map(RskuSupply::getFactoryCode)
+            .distinct()
+            .toList();
+        return factoryMasterMapper.selectBatchIds(factoryCodes).stream()
+            .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
+    }
+
+    private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<ImageAssets> images = imageAssetsMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ImageAssets>()
+                .in("rspu_id", rspuIds)
+                .eq("is_primary", true)
+        );
+        return images.stream()
+            .collect(Collectors.toMap(
+                ImageAssets::getRspuId,
+                img -> "/api/v1/images/" + img.getImageId(),
+                (a, b) -> a
+            ));
+    }
+
+    private QuoteItemResponse buildItem(RskuSupply rsku,
+                                        Map<String, RspuMaster> rspuMap,
+                                        Map<String, FactoryMaster> factoryMap,
+                                        Map<String, String> primaryImageUrlMap) {
+        RspuMaster rspu = rspuMap.get(rsku.getRspuId());
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("RSPU 不存在: " + rsku.getRspuId());
         }
 
-        FactoryMaster factory = factoryMasterMapper.selectById(rsku.getFactoryCode());
+        FactoryMaster factory = factoryMap.get(rsku.getFactoryCode());
 
         QuoteItemResponse item = new QuoteItemResponse();
         item.setRspuId(rspu.getRspuId());
         item.setRspuName(rspu.getPositioningLabel());
-        item.setPrimaryImageUrl(findPrimaryImageUrl(rspu.getRspuId()));
+        item.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));
 
         item.setRskuId(rsku.getRskuId());
         item.setFactoryCode(rsku.getFactoryCode());
@@ -102,19 +147,6 @@ public class QuoteService {
         item.setShippingFrom(rsku.getShippingFrom());
         item.setDiffNotes(rsku.getDiffNotes());
         return item;
-    }
-
-    private String findPrimaryImageUrl(String rspuId) {
-        List<ImageAssets> images = imageAssetsMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ImageAssets>()
-                .eq("rspu_id", rspuId)
-                .eq("is_primary", true)
-                .last("LIMIT 1")
-        );
-        if (images == null || images.isEmpty()) {
-            return null;
-        }
-        return "/api/v1/images/" + images.get(0).getImageId();
     }
 
     private QuoteSummaryResponse computeSummary(List<QuoteItemResponse> items) {

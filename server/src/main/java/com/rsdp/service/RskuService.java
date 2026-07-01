@@ -24,6 +24,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -53,10 +54,9 @@ public class RskuService {
         List<RskuSupply> list = rskuSupplyMapper.selectList(
             new QueryWrapper<RskuSupply>()
                 .eq("rspu_id", rspuId)
-                .isNull("deleted_at")
                 .orderByDesc("created_at")
         );
-        return list.stream().map(this::toResponse).collect(Collectors.toList());
+        return toResponses(list);
     }
 
     /**
@@ -74,7 +74,7 @@ public class RskuService {
         if (!rspuId.equals(rsku.getRspuId())) {
             throw new ResourceNotFoundException("RSKU 不属于该产品: " + rskuId);
         }
-        return toResponse(rsku);
+        return toResponses(List.of(rsku)).get(0);
     }
 
     /**
@@ -87,10 +87,9 @@ public class RskuService {
         List<RskuSupply> list = rskuSupplyMapper.selectList(
             new QueryWrapper<RskuSupply>()
                 .eq("factory_code", factoryCode)
-                .isNull("deleted_at")
                 .orderByDesc("created_at")
         );
-        return list.stream().map(this::toResponse).collect(Collectors.toList());
+        return toResponses(list);
     }
 
     /**
@@ -275,7 +274,20 @@ public class RskuService {
         }
     }
 
-    private RskuResponse toResponse(RskuSupply rsku) {
+    private List<RskuResponse> toResponses(List<RskuSupply> rskus) {
+        List<String> factoryCodes = rskus.stream()
+            .map(RskuSupply::getFactoryCode)
+            .distinct()
+            .toList();
+        Map<String, FactoryMaster> factoryMap = factoryMasterMapper.selectBatchIds(factoryCodes).stream()
+            .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
+
+        return rskus.stream()
+            .map(rsku -> toResponse(rsku, factoryMap))
+            .collect(Collectors.toList());
+    }
+
+    private RskuResponse toResponse(RskuSupply rsku, Map<String, FactoryMaster> factoryMap) {
         RskuResponse response = new RskuResponse();
         response.setRskuId(rsku.getRskuId());
         response.setRspuId(rsku.getRspuId());
@@ -297,7 +309,7 @@ public class RskuService {
         response.setCreatedAt(rsku.getCreatedAt());
         response.setUpdatedAt(rsku.getUpdatedAt());
 
-        FactoryMaster factory = factoryMasterMapper.selectById(rsku.getFactoryCode());
+        FactoryMaster factory = factoryMap.get(rsku.getFactoryCode());
         if (factory != null) {
             response.setFactoryName(factory.getFactoryName());
         }

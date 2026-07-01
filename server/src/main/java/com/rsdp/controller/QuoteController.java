@@ -7,6 +7,7 @@ import com.rsdp.service.QuoteExportService;
 import com.rsdp.service.QuoteService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/quotes")
 @RequiredArgsConstructor
+@Validated
 public class QuoteController {
 
     private final QuoteService quoteService;

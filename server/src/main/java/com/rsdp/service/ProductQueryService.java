@@ -60,28 +60,21 @@ public class ProductQueryService {
     public PageResult<ProductSummaryResponse> listProducts(ProductListRequest request) {
         Page<RspuMaster> pageParam = new Page<>(request.getPage(), request.getSize());
         QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
-        wrapper.isNull("deleted_at");
 
         if (StringUtils.hasText(request.getCategoryCode())) {
             wrapper.eq("category_code", request.getCategoryCode());
         }
         if (StringUtils.hasText(request.getPositioningLabel())) {
-            List<String> styleRspuIds = rspuStyleMapper.selectList(
-                new QueryWrapper<RspuStyle>().eq("style_code", request.getPositioningLabel())
-            ).stream().map(RspuStyle::getRspuId).distinct().collect(Collectors.toList());
-            if (styleRspuIds.isEmpty()) {
-                styleRspuIds.add("__NO_MATCH__");
-            }
-            wrapper.in("rspu_id", styleRspuIds);
+            wrapper.exists(
+                "SELECT 1 FROM rspu_style s WHERE s.rspu_id = rspu_master.rspu_id AND s.style_code = {0}",
+                request.getPositioningLabel().trim()
+            );
         }
         if (StringUtils.hasText(request.getSceneCode())) {
-            List<String> sceneRspuIds = rspuSceneMapper.selectList(
-                new QueryWrapper<RspuScene>().eq("scene_code", request.getSceneCode())
-            ).stream().map(RspuScene::getRspuId).distinct().collect(Collectors.toList());
-            if (sceneRspuIds.isEmpty()) {
-                sceneRspuIds.add("__NO_MATCH__");
-            }
-            wrapper.in("rspu_id", sceneRspuIds);
+            wrapper.exists(
+                "SELECT 1 FROM rspu_scene s WHERE s.rspu_id = rspu_master.rspu_id AND s.scene_code = {0}",
+                request.getSceneCode().trim()
+            );
         }
         if (StringUtils.hasText(request.getMaterialTag())) {
             String tagJson = "[\"" + request.getMaterialTag().trim() + "\"]";
@@ -104,11 +97,32 @@ public class ProductQueryService {
         wrapper.orderByDesc("created_at");
         Page<RspuMaster> page = rspuMapper.selectPage(pageParam, wrapper);
 
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(
+            page.getRecords().stream().map(RspuMaster::getRspuId).toList()
+        );
+
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(this::toSummary)
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap))
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
+    }
+
+    private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<ImageAssets> images = imageAssetsMapper.selectList(
+            new QueryWrapper<ImageAssets>()
+                .in("rspu_id", rspuIds)
+                .eq("is_primary", true)
+        );
+        return images.stream()
+            .collect(Collectors.toMap(
+                ImageAssets::getRspuId,
+                img -> buildImageUrl(img.getImageId()),
+                (a, b) -> a
+            ));
     }
 
     /**
@@ -336,7 +350,7 @@ public class ProductQueryService {
         return copy;
     }
 
-    private ProductSummaryResponse toSummary(RspuMaster rspu) {
+    private ProductSummaryResponse toSummary(RspuMaster rspu, Map<String, String> primaryImageUrlMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
         summary.setCategoryCode(rspu.getCategoryCode());
@@ -349,16 +363,7 @@ public class ProductQueryService {
         summary.setProductLevel(rspu.getProductLevel());
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());
-
-        ImageAssets primaryImage = imageAssetsMapper.selectOne(
-            new QueryWrapper<ImageAssets>()
-                .eq("rspu_id", rspu.getRspuId())
-                .eq("is_primary", true)
-                .last("LIMIT 1")
-        );
-        if (primaryImage != null) {
-            summary.setPrimaryImageUrl(buildImageUrl(primaryImage.getImageId()));
-        }
+        summary.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));
         return summary;
     }
 

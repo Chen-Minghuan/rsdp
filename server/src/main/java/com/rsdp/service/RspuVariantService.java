@@ -89,7 +89,6 @@ public class RspuVariantService {
         List<RspuVariant> variants = variantMapper.selectList(
             new QueryWrapper<RspuVariant>()
                 .eq("rspu_id", rspuId)
-                .isNull("deleted_at")
                 .orderByAsc("created_at")
         );
         return variants.stream().map(this::toResponse).collect(Collectors.toList());

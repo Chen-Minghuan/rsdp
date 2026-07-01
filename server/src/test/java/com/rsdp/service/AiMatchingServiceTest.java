@@ -88,10 +88,14 @@ class AiMatchingServiceTest {
         factory.setFactoryCode("F001");
         factory.setFactoryName("测试工厂");
 
+        ImageAssets image = new ImageAssets();
+        image.setImageId("IMG-001");
+        image.setRspuId("RSPU-001");
+
         when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
-        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
-        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(new ImageAssets()));
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
         when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING_ROOM", "客厅")));
         when(dictService.listByType("style")).thenReturn(List.of(createDict("MC", "中古风")));
 
@@ -159,11 +163,15 @@ class AiMatchingServiceTest {
         factory.setFactoryCode("F001");
         factory.setFactoryName("测试工厂");
 
+        ImageAssets image = new ImageAssets();
+        image.setImageId("IMG-001");
+        image.setRspuId("RSPU-001");
+
         when(rspuMapper.selectById("RSPU-ANCHOR")).thenReturn(anchor);
         when(rspuMapper.selectList(any())).thenReturn(List.of(candidate));
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
-        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
-        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(new ImageAssets()));
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
 
         AiSchemeRecommendation rec = new AiSchemeRecommendation();
         rec.setRspuIds(List.of("RSPU-001"));

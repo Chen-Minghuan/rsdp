@@ -1,5 +1,6 @@
 package com.rsdp.service.chroma;
 
+import com.rsdp.exception.ExternalServiceException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -42,12 +43,15 @@ public class ChromaDbClient {
                 .uri(baseCollectionPath() + "/{name}", collectionName)
                 .retrieve()
                 .body(Map.class);
+            if (collection == null || collection.get("id") == null) {
+                return createCollection(collectionName);
+            }
             String id = (String) collection.get("id");
             collectionIdCache.set(id);
             log.debug("ChromaDB 集合已存在: {} -> {}", collectionName, id);
             return id;
         } catch (Exception e) {
-            log.info("ChromaDB 集合不存在，正在创建: {}", collectionName);
+            log.info("ChromaDB 集合不存在或查询失败，正在创建: {}", collectionName);
             return createCollection(collectionName);
         }
     }
@@ -57,16 +61,25 @@ public class ChromaDbClient {
         body.put("name", collectionName);
         body.put("metadata", Map.of("hnsw:space", "cosine"));
 
-        Map<String, Object> collection = chromaRestClient.post()
-            .uri(baseCollectionPath())
-            .body(body)
-            .retrieve()
-            .body(Map.class);
+        try {
+            Map<String, Object> collection = chromaRestClient.post()
+                .uri(baseCollectionPath())
+                .body(body)
+                .retrieve()
+                .body(Map.class);
 
-        String id = (String) collection.get("id");
-        collectionIdCache.set(id);
-        log.info("ChromaDB 集合创建完成: {} -> {}", collectionName, id);
-        return id;
+            if (collection == null || collection.get("id") == null) {
+                throw new ExternalServiceException("ChromaDB 创建集合返回为空");
+            }
+            String id = (String) collection.get("id");
+            collectionIdCache.set(id);
+            log.info("ChromaDB 集合创建完成: {} -> {}", collectionName, id);
+            return id;
+        } catch (ExternalServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ExternalServiceException("ChromaDB 创建集合失败: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -83,11 +96,15 @@ public class ChromaDbClient {
             body.put("documents", documents);
         }
 
-        chromaRestClient.post()
-            .uri(baseCollectionPath() + "/{id}/upsert", collectionId)
-            .body(body)
-            .retrieve()
-            .toBodilessEntity();
+        try {
+            chromaRestClient.post()
+                .uri(baseCollectionPath() + "/{id}/upsert", collectionId)
+                .body(body)
+                .retrieve()
+                .toBodilessEntity();
+        } catch (Exception e) {
+            throw new ExternalServiceException("ChromaDB upsert 失败: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -105,13 +122,17 @@ public class ChromaDbClient {
             body.put("where", where);
         }
 
-        Map<String, Object> response = chromaRestClient.post()
-            .uri(baseCollectionPath() + "/{id}/query", collectionId)
-            .body(body)
-            .retrieve()
-            .body(Map.class);
+        try {
+            Map<String, Object> response = chromaRestClient.post()
+                .uri(baseCollectionPath() + "/{id}/query", collectionId)
+                .body(body)
+                .retrieve()
+                .body(Map.class);
 
-        return new QueryResult(response);
+            return new QueryResult(response);
+        } catch (Exception e) {
+            throw new ExternalServiceException("ChromaDB 查询失败: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -123,11 +144,15 @@ public class ChromaDbClient {
         Map<String, Object> body = new HashMap<>();
         body.put("ids", ids);
 
-        chromaRestClient.post()
-            .uri(baseCollectionPath() + "/{id}/delete", collectionId)
-            .body(body)
-            .retrieve()
-            .toBodilessEntity();
+        try {
+            chromaRestClient.post()
+                .uri(baseCollectionPath() + "/{id}/delete", collectionId)
+                .body(body)
+                .retrieve()
+                .toBodilessEntity();
+        } catch (Exception e) {
+            throw new ExternalServiceException("ChromaDB 删除失败: " + e.getMessage(), e);
+        }
     }
 
     /**

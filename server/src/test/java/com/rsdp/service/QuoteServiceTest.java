@@ -63,10 +63,14 @@ class QuoteServiceTest {
         factory.setFactoryCode("F001");
         factory.setFactoryName("测试工厂");
 
-        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
-        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
-        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
-        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(new ImageAssets()));
+        ImageAssets image = new ImageAssets();
+        image.setImageId("IMG-001");
+        image.setRspuId("RSPU-001");
+
+        when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-001"))).thenReturn(List.of(rsku));
+        when(rspuMapper.selectBatchIds(List.of("RSPU-001"))).thenReturn(List.of(rspu));
+        when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of(factory));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
 
         var response = quoteService.generateQuote(List.of("RSKU-001"));
 
@@ -86,7 +90,7 @@ class QuoteServiceTest {
 
     @Test
     void generateQuote_shouldThrowWhenRskuNotFound() {
-        when(rskuSupplyMapper.selectById("RSKU-NOT-FOUND")).thenReturn(null);
+        when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-NOT-FOUND"))).thenReturn(List.of());
 
         assertThatThrownBy(() -> quoteService.generateQuote(List.of("RSKU-NOT-FOUND")))
             .isInstanceOf(BusinessException.class)
@@ -96,12 +100,10 @@ class QuoteServiceTest {
 
     @Test
     void generateQuote_shouldCollectAllInvalidRskuIds() {
-        when(rskuSupplyMapper.selectById("RSKU-A")).thenReturn(null);
-
         RskuSupply deletedRsku = new RskuSupply();
         deletedRsku.setRskuId("RSKU-B");
         deletedRsku.setDeletedAt(java.time.LocalDateTime.now());
-        when(rskuSupplyMapper.selectById("RSKU-B")).thenReturn(deletedRsku);
+        when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-A", "RSKU-B"))).thenReturn(List.of(deletedRsku));
 
         assertThatThrownBy(() -> quoteService.generateQuote(List.of("RSKU-A", "RSKU-B")))
             .isInstanceOf(BusinessException.class)

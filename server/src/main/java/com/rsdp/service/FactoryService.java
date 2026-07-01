@@ -42,7 +42,6 @@ public class FactoryService {
         List<FactoryMaster> factories = factoryMasterMapper.selectList(
             new QueryWrapper<FactoryMaster>()
                 .eq("status", "active")
-                .isNull("deleted_at")
                 .orderByDesc("created_at")
         );
         return factories.stream().map(this::toResponse).collect(Collectors.toList());

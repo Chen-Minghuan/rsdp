@@ -5,6 +5,7 @@ import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.OpenAiChatMessage;
 import com.rsdp.dto.OpenAiChatRequest;
 import com.rsdp.dto.OpenAiChatResponse;
+import com.rsdp.exception.ExternalServiceException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +57,9 @@ public class VisionService {
     public AiLabels recognizeImage(InputStream imageStream) {
         try {
             byte[] imageBytes = imageStream.readAllBytes();
+            if (imageBytes.length == 0) {
+                throw new ExternalServiceException("图片流为空");
+            }
             String base64 = Base64.getEncoder().encodeToString(imageBytes);
 
             OpenAiChatRequest request = OpenAiChatRequest.builder()
@@ -72,7 +76,7 @@ public class VisionService {
 
         } catch (IOException e) {
             log.error("读取图片流失败", e);
-            throw new RuntimeException("读取图片流失败", e);
+            throw new ExternalServiceException("读取图片流失败", e);
         }
     }
 
@@ -98,20 +102,33 @@ public class VisionService {
 
     private String executeChat(OpenAiChatRequest request, String taskName) {
         long start = System.currentTimeMillis();
-        OpenAiChatResponse response = aiRestClient.post()
-            .uri("/chat/completions")
-            .body(request)
-            .retrieve()
-            .body(OpenAiChatResponse.class);
+        OpenAiChatResponse response;
+        try {
+            response = aiRestClient.post()
+                .uri("/chat/completions")
+                .body(request)
+                .retrieve()
+                .body(OpenAiChatResponse.class);
+        } catch (Exception e) {
+            throw new ExternalServiceException("AI API 调用失败: " + e.getMessage(), e);
+        }
         long cost = System.currentTimeMillis() - start;
 
         log.info("{}完成，耗时 {}ms", taskName, cost);
 
         if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
-            throw new RuntimeException("API 返回为空");
+            throw new ExternalServiceException("AI API 返回为空");
         }
 
-        String content = response.getChoices().get(0).getMessage().getContent();
+        OpenAiChatResponse.Choice choice = response.getChoices().get(0);
+        if (choice.getMessage() == null) {
+            throw new ExternalServiceException("AI API 返回消息为空");
+        }
+
+        String content = choice.getMessage().getContent();
+        if (content == null || content.isBlank()) {
+            throw new ExternalServiceException("AI API 返回内容为空");
+        }
 
         // 清理可能的 markdown 代码块标记
         return content

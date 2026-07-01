@@ -100,7 +100,7 @@ class SchemeServiceTest {
 
         assertThat(response).isNotNull();
         verify(schemeMapper).insert(any(Scheme.class));
-        verify(schemeItemMapper).insertBatch(any(List.class));
+        verify(schemeItemMapper).insertBatchSafe(any(List.class));
     }
 
     @Test
@@ -246,7 +246,7 @@ class SchemeServiceTest {
         assertThat(existingScheme.getItemCount()).isEqualTo(1);
         verify(schemeItemMapper).delete(any(QueryWrapper.class));
         verify(schemeMapper).updateById(existingScheme);
-        verify(schemeItemMapper).insertBatch(any(List.class));
+        verify(schemeItemMapper).insertBatchSafe(any(List.class));
     }
 
     @Test

@@ -163,6 +163,11 @@ CREATE TABLE IF NOT EXISTS factory_level_capability (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 
+-- 每个工厂只能有一个主评级
+CREATE UNIQUE INDEX IF NOT EXISTS idx_factory_level_primary_unique
+    ON factory_level_capability(factory_code)
+    WHERE is_primary = TRUE;
+
 -- 工厂仓库表
 CREATE TABLE IF NOT EXISTS factory_warehouse (
     warehouse_id VARCHAR(64) PRIMARY KEY,
@@ -231,6 +236,14 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id)
 );
+
+-- 部分唯一索引：处理 variant_id 可 NULL 的情况，并排除已软删除记录
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique_null_variant
+    ON rsku_supply(rspu_id, factory_code)
+    WHERE variant_id IS NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique_non_null_variant
+    ON rsku_supply(rspu_id, variant_id, factory_code)
+    WHERE variant_id IS NOT NULL AND deleted_at IS NULL;
 
 -- 价格历史表
 CREATE TABLE IF NOT EXISTS price_history (
@@ -369,8 +382,6 @@ CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
 CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code);
-
 CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
@@ -405,7 +416,7 @@ CREATE TABLE IF NOT EXISTS scheme (
 
 -- 搭配方案项表
 CREATE TABLE IF NOT EXISTS scheme_item (
-    scheme_item_id SERIAL PRIMARY KEY,
+    scheme_item_id BIGSERIAL PRIMARY KEY,
     scheme_id VARCHAR(64) NOT NULL,
     rspu_id VARCHAR(64) NOT NULL,
     rsku_id VARCHAR(64) NOT NULL,
@@ -417,7 +428,8 @@ CREATE TABLE IF NOT EXISTS scheme_item (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
+    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 
 -- 方案索引
@@ -433,7 +445,10 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'TB', '茶几', 3),
 ('category', 'FC', '柜类', 4),
 ('category', 'BS', '吧椅', 5),
-('category', 'OF', '办公家具', 6)
+('category', 'DT', '桌子', 6),
+('category', 'CB', '柜子', 7),
+('category', 'BD', '床', 8),
+('category', 'OF', '办公家具', 9)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 家装风格
@@ -531,4 +546,27 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('scene', 'CAFE', '咖啡厅', 4),
 ('scene', 'OFFICE', '办公室', 5),
 ('scene', 'HOTEL', '酒店', 6)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 空间类型（用于 AI 搭配方案）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('room_type', 'LIVING_ROOM', '客厅', 1),
+('room_type', 'BEDROOM', '卧室', 2),
+('room_type', 'DINING_ROOM', '餐厅', 3),
+('room_type', 'STUDY', '书房', 4),
+('room_type', 'OFFICE', '办公室', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 报价置信度
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('quote_confidence', 'high', '高', 1),
+('quote_confidence', 'mid', '中', 2),
+('quote_confidence', 'low', '低', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 产品状态
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('product_status', 'active', '在售', 1),
+('product_status', 'discontinued', '停产', 2),
+('product_status', 'draft', '草稿', 3)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;

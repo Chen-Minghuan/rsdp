@@ -6,7 +6,9 @@ import com.rsdp.dto.request.RspuRelationUpdateRequest;
 import com.rsdp.dto.response.RspuRelationResponse;
 import com.rsdp.service.RspuRelationService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,6 +26,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/products/{rspuId}/relations")
 @RequiredArgsConstructor
+@Validated
 public class RspuRelationController {
 
     private final RspuRelationService relationService;
@@ -35,7 +38,7 @@ public class RspuRelationController {
      * @return 搭配关系列表
      */
     @GetMapping
-    public Result<List<RspuRelationResponse>> listRelations(@PathVariable String rspuId) {
+    public Result<List<RspuRelationResponse>> listRelations(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
         return Result.ok(relationService.listByAnchor(rspuId));
     }
 
@@ -47,7 +50,7 @@ public class RspuRelationController {
      * @return 空结果
      */
     @PostMapping
-    public Result<Void> createRelation(@PathVariable String rspuId,
+    public Result<Void> createRelation(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                        @Valid @RequestBody RspuRelationCreateRequest request) {
         relationService.createRelation(rspuId, request);
         return Result.ok();
@@ -62,8 +65,8 @@ public class RspuRelationController {
      * @return 空结果
      */
     @PutMapping("/{relationId}")
-    public Result<Void> updateRelation(@PathVariable String rspuId,
-                                       @PathVariable String relationId,
+    public Result<Void> updateRelation(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
+                                       @PathVariable @NotBlank(message = "关系 ID 不能为空") String relationId,
                                        @Valid @RequestBody RspuRelationUpdateRequest request) {
         relationService.updateRelation(rspuId, relationId, request);
         return Result.ok();
@@ -77,8 +80,8 @@ public class RspuRelationController {
      * @return 空结果
      */
     @DeleteMapping("/{relationId}")
-    public Result<Void> deleteRelation(@PathVariable String rspuId,
-                                       @PathVariable String relationId) {
+    public Result<Void> deleteRelation(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
+                                       @PathVariable @NotBlank(message = "关系 ID 不能为空") String relationId) {
         relationService.deleteRelation(rspuId, relationId);
         return Result.ok();
     }

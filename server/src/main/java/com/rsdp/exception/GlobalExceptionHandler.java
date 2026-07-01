@@ -3,10 +3,14 @@ package com.rsdp.exception;
 import com.rsdp.common.Result;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.FieldError;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+
+import java.util.stream.Collectors;
 
 /**
  * 全局异常处理，统一返回 {@link Result} 格式。
@@ -41,6 +45,22 @@ public class GlobalExceptionHandler {
             .orElse("请求参数校验失败");
         log.warn("参数校验失败: {}", message);
         return Result.badRequest(message);
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public Result<Void> handleConstraintViolationException(ConstraintViolationException e) {
+        String message = e.getConstraintViolations().stream()
+            .findFirst()
+            .map(ConstraintViolation::getMessage)
+            .orElse("请求参数校验失败");
+        log.warn("参数校验失败: {}", message);
+        return Result.badRequest(message);
+    }
+
+    @ExceptionHandler(ExternalServiceException.class)
+    public Result<Void> handleExternalServiceException(ExternalServiceException e) {
+        log.error("外部服务调用失败: {}", e.getMessage(), e);
+        return Result.error(e.getCode(), e.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

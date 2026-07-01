@@ -107,7 +107,7 @@ class ProductQueryServiceTest {
         page.setRecords(List.of(rspu));
 
         when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
-        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
 
@@ -123,11 +123,6 @@ class ProductQueryServiceTest {
         request.setSize(10L);
         request.setPositioningLabel("MC");
 
-        RspuStyle style = new RspuStyle();
-        style.setRspuId("RSPU-TEST01");
-        style.setStyleCode("MC");
-        when(rspuStyleMapper.selectList(any())).thenReturn(List.of(style));
-
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setCategoryCode("FS");
@@ -138,7 +133,7 @@ class ProductQueryServiceTest {
         page.setRecords(List.of(rspu));
 
         when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
-        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
 
@@ -164,7 +159,7 @@ class ProductQueryServiceTest {
         page.setRecords(List.of(rspu));
 
         when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
-        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
 
@@ -178,11 +173,6 @@ class ProductQueryServiceTest {
         request.setSize(10L);
         request.setSceneCode("LIVING");
 
-        RspuScene scene = new RspuScene();
-        scene.setRspuId("RSPU-TEST01");
-        scene.setSceneCode("LIVING");
-        when(rspuSceneMapper.selectList(any())).thenReturn(List.of(scene));
-
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setCategoryCode("FS");
@@ -193,7 +183,7 @@ class ProductQueryServiceTest {
         page.setRecords(List.of(rspu));
 
         when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
-        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
 

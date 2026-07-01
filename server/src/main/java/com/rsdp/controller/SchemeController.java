@@ -8,7 +8,9 @@ import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
 import com.rsdp.service.SchemeService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,6 +28,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/schemes")
 @RequiredArgsConstructor
+@Validated
 public class SchemeController {
 
     private final SchemeService schemeService;
@@ -58,7 +61,7 @@ public class SchemeController {
      * @return 方案详情
      */
     @GetMapping("/{schemeId}")
-    public Result<SchemeResponse> detail(@PathVariable String schemeId) {
+    public Result<SchemeResponse> detail(@PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId) {
         return Result.ok(schemeService.getSchemeDetail(schemeId));
     }
 
@@ -70,7 +73,7 @@ public class SchemeController {
      * @return 更新后的方案详情
      */
     @PutMapping("/{schemeId}")
-    public Result<SchemeResponse> update(@PathVariable String schemeId,
+    public Result<SchemeResponse> update(@PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
                                          @Valid @RequestBody SchemeUpdateRequest request) {
         return Result.ok(schemeService.updateScheme(schemeId, request));
     }
@@ -82,7 +85,7 @@ public class SchemeController {
      * @return 空结果
      */
     @DeleteMapping("/{schemeId}")
-    public Result<Void> delete(@PathVariable String schemeId) {
+    public Result<Void> delete(@PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId) {
         schemeService.deleteScheme(schemeId);
         return Result.ok();
     }
@@ -94,7 +97,7 @@ public class SchemeController {
      * @return 报价单
      */
     @PostMapping("/{schemeId}/quote")
-    public Result<QuoteResponse> generateQuote(@PathVariable String schemeId) {
+    public Result<QuoteResponse> generateQuote(@PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId) {
         return Result.ok(schemeService.generateQuote(schemeId));
     }
 }

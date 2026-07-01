@@ -84,12 +84,11 @@ class RetrievalServiceTest {
         ImageAssets img1 = new ImageAssets();
         img1.setImageId("IMG-001");
         img1.setStorageUrl("http://localhost/images/IMG-001.jpg");
-        when(imageAssetsMapper.selectById("IMG-001")).thenReturn(img1);
 
         ImageAssets img3 = new ImageAssets();
         img3.setImageId("IMG-003");
         img3.setStorageUrl("http://localhost/images/IMG-003.jpg");
-        when(imageAssetsMapper.selectById("IMG-003")).thenReturn(img3);
+        when(imageAssetsMapper.selectBatchIds(any())).thenReturn(List.of(img1, img3));
 
         RspuMaster rspu1 = new RspuMaster();
         rspu1.setRspuId("RSPU-001");
@@ -97,13 +96,12 @@ class RetrievalServiceTest {
         rspu1.setPositioningLabel("MC");
         rspu1.setColorPrimaryName("焦糖棕");
         rspu1.setMaterialTags("[\"实木\"]");
-        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu1);
 
         RspuMaster rspu2 = new RspuMaster();
         rspu2.setRspuId("RSPU-002");
         rspu2.setCategoryCode("FS");
         rspu2.setPositioningLabel("CR");
-        when(rspuMapper.selectById("RSPU-002")).thenReturn(rspu2);
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu1, rspu2));
 
         // When
         List<SimilarProductResponse> results = retrievalService.searchSimilar(request);

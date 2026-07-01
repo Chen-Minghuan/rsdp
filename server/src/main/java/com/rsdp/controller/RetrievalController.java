@@ -6,7 +6,9 @@ import com.rsdp.dto.response.SimilarProductResponse;
 import com.rsdp.service.RetrievalService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,6 +22,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/retrieval")
 @RequiredArgsConstructor
+@Validated
 @Tag(name = "产品检索", description = "以图搜图、以文搜图")
 public class RetrievalController {
 
@@ -33,7 +36,7 @@ public class RetrievalController {
      */
     @PostMapping("/similar")
     @Operation(summary = "相似产品检索", description = "上传图片或输入文本，检索相似产品")
-    public Result<List<SimilarProductResponse>> searchSimilar(@ModelAttribute SimilarProductRequest request) {
+    public Result<List<SimilarProductResponse>> searchSimilar(@Valid @ModelAttribute SimilarProductRequest request) {
         List<SimilarProductResponse> results = retrievalService.searchSimilar(request);
         return Result.ok(results);
     }

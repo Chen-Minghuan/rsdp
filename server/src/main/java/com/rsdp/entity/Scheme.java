@@ -1,6 +1,7 @@
 package com.rsdp.entity;
 
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
@@ -27,5 +28,7 @@ public class Scheme {
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
 }

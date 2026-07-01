@@ -127,6 +127,11 @@ public class RetrievalService {
             return Collections.emptyList();
         }
 
+        // 批量查询图片 URL，避免 N+1
+        List<String> imageIds = ids.stream().distinct().collect(Collectors.toList());
+        Map<String, String> imageUrlMap = imageAssetsMapper.selectBatchIds(imageIds).stream()
+            .collect(Collectors.toMap(ImageAssets::getImageId, ImageAssets::getStorageUrl, (a, b) -> a));
+
         // 按 RSPU 聚合，取相似度最高的图片
         Map<String, SimilarProductResponse> bestByRspu = new LinkedHashMap<>();
         for (int i = 0; i < ids.size(); i++) {
@@ -147,7 +152,7 @@ public class RetrievalService {
                 response.setCategoryCode((String) metadata.get("category_code"));
                 response.setPositioningLabel((String) metadata.get("positioning_label"));
                 response.setVectorScore(score);
-                response.setMainImageUrl(resolveImageUrl(imageId));
+                response.setMainImageUrl(imageUrlMap.get(imageId));
                 response.setFinalScore(score);
                 bestByRspu.put(rspuId, response);
             }
@@ -159,17 +164,20 @@ public class RetrievalService {
             .collect(Collectors.toList());
     }
 
-    private String resolveImageUrl(String imageId) {
-        ImageAssets image = imageAssetsMapper.selectById(imageId);
-        return image != null ? image.getStorageUrl() : null;
-    }
-
     private List<SimilarProductResponse> rerank(List<SimilarProductResponse> candidates, SimilarProductRequest request) {
+        // 批量查询 RSPU 元数据，避免 N+1
+        List<String> rspuIds = candidates.stream()
+            .map(SimilarProductResponse::getRspuId)
+            .distinct()
+            .collect(Collectors.toList());
+        Map<String, RspuMaster> rspuMap = rspuMapper.selectBatchIds(rspuIds).stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+
         for (SimilarProductResponse candidate : candidates) {
             double boost = 0.0;
             List<String> reasons = new ArrayList<>();
 
-            RspuMaster rspu = rspuMapper.selectById(candidate.getRspuId());
+            RspuMaster rspu = rspuMap.get(candidate.getRspuId());
             if (rspu != null) {
                 candidate.setPositioningLabel(rspu.getPositioningLabel());
                 if (rspu.getColorPrimaryName() != null && !rspu.getColorPrimaryName().isBlank()) {

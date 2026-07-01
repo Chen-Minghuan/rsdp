@@ -72,8 +72,8 @@ class RspuRelationServiceTest {
 
         when(rspuMapper.selectById("RSPU-BED")).thenReturn(new RspuMaster());
         when(relationMapper.selectList(any())).thenReturn(List.of(relation));
-        when(rspuMapper.selectById("RSPU-MATTRESS")).thenReturn(related);
-        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+        when(rspuMapper.selectBatchIds(List.of("RSPU-MATTRESS"))).thenReturn(List.of(related));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
 
         List<RspuRelationResponse> result = relationService.listByAnchor("RSPU-BED");
@@ -94,10 +94,10 @@ class RspuRelationServiceTest {
 
         RspuMaster anchor = new RspuMaster();
         anchor.setRspuId("RSPU-BED");
-        when(rspuMapper.selectById("RSPU-BED")).thenReturn(anchor);
         when(rspuMapper.selectById("RSPU-MATTRESS")).thenReturn(new RspuMaster());
         when(relationMapper.selectList(any())).thenReturn(List.of(relation));
-        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+        when(rspuMapper.selectBatchIds(List.of("RSPU-BED"))).thenReturn(List.of(anchor));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
 
         List<RspuRelationResponse> result = relationService.listByRelated("RSPU-MATTRESS");
@@ -116,8 +116,8 @@ class RspuRelationServiceTest {
         relation.setStatus("active");
 
         when(rspuMapper.selectById("RSPU-BED")).thenReturn(new RspuMaster());
-        when(rspuMapper.selectById("RSPU-DELETED")).thenReturn(null);
         when(relationMapper.selectList(any())).thenReturn(List.of(relation));
+        when(rspuMapper.selectBatchIds(List.of("RSPU-DELETED"))).thenReturn(List.of());
 
         List<RspuRelationResponse> result = relationService.listByAnchor("RSPU-BED");
 
@@ -255,14 +255,16 @@ class RspuRelationServiceTest {
 
         ImageAssets image = new ImageAssets();
         image.setImageId("IMG-001");
+        image.setRspuId("RSPU-MATTRESS");
 
         RskuSupply rsku = new RskuSupply();
+        rsku.setRspuId("RSPU-MATTRESS");
         rsku.setFactoryPrice(new BigDecimal("1500"));
 
         when(rspuMapper.selectById("RSPU-BED")).thenReturn(new RspuMaster());
         when(relationMapper.selectList(any())).thenReturn(List.of(relation));
-        when(rspuMapper.selectById("RSPU-MATTRESS")).thenReturn(related);
-        when(imageAssetsMapper.selectOne(any())).thenReturn(image);
+        when(rspuMapper.selectBatchIds(List.of("RSPU-MATTRESS"))).thenReturn(List.of(related));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
 
         List<RspuRelationResponse> result = relationService.listByAnchor("RSPU-BED");
