@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.rsdp.mapper.RskuSupplyMapper">
+
+    <insert id="insertBatch">
+        INSERT INTO rsku_supply (
+            rsku_id,
+            rspu_id,
+            variant_id,
+            factory_code,
+            factory_sku,
+            factory_price,
+            price_band,
+            product_level,
+            material_description,
+            lead_time_days,
+            moq,
+            warranty_years,
+            shipping_from,
+            diff_notes,
+            quote_confidence,
+            review_status,
+            price_updated,
+            created_at,
+            updated_at
+        ) VALUES
+        <foreach collection="rskus" item="item" separator=",">
+            (
+                #{item.rskuId},
+                #{item.rspuId},
+                #{item.variantId},
+                #{item.factoryCode},
+                #{item.factorySku},
+                #{item.factoryPrice},
+                #{item.priceBand},
+                #{item.productLevel},
+                #{item.materialDescription},
+                #{item.leadTimeDays},
+                #{item.moq},
+                #{item.warrantyYears},
+                #{item.shippingFrom},
+                #{item.diffNotes},
+                #{item.quoteConfidence},
+                #{item.reviewStatus},
+                #{item.priceUpdated},
+                #{item.createdAt},
+                #{item.updatedAt}
+            )
+        </foreach>
+    </insert>
+</mapper>

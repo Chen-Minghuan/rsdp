@@ -65,6 +65,11 @@ const routes = [
     path: '/visual-search',
     name: 'VisualSearch',
     component: () => import('@/views/VisualSearchView.vue')
+  },
+  {
+    path: '/rsku/import',
+    name: 'RskuImport',
+    component: () => import('@/views/RskuImportView.vue')
   }
 ]
 

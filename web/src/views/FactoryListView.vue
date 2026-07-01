@@ -219,6 +219,9 @@ onMounted(() => {
             <n-button type="primary" :loading="submitting" @click="handleSubmit">
               创建工厂
             </n-button>
+            <n-button @click="router.push('/rsku/import')">
+              批量导入 RSKU 报价
+            </n-button>
           </n-space>
         </n-card>
 
