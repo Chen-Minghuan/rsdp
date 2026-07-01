@@ -15,6 +15,11 @@ spring:
 rsdp:
   encryption:
     key: ${RSDP_ENCRYPTION_KEY:WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=}
+  migration:
+    encrypt-prices:
+      # 开发环境默认关闭；需要测试迁移时临时设为 true
+      enabled: false
+      batch-size: 100
 
 # 开发环境文件先存本地磁盘
 storage:

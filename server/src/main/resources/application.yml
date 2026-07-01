@@ -45,6 +45,11 @@ rsdp:
   encryption:
     # Base64 编码的 32 字节 AES-256 密钥，生产环境必须通过 RSDP_ENCRYPTION_KEY 注入
     key: ${RSDP_ENCRYPTION_KEY:}
+  migration:
+    encrypt-prices:
+      # 历史价格字段加密迁移开关，默认关闭；需要迁移时设为 true 并重启应用
+      enabled: false
+      batch-size: 100
   async:
     core-pool-size: 4
     max-pool-size: 16
