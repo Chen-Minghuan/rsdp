@@ -45,6 +45,7 @@ public class AiMatchingService {
     private final DictService dictService;
     private final VisionService visionService;
     private final ObjectMapper objectMapper;
+    private final FactoryService factoryService;
 
     private static final int MAX_CANDIDATES = 30;
 
@@ -204,7 +205,8 @@ public class AiMatchingService {
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
                 .in("rspu_id", rspuIds)
         );
-        return rskus.stream()
+        List<RskuSupply> capableRskus = filterCapableRskus(rskus);
+        return capableRskus.stream()
             .filter(r -> r.getFactoryPrice() != null)
             .collect(Collectors.groupingBy(
                 RskuSupply::getRspuId,
@@ -373,7 +375,8 @@ public class AiMatchingService {
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
                 .in("rspu_id", rspuIds)
         );
-        return rskus.stream()
+        List<RskuSupply> capableRskus = filterCapableRskus(rskus);
+        return capableRskus.stream()
             .filter(r -> r.getFactoryPrice() != null)
             .collect(Collectors.groupingBy(
                 RskuSupply::getRspuId,
@@ -382,6 +385,35 @@ public class AiMatchingService {
             .entrySet().stream()
             .filter(e -> e.getValue().isPresent())
             .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().get()));
+    }
+
+    /**
+     * 过滤出工厂具备对应产品等级能力的 RSKU。
+     */
+    private List<RskuSupply> filterCapableRskus(List<RskuSupply> rskus) {
+        if (rskus.isEmpty()) {
+            return List.of();
+        }
+        Set<String> factoryCodes = rskus.stream()
+            .map(RskuSupply::getFactoryCode)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet());
+        Map<String, List<String>> capabilityMap = factoryCodes.stream()
+            .collect(Collectors.toMap(
+                code -> code,
+                code -> factoryService.getFactoryCapableLevels(code)
+            ));
+
+        return rskus.stream()
+            .filter(r -> {
+                String productLevel = r.getProductLevel();
+                if (productLevel == null || productLevel.isBlank()) {
+                    return true;
+                }
+                List<String> capableLevels = capabilityMap.get(r.getFactoryCode());
+                return capableLevels != null && capableLevels.contains(productLevel);
+            })
+            .collect(Collectors.toList());
     }
 
     private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {

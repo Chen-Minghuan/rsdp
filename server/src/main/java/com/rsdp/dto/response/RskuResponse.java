@@ -5,6 +5,7 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * RSKU 报价响应。
@@ -17,6 +18,7 @@ public class RskuResponse {
     private String variantId;
     private String factoryCode;
     private String factoryName;
+    private List<String> factoryCapableLevels;
     private String factorySku;
     private BigDecimal factoryPrice;
     private String priceBand;

@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -34,6 +35,7 @@ public class QuoteService {
     private final RspuMapper rspuMapper;
     private final FactoryMasterMapper factoryMasterMapper;
     private final ImageAssetsMapper imageAssetsMapper;
+    private final FactoryService factoryService;
 
     /**
      * 根据 RSKU ID 列表生成报价单。
@@ -68,6 +70,10 @@ public class QuoteService {
         // 批量查询 RSPU、工厂、主图
         Map<String, RspuMaster> rspuMap = batchRspuMap(rskus);
         Map<String, FactoryMaster> factoryMap = batchFactoryMap(rskus);
+
+        // 校验每个 RSKU 所属工厂是否具备对应产品等级能力
+        validateFactoryCapabilities(rskus);
+
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuMap.values().stream()
             .map(RspuMaster::getRspuId).toList());
 
@@ -90,6 +96,25 @@ public class QuoteService {
             .toList();
         return rspuMapper.selectBatchIds(rspuIds).stream()
             .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+    }
+
+    private void validateFactoryCapabilities(List<RskuSupply> rskus) {
+        List<String> mismatched = rskus.stream()
+            .filter(rsku -> {
+                String productLevel = rsku.getProductLevel();
+                if (productLevel == null || productLevel.isBlank()) {
+                    return false;
+                }
+                List<String> capableLevels = factoryService.getFactoryCapableLevels(rsku.getFactoryCode());
+                return !capableLevels.contains(productLevel);
+            })
+            .map(RskuSupply::getRskuId)
+            .toList();
+
+        if (!mismatched.isEmpty()) {
+            throw new BusinessException(
+                "以下 RSKU 所属工厂未声明对应产品等级能力，请重新选择：" + String.join(", ", mismatched));
+        }
     }
 
     private Map<String, FactoryMaster> batchFactoryMap(List<RskuSupply> rskus) {

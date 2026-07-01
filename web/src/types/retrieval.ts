@@ -32,4 +32,6 @@ export interface SimilarProductResponse {
   finalScore: number
   /** 匹配原因 */
   matchReasons: string[]
+  /** AI 视觉识别置信度（high/mid/low） */
+  aestheticsConfidence?: string
 }

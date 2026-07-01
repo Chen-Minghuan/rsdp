@@ -7,6 +7,7 @@ export interface Rsku {
   variantId?: string
   factoryCode: string
   factoryName?: string
+  factoryCapableLevels?: string[]
   factorySku?: string
   factoryPrice: number
   priceBand: string

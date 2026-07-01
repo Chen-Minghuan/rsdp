@@ -276,6 +276,17 @@ const quoteColumns = [
   { title: 'MOQ', key: 'moq', width: 100 }
 ]
 
+function isFactoryCapable(rsku: Rsku | undefined): boolean {
+  if (!rsku || !rsku.productLevel) return true
+  return (rsku.factoryCapableLevels || []).includes(rsku.productLevel)
+}
+
+function selectedRsku(rspuId: string): Rsku | undefined {
+  const rskuId = selectedRskuMap.value[rspuId]
+  if (!rskuId) return undefined
+  return rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
+}
+
 onMounted(() => {
   loadData()
 })
@@ -334,16 +345,20 @@ onMounted(() => {
                 />
                 <n-select
                   v-model:value="selectedRskuMap[product.rspu.rspuId]"
-                  :options="rskuMap[product.rspu.rspuId]?.map(r => ({
-                    label: `${r.factoryName || r.factoryCode} - ¥${r.factoryPrice.toFixed(2)}`,
-                    value: r.rskuId
-                  })) || []"
+                  :options="rskuMap[product.rspu.rspuId]?.map(r => {
+                    const capable = isFactoryCapable(r)
+                    return {
+                      label: `${r.factoryName || r.factoryCode} - ¥${r.factoryPrice.toFixed(2)}${capable ? '' : ` [工厂未声明 ${r.productLevel} 级能力]`}`,
+                      value: r.rskuId
+                    }
+                  }) || []"
                   placeholder="选择工厂报价"
-                  style="width: 320px;"
+                  style="width: 360px;"
                 />
               </n-space>
-              <n-tag type="info" size="small">
-                已选：¥{{ (rskuMap[product.rspu.rspuId]?.find(r => r.rskuId === selectedRskuMap[product.rspu.rspuId])?.factoryPrice ?? 0).toFixed(2) }}
+              <n-tag :type="isFactoryCapable(selectedRsku(product.rspu.rspuId)) ? 'info' : 'warning'" size="small">
+                已选：¥{{ (selectedRsku(product.rspu.rspuId)?.factoryPrice ?? 0).toFixed(2) }}
+                {{ !isFactoryCapable(selectedRsku(product.rspu.rspuId)) ? `[工厂未声明 ${selectedRsku(product.rspu.rspuId)?.productLevel} 级能力]` : '' }}
               </n-tag>
             </n-space>
           </n-card>

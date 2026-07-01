@@ -56,6 +56,9 @@ class AiMatchingServiceTest {
     @Mock
     private VisionService visionService;
 
+    @Mock
+    private FactoryService factoryService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -82,6 +85,7 @@ class AiMatchingServiceTest {
         rsku.setRspuId("RSPU-001");
         rsku.setFactoryCode("F001");
         rsku.setFactoryPrice(new BigDecimal("2500"));
+        rsku.setProductLevel("S");
         rsku.setLeadTimeDays(25);
 
         FactoryMaster factory = new FactoryMaster();
@@ -95,6 +99,7 @@ class AiMatchingServiceTest {
         when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
         when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
         when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING_ROOM", "客厅")));
         when(dictService.listByType("style")).thenReturn(List.of(createDict("MC", "中古风")));
@@ -157,6 +162,7 @@ class AiMatchingServiceTest {
         rsku.setRspuId("RSPU-001");
         rsku.setFactoryCode("F001");
         rsku.setFactoryPrice(new BigDecimal("1500"));
+        rsku.setProductLevel("S");
         rsku.setLeadTimeDays(20);
 
         FactoryMaster factory = new FactoryMaster();
@@ -171,6 +177,7 @@ class AiMatchingServiceTest {
         when(rspuMapper.selectList(any())).thenReturn(List.of(candidate));
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
         when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
 
         AiSchemeRecommendation rec = new AiSchemeRecommendation();
@@ -187,6 +194,49 @@ class AiMatchingServiceTest {
         assertThat(response.getItems()).hasSize(1);
         assertThat(response.getItems().get(0).getRspuId()).isEqualTo("RSPU-001");
         assertThat(response.getReasoning()).isEqualTo("风格与颜色统一");
+    }
+
+    @Test
+    void generateRoomScheme_shouldSkipRskuWhenFactoryNotCapable() throws Exception {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setPositioningLabel("中古风");
+        rspu.setColorPrimaryName("原木色");
+        rspu.setMaterialTags("[\"实木\"]");
+        rspu.setSceneTags("[\"客厅\"]");
+
+        RskuSupply cheapRsku = new RskuSupply();
+        cheapRsku.setRskuId("RSKU-001");
+        cheapRsku.setRspuId("RSPU-001");
+        cheapRsku.setFactoryCode("F001");
+        cheapRsku.setFactoryPrice(new BigDecimal("1500"));
+        cheapRsku.setProductLevel("S");
+        cheapRsku.setLeadTimeDays(25);
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        factory.setFactoryName("测试工厂");
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(cheapRsku));
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("A", "B"));
+        when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING_ROOM", "客厅")));
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("MC", "中古风")));
+
+        AiSchemeRecommendation rec = new AiSchemeRecommendation();
+        rec.setRspuIds(List.of("RSPU-001"));
+        rec.setReasoning("风格统一");
+        when(visionService.chatText(any(), any())).thenReturn(objectMapper.writeValueAsString(rec));
+
+        RoomSchemeRequest request = new RoomSchemeRequest();
+        request.setRoomType("LIVING_ROOM");
+        request.setBudgetLimit(new BigDecimal("10000"));
+        request.setStylePreference("MC");
+
+        RoomSchemeResponse response = aiMatchingService.generateRoomScheme(request);
+
+        assertThat(response.getItems()).isEmpty();
+        assertThat(response.getTotalPrice()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     @Test

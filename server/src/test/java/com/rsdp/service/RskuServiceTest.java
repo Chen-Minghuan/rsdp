@@ -84,11 +84,13 @@ class RskuServiceTest {
 
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
         when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of());
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
 
         List<RskuResponse> result = rskuService.listByRspu("RSPU-TEST01");
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getRskuId()).isEqualTo("RSKU-TEST01");
+        assertThat(result.get(0).getFactoryCapableLevels()).containsExactly("S", "A");
     }
 
     @Test

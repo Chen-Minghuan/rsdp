@@ -44,4 +44,9 @@ public class SimilarProductResponse {
      * 加分/匹配原因。
      */
     private List<String> matchReasons;
+
+    /**
+     * AI 视觉识别置信度（high/mid/low）。
+     */
+    private String aestheticsConfidence;
 }

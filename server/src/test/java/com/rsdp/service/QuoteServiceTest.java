@@ -22,6 +22,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 /**
@@ -42,6 +43,9 @@ class QuoteServiceTest {
     @Mock
     private ImageAssetsMapper imageAssetsMapper;
 
+    @Mock
+    private FactoryService factoryService;
+
     @InjectMocks
     private QuoteService quoteService;
 
@@ -52,6 +56,7 @@ class QuoteServiceTest {
         rsku.setRspuId("RSPU-001");
         rsku.setFactoryCode("F001");
         rsku.setFactoryPrice(new BigDecimal("2500"));
+        rsku.setProductLevel("S");
         rsku.setLeadTimeDays(25);
         rsku.setMoq(10);
 
@@ -70,6 +75,7 @@ class QuoteServiceTest {
         when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-001"))).thenReturn(List.of(rsku));
         when(rspuMapper.selectBatchIds(List.of("RSPU-001"))).thenReturn(List.of(rspu));
         when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of(factory));
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
 
         var response = quoteService.generateQuote(List.of("RSKU-001"));
@@ -109,5 +115,23 @@ class QuoteServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("RSKU-A")
             .hasMessageContaining("RSKU-B");
+    }
+
+    @Test
+    void generateQuote_shouldRejectRskuWhenFactoryNotCapable() {
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-001");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("2500"));
+        rsku.setProductLevel("S");
+
+        when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-001"))).thenReturn(List.of(rsku));
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("A", "B"));
+
+        assertThatThrownBy(() -> quoteService.generateQuote(List.of("RSKU-001")))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("RSKU-001")
+            .hasMessageContaining("未声明");
     }
 }

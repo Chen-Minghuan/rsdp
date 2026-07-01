@@ -281,13 +281,20 @@ public class RskuService {
             .toList();
         Map<String, FactoryMaster> factoryMap = factoryMasterMapper.selectBatchIds(factoryCodes).stream()
             .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
+        Map<String, List<String>> capabilityMap = factoryCodes.stream()
+            .collect(Collectors.toMap(
+                code -> code,
+                factoryService::getFactoryCapableLevels
+            ));
 
         return rskus.stream()
-            .map(rsku -> toResponse(rsku, factoryMap))
+            .map(rsku -> toResponse(rsku, factoryMap, capabilityMap))
             .collect(Collectors.toList());
     }
 
-    private RskuResponse toResponse(RskuSupply rsku, Map<String, FactoryMaster> factoryMap) {
+    private RskuResponse toResponse(RskuSupply rsku,
+                                    Map<String, FactoryMaster> factoryMap,
+                                    Map<String, List<String>> capabilityMap) {
         RskuResponse response = new RskuResponse();
         response.setRskuId(rsku.getRskuId());
         response.setRspuId(rsku.getRspuId());
@@ -313,6 +320,7 @@ public class RskuService {
         if (factory != null) {
             response.setFactoryName(factory.getFactoryName());
         }
+        response.setFactoryCapableLevels(capabilityMap.getOrDefault(rsku.getFactoryCode(), List.of()));
         return response;
     }
 }

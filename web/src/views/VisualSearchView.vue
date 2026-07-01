@@ -14,7 +14,8 @@ import {
   NGrid,
   NGridItem,
   NImage,
-  NTag
+  NTag,
+  NTooltip
 } from 'naive-ui'
 import type { UploadFileInfo } from 'naive-ui'
 import { searchSimilarProducts } from '@/api/retrieval'
@@ -111,6 +112,24 @@ function goToDetail(rspuId: string) {
   router.push(`/products/${rspuId}`)
 }
 
+function confidenceType(confidence?: string): 'success' | 'warning' | 'error' | 'default' {
+  switch (confidence?.toLowerCase()) {
+    case 'high': return 'success'
+    case 'mid': return 'warning'
+    case 'low': return 'error'
+    default: return 'default'
+  }
+}
+
+function confidenceText(confidence?: string): string {
+  switch (confidence?.toLowerCase()) {
+    case 'high': return 'AI 置信度高'
+    case 'mid': return 'AI 置信度中'
+    case 'low': return 'AI 置信度低'
+    default: return '无 AI 置信度'
+  }
+}
+
 onMounted(() => {
   loadDicts()
 })
@@ -200,18 +219,35 @@ onUnmounted(() => {
 
                 <n-space justify="space-between" align="center">
                   <span class="rspu-id">{{ item.rspuId }}</span>
-                  <n-tag size="small" type="info">
-                    {{ (item.finalScore * 100).toFixed(1) }}%
-                  </n-tag>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-tag size="small" type="info">
+                        {{ (item.finalScore * 100).toFixed(1) }}%
+                      </n-tag>
+                    </template>
+                    向量相似度 {{ (item.vectorScore * 100).toFixed(1) }}%
+                  </n-tooltip>
                 </n-space>
 
                 <n-space>
                   <n-tag v-if="item.categoryCode" size="small">{{ item.categoryCode }}</n-tag>
                   <n-tag v-if="item.positioningLabel" size="small">{{ item.positioningLabel }}</n-tag>
+                  <n-tag
+                    v-if="item.aestheticsConfidence"
+                    size="small"
+                    :type="confidenceType(item.aestheticsConfidence)"
+                  >
+                    {{ confidenceText(item.aestheticsConfidence) }}
+                  </n-tag>
                 </n-space>
 
                 <n-space v-if="item.matchReasons && item.matchReasons.length > 0" wrap>
-                  <n-tag v-for="reason in item.matchReasons" :key="reason" size="small" type="success">
+                  <n-tag
+                    v-for="reason in item.matchReasons"
+                    :key="reason"
+                    size="small"
+                    :type="reason.startsWith('风格') || reason.startsWith('主色') ? 'success' : 'warning'"
+                  >
                     {{ reason }}
                   </n-tag>
                 </n-space>
