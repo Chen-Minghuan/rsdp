@@ -332,7 +332,7 @@ POST   /api/v1/admin/vectors/backfill
 POST   /api/v1/style-knowledge/import
        # 批量导入风格案例、元素、搭配公式
        # Request: multipart/form-data
-       #   file: JSON 或 Excel（格式见 docs/03-guides/风格数据库导入数据格式.md）
+       #   file: JSON 或 Excel（格式见 docs/03-guides/04-风格数据库导入数据格式.md）
        # Response: { imported_cases: 12, imported_formulas: 3, errors: [...] }
 
 GET    /api/v1/style-knowledge/cases

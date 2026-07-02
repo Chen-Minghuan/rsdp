@@ -83,6 +83,8 @@ services:
       - MINIO_ENDPOINT=http://minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
+      - RSDP_ENCRYPTION_KEY=${RSDP_ENCRYPTION_KEY}
+      - RSDP_IMPORT_ALLOWED_IMAGE_HOSTS=${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:-}
     depends_on:
       - postgres
       - ollama

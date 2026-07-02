@@ -3,10 +3,10 @@
 > **状态**：已确认（待实施）  
 > **决策项**：在 RSDP 中新增一个可复用的「风格数据库 Skill」，把成功/失败设计案例沉淀为结构化元素与搭配公式，用于产品归类与搭配推荐。  
 > **相关文档**：
-> - `docs/02-architecture/数据库设计.md`
-> - `docs/02-architecture/API设计.md`
-> - `docs/03-guides/风格数据库导入数据格式.md`
-> - `docs/06-reference/双层编码体系.md`
+> - `docs/02-architecture/02-数据库设计.md`
+> - `docs/02-architecture/04-API设计.md`
+> - `docs/03-guides/04-风格数据库导入数据格式.md`
+> - `docs/06-reference/02-双层编码体系.md`
 
 ---
 
@@ -156,7 +156,7 @@ Kimi / ChatGPT / Claude（多模态网页版）
 阶段二：知识入库（在 RSDP 系统中完成）
     │
     ▼
-按 `docs/03-guides/风格数据库导入数据格式.md` 整理为 JSON / Excel
+按 `docs/03-guides/04-风格数据库导入数据格式.md` 整理为 JSON / Excel
     │
     ▼
 POST /api/v1/style-knowledge/import
@@ -301,7 +301,7 @@ CREATE INDEX IF NOT EXISTS idx_product_match_score ON product_style_match(overal
 
 ### 5.3 推荐 Prompt 模板与输出格式
 
-> 具体导入 JSON Schema、Excel 模板和字段校验规则见 `docs/03-guides/风格数据库导入数据格式.md`。
+> 具体导入 JSON Schema、Excel 模板和字段校验规则见 `docs/03-guides/04-风格数据库导入数据格式.md`。
 
 ```markdown
 你是资深家具/室内设计师，擅长从设计案例中提炼风格元素和搭配原则。
@@ -478,7 +478,7 @@ AI 识别产品 → 得到六维标签/颜色/材质/场景
 
 - 固化网页端 Prompt 和复核清单。
 - 收集 50-100 个成功案例 + 20-30 个失败案例。
-- 按 `docs/03-guides/风格数据库导入数据格式.md` 整理成 JSON/Excel。
+- 按 `docs/03-guides/04-风格数据库导入数据格式.md` 整理成 JSON/Excel。
 - 人工复核后导入 RSDP。
 
 ### Phase 3：产品匹配与推荐集成（1-2 周）

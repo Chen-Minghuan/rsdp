@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.rsdp.config.typehandler.PostgreSqlJsonbTypeHandler;
+import com.rsdp.config.typehandler.JsonbTypeHandler;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -37,13 +37,13 @@ public class AuditLog {
     /**
      * 变更前快照（JSON）。
      */
-    @TableField(typeHandler = PostgreSqlJsonbTypeHandler.class)
+    @TableField(typeHandler = JsonbTypeHandler.class)
     private Object oldValue;
 
     /**
      * 变更后快照（JSON）。
      */
-    @TableField(typeHandler = PostgreSqlJsonbTypeHandler.class)
+    @TableField(typeHandler = JsonbTypeHandler.class)
     private Object newValue;
 
     /**

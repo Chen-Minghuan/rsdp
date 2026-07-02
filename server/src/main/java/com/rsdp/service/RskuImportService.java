@@ -16,6 +16,7 @@ import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.util.ExcelFileValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -49,11 +50,6 @@ public class RskuImportService {
 
     private static final int MAX_ROWS = 1000;
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-    private static final List<String> ALLOWED_CONTENT_TYPES = List.of(
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel",
-        "text/csv"
-    );
 
     private final RskuSupplyMapper rskuSupplyMapper;
     private final RspuMapper rspuMapper;
@@ -160,8 +156,7 @@ public class RskuImportService {
         if (file.getSize() > MAX_FILE_SIZE) {
             throw new BusinessException("文件大小不能超过 10MB");
         }
-        String contentType = file.getContentType();
-        if (!ALLOWED_CONTENT_TYPES.contains(contentType)) {
+        if (!ExcelFileValidator.isExcelOrCsv(file)) {
             throw new BusinessException("仅支持 Excel (.xlsx/.xls) 或 CSV 文件");
         }
     }
