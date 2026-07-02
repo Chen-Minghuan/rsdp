@@ -2,16 +2,20 @@ package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.dto.Dimensions;
+import com.rsdp.dto.OcrResult;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.OcrPostProcessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -76,6 +80,9 @@ public class AsyncTaskProcessor {
             labels = visionService.recognizeImage(imageStream);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
+            // OCR 结果后处理：清洗型号/材质，规范化尺寸与材质标签
+            postProcessOcr(labels);
+
             updateTaskStatus(taskId, "processing", 60, null, null);
 
             float[] embedding = embedImageSafely(rspuId, imageBytes);
@@ -93,6 +100,36 @@ public class AsyncTaskProcessor {
             log.error("AI 识别失败，taskId={}", taskId, e);
             persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+        }
+    }
+
+    private void postProcessOcr(AiLabels labels) {
+        if (labels == null) {
+            return;
+        }
+        OcrResult ocr = labels.getOcr();
+        if (ocr == null) {
+            return;
+        }
+
+        OcrPostProcessor.clean(ocr);
+
+        // 如果视觉识别没有返回材质标签，尝试用 OCR 材质描述兜底
+        if ((labels.getMaterialTags() == null || labels.getMaterialTags().isEmpty())
+            && StringUtils.hasText(ocr.getMaterialDescription())) {
+            List<String> parsedMaterials = OcrPostProcessor.parseMaterials(
+                ocr.getMaterialDescription(), labels.getMaterialTags());
+            if (!parsedMaterials.isEmpty()) {
+                labels.setMaterialTags(parsedMaterials);
+            }
+        }
+
+        // 规范化尺寸：取解析结果的第一组有效尺寸写回 ocr.dimensions
+        if (StringUtils.hasText(ocr.getDimensionText())) {
+            List<Dimensions> parsed = OcrPostProcessor.parseDimensions(ocr.getDimensionText());
+            if (!parsed.isEmpty()) {
+                ocr.setDimensions(parsed.get(0));
+            }
         }
     }
 

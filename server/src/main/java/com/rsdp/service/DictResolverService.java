@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.entity.CategoryDict;
+import com.rsdp.util.OcrPostProcessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,14 +37,24 @@ public class DictResolverService {
             return null;
         }
         String normalized = dictName.trim();
-        return dictService.listByType(dictType).stream()
+        String code = dictService.listByType(dictType).stream()
             .filter(d -> normalized.equals(d.getDictName()) || normalized.equals(d.getDictNameEn()))
             .map(CategoryDict::getDictCode)
             .findFirst()
-            .orElseGet(() -> {
-                log.warn("未找到字典项: dictType={}, dictName={}", dictType, dictName);
-                return null;
-            });
+            .orElse(null);
+        if (code != null) {
+            return code;
+        }
+        // style 类型使用内置别名兜底（如意式极简 → IT、侘寂风 → WJ）
+        if ("style".equals(dictType)) {
+            String aliasCode = OcrPostProcessor.toStyleCode(normalized);
+            if (aliasCode != null) {
+                log.debug("风格别名兜底命中: dictName={} -> {}", dictName, aliasCode);
+                return aliasCode;
+            }
+        }
+        log.warn("未找到字典项: dictType={}, dictName={}", dictType, dictName);
+        return null;
     }
 
     /**

@@ -35,8 +35,6 @@ import java.util.UUID;
 public class ProductService {
 
     private final RspuMapper rspuMapper;
-    private final RspuVariantMapper rspuVariantMapper;
-    private final RspuStyleMapper rspuStyleMapper;
     private final AsyncTaskMapper asyncTaskMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final AsyncTaskProcessor asyncTaskProcessor;
