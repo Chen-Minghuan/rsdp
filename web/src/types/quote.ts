@@ -1,8 +1,16 @@
 /**
+ * 报价单项请求。
+ */
+export interface QuoteItemRequest {
+  rskuId: string
+  quantity: number
+}
+
+/**
  * 生成报价单请求。
  */
 export interface QuoteGenerateRequest {
-  rskuIds: string[]
+  items: QuoteItemRequest[]
 }
 
 /**
@@ -17,6 +25,8 @@ export interface QuoteItem {
   factoryName?: string
   factorySku?: string
   factoryPrice: number
+  quantity: number
+  subtotal?: number
   priceBand: string
   materialDescription?: string
   leadTimeDays?: number
@@ -32,6 +42,7 @@ export interface QuoteItem {
 export interface QuoteSummary {
   totalPrice: number
   itemCount: number
+  totalQuantity: number
   factoryCount: number
   maxLeadTimeDays: number
 }

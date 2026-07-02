@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
@@ -32,6 +33,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -68,13 +70,22 @@ public class SchemeService {
 
         String schemeId = "SCHEME-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
-        // 按 rskuId 去重，保留第一次出现的顺序
-        List<SchemeItemRequest> distinctItems = new java.util.ArrayList<>();
-        Set<String> seenRskuIds = new HashSet<>();
+        // 按 rskuId 去重并聚合数量，保留第一次出现的顺序
+        Map<String, SchemeItemRequest> uniqueItemMap = new java.util.LinkedHashMap<>();
+        Map<String, Integer> quantityMap = new java.util.LinkedHashMap<>();
         for (SchemeItemRequest item : request.getItems()) {
-            if (item.getRskuId() != null && seenRskuIds.add(item.getRskuId())) {
-                distinctItems.add(item);
+            if (item.getRskuId() == null) {
+                continue;
             }
+            int quantity = item.getQuantity() != null && item.getQuantity() > 0
+                ? item.getQuantity()
+                : 1;
+            uniqueItemMap.putIfAbsent(item.getRskuId(), item);
+            quantityMap.merge(item.getRskuId(), quantity, Integer::sum);
+        }
+        List<SchemeItemRequest> distinctItems = new java.util.ArrayList<>(uniqueItemMap.values());
+        if (distinctItems.isEmpty()) {
+            throw new BusinessException("没有有效的方案项");
         }
 
         BigDecimal totalPrice = BigDecimal.ZERO;
@@ -94,8 +105,10 @@ public class SchemeService {
                     "RSKU 与 RSPU 不匹配: " + itemRequest.getRskuId());
             }
 
+            int quantity = quantityMap.getOrDefault(itemRequest.getRskuId(), 1);
+
             if (rsku.getFactoryPrice() != null) {
-                totalPrice = totalPrice.add(rsku.getFactoryPrice());
+                totalPrice = totalPrice.add(rsku.getFactoryPrice().multiply(BigDecimal.valueOf(quantity)));
             }
             if (rsku.getLeadTimeDays() != null && rsku.getLeadTimeDays() > maxLeadTimeDays) {
                 maxLeadTimeDays = rsku.getLeadTimeDays();
@@ -112,6 +125,7 @@ public class SchemeService {
             schemeItem.setFactoryPrice(rsku.getFactoryPrice());
             schemeItem.setLeadTimeDays(rsku.getLeadTimeDays());
             schemeItem.setMoq(rsku.getMoq());
+            schemeItem.setQuantity(quantity);
             schemeItem.setSortOrder(itemRequest.getSortOrder() != null ? itemRequest.getSortOrder() : i);
             schemeItem.setCreatedAt(LocalDateTime.now());
             schemeItems.add(schemeItem);
@@ -162,13 +176,22 @@ public class SchemeService {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
 
-        // 按 rskuId 去重，保留第一次出现的顺序
-        List<SchemeItemRequest> distinctItems = new java.util.ArrayList<>();
-        Set<String> seenRskuIds = new HashSet<>();
+        // 按 rskuId 去重并聚合数量，保留第一次出现的顺序
+        Map<String, SchemeItemRequest> uniqueItemMap = new java.util.LinkedHashMap<>();
+        Map<String, Integer> quantityMap = new java.util.LinkedHashMap<>();
         for (SchemeItemRequest item : request.getItems()) {
-            if (item.getRskuId() != null && seenRskuIds.add(item.getRskuId())) {
-                distinctItems.add(item);
+            if (item.getRskuId() == null) {
+                continue;
             }
+            int quantity = item.getQuantity() != null && item.getQuantity() > 0
+                ? item.getQuantity()
+                : 1;
+            uniqueItemMap.putIfAbsent(item.getRskuId(), item);
+            quantityMap.merge(item.getRskuId(), quantity, Integer::sum);
+        }
+        List<SchemeItemRequest> distinctItems = new java.util.ArrayList<>(uniqueItemMap.values());
+        if (distinctItems.isEmpty()) {
+            throw new BusinessException("没有有效的方案项");
         }
 
         BigDecimal totalPrice = BigDecimal.ZERO;
@@ -187,8 +210,10 @@ public class SchemeService {
                     "RSKU 与 RSPU 不匹配: " + itemRequest.getRskuId());
             }
 
+            int quantity = quantityMap.getOrDefault(itemRequest.getRskuId(), 1);
+
             if (rsku.getFactoryPrice() != null) {
-                totalPrice = totalPrice.add(rsku.getFactoryPrice());
+                totalPrice = totalPrice.add(rsku.getFactoryPrice().multiply(BigDecimal.valueOf(quantity)));
             }
             if (rsku.getLeadTimeDays() != null && rsku.getLeadTimeDays() > maxLeadTimeDays) {
                 maxLeadTimeDays = rsku.getLeadTimeDays();
@@ -205,6 +230,7 @@ public class SchemeService {
             schemeItem.setFactoryPrice(rsku.getFactoryPrice());
             schemeItem.setLeadTimeDays(rsku.getLeadTimeDays());
             schemeItem.setMoq(rsku.getMoq());
+            schemeItem.setQuantity(quantity);
             schemeItem.setSortOrder(itemRequest.getSortOrder() != null ? itemRequest.getSortOrder() : i);
             schemeItem.setCreatedAt(LocalDateTime.now());
             schemeItems.add(schemeItem);
@@ -340,11 +366,19 @@ public class SchemeService {
             new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId)
         );
 
-        List<String> rskuIds = items.stream()
-            .map(SchemeItem::getRskuId)
+        List<QuoteItemRequest> quoteItems = items.stream()
+            .map(item -> {
+                QuoteItemRequest req = new QuoteItemRequest();
+                req.setRskuId(item.getRskuId());
+                int quantity = item.getQuantity() != null && item.getQuantity() > 0
+                    ? item.getQuantity()
+                    : 1;
+                req.setQuantity(quantity);
+                return req;
+            })
             .collect(Collectors.toList());
 
-        QuoteResponse quote = quoteService.generateQuote(rskuIds);
+        QuoteResponse quote = quoteService.generateQuote(quoteItems);
 
         // 快照模式：对比方案保存时的价格与当前最新价格
         List<PriceChangeResponse> priceChanges = items.stream()
@@ -379,6 +413,7 @@ public class SchemeService {
         FactoryMaster factory = item.getFactoryCode() != null
             ? factoryMasterMapper.selectById(item.getFactoryCode())
             : null;
+        RskuSupply rsku = rskuSupplyMapper.selectById(item.getRskuId());
 
         SchemeItemResponse response = new SchemeItemResponse();
         response.setSchemeItemId(item.getSchemeItemId());
@@ -388,7 +423,13 @@ public class SchemeService {
         response.setRskuId(item.getRskuId());
         response.setFactoryCode(item.getFactoryCode());
         response.setFactoryName(factory != null ? factory.getFactoryName() : null);
+        response.setFactorySku(rsku != null ? rsku.getFactorySku() : null);
         response.setFactoryPrice(item.getFactoryPrice());
+        int quantity = item.getQuantity() != null && item.getQuantity() > 0 ? item.getQuantity() : 1;
+        response.setQuantity(quantity);
+        if (item.getFactoryPrice() != null) {
+            response.setSubtotal(item.getFactoryPrice().multiply(BigDecimal.valueOf(quantity)));
+        }
         response.setLeadTimeDays(item.getLeadTimeDays());
         response.setMoq(item.getMoq());
         response.setSortOrder(item.getSortOrder());

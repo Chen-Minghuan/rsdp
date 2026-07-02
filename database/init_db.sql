@@ -421,6 +421,7 @@ CREATE TABLE IF NOT EXISTS scheme_item (
     factory_price TEXT,                            -- 出厂价（AES-256-GCM 加密存储，Base64 密文）
     lead_time_days INTEGER,
     moq INTEGER,
+    quantity INTEGER DEFAULT 1 NOT NULL,           -- 产品数量（默认 1）
     sort_order INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),

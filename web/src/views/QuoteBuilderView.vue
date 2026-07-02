@@ -11,6 +11,7 @@ import {
   NDescriptionsItem,
   NDataTable,
   NSelect,
+  NInputNumber,
   NImage,
   NTag,
   NEmpty,
@@ -26,7 +27,7 @@ import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
 import type { ProductDetail } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
-import type { QuoteResponse } from '@/types/quote'
+import type { QuoteResponse, QuoteItem } from '@/types/quote'
 import type { Scheme } from '@/types/scheme'
 
 const route = useRoute()
@@ -82,6 +83,7 @@ const schemeName = ref('')
 const products = ref<ProductDetail[]>([])
 const rskuMap = ref<Record<string, Rsku[]>>({})
 const selectedRskuMap = ref<Record<string, string>>({})
+const quantityMap = ref<Record<string, number>>({})
 const originalScheme = ref<Scheme | null>(null)
 
 const MAX_ITEMS = 50
@@ -94,7 +96,10 @@ const totalPriceCents = computed(() => {
     const rskuId = selectedRskuMap.value[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
-    if (rsku) total += Math.round(rsku.factoryPrice * 100)
+    if (rsku) {
+      const quantity = quantityMap.value[rspuId] ?? 1
+      total += Math.round(rsku.factoryPrice * 100 * quantity)
+    }
   }
   return total
 })
@@ -127,9 +132,10 @@ async function loadData() {
       originalScheme.value = scheme
       schemeName.value = scheme.schemeName
       ids = scheme.items.map(item => item.rspuId)
-      // 预先回填用户上次选择的 RSKU
+      // 预先回填用户上次选择的 RSKU 和数量
       scheme.items.forEach(item => {
         selectedRskuMap.value[item.rspuId] = item.rskuId
+        quantityMap.value[item.rspuId] = item.quantity ?? 1
       })
     } else {
       ids = rspuIds.value
@@ -150,6 +156,11 @@ async function loadData() {
 
     const detailResults = await Promise.all(ids.map(id => getProductDetail(id)))
     products.value = detailResults
+    products.value.forEach(p => {
+      if (quantityMap.value[p.rspu.rspuId] == null) {
+        quantityMap.value[p.rspu.rspuId] = 1
+      }
+    })
 
     const rskuResults = await Promise.all(ids.map(id => listRskuByRspu(id)))
     const map: Record<string, Rsku[]> = {}
@@ -176,8 +187,13 @@ async function loadData() {
 }
 
 async function handleGenerateQuote() {
-  const rskuIds = Object.values(selectedRskuMap.value).filter(Boolean)
-  if (rskuIds.length === 0) {
+  const items = Object.entries(selectedRskuMap.value)
+    .filter(([, rskuId]) => rskuId)
+    .map(([rspuId, rskuId]) => ({
+      rskuId: rskuId!,
+      quantity: quantityMap.value[rspuId] ?? 1
+    }))
+  if (items.length === 0) {
     errorMessage.value = '请至少选择一个 RSKU'
     return
   }
@@ -186,7 +202,7 @@ async function handleGenerateQuote() {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    quoteResult.value = await generateQuote({ rskuIds })
+    quoteResult.value = await generateQuote({ items })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '生成报价单失败'
   } finally {
@@ -195,8 +211,13 @@ async function handleGenerateQuote() {
 }
 
 async function handleExportQuote() {
-  const rskuIds = Object.values(selectedRskuMap.value).filter(Boolean)
-  if (rskuIds.length === 0) {
+  const items = Object.entries(selectedRskuMap.value)
+    .filter(([, rskuId]) => rskuId)
+    .map(([rspuId, rskuId]) => ({
+      rskuId: rskuId!,
+      quantity: quantityMap.value[rspuId] ?? 1
+    }))
+  if (items.length === 0) {
     errorMessage.value = '请至少选择一个 RSKU'
     return
   }
@@ -205,7 +226,7 @@ async function handleExportQuote() {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    await exportQuote({ rskuIds })
+    await exportQuote({ items })
     successMessage.value = '报价单已开始下载'
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '导出报价单失败'
@@ -237,6 +258,7 @@ async function handleSaveAsScheme() {
     .map(([rspuId, rskuId], index) => ({
       rspuId,
       rskuId: rskuId!,
+      quantity: quantityMap.value[rspuId] ?? 1,
       sortOrder: index
     }))
 
@@ -267,11 +289,32 @@ async function handleSaveAsScheme() {
   }
 }
 
+function formatPrice(value: number | undefined): string {
+  if (value == null || Number.isNaN(value)) return '-'
+  return `¥${value.toFixed(2)}`
+}
+
 const quoteColumns = [
   { title: 'RSPU', key: 'rspuName' },
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
-  { title: '出厂价', key: 'factoryPrice', width: 120 },
+  {
+    title: '出厂价',
+    key: 'factoryPrice',
+    width: 120,
+    render(row: QuoteItem) {
+      return formatPrice(row.factoryPrice)
+    }
+  },
+  { title: '数量', key: 'quantity', width: 80 },
+  {
+    title: '小计',
+    key: 'subtotal',
+    width: 120,
+    render(row: QuoteItem) {
+      return formatPrice(row.subtotal)
+    }
+  },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 }
 ]
@@ -285,6 +328,13 @@ function selectedRsku(rspuId: string): Rsku | undefined {
   const rskuId = selectedRskuMap.value[rspuId]
   if (!rskuId) return undefined
   return rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
+}
+
+function selectedSubtotal(rspuId: string): number {
+  const rsku = selectedRsku(rspuId)
+  if (!rsku) return 0
+  const quantity = quantityMap.value[rspuId] ?? 1
+  return rsku.factoryPrice * quantity
 }
 
 onMounted(() => {
@@ -355,9 +405,16 @@ onMounted(() => {
                   placeholder="选择工厂报价"
                   style="width: 360px;"
                 />
+                <n-input-number
+                  v-model:value="quantityMap[product.rspu.rspuId]"
+                  :min="1"
+                  :precision="0"
+                  placeholder="数量"
+                  style="width: 100px;"
+                />
               </n-space>
               <n-tag :type="isFactoryCapable(selectedRsku(product.rspu.rspuId)) ? 'info' : 'warning'" size="small">
-                已选：¥{{ (selectedRsku(product.rspu.rspuId)?.factoryPrice ?? 0).toFixed(2) }}
+                小计：¥{{ selectedSubtotal(product.rspu.rspuId).toFixed(2) }}
                 {{ !isFactoryCapable(selectedRsku(product.rspu.rspuId)) ? `[工厂未声明 ${selectedRsku(product.rspu.rspuId)?.productLevel} 级能力]` : '' }}
               </n-tag>
             </n-space>

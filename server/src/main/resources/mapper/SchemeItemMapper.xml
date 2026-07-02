@@ -12,6 +12,7 @@
             factory_price,
             lead_time_days,
             moq,
+            quantity,
             sort_order,
             created_at
         ) VALUES
@@ -24,6 +25,7 @@
                 #{item.factoryPrice},
                 #{item.leadTimeDays},
                 #{item.moq},
+                #{item.quantity},
                 #{item.sortOrder},
                 #{item.createdAt}
             )

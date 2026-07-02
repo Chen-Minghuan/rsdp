@@ -29,6 +29,7 @@ public class SchemeItem {
 
     private Integer leadTimeDays;
     private Integer moq;
+    private Integer quantity;
     private Integer sortOrder;
     private LocalDateTime createdAt;
 }

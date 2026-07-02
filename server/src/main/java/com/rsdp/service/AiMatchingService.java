@@ -289,6 +289,8 @@ public class AiMatchingService {
             item.setFactoryName(factory != null ? factory.getFactoryName() : null);
             item.setFactorySku(cheapest.getFactorySku());
             item.setFactoryPrice(cheapest.getFactoryPrice());
+            item.setQuantity(1);
+            item.setSubtotal(cheapest.getFactoryPrice());
             item.setLeadTimeDays(cheapest.getLeadTimeDays());
             item.setMoq(cheapest.getMoq());
             items.add(item);
@@ -374,6 +376,8 @@ public class AiMatchingService {
             item.setFactoryName(factory != null ? factory.getFactoryName() : null);
             item.setFactorySku(cheapest.getFactorySku());
             item.setFactoryPrice(cheapest.getFactoryPrice());
+            item.setQuantity(1);
+            item.setSubtotal(cheapest.getFactoryPrice());
             item.setLeadTimeDays(cheapest.getLeadTimeDays());
             item.setMoq(cheapest.getMoq());
             items.add(item);

@@ -255,15 +255,18 @@ GET    /api/v1/dicts/{dictType}
 
 ```
 POST   /api/v1/quotes/generate
-       # 根据选中的 RSKU 列表生成报价单（已实现）
-       # Request: { rskuIds: ["RSKU-001", ...] }
-       # Response: { items: [QuoteItem...], summary: { totalPrice, itemCount, factoryCount, maxLeadTimeDays } }
+       # 根据选中的 RSKU 及数量列表生成报价单（已实现）
+       # Request: { items: [{ rskuId, quantity }, ...] }
+       # Response: {
+       #   items: [QuoteItem...],           # QuoteItem 包含 quantity、subtotal
+       #   summary: { totalPrice, itemCount, totalQuantity, factoryCount, maxLeadTimeDays }
+       # }
 
 POST   /api/v1/quotes/export
-       # 根据选中的 RSKU 列表导出 Excel 报价单（已实现）
-       # Request: { rskuIds: ["RSKU-001", ...] }
+       # 根据选中的 RSKU 及数量列表导出 Excel 报价单（已实现）
+       # Request: { items: [{ rskuId, quantity }, ...] }
        # Response: application/octet-stream，Content-Disposition: attachment; filename="quote_<timestamp>.xlsx"
-       # 说明：工作簿包含两个 sheet："报价明细"（逐项报价）和"汇总"（总价、项数、工厂数、最大交期、价格变动提示）
+       # 说明：工作簿包含两个 sheet："报价明细"（逐项报价，含数量/小计）和"汇总"（总价、项数、总数量、工厂数、最大交期、价格变动提示）
 ```
 
 ### 搭配方案
@@ -275,7 +278,7 @@ POST   /api/v1/schemes
        #   schemeName (max 128 字符),
        #   roomType?,
        #   budgetLimit?,
-       #   items: [{ rspuId, rskuId, sortOrder? }] (1..50 项)
+       #   items: [{ rspuId, rskuId, quantity?, sortOrder? }] (1..50 项)
        # }
        # Response: SchemeResponse
 
@@ -293,7 +296,7 @@ PUT    /api/v1/schemes/{schemeId}
        #   schemeName (max 128 字符),
        #   roomType?,
        #   budgetLimit?,
-       #   items: [{ rspuId, rskuId, sortOrder? }] (1..50 项)
+       #   items: [{ rspuId, rskuId, quantity?, sortOrder? }] (1..50 项)
        # }
        # Response: SchemeResponse
        # 说明：会物理删除旧子项并重新写入，保证幂等

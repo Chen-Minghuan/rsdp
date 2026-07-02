@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
@@ -71,6 +72,7 @@ class SchemeServiceTest {
         SchemeItemRequest itemRequest = new SchemeItemRequest();
         itemRequest.setRspuId("RSPU-001");
         itemRequest.setRskuId("RSKU-001");
+        itemRequest.setQuantity(2);
 
         SchemeCreateRequest request = new SchemeCreateRequest();
         request.setSchemeName("客厅搭配方案");
@@ -91,14 +93,26 @@ class SchemeServiceTest {
         factory.setFactoryCode("F001");
         factory.setFactoryName("测试工厂");
 
+        SchemeItem savedItem = new SchemeItem();
+        savedItem.setSchemeItemId(1L);
+        savedItem.setSchemeId("SCHEME-001");
+        savedItem.setRspuId("RSPU-001");
+        savedItem.setRskuId("RSKU-001");
+        savedItem.setFactoryCode("F001");
+        savedItem.setFactoryPrice(new BigDecimal("2500"));
+        savedItem.setQuantity(2);
+
         when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
-        when(schemeItemMapper.selectList(any())).thenReturn(List.of());
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
         when(schemeMapper.selectById(any())).thenReturn(new Scheme());
         when(schemeMapper.selectCount(any())).thenReturn(0L);
 
         SchemeResponse response = schemeService.createScheme(request);
 
         assertThat(response).isNotNull();
+        assertThat(response.getItems()).hasSize(1);
+        assertThat(response.getItems().get(0).getQuantity()).isEqualTo(2);
+        assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
         verify(schemeMapper).insert(any(Scheme.class));
         verify(schemeItemMapper).insertBatchSafe(any(List.class));
     }
@@ -156,6 +170,8 @@ class SchemeServiceTest {
         item.setRspuId("RSPU-001");
         item.setRskuId("RSKU-001");
         item.setFactoryCode("F001");
+        item.setFactoryPrice(new BigDecimal("2500"));
+        item.setQuantity(3);
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
@@ -175,6 +191,8 @@ class SchemeServiceTest {
 
         assertThat(response.getSchemeId()).isEqualTo("SCHEME-001");
         assertThat(response.getItems()).hasSize(1);
+        assertThat(response.getItems().get(0).getQuantity()).isEqualTo(3);
+        assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo(new BigDecimal("7500"));
     }
 
     @Test
@@ -261,6 +279,7 @@ class SchemeServiceTest {
         item.setRspuId("RSPU-001");
         item.setRskuId("RSKU-001");
         item.setFactoryPrice(new BigDecimal("2000"));
+        item.setQuantity(3);
 
         RskuSupply currentRsku = new RskuSupply();
         currentRsku.setRskuId("RSKU-001");
@@ -276,7 +295,7 @@ class SchemeServiceTest {
 
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
-        when(quoteService.generateQuote(List.of("RSKU-001"))).thenReturn(quote);
+        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)))).thenReturn(quote);
         when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(currentRsku);
         when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
 
@@ -285,5 +304,58 @@ class SchemeServiceTest {
         assertThat(response.getPriceChanges()).hasSize(1);
         assertThat(response.getPriceChanges().get(0).getOldPrice()).isEqualTo(new BigDecimal("2000"));
         assertThat(response.getPriceChanges().get(0).getNewPrice()).isEqualTo(new BigDecimal("2200"));
+    }
+
+    @Test
+    void createScheme_shouldMergeDuplicateRskuQuantities() {
+        SchemeItemRequest itemRequest1 = new SchemeItemRequest();
+        itemRequest1.setRspuId("RSPU-001");
+        itemRequest1.setRskuId("RSKU-001");
+        itemRequest1.setQuantity(2);
+
+        SchemeItemRequest itemRequest2 = new SchemeItemRequest();
+        itemRequest2.setRspuId("RSPU-001");
+        itemRequest2.setRskuId("RSKU-001");
+        itemRequest2.setQuantity(3);
+
+        SchemeCreateRequest request = new SchemeCreateRequest();
+        request.setSchemeName("合并数量方案");
+        request.setItems(List.of(itemRequest1, itemRequest2));
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-001");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("1000"));
+        rsku.setFactorySku("FACTORY-SKU-001");
+        rsku.setLeadTimeDays(20);
+
+        SchemeItem savedItem = new SchemeItem();
+        savedItem.setSchemeItemId(1L);
+        savedItem.setSchemeId("SCHEME-001");
+        savedItem.setRspuId("RSPU-001");
+        savedItem.setRskuId("RSKU-001");
+        savedItem.setFactoryCode("F001");
+        savedItem.setFactoryPrice(new BigDecimal("1000"));
+        savedItem.setQuantity(5);
+
+        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
+        when(schemeMapper.selectById(any())).thenReturn(new Scheme());
+        when(schemeMapper.selectCount(any())).thenReturn(0L);
+
+        SchemeResponse response = schemeService.createScheme(request);
+
+        assertThat(response.getItems()).hasSize(1);
+        assertThat(response.getItems().get(0).getQuantity()).isEqualTo(5);
+        assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
+        assertThat(response.getItems().get(0).getFactorySku()).isEqualTo("FACTORY-SKU-001");
+    }
+
+    private QuoteItemRequest req(String rskuId, int quantity) {
+        QuoteItemRequest r = new QuoteItemRequest();
+        r.setRskuId(rskuId);
+        r.setQuantity(quantity);
+        return r;
     }
 }

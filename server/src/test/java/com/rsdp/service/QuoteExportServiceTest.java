@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.response.QuoteItemResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.QuoteSummaryResponse;
@@ -38,12 +39,15 @@ class QuoteExportServiceTest {
         item.setFactoryCode("F001");
         item.setFactoryName("测试工厂");
         item.setFactoryPrice(new BigDecimal("2500"));
+        item.setQuantity(3);
+        item.setSubtotal(new BigDecimal("7500"));
         item.setLeadTimeDays(25);
         item.setMoq(10);
 
         QuoteSummaryResponse summary = new QuoteSummaryResponse();
-        summary.setTotalPrice(new BigDecimal("2500"));
+        summary.setTotalPrice(new BigDecimal("7500"));
         summary.setItemCount(1);
+        summary.setTotalQuantity(3);
         summary.setFactoryCount(1);
         summary.setMaxLeadTimeDays(25);
 
@@ -51,9 +55,10 @@ class QuoteExportServiceTest {
         quote.setItems(List.of(item));
         quote.setSummary(summary);
 
-        when(quoteService.generateQuote(List.of("RSKU-001"))).thenReturn(quote);
+        List<QuoteItemRequest> request = List.of(req("RSKU-001", 3));
+        when(quoteService.generateQuote(request)).thenReturn(quote);
 
-        byte[] content = quoteExportService.exportQuote(List.of("RSKU-001"));
+        byte[] content = quoteExportService.exportQuote(request);
 
         assertThat(content).isNotEmpty();
         // Excel .xlsx 文件本质上是 ZIP 文件，起始字节应为 "PK"
@@ -67,5 +72,12 @@ class QuoteExportServiceTest {
         assertThatThrownBy(() -> quoteExportService.exportQuote(List.of()))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("至少一个");
+    }
+
+    private QuoteItemRequest req(String rskuId, int quantity) {
+        QuoteItemRequest r = new QuoteItemRequest();
+        r.setRskuId(rskuId);
+        r.setQuantity(quantity);
+        return r;
     }
 }

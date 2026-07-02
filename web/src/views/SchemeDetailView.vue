@@ -17,7 +17,7 @@ import {
 import { getSchemeDetail, generateQuoteFromScheme } from '@/api/scheme'
 import { exportQuote } from '@/api/quote'
 import type { Scheme, SchemeItem } from '@/types/scheme'
-import type { PriceChange, QuoteResponse } from '@/types/quote'
+import type { PriceChange, QuoteItem, QuoteResponse } from '@/types/quote'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,6 +44,11 @@ const duplicateRspuIds = computed(() => {
   return Array.from(duplicates)
 })
 
+function formatPrice(value: number | undefined): string {
+  if (value == null || Number.isNaN(value)) return '-'
+  return `¥${value.toFixed(2)}`
+}
+
 const itemColumns = [
   {
     title: '图片',
@@ -64,7 +69,23 @@ const itemColumns = [
   { title: 'RSPU', key: 'rspuId', width: 160 },
   { title: '名称', key: 'rspuName' },
   { title: '工厂', key: 'factoryName' },
-  { title: '出厂价', key: 'factoryPrice', width: 120 },
+  {
+    title: '出厂价',
+    key: 'factoryPrice',
+    width: 120,
+    render(row: SchemeItem) {
+      return formatPrice(row.factoryPrice)
+    }
+  },
+  { title: '数量', key: 'quantity', width: 80 },
+  {
+    title: '小计',
+    key: 'subtotal',
+    width: 120,
+    render(row: SchemeItem) {
+      return formatPrice(row.subtotal)
+    }
+  },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 }
 ]
@@ -73,7 +94,23 @@ const quoteColumns = [
   { title: 'RSPU', key: 'rspuName' },
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
-  { title: '出厂价', key: 'factoryPrice', width: 120 },
+  {
+    title: '出厂价',
+    key: 'factoryPrice',
+    width: 120,
+    render(row: QuoteItem) {
+      return formatPrice(row.factoryPrice)
+    }
+  },
+  { title: '数量', key: 'quantity', width: 80 },
+  {
+    title: '小计',
+    key: 'subtotal',
+    width: 120,
+    render(row: QuoteItem) {
+      return formatPrice(row.subtotal)
+    }
+  },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 }
 ]
@@ -157,8 +194,11 @@ async function handleExportQuote() {
   exporting.value = true
   errorMessage.value = ''
   try {
-    const rskuIds = scheme.value.items.map(item => item.rskuId)
-    await exportQuote({ rskuIds })
+    const items = scheme.value.items.map(item => ({
+      rskuId: item.rskuId,
+      quantity: item.quantity ?? 1
+    }))
+    await exportQuote({ items })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '导出报价单失败'
   } finally {
@@ -201,6 +241,9 @@ onMounted(() => {
             </n-descriptions-item>
             <n-descriptions-item label="项数">
               {{ scheme.itemCount }}
+            </n-descriptions-item>
+            <n-descriptions-item label="总数量">
+              {{ scheme.items.reduce((sum, item) => sum + (item.quantity ?? 1), 0) }}
             </n-descriptions-item>
             <n-descriptions-item label="总价">
               ¥{{ scheme.totalPrice.toFixed(2) }}
@@ -267,6 +310,9 @@ onMounted(() => {
                 </n-descriptions-item>
                 <n-descriptions-item label="项数">
                   {{ quoteResult.summary.itemCount }}
+                </n-descriptions-item>
+                <n-descriptions-item label="总数量">
+                  {{ quoteResult.summary.totalQuantity }}
                 </n-descriptions-item>
                 <n-descriptions-item label="涉及工厂">
                   {{ quoteResult.summary.factoryCount }} 家

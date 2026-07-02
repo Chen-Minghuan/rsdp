@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.response.QuoteItemResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.QuoteSummaryResponse;
@@ -17,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -38,17 +40,36 @@ public class QuoteService {
     private final FactoryService factoryService;
 
     /**
-     * 根据 RSKU ID 列表生成报价单。
+     * 根据 RSKU ID 及数量列表生成报价单。
      *
-     * @param rskuIds RSKU ID 列表
+     * @param quoteItems 报价单项请求列表
      * @return 报价单
      */
-    public QuoteResponse generateQuote(List<String> rskuIds) {
-        if (rskuIds == null || rskuIds.isEmpty()) {
+    public QuoteResponse generateQuote(List<QuoteItemRequest> quoteItems) {
+        if (quoteItems == null || quoteItems.isEmpty()) {
             throw new BusinessException("请选择至少一个 RSKU");
         }
 
-        List<String> distinctRskuIds = rskuIds.stream().distinct().toList();
+        // 按 rskuId 聚合数量，保留第一次出现的顺序
+        List<QuoteItemRequest> mergedItems = new ArrayList<>();
+        Map<String, Integer> quantityMap = new java.util.LinkedHashMap<>();
+        for (QuoteItemRequest item : quoteItems) {
+            if (item.getRskuId() == null || item.getRskuId().isBlank()) {
+                continue;
+            }
+            int quantity = item.getQuantity() != null && item.getQuantity() > 0 ? item.getQuantity() : 1;
+            quantityMap.merge(item.getRskuId(), quantity, Integer::sum);
+        }
+        quantityMap.forEach((rskuId, quantity) -> {
+            QuoteItemRequest merged = new QuoteItemRequest();
+            merged.setRskuId(rskuId);
+            merged.setQuantity(quantity);
+            mergedItems.add(merged);
+        });
+
+        List<String> distinctRskuIds = mergedItems.stream()
+            .map(QuoteItemRequest::getRskuId)
+            .toList();
 
         // 批量查询 RSKU
         List<RskuSupply> rskus = rskuSupplyMapper.selectBatchIds(distinctRskuIds);
@@ -77,8 +98,8 @@ public class QuoteService {
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuMap.values().stream()
             .map(RspuMaster::getRspuId).toList());
 
-        List<QuoteItemResponse> items = distinctRskuIds.stream()
-            .map(id -> buildItem(rskuMap.get(id), rspuMap, factoryMap, primaryImageUrlMap))
+        List<QuoteItemResponse> items = mergedItems.stream()
+            .map(item -> buildItem(item, rskuMap.get(item.getRskuId()), rspuMap, factoryMap, primaryImageUrlMap))
             .collect(Collectors.toList());
 
         QuoteSummaryResponse summary = computeSummary(items);
@@ -143,7 +164,8 @@ public class QuoteService {
             ));
     }
 
-    private QuoteItemResponse buildItem(RskuSupply rsku,
+    private QuoteItemResponse buildItem(QuoteItemRequest quoteItem,
+                                        RskuSupply rsku,
                                         Map<String, RspuMaster> rspuMap,
                                         Map<String, FactoryMaster> factoryMap,
                                         Map<String, String> primaryImageUrlMap) {
@@ -153,6 +175,12 @@ public class QuoteService {
         }
 
         FactoryMaster factory = factoryMap.get(rsku.getFactoryCode());
+        int quantity = quoteItem.getQuantity() != null && quoteItem.getQuantity() > 0
+            ? quoteItem.getQuantity()
+            : 1;
+        BigDecimal subtotal = rsku.getFactoryPrice() != null
+            ? rsku.getFactoryPrice().multiply(BigDecimal.valueOf(quantity))
+            : null;
 
         QuoteItemResponse item = new QuoteItemResponse();
         item.setRspuId(rspu.getRspuId());
@@ -164,6 +192,8 @@ public class QuoteService {
         item.setFactoryName(factory != null ? factory.getFactoryName() : null);
         item.setFactorySku(rsku.getFactorySku());
         item.setFactoryPrice(rsku.getFactoryPrice());
+        item.setQuantity(quantity);
+        item.setSubtotal(subtotal);
         item.setPriceBand(rsku.getPriceBand());
         item.setMaterialDescription(rsku.getMaterialDescription());
         item.setLeadTimeDays(rsku.getLeadTimeDays());
@@ -176,12 +206,16 @@ public class QuoteService {
 
     private QuoteSummaryResponse computeSummary(List<QuoteItemResponse> items) {
         BigDecimal totalPrice = BigDecimal.ZERO;
+        int totalQuantity = 0;
         int maxLeadTimeDays = 0;
         Set<String> factoryCodes = new HashSet<>();
 
         for (QuoteItemResponse item : items) {
-            if (item.getFactoryPrice() != null) {
-                totalPrice = totalPrice.add(item.getFactoryPrice());
+            if (item.getSubtotal() != null) {
+                totalPrice = totalPrice.add(item.getSubtotal());
+            }
+            if (item.getQuantity() != null) {
+                totalQuantity += item.getQuantity();
             }
             if (item.getLeadTimeDays() != null && item.getLeadTimeDays() > maxLeadTimeDays) {
                 maxLeadTimeDays = item.getLeadTimeDays();
@@ -194,6 +228,7 @@ public class QuoteService {
         QuoteSummaryResponse summary = new QuoteSummaryResponse();
         summary.setTotalPrice(totalPrice);
         summary.setItemCount(items.size());
+        summary.setTotalQuantity(totalQuantity);
         summary.setFactoryCount(factoryCodes.size());
         summary.setMaxLeadTimeDays(maxLeadTimeDays);
         return summary;

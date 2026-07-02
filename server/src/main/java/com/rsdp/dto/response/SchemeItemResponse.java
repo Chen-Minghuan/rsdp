@@ -21,6 +21,8 @@ public class SchemeItemResponse {
     private String factorySku;
 
     private BigDecimal factoryPrice;
+    private Integer quantity;
+    private BigDecimal subtotal;
     private Integer leadTimeDays;
     private Integer moq;
     private Integer sortOrder;

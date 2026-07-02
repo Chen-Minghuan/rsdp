@@ -22,6 +22,10 @@ storage:
   type: local
   local-path: ./data/uploads
 
+mybatis-plus:
+  # 注册 TypeHandler 包路径，确保 @TableField(typeHandler) 和价格加密处理器生效
+  type-handlers-package: com.rsdp.config.typehandler
+
 rsdp:
   ai:
     # 通义千问 VL 兼容 OpenAI 格式

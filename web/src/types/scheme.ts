@@ -4,6 +4,7 @@
 export interface SchemeItemRequest {
   rspuId: string
   rskuId: string
+  quantity: number
   sortOrder?: number
 }
 
@@ -34,6 +35,8 @@ export interface SchemeItem {
   factoryCode: string
   factoryName?: string
   factoryPrice: number
+  quantity: number
+  subtotal?: number
   leadTimeDays?: number
   moq?: number
   sortOrder: number

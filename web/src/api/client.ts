@@ -27,13 +27,11 @@ export const apiClient = axios.create({
 
 /**
  * 上传专用 Axios 实例，超时更长，避免大文件/批量上传中断。
+ * 不设置默认 Content-Type，以便 FormData 请求自动使用 multipart/form-data。
  */
 export const uploadClient = axios.create({
   baseURL: '/api',
-  timeout: 120000,
-  headers: {
-    'Content-Type': 'application/json;charset=UTF-8'
-  }
+  timeout: 120000
 })
 
 /**

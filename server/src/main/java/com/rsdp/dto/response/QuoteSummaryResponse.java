@@ -12,6 +12,7 @@ public class QuoteSummaryResponse {
 
     private BigDecimal totalPrice;
     private int itemCount;
+    private int totalQuantity;
     private int factoryCount;
     private int maxLeadTimeDays;
 }

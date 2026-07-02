@@ -36,7 +36,7 @@ public class QuoteController {
      */
     @PostMapping("/generate")
     public Result<QuoteResponse> generate(@Valid @RequestBody QuoteGenerateRequest request) {
-        return Result.ok(quoteService.generateQuote(request.getRskuIds()));
+        return Result.ok(quoteService.generateQuote(request.getItems()));
     }
 
     /**
@@ -47,7 +47,7 @@ public class QuoteController {
      */
     @PostMapping("/export")
     public ResponseEntity<byte[]> export(@Valid @RequestBody QuoteGenerateRequest request) {
-        byte[] content = quoteExportService.exportQuote(request.getRskuIds());
+        byte[] content = quoteExportService.exportQuote(request.getItems());
         String filename = "quote_" + System.currentTimeMillis() + ".xlsx";
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")

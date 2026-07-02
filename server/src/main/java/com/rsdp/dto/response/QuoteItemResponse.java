@@ -20,6 +20,8 @@ public class QuoteItemResponse {
     private String factorySku;
 
     private BigDecimal factoryPrice;
+    private Integer quantity;
+    private BigDecimal subtotal;
     private String priceBand;
     private String materialDescription;
     private Integer leadTimeDays;

@@ -1,5 +1,6 @@
 package com.rsdp.dto.request;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import lombok.Data;
 
@@ -12,5 +13,6 @@ import java.util.List;
 public class QuoteGenerateRequest {
 
     @NotEmpty(message = "请选择至少一个 RSKU")
-    private List<String> rskuIds;
+    @Valid
+    private List<QuoteItemRequest> items;
 }

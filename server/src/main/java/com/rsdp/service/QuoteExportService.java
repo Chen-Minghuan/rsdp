@@ -4,6 +4,7 @@ import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.ExcelWriter;
 import com.alibaba.excel.write.metadata.WriteSheet;
 import com.alibaba.excel.write.style.column.LongestMatchColumnWidthStyleStrategy;
+import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.response.PriceChangeResponse;
 import com.rsdp.dto.response.QuoteItemResponse;
 import com.rsdp.dto.response.QuoteResponse;
@@ -31,13 +32,13 @@ public class QuoteExportService {
     private final QuoteService quoteService;
 
     /**
-     * 根据 RSKU ID 列表生成 Excel 报价单。
+     * 根据 RSKU ID 及数量列表生成 Excel 报价单。
      *
-     * @param rskuIds RSKU ID 列表
+     * @param quoteItems 报价单项请求列表
      * @return Excel 文件字节数组
      */
-    public byte[] exportQuote(List<String> rskuIds) {
-        QuoteResponse quote = quoteService.generateQuote(rskuIds);
+    public byte[] exportQuote(List<QuoteItemRequest> quoteItems) {
+        QuoteResponse quote = quoteService.generateQuote(quoteItems);
 
         List<QuoteItemRow> itemRows = buildItemRows(quote.getItems());
         List<SummaryRow> summaryRows = buildSummaryRows(quote.getSummary(), quote.getPriceChanges());
@@ -69,7 +70,9 @@ public class QuoteExportService {
             row.setFactoryCode(item.getFactoryCode());
             row.setFactoryName(item.getFactoryName());
             row.setFactorySku(item.getFactorySku());
-            row.setFactoryPrice(item.getFactoryPrice());
+            row.setFactoryPrice(formatPrice(item.getFactoryPrice()));
+            row.setQuantity(item.getQuantity());
+            row.setSubtotal(formatPrice(item.getSubtotal()));
             row.setPriceBand(item.getPriceBand());
             row.setMaterialDescription(item.getMaterialDescription());
             row.setLeadTimeDays(item.getLeadTimeDays());
@@ -86,6 +89,7 @@ public class QuoteExportService {
         List<SummaryRow> rows = new ArrayList<>();
         rows.add(new SummaryRow("报价单生成时间", LocalDateTime.now().format(DATE_TIME_FORMATTER)));
         rows.add(new SummaryRow("项数", String.valueOf(summary.getItemCount())));
+        rows.add(new SummaryRow("总数量", String.valueOf(summary.getTotalQuantity())));
         rows.add(new SummaryRow("涉及工厂数", String.valueOf(summary.getFactoryCount())));
         rows.add(new SummaryRow("预估总价", formatPrice(summary.getTotalPrice())));
         rows.add(new SummaryRow("最大交期(天)", String.valueOf(summary.getMaxLeadTimeDays())));
@@ -138,7 +142,13 @@ public class QuoteExportService {
         private String factorySku;
 
         @com.alibaba.excel.annotation.ExcelProperty("出厂价")
-        private BigDecimal factoryPrice;
+        private String factoryPrice;
+
+        @com.alibaba.excel.annotation.ExcelProperty("数量")
+        private Integer quantity;
+
+        @com.alibaba.excel.annotation.ExcelProperty("小计")
+        private String subtotal;
 
         @com.alibaba.excel.annotation.ExcelProperty("价格带")
         private String priceBand;
