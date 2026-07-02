@@ -119,6 +119,40 @@ POST   /api/v1/export/excel
 POST   /api/v1/export/batch-import
 ```
 
+### 风格数据库
+
+```
+POST   /api/v1/style-knowledge/import
+       # 批量导入风格案例、元素、搭配公式
+       # Request: multipart/form-data
+       #   file: JSON 或 Excel（格式见 docs/03-guides/风格数据库导入数据格式.md）
+       # Response: { imported_cases: 12, imported_formulas: 3, errors: [...] }
+
+GET    /api/v1/style-knowledge/cases
+       # 案例列表（支持 style_code、is_success、room_type 筛选）
+       # Response: { total, page, rows: [StyleCaseSummary...] }
+
+GET    /api/v1/style-knowledge/cases/{caseId}
+       # 案例详情（含元素列表）
+
+POST   /api/v1/style-knowledge/formulas
+       # 新增/更新搭配公式
+
+GET    /api/v1/style-knowledge/formulas
+       # 公式列表
+
+GET    /api/v1/style-knowledge/formulas/{formulaId}
+       # 公式详情
+
+POST   /api/v1/style-knowledge/match/{rspuId}
+       # 手动触发某个 RSPU 的风格匹配计算
+       # Response: { style_code, overall_score, confidence, element_match, formula_scores }
+
+POST   /api/v1/style-knowledge/feedback
+       # 提交推荐反馈，用于优化公式
+       # Request: { rspu_id, recommended_rspu_id, formula_id, feedback, reason }
+```
+
 ### 系统
 
 ```
