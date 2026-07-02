@@ -49,9 +49,32 @@ public class VisionService {
           "colorPrimaryHsv": [H值0-360, S值0-1, V值0-1],
           "materialTags": ["材质1", "材质2"],
           "sceneTags": ["适用场景1", "适用场景2"],
-          "confidence": "high|mid|low"
+          "confidence": "high|mid|low",
+          "ocr": {
+            "rawText": "图片中所有可见文字，按原文完整输出，不要遗漏",
+            "productName": "产品名称",
+            "modelNumber": "型号/款号。必须是字母/数字组合或包含型号意义的编码，如 A2038、FS-MC-001。如果只是 #、*、- 等符号或无法判断，填 null",
+            "brand": "品牌名",
+            "factoryName": "工厂/厂家名",
+            "dimensionText": "原始尺寸文字，保留所有规格，如 2380*840*910/2600*840*910",
+            "dimensions": { "w": 数值或null, "d": 数值或null, "h": 数值或null, "unit": "mm|cm|m|inch" },
+            "materialDescription": "材质说明原文。只提取具体材质成分，如'橡木框架+亚麻布软包'；遇到品牌口号、标语（如'用真实木 造好家具'）应填 null",
+            "colorText": "颜色文字",
+            "priceText": "价格文字",
+            "price": 数值或null,
+            "currency": "CNY",
+            "otherInfo": {
+              "warranty": "质保信息",
+              "moq": 数值或null,
+              "leadTimeDays": 数值或null,
+              "netWeightKg": 数值或null,
+              "packageSize": "包装尺寸文字",
+              "notes": "其他文字信息"
+            }
+          }
         }
-        如果无法判断某个字段，填"unknown"。
+        如果无法判断某个字段或图片中没有对应文字，填 null 或 "unknown"。
+        只输出 JSON，不要任何其他文字说明。
         """;
 
     public AiLabels recognizeImage(InputStream imageStream) {
