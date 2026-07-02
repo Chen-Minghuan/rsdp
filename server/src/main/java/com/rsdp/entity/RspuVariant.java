@@ -2,6 +2,7 @@ package com.rsdp.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.rsdp.handler.JsonbTypeHandler;
 import lombok.Data;
@@ -9,7 +10,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * RSPU 款式变体表：一个具体的尺寸 × 颜色 × 材质组合。
+ * RSPU 变体实体，表示同一款式下的尺寸 × 颜色 × 材质组合。
  */
 @Data
 @TableName("rspu_variant")
@@ -38,11 +39,14 @@ public class RspuVariant {
 
     private String referencePriceBand;
 
+    private String productLevel;
+
     private String status;
 
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
 
+    @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
 }

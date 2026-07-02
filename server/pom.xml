@@ -89,6 +89,13 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- EasyExcel -->
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>easyexcel</artifactId>
+            <version>3.3.4</version>
+        </dependency>
+
         <!-- WireMock for testing -->
         <dependency>
             <groupId>org.wiremock</groupId>

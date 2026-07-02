@@ -1,22 +1,62 @@
 spring:
   application:
     name: rsdp-server
-  profiles:
-    active: dev
   servlet:
     multipart:
       max-file-size: 20MB
       max-request-size: 20MB
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    date-format: yyyy-MM-dd'T'HH:mm:ss
 
 server:
   port: 8081
+  servlet:
+    encoding:
+      charset: UTF-8
+      force-request-encoding: true
+      force-response-encoding: true
+
+storage:
+  type: local
+  local-path: ./data/uploads
+
+mybatis-plus:
+  # 注册 TypeHandler 包路径，确保 @TableField(typeHandler) 和价格加密处理器生效
+  type-handlers-package: com.rsdp.config.typehandler
 
 rsdp:
-  upload:
-    path: ./data/uploads/
   ai:
     # 通义千问 VL 兼容 OpenAI 格式
     base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
     model: qwen3-vl-plus
     api-key: ${DASHSCOPE_API_KEY:your-api-key-here}
     timeout-seconds: 60
+    max-retries: 2
+    # 多模态 embedding 模型，用于以图搜图
+    embedding-model: multimodal-embedding-v1
+    embedding-base-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding
+    embedding-timeout-seconds: 30
+    embedding-max-retries: 2
+  chromadb:
+    base-url: ${CHROMADB_URL:http://localhost:8000}
+    collection: rsdp_products
+    timeout-seconds: 10
+    max-retries: 2
+  encryption:
+    # Base64 编码的 32 字节 AES-256 密钥，生产环境必须通过 RSDP_ENCRYPTION_KEY 注入
+    key: ${RSDP_ENCRYPTION_KEY:}
+  migration:
+    encrypt-prices:
+      # 历史价格字段加密迁移开关，默认关闭；需要迁移时设为 true 并重启应用
+      enabled: false
+      batch-size: 100
+  async:
+    core-pool-size: 4
+    max-pool-size: 16
+    queue-capacity: 200
+    thread-name-prefix: rsdp-async-
+  import:
+    # 产品批量导入时允许下载图片的 host 白名单，逗号分隔；留空表示仅允许公网地址
+    allowed-image-hosts: ${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:}

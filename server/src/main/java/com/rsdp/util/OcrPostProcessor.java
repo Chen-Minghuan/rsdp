@@ -192,7 +192,7 @@ public class OcrPostProcessor {
     }
 
     /**
-     * 从文本中解析单位。
+     * 从文本中解析单位；未显式声明单位时返回 null，由调用方决定默认单位。
      */
     private static String parseUnit(String text) {
         if (!StringUtils.hasText(text)) {
@@ -209,7 +209,7 @@ public class OcrPostProcessor {
                 default -> unit;
             };
         }
-        return "mm"; // 默认 mm
+        return null;
     }
 
     /**
@@ -255,7 +255,7 @@ public class OcrPostProcessor {
         Map.entry("奶油风", "CR"),
         Map.entry("工业风", "IN"),
         Map.entry("孟菲斯", "MP"),
-        Map.entry("北欧风", "NC"),
+        // 北欧风在 category_dict 中暂无对应 code，先不映射，避免误归类为新中式
         Map.entry("现代简约", "IT")
     );
 
@@ -305,8 +305,9 @@ public class OcrPostProcessor {
         if (!StringUtils.hasText(text)) {
             return null;
         }
+        // 去掉部位/材质后缀，但保留"木"以避免"原木色"被误清洗为"原木"
         String cleaned = text.trim()
-            .replaceAll("(布艺|框架|靠枕|坐垫|靠背|软包|皮革|真皮|面料|布料|木头|木材|木)$", "")
+            .replaceAll("(布艺|框架|靠枕|坐垫|靠背|软包|皮革|真皮|面料|布料|木头|木材)$", "")
             .trim();
         return StringUtils.hasText(cleaned) ? cleaned : text.trim();
     }

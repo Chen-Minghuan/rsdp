@@ -1,7 +1,7 @@
 spring:
   datasource:
     driver-class-name: org.postgresql.Driver
-    url: jdbc:postgresql://localhost:5432/rsdp?currentSchema=public
+    url: jdbc:postgresql://localhost:5433/rsdp?currentSchema=public
     username: ${DB_USERNAME:rsdp}
     password: ${DB_PASSWORD:rsdp}
   data:
@@ -11,10 +11,23 @@ spring:
       database: 0
       enabled: false
 
-minio:
-  enabled: false
+# 开发环境默认 AES-256 密钥（仅本地使用，生产环境必须注入 RSDP_ENCRYPTION_KEY）
+rsdp:
+  encryption:
+    key: ${RSDP_ENCRYPTION_KEY:WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=}
+  migration:
+    encrypt-prices:
+      # 开发环境默认关闭；需要测试迁移时临时设为 true
+      enabled: false
+      batch-size: 100
+
+  import:
+    # 开发/测试环境可放开本地图片地址；生产环境应留空，仅允许公网地址
+    allowed-image-hosts: 127.0.0.1,localhost
 
 # 开发环境文件先存本地磁盘
+# 默认使用相对路径；若从项目根目录启动，建议通过 RSDP_STORAGE_LOCAL_PATH
+# 环境变量指定为 <项目根目录>/server/data/uploads 的绝对路径，避免启动目录变化导致找不到已上传图片。
 storage:
   type: local
-  local-path: ./data/uploads
+  local-path: ${RSDP_STORAGE_LOCAL_PATH:./data/uploads}

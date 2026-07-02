@@ -1,4 +1,4 @@
-> 本文档描述 RSDP 的目标 API 契约。当前 MVP 已实现 `POST /api/v1/products/entry`，其余接口为后续开发的设计基准。
+> 本文档描述 RSDP 的目标 API 契约。当前 MVP 已实现产品录入、产品库、复核、图片访问、工厂管理与 RSKU 报价录入接口。
 
 ## 通用约定
 
@@ -12,81 +12,158 @@
 
 ```
 POST   /api/v1/products/entry
-       # 新品录入（异步）
+       # 新品录入（同步完成图片保存与任务创建，AI 识别在后台异步执行）
        # Request:  multipart/form-data
-       #   image: File (必填, ≤20MB, jpg/png/webp)
-       #   category_code: String (必填, FS/SF/TB/...)
-       #   style_override: String (可选, 人工指定风格，跳过AI判定)
-       # Response: { taskId: "task-abc123", status: "processing" }
+       #   images: File[] (必填, 第一张为主图, 其余为非主图/detail, 单张 ≤20MB)
+       #   categoryCode: string (可选, 如 FS/DT/CB, 默认 FS)
+       # Response: { taskId, rspuId, imageIds: string[], message }
+       # 说明：AI 识别完成后会自动写入 rspu_style / rspu_scene 关联表，
+       #      positioning_label 保存风格码（如 MC），material_tags 保存材质码（如 WO）
 
-GET    /api/v1/products/entry/{taskId}
-       # 查询录入任务进度
+GET    /api/v1/tasks/{taskId}
+       # 查询异步任务状态（前端轮询用）
        # Response: {
-       #   taskId, status: "processing"|"done"|"failed",
-       #   progress: { step: "labeling", percent: 60 },
-       #   result: { aiLabels, similarProducts[], verdict }  // status=done时
+       #   taskId, taskType, status: "pending"|"processing"|"done"|"failed",
+       #   progress: 0..100,
+       #   result: { aiLabels }  // status=done 时
+       #   errorMessage: ""       // status=failed 时
+       #   createdAt, completedAt
        # }
 
 GET    /api/v1/products
-       # 产品列表（分页+多条件筛选）
-       # Query: page, size, category_code, style_label, status,
-       #        price_band, keyword（搜 category_path 或 six_dim_tags）
-       # Response: { total, page, rows: [RspuSummary...] }
+       # 产品列表（分页+多条件筛选，已实现）
+       # Query: page, size, categoryCode, positioningLabel（风格码）, sceneCode,
+       #        materialTag（材质码）, status, reviewStatus,
+       #        keyword（搜 category_path 或 rspu_id）
+       # Response: { total, page, size, rows: [ProductSummary...] }
+       # 说明：positioningLabel / sceneCode / materialTag 均按字典码精确查询
 
 GET    /api/v1/products/{rspuId}
-       # 产品详情（含关联的所有 RSKU 报价）
-       # Response: { rspu: RspuDetail, rsku_list: [RskuInfo...], factory_count: 4 }
+       # 产品详情（含图片、AI 识别记录、官方搭配与适配来源，已实现）
+       # Response: {
+       #   rspu: RspuMaster,
+       #   images: [ImageAssets...],
+       #   recognitions: [AiRecognition...],
+       #   officialMatches: [RspuRelationResponse...],  // 本产品搭配了谁
+       #   matchedBy: [RspuRelationResponse...]          // 谁把本产品作为搭配
+       # }
+
+GET    /api/v1/products/{rspuId}/relations
+       # 查询某产品作为锚点的搭配关系列表（已实现）
+       # Response: [RspuRelationResponse...]
+
+POST   /api/v1/products/{rspuId}/relations
+       # 为某产品创建搭配关系（已实现）
+       # Request: { relatedRspuId, relationType?: "official"|"ai_verified"|"exclude", reason?, sortOrder? }
+       # Response: void
+
+PUT    /api/v1/products/{rspuId}/relations/{relationId}
+       # 更新搭配关系（已实现）
+       # Request: { relationType?, reason?, sortOrder?, status? }
+       # Response: void
+
+DELETE /api/v1/products/{rspuId}/relations/{relationId}
+       # 删除搭配关系（软删除，已实现）
+       # Response: void
+
+PUT    /api/v1/products/{rspuId}/review
+       # 人工复核确认/存疑（已实现）
+       # Request: { reviewStatus: "已确认"|"存疑", reviewComment? }
 
 PUT    /api/v1/products/{rspuId}
-       # 更新产品元数据（六维标签、场景、尺寸等）
-       # Request: JSON Body（只传要更新的字段）
+       # 更新产品元数据（定位标签、颜色、材质、场景、六维标签、价格带、保修年限等，已实现）
+       # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）
 
 DELETE /api/v1/products/{rspuId}
-       # 软删除
+       # 软删除（已实现）
+       # Response: void
+       # 说明：仅设置 rspu_master.deleted_at，数据库中保留数据；已关联的 RSKU / 变体 / 关系不级联删除
+
+GET    /api/v1/products/import-template
+       # 下载产品批量导入 Excel 模板（已实现）
+       # Response: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+POST   /api/v1/products/import
+       # 产品（RSPU）批量导入（已实现）
+       # Request: multipart/form-data
+       #   file: File (必填, Excel .xlsx/.xls 或 CSV, ≤10MB, 单次 ≤500 行)
+       #   updateIfExists: boolean (可选, 默认 false, true=存在时更新, false=跳过)
+       # Response: {
+       #   totalRows: number,
+       #   successCount: number,
+       #   failedCount: number,
+       #   failures: [{ rowIndex, externalCode?, rspuId?, reason }]
+       # }
+       # 说明：
+       #   - 一行对应一个 RSPU 及其可选默认变体
+       #   - 按 RSPU ID → 外部编码顺序匹配已有产品
+       #   - 图片 URL 仅支持 http/https，下载失败只记录失败明细，不影响产品数据写入
+
+### 图片访问
+
+```
+GET    /api/v1/images/{imageId}
+       # 根据图片 ID 获取图片文件流
+       # 底层存储由 StorageService 统一封装，支持 local / minio 两种实现
+       # Response: image/jpeg | image/png | image/webp 等二进制流
 ```
 
 ### 供应管理
 
 ```
-POST   /api/v1/products/{rspuId}/sku
-       # 为该 RSPU 新增工厂报价
-       # Request: { factory_code, material_code, factory_price,
-       #            lead_time_days, moq, diff_notes, ... }
+GET    /api/v1/products/{rspuId}/rsku
+       # 查询某 RSPU 下的 RSKU 工厂报价列表（已实现）
+       # Response: [RskuSupply...]
 
-PUT    /api/v1/sku/{rskuId}
-       # 更新报价（价格变动时）
+GET    /api/v1/products/{rspuId}/rsku/{rskuId}
+       # 查询单个 RSKU 报价详情（已实现）
+       # Response: RskuSupply
+
+GET    /api/v1/products/{rspuId}/variants
+       # 查询某 RSPU 下的变体列表（已实现）
+       # Response: [RspuVariant...]
+
+POST   /api/v1/products/{rspuId}/variants
+       # 为 RSPU 创建变体（尺寸 × 颜色 × 材质组合，已实现）
+       # Request: { displayName, variantCode?, sizeCode?, dimensions?, colorCode?, materialCode, materialMix?, referencePriceBand? }
+       # Response: RspuVariant
+
+POST   /api/v1/products/{rspuId}/rsku
+       # 为该 RSPU 新增工厂报价（已实现）
+       # Request: { factoryCode, variantId（必填）, factorySku?, factoryPrice, materialDescription?,
+       #            leadTimeDays?, moq?, warrantyYears?, shippingFrom?, diffNotes?, quoteConfidence? }
+       # Response: void
+
+PUT    /api/v1/products/{rspuId}/rsku/{rskuId}/price
+       # 更新 RSKU 出厂价，自动写入 price_history（已实现）
+       # Request: { factoryPrice, changeReason? }
+       # Response: void
+
+GET    /api/v1/rsku/{rskuId}/price-history
+       # 查询 RSKU 价格历史（已实现）
+       # Response: [PriceHistory...]
 
 DELETE /api/v1/sku/{rskuId}
-       # 删除报价（该厂不再供应）
+       # 软删除报价（该厂不再供应，已实现）
+       # Response: void
+       # 说明：仅设置 rsku_supply.deleted_at，数据库中保留数据
 
 GET    /api/v1/sku/compare/{rspuId}
-       # 同款多厂比价列表
-```
-
-### 检索
-
-```
-POST   /api/v1/retrieval/similar
-       # 以图搜图（同款判定，完整三层检索）
-       # Request: multipart/form-data { image: File }
-
-POST   /api/v1/retrieval/by-condition
-       # 文字条件检索（不传图）
-       # Request: { category_code?, style_label?, six_dim_A?,
-       #            color_hue_range?, price_max?, scene_tag?, keyword? }
+       # 同款多厂比价列表（产品详情页 RSKU 列表已覆盖该能力，独立接口待评估）
 ```
 
 ### 搭配推荐
 
 ```
-POST   /api/v1/matching/recommend
-       # 单个搭配推荐
-       # Request: { existing_rspu_id, target_category_code }
+POST   /api/v1/matching/room-scheme
+       # 按空间类型一键生成搭配方案（已实现，接入 DashScope qwen3-vl-plus）
+       # Request: { roomType: "LIVING_ROOM", budgetLimit: 30000, stylePreference?: "MC" }
+       # Response: { roomType, budgetLimit, totalPrice, itemCount, reasoning, items: [SchemeItem...] }
 
-POST   /api/v1/matching/batch
-       # 批量搭配（一键生成客厅/餐厅/卧室方案）
-       # Request: { room_type: "living_room", existing_products: ["FS-MC-001-M"],
-       #            budget_limit: 30000 }
+POST   /api/v1/matching/recommend
+       # 以某个产品为锚点推荐搭配产品（已实现）
+       # Request: { existingRspuId, targetCategoryCode }
+       # Response: { existingRspuId, targetCategoryCode, reasoning, items: [SchemeItem...] }
 ```
 
 ### 空间校验
@@ -106,9 +183,41 @@ POST   /api/v1/spatial/floor-plan
 
 ```
 GET    /api/v1/factories
+       # 工厂列表（已实现）
+       # Query: keyword（搜 factory_name / factory_code）
+       # Response: [FactoryResponse...]
+       # FactoryResponse 增加 capableLevels: 可承接的所有等级
+
 POST   /api/v1/factories
+       # 新增工厂（已实现）
+       # Request: {
+       #   factoryCode, factoryName, factoryLevel（主等级）,
+       #   capableLevels?（兼做等级列表，默认自动包含主等级）,
+       #   contactPerson?, contactPhone?, address?, region?, notes?
+       # }
+
 PUT    /api/v1/factories/{code}
+       # 更新工厂（已实现）
+
+PUT    /api/v1/factories/{code}/level
+       # 更新工厂主等级，工厂代码保持不变（已实现）
+       # Request: { factoryLevel: "S"|"A"|"B"|"C" }
+       # Response: void
+       # 说明：修改主等级后会同步更新 factory_level_capability 表中的 is_primary 标记
+
+PUT    /api/v1/factories/{code}/capable-levels
+       # 更新工厂兼做等级列表（已实现）
+       # Request: { capableLevels: ["S", "A", ...] }
+       # Response: void
+       # 说明：列表必须包含当前主等级，后端会自动确保主等级存在
+
 GET    /api/v1/factories/{code}
+       # 工厂详情（已实现）
+       # Response: FactoryResponse
+
+GET    /api/v1/factories/{code}/rsku
+       # 查询某工厂的所有 RSKU 报价（已实现）
+       # Response: [RskuSupply...]
 ```
 
 ### 导出
@@ -119,7 +228,105 @@ POST   /api/v1/export/excel
 POST   /api/v1/export/batch-import
 ```
 
-### 风格数据库
+### 字典
+
+```
+GET    /api/v1/dicts/{dictType}
+       # 查询指定类型的字典项（已实现）
+       # dictType: style, scene, category, material, size, color,
+       #           room_type, quote_confidence, review_status, factory_level, product_status 等
+       # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder }]
+```
+
+### 报价单
+
+```
+POST   /api/v1/quotes/generate
+       # 根据选中的 RSKU 及数量列表生成报价单（已实现）
+       # Request: { items: [{ rskuId, quantity }, ...] }
+       # Response: {
+       #   items: [QuoteItem...],           # QuoteItem 包含 quantity、subtotal
+       #   summary: { totalPrice, itemCount, totalQuantity, factoryCount, maxLeadTimeDays }
+       # }
+
+POST   /api/v1/quotes/export
+       # 根据选中的 RSKU 及数量列表导出 Excel 报价单（已实现）
+       # Request: { items: [{ rskuId, quantity }, ...] }
+       # Response: application/octet-stream，Content-Disposition: attachment; filename="quote_<timestamp>.xlsx"
+       # 说明：工作簿包含两个 sheet："报价明细"（逐项报价，含数量/小计）和"汇总"（总价、项数、总数量、工厂数、最大交期、价格变动提示）
+```
+
+### 搭配方案
+
+```
+POST   /api/v1/schemes
+       # 创建搭配方案（已实现）
+       # Request: {
+       #   schemeName (max 128 字符),
+       #   roomType?,
+       #   budgetLimit?,
+       #   items: [{ rspuId, rskuId, quantity?, sortOrder? }] (1..50 项)
+       # }
+       # Response: SchemeResponse
+
+GET    /api/v1/schemes
+       # 查询搭配方案列表（已实现）
+       # Response: [SchemeSummary...]
+
+GET    /api/v1/schemes/{schemeId}
+       # 查询搭配方案详情（已实现）
+       # Response: SchemeResponse
+
+PUT    /api/v1/schemes/{schemeId}
+       # 更新搭配方案（已实现）
+       # Request: {
+       #   schemeName (max 128 字符),
+       #   roomType?,
+       #   budgetLimit?,
+       #   items: [{ rspuId, rskuId, quantity?, sortOrder? }] (1..50 项)
+       # }
+       # Response: SchemeResponse
+       # 说明：会物理删除旧子项并重新写入，保证幂等
+
+DELETE /api/v1/schemes/{schemeId}
+       # 删除搭配方案（已实现）
+
+POST   /api/v1/schemes/{schemeId}/quote
+       # 根据搭配方案生成报价单（已实现）
+       # Response: QuoteResponse
+       # 说明：采用快照模式，scheme_item 保存创建/更新时的 factory_price。
+       #      重新生成报价单时，报价单按 RSKU 最新价格计算；若与快照不一致，
+       #      会在 response.priceChanges 中列出变动项：
+       #      [{ rspuId, rspuName, rskuId, oldPrice, newPrice }]
+```
+
+### 视觉/语义检索
+
+```
+POST   /api/v1/retrieval/similar
+       # 以图搜图 / 以文搜图（已实现）
+       # Request: multipart/form-data
+       #   image: File (可选，与 text 二选一)
+       #   text: string (可选，与 image 二选一)
+       #   categoryCode: string (可选，按类别过滤)
+       #   positioningLabel: string (可选，按风格/定位过滤)
+       #   topK: number (可选，默认 20)
+       # Response: [{ rspuId, categoryCode, positioningLabel, mainImageUrl, vectorScore, finalScore, matchReasons }]
+       # 说明：三层检索：① DashScope 多模态 embedding 生成查询向量；
+       #      ② ChromaDB 向量召回 + metadata 过滤；③ 按 RSPU 聚合 + 规则重排。
+```
+
+### 管理后台
+
+```
+POST   /api/v1/admin/vectors/backfill
+       # 存量图片向量回填（已实现）
+       # Query: batchSize (默认 100，最大 1000)
+       # Response: { successCount, failedCount }
+       # 说明：为已 AI 识别但缺少向量的存量图片生成 embedding，并写入 ChromaDB。
+```
+
+### 风格数据库（规划中）
 
 ```
 POST   /api/v1/style-knowledge/import
