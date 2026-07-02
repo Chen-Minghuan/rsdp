@@ -131,14 +131,14 @@ RSKU（供应单元）：[RSPU ID]-[工厂代码3位]-[材质版本2位]
 - 多风格、多尺寸、多材质通过关联表表达（`rspu_style`、`rspu_scene`、`rspu_variant`、`rsku_supply`），不允许把可变属性写死进主键。
 
 原因与完整决策见 `docs/04-decisions/004-为什么RSPU和RSKU使用UUID主键而非业务编码作为主键.md`。
-详细规则见 `docs/06-reference/双层编码体系.md`。
+详细规则见 `docs/06-reference/02-双层编码体系.md`。
 
 ### 4.2 分类语义
 - **家装家具**：RSPU 第 2 段用风格（MC/CR/IT/FR/WJ/NC/BA/IN/MP）。
 - **办公家具**：RSPU 第 2 段用职级（EX/MG/ST/PU/CO），材质码 3 位。
 - **吧椅**：类别前缀用 `BS`，第 4 段为座高档（6/7/8），RSKU 加第 7 段功能码。
 
-详细规则见 `docs/06-reference/双层编码体系.md`。
+详细规则见 `docs/06-reference/02-双层编码体系.md`。
 
 ---
 
@@ -227,7 +227,7 @@ make clean
 
 ### 写代码前
 1. 先读 `AGENTS.md` 和 `docs/05-status/当前进度.md`。
-2. 涉及数据库改动时先读 `docs/02-architecture/数据库设计.md`。
+2. 涉及数据库改动时先读 `docs/02-architecture/02-数据库设计.md`。
 3. 不确定时提问，不要猜测。
 
 ### 写代码时
@@ -238,7 +238,7 @@ make clean
 
 ### 写代码后
 1. 简要说明改动点。
-2. 如果有接口变化，同步更新 `docs/02-architecture/API设计.md`。
+2. 如果有接口变化，同步更新 `docs/02-architecture/04-API设计.md`。
 3. 更新 `docs/05-status/当前进度.md`。
 
 ---

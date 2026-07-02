@@ -152,19 +152,6 @@ GET    /api/v1/sku/compare/{rspuId}
        # 同款多厂比价列表（产品详情页 RSKU 列表已覆盖该能力，独立接口待评估）
 ```
 
-### 检索
-
-```
-POST   /api/v1/retrieval/similar
-       # 以图搜图（同款判定，完整三层检索）
-       # Request: multipart/form-data { image: File }
-
-POST   /api/v1/retrieval/by-condition
-       # 文字条件检索（不传图）
-       # Request: { category_code?, style_label?, six_dim_A?,
-       #            color_hue_range?, price_max?, scene_tag?, keyword? }
-```
-
 ### 搭配推荐
 
 ```
@@ -337,6 +324,40 @@ POST   /api/v1/admin/vectors/backfill
        # Query: batchSize (默认 100，最大 1000)
        # Response: { successCount, failedCount }
        # 说明：为已 AI 识别但缺少向量的存量图片生成 embedding，并写入 ChromaDB。
+```
+
+### 风格数据库（规划中）
+
+```
+POST   /api/v1/style-knowledge/import
+       # 批量导入风格案例、元素、搭配公式
+       # Request: multipart/form-data
+       #   file: JSON 或 Excel（格式见 docs/03-guides/04-风格数据库导入数据格式.md）
+       # Response: { imported_cases: 12, imported_formulas: 3, errors: [...] }
+
+GET    /api/v1/style-knowledge/cases
+       # 案例列表（支持 style_code、is_success、room_type 筛选）
+       # Response: { total, page, rows: [StyleCaseSummary...] }
+
+GET    /api/v1/style-knowledge/cases/{caseId}
+       # 案例详情（含元素列表）
+
+POST   /api/v1/style-knowledge/formulas
+       # 新增/更新搭配公式
+
+GET    /api/v1/style-knowledge/formulas
+       # 公式列表
+
+GET    /api/v1/style-knowledge/formulas/{formulaId}
+       # 公式详情
+
+POST   /api/v1/style-knowledge/match/{rspuId}
+       # 手动触发某个 RSPU 的风格匹配计算
+       # Response: { style_code, overall_score, confidence, element_match, formula_scores }
+
+POST   /api/v1/style-knowledge/feedback
+       # 提交推荐反馈，用于优化公式
+       # Request: { rspu_id, recommended_rspu_id, formula_id, feedback, reason }
 ```
 
 ### 系统

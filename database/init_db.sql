@@ -1,5 +1,5 @@
 -- RSDP 多模态录入数据库初始化脚本（PostgreSQL 版本）
--- 基于 docs/RSDP-多模态录入数据库设计.md
+-- 基于 docs/02-architecture/数据库设计.md
 -- 说明：JSON 字段使用 JSONB 类型以获得更好的查询性能和索引支持
 
 -- 字典表（先创建，后续表的外键依赖它）
@@ -433,3 +433,88 @@ CREATE TABLE IF NOT EXISTS scheme_item (
 -- 方案索引
 CREATE INDEX IF NOT EXISTS idx_scheme_status ON scheme(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);
+
+-- =================== 风格数据库扩展表 ===================
+
+-- 案例库：成功/失败的设计案例
+CREATE TABLE IF NOT EXISTS style_case (
+    case_id VARCHAR(64) PRIMARY KEY,
+    case_name VARCHAR(128) NOT NULL,
+    style_code VARCHAR(32) NOT NULL,
+    room_type VARCHAR(32),
+    is_success BOOLEAN NOT NULL DEFAULT TRUE,
+    source_type VARCHAR(32),
+    source_url TEXT,
+    description TEXT,
+    image_url TEXT,
+    ai_raw_output JSONB,
+    review_status VARCHAR(16) DEFAULT '待复核',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+-- 元素库：从案例中拆解出的标准化元素
+CREATE TABLE IF NOT EXISTS style_element (
+    element_id VARCHAR(64) PRIMARY KEY,
+    case_id VARCHAR(64) NOT NULL,
+    element_type VARCHAR(32) NOT NULL,
+    element_value VARCHAR(128) NOT NULL,
+    normalized_code VARCHAR(64),
+    is_primary BOOLEAN DEFAULT FALSE,
+    confidence VARCHAR(16),
+    notes TEXT,
+    FOREIGN KEY (case_id) REFERENCES style_case(case_id)
+);
+
+-- 搭配公式库：可解释的搭配规则
+CREATE TABLE IF NOT EXISTS style_matching_formula (
+    formula_id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(256) NOT NULL,
+    style_code VARCHAR(32) NOT NULL,
+    room_type VARCHAR(32),
+    priority INTEGER DEFAULT 0,
+    formula_json JSONB NOT NULL,
+    source_case_ids JSONB,
+    negative_case_ids JSONB,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+-- 产品-风格匹配结果：产品录入后自动计算
+CREATE TABLE IF NOT EXISTS product_style_match (
+    match_id SERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    style_code VARCHAR(32) NOT NULL,
+    element_match JSONB,
+    formula_scores JSONB,
+    overall_score DECIMAL(5,4),
+    confidence VARCHAR(16),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    UNIQUE (rspu_id, style_code)
+);
+
+-- 推荐反馈：用于后续优化公式
+CREATE TABLE IF NOT EXISTS matching_feedback (
+    feedback_id SERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    recommended_rspu_id VARCHAR(64) NOT NULL,
+    formula_id VARCHAR(64),
+    score DECIMAL(5,4),
+    feedback VARCHAR(16),
+    reason TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 风格数据库索引
+CREATE INDEX IF NOT EXISTS idx_style_case_style ON style_case(style_code, is_success);
+CREATE INDEX IF NOT EXISTS idx_style_element_case ON style_element(case_id);
+CREATE INDEX IF NOT EXISTS idx_style_element_type ON style_element(element_type, normalized_code);
+CREATE INDEX IF NOT EXISTS idx_formula_style_room ON style_matching_formula(style_code, room_type, status);
+CREATE INDEX IF NOT EXISTS idx_product_match_rspu ON product_style_match(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_product_match_score ON product_style_match(overall_score DESC);
