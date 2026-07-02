@@ -21,6 +21,10 @@ rsdp:
       enabled: false
       batch-size: 100
 
+  import:
+    # 开发/测试环境可放开本地图片地址；生产环境应留空，仅允许公网地址
+    allowed-image-hosts: 127.0.0.1,localhost
+
 # 开发环境文件先存本地磁盘
 storage:
   type: local

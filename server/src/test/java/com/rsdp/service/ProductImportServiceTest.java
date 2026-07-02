@@ -41,6 +41,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -118,6 +119,9 @@ class ProductImportServiceTest {
         java.lang.reflect.Field field = ProductImportService.class.getDeclaredField("objectMapper");
         field.setAccessible(true);
         field.set(productImportService, objectMapper);
+
+        // 测试环境允许访问本地图片服务
+        productImportService.setAllowedImageHosts(Set.of("127.0.0.1", "localhost"));
 
         // 预加载字典
         when(dictService.listByType("category")).thenReturn(List.of(createDict("FS", "座椅")));
@@ -280,7 +284,7 @@ class ProductImportServiceTest {
     @Test
     void importProducts_shouldSucceedEvenWhenImageDownloadFails() {
         ProductImportRow row = createValidRow();
-        row.setPrimaryImageUrl("http://127.0.0.1:1/test.jpg");
+        row.setPrimaryImageUrl("http://192.0.2.1:1/test.jpg");
         MockMultipartFile file = createExcelFile(List.of(row));
 
         when(rspuMapper.selectList(any())).thenReturn(List.of());
@@ -290,6 +294,28 @@ class ProductImportServiceTest {
         assertThat(result.getSuccessCount()).isEqualTo(1);
         assertThat(result.getFailedCount()).isEqualTo(1);
         assertThat(result.getFailures().get(0).getReason()).contains("主图下载失败");
+        assertThat(insertedImages).isEmpty();
+    }
+
+    @Test
+    void importProducts_shouldRejectPrivateImageUrl() throws Exception {
+        // 移除本地白名单，模拟生产环境
+        productImportService.setAllowedImageHosts(Set.of());
+
+        java.lang.reflect.Field hostsField = ProductImportService.class.getDeclaredField("allowedImageHosts");
+        hostsField.setAccessible(true);
+
+        ProductImportRow row = createValidRow();
+        row.setPrimaryImageUrl("http://127.0.0.1:1/test.jpg");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("不安全的图片 URL");
         assertThat(insertedImages).isEmpty();
     }
 

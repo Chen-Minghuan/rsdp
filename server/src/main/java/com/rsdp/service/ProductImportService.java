@@ -17,6 +17,8 @@ import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.util.ExcelFileValidator;
+import com.rsdp.util.ImageUrlValidator;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
@@ -58,11 +60,6 @@ public class ProductImportService {
 
     private static final int MAX_ROWS = 500;
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-    private static final List<String> ALLOWED_CONTENT_TYPES = List.of(
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel",
-        "text/csv"
-    );
     private static final int MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
 
     private final RspuMapper rspuMapper;
@@ -76,6 +73,13 @@ public class ProductImportService {
     private final StorageService storageService;
     private final ObjectMapper objectMapper;
     private final PlatformTransactionManager transactionManager;
+
+    private java.util.Set<String> allowedImageHosts = java.util.Set.of();
+
+    @org.springframework.beans.factory.annotation.Value("${rsdp.import.allowed-image-hosts:}")
+    public void setAllowedImageHosts(java.util.Set<String> allowedImageHosts) {
+        this.allowedImageHosts = allowedImageHosts == null ? java.util.Set.of() : allowedImageHosts;
+    }
 
     /**
      * 批量导入产品。
@@ -144,9 +148,8 @@ public class ProductImportService {
         if (file.getSize() > MAX_FILE_SIZE) {
             throw new BusinessException("文件大小不能超过 10MB");
         }
-        String contentType = file.getContentType();
-        if (!ALLOWED_CONTENT_TYPES.contains(contentType)) {
-            throw new BusinessException("仅支持 Excel (.xlsx/.xls) 或 CSV 文件");
+        if (!ExcelFileValidator.isExcelOrCsv(file)) {
+            throw new BusinessException("仅支持 Excel (.xlsx/.xls) 或 CSV 文件，请检查文件内容是否被篡改");
         }
     }
 
@@ -208,23 +211,33 @@ public class ProductImportService {
 
         String primaryUrl = trim(row.getPrimaryImageUrl());
         if (StringUtils.hasText(primaryUrl)) {
-            DownloadedImage image = downloadSingleImage(primaryUrl, true);
-            if (image != null) {
-                images.add(image);
-            } else {
+            if (!ImageUrlValidator.isAllowed(primaryUrl, allowedImageHosts)) {
                 result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
-                    "主图下载失败: " + primaryUrl));
+                    "不安全的图片 URL: " + primaryUrl));
+            } else {
+                DownloadedImage image = downloadSingleImage(primaryUrl, true);
+                if (image != null) {
+                    images.add(image);
+                } else {
+                    result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                        "主图下载失败: " + primaryUrl));
+                }
             }
         }
 
         List<String> detailUrls = splitCsv(row.getDetailImageUrls());
         for (String url : detailUrls) {
-            DownloadedImage image = downloadSingleImage(url, false);
-            if (image != null) {
-                images.add(image);
-            } else {
+            if (!ImageUrlValidator.isAllowed(url, allowedImageHosts)) {
                 result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
-                    "详情图下载失败: " + url));
+                    "不安全的图片 URL: " + url));
+            } else {
+                DownloadedImage image = downloadSingleImage(url, false);
+                if (image != null) {
+                    images.add(image);
+                } else {
+                    result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                        "详情图下载失败: " + url));
+                }
             }
         }
 
@@ -237,8 +250,8 @@ public class ProductImportService {
             return null;
         }
         String trimmedUrl = url.trim();
-        if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
-            log.warn("不支持的图片 URL 协议: {}", trimmedUrl);
+        if (!ImageUrlValidator.isAllowed(trimmedUrl, allowedImageHosts)) {
+            log.warn("不安全的图片 URL: {}", trimmedUrl);
             return null;
         }
         try {
