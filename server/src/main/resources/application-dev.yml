@@ -26,7 +26,8 @@ rsdp:
     allowed-image-hosts: 127.0.0.1,localhost
 
 # 开发环境文件先存本地磁盘
-# 使用绝对路径，避免启动目录变化导致找不到已上传图片
+# 默认使用相对路径；若从项目根目录启动，建议通过 RSDP_STORAGE_LOCAL_PATH
+# 环境变量指定为 <项目根目录>/server/data/uploads 的绝对路径，避免启动目录变化导致找不到已上传图片。
 storage:
   type: local
-  local-path: C:/develop/roomVipdemototal/roomVipdemo3/rsdp/server/data/uploads
+  local-path: ${RSDP_STORAGE_LOCAL_PATH:./data/uploads}
