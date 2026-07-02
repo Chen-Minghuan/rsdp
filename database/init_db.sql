@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
 -- RSPU 设计原型主表（款式概念，不含工厂/价格/SKU 信息）
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
+    external_code VARCHAR(64),                     -- 业务侧外部编码/产品编码，用于 Excel 批量导入匹配
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
@@ -347,6 +348,8 @@ CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, statu
 CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rspu_external_code
+    ON rspu_master(external_code) WHERE deleted_at IS NULL;
 
 -- 多值标签索引
 CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);

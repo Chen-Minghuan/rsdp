@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { PageResult, ProductDetail, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
+import type { PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 /**
@@ -18,12 +18,7 @@ export async function uploadProductImages(files: File[], categoryCode?: string):
 
   const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult>>(
     '/v1/products/entry',
-    formData,
-    {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    }
+    formData
   )
   return result.data
 }
@@ -77,4 +72,32 @@ export async function updateProduct(rspuId: string, request: ProductUpdateReques
  */
 export async function deleteProduct(rspuId: string): Promise<void> {
   await apiClient.delete<ApiResult<void>>(`/v1/products/${rspuId}`)
+}
+
+/**
+ * 下载产品批量导入模板文件 URL。
+ *
+ * @returns 可直接触发下载的 URL
+ */
+export function downloadProductImportTemplate(): string {
+  return '/api/v1/products/import-template'
+}
+
+/**
+ * 批量导入产品（RSPU）。
+ *
+ * @param file Excel 文件
+ * @param updateIfExists 当 RSPU ID 或外部编码已存在时是否更新，false 则跳过
+ * @returns 导入结果
+ */
+export async function importProducts(file: File, updateIfExists: boolean): Promise<ProductImportResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('updateIfExists', String(updateIfExists))
+
+  const { data: result } = await uploadClient.post<ApiResult<ProductImportResult>>(
+    '/v1/products/import',
+    formData
+  )
+  return result.data
 }

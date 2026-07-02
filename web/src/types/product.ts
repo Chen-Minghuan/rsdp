@@ -131,3 +131,23 @@ export interface ProductUpdateRequest {
   warrantyYears?: number
   keySpecs?: Record<string, string>
 }
+
+/**
+ * 批量导入失败明细。
+ */
+export interface ProductImportFailure {
+  rowIndex: number
+  externalCode?: string
+  rspuId?: string
+  reason: string
+}
+
+/**
+ * 批量导入结果。
+ */
+export interface ProductImportResult {
+  totalRows: number
+  successCount: number
+  failedCount: number
+  failures: ProductImportFailure[]
+}

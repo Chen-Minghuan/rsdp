@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, onMounted, computed } from 'vue'
+import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -24,8 +24,8 @@ import type { PriceHistory, Rsku } from '@/types/rsku'
 const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
-const rspuId = route.params.rspuId as string
-const rskuId = route.params.rskuId as string
+const rspuId = computed(() => route.params.rspuId as string)
+const rskuId = computed(() => route.params.rskuId as string)
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -49,7 +49,7 @@ const historyColumns = [
 ]
 
 function validateParams(): boolean {
-  if (!rspuId?.trim() || !rskuId?.trim()) {
+  if (!rspuId.value?.trim() || !rskuId.value?.trim()) {
     errorMessage.value = '缺少产品 ID 或报价 ID'
     return false
   }
@@ -61,7 +61,7 @@ async function loadRsku() {
   loading.value = true
   errorMessage.value = ''
   try {
-    rsku.value = await getRsku(rspuId, rskuId)
+    rsku.value = await getRsku(rspuId.value, rskuId.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载 RSKU 详情失败'
   } finally {
@@ -70,13 +70,13 @@ async function loadRsku() {
 }
 
 async function loadPriceHistory() {
-  if (!rskuId?.trim()) {
+  if (!rskuId.value?.trim()) {
     errorMessage.value = '缺少报价 ID'
     return
   }
   historyLoading.value = true
   try {
-    priceHistory.value = await listPriceHistory(rskuId)
+    priceHistory.value = await listPriceHistory(rskuId.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载价格历史失败'
   } finally {
@@ -101,7 +101,7 @@ async function handleUpdatePrice() {
   successMessage.value = ''
 
   try {
-    await updateRskuPrice(rspuId, rskuId, {
+    await updateRskuPrice(rspuId.value, rskuId.value, {
       factoryPrice: newPrice.value,
       changeReason: changeReason.value || undefined
     })
@@ -123,16 +123,18 @@ function reviewStatusType(status: string) {
 }
 
 function handleDeleteRsku() {
+  const currentRskuId = rskuId.value
+  const currentRspuId = rspuId.value
   dialog.warning({
     title: '确认删除报价',
-    content: `确定要删除报价「${rsku.value?.rskuId || rskuId}」吗？删除后可在数据库中恢复。`,
+    content: `确定要删除报价「${rsku.value?.rskuId || currentRskuId}」吗？删除后可在数据库中恢复。`,
     positiveText: '确认删除',
     negativeText: '取消',
     onPositiveClick: () => {
-      return deleteRsku(rskuId)
+      return deleteRsku(currentRskuId)
         .then(() => {
           dialog.success({ title: '删除成功', content: '报价已删除', positiveText: '确定' })
-          router.push(`/products/${rspuId}`)
+          router.push(`/products/${currentRspuId}`)
         })
         .catch((e) => {
           errorMessage.value = e instanceof Error ? e.message : '删除报价失败'
@@ -144,6 +146,13 @@ function handleDeleteRsku() {
 onMounted(() => {
   loadRsku()
   loadPriceHistory()
+})
+
+onBeforeRouteUpdate((to) => {
+  if (to.params.rspuId && to.params.rskuId) {
+    loadRsku()
+    loadPriceHistory()
+  }
 })
 </script>
 

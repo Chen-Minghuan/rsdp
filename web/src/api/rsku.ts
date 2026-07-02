@@ -68,12 +68,7 @@ export async function importRskus(file: File, updateIfExists: boolean): Promise<
 
   const { data: result } = await uploadClient.post<ApiResult<RskuImportResult>>(
     '/v1/rsku/import',
-    formData,
-    {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    }
+    formData
   )
   return result.data
 }

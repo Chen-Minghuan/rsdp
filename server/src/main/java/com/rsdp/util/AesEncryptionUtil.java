@@ -58,7 +58,11 @@ public class AesEncryptionUtil {
     /**
      * 解密为 BigDecimal 价格。
      *
-     * @param encrypted Base64 编码的密文
+     * <p>正常 AES-256-GCM 密文会被解密为原值。对于历史遗留的明文价格（未迁移数据），
+     * 若无法作为密文解析且值本身为合法数字，则兜底返回该数值并记录告警日志，
+     * 避免未迁移明文导致查询崩溃。</p>
+     *
+     * @param encrypted Base64 编码的密文，或历史遗留明文价格
      * @return 明文价格
      */
     public static BigDecimal decrypt(String encrypted) {
@@ -69,9 +73,22 @@ public class AesEncryptionUtil {
             byte[] decoded = Base64.getDecoder().decode(encrypted);
             byte[] plainBytes = decrypt(decoded);
             return new BigDecimal(new String(plainBytes, StandardCharsets.UTF_8));
-        } catch (IllegalArgumentException e) {
-            log.error("密文 Base64 解码失败", e);
-            throw new IllegalStateException("AES 解密失败: 密文格式错误", e);
+        } catch (Exception e) {
+            return fallbackPlainPrice(encrypted, e);
+        }
+    }
+
+    /**
+     * 明文价格兜底：当密文解析失败时，若原始值为合法数字则按明文处理。
+     */
+    private static BigDecimal fallbackPlainPrice(String raw, Exception cause) {
+        try {
+            BigDecimal price = new BigDecimal(raw.trim());
+            log.warn("价格字段疑似仍为明文，已兜底返回原始值: {}", raw);
+            return price;
+        } catch (NumberFormatException nfe) {
+            log.error("AES 解密失败且无法作为明文价格解析: {}", raw, cause);
+            throw new IllegalStateException("AES 解密失败: 密文格式错误", cause);
         }
     }
 

@@ -79,6 +79,26 @@ DELETE /api/v1/products/{rspuId}
        # Response: void
        # 说明：仅设置 rspu_master.deleted_at，数据库中保留数据；已关联的 RSKU / 变体 / 关系不级联删除
 
+GET    /api/v1/products/import-template
+       # 下载产品批量导入 Excel 模板（已实现）
+       # Response: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+POST   /api/v1/products/import
+       # 产品（RSPU）批量导入（已实现）
+       # Request: multipart/form-data
+       #   file: File (必填, Excel .xlsx/.xls 或 CSV, ≤10MB, 单次 ≤500 行)
+       #   updateIfExists: boolean (可选, 默认 false, true=存在时更新, false=跳过)
+       # Response: {
+       #   totalRows: number,
+       #   successCount: number,
+       #   failedCount: number,
+       #   failures: [{ rowIndex, externalCode?, rspuId?, reason }]
+       # }
+       # 说明：
+       #   - 一行对应一个 RSPU 及其可选默认变体
+       #   - 按 RSPU ID → 外部编码顺序匹配已有产品
+       #   - 图片 URL 仅支持 http/https，下载失败只记录失败明细，不影响产品数据写入
+
 ### 图片访问
 
 ```

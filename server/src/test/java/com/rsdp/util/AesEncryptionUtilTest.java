@@ -78,4 +78,13 @@ class AesEncryptionUtilTest {
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("解密失败");
     }
+
+    @Test
+    void decrypt_shouldFallbackForPlaintextPrice() {
+        BigDecimal plaintext = new BigDecimal("12345.67");
+
+        BigDecimal decrypted = AesEncryptionUtil.decrypt(plaintext.toPlainString());
+
+        assertThat(decrypted).isEqualByComparingTo(plaintext);
+    }
 }

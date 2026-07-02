@@ -19,8 +19,30 @@ storage:
     secret-key: ${MINIO_SECRET_KEY:minioadmin}
     bucket-name: ${MINIO_BUCKET:rsdp}
 
-ollama:
-  base-url: ${OLLAMA_URL:http://ollama:11434}
-
-chromadb:
-  base-url: ${CHROMADB_URL:http://chromadb:8000}
+rsdp:
+  ai:
+    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    model: qwen3-vl-plus
+    api-key: ${DASHSCOPE_API_KEY}
+    timeout-seconds: 60
+    max-retries: 2
+    embedding-model: multimodal-embedding-v1
+    embedding-base-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding
+    embedding-timeout-seconds: 30
+    embedding-max-retries: 2
+  chromadb:
+    base-url: ${CHROMADB_URL:http://chromadb:8000}
+    collection: rsdp_products
+    timeout-seconds: 10
+    max-retries: 2
+  encryption:
+    key: ${RSDP_ENCRYPTION_KEY}
+  migration:
+    encrypt-prices:
+      enabled: false
+      batch-size: 100
+  async:
+    core-pool-size: 4
+    max-pool-size: 16
+    queue-capacity: 200
+    thread-name-prefix: rsdp-async-

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, h, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -24,7 +24,7 @@ import type { DictItem } from '@/types/dict'
 
 const route = useRoute()
 const router = useRouter()
-const factoryCode = route.params.factoryCode as string
+const factoryCode = computed(() => route.params.factoryCode as string)
 
 const loading = ref(false)
 const rskuLoading = ref(false)
@@ -77,7 +77,7 @@ const rskuColumns = [
 ]
 
 function validateFactoryCode(): boolean {
-  if (!factoryCode?.trim()) {
+  if (!factoryCode.value?.trim()) {
     errorMessage.value = '缺少工厂代码'
     return false
   }
@@ -89,7 +89,7 @@ async function loadFactory() {
   loading.value = true
   errorMessage.value = ''
   try {
-    factory.value = await getFactory(factoryCode)
+    factory.value = await getFactory(factoryCode.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载工厂详情失败'
   } finally {
@@ -101,7 +101,7 @@ async function loadRskuList() {
   if (!validateFactoryCode()) return
   rskuLoading.value = true
   try {
-    rskuList.value = await listRskuByFactory(factoryCode)
+    rskuList.value = await listRskuByFactory(factoryCode.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载报价列表失败'
   } finally {
@@ -133,7 +133,7 @@ async function handleUpdateLevel() {
   successMessage.value = ''
 
   try {
-    await updateFactoryLevel(factoryCode, { factoryLevel: newLevel.value })
+    await updateFactoryLevel(factoryCode.value, { factoryLevel: newLevel.value })
     successMessage.value = '工厂主等级更新成功'
     showLevelModal.value = false
     await loadFactory()
@@ -160,7 +160,7 @@ async function handleUpdateCapableLevels() {
   successMessage.value = ''
 
   try {
-    await updateCapableLevels(factoryCode, { capableLevels: newCapableLevels.value })
+    await updateCapableLevels(factoryCode.value, { capableLevels: newCapableLevels.value })
     successMessage.value = '工厂兼做等级更新成功'
     showCapableModal.value = false
     await loadFactory()
@@ -179,6 +179,13 @@ onMounted(() => {
   loadFactory()
   loadRskuList()
   loadLevels()
+})
+
+onBeforeRouteUpdate((to) => {
+  if (to.params.factoryCode) {
+    loadFactory()
+    loadRskuList()
+  }
 })
 </script>
 

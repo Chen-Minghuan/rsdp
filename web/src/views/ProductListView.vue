@@ -293,6 +293,9 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
             placeholder="产品等级"
           />
           <n-button type="primary" @click="handleSearch">搜索</n-button>
+          <n-button @click="router.push('/products/import')">
+            批量导入
+          </n-button>
         </n-space>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">

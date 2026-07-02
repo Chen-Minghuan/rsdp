@@ -24,6 +24,18 @@ public interface StorageService {
     String store(MultipartFile file, String objectKey) throws IOException;
 
     /**
+     * 存储输入流（适用于从 URL 下载等非 MultipartFile 场景）。
+     *
+     * @param inputStream 输入流
+     * @param objectKey   对象键
+     * @param size        数据大小（字节），-1 表示未知
+     * @param contentType 内容类型，可为 null
+     * @return 可用于后续读取的存储路径
+     * @throws IOException 存储失败
+     */
+    String store(InputStream inputStream, String objectKey, long size, String contentType) throws IOException;
+
+    /**
      * 读取文件流。
      *
      * @param objectKey 对象键

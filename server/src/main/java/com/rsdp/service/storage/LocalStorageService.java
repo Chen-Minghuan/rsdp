@@ -12,6 +12,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 
 /**
  * 本地磁盘存储实现。
@@ -29,6 +30,15 @@ public class LocalStorageService implements StorageService {
         Path target = resolvePath(objectKey);
         Files.createDirectories(target.getParent());
         file.transferTo(target.toFile());
+        log.debug("本地存储写入文件: {}", target);
+        return objectKey;
+    }
+
+    @Override
+    public String store(InputStream inputStream, String objectKey, long size, String contentType) throws IOException {
+        Path target = resolvePath(objectKey);
+        Files.createDirectories(target.getParent());
+        Files.copy(inputStream, target, StandardCopyOption.REPLACE_EXISTING);
         log.debug("本地存储写入文件: {}", target);
         return objectKey;
     }

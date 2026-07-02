@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 public class RspuMaster {
     @TableId
     private String rspuId;
+    private String externalCode;
     private String categoryCode;
     private String categoryPath;
     private String positioningLabel;

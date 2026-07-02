@@ -125,6 +125,14 @@ RSKU（供应单元）：[RSPU ID]-[工厂代码3位]-[材质版本2位]
 - `rspu_master` 绝对不含工厂代码、价格、交期、SKU。
 - `rsku_supply` 必须外键关联 `rspu_id`，且自身携带工厂 + 材质 + 价格。
 
+**主键与业务编码分离（不可违反）**：
+- `rspu_master.rspu_id` 与 `rsku_supply.rsku_id` 使用 UUID 主键（如 `RSPU-XXXX`、`RSKU-XXXX`），与风格、尺寸、工厂、材质等业务属性解耦。
+- 业务编码仅作为**展示/报表字段**使用，不能替代 UUID 主键；未来如需展示业务编码，应新增 `rspu_code`、`rsku_code` 等独立字段。
+- 多风格、多尺寸、多材质通过关联表表达（`rspu_style`、`rspu_scene`、`rspu_variant`、`rsku_supply`），不允许把可变属性写死进主键。
+
+原因与完整决策见 `docs/04-decisions/004-为什么RSPU和RSKU使用UUID主键而非业务编码作为主键.md`。
+详细规则见 `docs/06-reference/双层编码体系.md`。
+
 ### 4.2 分类语义
 - **家装家具**：RSPU 第 2 段用风格（MC/CR/IT/FR/WJ/NC/BA/IN/MP）。
 - **办公家具**：RSPU 第 2 段用职级（EX/MG/ST/PU/CO），材质码 3 位。

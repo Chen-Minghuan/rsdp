@@ -27,12 +27,7 @@ export async function searchSimilarProducts(request: SimilarProductRequest): Pro
 
   const { data: result } = await apiClient.post<ApiResult<SimilarProductResponse[]>>(
     '/v1/retrieval/similar',
-    formData,
-    {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    }
+    formData
   )
   return result.data
 }

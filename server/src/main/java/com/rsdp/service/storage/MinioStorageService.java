@@ -47,6 +47,26 @@ public class MinioStorageService implements StorageService {
     }
 
     @Override
+    public String store(InputStream inputStream, String objectKey, long size, String contentType) throws IOException {
+        String bucketName = storageProperties.getMinio().getBucketName();
+        ensureBucketExists(bucketName);
+        try (inputStream) {
+            minioClient.putObject(
+                PutObjectArgs.builder()
+                    .bucket(bucketName)
+                    .object(objectKey)
+                    .stream(inputStream, size, -1)
+                    .contentType(contentType)
+                    .build()
+            );
+        } catch (MinioException | InvalidKeyException | NoSuchAlgorithmException e) {
+            throw new IOException("MinIO 上传失败: " + objectKey, e);
+        }
+        log.debug("MinIO 存储写入对象: {}/{}", bucketName, objectKey);
+        return objectKey;
+    }
+
+    @Override
     public InputStream get(String objectKey) throws IOException {
         String bucketName = storageProperties.getMinio().getBucketName();
         try {
