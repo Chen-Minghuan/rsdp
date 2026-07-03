@@ -160,8 +160,10 @@ public class RetrievalService {
 
         // 批量查询图片 URL，避免 N+1
         List<String> imageIds = ids.stream().distinct().collect(Collectors.toList());
-        Map<String, String> imageUrlMap = imageAssetsMapper.selectBatchIds(imageIds).stream()
-            .collect(Collectors.toMap(ImageAssets::getImageId, ImageAssets::getStorageUrl, (a, b) -> a));
+        Map<String, String> imageUrlMap = imageIds.isEmpty()
+            ? Map.of()
+            : imageAssetsMapper.selectBatchIds(imageIds).stream()
+                .collect(Collectors.toMap(ImageAssets::getImageId, ImageAssets::getStorageUrl, (a, b) -> a));
 
         // 按 RSPU 聚合，取相似度最高的图片
         Map<String, SimilarProductResponse> bestByRspu = new LinkedHashMap<>();
@@ -201,10 +203,13 @@ public class RetrievalService {
         // 批量查询 RSPU 元数据，避免 N+1
         List<String> rspuIds = candidates.stream()
             .map(SimilarProductResponse::getRspuId)
+            .filter(id -> id != null && !id.isBlank())
             .distinct()
             .collect(Collectors.toList());
-        Map<String, RspuMaster> rspuMap = rspuMapper.selectBatchIds(rspuIds).stream()
-            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+        Map<String, RspuMaster> rspuMap = rspuIds.isEmpty()
+            ? Map.of()
+            : rspuMapper.selectBatchIds(rspuIds).stream()
+                .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
 
         // 按向量分排序后做跨 RSPU 同款去重
         candidates = candidates.stream()

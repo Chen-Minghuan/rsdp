@@ -7,9 +7,10 @@ import type { ProductEntryResult } from '@/types/task'
  *
  * @param files 图片文件列表，第一张作为主图
  * @param categoryCode 品类码，如 FS/DT/CB
+ * @param signal 可选的 AbortSignal，用于取消请求
  * @returns 任务信息
  */
-export async function uploadProductImages(files: File[], categoryCode?: string): Promise<ProductEntryResult> {
+export async function uploadProductImages(files: File[], categoryCode?: string, signal?: AbortSignal): Promise<ProductEntryResult> {
   const formData = new FormData()
   files.forEach(file => formData.append('images', file))
   if (categoryCode) {
@@ -18,7 +19,8 @@ export async function uploadProductImages(files: File[], categoryCode?: string):
 
   const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult>>(
     '/v1/products/entry',
-    formData
+    formData,
+    { signal }
   )
   return result.data
 }

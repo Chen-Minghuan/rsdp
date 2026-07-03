@@ -16,6 +16,7 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -67,6 +68,10 @@ public class QuoteService {
             mergedItems.add(merged);
         });
 
+        if (mergedItems.isEmpty()) {
+            throw new BusinessException("请选择至少一个有效的 RSKU");
+        }
+
         List<String> distinctRskuIds = mergedItems.stream()
             .map(QuoteItemRequest::getRskuId)
             .toList();
@@ -113,8 +118,12 @@ public class QuoteService {
     private Map<String, RspuMaster> batchRspuMap(List<RskuSupply> rskus) {
         List<String> rspuIds = rskus.stream()
             .map(RskuSupply::getRspuId)
+            .filter(StringUtils::hasText)
             .distinct()
             .toList();
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
         return rspuMapper.selectBatchIds(rspuIds).stream()
             .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
     }
@@ -141,8 +150,12 @@ public class QuoteService {
     private Map<String, FactoryMaster> batchFactoryMap(List<RskuSupply> rskus) {
         List<String> factoryCodes = rskus.stream()
             .map(RskuSupply::getFactoryCode)
+            .filter(StringUtils::hasText)
             .distinct()
             .toList();
+        if (factoryCodes.isEmpty()) {
+            return Map.of();
+        }
         return factoryMasterMapper.selectBatchIds(factoryCodes).stream()
             .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
     }

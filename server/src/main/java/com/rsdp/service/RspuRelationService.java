@@ -200,11 +200,14 @@ public class RspuRelationService {
 
         List<String> targetRspuIds = relations.stream()
             .map(targetRspuIdExtractor)
+            .filter(StringUtils::hasText)
             .distinct()
             .toList();
 
-        Map<String, RspuMaster> rspuMap = rspuMapper.selectBatchIds(targetRspuIds).stream()
-            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+        Map<String, RspuMaster> rspuMap = targetRspuIds.isEmpty()
+            ? Map.of()
+            : rspuMapper.selectBatchIds(targetRspuIds).stream()
+                .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
         Map<String, String> imageUrlMap = batchPrimaryImageUrls(targetRspuIds);
         Map<String, BigDecimal> minPriceMap = batchMinPrices(targetRspuIds);
 

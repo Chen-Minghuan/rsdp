@@ -94,6 +94,17 @@ class RskuServiceTest {
     }
 
     @Test
+    void listByRspu_shouldReturnEmptyListWhenNoRsku() {
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        List<RskuResponse> result = rskuService.listByRspu("RSPU-TEST01");
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(factoryMasterMapper);
+        verifyNoInteractions(factoryService);
+    }
+
+    @Test
     void createRsku_shouldInsertWhenValid() {
         RskuCreateRequest request = new RskuCreateRequest();
         request.setRspuId("RSPU-TEST01");

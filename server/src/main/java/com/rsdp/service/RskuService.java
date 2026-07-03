@@ -283,15 +283,20 @@ public class RskuService {
     private List<RskuResponse> toResponses(List<RskuSupply> rskus) {
         List<String> factoryCodes = rskus.stream()
             .map(RskuSupply::getFactoryCode)
+            .filter(StringUtils::hasText)
             .distinct()
             .toList();
-        Map<String, FactoryMaster> factoryMap = factoryMasterMapper.selectBatchIds(factoryCodes).stream()
-            .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
-        Map<String, List<String>> capabilityMap = factoryCodes.stream()
-            .collect(Collectors.toMap(
-                code -> code,
-                factoryService::getFactoryCapableLevels
-            ));
+        Map<String, FactoryMaster> factoryMap = factoryCodes.isEmpty()
+            ? Map.of()
+            : factoryMasterMapper.selectBatchIds(factoryCodes).stream()
+                .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
+        Map<String, List<String>> capabilityMap = factoryCodes.isEmpty()
+            ? Map.of()
+            : factoryCodes.stream()
+                .collect(Collectors.toMap(
+                    code -> code,
+                    factoryService::getFactoryCapableLevels
+                ));
 
         return rskus.stream()
             .map(rsku -> toResponse(rsku, factoryMap, capabilityMap))
