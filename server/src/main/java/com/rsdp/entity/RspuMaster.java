@@ -2,8 +2,9 @@ package com.rsdp.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.rsdp.handler.JsonbTypeHandler;
+import com.rsdp.config.typehandler.JsonbTypeHandler;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -13,6 +14,7 @@ import java.time.LocalDateTime;
 public class RspuMaster {
     @TableId
     private String rspuId;
+    private String externalCode;
     private String categoryCode;
     private String categoryPath;
     private String positioningLabel;
@@ -38,6 +40,8 @@ public class RspuMaster {
 
     private String referencePriceBand;
 
+    private String productLevel;
+
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String budgetRange;
 
@@ -47,9 +51,12 @@ public class RspuMaster {
     private String keySpecs;
     private String status;
     private String reviewStatus;
+    private String reviewComment;
     private String aestheticsConfidence;
     private String sourceAgentVersion;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
 }

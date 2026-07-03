@@ -1,213 +1,183 @@
 package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rsdp.dto.AiLabels;
-import com.rsdp.dto.Dimensions;
-import com.rsdp.dto.OcrResult;
-import com.rsdp.util.OcrPostProcessor;
-import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
-import com.rsdp.entity.RspuStyle;
-import com.rsdp.entity.RspuVariant;
-import com.rsdp.mapper.AiRecognitionMapper;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.mapper.RspuStyleMapper;
-import com.rsdp.mapper.RspuVariantMapper;
+import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.ImageUploadValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * 产品录入服务，负责接收图片、创建 RSPU 草稿和异步任务，并触发后台 AI 识别。
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProductService {
 
     private final RspuMapper rspuMapper;
-    private final RspuVariantMapper rspuVariantMapper;
-    private final RspuStyleMapper rspuStyleMapper;
     private final AsyncTaskMapper asyncTaskMapper;
     private final ImageAssetsMapper imageAssetsMapper;
-    private final AiRecognitionMapper aiRecognitionMapper;
-    private final VisionService visionService;
+    private final AsyncTaskProcessor asyncTaskProcessor;
+    private final ImageUploadValidator imageUploadValidator;
+    private final StorageService storageService;
+    private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
-    @Value("${rsdp.upload.path}")
-    private String uploadPath;
+    @Value("${spring.servlet.multipart.max-file-size:20MB}")
+    private String maxFileSize;
 
-    @Value("${rsdp.ai.model}")
-    private String aiModel;
-
+    /**
+     * 新品录入入口。
+     *
+     * <p>同步完成：图片校验、本地落盘、RSPU 草稿、图片记录、异步任务记录。
+     * AI 识别在后台异步执行，调用方通过返回的 {@code taskId} 轮询任务状态。
+     *
+     * <p>支持一次上传多张图片：第一张图作为主图（{@code white_bg}）参与 AI 识别，
+     * 其余图作为非主图（{@code detail}）仅做存档展示。
+     *
+     * @param images       产品图片列表，第一张为主图
+     * @param categoryCode 品类码，如 FS/DT/CB；为空时默认 FS
+     * @return 包含 taskId、rspuId、imageIds 的映射
+     * @throws IOException 文件保存失败
+     */
     @Transactional
-    public Map<String, Object> createEntry(MultipartFile image) throws IOException {
-        long totalStart = System.currentTimeMillis();
+    public Map<String, Object> createEntry(List<MultipartFile> images, String categoryCode) throws IOException {
+        long start = System.currentTimeMillis();
 
-        // 1. 生成 ID
+        if (images == null || images.isEmpty()) {
+            throw new BusinessException("请至少上传一张图片");
+        }
+
+        long maxSize = parseMaxFileSize(maxFileSize);
+        for (MultipartFile image : images) {
+            imageUploadValidator.validate(image, maxSize);
+        }
+
         String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
-        // 2. 保存图片到本地
-        Path dir = Paths.get(System.getProperty("user.dir"), uploadPath);
-        if (!Files.exists(dir)) {
-            Files.createDirectories(dir);
-        }
-        String ext = getExtension(image.getOriginalFilename());
-        String fileName = imageId + "." + ext;
-        Path filePath = dir.resolve(fileName);
-        image.transferTo(filePath.toFile());
+        String effectiveCategoryCode = (categoryCode == null || categoryCode.isBlank()) ? "FS" : categoryCode.trim().toUpperCase();
 
-        // 3. 写入 RSPU 草稿（必须先于 image_assets，因为外键约束）
+        // 创建 RSPU 草稿
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
-        rspu.setCategoryCode("FS");
-        rspu.setCategoryPath("[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]");
+        rspu.setCategoryCode(effectiveCategoryCode);
+        rspu.setCategoryPath(resolveCategoryPath(effectiveCategoryCode));
         rspu.setPositioningLabel("待识别");
         rspu.setStatus("processing");
         rspu.setReviewStatus("待复核");
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
+        auditLogService.logCreate("rspu_master", rspuId, rspu, "admin");
 
-        // 4. 写入图片资源记录
-        ImageAssets imageAsset = new ImageAssets();
-        imageAsset.setImageId(imageId);
-        imageAsset.setRspuId(rspuId);
-        imageAsset.setImageType("white_bg");
-        imageAsset.setStoragePath(filePath.toString().replace("\\", "/"));
-        imageAsset.setPrimary(true);
-        imageAsset.setAiProcessed(false);
-        imageAsset.setUploadedBy("admin");
-        imageAsset.setCreatedAt(LocalDateTime.now());
-        imageAssetsMapper.insert(imageAsset);
+        List<String> imageIds = new ArrayList<>();
+        String primaryImageId = null;
+        String primaryObjectKey = null;
 
-        // 5. 调用 AI 视觉模型识别
-        AiLabels labels = null;
-        String recognitionId = "REC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String status = "success";
-        String errorMessage = null;
+        for (int i = 0; i < images.size(); i++) {
+            MultipartFile image = images.get(i);
+            String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+            String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
+            String storagePath = storageService.store(image, objectKey);
 
-        try {
-            long aiStart = System.currentTimeMillis();
-            labels = visionService.recognizeImage(filePath);
-            int processingTime = (int) (System.currentTimeMillis() - aiStart);
+            boolean isPrimary = i == 0;
+            ImageAssets imageAsset = new ImageAssets();
+            imageAsset.setImageId(imageId);
+            imageAsset.setRspuId(rspuId);
+            imageAsset.setImageType(isPrimary ? "white_bg" : "detail");
+            imageAsset.setStoragePath(storagePath);
+            imageAsset.setPrimary(isPrimary);
+            imageAsset.setAiProcessed(false);
+            imageAsset.setFileSize(image.getSize());
+            imageAsset.setFormat(getExtension(image.getOriginalFilename()));
+            imageAsset.setUploadedBy("admin");
+            imageAsset.setCreatedAt(LocalDateTime.now());
+            imageAssetsMapper.insert(imageAsset);
+            auditLogService.logCreate("image_assets", imageId, imageAsset, "admin");
 
-            // 解析并清洗 OCR 信息
-            OcrResult ocr = labels.getOcr();
-            OcrPostProcessor.clean(ocr);
-
-            // 更新 RSPU
-            rspu.setPositioningLabel(labels.getStyle());
-            rspu.setSixDimTags(objectMapper.writeValueAsString(labels.getSixDimTags()));
-            rspu.setColorPrimaryName(labels.getColorPrimaryName());
-            rspu.setColorPrimaryHsv(objectMapper.writeValueAsString(labels.getColorPrimaryHsv()));
-            rspu.setMaterialTags(objectMapper.writeValueAsString(labels.getMaterialTags()));
-            rspu.setSceneTags(objectMapper.writeValueAsString(labels.getSceneTags()));
-            rspu.setAestheticsConfidence(labels.getConfidence());
-            rspu.setSourceAgentVersion(aiModel);
-            rspu.setKeySpecs(objectMapper.writeValueAsString(buildKeySpecs(ocr)));
-            rspu.setStatus("active");
-            rspu.setUpdatedAt(LocalDateTime.now());
-            rspuMapper.updateById(rspu);
-
-            // 写入风格关联（主风格 + 未来可扩展多风格）
-            saveRspuStyle(rspuId, labels.getStyle(), true);
-
-            // 根据 OCR 创建款式变体（支持尺寸 × 颜色 × 材质组合）
-            createVariantsFromOcr(rspuId, ocr, labels);
-
-            // 更新图片为已识别
-            imageAsset.setAiProcessed(true);
-            imageAssetsMapper.updateById(imageAsset);
-
-            // 写入 AI 识别记录
-            AiRecognition rec = new AiRecognition();
-            rec.setRecognitionId(recognitionId);
-            rec.setImageId(imageId);
-            rec.setRspuId(rspuId);
-            rec.setTaskId(taskId);
-            rec.setModelName(aiModel);
-            rec.setRecognitionType("label");
-            rec.setEndpoint("/chat/completions");
-            rec.setOutputData(objectMapper.writeValueAsString(labels));
-            rec.setParsedStyle(labels.getStyle());
-            rec.setParsedSixDim(objectMapper.writeValueAsString(labels.getSixDimTags()));
-            rec.setParsedColorHsv(objectMapper.writeValueAsString(labels.getColorPrimaryHsv()));
-            rec.setParsedSceneTags(objectMapper.writeValueAsString(labels.getSceneTags()));
-            rec.setParsedOcr(objectMapper.writeValueAsString(ocr));
-            rec.setConfidence(labels.getConfidence());
-            rec.setProcessingTimeMs(processingTime);
-            rec.setStatus(status);
-            rec.setCreatedAt(LocalDateTime.now());
-            aiRecognitionMapper.insert(rec);
-
-        } catch (Exception e) {
-            log.error("AI 识别失败", e);
-            status = "failed";
-            errorMessage = e.getMessage();
-
-            // 识别失败也记录
-            AiRecognition rec = new AiRecognition();
-            rec.setRecognitionId(recognitionId);
-            rec.setImageId(imageId);
-            rec.setRspuId(rspuId);
-            rec.setTaskId(taskId);
-            rec.setModelName(aiModel);
-            rec.setRecognitionType("label");
-            rec.setEndpoint("/chat/completions");
-            rec.setStatus(status);
-            rec.setErrorMessage(errorMessage);
-            rec.setCreatedAt(LocalDateTime.now());
-            aiRecognitionMapper.insert(rec);
-
-            // RSPU 保持 active，但 review_status 为存疑
-            rspu.setStatus("active");
-            rspu.setReviewStatus("存疑");
-            rspu.setUpdatedAt(LocalDateTime.now());
-            rspuMapper.updateById(rspu);
+            imageIds.add(imageId);
+            if (isPrimary) {
+                primaryImageId = imageId;
+                primaryObjectKey = storagePath;
+            }
         }
 
-        // 6. 写入异步任务
+        // 创建异步任务（仅针对主图做 AI 识别）
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);
         task.setTaskType("product_entry");
-        task.setStatus("done");
-        task.setProgress(100);
-        task.setResultData(objectMapper.writeValueAsString(Map.of(
+        task.setStatus("pending");
+        task.setProgress(0);
+        MultipartFile primaryImage = images.get(0);
+        task.setInputData(objectMapper.writeValueAsString(Map.of(
             "rspuId", rspuId,
-            "imageId", imageId,
-            "imagePath", filePath.toString().replace("\\", "/"),
-            "aiLabels", labels != null ? labels : Map.of("error", errorMessage)
+            "imageId", primaryImageId,
+            "objectKey", primaryObjectKey,
+            "originalFilename", primaryImage.getOriginalFilename()
         )));
         task.setCreatedAt(LocalDateTime.now());
-        task.setCompletedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
 
-        int totalTime = (int) (System.currentTimeMillis() - totalStart);
-        log.info("产品录入完成，总耗时 {}ms，rspuId={}", totalTime, rspuId);
+        // 触发后台 AI 识别：若处于事务中，则在事务提交后触发；否则立即触发
+        triggerAsyncProcess(taskId, rspuId, primaryImageId, primaryObjectKey);
+
+        log.info("产品录入任务已创建，共 {} 张图片，总耗时 {}ms，taskId={}",
+            images.size(), System.currentTimeMillis() - start, taskId);
 
         return Map.of(
             "taskId", taskId,
             "rspuId", rspuId,
-            "imageId", imageId,
-            "imagePath", filePath.toString().replace("\\", "/"),
-            "aiLabels", labels != null ? labels : Map.of("error", errorMessage)
+            "imageIds", imageIds,
+            "message", "任务已创建，正在后台识别中"
         );
+    }
+
+    private void triggerAsyncProcess(String taskId, String rspuId, String imageId, String objectKey) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+                }
+            });
+        } else {
+            asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+        }
+    }
+
+    private String resolveCategoryPath(String categoryCode) {
+        return switch (categoryCode) {
+            case "SF" -> "[\"家具\",\"沙发\"]";
+            case "TB" -> "[\"家具\",\"茶几\"]";
+            case "FC" -> "[\"家具\",\"柜类\"]";
+            case "BS" -> "[\"家具\",\"吧椅\"]";
+            case "DT" -> "[\"家具\",\"桌子\"]";
+            case "CB" -> "[\"家具\",\"柜子\"]";
+            case "BD" -> "[\"家具\",\"床\"]";
+            case "OF" -> "[\"办公家具\"]";
+            default -> "[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]";
+        };
     }
 
     private String getExtension(String filename) {
@@ -217,168 +187,27 @@ public class ProductService {
         return filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
     }
 
-    /**
-     * 把 OCR 结果中适合写入 RSPU 的规格信息汇总成 key_specs。
-     */
-    private Map<String, Object> buildKeySpecs(OcrResult ocr) {
-        Map<String, Object> keySpecs = new java.util.HashMap<>();
-        if (ocr == null) {
-            return keySpecs;
+    private long parseMaxFileSize(String size) {
+        if (size == null || size.isBlank()) {
+            return 20 * 1024 * 1024;
         }
-        if (org.springframework.util.StringUtils.hasText(ocr.getModelNumber())) {
-            keySpecs.put("modelNumber", ocr.getModelNumber());
+        String value = size.trim().toUpperCase();
+        long multiplier = 1;
+        if (value.endsWith("MB")) {
+            multiplier = 1024 * 1024;
+            value = value.substring(0, value.length() - 2);
+        } else if (value.endsWith("KB")) {
+            multiplier = 1024;
+            value = value.substring(0, value.length() - 2);
+        } else if (value.endsWith("GB")) {
+            multiplier = 1024L * 1024 * 1024;
+            value = value.substring(0, value.length() - 2);
         }
-        if (org.springframework.util.StringUtils.hasText(ocr.getMaterialDescription())) {
-            keySpecs.put("materialDescription", ocr.getMaterialDescription());
+        try {
+            return Long.parseLong(value.trim()) * multiplier;
+        } catch (NumberFormatException e) {
+            log.warn("无法解析 max-file-size: {}", size);
+            return 20 * 1024 * 1024;
         }
-        if (org.springframework.util.StringUtils.hasText(ocr.getBrand())) {
-            keySpecs.put("brand", ocr.getBrand());
-        }
-        if (org.springframework.util.StringUtils.hasText(ocr.getRawText())) {
-            keySpecs.put("ocrRawText", ocr.getRawText());
-        }
-        if (ocr.getOtherInfo() != null && !ocr.getOtherInfo().isEmpty()) {
-            keySpecs.put("otherInfo", ocr.getOtherInfo());
-        }
-        return keySpecs;
-    }
-
-    /**
-     * 保存 RSPU 风格关联。
-     */
-    private void saveRspuStyle(String rspuId, String styleName, boolean primary) {
-        String styleCode = OcrPostProcessor.toStyleCode(styleName);
-        if (!org.springframework.util.StringUtils.hasText(styleCode)) {
-            log.warn("无法将风格 '{}' 映射为字典 code，rspuId={}", styleName, rspuId);
-            return;
-        }
-        RspuStyle style = new RspuStyle();
-        style.setRspuId(rspuId);
-        style.setDictType("style");
-        style.setStyleCode(styleCode);
-        style.setPrimary(primary);
-        style.setCreatedAt(LocalDateTime.now());
-        rspuStyleMapper.insert(style);
-        log.info("已保存 RSPU 风格关联，rspuId={}，styleCode={}", rspuId, styleCode);
-    }
-
-    /**
-     * 根据 OCR 信息创建 RSPU 变体，支持尺寸 × 颜色 × 材质组合。
-     */
-    private void createVariantsFromOcr(String rspuId, OcrResult ocr, AiLabels labels) throws IOException {
-        // 尺寸列表
-        List<Dimensions> dimensionsList = (ocr != null)
-            ? OcrPostProcessor.parseDimensions(ocr.getDimensionText())
-            : java.util.List.of();
-        if (dimensionsList.isEmpty() && ocr != null && isValidDimensions(ocr.getDimensions())) {
-            dimensionsList = java.util.List.of(ocr.getDimensions());
-        }
-        if (dimensionsList.isEmpty()) {
-            dimensionsList = java.util.List.of(new Dimensions());
-        }
-
-        // 颜色列表
-        List<String> colors = OcrPostProcessor.parseColors(
-            ocr != null ? ocr.getColorText() : null,
-            labels != null ? labels.getColorPrimaryName() : null
-        );
-        if (colors.isEmpty()) {
-            colors = java.util.List.of("默认");
-        }
-
-        // 材质组合：合并 OCR 材质描述 + 视觉识别材质标签，不拆分变体
-        // 预留后续人工复核时修改材质组合的能力
-        List<String> materialMix = buildMaterialMix(
-            ocr != null ? ocr.getMaterialDescription() : null,
-            labels != null ? labels.getMaterialTags() : null
-        );
-
-        String productName = (ocr != null && org.springframework.util.StringUtils.hasText(ocr.getProductName()))
-            ? ocr.getProductName()
-            : "默认变体";
-
-        // 笛卡尔积生成变体：尺寸 × 颜色（材质作为组合存入，不拆分）
-        int index = 1;
-        for (Dimensions dimensions : dimensionsList) {
-            for (String color : colors) {
-                createSingleVariant(rspuId, productName, color, materialMix, dimensions, index++);
-            }
-        }
-
-        log.info("已为 RSPU 创建 {} 个变体，rspuId={}", index - 1, rspuId);
-    }
-
-    /**
-     * 判断尺寸是否有效。
-     */
-    private boolean isValidDimensions(Dimensions dimensions) {
-        if (dimensions == null || !org.springframework.util.StringUtils.hasText(dimensions.getUnit())) {
-            return false;
-        }
-        return dimensions.getW() != null || dimensions.getD() != null || dimensions.getH() != null;
-    }
-
-    /**
-     * 创建单个 RSPU 变体。
-     */
-    private void createSingleVariant(String rspuId, String productName, String color,
-                                     List<String> materialMix, Dimensions dimensions, int index) throws IOException {
-        String variantId = rspuId + "-V" + String.format("%03d", index);
-        RspuVariant variant = new RspuVariant();
-        variant.setVariantId(variantId);
-        variant.setRspuId(rspuId);
-        variant.setDisplayName(buildVariantDisplayName(productName, color, materialMix, index));
-        variant.setVariantCode("V" + String.format("%03d", index));
-        variant.setDimensions(objectMapper.writeValueAsString(dimensions));
-        variant.setMaterialMix(objectMapper.writeValueAsString(
-            materialMix != null && !materialMix.isEmpty() ? materialMix : java.util.List.of("")
-        ));
-        variant.setStatus("active");
-        variant.setCreatedAt(LocalDateTime.now());
-        variant.setUpdatedAt(LocalDateTime.now());
-        rspuVariantMapper.insert(variant);
-    }
-
-    /**
-     * 构建材质组合列表：OCR 材质描述 + 视觉识别材质标签去重合并。
-     */
-    private List<String> buildMaterialMix(String materialDescription, List<String> materialTags) {
-        List<String> materialMix = new java.util.ArrayList<>();
-        if (org.springframework.util.StringUtils.hasText(materialDescription)) {
-            materialMix.add(materialDescription.trim());
-        }
-        if (materialTags != null) {
-            for (String material : materialTags) {
-                if (org.springframework.util.StringUtils.hasText(material)
-                    && !materialMix.contains(material.trim())) {
-                    materialMix.add(material.trim());
-                }
-            }
-        }
-        if (materialMix.isEmpty()) {
-            materialMix.add("");
-        }
-        return materialMix;
-    }
-
-    /**
-     * 构建变体显示名称。
-     */
-    private String buildVariantDisplayName(String productName, String color,
-                                           List<String> materialMix, int index) {
-        StringBuilder sb = new StringBuilder(productName);
-        if (!"默认".equals(color)) {
-            sb.append(" ").append(color);
-        }
-        if (materialMix != null && !materialMix.isEmpty()) {
-            String materialStr = materialMix.stream()
-                .filter(org.springframework.util.StringUtils::hasText)
-                .collect(java.util.stream.Collectors.joining("+"));
-            if (org.springframework.util.StringUtils.hasText(materialStr)) {
-                sb.append(" ").append(materialStr);
-            }
-        }
-        sb.append(" V").append(String.format("%03d", index));
-        return sb.toString();
     }
 }

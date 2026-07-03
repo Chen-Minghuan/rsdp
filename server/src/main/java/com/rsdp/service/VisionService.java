@@ -5,6 +5,7 @@ import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.OpenAiChatMessage;
 import com.rsdp.dto.OpenAiChatRequest;
 import com.rsdp.dto.OpenAiChatResponse;
+import com.rsdp.exception.ExternalServiceException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,8 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.InputStream;
 import java.util.Base64;
 import java.util.List;
 
@@ -77,9 +77,12 @@ public class VisionService {
         只输出 JSON，不要任何其他文字说明。
         """;
 
-    public AiLabels recognizeImage(Path imagePath) {
+    public AiLabels recognizeImage(InputStream imageStream) {
         try {
-            byte[] imageBytes = Files.readAllBytes(imagePath);
+            byte[] imageBytes = imageStream.readAllBytes();
+            if (imageBytes.length == 0) {
+                throw new ExternalServiceException("图片流为空");
+            }
             String base64 = Base64.getEncoder().encodeToString(imageBytes);
 
             OpenAiChatRequest request = OpenAiChatRequest.builder()
@@ -91,36 +94,69 @@ public class VisionService {
                 .temperature(0.3)
                 .build();
 
-            long start = System.currentTimeMillis();
-            OpenAiChatResponse response = aiRestClient.post()
+            String json = executeChat(request, "AI 识别");
+            return objectMapper.readValue(json, AiLabels.class);
+
+        } catch (IOException e) {
+            log.error("读取图片流失败", e);
+            throw new ExternalServiceException("读取图片流失败", e);
+        }
+    }
+
+    /**
+     * 纯文本对话，用于非图片类 AI 任务（如搭配推荐）。
+     *
+     * @param systemPrompt 系统提示词
+     * @param userPrompt   用户提示词
+     * @return AI 返回的文本内容
+     */
+    public String chatText(String systemPrompt, String userPrompt) {
+        OpenAiChatRequest request = OpenAiChatRequest.builder()
+            .model(model)
+            .messages(List.of(
+                OpenAiChatMessage.text("system", systemPrompt),
+                OpenAiChatMessage.text("user", userPrompt)
+            ))
+            .temperature(0.5)
+            .build();
+
+        return executeChat(request, "AI 文本对话");
+    }
+
+    private String executeChat(OpenAiChatRequest request, String taskName) {
+        long start = System.currentTimeMillis();
+        OpenAiChatResponse response;
+        try {
+            response = aiRestClient.post()
                 .uri("/chat/completions")
                 .body(request)
                 .retrieve()
                 .body(OpenAiChatResponse.class);
-            long cost = System.currentTimeMillis() - start;
-
-            log.info("AI 识别完成，耗时 {}ms", cost);
-
-            if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
-                throw new RuntimeException("API 返回为空");
-            }
-
-            String content = response.getChoices().get(0).getMessage().getContent();
-
-            // 清理可能的 markdown 代码块标记
-            String json = content
-                .replaceAll("```json\\s*", "")
-                .replaceAll("```\\s*", "")
-                .trim();
-
-            return objectMapper.readValue(json, AiLabels.class);
-
-        } catch (IOException e) {
-            log.error("读取图片失败", e);
-            throw new RuntimeException("读取图片失败", e);
         } catch (Exception e) {
-            log.error("AI 识别失败", e);
-            throw new RuntimeException("AI 识别失败: " + e.getMessage(), e);
+            throw new ExternalServiceException("AI API 调用失败: " + e.getMessage(), e);
         }
+        long cost = System.currentTimeMillis() - start;
+
+        log.info("{}完成，耗时 {}ms", taskName, cost);
+
+        if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
+            throw new ExternalServiceException("AI API 返回为空");
+        }
+
+        OpenAiChatResponse.Choice choice = response.getChoices().get(0);
+        if (choice.getMessage() == null) {
+            throw new ExternalServiceException("AI API 返回消息为空");
+        }
+
+        String content = choice.getMessage().getContent();
+        if (content == null || content.isBlank()) {
+            throw new ExternalServiceException("AI API 返回内容为空");
+        }
+
+        // 清理可能的 markdown 代码块标记
+        return content
+            .replaceAll("```json\\s*", "")
+            .replaceAll("```\\s*", "")
+            .trim();
     }
 }

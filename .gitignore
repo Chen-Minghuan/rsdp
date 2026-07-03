@@ -26,6 +26,7 @@ uploads/
 # 日志
 *.log
 logs/
+backend.pid
 
 # 环境变量和密钥
 .env

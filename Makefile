@@ -33,7 +33,7 @@ build: ## 构建前后端
 	cd web && pnpm install && pnpm build
 
 backend: ## 启动后端（需先启动 infra）
-	cd server && mvn spring-boot:run -Dspring-boot.run.profiles=dev
+	cd server && mvn spring-boot:run -Dspring-boot.run.jvmArguments="--spring.profiles.active=dev"
 
 frontend: ## 启动前端开发服务器
 	cd web && pnpm install && pnpm dev

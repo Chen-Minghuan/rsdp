@@ -66,7 +66,7 @@
 
 ### 环境要求
 
-- JDK 17+（推荐 21）
+- JDK 21 LTS
 - Node.js 20+ + pnpm
 - Maven 3.9+
 - Docker Desktop（可选，用于 PostgreSQL / Ollama / ChromaDB / Redis / MinIO）
@@ -92,8 +92,8 @@ cp deploy/.env.example deploy/.env
 # 2. 启动基础设施 + 初始化数据库
 make dev
 
-# 3. 启动后端
-cd server && mvn spring-boot:run -Dspring-boot.run.profiles=dev
+# 3. 启动后端（必须指定 dev profile）
+cd server && mvn spring-boot:run -Dspring-boot.run.jvmArguments="--spring.profiles.active=dev"
 
 # 4. 启动前端
 cd web && pnpm install && pnpm dev
@@ -135,17 +135,17 @@ cd web && pnpm install && pnpm dev
 
 详见 `docs/` 目录：
 
-- [整体架构](docs/02-architecture/整体架构.md)
-- [数据库设计](docs/02-architecture/数据库设计.md)
-- [数据库实现说明](docs/02-architecture/数据库实现说明.md)
-- [API 设计](docs/02-architecture/API设计.md)
-- [本地开发环境搭建](docs/03-guides/本地开发环境搭建.md)
-- [编码规范](docs/03-guides/编码规范.md)
-- [测试指南](docs/03-guides/测试指南.md)
+- [整体架构](docs/02-architecture/01-整体架构.md)
+- [数据库设计](docs/02-architecture/02-数据库设计.md)
+- [数据库实现说明](docs/02-architecture/03-数据库实现说明.md)
+- [API 设计](docs/02-architecture/04-API设计.md)
+- [本地开发环境搭建](docs/03-guides/01-本地开发环境搭建.md)
+- [编码规范](docs/03-guides/02-编码规范.md)
+- [测试指南](docs/03-guides/03-测试指南.md)
 - [当前进度](docs/05-status/当前进度.md)
 - [待办事项](docs/05-status/待办事项.md)
-- [业务规则说明](docs/06-reference/业务规则说明.md)
-- [双层编码体系](docs/06-reference/双层编码体系.md)
+- [业务规则说明](docs/06-reference/01-业务规则说明.md)
+- [双层编码体系](docs/06-reference/02-双层编码体系.md)
 
 ## 开发路线
 
