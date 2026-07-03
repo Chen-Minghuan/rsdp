@@ -530,6 +530,21 @@ CREATE INDEX IF NOT EXISTS idx_formula_style_room ON style_matching_formula(styl
 CREATE INDEX IF NOT EXISTS idx_product_match_rspu ON product_style_match(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_product_match_score ON product_style_match(overall_score DESC);
 
+-- 系统用户表
+CREATE TABLE IF NOT EXISTS sys_user (
+    user_id VARCHAR(64) PRIMARY KEY,
+    username VARCHAR(64) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    nickname VARCHAR(64),
+    role VARCHAR(32) NOT NULL DEFAULT 'VIEWER',
+    status VARCHAR(16) DEFAULT 'active',
+    last_login_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sys_user_username ON sys_user(username);
+
 -- =================== 5. 插入种子数据 ===================
 
 -- 产品类别

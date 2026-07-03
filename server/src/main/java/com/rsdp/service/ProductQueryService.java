@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -175,7 +177,7 @@ public class ProductQueryService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
-        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, "admin");
+        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
     }
 
     /**
@@ -198,7 +200,7 @@ public class ProductQueryService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
-        auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, "admin");
+        auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, SecurityOperatorContext.currentUsername());
 
         publishRspuDeletedEvent(rspuId);
     }
@@ -287,7 +289,7 @@ public class ProductQueryService {
             updateScenes(rspuId, sceneCodes);
         }
 
-        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, "admin");
+        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
     }
 
     private void updatePrimaryStyle(String rspuId, String styleCode) {

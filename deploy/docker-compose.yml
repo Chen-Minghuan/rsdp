@@ -84,6 +84,7 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - RSDP_ENCRYPTION_KEY=${RSDP_ENCRYPTION_KEY}
+      - RSDP_JWT_SECRET=${RSDP_JWT_SECRET}
       - RSDP_IMPORT_ALLOWED_IMAGE_HOSTS=${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:-}
     depends_on:
       - postgres

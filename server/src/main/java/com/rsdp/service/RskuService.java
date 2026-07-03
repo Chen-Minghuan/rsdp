@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.response.RskuResponse;
@@ -155,7 +157,7 @@ public class RskuService {
             throw new BusinessException("该工厂对该变体已有报价");
         }
 
-        auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, "admin");
+        auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
     }
 
     private String resolveProductLevel(RskuCreateRequest request, RspuMaster rspu, RspuVariant variant) {
@@ -196,7 +198,7 @@ public class RskuService {
         rsku.setUpdatedAt(LocalDateTime.now());
         rskuSupplyMapper.updateById(rsku);
 
-        auditLogService.logDelete("rsku_supply", rskuId, oldSnapshot, "admin");
+        auditLogService.logDelete("rsku_supply", rskuId, oldSnapshot, SecurityOperatorContext.currentUsername());
     }
 
     /**
@@ -235,12 +237,12 @@ public class RskuService {
         history.setRskuId(rskuId);
         history.setOldPrice(oldPrice);
         history.setNewPrice(newPrice);
-        history.setChangedBy("admin");
+        history.setChangedBy(SecurityOperatorContext.currentUsername());
         history.setChangeReason(changeReason);
         history.setCreatedAt(LocalDateTime.now());
         priceHistoryMapper.insert(history);
 
-        auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, rsku, "admin");
+        auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, rsku, SecurityOperatorContext.currentUsername());
     }
 
     private RskuSupply snapshot(RskuSupply source) {

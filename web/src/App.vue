@@ -1,24 +1,51 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider } from 'naive-ui'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown } from 'naive-ui'
+import { onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useUserStore } from '@/stores/user'
+import { getCurrentUser } from '@/api/auth'
 
 const router = useRouter()
 const route = useRoute()
+const userStore = useUserStore()
+
+function handleUserAction(key: string) {
+  if (key === 'logout') {
+    userStore.clearAuth()
+    router.push('/login')
+  }
+}
 
 function navigate(path: string) {
   router.push(path)
 }
+
+onMounted(async () => {
+  if (userStore.token && !userStore.userInfo) {
+    try {
+      const user = await getCurrentUser()
+      userStore.setAuth(userStore.token, {
+        userId: user.userId,
+        username: user.username,
+        nickname: user.nickname,
+        role: user.role
+      })
+    } catch {
+      userStore.clearAuth()
+    }
+  }
+})
 </script>
 
 <template>
   <n-config-provider :locale="zhCN" :date-locale="dateZhCN">
     <n-layout style="height: 100vh;">
-      <n-layout-header bordered style="padding: 12px 24px;">
+      <n-layout-header v-if="route.path !== '/login'" bordered style="padding: 12px 24px;">
         <n-space align="center" justify="space-between">
           <div style="font-size: 18px; font-weight: bold; cursor: pointer;" @click="navigate('/')">
             RSDP 家具数据平台
           </div>
-          <n-space>
+          <n-space align="center">
             <n-button
               :type="route.path === '/' ? 'primary' : 'default'"
               @click="navigate('/')"
@@ -66,6 +93,19 @@ function navigate(path: string) {
               @click="navigate('/visual-search')"
             >
               以图搜图
+            </n-button>
+            <n-dropdown
+              v-if="userStore.isLoggedIn"
+              :options="[
+                { label: `角色：${userStore.userInfo?.role || '-'}`, key: 'role', disabled: true },
+                { label: '退出登录', key: 'logout' }
+              ]"
+              @select="handleUserAction"
+            >
+              <n-button>{{ userStore.displayName }}</n-button>
+            </n-dropdown>
+            <n-button v-else @click="navigate('/login')">
+              登录
             </n-button>
           </n-space>
         </n-space>

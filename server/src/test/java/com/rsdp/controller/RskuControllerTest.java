@@ -3,10 +3,12 @@ package com.rsdp.controller;
 import com.rsdp.dto.request.RskuPriceUpdateRequest;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.RskuService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
@@ -27,6 +29,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@link RskuController} 单元测试。
  */
 @WebMvcTest(RskuController.class)
+@AutoConfigureMockMvc(addFilters = false)
 @Import(GlobalExceptionHandler.class)
 class RskuControllerTest {
 
@@ -38,6 +41,9 @@ class RskuControllerTest {
 
     @MockBean
     private RskuService rskuService;
+
+    @MockBean
+    private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Test
     void updatePrice_shouldReturnOk() throws Exception {

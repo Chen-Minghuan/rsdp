@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.RspuRelationCreateRequest;
 import com.rsdp.dto.request.RspuRelationUpdateRequest;
@@ -111,12 +113,12 @@ public class RspuRelationService {
         relation.setReason(request.getReason());
         relation.setSortOrder(request.getSortOrder() != null ? request.getSortOrder() : 0);
         relation.setStatus("active");
-        relation.setCreatedBy("admin");
+        relation.setCreatedBy(SecurityOperatorContext.currentUsername());
         relation.setCreatedAt(LocalDateTime.now());
         relation.setUpdatedAt(LocalDateTime.now());
 
         relationMapper.insert(relation);
-        auditLogService.logCreate("rspu_relation", relation.getRelationId(), relation, "admin");
+        auditLogService.logCreate("rspu_relation", relation.getRelationId(), relation, SecurityOperatorContext.currentUsername());
     }
 
     /**
@@ -151,7 +153,7 @@ public class RspuRelationService {
         relation.setUpdatedAt(LocalDateTime.now());
 
         relationMapper.updateById(relation);
-        auditLogService.logUpdate("rspu_relation", relationId, oldSnapshot, relation, "admin");
+        auditLogService.logUpdate("rspu_relation", relationId, oldSnapshot, relation, SecurityOperatorContext.currentUsername());
     }
 
     /**
@@ -173,7 +175,7 @@ public class RspuRelationService {
         relation.setDeletedAt(LocalDateTime.now());
         relation.setUpdatedAt(LocalDateTime.now());
         relationMapper.updateById(relation);
-        auditLogService.logUpdate("rspu_relation", relationId, oldSnapshot, relation, "admin");
+        auditLogService.logUpdate("rspu_relation", relationId, oldSnapshot, relation, SecurityOperatorContext.currentUsername());
     }
 
     private void validateRspuExists(String rspuId) {

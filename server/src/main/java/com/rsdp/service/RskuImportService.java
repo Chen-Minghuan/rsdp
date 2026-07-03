@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
@@ -148,7 +150,7 @@ public class RskuImportService {
         }
         if (!toUpdate.isEmpty()) {
             toUpdate.forEach(rskuSupplyMapper::updateById);
-            toUpdate.forEach(r -> auditLogService.logUpdate("rsku_supply", r.getRskuId(), updateSnapshots.get(r), r, "admin"));
+            toUpdate.forEach(r -> auditLogService.logUpdate("rsku_supply", r.getRskuId(), updateSnapshots.get(r), r, SecurityOperatorContext.currentUsername()));
         }
         if (!priceHistories.isEmpty()) {
             priceHistories.forEach(priceHistoryMapper::insert);
@@ -174,7 +176,7 @@ public class RskuImportService {
     private int doInsertBatch(List<RskuSupply> toInsert, List<RskuImportFailure> failures) {
         try {
             rskuSupplyMapper.insertBatchSafe(toInsert);
-            toInsert.forEach(r -> auditLogService.logCreate("rsku_supply", r.getRskuId(), r, "admin"));
+            toInsert.forEach(r -> auditLogService.logCreate("rsku_supply", r.getRskuId(), r, SecurityOperatorContext.currentUsername()));
             return 0;
         } catch (DataIntegrityViolationException e) {
             log.warn("批量插入报价触发唯一约束冲突，尝试逐行回退插入", e);
@@ -182,7 +184,7 @@ public class RskuImportService {
             for (RskuSupply rsku : toInsert) {
                 try {
                     rskuSupplyMapper.insert(rsku);
-                    auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, "admin");
+                    auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
                 } catch (DataIntegrityViolationException ex) {
                     log.warn("逐行插入报价冲突: {} - {}", rsku.getFactoryCode(), rsku.getVariantId(), ex);
                     failures.add(new RskuImportFailure(
@@ -493,7 +495,7 @@ public class RskuImportService {
         history.setRskuId(rsku.getRskuId());
         history.setOldPrice(oldPrice);
         history.setNewPrice(rsku.getFactoryPrice());
-        history.setChangedBy("admin");
+        history.setChangedBy(SecurityOperatorContext.currentUsername());
         history.setChangeReason("批量导入更新");
         history.setCreatedAt(LocalDateTime.now());
         return history;

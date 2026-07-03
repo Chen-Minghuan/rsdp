@@ -4,10 +4,12 @@ import com.rsdp.dto.request.DictCreateRequest;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.GlobalExceptionHandler;
+import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.DictService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
@@ -28,6 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@link DictController} 单元测试。
  */
 @WebMvcTest(DictController.class)
+@AutoConfigureMockMvc(addFilters = false)
 @Import(GlobalExceptionHandler.class)
 class DictControllerTest {
 
@@ -39,6 +42,9 @@ class DictControllerTest {
 
     @MockBean
     private DictService dictService;
+
+    @MockBean
+    private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Test
     void listByType_shouldReturnDicts() throws Exception {

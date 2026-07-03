@@ -103,9 +103,8 @@ class AiMatchingServiceTest {
 
         when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
         when(rspuStyleMapper.selectList(any())).thenReturn(List.of(createRspuStyle("RSPU-001", "MC")));
-        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
+        when(rskuSupplyMapper.selectCapableByRspuIds(any())).thenReturn(List.of(rsku));
         when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
         when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING_ROOM", "客厅")));
         when(dictService.listByType("style")).thenReturn(List.of(createDict("MC", "中古风")));
@@ -182,9 +181,8 @@ class AiMatchingServiceTest {
 
         when(rspuMapper.selectById("RSPU-ANCHOR")).thenReturn(anchor);
         when(rspuMapper.selectList(any())).thenReturn(List.of(candidate));
-        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
+        when(rskuSupplyMapper.selectCapableByRspuIds(any())).thenReturn(List.of(rsku));
         when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
 
         AiSchemeRecommendation rec = new AiSchemeRecommendation();
@@ -226,8 +224,7 @@ class AiMatchingServiceTest {
 
         when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
         when(rspuStyleMapper.selectList(any())).thenReturn(List.of(createRspuStyle("RSPU-001", "MC")));
-        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(cheapRsku));
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("A", "B"));
+        when(rskuSupplyMapper.selectCapableByRspuIds(any())).thenReturn(List.of());
         when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING_ROOM", "客厅")));
         when(dictService.listByType("style")).thenReturn(List.of(createDict("MC", "中古风")));
 

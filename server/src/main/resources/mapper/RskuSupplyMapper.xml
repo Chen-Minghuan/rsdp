@@ -49,4 +49,28 @@
             )
         </foreach>
     </insert>
+
+    <select id="selectCapableByRspuIds" resultType="com.rsdp.entity.RskuSupply">
+        SELECT rs.*
+        FROM rsku_supply rs
+        WHERE rs.rspu_id IN
+        <foreach collection="rspuIds" item="rspuId" open="(" separator="," close=")">
+            #{rspuId}
+        </foreach>
+          AND rs.deleted_at IS NULL
+          AND EXISTS (
+              SELECT 1 FROM factory_master fm
+              WHERE fm.factory_code = rs.factory_code
+                AND fm.deleted_at IS NULL
+          )
+          AND (
+              rs.product_level IS NULL
+              OR rs.product_level = ''
+              OR EXISTS (
+                  SELECT 1 FROM factory_level_capability flc
+                  WHERE flc.factory_code = rs.factory_code
+                    AND flc.level_code = rs.product_level
+              )
+          )
+    </select>
 </mapper>

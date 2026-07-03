@@ -2,9 +2,11 @@ package com.rsdp.service;
 
 import com.rsdp.entity.AuditLog;
 import com.rsdp.mapper.AuditLogMapper;
+import com.rsdp.security.SecurityOperatorContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 
@@ -76,7 +78,7 @@ public class AuditLogService {
         logEntry.setAction(action);
         logEntry.setOldValue(oldValue);
         logEntry.setNewValue(newValue);
-        logEntry.setOperator(operator);
+        logEntry.setOperator(StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername());
         logEntry.setCreatedAt(LocalDateTime.now());
         try {
             auditLogMapper.insert(logEntry);

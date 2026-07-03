@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.ImageAssets;
@@ -91,7 +93,7 @@ public class ProductService {
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
-        auditLogService.logCreate("rspu_master", rspuId, rspu, "admin");
+        auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
         List<String> imageIds = new ArrayList<>();
         String primaryImageId = null;
@@ -113,10 +115,10 @@ public class ProductService {
             imageAsset.setAiProcessed(false);
             imageAsset.setFileSize(image.getSize());
             imageAsset.setFormat(getExtension(image.getOriginalFilename()));
-            imageAsset.setUploadedBy("admin");
+            imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);
-            auditLogService.logCreate("image_assets", imageId, imageAsset, "admin");
+            auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
 
             imageIds.add(imageId);
             if (isPrimary) {

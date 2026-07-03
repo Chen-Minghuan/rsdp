@@ -10,6 +10,10 @@ set PROJECT_ROOT=%CD%
 set LOG_DIR=%PROJECT_ROOT%\logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
+rem 本地开发默认密钥：仅在开发环境使用，生产环境必须通过环境变量注入真实密钥
+if not defined RSDP_ENCRYPTION_KEY set RSDP_ENCRYPTION_KEY=WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=
+if not defined RSDP_JWT_SECRET set RSDP_JWT_SECRET=g3g6Ryj6ty4Dsw0jm1ImR59dbRAOI98q3qKVf7gz0jU=
+
 echo ==========================================
 echo  RSDP 本地开发环境启动
 echo ==========================================

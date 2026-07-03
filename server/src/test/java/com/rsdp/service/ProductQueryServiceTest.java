@@ -20,8 +20,13 @@ import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.dto.response.RspuRelationResponse;
 import com.rsdp.event.RspuDeletedEvent;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -44,6 +49,18 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 class ProductQueryServiceTest {
+
+    @BeforeEach
+    void setSecurityContext() {
+        var user = User.withUsername("admin").password("").roles("ADMIN").build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
 
     @Mock
     private RspuMapper rspuMapper;

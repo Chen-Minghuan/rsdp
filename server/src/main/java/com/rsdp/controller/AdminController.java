@@ -1,6 +1,8 @@
 package com.rsdp.controller;
 
 import com.rsdp.common.Result;
+import com.rsdp.config.LoggingRejectedExecutionHandler;
+import com.rsdp.dto.response.AsyncMetricsResponse;
 import com.rsdp.service.VectorBackfillService;
 import com.rsdp.service.VectorBackfillService.BackfillResult;
 import io.swagger.v3.oas.annotations.Operation;
@@ -8,11 +10,17 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 管理后台接口。
@@ -25,6 +33,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminController {
 
     private final VectorBackfillService vectorBackfillService;
+
+    @Autowired
+    @Qualifier("taskExecutor")
+    private ThreadPoolTaskExecutor taskExecutor;
 
     /**
      * 触发存量图片向量回填。
@@ -41,5 +53,32 @@ public class AdminController {
                                                   int batchSize) {
         BackfillResult result = vectorBackfillService.backfill(batchSize);
         return Result.ok(result);
+    }
+
+    /**
+     * 获取异步任务线程池运行时指标。
+     */
+    @GetMapping("/async/metrics")
+    @Operation(summary = "异步线程池指标", description = "查询 taskExecutor 活跃线程数、队列大小等运行时指标")
+    public Result<AsyncMetricsResponse> asyncMetrics() {
+        ThreadPoolExecutor pool = taskExecutor.getThreadPoolExecutor();
+        AsyncMetricsResponse response = new AsyncMetricsResponse();
+        response.setCorePoolSize(pool.getCorePoolSize());
+        response.setMaxPoolSize(pool.getMaximumPoolSize());
+        response.setQueueCapacity(pool.getQueue().remainingCapacity() + pool.getQueue().size());
+        response.setActiveCount(pool.getActiveCount());
+        response.setQueueSize(pool.getQueue().size());
+        response.setCompletedTaskCount(pool.getCompletedTaskCount());
+        response.setTaskCount(pool.getTaskCount());
+        response.setRejectedPolicy(resolveRejectedPolicyName(pool));
+        return Result.ok(response);
+    }
+
+    private String resolveRejectedPolicyName(ThreadPoolExecutor pool) {
+        var handler = pool.getRejectedExecutionHandler();
+        if (handler instanceof LoggingRejectedExecutionHandler loggingHandler) {
+            return loggingHandler.getDelegateName();
+        }
+        return handler != null ? handler.getClass().getSimpleName() : "unknown";
     }
 }

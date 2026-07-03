@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
@@ -119,7 +120,7 @@ public class AiRecognitionPersistenceService {
         rspu.setStatus("active");
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
-        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, "admin");
+        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
     }
 
     private void markRspuAsDoubtful(String rspuId, String modelName) {
@@ -135,7 +136,7 @@ public class AiRecognitionPersistenceService {
         rspu.setSourceAgentVersion(modelName);
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
-        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, "admin");
+        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
     }
 
     private void refreshStyleAssociations(String rspuId, String styleCode) {

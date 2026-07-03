@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
@@ -145,7 +147,7 @@ public class SchemeService {
         scheme.setMaxLeadTimeDays(maxLeadTimeDays);
         scheme.setItemCount(distinctItems.size());
         scheme.setStatus("active");
-        scheme.setCreatedBy("admin");
+        scheme.setCreatedBy(SecurityOperatorContext.currentUsername());
         scheme.setCreatedAt(LocalDateTime.now());
         schemeMapper.insert(scheme);
 
@@ -263,7 +265,7 @@ public class SchemeService {
         QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
             .eq("scheme_name", schemeName)
             .eq("status", "active")
-            .eq("created_by", "admin");
+            .eq("created_by", SecurityOperatorContext.currentUsername());
         if (excludeSchemeId != null) {
             wrapper.ne("scheme_id", excludeSchemeId);
         }

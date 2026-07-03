@@ -6,6 +6,17 @@
 - 统一响应：`{ code, message, data }`
 - 分页响应：`{ total, page, rows }`
 
+## 认证
+
+```
+POST   /api/v1/auth/login
+       # 用户登录
+       # Request:  { username, password }
+       # Response: { token, tokenType, userId, username, nickname, role }
+       # 说明：登录成功后，前端应将 token 存入 localStorage，
+       #      并在后续请求头中携带 Authorization: Bearer <token>
+```
+
 ## 核心 API 端点设计
 
 ### 产品管理
@@ -334,6 +345,13 @@ POST   /api/v1/admin/vectors/backfill
        # Query: batchSize (默认 100，最大 1000)
        # Response: { successCount, failedCount }
        # 说明：为已 AI 识别但缺少向量的存量图片生成 embedding，并写入 ChromaDB。
+
+GET    /api/v1/admin/async/metrics
+       # 异步任务线程池运行时指标（已实现）
+       # Response: { corePoolSize, maxPoolSize, queueCapacity, activeCount, queueSize,
+       #             completedTaskCount, taskCount, rejectedPolicy }
+       # 说明：用于监控 AI 识别等后台任务的线程池状态；rejectedPolicy 取值见
+       #      rsdp.async.rejected-policy 配置（abort / discard / discard-oldest / caller-runs）。
 ```
 
 ### 风格数据库（规划中）

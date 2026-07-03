@@ -28,7 +28,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -48,7 +47,6 @@ public class AiMatchingService {
     private final DictService dictService;
     private final VisionService visionService;
     private final ObjectMapper objectMapper;
-    private final FactoryService factoryService;
 
     private static final int MAX_CANDIDATES = 30;
 
@@ -175,17 +173,14 @@ public class AiMatchingService {
     }
 
     private List<RspuMaster> fetchCandidatesByCategory(String categoryCode, String excludeRspuId) {
-        List<RspuMaster> all = rspuMapper.selectList(
+        return rspuMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuMaster>()
                 .eq("status", "active")
                 .eq("category_code", categoryCode)
+                .ne("rspu_id", excludeRspuId)
                 .orderByDesc("created_at")
+                .last("LIMIT " + MAX_CANDIDATES)
         );
-
-        return all.stream()
-            .filter(r -> !r.getRspuId().equals(excludeRspuId))
-            .limit(MAX_CANDIDATES)
-            .collect(Collectors.toList());
     }
 
     private String buildPrompt(String roomTypeName, BigDecimal budgetLimit, String styleName, List<RspuMaster> candidates) {
@@ -221,11 +216,7 @@ public class AiMatchingService {
         if (rspuIds.isEmpty()) {
             return Map.of();
         }
-        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
-                .in("rspu_id", rspuIds)
-        );
-        List<RskuSupply> capableRskus = filterCapableRskus(rskus);
+        List<RskuSupply> capableRskus = rskuSupplyMapper.selectCapableByRspuIds(rspuIds);
         return capableRskus.stream()
             .filter(r -> r.getFactoryPrice() != null)
             .collect(Collectors.groupingBy(
@@ -395,11 +386,7 @@ public class AiMatchingService {
         if (rspuIds.isEmpty()) {
             return Map.of();
         }
-        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
-                .in("rspu_id", rspuIds)
-        );
-        List<RskuSupply> capableRskus = filterCapableRskus(rskus);
+        List<RskuSupply> capableRskus = rskuSupplyMapper.selectCapableByRspuIds(rspuIds);
         return capableRskus.stream()
             .filter(r -> r.getFactoryPrice() != null)
             .collect(Collectors.groupingBy(
@@ -409,35 +396,6 @@ public class AiMatchingService {
             .entrySet().stream()
             .filter(e -> e.getValue().isPresent())
             .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().get()));
-    }
-
-    /**
-     * 过滤出工厂具备对应产品等级能力的 RSKU。
-     */
-    private List<RskuSupply> filterCapableRskus(List<RskuSupply> rskus) {
-        if (rskus.isEmpty()) {
-            return List.of();
-        }
-        Set<String> factoryCodes = rskus.stream()
-            .map(RskuSupply::getFactoryCode)
-            .filter(Objects::nonNull)
-            .collect(Collectors.toSet());
-        Map<String, List<String>> capabilityMap = factoryCodes.stream()
-            .collect(Collectors.toMap(
-                code -> code,
-                code -> factoryService.getFactoryCapableLevels(code)
-            ));
-
-        return rskus.stream()
-            .filter(r -> {
-                String productLevel = r.getProductLevel();
-                if (productLevel == null || productLevel.isBlank()) {
-                    return true;
-                }
-                List<String> capableLevels = capabilityMap.get(r.getFactoryCode());
-                return capableLevels != null && capableLevels.contains(productLevel);
-            })
-            .collect(Collectors.toList());
     }
 
     private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {

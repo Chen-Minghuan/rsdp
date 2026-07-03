@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.FactoryCreateRequest;
 import com.rsdp.dto.request.FactoryLevelCapabilityUpdateRequest;
@@ -107,7 +109,7 @@ public class FactoryService {
 
         saveCapabilities(factory.getFactoryCode(), primaryLevel, capableLevels);
 
-        auditLogService.logCreate("factory_master", factory.getFactoryCode(), factory, "admin");
+        auditLogService.logCreate("factory_master", factory.getFactoryCode(), factory, SecurityOperatorContext.currentUsername());
     }
 
     /**
@@ -134,7 +136,7 @@ public class FactoryService {
 
         syncPrimaryCapability(factoryCode, newLevel);
 
-        auditLogService.logUpdate("factory_master", factoryCode, oldSnapshot, factory, "admin");
+        auditLogService.logUpdate("factory_master", factoryCode, oldSnapshot, factory, SecurityOperatorContext.currentUsername());
     }
 
     /**

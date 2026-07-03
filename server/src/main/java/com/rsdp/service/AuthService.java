@@ -1,0 +1,86 @@
+package com.rsdp.service;
+
+import com.rsdp.dto.request.LoginRequest;
+import com.rsdp.dto.response.LoginResponse;
+import com.rsdp.entity.SysUser;
+import com.rsdp.exception.BusinessException;
+import com.rsdp.mapper.SysUserMapper;
+import com.rsdp.util.JwtUtil;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+
+/**
+ * 认证服务。
+ */
+@Service
+@RequiredArgsConstructor
+public class AuthService {
+
+    private final AuthenticationManager authenticationManager;
+    private final SysUserMapper sysUserMapper;
+    private final JwtUtil jwtUtil;
+
+    /**
+     * 用户登录。
+     *
+     * @param request 登录请求
+     * @return 登录响应，包含 JWT
+     */
+    public LoginResponse login(LoginRequest request) {
+        try {
+            Authentication authentication = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword())
+            );
+            if (!authentication.isAuthenticated()) {
+                throw new BusinessException("登录失败");
+            }
+        } catch (BadCredentialsException e) {
+            throw new BusinessException("用户名或密码错误");
+        }
+
+        SysUser user = sysUserMapper.selectByUsername(request.getUsername());
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+
+        user.setLastLoginAt(LocalDateTime.now());
+        sysUserMapper.updateById(user);
+
+        String token = jwtUtil.generateToken(user.getUserId(), user.getUsername(), user.getNickname(), user.getRole());
+        return new LoginResponse(
+            token,
+            "Bearer",
+            user.getUserId(),
+            user.getUsername(),
+            user.getNickname(),
+            user.getRole()
+        );
+    }
+
+    /**
+     * 获取当前登录用户信息。
+     *
+     * @param username 用户名
+     * @return 用户信息（不含 JWT）
+     */
+    public LoginResponse getCurrentUser(String username) {
+        SysUser user = sysUserMapper.selectByUsername(username);
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+        return new LoginResponse(
+            null,
+            "Bearer",
+            user.getUserId(),
+            user.getUsername(),
+            user.getNickname(),
+            user.getRole()
+        );
+    }
+}

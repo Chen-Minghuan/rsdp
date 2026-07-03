@@ -8,6 +8,10 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
 
+# 本地开发默认密钥：仅在开发环境使用，生产环境必须通过环境变量注入真实密钥
+export RSDP_ENCRYPTION_KEY="${RSDP_ENCRYPTION_KEY:-WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=}"
+export RSDP_JWT_SECRET="${RSDP_JWT_SECRET:-g3g6Ryj6ty4Dsw0jm1ImR59dbRAOI98q3qKVf7gz0jU=}"
+
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 

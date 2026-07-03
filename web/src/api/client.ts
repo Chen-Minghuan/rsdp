@@ -35,6 +35,20 @@ export const uploadClient = axios.create({
 })
 
 /**
+ * 请求拦截器：如果存在登录 token，则自动附加到 Authorization 头。
+ */
+function authInterceptor(config: import('axios').InternalAxiosRequestConfig) {
+  const token = localStorage.getItem('rsdp:token')
+  if (token && config.headers) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+}
+
+apiClient.interceptors.request.use(authInterceptor)
+uploadClient.interceptors.request.use(authInterceptor)
+
+/**
  * 统一的响应拦截器：解析业务 code，非成功时统一抛 ApiError。
  */
 function businessCodeInterceptor(response: AxiosResponse) {
@@ -59,6 +73,15 @@ async function errorInterceptor(error: AxiosError | ApiError) {
   const response = error.response
   if (!response) {
     return Promise.reject(new Error(error.message || '请求失败'))
+  }
+
+  if (response.status === 401) {
+    localStorage.removeItem('rsdp:token')
+    localStorage.removeItem('rsdp:user')
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+    return Promise.reject(new Error('登录已过期，请重新登录'))
   }
 
   let message: string | undefined
