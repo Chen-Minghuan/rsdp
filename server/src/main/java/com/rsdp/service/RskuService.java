@@ -202,15 +202,21 @@ public class RskuService {
     /**
      * 更新 RSKU 出厂价，并记录价格历史。
      *
+     * @param rspuId      RSPU ID
      * @param rskuId      RSKU ID
      * @param newPrice    新价格
      * @param changeReason 变更原因
+     * @throws ResourceNotFoundException 当 RSKU 不存在或不属于该 RSPU 时
+     * @throws BusinessException         当价格非法时
      */
     @Transactional
-    public void updateRskuPrice(String rskuId, BigDecimal newPrice, String changeReason) {
+    public void updateRskuPrice(String rspuId, String rskuId, BigDecimal newPrice, String changeReason) {
         RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
         if (rsku == null || rsku.getDeletedAt() != null) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
+        if (!rspuId.equals(rsku.getRspuId())) {
+            throw new ResourceNotFoundException("RSKU 不属于该产品: " + rskuId);
         }
         if (newPrice == null || newPrice.compareTo(java.math.BigDecimal.ZERO) < 0) {
             throw new BusinessException("价格不能为负数");

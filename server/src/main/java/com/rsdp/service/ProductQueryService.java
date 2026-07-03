@@ -9,11 +9,13 @@ import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.AiRecognition;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
 import com.rsdp.event.RspuDeletedEvent;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
@@ -231,8 +233,11 @@ public class ProductQueryService {
         String oldPositioningLabel = rspu.getPositioningLabel();
         String oldSceneTagsJson = rspu.getSceneTags();
 
+        String styleCode = null;
         if (StringUtils.hasText(request.getPositioningLabel())) {
-            rspu.setPositioningLabel(request.getPositioningLabel().trim());
+            styleCode = request.getPositioningLabel().trim().toUpperCase();
+            validateDictCode("style", styleCode);
+            rspu.setPositioningLabel(styleCode);
         }
         if (request.getColorPrimaryName() != null) {
             rspu.setColorPrimaryName(request.getColorPrimaryName().trim());
@@ -241,10 +246,15 @@ public class ProductQueryService {
             rspu.setColorPrimaryHsv(writeJson(request.getColorPrimaryHsv()));
         }
         if (request.getMaterialTags() != null) {
-            rspu.setMaterialTags(writeJson(request.getMaterialTags()));
+            List<String> materialCodes = normalizeCodes(request.getMaterialTags());
+            validateDictCodes("material", materialCodes);
+            rspu.setMaterialTags(writeJson(materialCodes));
         }
+        List<String> sceneCodes = null;
         if (request.getSceneTags() != null) {
-            rspu.setSceneTags(writeJson(request.getSceneTags()));
+            sceneCodes = normalizeCodes(request.getSceneTags());
+            validateDictCodes("scene", sceneCodes);
+            rspu.setSceneTags(writeJson(sceneCodes));
         }
         if (request.getSixDimTags() != null) {
             rspu.setSixDimTags(writeJson(request.getSixDimTags()));
@@ -253,8 +263,9 @@ public class ProductQueryService {
             rspu.setReferencePriceBand(request.getReferencePriceBand().trim());
         }
         if (StringUtils.hasText(request.getProductLevel())) {
-            validateProductLevel(request.getProductLevel().trim());
-            rspu.setProductLevel(request.getProductLevel().trim());
+            String productLevel = request.getProductLevel().trim().toUpperCase();
+            validateProductLevel(productLevel);
+            rspu.setProductLevel(productLevel);
         }
         if (request.getWarrantyYears() != null) {
             rspu.setWarrantyYears(request.getWarrantyYears());
@@ -266,14 +277,14 @@ public class ProductQueryService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
-        if (StringUtils.hasText(request.getPositioningLabel())
-            && !request.getPositioningLabel().trim().equals(oldPositioningLabel)) {
-            updatePrimaryStyle(rspuId, request.getPositioningLabel().trim());
+        if (StringUtils.hasText(styleCode)
+            && !styleCode.equals(oldPositioningLabel)) {
+            updatePrimaryStyle(rspuId, styleCode);
         }
 
-        if (request.getSceneTags() != null
-            && !writeJson(request.getSceneTags()).equals(oldSceneTagsJson)) {
-            updateScenes(rspuId, request.getSceneTags());
+        if (sceneCodes != null
+            && !writeJson(sceneCodes).equals(oldSceneTagsJson)) {
+            updateScenes(rspuId, sceneCodes);
         }
 
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, "admin");
@@ -309,11 +320,54 @@ public class ProductQueryService {
     }
 
     private void validateProductLevel(String level) {
-        boolean exists = dictService.listByType("factory_level").stream()
-            .anyMatch(d -> level.equals(d.getDictCode()) || level.equals(d.getDictName()));
+        validateDictCode("factory_level", level);
+    }
+
+    private void validateDictCode(String dictType, String dictCode) {
+        boolean exists = dictService.listByType(dictType).stream()
+            .anyMatch(d -> dictCode.equals(d.getDictCode()));
         if (!exists) {
-            throw new com.rsdp.exception.BusinessException("产品等级不存在: " + level);
+            throw new BusinessException(dictErrorMessage(dictType, dictCode));
         }
+    }
+
+    private void validateDictCodes(String dictType, List<String> dictCodes) {
+        if (dictCodes == null || dictCodes.isEmpty()) {
+            return;
+        }
+        List<String> validCodes = dictService.listByType(dictType).stream()
+            .map(CategoryDict::getDictCode)
+            .toList();
+        for (String code : dictCodes) {
+            if (!StringUtils.hasText(code)) {
+                continue;
+            }
+            if (!validCodes.contains(code.trim())) {
+                throw new BusinessException(dictErrorMessage(dictType, code.trim()));
+            }
+        }
+    }
+
+    private List<String> normalizeCodes(List<String> codes) {
+        if (codes == null) {
+            return List.of();
+        }
+        return codes.stream()
+            .filter(StringUtils::hasText)
+            .map(String::trim)
+            .map(String::toUpperCase)
+            .toList();
+    }
+
+    private String dictErrorMessage(String dictType, String dictCode) {
+        return switch (dictType) {
+            case "style" -> "风格不存在: " + dictCode;
+            case "scene" -> "场景标签不存在: " + dictCode;
+            case "material" -> "材质标签不存在: " + dictCode;
+            case "factory_level" -> "产品等级不存在: " + dictCode;
+            case "category" -> "品类不存在: " + dictCode;
+            default -> "字典项不存在: " + dictType + "=" + dictCode;
+        };
     }
 
     private String writeJson(Object value) {

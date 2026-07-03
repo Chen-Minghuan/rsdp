@@ -41,6 +41,7 @@ public class ProductService {
     private final ImageUploadValidator imageUploadValidator;
     private final StorageService storageService;
     private final AuditLogService auditLogService;
+    private final DictService dictService;
     private final ObjectMapper objectMapper;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
@@ -77,6 +78,7 @@ public class ProductService {
         String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
         String effectiveCategoryCode = (categoryCode == null || categoryCode.isBlank()) ? "FS" : categoryCode.trim().toUpperCase();
+        validateCategoryCode(effectiveCategoryCode);
 
         // 创建 RSPU 草稿
         RspuMaster rspu = new RspuMaster();
@@ -163,6 +165,14 @@ public class ProductService {
             });
         } else {
             asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+        }
+    }
+
+    private void validateCategoryCode(String categoryCode) {
+        boolean exists = dictService.listByType("category").stream()
+            .anyMatch(d -> categoryCode.equals(d.getDictCode()));
+        if (!exists) {
+            throw new BusinessException("品类不存在: " + categoryCode);
         }
     }
 

@@ -104,11 +104,24 @@ public class VectorBackfillService {
             embedding = embeddingService.embedImage(stream);
         }
 
-        // 更新 RSPU style_vector
+        // 先写 ChromaDB，成功后再更新 PG，避免 PG 已改但向量库缺失导致不一致
+        Map<String, Object> metadata = buildMetadata(rspu, image);
+        chromaDbClient.upsert(
+            List.of(image.getImageId()),
+            List.of(embedding),
+            List.of(metadata),
+            null
+        );
+
+        // ChromaDB 写入成功后，再更新 RSPU style_vector
         rspu.setStyleVector(objectMapper.writeValueAsString(embedding));
         rspuMapper.updateById(rspu);
 
-        // 写入 ChromaDB
+        log.info("存量向量回填完成，imageId={}", image.getImageId());
+        return true;
+    }
+
+    private Map<String, Object> buildMetadata(RspuMaster rspu, ImageAssets image) {
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("rspu_id", rspu.getRspuId());
         metadata.put("category_code", rspu.getCategoryCode());
@@ -118,16 +131,7 @@ public class VectorBackfillService {
         metadata.put("scene_tags", rspu.getSceneTags());
         metadata.put("status", rspu.getStatus());
         metadata.put("image_size", image.getFileSize() != null ? image.getFileSize() : 0);
-
-        chromaDbClient.upsert(
-            List.of(image.getImageId()),
-            List.of(embedding),
-            List.of(metadata),
-            null
-        );
-
-        log.info("存量向量回填完成，imageId={}", image.getImageId());
-        return true;
+        return metadata;
     }
 
     /**

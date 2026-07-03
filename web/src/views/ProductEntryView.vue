@@ -34,8 +34,9 @@ const selectedFiles = computed(() =>
 
 const hasSelectedFiles = computed(() => selectedFiles.value.length > 0)
 const hasTasks = computed(() => taskList.value.length > 0)
+const terminalStatuses = ['done', 'partial_success', 'failed']
 const pendingTaskCount = computed(
-  () => taskList.value.filter(t => t.status === 'pending' || t.status === 'processing').length
+  () => taskList.value.filter(t => !terminalStatuses.includes(t.status)).length
 )
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -59,7 +60,7 @@ function ensurePolling() {
 
 async function pollAllTasks() {
   const pendingTasks = taskList.value.filter(
-    t => t.status === 'pending' || t.status === 'processing'
+    t => !terminalStatuses.includes(t.status)
   )
   await Promise.all(pendingTasks.map(task => pollTask(task)))
 }
@@ -177,10 +178,25 @@ function statusText(status: TaskItem['status']) {
       return '识别中'
     case 'done':
       return '已完成'
+    case 'partial_success':
+      return '部分成功'
     case 'failed':
       return '失败'
     default:
       return '未知'
+  }
+}
+
+function statusTagType(status: TaskItem['status']) {
+  switch (status) {
+    case 'done':
+      return 'success'
+    case 'failed':
+      return 'error'
+    case 'partial_success':
+      return 'warning'
+    default:
+      return 'warning'
   }
 }
 </script>
@@ -250,7 +266,7 @@ function statusText(status: TaskItem['status']) {
                   任务：{{ task.taskId }} / RSPU：{{ task.rspuId }}
                 </span>
               </n-space>
-              <n-tag :type="task.status === 'done' ? 'success' : task.status === 'failed' ? 'error' : 'warning'">
+              <n-tag :type="statusTagType(task.status)">
                 {{ statusText(task.status) }}
               </n-tag>
             </n-space>
@@ -263,6 +279,10 @@ function statusText(status: TaskItem['status']) {
 
             <n-alert v-if="task.status === 'failed'" type="error" :show-icon="true">
               {{ task.errorMessage }}
+            </n-alert>
+
+            <n-alert v-if="task.status === 'partial_success'" type="warning" :show-icon="true">
+              {{ task.errorMessage || 'AI 识别完成，但向量未成功写入，以图搜图可能不可用' }}
             </n-alert>
 
             <n-space
@@ -282,7 +302,7 @@ function statusText(status: TaskItem['status']) {
             </n-space>
 
             <n-descriptions
-              v-if="task.status === 'done' && task.result"
+              v-if="(task.status === 'done' || task.status === 'partial_success') && task.result"
               bordered
               :column="1"
               size="small"

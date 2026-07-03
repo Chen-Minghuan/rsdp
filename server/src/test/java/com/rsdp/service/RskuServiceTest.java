@@ -315,7 +315,7 @@ class RskuServiceTest {
 
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
 
-        rskuService.updateRskuPrice("RSKU-TEST01", new BigDecimal("1500"), "原材料涨价");
+        rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", new BigDecimal("1500"), "原材料涨价");
 
         ArgumentCaptor<RskuSupply> rskuCaptor = ArgumentCaptor.forClass(RskuSupply.class);
         verify(rskuSupplyMapper).updateById(rskuCaptor.capture());
@@ -326,6 +326,21 @@ class RskuServiceTest {
         assertThat(historyCaptor.getValue().getOldPrice()).isEqualTo(new BigDecimal("1200"));
         assertThat(historyCaptor.getValue().getNewPrice()).isEqualTo(new BigDecimal("1500"));
         assertThat(historyCaptor.getValue().getChangeReason()).isEqualTo("原材料涨价");
+    }
+
+    @Test
+    void updateRskuPrice_shouldThrowWhenRspuIdMismatch() {
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setRspuId("RSPU-OTHER");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("1200"));
+
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+
+        assertThatThrownBy(() -> rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", new BigDecimal("1500"), "原材料涨价"))
+            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class)
+            .hasMessageContaining("RSKU 不属于该产品");
     }
 
     @Test

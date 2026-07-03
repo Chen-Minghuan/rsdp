@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -126,7 +127,75 @@ class AsyncTaskProcessorTest {
         assertThat(embeddingsCaptor.getValue().get(0)).containsExactly(0.1f, 0.2f, 0.3f);
         assertThat(metadataCaptor.getValue().get(0)).containsEntry("rspu_id", rspuId);
 
-        verify(asyncTaskMapper, times(3)).updateById(any(AsyncTask.class));
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());
+        AsyncTask finalTask = taskCaptor.getValue();
+        assertThat(finalTask.getStatus()).isEqualTo("done");
+        assertThat(finalTask.getProgress()).isEqualTo(100);
+        assertThat(finalTask.getErrorMessage()).isNull();
+    }
+
+    @Test
+    void processProductEntry_shouldMarkPartialSuccessWhenChromaDbFails() throws Exception {
+        // Given
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        when(visionService.recognizeImage(any())).thenReturn(labels);
+
+        float[] embedding = new float[]{0.1f, 0.2f, 0.3f};
+        when(embeddingService.embedImage(any())).thenReturn(embedding);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+
+        doThrow(new RuntimeException("ChromaDB 写入失败")).when(chromaDbClient).upsert(any(), any(), any(), any());
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());
+        AsyncTask finalTask = taskCaptor.getValue();
+        assertThat(finalTask.getStatus()).isEqualTo("partial_success");
+        assertThat(finalTask.getProgress()).isEqualTo(100);
+        assertThat(finalTask.getErrorMessage()).contains("向量写入 ChromaDB 失败");
+        assertThat(finalTask.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    void processProductEntry_shouldMarkPartialSuccessWhenEmbeddingFails() throws Exception {
+        // Given
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        when(visionService.recognizeImage(any())).thenReturn(labels);
+
+        when(embeddingService.embedImage(any())).thenThrow(new RuntimeException("Embedding 服务异常"));
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        verify(chromaDbClient, times(0)).upsert(any(), any(), any(), any());
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());
+        AsyncTask finalTask = taskCaptor.getValue();
+        assertThat(finalTask.getStatus()).isEqualTo("partial_success");
+        assertThat(finalTask.getProgress()).isEqualTo(100);
+        assertThat(finalTask.getErrorMessage()).contains("生成图片向量失败");
+        assertThat(finalTask.getCompletedAt()).isNotNull();
     }
 
     @Test

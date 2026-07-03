@@ -2,6 +2,7 @@ package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.BusinessException;
@@ -52,6 +53,9 @@ class ProductServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private DictService dictService;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -65,6 +69,7 @@ class ProductServiceTest {
         setField("objectMapper", objectMapper);
         setField("storageService", storageService);
         setField("auditLogService", auditLogService);
+        setField("dictService", dictService);
     }
 
     private void setField(String name, Object value) throws Exception {
@@ -73,11 +78,27 @@ class ProductServiceTest {
         field.set(productService, value);
     }
 
+    private List<CategoryDict> categoryDicts() {
+        return List.of(
+            createDict("category", "FS", "座椅"),
+            createDict("category", "DT", "桌子")
+        );
+    }
+
+    private CategoryDict createDict(String dictType, String dictCode, String dictName) {
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType(dictType);
+        dict.setDictCode(dictCode);
+        dict.setDictName(dictName);
+        return dict;
+    }
+
     @Test
     void createEntry_shouldCreateDraftAndTriggerAsyncTask() throws Exception {
         MockMultipartFile image = new MockMultipartFile(
             "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
         );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
         when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
 
         Map<String, Object> result = productService.createEntry(List.of(image), null);
@@ -115,6 +136,7 @@ class ProductServiceTest {
         MockMultipartFile detail = new MockMultipartFile(
             "image", "chair-detail.jpg", "image/jpeg", "fake-detail".getBytes()
         );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
         when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
 
         Map<String, Object> result = productService.createEntry(List.of(primary, detail), "DT");
@@ -163,5 +185,34 @@ class ProductServiceTest {
             .hasMessageContaining("请至少上传一张图片");
 
         verifyNoInteractions(rspuMapper, asyncTaskMapper, imageAssetsMapper, asyncTaskProcessor);
+    }
+
+    @Test
+    void createEntry_shouldRejectInvalidCategoryCode() {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+
+        assertThatThrownBy(() -> productService.createEntry(List.of(image), "XX"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("品类不存在");
+
+        verifyNoInteractions(rspuMapper, asyncTaskMapper, imageAssetsMapper, asyncTaskProcessor);
+    }
+
+    @Test
+    void createEntry_shouldNormalizeCategoryCodeToUpperCase() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
+
+        productService.createEntry(List.of(image), "fs");
+
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper).insert(rspuCaptor.capture());
+        assertThat(rspuCaptor.getValue().getCategoryCode()).isEqualTo("FS");
     }
 }
