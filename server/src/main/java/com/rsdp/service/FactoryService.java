@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -297,13 +298,19 @@ public class FactoryService {
     /**
      * 查询工厂的能力等级列表。
      *
+     * <p>工厂不存在或已删除时返回空列表，由调用方决定如何处理；
+     * 避免一个缺失工厂导致整批查询/列表接口失败。</p>
+     *
      * @param factoryCode 工厂代码
-     * @return 能力等级代码列表
+     * @return 能力等级代码列表，不存在时返回空列表
      */
     public List<String> getFactoryCapableLevels(String factoryCode) {
+        if (!StringUtils.hasText(factoryCode)) {
+            return List.of();
+        }
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
         if (factory == null || factory.getDeletedAt() != null) {
-            throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
+            return List.of();
         }
 
         List<String> levels = listCapableLevels(factoryCode);

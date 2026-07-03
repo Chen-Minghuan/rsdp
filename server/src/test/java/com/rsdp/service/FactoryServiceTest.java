@@ -212,6 +212,25 @@ class FactoryServiceTest {
     }
 
     @Test
+    void getFactoryCapableLevels_shouldReturnEmptyListWhenFactoryNotFound() {
+        when(factoryMasterMapper.selectById("F999")).thenReturn(null);
+
+        List<String> result = factoryService.getFactoryCapableLevels("F999");
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(capabilityMapper);
+    }
+
+    @Test
+    void getFactoryCapableLevels_shouldReturnEmptyListWhenFactoryCodeBlank() {
+        List<String> result = factoryService.getFactoryCapableLevels("");
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(factoryMasterMapper);
+        verifyNoInteractions(capabilityMapper);
+    }
+
+    @Test
     void extendCapability_shouldInsertPrimaryLevelFirstForLegacyFactory() {
         FactoryMaster factory = new FactoryMaster();
         factory.setFactoryCode("F001");

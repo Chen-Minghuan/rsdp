@@ -236,6 +236,16 @@ GET    /api/v1/dicts/{dictType}
        # dictType: style, scene, category, material, size, color,
        #           room_type, quote_confidence, review_status, factory_level, product_status 等
        # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder }]
+
+POST   /api/v1/dicts
+       # 创建新的字典项（当前仅允许扩展 material / scene 两类业务标签）
+       # Request:  { dictType: "material" | "scene", dictCode, dictName, dictNameEn? }
+       # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder }
+       # 注意：
+       # 1. dictCode 仅支持字母和数字，服务端自动归一化为大写。
+       # 2. 同一类型下 dictCode 重复会返回 400 "字典项已存在"。
+       # 3. 创建成功后自动清除 dicts 缓存，前端可立即看到新选项。
+       # 4. 新增标签不会被 AI 自动识别，只能人工或导入时赋值。
 ```
 
 ### 报价单

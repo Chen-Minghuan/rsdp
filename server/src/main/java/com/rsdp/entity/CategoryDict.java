@@ -1,5 +1,6 @@
 package com.rsdp.entity;
 
+import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -15,7 +16,7 @@ import lombok.Data;
 @TableName("category_dict")
 public class CategoryDict {
 
-    @TableId("dict_type")
+    @TableId(value = "dict_type", type = IdType.INPUT)
     private String dictType;
 
     @TableField("dict_code")

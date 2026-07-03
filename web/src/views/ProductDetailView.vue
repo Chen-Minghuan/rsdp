@@ -27,7 +27,7 @@ import { getProductDetail, listProducts, reviewProduct, updateProduct, deletePro
 import { listRskuByRspu, createRsku, deleteRsku } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
-import { listDicts } from '@/api/dict'
+import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
 import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct } from '@/types/product'
 import type { DictItem } from '@/types/dict'
@@ -141,6 +141,15 @@ interface ProductEditForm extends ProductUpdateRequest {
 const showEditModal = ref(false)
 const submittingEdit = ref(false)
 const editForm = ref<ProductEditForm>({})
+
+const showDictCreateModal = ref(false)
+const submittingDictCreate = ref(false)
+const dictCreateType = ref<'material' | 'scene'>('material')
+const dictCreateForm = ref({
+  dictCode: '',
+  dictName: '',
+  dictNameEn: ''
+})
 
 const rskuColumns: DataTableColumns<Rsku> = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
@@ -376,6 +385,58 @@ async function handleReview(status: '已确认' | '存疑') {
     errorMessage.value = e instanceof Error ? e.message : '复核失败'
   } finally {
     reviewing.value = false
+  }
+}
+
+function openDictCreateModal(type: 'material' | 'scene') {
+  dictCreateType.value = type
+  dictCreateForm.value = { dictCode: '', dictName: '', dictNameEn: '' }
+  showDictCreateModal.value = true
+}
+
+async function handleCreateDict() {
+  const code = dictCreateForm.value.dictCode.trim()
+  const name = dictCreateForm.value.dictName.trim()
+  if (!code) {
+    errorMessage.value = '请输入字典编码'
+    return
+  }
+  if (!name) {
+    errorMessage.value = '请输入字典名称'
+    return
+  }
+
+  submittingDictCreate.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    const created = await createDict({
+      dictType: dictCreateType.value,
+      dictCode: code,
+      dictName: name,
+      dictNameEn: dictCreateForm.value.dictNameEn?.trim() || undefined
+    })
+
+    if (dictCreateType.value === 'material') {
+      materialOptions.value = await listDicts('material')
+      if (!editForm.value.materialTags?.includes(created.dictCode)) {
+        editForm.value.materialTags = [...(editForm.value.materialTags || []), created.dictCode]
+      }
+    } else {
+      sceneOptions.value = await listDicts('scene')
+      if (!editForm.value.sceneTags?.includes(created.dictCode)) {
+        editForm.value.sceneTags = [...(editForm.value.sceneTags || []), created.dictCode]
+      }
+    }
+
+    successMessage.value = `已新增${dictCreateType.value === 'material' ? '材质' : '场景'}标签：${name}`
+    showDictCreateModal.value = false
+  } catch (e) {
+    successMessage.value = ''
+    errorMessage.value = e instanceof Error ? e.message : '创建标签失败'
+  } finally {
+    submittingDictCreate.value = false
   }
 }
 
@@ -1055,22 +1116,34 @@ onBeforeRouteUpdate((to, from) => {
           <n-input v-model:value="editForm.colorPrimaryName" placeholder="如：原木色" />
         </n-form-item>
         <n-form-item label="材质标签">
-          <n-select
-            v-model:value="editForm.materialTags"
-            :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="选择材质"
-            multiple
-            filterable
-          />
+          <n-space align="center" style="width: 100%;">
+            <n-select
+              v-model:value="editForm.materialTags"
+              :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="选择材质"
+              multiple
+              filterable
+              style="width: 420px;"
+            />
+            <n-button type="primary" ghost size="small" @click="openDictCreateModal('material')">
+              + 新增材质
+            </n-button>
+          </n-space>
         </n-form-item>
         <n-form-item label="场景标签">
-          <n-select
-            v-model:value="editForm.sceneTags"
-            :options="sceneOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="选择场景"
-            multiple
-            filterable
-          />
+          <n-space align="center" style="width: 100%;">
+            <n-select
+              v-model:value="editForm.sceneTags"
+              :options="sceneOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="选择场景"
+              multiple
+              filterable
+              style="width: 420px;"
+            />
+            <n-button type="primary" ghost size="small" @click="openDictCreateModal('scene')">
+              + 新增场景
+            </n-button>
+          </n-space>
         </n-form-item>
         <n-form-item label="参考价格带">
           <n-select
@@ -1111,6 +1184,44 @@ onBeforeRouteUpdate((to, from) => {
         <n-button @click="showEditModal = false">取消</n-button>
         <n-button type="primary" :loading="submittingEdit" @click="handleUpdateProduct">
           保存
+        </n-button>
+      </n-space>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showDictCreateModal"
+      :title="dictCreateType === 'material' ? '新增材质标签' : '新增场景标签'"
+      preset="card"
+      style="width: 480px;"
+    >
+      <n-form label-placement="left" label-width="100">
+        <n-form-item label="编码" required>
+          <n-input
+            v-model:value="dictCreateForm.dictCode"
+            placeholder="如 VELVET，仅支持字母和数字"
+            :disabled="submittingDictCreate"
+          />
+        </n-form-item>
+        <n-form-item label="名称" required>
+          <n-input
+            v-model:value="dictCreateForm.dictName"
+            placeholder="如 天鹅绒"
+            :disabled="submittingDictCreate"
+          />
+        </n-form-item>
+        <n-form-item label="英文名称">
+          <n-input
+            v-model:value="dictCreateForm.dictNameEn"
+            placeholder="如 Velvet"
+            :disabled="submittingDictCreate"
+          />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showDictCreateModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingDictCreate" @click="handleCreateDict">
+          创建
         </n-button>
       </n-space>
     </n-modal>
