@@ -3,6 +3,11 @@
 -- 执行方式：在 IDEA 数据库插件的 rsdp@localhost Console 中全选执行
 
 -- =================== 1. 清理旧表 ===================
+DROP TABLE IF EXISTS matching_feedback CASCADE;
+DROP TABLE IF EXISTS product_style_match CASCADE;
+DROP TABLE IF EXISTS style_element CASCADE;
+DROP TABLE IF EXISTS style_matching_formula CASCADE;
+DROP TABLE IF EXISTS style_case CASCADE;
 DROP TABLE IF EXISTS ai_recognition CASCADE;
 DROP TABLE IF EXISTS image_assets CASCADE;
 DROP TABLE IF EXISTS price_history CASCADE;
@@ -289,6 +294,95 @@ CREATE TABLE IF NOT EXISTS user_operator (
     updated_at TIMESTAMP
 );
 
+-- 风格数据库 Skill 表
+
+-- 案例库：成功/失败的设计案例
+CREATE TABLE IF NOT EXISTS style_case (
+    case_id VARCHAR(64) PRIMARY KEY,
+    case_name VARCHAR(128) NOT NULL,
+    dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
+    style_code VARCHAR(32) NOT NULL,
+    room_type VARCHAR(32),
+    is_success BOOLEAN NOT NULL DEFAULT TRUE,
+    source_type VARCHAR(32),
+    source_url TEXT,
+    description TEXT,
+    image_url TEXT,
+    ai_raw_output JSONB,
+    negative_lesson TEXT,
+    review_status VARCHAR(16) DEFAULT '待复核',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
+);
+
+-- 元素库：从案例中拆解出的标准化元素
+CREATE TABLE IF NOT EXISTS style_element (
+    element_id VARCHAR(64) PRIMARY KEY,
+    case_id VARCHAR(64) NOT NULL,
+    element_type VARCHAR(32) NOT NULL,
+    element_value VARCHAR(128) NOT NULL,
+    normalized_code VARCHAR(64),
+    is_primary BOOLEAN DEFAULT FALSE,
+    confidence VARCHAR(16),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (case_id) REFERENCES style_case(case_id)
+);
+
+-- 搭配公式库：可解释的搭配规则
+CREATE TABLE IF NOT EXISTS style_matching_formula (
+    formula_id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(256) NOT NULL,
+    dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
+    style_code VARCHAR(32) NOT NULL,
+    room_type VARCHAR(32),
+    priority INTEGER DEFAULT 0,
+    formula_json JSONB NOT NULL,
+    source_case_ids JSONB,
+    negative_case_ids JSONB,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
+);
+
+-- 产品-风格匹配结果：产品录入后自动计算
+CREATE TABLE IF NOT EXISTS product_style_match (
+    match_id SERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
+    style_code VARCHAR(32) NOT NULL,
+    element_match JSONB,
+    formula_scores JSONB,
+    overall_score DECIMAL(5,4),
+    confidence VARCHAR(16),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    UNIQUE (rspu_id, style_code),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
+);
+
+-- 推荐反馈：用于后续优化公式
+CREATE TABLE IF NOT EXISTS matching_feedback (
+    feedback_id SERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    recommended_rspu_id VARCHAR(64) NOT NULL,
+    formula_id VARCHAR(64),
+    score DECIMAL(5,4),
+    feedback VARCHAR(16),
+    reason TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (recommended_rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (formula_id) REFERENCES style_matching_formula(formula_id)
+);
+
 -- =================== 4. 创建索引 ===================
 CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, status);
 CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
@@ -325,6 +419,15 @@ CREATE INDEX IF NOT EXISTS idx_ai_rspu ON ai_recognition(rspu_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
 
+-- 风格数据库索引
+CREATE INDEX IF NOT EXISTS idx_style_case_style ON style_case(style_code, is_success);
+CREATE INDEX IF NOT EXISTS idx_style_case_room ON style_case(room_type, is_success);
+CREATE INDEX IF NOT EXISTS idx_style_element_case ON style_element(case_id);
+CREATE INDEX IF NOT EXISTS idx_style_element_type ON style_element(element_type, normalized_code);
+CREATE INDEX IF NOT EXISTS idx_formula_style_room ON style_matching_formula(style_code, room_type, status);
+CREATE INDEX IF NOT EXISTS idx_product_match_rspu ON product_style_match(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_product_match_score ON product_style_match(overall_score DESC);
+
 -- =================== 5. 插入种子数据 ===================
 
 -- 产品类别
@@ -337,7 +440,7 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'OF', '办公家具', 6)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 家装风格
+-- 家装风格（扩展为 11 个独立风格 + 6 个基础风格，保留 2 位编码）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('style', 'MC', '中古风', 1),
 ('style', 'BA', '包豪斯', 2),
@@ -347,7 +450,15 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('style', 'NC', '新中式', 6),
 ('style', 'CR', '奶油风', 7),
 ('style', 'IN', '工业风', 8),
-('style', 'MP', '孟菲斯', 9)
+('style', 'MP', '孟菲斯', 9),
+('style', 'IL', '意式极简轻奢', 10),
+('style', 'ZS', '新中式宋式', 11),
+('style', 'MB', '现代极简包豪斯', 12),
+('style', 'MD', '孟菲斯多巴胺', 13),
+('style', 'IO', '工业风LOFT', 14),
+('style', 'FN', '法式复古南洋', 15),
+('style', 'HH', '混搭风', 16),
+('style', 'DL', '国外顶尖大牌搭配', 17)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 办公家具职级
@@ -359,20 +470,27 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('grade', 'CO', '会议区', 5)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 材质版本码
+-- 材质版本码（精简为 19 个准确大类，覆盖风格百科高频材质）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('material', 'TN', '真藤', 1),
+('material', 'TN', '真藤/竹编/草编', 1),
 ('material', 'PE', 'PE仿藤', 2),
 ('material', 'LE', '皮革', 3),
 ('material', 'NP', '纳帕皮', 4),
 ('material', 'SU', '磨砂皮', 5),
 ('material', 'MA', '马鞍皮', 6),
-('material', 'LI', '亚麻', 7),
-('material', 'SF', '羊羔绒', 8),
-('material', 'VE', '天鹅绒', 9),
+('material', 'LI', '亚麻/棉麻', 7),
+('material', 'SF', '羊羔绒/泰迪绒', 8),
+('material', 'VE', '天鹅绒/绒布', 9),
 ('material', 'WO', '实木', 10),
 ('material', 'RK', '藤编+实木混血', 11),
-('material', 'MT', '金属', 12)
+('material', 'MT', '金属/不锈钢/黄铜', 12),
+('material', 'WL', '羊毛', 13),
+('material', 'GL', '玻璃', 14),
+('material', 'ST', '天然石材/大理石/洞石/岩板', 15),
+('material', 'CE', '水泥/混凝土/微水泥', 16),
+('material', 'CL', '陶瓷', 17),
+('material', 'GP', '石膏/PU线条', 18),
+('material', 'PL', '塑料/亚克力', 19)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 六维标签 - 休闲椅 A 维度（轮廓）
@@ -414,14 +532,23 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('size', 'TRIPLE', '三人位', 6)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 颜色码
+-- 颜色码（精简为 15 个准确色系，覆盖风格百科高频颜色）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('color', 'CARAMEL', '焦糖棕', 1),
-('color', 'BEIGE', '米白', 2),
-('color', 'NATURAL', '原木色', 3),
-('color', 'BLACK', '黑色', 4),
-('color', 'GRAY', '灰色', 5),
-('color', 'NAVY', '藏青', 6)
+('color', 'BEIGE', '米白/奶油白/燕麦色', 2),
+('color', 'CA', '驼色/奶咖色', 3),
+('color', 'DB', '深棕/胡桃木色', 4),
+('color', 'NATURAL', '原木色', 5),
+('color', 'BLACK', '黑色', 6),
+('color', 'GRAY', '灰色', 7),
+('color', 'NAVY', '藏青/蓝色系', 8),
+('color', 'GN', '绿色系', 9),
+('color', 'PR', '紫色系', 10),
+('color', 'RD', '红色系', 11),
+('color', 'OR', '橙色系', 12),
+('color', 'PK', '粉色系', 13),
+('color', 'YE', '黄色系', 14),
+('color', 'WT', '白色', 15)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 场景标签
@@ -432,4 +559,19 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('scene', 'CAFE', '咖啡厅', 4),
 ('scene', 'OFFICE', '办公室', 5),
 ('scene', 'HOTEL', '酒店', 6)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 空间类型（风格数据库 case 用）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('room_type', 'LIVING_ROOM', '客厅', 1),
+('room_type', 'BEDROOM', '卧室', 2),
+('room_type', 'DINING_ROOM', '餐厅', 3),
+('room_type', 'STUDY_ROOM', '书房', 4),
+('room_type', 'OFFICE_EXECUTIVE', '总裁办公室', 5),
+('room_type', 'OFFICE_STAFF', '职员办公区', 6),
+('room_type', 'OFFICE_MEETING', '会议室', 7),
+('room_type', 'CAFE', '咖啡厅', 8),
+('room_type', 'HOTEL_ROOM', '酒店客房', 9),
+('room_type', 'BAR', '酒吧', 10),
+('room_type', 'OUTDOOR', '户外', 11)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
