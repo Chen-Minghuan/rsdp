@@ -1,8 +1,11 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.SysUser;
 import com.rsdp.entity.SysUserFactory;
+import com.rsdp.exception.BusinessException;
+import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.SysUserFactoryMapper;
 import com.rsdp.mapper.SysUserMapper;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +23,7 @@ public class UserFactoryService {
 
     private final SysUserFactoryMapper sysUserFactoryMapper;
     private final SysUserMapper sysUserMapper;
+    private final FactoryMasterMapper factoryMasterMapper;
 
     /**
      * 查询用户关联的所有工厂编码。
@@ -49,9 +53,14 @@ public class UserFactoryService {
             if (factoryCode == null || factoryCode.isBlank()) {
                 continue;
             }
+            String code = factoryCode.trim();
+            FactoryMaster factory = factoryMasterMapper.selectById(code);
+            if (factory == null) {
+                throw new BusinessException("工厂不存在: " + code);
+            }
             SysUserFactory userFactory = new SysUserFactory();
             userFactory.setUserId(userId);
-            userFactory.setFactoryCode(factoryCode.trim());
+            userFactory.setFactoryCode(code);
             sysUserFactoryMapper.insert(userFactory);
         }
     }

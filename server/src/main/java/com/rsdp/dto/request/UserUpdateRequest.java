@@ -19,6 +19,4 @@ public class UserUpdateRequest {
     private String roleCode;
 
     private List<String> factoryCodes;
-
-    private String status;
 }

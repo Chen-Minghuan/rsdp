@@ -41,6 +41,7 @@ public class UserService {
      * @param keyword  关键词（用户名/昵称）
      * @return 用户分页结果
      */
+    @Transactional(readOnly = true)
     public Page<UserResponse> listUsers(int page, int size, String keyword) {
         QueryWrapper<SysUser> wrapper = new QueryWrapper<>();
         if (keyword != null && !keyword.isBlank()) {
@@ -76,7 +77,7 @@ public class UserService {
         }
 
         SysUser user = new SysUser();
-        user.setUserId("USER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        user.setUserId("USER-" + UUID.randomUUID().toString().toUpperCase().replace("-", ""));
         user.setUsername(request.getUsername());
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setNickname(request.getNickname());
@@ -113,9 +114,6 @@ public class UserService {
         if (request.getNickname() != null) {
             user.setNickname(request.getNickname());
         }
-        if (request.getStatus() != null) {
-            user.setStatus(request.getStatus());
-        }
         user.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.updateById(user);
 
@@ -131,6 +129,7 @@ public class UserService {
      * @param userId      用户 ID
      * @param newPassword 新密码
      */
+    @Transactional
     public void resetPassword(String userId, String newPassword) {
         SysUser user = sysUserMapper.selectById(userId);
         if (user == null) {
@@ -148,6 +147,7 @@ public class UserService {
      * @param status 状态
      * @return 用户响应
      */
+    @Transactional
     public UserResponse updateStatus(String userId, String status) {
         SysUser user = sysUserMapper.selectById(userId);
         if (user == null) {

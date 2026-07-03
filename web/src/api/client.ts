@@ -84,6 +84,10 @@ async function errorInterceptor(error: AxiosError | ApiError) {
     return Promise.reject(new Error('登录已过期，请重新登录'))
   }
 
+  if (response.status === 403) {
+    return Promise.reject(new Error('权限不足，无法执行该操作'))
+  }
+
   let message: string | undefined
   // Blob 错误响应需要先从 Blob 中读取文本再解析
   if (error.config?.responseType === 'blob' && response.data instanceof Blob) {

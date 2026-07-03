@@ -9,6 +9,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -29,6 +30,7 @@ import java.util.List;
  */
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity(prePostEnabled = true)
 @RequiredArgsConstructor
 public class SecurityConfig {
 
@@ -48,11 +50,15 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/auth/login").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/images/**").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/v1/**").permitAll()
 
-                // 用户管理（管理员）
-                .requestMatchers("/api/v1/admin/users/**").hasAuthority(Permissions.USER_CREATE)
+                // 用户管理（管理员）—— 必须放在 broad GET permitAll 之前
+                .requestMatchers(HttpMethod.GET, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/admin/users").hasAuthority(Permissions.USER_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_UPDATE)
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+
+                // 其他公开 GET
+                .requestMatchers(HttpMethod.GET, "/api/v1/**").permitAll()
 
                 // 产品
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)

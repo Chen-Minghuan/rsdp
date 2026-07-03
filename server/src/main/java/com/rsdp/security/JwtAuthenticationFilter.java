@@ -1,5 +1,7 @@
 package com.rsdp.security;
 
+import com.rsdp.entity.SysUser;
+import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.util.JwtUtil;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
@@ -30,6 +32,7 @@ import java.util.List;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
+    private final SysUserMapper sysUserMapper;
 
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
@@ -43,6 +46,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             Claims claims = jwtUtil.parseToken(token);
             if (claims != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                 String username = claims.getSubject();
+
+                // 校验用户是否存在且未被禁用
+                SysUser user = sysUserMapper.selectByUsername(username);
+                if (user == null || !"active".equals(user.getStatus())) {
+                    filterChain.doFilter(request, response);
+                    return;
+                }
+
                 String role = jwtUtil.getRole(claims);
                 List<String> permissions = jwtUtil.getPermissions(claims);
 
