@@ -16,6 +16,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -45,7 +47,8 @@ class AuthControllerTest {
     @Test
     void login_shouldReturnToken() throws Exception {
         LoginResponse response = new LoginResponse(
-            "token-xxx", "Bearer", "USER-001", "admin", "管理员", "ADMIN"
+            "token-xxx", "Bearer", "USER-001", "admin", "管理员", "ADMIN",
+            List.of("ADMIN"), List.of("admin:user:manage")
         );
         when(authService.login(any())).thenReturn(response);
 
@@ -59,7 +62,9 @@ class AuthControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.token").value("token-xxx"))
-            .andExpect(jsonPath("$.data.role").value("ADMIN"));
+            .andExpect(jsonPath("$.data.role").value("ADMIN"))
+            .andExpect(jsonPath("$.data.roles[0]").value("ADMIN"))
+            .andExpect(jsonPath("$.data.permissions[0]").value("admin:user:manage"));
     }
 
     @Test

@@ -25,4 +25,8 @@ public class PageResult<T> {
         result.setRows(rows);
         return result;
     }
+
+    public static <T> PageResult<T> from(com.baomidou.mybatisplus.extension.plugins.pagination.Page<T> page) {
+        return of(page.getTotal(), page.getCurrent(), page.getSize(), page.getRecords());
+    }
 }

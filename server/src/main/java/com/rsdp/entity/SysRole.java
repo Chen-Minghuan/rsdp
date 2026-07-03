@@ -7,24 +7,20 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 系统用户实体。
+ * 系统角色实体。
  */
 @Data
-@TableName("sys_user")
-public class SysUser {
+@TableName("sys_role")
+public class SysRole {
 
     @TableId
-    private String userId;
+    private Long roleId;
 
-    private String username;
+    private String roleCode;
 
-    private String passwordHash;
-
-    private String nickname;
+    private String roleName;
 
     private String status;
-
-    private LocalDateTime lastLoginAt;
 
     private LocalDateTime createdAt;
 

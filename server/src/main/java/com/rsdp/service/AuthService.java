@@ -14,6 +14,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 认证服务。
@@ -25,6 +26,8 @@ public class AuthService {
     private final AuthenticationManager authenticationManager;
     private final SysUserMapper sysUserMapper;
     private final JwtUtil jwtUtil;
+    private final UserRoleService userRoleService;
+    private final PermissionService permissionService;
 
     /**
      * 用户登录。
@@ -52,14 +55,19 @@ public class AuthService {
         user.setLastLoginAt(LocalDateTime.now());
         sysUserMapper.updateById(user);
 
-        String token = jwtUtil.generateToken(user.getUserId(), user.getUsername(), user.getNickname(), user.getRole());
+        String role = getPrimaryRoleCode(user.getUserId());
+        List<String> roles = userRoleService.getRoleCodesByUserId(user.getUserId());
+        List<String> permissions = permissionService.getPermissionsByUserId(user.getUserId()).stream().toList();
+        String token = jwtUtil.generateToken(user.getUserId(), user.getUsername(), user.getNickname(), role, permissions);
         return new LoginResponse(
             token,
             "Bearer",
             user.getUserId(),
             user.getUsername(),
             user.getNickname(),
-            user.getRole()
+            role,
+            roles,
+            permissions
         );
     }
 
@@ -74,13 +82,22 @@ public class AuthService {
         if (user == null) {
             throw new BusinessException("用户不存在");
         }
+        List<String> roles = userRoleService.getRoleCodesByUserId(user.getUserId());
+        List<String> permissions = permissionService.getPermissionsByUserId(user.getUserId()).stream().toList();
         return new LoginResponse(
             null,
             "Bearer",
             user.getUserId(),
             user.getUsername(),
             user.getNickname(),
-            user.getRole()
+            getPrimaryRoleCode(user.getUserId()),
+            roles,
+            permissions
         );
+    }
+
+    private String getPrimaryRoleCode(String userId) {
+        List<String> roleCodes = userRoleService.getRoleCodesByUserId(userId);
+        return roleCodes.isEmpty() ? "USER" : roleCodes.get(0);
     }
 }

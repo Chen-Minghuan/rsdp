@@ -34,7 +34,8 @@ async function handleLogin() {
       userId: result.userId,
       username: result.username,
       nickname: result.nickname,
-      role: result.role
+      roles: result.roles || [result.role || 'USER'],
+      permissions: result.permissions || []
     })
     router.push('/')
   } catch (e) {

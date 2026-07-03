@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * 登录响应。
  */
@@ -18,4 +20,6 @@ public class LoginResponse {
     private String username;
     private String nickname;
     private String role;
+    private List<String> roles;
+    private List<String> permissions;
 }

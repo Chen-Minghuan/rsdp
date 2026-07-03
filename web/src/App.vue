@@ -28,7 +28,8 @@ onMounted(async () => {
         userId: user.userId,
         username: user.username,
         nickname: user.nickname,
-        role: user.role
+        roles: user.roles || [user.role || 'USER'],
+        permissions: user.permissions || []
       })
     } catch {
       userStore.clearAuth()
@@ -94,10 +95,17 @@ onMounted(async () => {
             >
               以图搜图
             </n-button>
+            <n-button
+              v-if="userStore.hasRole('ADMIN')"
+              :type="route.path === '/admin/users' ? 'primary' : 'default'"
+              @click="navigate('/admin/users')"
+            >
+              用户管理
+            </n-button>
             <n-dropdown
               v-if="userStore.isLoggedIn"
               :options="[
-                { label: `角色：${userStore.userInfo?.role || '-'}`, key: 'role', disabled: true },
+                { label: `角色：${userStore.roles.join(', ') || '-'}`, key: 'role', disabled: true },
                 { label: '退出登录', key: 'logout' }
               ]"
               @select="handleUserAction"

@@ -4,6 +4,8 @@ import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -20,7 +22,7 @@ class JwtUtilTest {
 
     @Test
     void generateAndParseToken_shouldWork() {
-        String token = jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN");
+        String token = jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN", List.of("user:read", "user:create"));
         assertThat(token).isNotBlank();
 
         Claims claims = jwtUtil.parseToken(token);
@@ -29,6 +31,7 @@ class JwtUtilTest {
         assertThat(jwtUtil.getUserId(claims)).isEqualTo("USER-001");
         assertThat(jwtUtil.getNickname(claims)).isEqualTo("管理员");
         assertThat(jwtUtil.getRole(claims)).isEqualTo("ADMIN");
+        assertThat(jwtUtil.getPermissions(claims)).containsExactly("user:read", "user:create");
     }
 
     @Test

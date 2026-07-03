@@ -12,6 +12,8 @@ export interface LoginResponse {
   username: string
   nickname: string
   role: string
+  roles: string[]
+  permissions: string[]
 }
 
 /**

@@ -10,6 +10,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 
+import java.util.List;
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
@@ -23,18 +26,26 @@ class SecurityUserDetailsServiceTest {
     @Mock
     private SysUserMapper sysUserMapper;
 
+    @Mock
+    private PermissionService permissionService;
+
+    @Mock
+    private UserRoleService userRoleService;
+
     @InjectMocks
     private SecurityUserDetailsService userDetailsService;
 
     @Test
     void loadUserByUsername_activeUser_shouldReturnUserDetails() {
         SysUser user = new SysUser();
+        user.setUserId("USER-001");
         user.setUsername("admin");
         user.setPasswordHash("hashed");
-        user.setRole("ADMIN");
         user.setStatus("active");
 
         when(sysUserMapper.selectByUsername("admin")).thenReturn(user);
+        when(userRoleService.getRoleCodesByUserId("USER-001")).thenReturn(List.of("ADMIN"));
+        when(permissionService.getPermissionsByUserId("USER-001")).thenReturn(Set.of("user:create"));
 
         UserDetails details = userDetailsService.loadUserByUsername("admin");
 
@@ -42,6 +53,8 @@ class SecurityUserDetailsServiceTest {
         assertThat(details.getPassword()).isEqualTo("hashed");
         assertThat(details.getAuthorities())
             .anyMatch(auth -> "ROLE_ADMIN".equals(auth.getAuthority()));
+        assertThat(details.getAuthorities())
+            .anyMatch(auth -> "user:create".equals(auth.getAuthority()));
     }
 
     @Test

@@ -133,3 +133,96 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('product_status', 'discontinued', '停产', 2),
 ('product_status', 'draft', '草稿', 3)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- =================== 系统权限与角色 ===================
+
+-- 角色
+INSERT INTO sys_role (role_code, role_name) VALUES
+('ADMIN', '系统管理员'),
+('EDITOR', '编辑员'),
+('VIEWER', '浏览者'),
+('FACTORY_SALES', '厂商业务员'),
+('DESIGNER', '设计师'),
+('USER', '普通用户')
+ON CONFLICT (role_code) DO NOTHING;
+
+-- 权限
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('product:read', '查看产品'),
+('product:create', '新品录入'),
+('product:update', '编辑产品元数据'),
+('product:delete', '删除产品'),
+('product:review', '复核产品'),
+('product:import', '批量导入产品'),
+('factory:read', '查看工厂'),
+('factory:create', '创建工厂'),
+('factory:update', '编辑工厂'),
+('factory:delete', '删除工厂'),
+('rsku:read', '查看报价'),
+('rsku:create', '新增报价'),
+('rsku:update', '编辑报价'),
+('rsku:delete', '删除报价'),
+('rsku:import', '批量导入报价'),
+('quote:read', '查看报价单'),
+('quote:generate', '生成报价单'),
+('quote:export', '导出报价单'),
+('scheme:read', '查看搭配方案'),
+('scheme:create', '创建搭配方案'),
+('scheme:update', '编辑搭配方案'),
+('scheme:delete', '删除搭配方案'),
+('dict:create', '创建字典项'),
+('user:read', '查看用户'),
+('user:create', '创建用户'),
+('user:update', '编辑用户'),
+('user:delete', '删除用户'),
+('user:reset-password', '重置密码'),
+('admin:async-metrics', '查看异步线程池指标'),
+('admin:vector-backfill', '向量回填')
+ON CONFLICT (permission_code) DO NOTHING;
+
+-- ADMIN 拥有所有权限
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'ADMIN'
+ON CONFLICT DO NOTHING;
+
+-- EDITOR：除用户管理和高级 admin 外的全部权限
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'EDITOR'
+  AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill')
+ON CONFLICT DO NOTHING;
+
+-- VIEWER：只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'VIEWER'
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read')
+ON CONFLICT DO NOTHING;
+
+-- FACTORY_SALES：自己工厂报价相关 + 只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'FACTORY_SALES'
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import')
+ON CONFLICT DO NOTHING;
+
+-- DESIGNER：方案/报价 + 只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'DESIGNER'
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'quote:generate', 'quote:export', 'scheme:read', 'scheme:create', 'scheme:update', 'scheme:delete')
+ON CONFLICT DO NOTHING;
+
+-- USER：只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'USER'
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read')
+ON CONFLICT DO NOTHING;

@@ -12,9 +12,14 @@
 POST   /api/v1/auth/login
        # 用户登录
        # Request:  { username, password }
-       # Response: { token, tokenType, userId, username, nickname, role }
+       # Response: { token, tokenType, userId, username, nickname, role, roles, permissions }
        # 说明：登录成功后，前端应将 token 存入 localStorage，
        #      并在后续请求头中携带 Authorization: Bearer <token>
+
+GET    /api/v1/auth/me
+       # 获取当前登录用户信息（需认证）
+       # Response: { tokenType, userId, username, nickname, role, roles, permissions }
+       # 说明：token 为空；roles/permissions 用于前端权限控制
 ```
 
 ## 核心 API 端点设计
@@ -386,6 +391,37 @@ POST   /api/v1/style-knowledge/match/{rspuId}
 POST   /api/v1/style-knowledge/feedback
        # 提交推荐反馈，用于优化公式
        # Request: { rspu_id, recommended_rspu_id, formula_id, feedback, reason }
+```
+
+### 用户管理（仅 ADMIN）
+
+```
+GET    /api/v1/admin/users
+       # 用户列表（分页+关键字搜索）
+       # Query: page, size, keyword（搜 username/nickname）
+       # Response: { total, page, size, rows: [UserAdminResponse...] }
+       # UserAdminResponse: { userId, username, nickname, roleCode, roleName, status,
+       #                      factoryCodes: string[], lastLoginAt, createdAt, updatedAt }
+
+POST   /api/v1/admin/users
+       # 创建用户
+       # Request: { username, nickname?, password, roleCode, factoryCodes?: string[] }
+       # Response: UserAdminResponse
+
+PUT    /api/v1/admin/users/{userId}
+       # 编辑用户
+       # Request: { nickname?, roleCode, factoryCodes?: string[] }
+       # Response: UserAdminResponse
+
+PUT    /api/v1/admin/users/{userId}/reset-password
+       # 重置密码
+       # Request: { newPassword }
+       # Response: void
+
+PUT    /api/v1/admin/users/{userId}/status
+       # 启用/禁用用户
+       # Query: status (active|disabled)
+       # Response: void
 ```
 
 ### 系统

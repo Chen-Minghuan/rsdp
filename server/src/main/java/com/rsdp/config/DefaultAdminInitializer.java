@@ -2,6 +2,7 @@ package com.rsdp.config;
 
 import com.rsdp.entity.SysUser;
 import com.rsdp.mapper.SysUserMapper;
+import com.rsdp.service.UserRoleService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -24,6 +25,7 @@ public class DefaultAdminInitializer implements CommandLineRunner {
 
     private final SysUserMapper sysUserMapper;
     private final PasswordEncoder passwordEncoder;
+    private final UserRoleService userRoleService;
 
     @Override
     public void run(String... args) {
@@ -38,11 +40,12 @@ public class DefaultAdminInitializer implements CommandLineRunner {
             admin.setUsername("admin");
             admin.setPasswordHash(passwordEncoder.encode("admin123"));
             admin.setNickname("系统管理员");
-            admin.setRole("ADMIN");
             admin.setStatus("active");
             admin.setCreatedAt(LocalDateTime.now());
             admin.setUpdatedAt(LocalDateTime.now());
             sysUserMapper.insert(admin);
+
+            userRoleService.assignRoleByCode(admin.getUserId(), "ADMIN");
 
             log.warn("已创建默认管理员账号：admin / admin123，请尽快修改默认密码");
         } catch (Exception e) {

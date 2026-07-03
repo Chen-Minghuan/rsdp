@@ -1,28 +1,29 @@
-package com.rsdp.entity;
+package com.rsdp.dto.response;
 
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
- * 系统用户实体。
+ * 用户响应。
  */
 @Data
-@TableName("sys_user")
-public class SysUser {
+public class UserResponse {
 
-    @TableId
     private String userId;
 
     private String username;
 
-    private String passwordHash;
-
     private String nickname;
 
+    private String roleCode;
+
+    private String roleName;
+
     private String status;
+
+    private List<String> factoryCodes;
 
     private LocalDateTime lastLoginAt;
 

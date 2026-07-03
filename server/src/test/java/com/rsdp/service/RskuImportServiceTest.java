@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import com.rsdp.security.datascope.DataScopeHelper;
 import org.springframework.security.core.userdetails.User;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -46,12 +47,16 @@ class RskuImportServiceTest {
         var user = User.withUsername("admin").password("").roles("ADMIN").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
+        lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
     }
 
     @AfterEach
     void clearSecurityContext() {
         SecurityContextHolder.clearContext();
     }
+
+    @Mock
+    private DataScopeHelper dataScopeHelper;
 
     @Mock
     private RskuSupplyMapper rskuSupplyMapper;

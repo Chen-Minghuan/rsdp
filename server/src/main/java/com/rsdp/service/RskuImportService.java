@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
@@ -63,6 +64,7 @@ public class RskuImportService {
     private final DictService dictService;
     private final AuditLogService auditLogService;
     private final PriceHistoryMapper priceHistoryMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 批量导入 RSKU 报价。
@@ -108,6 +110,10 @@ public class RskuImportService {
         int rowIndex = 1; // Excel 行号，第 1 行为表头，数据从第 2 行开始
         for (RskuImportRow row : rows) {
             rowIndex++;
+            if (!dataScopeHelper.canAccessRskuFactory(row.getFactoryCode())) {
+                result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "无权为该工厂导入报价"));
+                continue;
+            }
             normalizeRow(row, productLevels, quoteConfidenceLevels);
             String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels);
             if (error != null) {

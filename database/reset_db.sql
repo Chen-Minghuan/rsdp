@@ -27,6 +27,12 @@ DROP TABLE IF EXISTS style_element CASCADE;
 DROP TABLE IF EXISTS style_case CASCADE;
 DROP TABLE IF EXISTS scheme_item CASCADE;
 DROP TABLE IF EXISTS scheme CASCADE;
+DROP TABLE IF EXISTS sys_user_factory CASCADE;
+DROP TABLE IF EXISTS sys_user_role CASCADE;
+DROP TABLE IF EXISTS sys_role_permission CASCADE;
+DROP TABLE IF EXISTS sys_permission CASCADE;
+DROP TABLE IF EXISTS sys_role CASCADE;
+DROP TABLE IF EXISTS sys_user CASCADE;
 
 -- =================== 2. 创建字典表 ===================
 CREATE TABLE IF NOT EXISTS category_dict (
@@ -536,7 +542,6 @@ CREATE TABLE IF NOT EXISTS sys_user (
     username VARCHAR(64) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     nickname VARCHAR(64),
-    role VARCHAR(32) NOT NULL DEFAULT 'VIEWER',
     status VARCHAR(16) DEFAULT 'active',
     last_login_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -544,6 +549,57 @@ CREATE TABLE IF NOT EXISTS sys_user (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sys_user_username ON sys_user(username);
+
+-- 角色表
+CREATE TABLE IF NOT EXISTS sys_role (
+    role_id BIGSERIAL PRIMARY KEY,
+    role_code VARCHAR(32) NOT NULL UNIQUE,
+    role_name VARCHAR(64) NOT NULL,
+    status VARCHAR(16) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+-- 权限表
+CREATE TABLE IF NOT EXISTS sys_permission (
+    permission_id BIGSERIAL PRIMARY KEY,
+    permission_code VARCHAR(64) NOT NULL UNIQUE,
+    permission_name VARCHAR(128) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 角色权限关联表
+CREATE TABLE IF NOT EXISTS sys_role_permission (
+    id BIGSERIAL PRIMARY KEY,
+    role_id BIGINT NOT NULL,
+    permission_id BIGINT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (role_id, permission_id),
+    FOREIGN KEY (role_id) REFERENCES sys_role(role_id),
+    FOREIGN KEY (permission_id) REFERENCES sys_permission(permission_id)
+);
+
+-- 用户角色关联表
+CREATE TABLE IF NOT EXISTS sys_user_role (
+    id BIGSERIAL PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    role_id BIGINT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, role_id),
+    FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
+    FOREIGN KEY (role_id) REFERENCES sys_role(role_id)
+);
+
+-- 用户工厂关联表（用于厂商业务员数据权限）
+CREATE TABLE IF NOT EXISTS sys_user_factory (
+    id BIGSERIAL PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(64) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, factory_code),
+    FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
 
 -- =================== 5. 插入种子数据 ===================
 

@@ -49,21 +49,41 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/images/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/**").permitAll()
+
+                // 用户管理（管理员）
+                .requestMatchers("/api/v1/admin/users/**").hasAuthority(Permissions.USER_CREATE)
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.POST, "/api/v1/products/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.PUT, "/api/v1/products/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.DELETE, "/api/v1/products/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.POST, "/api/v1/factories/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.PUT, "/api/v1/factories/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.POST, "/api/v1/sku/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.PUT, "/api/v1/sku/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.POST, "/api/v1/schemes/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.PUT, "/api/v1/schemes/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.DELETE, "/api/v1/schemes/**").hasAnyRole("ADMIN", "EDITOR")
-                .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAnyRole("ADMIN", "EDITOR")
+
+                // 产品
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_DELETE)
+
+                // 工厂
+                .requestMatchers(HttpMethod.POST, "/api/v1/factories").hasAuthority(Permissions.FACTORY_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_DELETE)
+
+                // RSKU
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/rsku/**").hasAuthority(Permissions.RSKU_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAuthority(Permissions.RSKU_DELETE)
+                .requestMatchers("/api/v1/rsku/import").hasAuthority(Permissions.RSKU_IMPORT)
+                .requestMatchers("/api/v1/rsku/import-template").hasAuthority(Permissions.RSKU_IMPORT)
+
+                // 报价单
+                .requestMatchers(HttpMethod.POST, "/api/v1/quotes/**").hasAuthority(Permissions.QUOTE_GENERATE)
+
+                // 搭配方案
+                .requestMatchers(HttpMethod.POST, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_DELETE)
+
+                // 字典
+                .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAuthority(Permissions.DICT_CREATE)
+
                 .requestMatchers("/api/v1/**").authenticated()
                 .anyRequest().permitAll()
             )

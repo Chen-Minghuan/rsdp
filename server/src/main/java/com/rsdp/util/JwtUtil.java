@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
 import java.util.Date;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * JWT 工具类。
@@ -28,6 +30,7 @@ public class JwtUtil {
     private static final String CLAIM_USER_ID = "userId";
     private static final String CLAIM_NICKNAME = "nickname";
     private static final String CLAIM_ROLE = "role";
+    private static final String CLAIM_PERMISSIONS = "permissions";
 
     private SecretKey getSigningKey() {
         if (secret == null || secret.isBlank()) {
@@ -40,13 +43,14 @@ public class JwtUtil {
     /**
      * 生成 JWT。
      *
-     * @param userId   用户 ID
-     * @param username 用户名
-     * @param nickname 昵称
-     * @param role     角色
+     * @param userId      用户 ID
+     * @param username    用户名
+     * @param nickname    昵称
+     * @param role        角色
+     * @param permissions 权限列表
      * @return token
      */
-    public String generateToken(String userId, String username, String nickname, String role) {
+    public String generateToken(String userId, String username, String nickname, String role, List<String> permissions) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + expirationHours * 60 * 60 * 1000);
         return Jwts.builder()
@@ -54,6 +58,7 @@ public class JwtUtil {
             .claim(CLAIM_USER_ID, userId)
             .claim(CLAIM_NICKNAME, nickname)
             .claim(CLAIM_ROLE, role)
+            .claim(CLAIM_PERMISSIONS, permissions)
             .issuedAt(now)
             .expiration(expiry)
             .signWith(getSigningKey())
@@ -89,5 +94,17 @@ public class JwtUtil {
 
     public String getRole(Claims claims) {
         return claims.get(CLAIM_ROLE, String.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<String> getPermissions(Claims claims) {
+        Object value = claims.get(CLAIM_PERMISSIONS);
+        if (value instanceof List<?> list) {
+            return list.stream()
+                .filter(String.class::isInstance)
+                .map(String.class::cast)
+                .collect(Collectors.toList());
+        }
+        return List.of();
     }
 }

@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.RskuCreateRequest;
@@ -45,6 +46,7 @@ public class RskuService {
     private final RspuVariantService rspuVariantService;
     private final PriceHistoryMapper priceHistoryMapper;
     private final AuditLogService auditLogService;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 查询某 RSPU 下的所有 RSKU 报价。
@@ -53,11 +55,11 @@ public class RskuService {
      * @return RSKU 报价列表
      */
     public List<RskuResponse> listByRspu(String rspuId) {
-        List<RskuSupply> list = rskuSupplyMapper.selectList(
-            new QueryWrapper<RskuSupply>()
-                .eq("rspu_id", rspuId)
-                .orderByDesc("created_at")
-        );
+        QueryWrapper<RskuSupply> wrapper = new QueryWrapper<RskuSupply>()
+            .eq("rspu_id", rspuId)
+            .orderByDesc("created_at");
+        dataScopeHelper.applyRskuScope(wrapper);
+        List<RskuSupply> list = rskuSupplyMapper.selectList(wrapper);
         return toResponses(list);
     }
 
@@ -76,6 +78,9 @@ public class RskuService {
         if (!rspuId.equals(rsku.getRspuId())) {
             throw new ResourceNotFoundException("RSKU 不属于该产品: " + rskuId);
         }
+        if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
         return toResponses(List.of(rsku)).get(0);
     }
 
@@ -86,6 +91,9 @@ public class RskuService {
      * @return RSKU 报价列表
      */
     public List<RskuResponse> listByFactory(String factoryCode) {
+        if (!dataScopeHelper.canAccessRskuFactory(factoryCode)) {
+            return List.of();
+        }
         List<RskuSupply> list = rskuSupplyMapper.selectList(
             new QueryWrapper<RskuSupply>()
                 .eq("factory_code", factoryCode)
@@ -109,6 +117,9 @@ public class RskuService {
         FactoryMaster factory = factoryMasterMapper.selectById(request.getFactoryCode());
         if (factory == null || factory.getDeletedAt() != null) {
             throw new ResourceNotFoundException("工厂不存在: " + request.getFactoryCode());
+        }
+        if (!dataScopeHelper.canAccessRskuFactory(request.getFactoryCode())) {
+            throw new BusinessException("无权为该工厂录入报价: " + request.getFactoryCode());
         }
 
         RspuVariant variant = rspuVariantService.findById(request.getVariantId());
@@ -192,6 +203,9 @@ public class RskuService {
         if (rsku == null || rsku.getDeletedAt() != null) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
+        if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
 
         RskuSupply oldSnapshot = snapshot(rsku);
         rsku.setDeletedAt(LocalDateTime.now());
@@ -219,6 +233,9 @@ public class RskuService {
         }
         if (!rspuId.equals(rsku.getRspuId())) {
             throw new ResourceNotFoundException("RSKU 不属于该产品: " + rskuId);
+        }
+        if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
         if (newPrice == null || newPrice.compareTo(java.math.BigDecimal.ZERO) < 0) {
             throw new BusinessException("价格不能为负数");

@@ -97,6 +97,12 @@ const routes = [
     name: 'RskuImport',
     component: () => import('@/views/RskuImportView.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/admin/users',
+    name: 'UserManagement',
+    component: () => import('@/views/UserManagementView.vue'),
+    meta: { requiresAuth: true, roles: ['ADMIN'] }
   }
 ]
 
@@ -117,6 +123,20 @@ router.beforeEach((to, _from, next) => {
   if (!isLoggedIn && !to.meta.public && to.path !== '/login') {
     next({ path: '/login', query: { redirect: to.fullPath } })
     return
+  }
+
+  if (isLoggedIn && to.meta.roles && Array.isArray(to.meta.roles)) {
+    if (!userStore.hasAnyRole(to.meta.roles as string[])) {
+      next('/')
+      return
+    }
+  }
+
+  if (isLoggedIn && to.meta.permissions && Array.isArray(to.meta.permissions)) {
+    if (!userStore.hasAnyPermission(to.meta.permissions as string[])) {
+      next('/')
+      return
+    }
   }
 
   next()

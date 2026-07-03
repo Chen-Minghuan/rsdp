@@ -16,6 +16,9 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 
+import java.util.List;
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -39,6 +42,12 @@ class AuthServiceTest {
     @Mock
     private JwtUtil jwtUtil;
 
+    @Mock
+    private UserRoleService userRoleService;
+
+    @Mock
+    private PermissionService permissionService;
+
     @InjectMocks
     private AuthService authService;
 
@@ -53,9 +62,10 @@ class AuthServiceTest {
         user.setUserId("USER-001");
         user.setUsername("admin");
         user.setNickname("管理员");
-        user.setRole("ADMIN");
         when(sysUserMapper.selectByUsername("admin")).thenReturn(user);
-        when(jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN")).thenReturn("jwt-token");
+        when(userRoleService.getRoleCodesByUserId("USER-001")).thenReturn(List.of("ADMIN"));
+        when(permissionService.getPermissionsByUserId("USER-001")).thenReturn(Set.of("admin:user:manage"));
+        when(jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN", List.of("admin:user:manage"))).thenReturn("jwt-token");
 
         LoginRequest request = new LoginRequest();
         request.setUsername("admin");
@@ -65,6 +75,8 @@ class AuthServiceTest {
 
         assertThat(response.getToken()).isEqualTo("jwt-token");
         assertThat(response.getRole()).isEqualTo("ADMIN");
+        assertThat(response.getRoles()).containsExactly("ADMIN");
+        assertThat(response.getPermissions()).containsExactly("admin:user:manage");
         verify(sysUserMapper).updateById(user);
     }
 
