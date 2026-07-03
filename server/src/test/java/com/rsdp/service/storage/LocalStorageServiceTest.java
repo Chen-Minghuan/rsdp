@@ -83,4 +83,42 @@ class LocalStorageServiceTest {
         assertThatThrownBy(() -> localStorageService.get("images/IMG-NOTEXIST.jpg"))
             .isInstanceOf(Exception.class);
     }
+
+    @Test
+    void resolvePath_shouldAllowAbsolutePathInsideRoot() throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        String absoluteKey = tempDir.resolve("images/IMG-ABS.jpg").toString();
+
+        String objectKey = localStorageService.store(file, absoluteKey);
+
+        assertThat(objectKey).isEqualTo(absoluteKey);
+        assertThat(Files.exists(tempDir.resolve("images/IMG-ABS.jpg"))).isTrue();
+    }
+
+    @Test
+    void resolvePath_shouldRejectAbsolutePathOutsideRoot() {
+        Path outsideDir = tempDir.getParent().resolve("outside");
+        String absoluteKey = outsideDir.resolve("evil.jpg").toString();
+
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+
+        assertThatThrownBy(() -> localStorageService.store(file, absoluteKey))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("路径越界");
+    }
+
+    @Test
+    void resolvePath_shouldRejectRelativePathTraversal() {
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+
+        assertThatThrownBy(() -> localStorageService.store(file, "../evil.jpg"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("路径越界");
+    }
 }

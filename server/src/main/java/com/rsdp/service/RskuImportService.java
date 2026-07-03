@@ -8,11 +8,13 @@ import com.rsdp.dto.response.RskuImportFailure;
 import com.rsdp.dto.response.RskuImportResult;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryMaster;
+import com.rsdp.entity.PriceHistory;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.FactoryMasterMapper;
+import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
@@ -58,6 +60,7 @@ public class RskuImportService {
     private final FactoryService factoryService;
     private final DictService dictService;
     private final AuditLogService auditLogService;
+    private final PriceHistoryMapper priceHistoryMapper;
 
     /**
      * 批量导入 RSKU 报价。
@@ -81,6 +84,7 @@ public class RskuImportService {
         List<RskuSupply> toInsert = new ArrayList<>();
         List<RskuSupply> toUpdate = new ArrayList<>();
         Map<RskuSupply, RskuSupply> updateSnapshots = new IdentityHashMap<>();
+        List<PriceHistory> priceHistories = new ArrayList<>();
 
         // 预加载所有相关工厂、RSPU、变体、现有报价、工厂能力等级
         Map<String, FactoryMaster> factoryMap = preloadFactories(rows);
@@ -121,9 +125,12 @@ public class RskuImportService {
             if (existing != null) {
                 if (updateIfExists) {
                     RskuSupply oldSnapshot = snapshot(existing);
-                    updateExistingRsku(existing, row, productLevel);
+                    BigDecimal oldPrice = updateExistingRsku(existing, row, productLevel);
                     toUpdate.add(existing);
                     updateSnapshots.put(existing, oldSnapshot);
+                    if (shouldRecordPriceHistory(oldPrice, existing.getFactoryPrice())) {
+                        priceHistories.add(buildPriceHistory(existing, oldPrice));
+                    }
                 } else {
                     result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "该工厂对该变体已有报价，已跳过"));
                 }
@@ -142,6 +149,9 @@ public class RskuImportService {
         if (!toUpdate.isEmpty()) {
             toUpdate.forEach(rskuSupplyMapper::updateById);
             toUpdate.forEach(r -> auditLogService.logUpdate("rsku_supply", r.getRskuId(), updateSnapshots.get(r), r, "admin"));
+        }
+        if (!priceHistories.isEmpty()) {
+            priceHistories.forEach(priceHistoryMapper::insert);
         }
 
         result.setSuccessCount(toInsert.size() + toUpdate.size() - insertFailures);
@@ -453,7 +463,8 @@ public class RskuImportService {
         return rsku;
     }
 
-    private void updateExistingRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
+    private BigDecimal updateExistingRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
+        BigDecimal oldPrice = existing.getFactoryPrice();
         existing.setFactorySku(trim(row.getFactorySku()));
         existing.setFactoryPrice(row.getFactoryPrice());
         existing.setPriceBand(resolvePriceBand(row.getFactoryPrice()));
@@ -467,6 +478,25 @@ public class RskuImportService {
         existing.setQuoteConfidence(trim(row.getQuoteConfidence()));
         existing.setPriceUpdated(LocalDate.now());
         existing.setUpdatedAt(LocalDateTime.now());
+        return oldPrice;
+    }
+
+    private boolean shouldRecordPriceHistory(BigDecimal oldPrice, BigDecimal newPrice) {
+        if (newPrice == null) {
+            return oldPrice != null;
+        }
+        return oldPrice == null || oldPrice.compareTo(newPrice) != 0;
+    }
+
+    private PriceHistory buildPriceHistory(RskuSupply rsku, BigDecimal oldPrice) {
+        PriceHistory history = new PriceHistory();
+        history.setRskuId(rsku.getRskuId());
+        history.setOldPrice(oldPrice);
+        history.setNewPrice(rsku.getFactoryPrice());
+        history.setChangedBy("admin");
+        history.setChangeReason("批量导入更新");
+        history.setCreatedAt(LocalDateTime.now());
+        return history;
     }
 
     private String resolvePriceBand(BigDecimal price) {

@@ -6,6 +6,7 @@ import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
 import com.rsdp.dto.response.QuoteResponse;
+import com.rsdp.dto.response.SchemeItemResponse;
 import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.ImageAssets;
@@ -103,6 +104,7 @@ class SchemeServiceTest {
         savedItem.setQuantity(2);
 
         when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
         when(schemeMapper.selectById(any())).thenReturn(new Scheme());
         when(schemeMapper.selectCount(any())).thenReturn(0L);
@@ -183,8 +185,9 @@ class SchemeServiceTest {
 
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
-        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
-        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+        when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of(factory));
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
@@ -250,8 +253,9 @@ class SchemeServiceTest {
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(existingScheme);
         when(rskuSupplyMapper.selectById("RSKU-002")).thenReturn(rsku);
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
-        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
-        when(factoryMasterMapper.selectById("F002")).thenReturn(factory);
+        when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of(factory));
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
         when(schemeMapper.selectCount(any())).thenReturn(0L);
 
@@ -340,6 +344,7 @@ class SchemeServiceTest {
         savedItem.setQuantity(5);
 
         when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
         when(schemeMapper.selectById(any())).thenReturn(new Scheme());
         when(schemeMapper.selectCount(any())).thenReturn(0L);
@@ -347,9 +352,12 @@ class SchemeServiceTest {
         SchemeResponse response = schemeService.createScheme(request);
 
         assertThat(response.getItems()).hasSize(1);
-        assertThat(response.getItems().get(0).getQuantity()).isEqualTo(5);
-        assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
-        assertThat(response.getItems().get(0).getFactorySku()).isEqualTo("FACTORY-SKU-001");
+        SchemeItemResponse itemResponse = response.getItems().get(0);
+        assertThat(itemResponse.getQuantity()).isEqualTo(5);
+        assertThat(itemResponse.getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
+        assertThat(itemResponse.getRskuId()).isEqualTo("RSKU-001");
+        assertThat(itemResponse.getFactoryCode()).isEqualTo("F001");
+        assertThat(itemResponse.getFactorySku()).isEqualTo("FACTORY-SKU-001");
     }
 
     private QuoteItemRequest req(String rskuId, int quantity) {

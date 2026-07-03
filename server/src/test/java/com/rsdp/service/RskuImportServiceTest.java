@@ -3,11 +3,13 @@ package com.rsdp.service;
 import com.rsdp.dto.response.RskuImportResult;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryMaster;
+import com.rsdp.entity.PriceHistory;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.FactoryMasterMapper;
+import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
@@ -54,6 +56,9 @@ class RskuImportServiceTest {
 
     @Mock
     private AuditLogService auditLogService;
+
+    @Mock
+    private PriceHistoryMapper priceHistoryMapper;
 
     @InjectMocks
     private RskuImportService rskuImportService;
@@ -341,6 +346,14 @@ class RskuImportServiceTest {
         verify(auditLogService).logUpdate(eq("rsku_supply"), eq("RSKU-OLD01"), oldValueCaptor.capture(), newValueCaptor.capture(), eq("admin"));
         assertThat(oldValueCaptor.getValue().getFactoryPrice()).isEqualByComparingTo(new BigDecimal("1000"));
         assertThat(newValueCaptor.getValue().getFactoryPrice()).isEqualByComparingTo(new BigDecimal("1500"));
+
+        ArgumentCaptor<PriceHistory> historyCaptor = ArgumentCaptor.forClass(PriceHistory.class);
+        verify(priceHistoryMapper).insert(historyCaptor.capture());
+        PriceHistory history = historyCaptor.getValue();
+        assertThat(history.getRskuId()).isEqualTo("RSKU-OLD01");
+        assertThat(history.getOldPrice()).isEqualByComparingTo(new BigDecimal("1000"));
+        assertThat(history.getNewPrice()).isEqualByComparingTo(new BigDecimal("1500"));
+        assertThat(history.getChangeReason()).isEqualTo("批量导入更新");
     }
 
     @Test

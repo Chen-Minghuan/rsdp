@@ -19,6 +19,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -45,7 +46,14 @@ public class FactoryService {
                 .eq("status", "active")
                 .orderByDesc("created_at")
         );
-        return factories.stream().map(this::toResponse).collect(Collectors.toList());
+        List<String> factoryCodes = factories.stream()
+            .map(FactoryMaster::getFactoryCode)
+            .distinct()
+            .toList();
+        Map<String, List<String>> capabilityMap = batchListCapableLevels(factoryCodes);
+        return factories.stream()
+            .map(f -> toResponse(f, capabilityMap))
+            .collect(Collectors.toList());
     }
 
     /**
@@ -236,11 +244,16 @@ public class FactoryService {
     }
 
     private FactoryResponse toResponse(FactoryMaster factory) {
+        return toResponse(factory, Map.of());
+    }
+
+    private FactoryResponse toResponse(FactoryMaster factory,
+                                       Map<String, List<String>> capabilityMap) {
         FactoryResponse response = new FactoryResponse();
         response.setFactoryCode(factory.getFactoryCode());
         response.setFactoryName(factory.getFactoryName());
         response.setFactoryLevel(factory.getFactoryLevel());
-        response.setCapableLevels(listCapableLevels(factory.getFactoryCode()));
+        response.setCapableLevels(resolveCapableLevels(factory, capabilityMap));
         response.setHomeCommercialTag(factory.getHomeCommercialTag());
         response.setRegion(factory.getRegion());
         response.setAddress(factory.getAddress());
@@ -253,6 +266,32 @@ public class FactoryService {
         response.setCreatedAt(factory.getCreatedAt());
         response.setUpdatedAt(factory.getUpdatedAt());
         return response;
+    }
+
+    private List<String> resolveCapableLevels(FactoryMaster factory,
+                                              Map<String, List<String>> capabilityMap) {
+        List<String> levels = capabilityMap.get(factory.getFactoryCode());
+        if (levels == null || levels.isEmpty()) {
+            return factory.getFactoryLevel() != null
+                ? List.of(factory.getFactoryLevel())
+                : List.of();
+        }
+        return sortLevels(levels);
+    }
+
+    private Map<String, List<String>> batchListCapableLevels(List<String> factoryCodes) {
+        if (factoryCodes.isEmpty()) {
+            return Map.of();
+        }
+        List<FactoryLevelCapability> capabilities = capabilityMapper.selectList(
+            new QueryWrapper<FactoryLevelCapability>()
+                .in("factory_code", factoryCodes)
+        );
+        return capabilities.stream()
+            .collect(Collectors.groupingBy(
+                FactoryLevelCapability::getFactoryCode,
+                Collectors.mapping(FactoryLevelCapability::getLevelCode, Collectors.toList())
+            ));
     }
 
     /**
@@ -333,9 +372,12 @@ public class FactoryService {
             .map(FactoryLevelCapability::getLevelCode)
             .distinct()
             .collect(Collectors.toList());
+        return sortLevels(levels);
+    }
 
-        // 按业务等级 S > A > B > C 排序，未定义的等级放末尾
-        levels.sort((a, b) -> {
+    private List<String> sortLevels(List<String> levels) {
+        List<String> sorted = new ArrayList<>(levels);
+        sorted.sort((a, b) -> {
             int idxA = LEVEL_ORDER.indexOf(a);
             int idxB = LEVEL_ORDER.indexOf(b);
             if (idxA >= 0 && idxB >= 0) {
@@ -343,6 +385,6 @@ public class FactoryService {
             }
             return idxA >= 0 ? -1 : (idxB >= 0 ? 1 : a.compareTo(b));
         });
-        return levels;
+        return sorted;
     }
 }

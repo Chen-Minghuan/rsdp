@@ -314,8 +314,21 @@ public class SchemeService {
                 .orderByAsc("sort_order")
         );
 
+        List<String> rspuIds = items.stream().map(SchemeItem::getRspuId).distinct().toList();
+        List<String> rskuIds = items.stream().map(SchemeItem::getRskuId).distinct().toList();
+        List<String> factoryCodes = items.stream()
+            .map(SchemeItem::getFactoryCode)
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList();
+
+        Map<String, RspuMaster> rspuMap = batchRspuMap(rspuIds);
+        Map<String, RskuSupply> rskuMap = batchRskuMap(rskuIds);
+        Map<String, FactoryMaster> factoryMap = batchFactoryMap(factoryCodes);
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
+
         List<SchemeItemResponse> itemResponses = items.stream()
-            .map(this::buildItemResponse)
+            .map(item -> buildItemResponse(item, rspuMap, rskuMap, factoryMap, primaryImageUrlMap))
             .collect(Collectors.toList());
 
         SchemeResponse response = new SchemeResponse();
@@ -408,18 +421,22 @@ public class SchemeService {
         return quote;
     }
 
-    private SchemeItemResponse buildItemResponse(SchemeItem item) {
-        RspuMaster rspu = rspuMapper.selectById(item.getRspuId());
+    private SchemeItemResponse buildItemResponse(SchemeItem item,
+                                                 Map<String, RspuMaster> rspuMap,
+                                                 Map<String, RskuSupply> rskuMap,
+                                                 Map<String, FactoryMaster> factoryMap,
+                                                 Map<String, String> primaryImageUrlMap) {
+        RspuMaster rspu = rspuMap.get(item.getRspuId());
         FactoryMaster factory = item.getFactoryCode() != null
-            ? factoryMasterMapper.selectById(item.getFactoryCode())
+            ? factoryMap.get(item.getFactoryCode())
             : null;
-        RskuSupply rsku = rskuSupplyMapper.selectById(item.getRskuId());
+        RskuSupply rsku = rskuMap.get(item.getRskuId());
 
         SchemeItemResponse response = new SchemeItemResponse();
         response.setSchemeItemId(item.getSchemeItemId());
         response.setRspuId(item.getRspuId());
         response.setRspuName(rspu != null ? rspu.getPositioningLabel() : null);
-        response.setPrimaryImageUrl(findPrimaryImageUrl(item.getRspuId()));
+        response.setPrimaryImageUrl(primaryImageUrlMap.get(item.getRspuId()));
         response.setRskuId(item.getRskuId());
         response.setFactoryCode(item.getFactoryCode());
         response.setFactoryName(factory != null ? factory.getFactoryName() : null);
@@ -436,16 +453,47 @@ public class SchemeService {
         return response;
     }
 
-    private String findPrimaryImageUrl(String rspuId) {
+    private Map<String, RspuMaster> batchRspuMap(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        return rspuMapper.selectList(
+            new QueryWrapper<RspuMaster>().in("rspu_id", rspuIds)
+        ).stream().collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+    }
+
+    private Map<String, RskuSupply> batchRskuMap(List<String> rskuIds) {
+        if (rskuIds.isEmpty()) {
+            return Map.of();
+        }
+        return rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>().in("rsku_id", rskuIds)
+        ).stream().collect(Collectors.toMap(RskuSupply::getRskuId, r -> r));
+    }
+
+    private Map<String, FactoryMaster> batchFactoryMap(List<String> factoryCodes) {
+        if (factoryCodes.isEmpty()) {
+            return Map.of();
+        }
+        return factoryMasterMapper.selectList(
+            new QueryWrapper<FactoryMaster>().in("factory_code", factoryCodes)
+        ).stream().collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
+    }
+
+    private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
         List<ImageAssets> images = imageAssetsMapper.selectList(
             new QueryWrapper<ImageAssets>()
-                .eq("rspu_id", rspuId)
+                .in("rspu_id", rspuIds)
                 .eq("is_primary", true)
-                .last("LIMIT 1")
         );
-        if (images == null || images.isEmpty()) {
-            return null;
-        }
-        return "/api/v1/images/" + images.get(0).getImageId();
+        return images.stream()
+            .collect(Collectors.toMap(
+                ImageAssets::getRspuId,
+                img -> "/api/v1/images/" + img.getImageId(),
+                (a, b) -> a
+            ));
     }
 }

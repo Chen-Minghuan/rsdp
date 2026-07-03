@@ -55,55 +55,75 @@ public class PriceEncryptionMigration implements CommandLineRunner {
     }
 
     private void migrateTable(String tableName, String idColumn, String selectSql) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(selectSql);
-        if (rows.isEmpty()) {
+        int offset = 0;
+        int totalProcessed = 0;
+        int totalAlreadyEncrypted = 0;
+        int totalMigrated = 0;
+        int totalFailed = 0;
+        int batchSize = properties.getBatchSize();
+
+        while (true) {
+            String pagedSql = selectSql + " ORDER BY " + idColumn + " LIMIT " + batchSize + " OFFSET " + offset;
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(pagedSql);
+            if (rows.isEmpty()) {
+                break;
+            }
+
+            int batchAlreadyEncrypted = 0;
+            int batchMigrated = 0;
+            int batchFailed = 0;
+
+            for (Map<String, Object> row : rows) {
+                Object idValue = row.get(idColumn);
+                String rawPrice = (String) row.get("factory_price");
+
+                if (rawPrice == null || rawPrice.isBlank()) {
+                    continue;
+                }
+
+                // 幂等：已加密则跳过
+                if (isEncrypted(rawPrice)) {
+                    batchAlreadyEncrypted++;
+                    continue;
+                }
+
+                BigDecimal plainPrice;
+                try {
+                    plainPrice = new BigDecimal(rawPrice.trim());
+                } catch (NumberFormatException e) {
+                    batchFailed++;
+                    log.error("表 {} 记录 {} 的价格无法解析为数字", tableName, idValue);
+                    continue;
+                }
+
+                String encrypted = AesEncryptionUtil.encrypt(plainPrice);
+                String updateSql = String.format("UPDATE %s SET factory_price = ? WHERE %s = ?", tableName, idColumn);
+                try {
+                    jdbcTemplate.update(updateSql, encrypted, idValue);
+                    batchMigrated++;
+                } catch (Exception e) {
+                    batchFailed++;
+                    log.error("表 {} 记录 {} 加密更新失败", tableName, idValue, e);
+                }
+            }
+
+            totalProcessed += rows.size();
+            totalAlreadyEncrypted += batchAlreadyEncrypted;
+            totalMigrated += batchMigrated;
+            totalFailed += batchFailed;
+            offset += rows.size();
+
+            log.info("表 {} 批次迁移：偏移 {}，处理 {}，已加密跳过 {}，本次迁移 {}，失败 {}",
+                tableName, offset - rows.size(), rows.size(), batchAlreadyEncrypted, batchMigrated, batchFailed);
+        }
+
+        if (totalProcessed == 0) {
             log.info("表 {} 无需迁移的价格记录", tableName);
             return;
         }
 
-        int total = rows.size();
-        int alreadyEncrypted = 0;
-        int migrated = 0;
-        int failed = 0;
-
-        log.info("表 {} 发现 {} 条待处理价格记录", tableName, total);
-
-        for (Map<String, Object> row : rows) {
-            Object idValue = row.get(idColumn);
-            String rawPrice = (String) row.get("factory_price");
-
-            if (rawPrice == null || rawPrice.isBlank()) {
-                continue;
-            }
-
-            // 幂等：已加密则跳过
-            if (isEncrypted(rawPrice)) {
-                alreadyEncrypted++;
-                continue;
-            }
-
-            BigDecimal plainPrice;
-            try {
-                plainPrice = new BigDecimal(rawPrice.trim());
-            } catch (NumberFormatException e) {
-                failed++;
-                log.error("表 {} 记录 {} 的价格无法解析为数字：{}", tableName, idValue, rawPrice);
-                continue;
-            }
-
-            String encrypted = AesEncryptionUtil.encrypt(plainPrice);
-            String updateSql = String.format("UPDATE %s SET factory_price = ? WHERE %s = ?", tableName, idColumn);
-            try {
-                jdbcTemplate.update(updateSql, encrypted, idValue);
-                migrated++;
-            } catch (Exception e) {
-                failed++;
-                log.error("表 {} 记录 {} 加密更新失败", tableName, idValue, e);
-            }
-        }
-
         log.info("表 {} 迁移结果：总计 {}，已加密跳过 {}，本次迁移 {}，失败 {}",
-            tableName, total, alreadyEncrypted, migrated, failed);
+            tableName, totalProcessed, totalAlreadyEncrypted, totalMigrated, totalFailed);
     }
 
     /**

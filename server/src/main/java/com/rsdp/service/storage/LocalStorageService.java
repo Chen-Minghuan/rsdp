@@ -68,23 +68,37 @@ public class LocalStorageService implements StorageService {
      * 将 objectKey 解析为本地绝对路径。
      *
      * <p>兼容旧数据：若 objectKey 本身已是绝对路径（如旧版直接存储的完整磁盘路径），
-     * 则直接使用；否则按配置的 localPath 拼接，并校验不越界。</p>
+     * 且位于允许根目录内，则直接使用；否则按配置的 localPath 拼接，并校验不越界。</p>
+     *
+     * @param objectKey 对象键
+     * @return 解析后的本地绝对路径
+     * @throws IllegalArgumentException 当路径越界或非法时
      */
     private Path resolvePath(String objectKey) {
-        Path objectPath = Paths.get(objectKey);
-        if (objectPath.isAbsolute()) {
-            return objectPath.normalize();
-        }
+        Path root = resolveRoot();
+        Path objectPath = Paths.get(objectKey).normalize();
 
+        Path resolved = objectPath.isAbsolute()
+            ? objectPath
+            : root.resolve(objectPath).normalize();
+
+        if (!resolved.startsWith(root)) {
+            throw new IllegalArgumentException("非法对象键，路径越界: " + objectKey);
+        }
+        return resolved;
+    }
+
+    /**
+     * 解析并返回本地存储的根目录。
+     *
+     * @return 根目录绝对路径（已 normalize）
+     */
+    private Path resolveRoot() {
         String localPath = storageProperties.getLocalPath();
         Path root = Paths.get(localPath);
         if (!root.isAbsolute()) {
             root = Paths.get(System.getProperty("user.dir"), localPath);
         }
-        Path resolved = root.resolve(objectPath).normalize();
-        if (!resolved.startsWith(root.normalize())) {
-            throw new IllegalArgumentException("非法对象键，路径越界: " + objectKey);
-        }
-        return resolved;
+        return root.normalize();
     }
 }
