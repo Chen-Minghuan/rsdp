@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
 -- RSPU 设计原型主表（款式概念，不含工厂/价格/SKU 信息）
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
+    external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
@@ -28,11 +29,13 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     material_tags JSONB,                           -- AI识别材质标签
     scene_tags JSONB,                              -- AI识别适用场景标签
     reference_price_band VARCHAR(16),              -- 参考价格带 low/mid/high
+    product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华
     budget_range JSONB,                            -- 预算区间 [800, 3500]
     warranty_years INTEGER,                        -- 款式级典型质保年限
     key_specs JSONB,                               -- 关键规格：框架材质、海绵密度等
     status VARCHAR(16) DEFAULT 'active',           -- active/discontinued/draft
     review_status VARCHAR(16) DEFAULT '待复核',     -- 待复核/已确认/存疑
+    review_comment TEXT,                           -- 复核备注/说明
     aesthetics_confidence VARCHAR(16),             -- high/mid/low
     source_agent_version VARCHAR(64),              -- Ollama 模型版本
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

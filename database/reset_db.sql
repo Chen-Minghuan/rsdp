@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
 -- RSPU 设计原型主表（款式概念）
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
+    external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,
@@ -52,11 +53,13 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     material_tags JSONB,
     scene_tags JSONB,
     reference_price_band VARCHAR(16),
+    product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华
     budget_range JSONB,
     warranty_years INTEGER,
     key_specs JSONB,
     status VARCHAR(16) DEFAULT 'active',
     review_status VARCHAR(16) DEFAULT '待复核',
+    review_comment TEXT,                           -- 复核备注/说明
     aesthetics_confidence VARCHAR(16),
     source_agent_version VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

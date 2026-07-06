@@ -1,4 +1,5 @@
 -- RSDP 字典表种子数据（PostgreSQL 版本）
+-- 风格数据库的案例/元素/公式种子数据见 database/seed_style_knowledge.sql
 -- 后续可根据实际业务扩展
 
 -- 产品类别
