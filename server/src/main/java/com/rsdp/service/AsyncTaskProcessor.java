@@ -80,8 +80,8 @@ public class AsyncTaskProcessor {
             labels = visionService.recognizeImage(imageStream);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
-            // OCR 结果后处理：清洗型号/材质，规范化尺寸与材质标签
-            postProcessOcr(labels);
+            // AI 标签后处理：清洗 OCR 字段，规范化尺寸，OCR 材质兜底
+            postProcessLabels(labels);
 
             updateTaskStatus(taskId, "processing", 60, null, null);
 
@@ -103,7 +103,7 @@ public class AsyncTaskProcessor {
         }
     }
 
-    private void postProcessOcr(AiLabels labels) {
+    private void postProcessLabels(AiLabels labels) {
         if (labels == null) {
             return;
         }
@@ -117,8 +117,7 @@ public class AsyncTaskProcessor {
         // 如果视觉识别没有返回材质标签，尝试用 OCR 材质描述兜底
         if ((labels.getMaterialTags() == null || labels.getMaterialTags().isEmpty())
             && StringUtils.hasText(ocr.getMaterialDescription())) {
-            List<String> parsedMaterials = OcrPostProcessor.parseMaterials(
-                ocr.getMaterialDescription(), labels.getMaterialTags());
+            List<String> parsedMaterials = OcrPostProcessor.parseMaterials(ocr.getMaterialDescription());
             if (!parsedMaterials.isEmpty()) {
                 labels.setMaterialTags(parsedMaterials);
             }

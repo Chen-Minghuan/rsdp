@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -20,6 +21,9 @@ import { getTaskStatus } from '@/api/task'
 import { listDicts } from '@/api/dict'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
+import type { OcrResult } from '@/types/product'
+
+const router = useRouter()
 
 const fileList = ref<UploadFileInfo[]>([])
 const taskList = ref<TaskItem[]>([])
@@ -183,6 +187,32 @@ function statusText(status: TaskItem['status']) {
       return '未知'
   }
 }
+
+function goToProduct(rspuId: string) {
+  router.push(`/products/${rspuId}`)
+}
+
+function getOcr(task: TaskItem): OcrResult | undefined {
+  const ocr = task.result?.ocr
+  return ocr && typeof ocr === 'object' ? (ocr as OcrResult) : undefined
+}
+
+function formatDimensions(ocr?: OcrResult): string {
+  const d = ocr?.dimensions
+  if (!d || (d.w == null && d.d == null && d.h == null)) return '-'
+  const parts = [d.w, d.d, d.h].filter(v => v != null)
+  return parts.length > 0 ? `${parts.join(' × ')} ${d.unit || 'mm'}` : '-'
+}
+
+function formatPrice(ocr?: OcrResult): string {
+  if (ocr?.price != null && ocr.price > 0) {
+    return `¥${ocr.price}`
+  }
+  if (ocr?.priceText) {
+    return ocr.priceText
+  }
+  return '-'
+}
 </script>
 
 <template>
@@ -247,7 +277,15 @@ function statusText(status: TaskItem['status']) {
               <n-space align="center">
                 <n-spin v-if="task.status === 'pending' || task.status === 'processing'" size="small" />
                 <span>
-                  任务：{{ task.taskId }} / RSPU：{{ task.rspuId }}
+                  任务：{{ task.taskId }} / RSPU：
+                  <n-button
+                    text
+                    tag="a"
+                    type="primary"
+                    @click="goToProduct(task.rspuId)"
+                  >
+                    {{ task.rspuId }}
+                  </n-button>
                 </span>
               </n-space>
               <n-tag :type="task.status === 'done' ? 'success' : task.status === 'failed' ? 'error' : 'warning'">
@@ -281,31 +319,86 @@ function statusText(status: TaskItem['status']) {
               />
             </n-space>
 
-            <n-descriptions
+            <n-card
               v-if="task.status === 'done' && task.result"
-              bordered
-              :column="1"
+              title="AI 识别结果"
               size="small"
             >
-              <n-descriptions-item label="风格">
-                {{ task.result.style || '-' }}
-              </n-descriptions-item>
-              <n-descriptions-item label="主色">
-                {{ task.result.colorPrimaryName || '-' }}
-              </n-descriptions-item>
-              <n-descriptions-item label="置信度">
-                {{ task.result.confidence || '-' }}
-              </n-descriptions-item>
-              <n-descriptions-item label="材质">
-                {{ Array.isArray(task.result.materialTags) ? task.result.materialTags.join('、') : '-' }}
-              </n-descriptions-item>
-              <n-descriptions-item label="场景">
-                {{ Array.isArray(task.result.sceneTags) ? task.result.sceneTags.join('、') : '-' }}
-              </n-descriptions-item>
-              <n-descriptions-item label="六维标签">
-                <pre style="margin: 0;">{{ JSON.stringify(task.result.sixDimTags, null, 2) }}</pre>
-              </n-descriptions-item>
-            </n-descriptions>
+              <n-descriptions bordered :column="2" size="small">
+                <n-descriptions-item label="风格">
+                  {{ task.result.style || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="置信度">
+                  <n-tag
+                    :type="task.result.confidence === 'high'
+                      ? 'success'
+                      : task.result.confidence === 'mid'
+                        ? 'warning'
+                        : 'default'"
+                    size="small"
+                  >
+                    {{ task.result.confidence || '-' }}
+                  </n-tag>
+                </n-descriptions-item>
+                <n-descriptions-item label="主色">
+                  {{ task.result.colorPrimaryName || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="材质">
+                  {{ Array.isArray(task.result.materialTags) ? task.result.materialTags.join('、') : '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="场景">
+                  {{ Array.isArray(task.result.sceneTags) ? task.result.sceneTags.join('、') : '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="六维标签">
+                  <pre style="margin: 0;">{{ JSON.stringify(task.result.sixDimTags, null, 2) }}</pre>
+                </n-descriptions-item>
+              </n-descriptions>
+            </n-card>
+
+            <n-card
+              v-if="task.status === 'done' && getOcr(task)"
+              title="OCR 识别结果"
+              size="small"
+            >
+              <n-descriptions bordered :column="2" size="small">
+                <n-descriptions-item label="产品名称">
+                  {{ getOcr(task)?.productName || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="型号">
+                  {{ getOcr(task)?.modelNumber || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="品牌">
+                  {{ getOcr(task)?.brand || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="工厂">
+                  {{ getOcr(task)?.factoryName || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="尺寸">
+                  {{ formatDimensions(getOcr(task)) }}
+                </n-descriptions-item>
+                <n-descriptions-item label="价格">
+                  {{ formatPrice(getOcr(task)) }}
+                </n-descriptions-item>
+                <n-descriptions-item label="材质说明">
+                  {{ getOcr(task)?.materialDescription || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="颜色文字">
+                  {{ getOcr(task)?.colorText || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="交期">
+                  {{ getOcr(task)?.otherInfo?.leadTimeDays != null ? `${getOcr(task)?.otherInfo?.leadTimeDays} 天` : '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="MOQ">
+                  {{ getOcr(task)?.otherInfo?.moq || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="质保">
+                  {{ getOcr(task)?.otherInfo?.warranty || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="净重">
+                  {{ getOcr(task)?.otherInfo?.netWeightKg != null ? `${getOcr(task)?.otherInfo?.netWeightKg} kg` : '-' }}
+                </n-descriptions-item>
+              </n-descriptions>
+            </n-card>
           </n-space>
         </n-card>
       </n-space>

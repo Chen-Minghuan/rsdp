@@ -43,6 +43,50 @@ export interface PageResult<T> {
 }
 
 /**
+ * OCR 识别结果。
+ */
+export interface OcrResult {
+  rawText?: string
+  productName?: string
+  modelNumber?: string
+  brand?: string
+  factoryName?: string
+  dimensionText?: string
+  dimensions?: {
+    w?: number
+    d?: number
+    h?: number
+    unit?: string
+  }
+  materialDescription?: string
+  colorText?: string
+  priceText?: string
+  price?: number
+  currency?: string
+  otherInfo?: {
+    warranty?: string
+    moq?: number
+    leadTimeDays?: number
+    netWeightKg?: number
+    packageSize?: string
+    notes?: string
+  }
+}
+
+/**
+ * AI 识别历史记录。
+ */
+export interface RecognitionHistoryItem {
+  recognitionId: string
+  modelName: string
+  parsedStyle: string
+  confidence: string
+  status: string
+  errorMessage: string
+  createdAt: string
+}
+
+/**
  * 产品详情。
  */
 export interface ProductDetail {
@@ -73,15 +117,7 @@ export interface ProductDetail {
     storageUrl: string
     isPrimary: boolean
   }>
-  recognitions: Array<{
-    recognitionId: string
-    modelName: string
-    parsedStyle: string
-    confidence: string
-    status: string
-    errorMessage: string
-    createdAt: string
-  }>
+  recognitions: RecognitionHistoryItem[]
   officialMatches?: RelatedProduct[]
   matchedBy?: RelatedProduct[]
 }

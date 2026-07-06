@@ -239,39 +239,28 @@ public class OcrPostProcessor {
 
     /**
      * 风格名称 → 字典 code 映射（与 category_dict 中的 style 类型保持一致）。
+     *
+     * <p>仅用于 OCR 文本、批量导入等非 VisionService 场景的风格别名兜底。
+     * VisionService 的提示词已强制 AI 从 category_dict 标准枚举中选择，
+     * 因此此处只保留常见变体/缩写，不再接受数据库外风格。</p>
      */
     private static final Map<String, String> STYLE_NAME_TO_CODE = Map.ofEntries(
-        Map.entry("中古风", "MC"),
-        Map.entry("包豪斯", "BA"),
         Map.entry("现代包豪斯", "MB"),
         Map.entry("现代极简包豪斯", "MB"),
-        Map.entry("意式", "IT"),
         Map.entry("意式极简", "IT"),
         Map.entry("意式轻奢", "IL"),
         Map.entry("意式极简轻奢", "IL"),
-        Map.entry("法式", "FR"),
         Map.entry("法式复古南洋", "FN"),
         Map.entry("法式南洋", "FN"),
-        Map.entry("侘寂", "WJ"),
         Map.entry("侘寂风", "WJ"),
-        Map.entry("日式原木风", "WJ"),
-        Map.entry("日式", "WJ"),
-        Map.entry("原木风", "WJ"),
         Map.entry("新中式", "NC"),
         Map.entry("新中式宋式", "ZS"),
         Map.entry("宋式", "ZS"),
-        Map.entry("奶油风", "CR"),
-        Map.entry("工业风", "IN"),
         Map.entry("工业风LOFT", "IO"),
         Map.entry("工业LOFT", "IO"),
-        Map.entry("孟菲斯", "MP"),
         Map.entry("孟菲斯多巴胺", "MD"),
-        Map.entry("混搭风", "HH"),
         Map.entry("混搭", "HH"),
-        Map.entry("国外顶尖大牌搭配", "DL"),
-        Map.entry("顶尖大牌搭配", "DL"),
-        Map.entry("北欧风", "NC"),
-        Map.entry("现代简约", "IT")
+        Map.entry("顶尖大牌搭配", "DL")
     );
 
     /**
@@ -289,60 +278,13 @@ public class OcrPostProcessor {
     }
 
     /**
-     * 解析颜色列表。
-     * 优先从 OCR colorText 解析，会去掉"布艺"、"框架"等部位/材质后缀，提取纯颜色词；
-     * 为空则用视觉识别的 colorPrimaryName。
-     *
-     * @param colorText       OCR 颜色文字
-     * @param colorPrimaryName 视觉识别主色
-     * @return 颜色名称列表
-     */
-    public static List<String> parseColors(String colorText, String colorPrimaryName) {
-        List<String> result = splitByDelimiter(colorText).stream()
-            .map(OcrPostProcessor::extractColorWord)
-            .filter(StringUtils::hasText)
-            .distinct()
-            .collect(Collectors.toList());
-        if (!result.isEmpty()) {
-            return result;
-        }
-        if (StringUtils.hasText(colorPrimaryName) && !"unknown".equalsIgnoreCase(colorPrimaryName)) {
-            return List.of(colorPrimaryName.trim());
-        }
-        return List.of();
-    }
-
-    /**
-     * 从颜色描述中提取颜色词，去掉部位/材质后缀。
-     * 例如："灰色布艺" → "灰色"，"原木色框架" → "原木色"。
-     */
-    private static String extractColorWord(String text) {
-        if (!StringUtils.hasText(text)) {
-            return null;
-        }
-        String cleaned = text.trim()
-            .replaceAll("(布艺|框架|靠枕|坐垫|靠背|软包|皮革|真皮|面料|布料|木头|木材|木)$", "")
-            .trim();
-        return StringUtils.hasText(cleaned) ? cleaned : text.trim();
-    }
-
-    /**
      * 解析材质列表。
-     * 优先从 OCR materialDescription 解析，为空则用视觉识别的 materialTags。
      *
      * @param materialDescription OCR 材质描述
-     * @param materialTags        视觉识别材质标签
      * @return 材质名称列表
      */
-    public static List<String> parseMaterials(String materialDescription, List<String> materialTags) {
-        List<String> result = splitByDelimiter(materialDescription);
-        if (!result.isEmpty()) {
-            return result;
-        }
-        if (materialTags != null && !materialTags.isEmpty()) {
-            return new ArrayList<>(materialTags);
-        }
-        return List.of();
+    public static List<String> parseMaterials(String materialDescription) {
+        return splitByDelimiter(materialDescription);
     }
 
     /**
