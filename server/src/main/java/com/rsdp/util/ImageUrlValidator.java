@@ -38,6 +38,11 @@ public final class ImageUrlValidator {
             return false;
         }
 
+        // 拒绝带 userinfo 的 URL，防止 @ 绕过（如 http://10.0.0.1@example.com）
+        if (uri.getUserInfo() != null && !uri.getUserInfo().isBlank()) {
+            return false;
+        }
+
         String host = uri.getHost();
         if (host == null || host.isBlank()) {
             return false;
@@ -56,8 +61,8 @@ public final class ImageUrlValidator {
             InetAddress address = InetAddress.getByName(host);
             return !isPrivateOrReserved(address);
         } catch (Exception e) {
-            // 无法解析的域名默认放行，实际下载时仍会失败
-            return true;
+            // 无法解析的域名默认拒绝，防止通过 DNS 绕过内网限制
+            return false;
         }
     }
 

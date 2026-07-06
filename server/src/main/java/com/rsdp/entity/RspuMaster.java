@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonRawValue;
 import com.rsdp.config.typehandler.JsonbTypeHandler;
 import lombok.Data;
 
@@ -19,22 +20,27 @@ public class RspuMaster {
     private String categoryPath;
     private String positioningLabel;
 
+    @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String sixDimTags;
 
+    @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String styleVector;
 
     private String colorPrimaryName;
 
+    @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String colorPrimaryHsv;
 
     private String colorSecondary;
 
+    @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String materialTags;
 
+    @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String sceneTags;
 
@@ -42,11 +48,13 @@ public class RspuMaster {
 
     private String productLevel;
 
+    @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String budgetRange;
 
     private Integer warrantyYears;
 
+    @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String keySpecs;
     private String status;

@@ -65,6 +65,11 @@ rsdp:
     secret: ${RSDP_JWT_SECRET}
     # token 有效期，单位小时
     expiration-hours: 24
+    # HttpOnly Cookie 配置
+    cookie-name: ${RSDP_JWT_COOKIE_NAME:rsdp_token}
+    # Secure 属性：生产环境必须 true，开发环境若使用 http 可设为 false
+    cookie-secure: ${RSDP_JWT_COOKIE_SECURE:true}
+    cookie-same-site: ${RSDP_JWT_COOKIE_SAME_SITE:Strict}
   security:
     # 允许跨域来源，逗号分隔；生产环境必须通过 RSDP_ALLOWED_ORIGINS 配置为具体域名白名单
     allowed-origins: ${RSDP_ALLOWED_ORIGINS:http://localhost:5173}

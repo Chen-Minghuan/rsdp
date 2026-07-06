@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.RspuRelationCreateRequest;
@@ -44,6 +45,7 @@ public class RspuRelationService {
     private final RskuSupplyMapper rskuSupplyMapper;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 查询某产品作为锚点的有效搭配关系。
@@ -244,6 +246,10 @@ public class RspuRelationService {
             new QueryWrapper<RskuSupply>()
                 .in("rspu_id", rspuIds)
         );
+        // 数据权限过滤：只取当前用户可见工厂的 RSKU 最低价
+        rskus = rskus.stream()
+            .filter(rsku -> dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode()))
+            .collect(Collectors.toList());
         return rskus.stream()
             .filter(r -> r.getFactoryPrice() != null)
             .collect(Collectors.groupingBy(

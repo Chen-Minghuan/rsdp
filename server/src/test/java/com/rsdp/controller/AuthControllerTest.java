@@ -21,6 +21,8 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -45,7 +47,7 @@ class AuthControllerTest {
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Test
-    void login_shouldReturnToken() throws Exception {
+    void login_shouldReturnUserInfoAndSetHttpOnlyCookie() throws Exception {
         LoginResponse response = new LoginResponse(
             "token-xxx", "Bearer", "USER-001", "admin", "管理员", "ADMIN",
             List.of("ADMIN"), List.of("admin:user:manage")
@@ -61,10 +63,14 @@ class AuthControllerTest {
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.token").value("token-xxx"))
+            .andExpect(jsonPath("$.data.token").doesNotExist())
             .andExpect(jsonPath("$.data.role").value("ADMIN"))
             .andExpect(jsonPath("$.data.roles[0]").value("ADMIN"))
-            .andExpect(jsonPath("$.data.permissions[0]").value("admin:user:manage"));
+            .andExpect(jsonPath("$.data.permissions[0]").value("admin:user:manage"))
+            .andExpect(header().stringValues("Set-Cookie",
+                org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.containsString("rsdp_token=token-xxx"))))
+            .andExpect(header().stringValues("Set-Cookie",
+                org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.containsString("HttpOnly"))));
     }
 
     @Test

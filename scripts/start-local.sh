@@ -1,16 +1,41 @@
 #!/usr/bin/env bash
 # RSDP 本地开发环境一键启动脚本（Git Bash / WSL / Linux / macOS）
 # 会在后台启动后端和前端 dev server，并输出日志到文件
+#
+# 前置条件：
+#   1. 复制 deploy/.env.example 为 deploy/.env
+#   2. 在 deploy/.env 中填入真实密钥（RSDP_ENCRYPTION_KEY、RSDP_JWT_SECRET 等）
+#   3. 运行 scripts/start-local.sh
 
 set -e
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$PROJECT_ROOT/deploy/.env"
 LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
 
-# 本地开发默认密钥：仅在开发环境使用，生产环境必须通过环境变量注入真实密钥
-export RSDP_ENCRYPTION_KEY="${RSDP_ENCRYPTION_KEY:-WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=}"
-export RSDP_JWT_SECRET="${RSDP_JWT_SECRET:-g3g6Ryj6ty4Dsw0jm1ImR59dbRAOI98q3qKVf7gz0jU=}"
+if [ ! -f "$ENV_FILE" ]; then
+    echo "错误：找不到环境变量文件 $ENV_FILE"
+    echo "请先复制 deploy/.env.example 为 deploy/.env 并填写真实密钥"
+    exit 1
+fi
+
+# 读取 .env 文件中的变量
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
+
+# 校验关键敏感变量
+REQUIRED_VARS=("RSDP_ENCRYPTION_KEY" "RSDP_JWT_SECRET")
+for var in "${REQUIRED_VARS[@]}"; do
+    value="${!var:-}"
+    if [ -z "$value" ] || [ "$value" = "<CHANGE_ME>" ]; then
+        echo "错误：环境变量 $var 未设置或为默认值 <CHANGE_ME>"
+        echo "请在 $ENV_FILE 中设置强随机值后再启动"
+        exit 1
+    fi
+done
 
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
@@ -20,6 +45,7 @@ echo " RSDP 本地开发环境启动"
 echo "=========================================="
 echo ""
 echo "项目根目录: $PROJECT_ROOT"
+echo "环境文件: $ENV_FILE"
 echo ""
 
 echo "[1/2] 启动后端 Spring Boot（端口 8081）..."

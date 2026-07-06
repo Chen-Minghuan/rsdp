@@ -47,47 +47,63 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .authorizeHttpRequests(auth -> auth
+                // 公开接口
                 .requestMatchers("/api/v1/auth/login").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/images/**").permitAll()
 
-                // 用户管理（管理员）—— 必须放在 broad GET permitAll 之前
+                // 用户管理（管理员）
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/users").hasAuthority(Permissions.USER_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_UPDATE)
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 
-                // 其他公开 GET
-                .requestMatchers(HttpMethod.GET, "/api/v1/**").permitAll()
+                // 认证即可访问的读接口（非敏感）
+                .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/dicts/**").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/tasks/*").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/products").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/*").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/*/relations").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/*/variants").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/factories").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/factories/*").authenticated()
 
-                // 产品
+                // 敏感读接口：按最小权限显式授权
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)
+                .requestMatchers(HttpMethod.GET, "/api/v1/rsku/import-template").hasAuthority(Permissions.RSKU_IMPORT)
+                .requestMatchers(HttpMethod.GET, "/api/v1/factories/*/rsku").hasAuthority(Permissions.RSKU_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/*/rsku/*").hasAuthority(Permissions.RSKU_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/rsku/*/price-history").hasAuthority(Permissions.RSKU_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/schemes/*").hasAuthority(Permissions.SCHEME_READ)
+
+                // 产品写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)
-                .requestMatchers(HttpMethod.POST, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_DELETE)
 
-                // 工厂
+                // 工厂写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/factories").hasAuthority(Permissions.FACTORY_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_DELETE)
 
-                // RSKU
+                // RSKU 写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/rsku/**").hasAuthority(Permissions.RSKU_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAuthority(Permissions.RSKU_DELETE)
                 .requestMatchers("/api/v1/rsku/import").hasAuthority(Permissions.RSKU_IMPORT)
-                .requestMatchers("/api/v1/rsku/import-template").hasAuthority(Permissions.RSKU_IMPORT)
 
                 // 报价单
                 .requestMatchers(HttpMethod.POST, "/api/v1/quotes/**").hasAuthority(Permissions.QUOTE_GENERATE)
 
-                // 搭配方案
+                // 搭配方案写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_DELETE)
 
-                // 字典
+                // 字典写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAuthority(Permissions.DICT_CREATE)
 
                 .requestMatchers("/api/v1/**").authenticated()
@@ -120,7 +136,7 @@ public class SecurityConfig {
         configuration.setAllowedOrigins(origins.isEmpty() ? List.of("http://localhost:5173") : origins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
-        configuration.setExposedHeaders(List.of("Authorization"));
+        configuration.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;

@@ -203,6 +203,9 @@ onBeforeRouteUpdate((to) => {
             <n-descriptions-item label="价格带">
               {{ rsku.priceBand }}
             </n-descriptions-item>
+            <n-descriptions-item label="材质编码">
+              {{ rsku.materialCode || '-' }}
+            </n-descriptions-item>
             <n-descriptions-item label="材质说明">
               {{ rsku.materialDescription || '-' }}
             </n-descriptions-item>

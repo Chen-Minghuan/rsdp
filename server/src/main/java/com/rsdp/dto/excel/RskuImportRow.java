@@ -26,6 +26,9 @@ public class RskuImportRow {
     @ExcelProperty("工厂SKU")
     private String factorySku;
 
+    @ExcelProperty("材质编码")
+    private String materialCode;
+
     @ExcelProperty("材质说明")
     private String materialDescription;
 

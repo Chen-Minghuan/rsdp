@@ -22,6 +22,8 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SchemeItemMapper;
 import com.rsdp.mapper.SchemeMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -35,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,8 +68,16 @@ class SchemeServiceTest {
     @Mock
     private QuoteService quoteService;
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private SchemeService schemeService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+    }
 
     @Test
     void createScheme_shouldSaveAndComputeSummary() {

@@ -150,6 +150,7 @@ public class RskuService {
         rsku.setFactoryPrice(request.getFactoryPrice());
         rsku.setPriceBand(resolvePriceBand(request.getFactoryPrice()));
         rsku.setProductLevel(productLevel);
+        rsku.setMaterialCode(request.getMaterialCode());
         rsku.setMaterialDescription(request.getMaterialDescription());
         rsku.setLeadTimeDays(request.getLeadTimeDays());
         rsku.setMoq(request.getMoq());
@@ -272,6 +273,7 @@ public class RskuService {
         copy.setFactoryPrice(source.getFactoryPrice());
         copy.setPriceBand(source.getPriceBand());
         copy.setProductLevel(source.getProductLevel());
+        copy.setMaterialCode(source.getMaterialCode());
         copy.setMaterialDescription(source.getMaterialDescription());
         copy.setLeadTimeDays(source.getLeadTimeDays());
         copy.setMoq(source.getMoq());
@@ -334,6 +336,7 @@ public class RskuService {
         response.setFactoryPrice(rsku.getFactoryPrice());
         response.setPriceBand(rsku.getPriceBand());
         response.setProductLevel(rsku.getProductLevel());
+        response.setMaterialCode(rsku.getMaterialCode());
         response.setMaterialDescription(rsku.getMaterialDescription());
         response.setLeadTimeDays(rsku.getLeadTimeDays());
         response.setMoq(rsku.getMoq());

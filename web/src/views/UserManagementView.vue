@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted, reactive, computed } from 'vue'
 import {
   NCard,
   NButton,
@@ -39,11 +39,18 @@ interface UserForm {
 const message = useMessage()
 const formRef = ref<InstanceType<typeof NForm> | null>(null)
 
-const rules = {
+const createRules = {
   username: { required: true, message: '请输入用户名', trigger: 'blur' },
   password: { required: true, message: '请输入密码', trigger: 'blur' },
   roleCode: { required: true, message: '请选择角色', trigger: 'change' }
 }
+
+const editRules = {
+  username: { required: true, message: '请输入用户名', trigger: 'blur' },
+  roleCode: { required: true, message: '请选择角色', trigger: 'change' }
+}
+
+const rules = computed(() => (editingUser.value ? editRules : createRules))
 
 const users = ref<User[]>([])
 const total = ref(0)
@@ -229,7 +236,7 @@ onMounted(loadUsers)
 
   <n-modal v-model:show="showModal" :title="editingUser ? '编辑用户' : '新增用户'">
     <n-card style="width: 420px;">
-      <n-form ref="formRef" :model="form" :rules="rules" label-placement="left" label-width="80">
+      <n-form ref="formRef" :model="form" :rules="rules" label-placement="left" label-width="80" :key="editingUser ? 'edit' : 'create'">
         <n-form-item label="用户名">
           <n-input v-model:value="form.username" :disabled="!!editingUser" placeholder="请输入用户名" />
         </n-form-item>

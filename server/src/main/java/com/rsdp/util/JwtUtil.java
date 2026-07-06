@@ -31,6 +31,7 @@ public class JwtUtil {
     private static final String CLAIM_NICKNAME = "nickname";
     private static final String CLAIM_ROLE = "role";
     private static final String CLAIM_PERMISSIONS = "permissions";
+    private static final String CLAIM_TOKEN_VERSION = "tokenVersion";
 
     private SecretKey getSigningKey() {
         if (secret == null || secret.isBlank()) {
@@ -43,14 +44,15 @@ public class JwtUtil {
     /**
      * 生成 JWT。
      *
-     * @param userId      用户 ID
-     * @param username    用户名
-     * @param nickname    昵称
-     * @param role        角色
-     * @param permissions 权限列表
+     * @param userId       用户 ID
+     * @param username     用户名
+     * @param nickname     昵称
+     * @param role         角色
+     * @param permissions  权限列表
+     * @param tokenVersion 用户 token 版本号
      * @return token
      */
-    public String generateToken(String userId, String username, String nickname, String role, List<String> permissions) {
+    public String generateToken(String userId, String username, String nickname, String role, List<String> permissions, int tokenVersion) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + expirationHours * 60 * 60 * 1000);
         return Jwts.builder()
@@ -59,6 +61,7 @@ public class JwtUtil {
             .claim(CLAIM_NICKNAME, nickname)
             .claim(CLAIM_ROLE, role)
             .claim(CLAIM_PERMISSIONS, permissions)
+            .claim(CLAIM_TOKEN_VERSION, tokenVersion)
             .issuedAt(now)
             .expiration(expiry)
             .signWith(getSigningKey())
@@ -94,6 +97,10 @@ public class JwtUtil {
 
     public String getRole(Claims claims) {
         return claims.get(CLAIM_ROLE, String.class);
+    }
+
+    public Integer getTokenVersion(Claims claims) {
+        return claims.get(CLAIM_TOKEN_VERSION, Integer.class);
     }
 
     @SuppressWarnings("unchecked")

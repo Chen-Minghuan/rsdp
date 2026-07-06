@@ -30,7 +30,7 @@ async function handleLogin() {
       username: form.value.username.trim(),
       password: form.value.password
     })
-    userStore.setAuth(result.token, {
+    userStore.setUserInfo({
       userId: result.userId,
       username: result.username,
       nickname: result.nickname,

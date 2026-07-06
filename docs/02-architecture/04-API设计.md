@@ -146,7 +146,7 @@ POST   /api/v1/products/{rspuId}/variants
 
 POST   /api/v1/products/{rspuId}/rsku
        # 为该 RSPU 新增工厂报价（已实现）
-       # Request: { factoryCode, variantId（必填）, factorySku?, factoryPrice, materialDescription?,
+       # Request: { factoryCode, variantId（必填）, factorySku?, factoryPrice, materialCode?, materialDescription?,
        #            leadTimeDays?, moq?, warrantyYears?, shippingFrom?, diffNotes?, quoteConfidence? }
        # Response: void
 

@@ -45,8 +45,10 @@ public class DataScopeContext {
             return DataScope.FACTORY_LIST;
         }
 
+        // DESIGNER 角色暂时按 ALL 只读处理；后续若需仅看自己创建的数据，
+        // 需在 rsku_supply 等表补充 created_by 字段并改为 SELF_CREATED
         if (roleCodes.contains("DESIGNER")) {
-            return DataScope.SELF_CREATED;
+            return DataScope.ALL;
         }
 
         return DataScope.PUBLIC_ONLY;

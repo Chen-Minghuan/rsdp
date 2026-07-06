@@ -58,7 +58,8 @@ public class AuthService {
         String role = getPrimaryRoleCode(user.getUserId());
         List<String> roles = userRoleService.getRoleCodesByUserId(user.getUserId());
         List<String> permissions = permissionService.getPermissionsByUserId(user.getUserId()).stream().toList();
-        String token = jwtUtil.generateToken(user.getUserId(), user.getUsername(), user.getNickname(), role, permissions);
+        int tokenVersion = user.getTokenVersion() == null ? 0 : user.getTokenVersion();
+        String token = jwtUtil.generateToken(user.getUserId(), user.getUsername(), user.getNickname(), role, permissions, tokenVersion);
         return new LoginResponse(
             token,
             "Bearer",

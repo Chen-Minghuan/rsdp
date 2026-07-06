@@ -9,6 +9,6 @@ echo "=== RSDP PostgreSQL 数据库备份 ==="
 
 mkdir -p "$BACKUP_DIR"
 
-pg_dump -h localhost -U "${POSTGRES_USER:-rsdp}" -d rsdp -Fc > "$BACKUP_FILE"
+docker exec rsdp-postgres pg_dump -U "${POSTGRES_USER:-rsdp}" -d rsdp -Fc > "$BACKUP_FILE"
 
 echo "备份完成：$BACKUP_FILE"

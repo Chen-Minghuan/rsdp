@@ -65,7 +65,7 @@ class AuthServiceTest {
         when(sysUserMapper.selectByUsername("admin")).thenReturn(user);
         when(userRoleService.getRoleCodesByUserId("USER-001")).thenReturn(List.of("ADMIN"));
         when(permissionService.getPermissionsByUserId("USER-001")).thenReturn(Set.of("admin:user:manage"));
-        when(jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN", List.of("admin:user:manage"))).thenReturn("jwt-token");
+        when(jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN", List.of("admin:user:manage"), 0)).thenReturn("jwt-token");
 
         LoginRequest request = new LoginRequest();
         request.setUsername("admin");

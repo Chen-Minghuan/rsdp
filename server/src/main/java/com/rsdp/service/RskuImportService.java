@@ -331,6 +331,9 @@ public class RskuImportService {
         if (StringUtils.hasText(row.getFactorySku()) && row.getFactorySku().length() > 64) {
             return "工厂SKU 长度不能超过 64";
         }
+        if (StringUtils.hasText(row.getMaterialCode()) && row.getMaterialCode().length() > 8) {
+            return "材质编码 长度不能超过 8";
+        }
         if (StringUtils.hasText(row.getMaterialDescription()) && row.getMaterialDescription().length() > 1000) {
             return "材质说明 长度不能超过 1000";
         }
@@ -392,6 +395,7 @@ public class RskuImportService {
         row.setFactoryCode(trim(row.getFactoryCode()));
         row.setVariantId(trim(row.getVariantId()));
         row.setFactorySku(trim(row.getFactorySku()));
+        row.setMaterialCode(trim(row.getMaterialCode()));
         row.setMaterialDescription(trim(row.getMaterialDescription()));
         row.setShippingFrom(trim(row.getShippingFrom()));
         row.setDiffNotes(trim(row.getDiffNotes()));
@@ -457,6 +461,7 @@ public class RskuImportService {
         rsku.setFactoryPrice(row.getFactoryPrice());
         rsku.setPriceBand(resolvePriceBand(row.getFactoryPrice()));
         rsku.setProductLevel(productLevel);
+        rsku.setMaterialCode(trim(row.getMaterialCode()));
         rsku.setMaterialDescription(trim(row.getMaterialDescription()));
         rsku.setLeadTimeDays(row.getLeadTimeDays());
         rsku.setMoq(row.getMoq());
@@ -477,6 +482,7 @@ public class RskuImportService {
         existing.setFactoryPrice(row.getFactoryPrice());
         existing.setPriceBand(resolvePriceBand(row.getFactoryPrice()));
         existing.setProductLevel(productLevel);
+        existing.setMaterialCode(trim(row.getMaterialCode()));
         existing.setMaterialDescription(trim(row.getMaterialDescription()));
         existing.setLeadTimeDays(row.getLeadTimeDays());
         existing.setMoq(row.getMoq());
@@ -533,6 +539,7 @@ public class RskuImportService {
         copy.setFactoryPrice(source.getFactoryPrice());
         copy.setPriceBand(source.getPriceBand());
         copy.setProductLevel(source.getProductLevel());
+        copy.setMaterialCode(source.getMaterialCode());
         copy.setMaterialDescription(source.getMaterialDescription());
         copy.setLeadTimeDays(source.getLeadTimeDays());
         copy.setMoq(source.getMoq());

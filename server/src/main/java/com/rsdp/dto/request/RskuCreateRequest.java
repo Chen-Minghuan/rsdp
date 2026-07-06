@@ -24,6 +24,7 @@ public class RskuCreateRequest {
     @NotNull(message = "出厂价不能为空")
     private BigDecimal factoryPrice;
 
+    private String materialCode;
     private String materialDescription;
     private Integer leadTimeDays;
     private Integer moq;

@@ -14,6 +14,7 @@ import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -39,6 +40,7 @@ public class QuoteService {
     private final FactoryMasterMapper factoryMasterMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final FactoryService factoryService;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 根据 RSKU ID 及数量列表生成报价单。
@@ -91,6 +93,15 @@ public class QuoteService {
         if (!invalidRskuIds.isEmpty()) {
             throw new BusinessException(
                 "以下 RSKU 已失效或不存在，请重新选择产品：" + String.join(", ", invalidRskuIds));
+        }
+
+        // 数据权限校验：当前用户必须能访问每个 RSKU 的工厂
+        List<String> deniedRskuIds = rskus.stream()
+            .filter(rsku -> !dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode()))
+            .map(RskuSupply::getRskuId)
+            .toList();
+        if (!deniedRskuIds.isEmpty()) {
+            throw new BusinessException("无权访问以下 RSKU 的工厂数据：" + String.join(", ", deniedRskuIds));
         }
 
         // 批量查询 RSPU、工厂、主图

@@ -11,6 +11,7 @@ export interface Rsku {
   factorySku?: string
   factoryPrice: number
   priceBand: string
+  materialCode?: string
   materialDescription?: string
   leadTimeDays?: number
   moq?: number
@@ -33,6 +34,7 @@ export interface RskuCreateRequest {
   variantId: string
   factorySku?: string
   factoryPrice: number
+  materialCode?: string
   materialDescription?: string
   leadTimeDays?: number
   moq?: number

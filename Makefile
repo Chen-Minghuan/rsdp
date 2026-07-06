@@ -11,11 +11,11 @@ infra: ## 启动基础设施（PostgreSQL + Ollama + ChromaDB + Redis + MinIO）
 	docker compose -f deploy/docker-compose.yml up -d postgres ollama chromadb redis minio
 
 init-db: ## 初始化 PostgreSQL 数据库（需先启动 postgres）
-	@PGPASSWORD=$(POSTGRES_PASSWORD) psql -h localhost -U $(POSTGRES_USER) -d rsdp -f database/init_db.sql
+	@docker exec -i rsdp-postgres psql -U $(POSTGRES_USER) -d rsdp -f /docker-entrypoint-initdb.d/01-init.sql
 	@echo "数据库初始化完成"
 
 seed: ## 导入 PostgreSQL 种子数据
-	@PGPASSWORD=$(POSTGRES_PASSWORD) psql -h localhost -U $(POSTGRES_USER) -d rsdp -f database/seed_data.sql
+	@docker exec -i rsdp-postgres psql -U $(POSTGRES_USER) -d rsdp -f /docker-entrypoint-initdb.d/02-seed.sql
 	@echo "种子数据导入完成"
 
 dev: ## 本地开发：启动基础设施 + 数据库

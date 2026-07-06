@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     factory_price TEXT,                            -- 出厂价（AES-256-GCM 加密存储，Base64 密文）
     price_band VARCHAR(16),                        -- low/mid/high
     product_level VARCHAR(8),                      -- 产品等级，继承自 RSPU/变体
+    material_code VARCHAR(8),                      -- 材质版本码
     material_description TEXT,                     -- 工厂提供的详细材质说明
     lead_time_days INTEGER,                        -- 交期
     moq INTEGER,                                   -- 最小起订量
@@ -526,6 +527,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
     password_hash VARCHAR(255) NOT NULL,
     nickname VARCHAR(64),
     status VARCHAR(16) DEFAULT 'active',
+    token_version INT DEFAULT 0,
     last_login_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP
@@ -577,7 +579,7 @@ CREATE TABLE IF NOT EXISTS sys_user_role (
 CREATE TABLE IF NOT EXISTS sys_user_factory (
     id BIGSERIAL PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL,
-    factory_code VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (user_id, factory_code),
     FOREIGN KEY (user_id) REFERENCES sys_user(user_id),

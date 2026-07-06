@@ -50,7 +50,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // 校验用户是否存在且未被禁用
                 SysUser user = sysUserMapper.selectByUsername(username);
                 if (user == null || !"active".equals(user.getStatus())) {
-                    filterChain.doFilter(request, response);
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    return;
+                }
+
+                // 校验 token 版本号，防止角色/权限变更后旧 token 继续生效
+                Integer tokenVersion = jwtUtil.getTokenVersion(claims);
+                Integer currentVersion = user.getTokenVersion();
+                if (tokenVersion == null || !tokenVersion.equals(currentVersion == null ? 0 : currentVersion)) {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     return;
                 }
 

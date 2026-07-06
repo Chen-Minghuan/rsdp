@@ -22,7 +22,7 @@ class JwtUtilTest {
 
     @Test
     void generateAndParseToken_shouldWork() {
-        String token = jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN", List.of("user:read", "user:create"));
+        String token = jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN", List.of("user:read", "user:create"), 3);
         assertThat(token).isNotBlank();
 
         Claims claims = jwtUtil.parseToken(token);
@@ -32,6 +32,7 @@ class JwtUtilTest {
         assertThat(jwtUtil.getNickname(claims)).isEqualTo("管理员");
         assertThat(jwtUtil.getRole(claims)).isEqualTo("ADMIN");
         assertThat(jwtUtil.getPermissions(claims)).containsExactly("user:read", "user:create");
+        assertThat(jwtUtil.getTokenVersion(claims)).isEqualTo(3);
     }
 
     @Test

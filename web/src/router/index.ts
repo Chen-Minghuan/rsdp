@@ -111,8 +111,18 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
+
+  const requiresAuth = to.meta.requiresAuth === true
+  const requiresRoleCheck = to.meta.roles && Array.isArray(to.meta.roles)
+  const requiresPermissionCheck = to.meta.permissions && Array.isArray(to.meta.permissions)
+
+  // 任何非公开页面都需要先确认登录状态
+  if (requiresAuth || requiresRoleCheck || requiresPermissionCheck) {
+    await userStore.fetchUserInfo()
+  }
+
   const isLoggedIn = userStore.isLoggedIn
 
   if (to.path === '/login' && isLoggedIn) {
@@ -125,14 +135,14 @@ router.beforeEach((to, _from, next) => {
     return
   }
 
-  if (isLoggedIn && to.meta.roles && Array.isArray(to.meta.roles)) {
+  if (requiresRoleCheck) {
     if (!userStore.hasAnyRole(to.meta.roles as string[])) {
       next('/')
       return
     }
   }
 
-  if (isLoggedIn && to.meta.permissions && Array.isArray(to.meta.permissions)) {
+  if (requiresPermissionCheck) {
     if (!userStore.hasAnyPermission(to.meta.permissions as string[])) {
       next('/')
       return

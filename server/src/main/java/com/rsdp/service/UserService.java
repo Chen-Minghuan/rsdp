@@ -11,6 +11,8 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.SysRoleMapper;
 import com.rsdp.mapper.SysUserMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -111,6 +113,21 @@ public class UserService {
             throw new BusinessException("角色不存在: " + request.getRoleCode());
         }
 
+        // 禁止修改当前登录用户自己的角色
+        String currentUserId = getCurrentUserId();
+        if (userId.equals(currentUserId)) {
+            List<String> existingRoleCodes = userRoleService.getRoleCodesByUserId(userId);
+            String existingRoleCode = existingRoleCodes.isEmpty() ? null : existingRoleCodes.get(0);
+            if (!request.getRoleCode().equals(existingRoleCode)) {
+                throw new BusinessException("不能修改当前登录用户自己的角色");
+            }
+        }
+
+        // 角色变更时递增 token_version，使旧 token 失效
+        List<String> existingRoleCodes = userRoleService.getRoleCodesByUserId(userId);
+        String existingRoleCode = existingRoleCodes.isEmpty() ? null : existingRoleCodes.get(0);
+        boolean roleChanged = !request.getRoleCode().equals(existingRoleCode);
+
         if (request.getNickname() != null) {
             user.setNickname(request.getNickname());
         }
@@ -119,6 +136,10 @@ public class UserService {
 
         userRoleService.assignRole(userId, role.getRoleId());
         userFactoryService.resetFactories(userId, request.getFactoryCodes());
+
+        if (roleChanged) {
+            incrementTokenVersion(userId);
+        }
 
         return toResponse(user);
     }
@@ -138,6 +159,7 @@ public class UserService {
         user.setPasswordHash(passwordEncoder.encode(newPassword));
         user.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.updateById(user);
+        incrementTokenVersion(userId);
     }
 
     /**
@@ -153,10 +175,54 @@ public class UserService {
         if (user == null) {
             throw new BusinessException("用户不存在");
         }
+
+        // 禁止禁用当前登录用户自己
+        if ("disabled".equals(status) && userId.equals(getCurrentUserId())) {
+            throw new BusinessException("不能禁用当前登录用户");
+        }
+
         user.setStatus(status);
         user.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.updateById(user);
+
+        // 禁用用户时使旧 token 失效
+        if ("disabled".equals(status)) {
+            incrementTokenVersion(userId);
+        }
+
         return toResponse(user);
+    }
+
+    /**
+     * 递增用户 token 版本号，使已签发的 JWT 失效。
+     *
+     * @param userId 用户 ID
+     */
+    private void incrementTokenVersion(String userId) {
+        SysUser user = sysUserMapper.selectById(userId);
+        if (user == null) {
+            return;
+        }
+        Integer version = user.getTokenVersion();
+        user.setTokenVersion(version == null ? 1 : version + 1);
+        user.setUpdatedAt(LocalDateTime.now());
+        sysUserMapper.updateById(user);
+    }
+
+    /**
+     * 获取当前登录用户 ID。
+     *
+     * @return 当前用户 ID；未登录返回 null
+     */
+    private String getCurrentUserId() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated() || "anonymousUser".equals(authentication.getPrincipal())) {
+            return null;
+        }
+        Object principal = authentication.getPrincipal();
+        String username = principal.toString();
+        SysUser user = sysUserMapper.selectByUsername(username);
+        return user == null ? null : user.getUserId();
     }
 
     private UserResponse toResponse(SysUser user) {

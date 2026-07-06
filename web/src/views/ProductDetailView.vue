@@ -58,6 +58,7 @@ const rskuForm = ref<RskuCreateRequest>({
   variantId: '',
   factorySku: '',
   factoryPrice: 0,
+  materialCode: '',
   materialDescription: '',
   leadTimeDays: undefined,
   moq: undefined,
@@ -158,6 +159,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
   { title: '出厂价', key: 'factoryPrice', width: 120 },
   { title: '价格带', key: 'priceBand', width: 100 },
   { title: '产品等级', key: 'productLevel', width: 100 },
+  { title: '材质编码', key: 'materialCode', width: 100 },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 },
   {
@@ -515,6 +517,7 @@ function openRskuModal() {
     variantId: '',
     factorySku: '',
     factoryPrice: 0,
+    materialCode: '',
     materialDescription: '',
     leadTimeDays: undefined,
     moq: undefined,
@@ -990,6 +993,9 @@ onBeforeRouteUpdate((to, from) => {
         </n-form-item>
         <n-form-item label="出厂价" required>
           <n-input-number v-model:value="rskuForm.factoryPrice" :min="0" placeholder="出厂价" />
+        </n-form-item>
+        <n-form-item label="材质编码">
+          <n-input v-model:value="rskuForm.materialCode" placeholder="材质编码" />
         </n-form-item>
         <n-form-item label="材质说明">
           <n-input v-model:value="rskuForm.materialDescription" placeholder="材质说明" />

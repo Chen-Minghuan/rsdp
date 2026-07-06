@@ -3,15 +3,14 @@ import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpac
 import { onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-import { getCurrentUser } from '@/api/auth'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 
-function handleUserAction(key: string) {
+async function handleUserAction(key: string) {
   if (key === 'logout') {
-    userStore.clearAuth()
+    await userStore.logout()
     router.push('/login')
   }
 }
@@ -21,18 +20,11 @@ function navigate(path: string) {
 }
 
 onMounted(async () => {
-  if (userStore.token && !userStore.userInfo) {
+  if (!userStore.userInfo) {
     try {
-      const user = await getCurrentUser()
-      userStore.setAuth(userStore.token, {
-        userId: user.userId,
-        username: user.username,
-        nickname: user.nickname,
-        roles: user.roles || [user.role || 'USER'],
-        permissions: user.permissions || []
-      })
+      await userStore.fetchUserInfo()
     } catch {
-      userStore.clearAuth()
+      userStore.clearUserInfo()
     }
   }
 })

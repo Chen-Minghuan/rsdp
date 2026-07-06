@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.QuoteItemRequest;
@@ -54,6 +55,7 @@ public class SchemeService {
     private final FactoryMasterMapper factoryMasterMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final QuoteService quoteService;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 创建搭配方案。
@@ -318,6 +320,11 @@ public class SchemeService {
 
         List<String> rspuIds = items.stream().map(SchemeItem::getRspuId).distinct().toList();
         List<String> rskuIds = items.stream().map(SchemeItem::getRskuId).distinct().toList();
+        // 数据权限过滤：只返回当前用户可见工厂的项
+        items = items.stream()
+            .filter(item -> dataScopeHelper.canAccessRskuFactory(item.getFactoryCode()))
+            .collect(Collectors.toList());
+
         List<String> factoryCodes = items.stream()
             .map(SchemeItem::getFactoryCode)
             .filter(StringUtils::hasText)
@@ -381,7 +388,12 @@ public class SchemeService {
             new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId)
         );
 
-        List<QuoteItemRequest> quoteItems = items.stream()
+        // 数据权限过滤：无权限的 RSKU 不进入报价单
+        List<SchemeItem> accessibleItems = items.stream()
+            .filter(item -> dataScopeHelper.canAccessRskuFactory(item.getFactoryCode()))
+            .collect(Collectors.toList());
+
+        List<QuoteItemRequest> quoteItems = accessibleItems.stream()
             .map(item -> {
                 QuoteItemRequest req = new QuoteItemRequest();
                 req.setRskuId(item.getRskuId());
@@ -396,7 +408,7 @@ public class SchemeService {
         QuoteResponse quote = quoteService.generateQuote(quoteItems);
 
         // 快照模式：对比方案保存时的价格与当前最新价格
-        List<PriceChangeResponse> priceChanges = items.stream()
+        List<PriceChangeResponse> priceChanges = accessibleItems.stream()
             .map(item -> {
                 RskuSupply currentRsku = rskuSupplyMapper.selectById(item.getRskuId());
                 if (currentRsku == null) {

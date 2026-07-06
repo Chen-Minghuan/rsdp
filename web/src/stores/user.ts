@@ -1,5 +1,7 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
+import { apiClient } from '@/api/client'
+import type { ApiResult } from '@/api/client'
 
 export interface UserInfo {
   userId: string
@@ -9,14 +11,20 @@ export interface UserInfo {
   permissions: string[]
 }
 
-const TOKEN_KEY = 'rsdp:token'
-const USER_KEY = 'rsdp:user'
+interface AuthMeResponse {
+  userId: string
+  username: string
+  nickname: string
+  role: string
+  roles: string[]
+  permissions: string[]
+}
 
 export const useUserStore = defineStore('user', () => {
-  const token = ref<string | null>(localStorage.getItem(TOKEN_KEY))
-  const userInfo = ref<UserInfo | null>(loadUserInfo())
+  const userInfo = ref<UserInfo | null>(null)
+  const loading = ref(false)
 
-  const isLoggedIn = computed(() => !!token.value)
+  const isLoggedIn = computed(() => !!userInfo.value)
   const displayName = computed(() => userInfo.value?.nickname || userInfo.value?.username || '')
   const roles = computed(() => userInfo.value?.roles || [])
   const permissions = computed(() => userInfo.value?.permissions || [])
@@ -38,23 +46,66 @@ export const useUserStore = defineStore('user', () => {
     return perms.some((p) => permissions.value.includes(p))
   }
 
-  function setAuth(newToken: string, info: UserInfo) {
-    token.value = newToken
+  function setUserInfo(info: UserInfo) {
     userInfo.value = info
-    localStorage.setItem(TOKEN_KEY, newToken)
-    localStorage.setItem(USER_KEY, JSON.stringify(info))
   }
 
-  function clearAuth() {
-    token.value = null
+  function clearUserInfo() {
     userInfo.value = null
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(USER_KEY)
+  }
+
+  /**
+   * 从后端 /auth/me 拉取当前登录用户信息（含角色/权限）。
+   * 结果仅保存在内存中。
+   */
+  async function fetchUserInfo(): Promise<UserInfo | null> {
+    if (loading.value) {
+      return new Promise((resolve) => {
+        const stop = watch(loading, (v) => {
+          if (!v) {
+            stop()
+            resolve(userInfo.value)
+          }
+        })
+      })
+    }
+    loading.value = true
+    try {
+      const { data: result } = await apiClient.get<ApiResult<AuthMeResponse>>('/v1/auth/me')
+      const data = result.data
+      const info: UserInfo = {
+        userId: data.userId,
+        username: data.username,
+        nickname: data.nickname,
+        roles: normalizeRoles(data.roles, data.role),
+        permissions: data.permissions || []
+      }
+      userInfo.value = info
+      return info
+    } catch {
+      userInfo.value = null
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * 调用后端登出接口并清空内存中的用户信息。
+   */
+  async function logout(): Promise<void> {
+    try {
+      await apiClient.post<ApiResult<void>>('/v1/auth/logout')
+    } catch {
+      // 即使后端登出失败，也清空前端状态
+    } finally {
+      userInfo.value = null
+    }
   }
 
   return {
-    token,
     userInfo,
+    loading,
     isLoggedIn,
     displayName,
     roleCode,
@@ -64,27 +115,15 @@ export const useUserStore = defineStore('user', () => {
     hasAnyRole,
     hasPermission,
     hasAnyPermission,
-    setAuth,
-    clearAuth
+    setUserInfo,
+    clearUserInfo,
+    fetchUserInfo,
+    logout
   }
 })
 
-function loadUserInfo(): UserInfo | null {
-  const raw = localStorage.getItem(USER_KEY)
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw) as UserInfo & { role?: string }
-    if (parsed.role && !parsed.roles) {
-      parsed.roles = [parsed.role]
-    }
-    if (!parsed.roles) {
-      parsed.roles = []
-    }
-    if (!parsed.permissions) {
-      parsed.permissions = []
-    }
-    return parsed
-  } catch {
-    return null
-  }
+function normalizeRoles(roles: string[] | undefined | null, role: string | undefined | null): string[] {
+  if (roles && roles.length > 0) return roles
+  if (role) return [role]
+  return []
 }
