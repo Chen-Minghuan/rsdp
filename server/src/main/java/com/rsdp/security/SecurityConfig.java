@@ -61,26 +61,50 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/dicts/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/tasks/*").authenticated()
-                // 敏感读接口：按最小权限显式授权（必须放在对应通配规则之前）
+
+                // 导入模板：按最小权限显式授权（必须放在对应通配规则之前）
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)
                 .requestMatchers(HttpMethod.GET, "/api/v1/rsku/import-template").hasAuthority(Permissions.RSKU_IMPORT)
 
-                .requestMatchers(HttpMethod.GET, "/api/v1/products").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/v1/products/*").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/v1/products/*/relations").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/v1/products/*/variants").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/v1/factories").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/v1/factories/*").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/v1/factories/*/rsku").hasAuthority(Permissions.RSKU_READ)
+                // RSKU 读接口：必须放在产品/工厂读通配规则之前
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/rsku/*").hasAuthority(Permissions.RSKU_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/factories/*/rsku").hasAuthority(Permissions.RSKU_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/rsku/*/price-history").hasAuthority(Permissions.RSKU_READ)
-                .requestMatchers(HttpMethod.GET, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_READ)
-                .requestMatchers(HttpMethod.GET, "/api/v1/schemes/*").hasAuthority(Permissions.SCHEME_READ)
 
-                // 产品写接口
+                // 产品读接口
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_READ)
+
+                // 工厂读接口
+                .requestMatchers(HttpMethod.GET, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_READ)
+
+                // 方案读接口
+                .requestMatchers(HttpMethod.GET, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_READ)
+
+                // 检索/推荐接口
+                .requestMatchers(HttpMethod.POST, "/api/v1/matching/**").hasAuthority(Permissions.PRODUCT_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/retrieval/**").hasAuthority(Permissions.PRODUCT_READ)
+
+                // 产品录入与批量导入
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)
+
+                // RSKU 写接口：必须放在产品写通配规则之前
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/rsku/**").hasAuthority(Permissions.RSKU_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAuthority(Permissions.RSKU_DELETE)
+                .requestMatchers("/api/v1/rsku/import").hasAuthority(Permissions.RSKU_IMPORT)
+
+                // 产品关系与变体
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/relations").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/relations/*").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/products/*/relations/*").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/variants").hasAuthority(Permissions.PRODUCT_UPDATE)
+
+                // 产品复核
+                .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/review").hasAuthority(Permissions.PRODUCT_REVIEW)
+
+                // 产品更新/删除
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_DELETE)
 
@@ -89,14 +113,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_DELETE)
 
-                // RSKU 写接口
-                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_CREATE)
-                .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/rsku/**").hasAuthority(Permissions.RSKU_UPDATE)
-                .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAuthority(Permissions.RSKU_DELETE)
-                .requestMatchers("/api/v1/rsku/import").hasAuthority(Permissions.RSKU_IMPORT)
-
                 // 报价单
-                .requestMatchers(HttpMethod.POST, "/api/v1/quotes/**").hasAuthority(Permissions.QUOTE_GENERATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/quotes/generate").hasAuthority(Permissions.QUOTE_GENERATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/quotes/export").hasAuthority(Permissions.QUOTE_EXPORT)
+                .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/quote").hasAuthority(Permissions.QUOTE_GENERATE)
 
                 // 搭配方案写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_CREATE)

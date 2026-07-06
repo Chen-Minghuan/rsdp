@@ -1,0 +1,50 @@
+// 角色常量
+export const ROLES = {
+  ADMIN: 'ADMIN',
+  EDITOR: 'EDITOR',
+  VIEWER: 'VIEWER',
+  USER: 'USER',
+  FACTORY_SALES: 'FACTORY_SALES',
+  DESIGNER: 'DESIGNER'
+} as const
+
+// 权限常量（与后端 Permissions.java 保持一致）
+export const PERMISSIONS = {
+  PRODUCT_READ: 'product:read',
+  PRODUCT_CREATE: 'product:create',
+  PRODUCT_UPDATE: 'product:update',
+  PRODUCT_DELETE: 'product:delete',
+  PRODUCT_REVIEW: 'product:review',
+  PRODUCT_IMPORT: 'product:import',
+
+  FACTORY_READ: 'factory:read',
+  FACTORY_CREATE: 'factory:create',
+  FACTORY_UPDATE: 'factory:update',
+  FACTORY_DELETE: 'factory:delete',
+
+  RSKU_READ: 'rsku:read',
+  RSKU_CREATE: 'rsku:create',
+  RSKU_UPDATE: 'rsku:update',
+  RSKU_DELETE: 'rsku:delete',
+  RSKU_IMPORT: 'rsku:import',
+
+  QUOTE_READ: 'quote:read',
+  QUOTE_GENERATE: 'quote:generate',
+  QUOTE_EXPORT: 'quote:export',
+
+  SCHEME_READ: 'scheme:read',
+  SCHEME_CREATE: 'scheme:create',
+  SCHEME_UPDATE: 'scheme:update',
+  SCHEME_DELETE: 'scheme:delete',
+
+  DICT_CREATE: 'dict:create',
+
+  USER_READ: 'user:read',
+  USER_CREATE: 'user:create',
+  USER_UPDATE: 'user:update',
+  USER_DELETE: 'user:delete',
+  USER_RESET_PASSWORD: 'user:reset-password',
+
+  ADMIN_ASYNC_METRICS: 'admin:async-metrics',
+  ADMIN_VECTOR_BACKFILL: 'admin:vector-backfill'
+} as const

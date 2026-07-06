@@ -20,14 +20,18 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
-# 读取 .env 文件中的变量
+# 读取 .env 文件中的变量（兼容 Windows CRLF）
 set -a
 # shellcheck source=/dev/null
-source "$ENV_FILE"
+source <(sed 's/\r$//' "$ENV_FILE")
 set +a
 
 # 本地开发使用 http，必须关闭 Cookie 的 Secure 属性，否则浏览器不会发送 Cookie
 export RSDP_JWT_COOKIE_SECURE=false
+
+# 让本地后端使用与 Docker Postgres 相同的账号密码
+export DB_USERNAME="${POSTGRES_USER:-rsdp}"
+export DB_PASSWORD="${POSTGRES_PASSWORD:-rsdp}"
 
 # 校验关键敏感变量
 REQUIRED_VARS=("RSDP_ENCRYPTION_KEY" "RSDP_JWT_SECRET")

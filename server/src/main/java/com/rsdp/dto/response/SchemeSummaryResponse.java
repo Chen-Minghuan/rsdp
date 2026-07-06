@@ -15,5 +15,6 @@ public class SchemeSummaryResponse {
     private String schemeName;
     private Integer itemCount;
     private BigDecimal totalPrice;
+    private String createdBy;
     private LocalDateTime createdAt;
 }

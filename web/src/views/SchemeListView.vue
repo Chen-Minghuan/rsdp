@@ -14,9 +14,20 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { listSchemes, deleteScheme } from '@/api/scheme'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { SchemeSummary } from '@/types/scheme'
 
 const router = useRouter()
+const userStore = useUserStore()
+
+const isAdmin = computed(() => userStore.hasRole(ROLES.ADMIN))
+const currentUsername = computed(() => userStore.userInfo?.username || '')
+const canCreateScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_CREATE))
+const canUpdateScheme = (row: SchemeSummary) =>
+  userStore.hasPermission(PERMISSIONS.SCHEME_UPDATE) && (isAdmin.value || row.createdBy === currentUsername.value)
+const canDeleteScheme = (row: SchemeSummary) =>
+  userStore.hasPermission(PERMISSIONS.SCHEME_DELETE) && (isAdmin.value || row.createdBy === currentUsername.value)
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -79,19 +90,23 @@ const columns: DataTableColumns<SchemeSummary> = [
               { size: 'small', onClick: () => router.push(`/schemes/${row.schemeId}`) },
               { default: () => '详情' }
             ),
-            h(
-              NButton,
-              { size: 'small', onClick: () => router.push(`/quotes/build?editSchemeId=${row.schemeId}`) },
-              { default: () => '编辑' }
-            ),
-            h(
-              NPopconfirm,
-              { onPositiveClick: () => handleDelete(row.schemeId) },
-              {
-                trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
-                default: () => '确定删除该方案吗？'
-              }
-            )
+            canUpdateScheme(row)
+              ? h(
+                  NButton,
+                  { size: 'small', onClick: () => router.push(`/quotes/build?editSchemeId=${row.schemeId}`) },
+                  { default: () => '编辑' }
+                )
+              : null,
+            canDeleteScheme(row)
+              ? h(
+                  NPopconfirm,
+                  { onPositiveClick: () => handleDelete(row.schemeId) },
+                  {
+                    trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
+                    default: () => '确定删除该方案吗？'
+                  }
+                )
+              : null
           ]
         }
       )
@@ -132,7 +147,7 @@ onMounted(() => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回产品库</n-button>
-          <n-button type="primary" @click="router.push('/quotes/build')">新建搭配方案</n-button>
+          <n-button v-if="canCreateScheme" type="primary" @click="router.push('/quotes/build')">新建搭配方案</n-button>
         </n-space>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">

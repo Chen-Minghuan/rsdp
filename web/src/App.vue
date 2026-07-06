@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown } from 'naive-ui'
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 
 const router = useRouter()
 const route = useRoute()
@@ -28,6 +29,12 @@ onMounted(async () => {
     }
   }
 })
+
+const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_CREATE))
+const canReadProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_READ))
+const canReadFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_READ))
+const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
+const canReadScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_READ))
 </script>
 
 <template>
@@ -46,49 +53,56 @@ onMounted(async () => {
               首页
             </n-button>
             <n-button
+              v-if="canCreateProduct"
               :type="route.path === '/entry' ? 'primary' : 'default'"
               @click="navigate('/entry')"
             >
               新品录入
             </n-button>
             <n-button
+              v-if="canReadProduct"
               :type="route.path.startsWith('/products') ? 'primary' : 'default'"
               @click="navigate('/products')"
             >
               产品库
             </n-button>
             <n-button
+              v-if="canReadFactory"
               :type="route.path === '/factories' ? 'primary' : 'default'"
               @click="navigate('/factories')"
             >
               工厂管理
             </n-button>
             <n-button
+              v-if="canGenerateQuote"
               :type="route.path === '/quotes/build' ? 'primary' : 'default'"
               @click="navigate('/quotes/build')"
             >
               报价单生成器
             </n-button>
             <n-button
+              v-if="canReadScheme"
               :type="route.path.startsWith('/schemes') ? 'primary' : 'default'"
               @click="navigate('/schemes')"
             >
               搭配方案
             </n-button>
             <n-button
+              v-if="canReadProduct"
               :type="route.path.startsWith('/matching') ? 'primary' : 'default'"
               @click="navigate('/matching/room-scheme')"
             >
               AI 搭配方案
             </n-button>
             <n-button
+              v-if="canReadProduct"
               :type="route.path === '/visual-search' ? 'primary' : 'default'"
               @click="navigate('/visual-search')"
             >
               以图搜图
             </n-button>
             <n-button
-              v-if="userStore.hasRole('ADMIN')"
+              v-if="userStore.hasRole(ROLES.ADMIN)"
               :type="route.path === '/admin/users' ? 'primary' : 'default'"
               @click="navigate('/admin/users')"
             >

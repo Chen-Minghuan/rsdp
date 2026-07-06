@@ -7,7 +7,10 @@ help: ## 显示可用命令
 	@echo "RSDP 可用命令："
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-infra: ## 启动基础设施（PostgreSQL + Ollama + ChromaDB + Redis + MinIO），不含后端/前端
+infra: ## 启动基础设施（PostgreSQL + ChromaDB + Redis + MinIO），不含后端/前端/AI
+	docker compose -f deploy/docker-compose.yml up -d postgres chromadb redis minio
+
+infra-ai: ## 启动包含 Ollama 的基础设施（需要 NVIDIA GPU）
 	docker compose -f deploy/docker-compose.yml up -d postgres ollama chromadb redis minio
 
 init-db: ## 初始化 PostgreSQL 数据库（需先启动 postgres）
@@ -18,10 +21,13 @@ seed: ## 导入 PostgreSQL 种子数据
 	@docker exec -i rsdp-postgres psql -U $(POSTGRES_USER) -d rsdp -f /docker-entrypoint-initdb.d/02-seed.sql
 	@echo "种子数据导入完成"
 
-dev: ## 本地开发：启动基础设施 + 数据库
+dev: ## 本地开发：启动基础设施 + 数据库（默认不含 Ollama）
 	make infra
 	@echo "等待 PostgreSQL 就绪..."
-	@sleep 5
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		docker exec rsdp-postgres pg_isready -U $(POSTGRES_USER) -d rsdp >/dev/null 2>&1 && break; \
+		sleep 1; \
+	done
 	make init-db
 	make seed
 
@@ -33,7 +39,7 @@ build: ## 构建前后端
 	cd web && pnpm install && pnpm build
 
 backend: ## 启动后端（需先启动 infra）
-	cd server && mvn spring-boot:run -Dspring-boot.run.jvmArguments="--spring.profiles.active=dev"
+	cd server && mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 frontend: ## 启动前端开发服务器
 	cd web && pnpm install && pnpm dev

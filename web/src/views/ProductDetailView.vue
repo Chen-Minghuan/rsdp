@@ -29,6 +29,8 @@ import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
 import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuCreateRequest } from '@/types/rsku'
@@ -39,7 +41,15 @@ import type { RspuRelationCreateRequest } from '@/types/relation'
 const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
+const userStore = useUserStore()
 const rspuId = ref(route.params.rspuId as string)
+
+const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
+const canReviewProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_REVIEW))
+const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_UPDATE))
+const canCreateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_CREATE))
+const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
+const canCreateDict = computed(() => userStore.hasPermission(PERMISSIONS.DICT_CREATE))
 
 const loading = ref(false)
 const reviewing = ref(false)
@@ -180,11 +190,13 @@ const rskuColumns: DataTableColumns<Rsku> = [
     key: 'actions',
     width: 100,
     render(row: Rsku) {
-      return h(
-        NButton,
-        { size: 'small', type: 'error', onClick: (e: MouseEvent) => { e.stopPropagation(); handleDeleteRsku(row.rskuId) } },
-        { default: () => '删除' }
-      )
+      return canDeleteRsku.value
+        ? h(
+            NButton,
+            { size: 'small', type: 'error', onClick: (e: MouseEvent) => { e.stopPropagation(); handleDeleteRsku(row.rskuId) } },
+            { default: () => '删除' }
+          )
+        : null
     }
   }
 ]
@@ -211,6 +223,7 @@ const variantColumns = [
 ]
 
 function createRelationColumns(showDelete: boolean) {
+  const effectiveShowDelete = showDelete && canUpdateProduct.value
   const columns: DataTableColumns<RelatedProduct> = [
     {
       title: '图片',
@@ -260,7 +273,7 @@ function createRelationColumns(showDelete: boolean) {
       }
     }
   ]
-  if (showDelete) {
+  if (effectiveShowDelete) {
     columns.push({
       title: '操作',
       key: 'actions',
@@ -749,7 +762,7 @@ onBeforeRouteUpdate((to, from) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回列表</n-button>
-          <n-button size="small" type="error" @click="handleDeleteProduct">
+          <n-button v-if="canDeleteProduct" size="small" type="error" @click="handleDeleteProduct">
             删除产品
           </n-button>
         </n-space>
@@ -838,7 +851,7 @@ onBeforeRouteUpdate((to, from) => {
           <n-card title="官方搭配" size="small">
             <n-space vertical>
               <n-space>
-                <n-button type="primary" @click="openRelationModal">添加搭配</n-button>
+                <n-button v-if="canUpdateProduct" type="primary" @click="openRelationModal">添加搭配</n-button>
               </n-space>
               <n-data-table
                 :columns="createRelationColumns(true)"
@@ -877,9 +890,10 @@ onBeforeRouteUpdate((to, from) => {
           </n-card>
 
           <n-card size="small">
-            <n-card title="复核操作" size="small">
+            <n-card v-if="canReviewProduct || canUpdateProduct" title="管理操作" size="small">
               <n-space>
                 <n-button
+                  v-if="canReviewProduct"
                   type="success"
                   :loading="reviewing"
                   :disabled="detail.rspu.reviewStatus === '已确认'"
@@ -888,6 +902,7 @@ onBeforeRouteUpdate((to, from) => {
                   确认通过
                 </n-button>
                 <n-button
+                  v-if="canReviewProduct"
                   type="error"
                   :loading="reviewing"
                   :disabled="detail.rspu.reviewStatus === '存疑'"
@@ -895,7 +910,7 @@ onBeforeRouteUpdate((to, from) => {
                 >
                   标记存疑
                 </n-button>
-                <n-button @click="openEditModal">
+                <n-button v-if="canUpdateProduct" @click="openEditModal">
                   编辑元数据
                 </n-button>
               </n-space>
@@ -904,7 +919,7 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="变体管理" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button type="primary" @click="openVariantModal">新增变体</n-button>
+                  <n-button v-if="canUpdateProduct" type="primary" @click="openVariantModal">新增变体</n-button>
                 </n-space>
                 <n-data-table
                   :columns="variantColumns"
@@ -925,7 +940,7 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="工厂报价（RSKU）" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button type="primary" @click="openRskuModal">新增报价</n-button>
+                  <n-button v-if="canCreateRsku" type="primary" @click="openRskuModal">新增报价</n-button>
                 </n-space>
                 <n-data-table
                   :columns="rskuColumns"
@@ -1131,7 +1146,7 @@ onBeforeRouteUpdate((to, from) => {
               filterable
               style="width: 420px;"
             />
-            <n-button type="primary" ghost size="small" @click="openDictCreateModal('material')">
+            <n-button v-if="canCreateDict" type="primary" ghost size="small" @click="openDictCreateModal('material')">
               + 新增材质
             </n-button>
           </n-space>
@@ -1146,7 +1161,7 @@ onBeforeRouteUpdate((to, from) => {
               filterable
               style="width: 420px;"
             />
-            <n-button type="primary" ghost size="small" @click="openDictCreateModal('scene')">
+            <n-button v-if="canCreateDict" type="primary" ghost size="small" @click="openDictCreateModal('scene')">
               + 新增场景
             </n-button>
           </n-space>

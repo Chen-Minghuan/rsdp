@@ -23,12 +23,16 @@ import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SchemeItemMapper;
 import com.rsdp.mapper.SchemeMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -77,6 +81,14 @@ class SchemeServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+        var user = User.withUsername("testuser").password("").authorities("ROLE_DESIGNER", "scheme:read", "scheme:create", "scheme:update", "scheme:delete").build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     @Test
@@ -214,6 +226,7 @@ class SchemeServiceTest {
         Scheme scheme = new Scheme();
         scheme.setSchemeId("SCHEME-001");
         scheme.setStatus("active");
+        scheme.setCreatedBy("testuser");
 
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
 
@@ -230,6 +243,7 @@ class SchemeServiceTest {
         existingScheme.setSchemeId("SCHEME-001");
         existingScheme.setSchemeName("旧方案");
         existingScheme.setStatus("active");
+        existingScheme.setCreatedBy("testuser");
 
         SchemeItemRequest itemRequest = new SchemeItemRequest();
         itemRequest.setRspuId("RSPU-001");

@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
+import com.rsdp.common.ReviewStatus;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
@@ -90,6 +91,10 @@ public class ProductQueryService {
         if (StringUtils.hasText(request.getReviewStatus())) {
             wrapper.eq("review_status", request.getReviewStatus());
         }
+        // 非管理员默认只展示已审核通过的产品
+        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+            wrapper.eq("review_status", ReviewStatus.APPROVED.getDbValue());
+        }
         if (StringUtils.hasText(request.getProductLevel())) {
             wrapper.eq("product_level", request.getProductLevel());
         }
@@ -138,6 +143,10 @@ public class ProductQueryService {
     public ProductDetailResponse getProductDetail(String rspuId) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null || rspu.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+        if (!SecurityOperatorContext.isCurrentUserAdmin()
+            && !ReviewStatus.APPROVED.getDbValue().equals(rspu.getReviewStatus())) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 

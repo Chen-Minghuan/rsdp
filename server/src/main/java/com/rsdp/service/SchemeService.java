@@ -136,7 +136,7 @@ public class SchemeService {
         }
 
         // 同一创建人下不允许存在同名活动方案
-        assertSchemeNameUnique(request.getSchemeName().trim(), null);
+        assertSchemeNameUnique(request.getSchemeName().trim(), SecurityOperatorContext.currentUsername(), null);
 
         // 先写入主表，再写入子表，避免外键约束异常
         Scheme scheme = new Scheme();
@@ -179,6 +179,7 @@ public class SchemeService {
         if (scheme == null || scheme.getDeletedAt() != null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
+        assertSchemeOwnerOrAdmin(scheme);
 
         // 按 rskuId 去重并聚合数量，保留第一次出现的顺序
         Map<String, SchemeItemRequest> uniqueItemMap = new java.util.LinkedHashMap<>();
@@ -241,7 +242,7 @@ public class SchemeService {
         }
 
         // 同一创建人下不允许存在同名活动方案（排除当前方案自身）
-        assertSchemeNameUnique(request.getSchemeName().trim(), schemeId);
+        assertSchemeNameUnique(request.getSchemeName().trim(), scheme.getCreatedBy(), schemeId);
 
         // 物理删除旧子项
         schemeItemMapper.delete(
@@ -263,17 +264,27 @@ public class SchemeService {
         return getSchemeDetail(schemeId);
     }
 
-    private void assertSchemeNameUnique(String schemeName, String excludeSchemeId) {
+    private void assertSchemeNameUnique(String schemeName, String owner, String excludeSchemeId) {
         QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
             .eq("scheme_name", schemeName)
             .eq("status", "active")
-            .eq("created_by", SecurityOperatorContext.currentUsername());
+            .eq("created_by", owner);
         if (excludeSchemeId != null) {
             wrapper.ne("scheme_id", excludeSchemeId);
         }
         Long count = schemeMapper.selectCount(wrapper);
         if (count != null && count > 0) {
             throw new BusinessException("已存在同名方案：" + schemeName);
+        }
+    }
+
+    private void assertSchemeOwnerOrAdmin(Scheme scheme) {
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            return;
+        }
+        String currentUser = SecurityOperatorContext.currentUsername();
+        if (scheme.getCreatedBy() == null || !scheme.getCreatedBy().equals(currentUser)) {
+            throw new BusinessException("无权操作该方案");
         }
     }
 
@@ -295,6 +306,7 @@ public class SchemeService {
             summary.setSchemeName(s.getSchemeName());
             summary.setItemCount(s.getItemCount());
             summary.setTotalPrice(s.getTotalPrice());
+            summary.setCreatedBy(s.getCreatedBy());
             summary.setCreatedAt(s.getCreatedAt());
             return summary;
         }).collect(Collectors.toList());
@@ -366,6 +378,7 @@ public class SchemeService {
         if (scheme == null || scheme.getDeletedAt() != null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
+        assertSchemeOwnerOrAdmin(scheme);
         scheme.setStatus("deleted");
         scheme.setDeletedAt(LocalDateTime.now());
         scheme.setUpdatedAt(LocalDateTime.now());

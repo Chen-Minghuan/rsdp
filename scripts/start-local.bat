@@ -35,6 +35,18 @@ for /f "usebackq tokens=1,* delims==" %%a in ("%ENV_FILE%") do (
 rem 本地开发使用 http，必须关闭 Cookie 的 Secure 属性
 set RSDP_JWT_COOKIE_SECURE=false
 
+rem 让本地后端使用与 Docker Postgres 相同的账号密码
+if defined POSTGRES_USER (
+    set DB_USERNAME=%POSTGRES_USER%
+) else (
+    set DB_USERNAME=rsdp
+)
+if defined POSTGRES_PASSWORD (
+    set DB_PASSWORD=%POSTGRES_PASSWORD%
+) else (
+    set DB_PASSWORD=rsdp
+)
+
 rem 校验关键敏感变量
 call :validate_secret RSDP_ENCRYPTION_KEY
 if %ERRORLEVEL% neq 0 exit /b 1

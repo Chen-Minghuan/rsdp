@@ -18,13 +18,18 @@ import {
 } from 'naive-ui'
 import { getFactory, listRskuByFactory, updateFactoryLevel, updateCapableLevels } from '@/api/factory'
 import { listDicts } from '@/api/dict'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { Factory } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 import type { DictItem } from '@/types/dict'
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 const factoryCode = computed(() => route.params.factoryCode as string)
+
+const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_UPDATE))
 
 const loading = ref(false)
 const rskuLoading = ref(false)
@@ -243,7 +248,7 @@ onBeforeRouteUpdate((to) => {
             </n-descriptions-item>
           </n-descriptions>
 
-          <n-space>
+          <n-space v-if="canUpdateFactory">
             <n-button type="primary" @click="openLevelModal">变更主等级</n-button>
             <n-button @click="openCapableModal">编辑兼做等级</n-button>
           </n-space>

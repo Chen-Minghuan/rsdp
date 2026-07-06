@@ -18,10 +18,17 @@ import {
 } from 'naive-ui'
 import { listFactories, createFactory } from '@/api/factory'
 import { listDicts } from '@/api/dict'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { Factory, FactoryCreateRequest } from '@/types/factory'
 import type { DictItem } from '@/types/dict'
 
 const router = useRouter()
+const userStore = useUserStore()
+
+const canCreateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_CREATE))
+const canImportRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_IMPORT))
+const showManagementCard = computed(() => canCreateFactory.value || canImportRsku.value)
 
 const factories = ref<Factory[]>([])
 const loading = ref(false)
@@ -153,7 +160,7 @@ onMounted(() => {
   <n-space vertical style="padding: 24px;">
     <n-card title="工厂管理">
       <n-space vertical>
-        <n-card title="新增工厂" size="small">
+        <n-card v-if="showManagementCard" title="新增工厂" size="small">
           <n-form :model="form" label-placement="left" label-width="80">
             <n-grid :cols="3" :x-gap="16">
               <n-grid-item>
@@ -216,10 +223,10 @@ onMounted(() => {
           </n-form>
 
           <n-space>
-            <n-button type="primary" :loading="submitting" @click="handleSubmit">
+            <n-button v-if="canCreateFactory" type="primary" :loading="submitting" @click="handleSubmit">
               创建工厂
             </n-button>
-            <n-button @click="router.push('/rsku/import')">
+            <n-button v-if="canImportRsku" @click="router.push('/rsku/import')">
               批量导入 RSKU 报价
             </n-button>
           </n-space>
