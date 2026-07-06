@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.ImageAssets;
@@ -41,6 +43,7 @@ public class ProductService {
     private final ImageUploadValidator imageUploadValidator;
     private final StorageService storageService;
     private final AuditLogService auditLogService;
+    private final DictService dictService;
     private final ObjectMapper objectMapper;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
@@ -77,6 +80,7 @@ public class ProductService {
         String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
         String effectiveCategoryCode = (categoryCode == null || categoryCode.isBlank()) ? "FS" : categoryCode.trim().toUpperCase();
+        validateCategoryCode(effectiveCategoryCode);
 
         // 创建 RSPU 草稿
         RspuMaster rspu = new RspuMaster();
@@ -89,7 +93,7 @@ public class ProductService {
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
-        auditLogService.logCreate("rspu_master", rspuId, rspu, "admin");
+        auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
         List<String> imageIds = new ArrayList<>();
         String primaryImageId = null;
@@ -111,10 +115,10 @@ public class ProductService {
             imageAsset.setAiProcessed(false);
             imageAsset.setFileSize(image.getSize());
             imageAsset.setFormat(getExtension(image.getOriginalFilename()));
-            imageAsset.setUploadedBy("admin");
+            imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);
-            auditLogService.logCreate("image_assets", imageId, imageAsset, "admin");
+            auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
 
             imageIds.add(imageId);
             if (isPrimary) {
@@ -163,6 +167,14 @@ public class ProductService {
             });
         } else {
             asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+        }
+    }
+
+    private void validateCategoryCode(String categoryCode) {
+        boolean exists = dictService.listByType("category").stream()
+            .anyMatch(d -> categoryCode.equals(d.getDictCode()));
+        if (!exists) {
+            throw new BusinessException("品类不存在: " + categoryCode);
         }
     }
 

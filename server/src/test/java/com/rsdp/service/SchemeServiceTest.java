@@ -6,6 +6,7 @@ import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
 import com.rsdp.dto.response.QuoteResponse;
+import com.rsdp.dto.response.SchemeItemResponse;
 import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.ImageAssets;
@@ -21,11 +22,17 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SchemeItemMapper;
 import com.rsdp.mapper.SchemeMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -34,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,8 +72,24 @@ class SchemeServiceTest {
     @Mock
     private QuoteService quoteService;
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private SchemeService schemeService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+        var user = User.withUsername("testuser").password("").authorities("ROLE_DESIGNER", "scheme:read", "scheme:create", "scheme:update", "scheme:delete").build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
+    }
 
     @Test
     void createScheme_shouldSaveAndComputeSummary() {
@@ -103,6 +127,7 @@ class SchemeServiceTest {
         savedItem.setQuantity(2);
 
         when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
         when(schemeMapper.selectById(any())).thenReturn(new Scheme());
         when(schemeMapper.selectCount(any())).thenReturn(0L);
@@ -183,8 +208,9 @@ class SchemeServiceTest {
 
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
-        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
-        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+        when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of(factory));
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
@@ -200,6 +226,7 @@ class SchemeServiceTest {
         Scheme scheme = new Scheme();
         scheme.setSchemeId("SCHEME-001");
         scheme.setStatus("active");
+        scheme.setCreatedBy("testuser");
 
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
 
@@ -216,6 +243,7 @@ class SchemeServiceTest {
         existingScheme.setSchemeId("SCHEME-001");
         existingScheme.setSchemeName("旧方案");
         existingScheme.setStatus("active");
+        existingScheme.setCreatedBy("testuser");
 
         SchemeItemRequest itemRequest = new SchemeItemRequest();
         itemRequest.setRspuId("RSPU-001");
@@ -250,8 +278,9 @@ class SchemeServiceTest {
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(existingScheme);
         when(rskuSupplyMapper.selectById("RSKU-002")).thenReturn(rsku);
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
-        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
-        when(factoryMasterMapper.selectById("F002")).thenReturn(factory);
+        when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of(factory));
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
         when(schemeMapper.selectCount(any())).thenReturn(0L);
 
@@ -340,6 +369,7 @@ class SchemeServiceTest {
         savedItem.setQuantity(5);
 
         when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
         when(schemeMapper.selectById(any())).thenReturn(new Scheme());
         when(schemeMapper.selectCount(any())).thenReturn(0L);
@@ -347,9 +377,12 @@ class SchemeServiceTest {
         SchemeResponse response = schemeService.createScheme(request);
 
         assertThat(response.getItems()).hasSize(1);
-        assertThat(response.getItems().get(0).getQuantity()).isEqualTo(5);
-        assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
-        assertThat(response.getItems().get(0).getFactorySku()).isEqualTo("FACTORY-SKU-001");
+        SchemeItemResponse itemResponse = response.getItems().get(0);
+        assertThat(itemResponse.getQuantity()).isEqualTo(5);
+        assertThat(itemResponse.getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
+        assertThat(itemResponse.getRskuId()).isEqualTo("RSKU-001");
+        assertThat(itemResponse.getFactoryCode()).isEqualTo("F001");
+        assertThat(itemResponse.getFactorySku()).isEqualTo("FACTORY-SKU-001");
     }
 
     private QuoteItemRequest req(String rskuId, int quantity) {

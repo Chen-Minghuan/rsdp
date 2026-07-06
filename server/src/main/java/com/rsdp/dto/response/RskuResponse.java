@@ -23,6 +23,7 @@ public class RskuResponse {
     private BigDecimal factoryPrice;
     private String priceBand;
     private String productLevel;
+    private String materialCode;
     private String materialDescription;
     private Integer leadTimeDays;
     private Integer moq;

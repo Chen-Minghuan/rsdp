@@ -29,6 +29,7 @@ import java.util.Arrays;
 public class CacheConfig {
 
     public static final String CACHE_NAME_DICTS = "dicts";
+    public static final String CACHE_NAME_USER_PERMISSIONS = "userPermissions";
     public static final String CACHE_NAME_STYLE_FORMULA = "styleFormula";
 
     /**
@@ -54,7 +55,7 @@ public class CacheConfig {
     @ConditionalOnProperty(prefix = "spring.data.redis", name = "enabled", havingValue = "false")
     public CacheManager concurrentMapCacheManager() {
         log.info("Redis 缓存已禁用，回退到 ConcurrentMapCacheManager");
-        return new ConcurrentMapCacheManager(CACHE_NAME_DICTS, CACHE_NAME_STYLE_FORMULA);
+        return new ConcurrentMapCacheManager(CACHE_NAME_DICTS, CACHE_NAME_USER_PERMISSIONS, CACHE_NAME_STYLE_FORMULA);
     }
 
     /**

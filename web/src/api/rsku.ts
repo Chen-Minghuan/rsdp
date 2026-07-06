@@ -50,9 +50,25 @@ export async function deleteRsku(rskuId: string): Promise<void> {
 
 /**
  * 下载 RSKU 报价导入模板。
+ *
+ * @param filename 保存文件名
  */
-export function downloadRskuImportTemplate(): string {
-  return '/api/v1/rsku/import-template'
+export async function downloadRskuImportTemplate(filename = 'RSKU导入模板.xlsx'): Promise<void> {
+  const response = await apiClient.get('/v1/rsku/import-template', {
+    responseType: 'blob'
+  })
+  triggerDownload(response.data as Blob, filename)
+}
+
+function triggerDownload(blob: Blob, filename: string): void {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
 }
 
 /**

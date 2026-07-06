@@ -30,4 +30,19 @@ public interface RskuSupplyMapper extends BaseMapper<RskuSupply> {
         }
         return insertBatch(rskus);
     }
+
+    /**
+     * 查询指定 RSPU 列表中工厂具备对应产品等级能力的 RSKU。
+     *
+     * <p>过滤条件：</p>
+     * <ul>
+     *   <li>RSKU 未软删除</li>
+     *   <li>关联工厂未软删除</li>
+     *   <li>product_level 为空，或工厂能力表包含该等级</li>
+     * </ul>
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return 具备能力的 RSKU 列表
+     */
+    List<RskuSupply> selectCapableByRspuIds(@Param("rspuIds") List<String> rspuIds);
 }

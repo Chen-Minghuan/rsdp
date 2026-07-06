@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.rsdp.mapper.ProductCollectionItemMapper">
+
+    <select id="selectByCollectionId" resultType="com.rsdp.entity.ProductCollectionItem">
+        SELECT
+            id,
+            collection_id AS collectionId,
+            rspu_id AS rspuId,
+            sort_order AS sortOrder,
+            created_at AS createdAt
+        FROM product_collection_item
+        WHERE collection_id = #{collectionId}
+        ORDER BY sort_order ASC, id ASC
+    </select>
+
+    <insert id="insertBatch">
+        INSERT INTO product_collection_item (
+            collection_id,
+            rspu_id,
+            sort_order,
+            created_at
+        ) VALUES
+        <foreach collection="list" item="item" separator=",">
+            (
+                #{item.collectionId},
+                #{item.rspuId},
+                #{item.sortOrder},
+                #{item.createdAt}
+            )
+        </foreach>
+    </insert>
+
+    <delete id="deleteByCollectionId">
+        DELETE FROM product_collection_item
+        WHERE collection_id = #{collectionId}
+    </delete>
+
+</mapper>

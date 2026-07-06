@@ -11,6 +11,7 @@ import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
@@ -20,8 +21,13 @@ import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.dto.response.RspuRelationResponse;
 import com.rsdp.event.RspuDeletedEvent;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -44,6 +50,18 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 class ProductQueryServiceTest {
+
+    @BeforeEach
+    void setSecurityContext() {
+        var user = User.withUsername("admin").password("").roles("ADMIN").build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
 
     @Mock
     private RspuMapper rspuMapper;
@@ -91,6 +109,30 @@ class ProductQueryServiceTest {
         c.setDictCode("C");
         c.setDictName("C级");
         return List.of(s, c);
+    }
+
+    private List<com.rsdp.entity.CategoryDict> styleDicts() {
+        com.rsdp.entity.CategoryDict mc = new com.rsdp.entity.CategoryDict();
+        mc.setDictType("style");
+        mc.setDictCode("MC");
+        mc.setDictName("现代简约");
+        return List.of(mc);
+    }
+
+    private List<com.rsdp.entity.CategoryDict> sceneDicts() {
+        com.rsdp.entity.CategoryDict living = new com.rsdp.entity.CategoryDict();
+        living.setDictType("scene");
+        living.setDictCode("LIVING");
+        living.setDictName("客厅");
+        return List.of(living);
+    }
+
+    private List<com.rsdp.entity.CategoryDict> materialDicts() {
+        com.rsdp.entity.CategoryDict wo = new com.rsdp.entity.CategoryDict();
+        wo.setDictType("material");
+        wo.setDictCode("WO");
+        wo.setDictName("实木");
+        return List.of(wo);
     }
 
     @Test
@@ -274,6 +316,9 @@ class ProductQueryServiceTest {
         rspu.setSceneTags("[]");
 
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(dictService.listByType("style")).thenReturn(styleDicts());
+        when(dictService.listByType("scene")).thenReturn(sceneDicts());
+        when(dictService.listByType("material")).thenReturn(materialDicts());
 
         ProductUpdateRequest request = new ProductUpdateRequest();
         request.setPositioningLabel("MC");
@@ -349,6 +394,59 @@ class ProductQueryServiceTest {
 
         assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-NOTEXIST", request))
             .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void updateProduct_shouldRejectInvalidPositioningLabel() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setPositioningLabel("MC");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(dictService.listByType("style")).thenReturn(styleDicts());
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setPositioningLabel("INVALID");
+
+        assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-TEST01", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("风格不存在");
+    }
+
+    @Test
+    void updateProduct_shouldRejectInvalidSceneTag() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setPositioningLabel("MC");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(dictService.listByType("scene")).thenReturn(sceneDicts());
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setSceneTags(List.of("INVALID"));
+
+        assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-TEST01", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("场景标签不存在");
+    }
+
+    @Test
+    void updateProduct_shouldNormalizeStyleCodeToUpperCase() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setPositioningLabel("OLD");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(dictService.listByType("style")).thenReturn(styleDicts());
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setPositioningLabel("mc");
+
+        productQueryService.updateProduct("RSPU-TEST01", request);
+
+        assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
+        verify(rspuStyleMapper).delete(any());
+        verify(rspuStyleMapper).insert(any(RspuStyle.class));
     }
 
     @Test

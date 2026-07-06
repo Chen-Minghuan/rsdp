@@ -7,9 +7,12 @@ import com.rsdp.dto.request.SimilarProductRequest;
 import com.rsdp.dto.response.SimilarProductResponse;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.common.ReviewStatus;
 import com.rsdp.exception.ExternalServiceException;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.mapper.RspuMapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.service.chroma.ChromaDbClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -73,6 +76,7 @@ public class RetrievalService {
         }
 
         List<SimilarProductResponse> candidates = aggregateByRspu(result, topK * 5);
+        candidates = filterByReviewStatus(candidates);
         candidates = rerank(candidates, request, queryLabels);
 
         return candidates.stream()
@@ -160,8 +164,10 @@ public class RetrievalService {
 
         // 批量查询图片 URL，避免 N+1
         List<String> imageIds = ids.stream().distinct().collect(Collectors.toList());
-        Map<String, String> imageUrlMap = imageAssetsMapper.selectBatchIds(imageIds).stream()
-            .collect(Collectors.toMap(ImageAssets::getImageId, ImageAssets::getStorageUrl, (a, b) -> a));
+        Map<String, String> imageUrlMap = imageIds.isEmpty()
+            ? Map.of()
+            : imageAssetsMapper.selectBatchIds(imageIds).stream()
+                .collect(Collectors.toMap(ImageAssets::getImageId, ImageAssets::getStorageUrl, (a, b) -> a));
 
         // 按 RSPU 聚合，取相似度最高的图片
         Map<String, SimilarProductResponse> bestByRspu = new LinkedHashMap<>();
@@ -195,16 +201,49 @@ public class RetrievalService {
             .collect(Collectors.toList());
     }
 
+    /**
+     * 按复核状态过滤候选产品。非管理员只能看到已审核通过的产品。
+     *
+     * @param candidates 候选产品列表
+     * @return 过滤后的列表
+     */
+    private List<SimilarProductResponse> filterByReviewStatus(List<SimilarProductResponse> candidates) {
+        if (SecurityOperatorContext.isCurrentUserAdmin() || candidates.isEmpty()) {
+            return candidates;
+        }
+        Set<String> rspuIds = candidates.stream()
+            .map(SimilarProductResponse::getRspuId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet());
+        if (rspuIds.isEmpty()) {
+            return candidates;
+        }
+        List<RspuMaster> approvedRspus = rspuMapper.selectList(
+            new QueryWrapper<RspuMaster>()
+                .in("rspu_id", rspuIds)
+                .eq("review_status", ReviewStatus.APPROVED.getDbValue())
+        );
+        Set<String> approvedIds = approvedRspus.stream()
+            .map(RspuMaster::getRspuId)
+            .collect(Collectors.toSet());
+        return candidates.stream()
+            .filter(c -> approvedIds.contains(c.getRspuId()))
+            .collect(Collectors.toList());
+    }
+
     private List<SimilarProductResponse> rerank(List<SimilarProductResponse> candidates,
                                                 SimilarProductRequest request,
                                                 AiLabels queryLabels) {
         // 批量查询 RSPU 元数据，避免 N+1
         List<String> rspuIds = candidates.stream()
             .map(SimilarProductResponse::getRspuId)
+            .filter(id -> id != null && !id.isBlank())
             .distinct()
             .collect(Collectors.toList());
-        Map<String, RspuMaster> rspuMap = rspuMapper.selectBatchIds(rspuIds).stream()
-            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+        Map<String, RspuMaster> rspuMap = rspuIds.isEmpty()
+            ? Map.of()
+            : rspuMapper.selectBatchIds(rspuIds).stream()
+                .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
 
         // 按向量分排序后做跨 RSPU 同款去重
         candidates = candidates.stream()

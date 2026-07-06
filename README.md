@@ -72,37 +72,54 @@
 - Docker Desktop（可选，用于 PostgreSQL / Ollama / ChromaDB / Redis / MinIO）
 - NVIDIA RTX 3060/4060 或更高（推荐，用于本地 AI 推理加速）
 
-### 方式一：Docker Compose 一键启动
+### 方式一：生产/全服务部署（Docker Compose）
+
+适合完整体验前后端 + Nginx + 所有基础设施。
 
 ```bash
-cd deploy
-docker compose up -d
+# 1. 复制并填写环境变量（所有 <CHANGE_ME> 必须替换）
+cp deploy/.env.example deploy/.env
+# 编辑 deploy/.env：DASHSCOPE_API_KEY、RSDP_JWT_SECRET、RSDP_ENCRYPTION_KEY、各密码等
+
+# 2. 全量启动（含 Nginx、后端、前端、PostgreSQL、ChromaDB、Redis、MinIO、Ollama）
+cd deploy && docker compose up -d
 ```
 
 首次启动时，PostgreSQL 会自动执行 `database/init_db.sql` 和 `database/seed_data.sql` 完成数据库初始化。
 
-访问：http://localhost
+访问：http://localhost（Nginx 会强转 HTTPS，若使用自签名证书请忽略浏览器安全警告）
+
+> **注意**：`docker-compose.yml` 中 Ollama 默认配置了 NVIDIA GPU。Windows 无 GPU 或不想使用本地 Ollama 时，请删除/注释 Ollama 服务的 `deploy.resources` 段，或改用下方的本地开发方式（MVP 默认使用 DashScope，可不启动 Ollama）。
 
 ### 方式二：本地开发（推荐）
 
-```bash
-# 1. 复制环境变量模板并配置 DASHSCOPE_API_KEY
-cp deploy/.env.example deploy/.env
+适合日常开发调试，前后端在宿主机运行，数据库等基础设施用 Docker。
 
-# 2. 启动基础设施 + 初始化数据库
+```bash
+# 1. 复制并填写环境变量
+cp deploy/.env.example deploy/.env
+# 编辑 deploy/.env：至少填写 DASHSCOPE_API_KEY、RSDP_JWT_SECRET、RSDP_ENCRYPTION_KEY、POSTGRES_PASSWORD
+
+# 2. 启动基础设施 + 初始化数据库（默认不含 Ollama）
 make dev
 
-# 3. 启动后端（必须指定 dev profile）
-cd server && mvn spring-boot:run -Dspring-boot.run.jvmArguments="--spring.profiles.active=dev"
+# 3. 一键启动前后端（任选其一）
+# 3a. 使用脚本（推荐，自动处理 Cookie Secure、DB 密码等本地细节）
+scripts/start-local.sh        # Git Bash / WSL / macOS / Linux
+scripts/start-local.bat       # Windows CMD
 
-# 4. 启动前端
+# 3b. 手动启动
+# 后端
+cd server && mvn spring-boot:run -Dspring-boot.run.profiles=dev
+# 前端
 cd web && pnpm install && pnpm dev
 ```
 
 访问：http://localhost:5173
 
-> 若使用本地 Ollama，请进入容器拉取模型：
+> 若切换到本地 Ollama，先启动 AI 基础设施：
 > ```bash
+> make infra-ai
 > docker exec -it rsdp-ollama ollama pull qwen2.5-vl:7b
 > docker exec -it rsdp-ollama ollama pull nomic-embed-text
 > ```
@@ -112,10 +129,11 @@ cd web && pnpm install && pnpm dev
 | 命令 | 说明 |
 |:---|:---|
 | `make help` | 显示所有可用命令 |
-| `make infra` | 启动基础设施容器 |
+| `make infra` | 启动基础设施容器（PostgreSQL + ChromaDB + Redis + MinIO，不含 Ollama） |
+| `make infra-ai` | 启动包含 Ollama 的基础设施（需要 NVIDIA GPU） |
 | `make init-db` | 初始化数据库 |
 | `make seed` | 导入种子数据 |
-| `make dev` | 启动基础设施 + 初始化数据库 |
+| `make dev` | 启动基础设施 + 初始化数据库（默认不含 Ollama） |
 | `make backend` | 启动后端 |
 | `make frontend` | 启动前端开发服务器 |
 | `make test` | 运行全量测试 |

@@ -7,9 +7,10 @@ import type { ProductEntryResult } from '@/types/task'
  *
  * @param files 图片文件列表，第一张作为主图
  * @param categoryCode 品类码，如 FS/DT/CB
+ * @param signal 可选的 AbortSignal，用于取消请求
  * @returns 任务信息
  */
-export async function uploadProductImages(files: File[], categoryCode?: string): Promise<ProductEntryResult> {
+export async function uploadProductImages(files: File[], categoryCode?: string, signal?: AbortSignal): Promise<ProductEntryResult> {
   const formData = new FormData()
   files.forEach(file => formData.append('images', file))
   if (categoryCode) {
@@ -18,7 +19,8 @@ export async function uploadProductImages(files: File[], categoryCode?: string):
 
   const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult>>(
     '/v1/products/entry',
-    formData
+    formData,
+    { signal }
   )
   return result.data
 }
@@ -75,12 +77,26 @@ export async function deleteProduct(rspuId: string): Promise<void> {
 }
 
 /**
- * 下载产品批量导入模板文件 URL。
+ * 下载产品批量导入模板文件。
  *
- * @returns 可直接触发下载的 URL
+ * @param filename 保存文件名
  */
-export function downloadProductImportTemplate(): string {
-  return '/api/v1/products/import-template'
+export async function downloadProductImportTemplate(filename = '产品导入模板.xlsx'): Promise<void> {
+  const response = await apiClient.get('/v1/products/import-template', {
+    responseType: 'blob'
+  })
+  triggerDownload(response.data as Blob, filename)
+}
+
+function triggerDownload(blob: Blob, filename: string): void {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
 }
 
 /**

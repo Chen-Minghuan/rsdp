@@ -13,8 +13,14 @@ import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import com.rsdp.security.datascope.DataScopeHelper;
+import org.springframework.security.core.userdetails.User;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -27,6 +33,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.*;
 
 /**
@@ -34,6 +41,22 @@ import static org.mockito.Mockito.*;
  */
 @ExtendWith(MockitoExtension.class)
 class RskuServiceTest {
+
+    @BeforeEach
+    void setSecurityContext() {
+        var user = User.withUsername("admin").password("").roles("ADMIN").build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    @Mock
+    private DataScopeHelper dataScopeHelper;
 
     @Mock
     private RskuSupplyMapper rskuSupplyMapper;
@@ -91,6 +114,17 @@ class RskuServiceTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getRskuId()).isEqualTo("RSKU-TEST01");
         assertThat(result.get(0).getFactoryCapableLevels()).containsExactly("S", "A");
+    }
+
+    @Test
+    void listByRspu_shouldReturnEmptyListWhenNoRsku() {
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        List<RskuResponse> result = rskuService.listByRspu("RSPU-TEST01");
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(factoryMasterMapper);
+        verifyNoInteractions(factoryService);
     }
 
     @Test
@@ -315,7 +349,7 @@ class RskuServiceTest {
 
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
 
-        rskuService.updateRskuPrice("RSKU-TEST01", new BigDecimal("1500"), "原材料涨价");
+        rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", new BigDecimal("1500"), "原材料涨价");
 
         ArgumentCaptor<RskuSupply> rskuCaptor = ArgumentCaptor.forClass(RskuSupply.class);
         verify(rskuSupplyMapper).updateById(rskuCaptor.capture());
@@ -326,6 +360,21 @@ class RskuServiceTest {
         assertThat(historyCaptor.getValue().getOldPrice()).isEqualTo(new BigDecimal("1200"));
         assertThat(historyCaptor.getValue().getNewPrice()).isEqualTo(new BigDecimal("1500"));
         assertThat(historyCaptor.getValue().getChangeReason()).isEqualTo("原材料涨价");
+    }
+
+    @Test
+    void updateRskuPrice_shouldThrowWhenRspuIdMismatch() {
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setRspuId("RSPU-OTHER");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("1200"));
+
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+
+        assertThatThrownBy(() -> rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", new BigDecimal("1500"), "原材料涨价"))
+            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class)
+            .hasMessageContaining("RSKU 不属于该产品");
     }
 
     @Test

@@ -12,11 +12,11 @@ sleep 5
 
 # 初始化数据库
 echo "初始化 PostgreSQL 数据库..."
-psql -h localhost -U "${POSTGRES_USER:-rsdp}" -d rsdp -f database/init_db.sql
+docker exec -i rsdp-postgres psql -U "${POSTGRES_USER:-rsdp}" -d rsdp -f /docker-entrypoint-initdb.d/01-init.sql
 
 # 导入种子数据
 echo "导入种子数据..."
-psql -h localhost -U "${POSTGRES_USER:-rsdp}" -d rsdp -f database/seed_data.sql
+docker exec -i rsdp-postgres psql -U "${POSTGRES_USER:-rsdp}" -d rsdp -f /docker-entrypoint-initdb.d/02-seed.sql
 
 echo "=== 环境搭建完成 ==="
 echo "请确认已设置 DASHSCOPE_API_KEY 环境变量（如使用 DashScope）。"

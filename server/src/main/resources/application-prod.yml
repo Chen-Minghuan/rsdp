@@ -35,6 +35,7 @@ rsdp:
     collection: rsdp_products
     timeout-seconds: 10
     max-retries: 2
+    auth-token: ${CHROMADB_AUTH_TOKEN:${CHROMA_AUTH_CREDENTIALS:}}
   encryption:
     key: ${RSDP_ENCRYPTION_KEY}
   migration:
@@ -46,6 +47,10 @@ rsdp:
     max-pool-size: 16
     queue-capacity: 200
     thread-name-prefix: rsdp-async-
+    rejected-policy: abort
+  jwt:
+    secret: ${RSDP_JWT_SECRET}
+    expiration-hours: 24
   import:
     # 产品批量导入时允许下载图片的 host 白名单，逗号分隔；留空表示仅允许公网地址
     allowed-image-hosts: ${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:}

@@ -61,8 +61,12 @@ async function handleImport() {
   }
 }
 
-function handleDownloadTemplate() {
-  window.open(downloadRskuImportTemplate(), '_blank')
+async function handleDownloadTemplate() {
+  try {
+    await downloadRskuImportTemplate()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '下载模板失败'
+  }
 }
 </script>
 

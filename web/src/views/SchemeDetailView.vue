@@ -16,12 +16,25 @@ import {
 } from 'naive-ui'
 import { getSchemeDetail, generateQuoteFromScheme } from '@/api/scheme'
 import { exportQuote } from '@/api/quote'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { Scheme, SchemeItem } from '@/types/scheme'
 import type { PriceChange, QuoteItem, QuoteResponse } from '@/types/quote'
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 const schemeId = route.params.schemeId as string
+
+const isAdmin = computed(() => userStore.hasRole(ROLES.ADMIN))
+const currentUsername = computed(() => userStore.userInfo?.username || '')
+const canEditScheme = computed(() => {
+  if (!userStore.hasPermission(PERMISSIONS.SCHEME_UPDATE)) return false
+  if (isAdmin.value) return true
+  return scheme.value != null && scheme.value.createdBy === currentUsername.value
+})
+const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
+const canExportQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_EXPORT))
 
 const loading = ref(false)
 const generating = ref(false)
@@ -217,13 +230,13 @@ onMounted(() => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/schemes')">返回方案列表</n-button>
-          <n-button size="small" @click="router.push(`/quotes/build?editSchemeId=${schemeId}`)">
+          <n-button v-if="canEditScheme" size="small" @click="router.push(`/quotes/build?editSchemeId=${schemeId}`)">
             编辑方案
           </n-button>
-          <n-button type="primary" :loading="generating" @click="handleGenerateQuote">
+          <n-button v-if="canGenerateQuote" type="primary" :loading="generating" @click="handleGenerateQuote">
             生成报价单
           </n-button>
-          <n-button :loading="exporting" @click="handleExportQuote">
+          <n-button v-if="canExportQuote" :loading="exporting" @click="handleExportQuote">
             导出 Excel
           </n-button>
         </n-space>
@@ -253,6 +266,9 @@ onMounted(() => {
             </n-descriptions-item>
             <n-descriptions-item label="最大交期">
               {{ scheme.maxLeadTimeDays || '-' }} 天
+            </n-descriptions-item>
+            <n-descriptions-item label="创建人">
+              {{ scheme.createdBy || '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="创建时间">
               {{ scheme.createdAt }}

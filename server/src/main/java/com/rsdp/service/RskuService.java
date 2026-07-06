@@ -1,5 +1,8 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
+
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.response.RskuResponse;
@@ -43,6 +46,7 @@ public class RskuService {
     private final RspuVariantService rspuVariantService;
     private final PriceHistoryMapper priceHistoryMapper;
     private final AuditLogService auditLogService;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 查询某 RSPU 下的所有 RSKU 报价。
@@ -51,11 +55,11 @@ public class RskuService {
      * @return RSKU 报价列表
      */
     public List<RskuResponse> listByRspu(String rspuId) {
-        List<RskuSupply> list = rskuSupplyMapper.selectList(
-            new QueryWrapper<RskuSupply>()
-                .eq("rspu_id", rspuId)
-                .orderByDesc("created_at")
-        );
+        QueryWrapper<RskuSupply> wrapper = new QueryWrapper<RskuSupply>()
+            .eq("rspu_id", rspuId)
+            .orderByDesc("created_at");
+        dataScopeHelper.applyRskuScope(wrapper);
+        List<RskuSupply> list = rskuSupplyMapper.selectList(wrapper);
         return toResponses(list);
     }
 
@@ -74,6 +78,9 @@ public class RskuService {
         if (!rspuId.equals(rsku.getRspuId())) {
             throw new ResourceNotFoundException("RSKU 不属于该产品: " + rskuId);
         }
+        if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
         return toResponses(List.of(rsku)).get(0);
     }
 
@@ -84,6 +91,9 @@ public class RskuService {
      * @return RSKU 报价列表
      */
     public List<RskuResponse> listByFactory(String factoryCode) {
+        if (!dataScopeHelper.canAccessRskuFactory(factoryCode)) {
+            return List.of();
+        }
         List<RskuSupply> list = rskuSupplyMapper.selectList(
             new QueryWrapper<RskuSupply>()
                 .eq("factory_code", factoryCode)
@@ -107,6 +117,9 @@ public class RskuService {
         FactoryMaster factory = factoryMasterMapper.selectById(request.getFactoryCode());
         if (factory == null || factory.getDeletedAt() != null) {
             throw new ResourceNotFoundException("工厂不存在: " + request.getFactoryCode());
+        }
+        if (!dataScopeHelper.canAccessRskuFactory(request.getFactoryCode())) {
+            throw new BusinessException("无权为该工厂录入报价: " + request.getFactoryCode());
         }
 
         RspuVariant variant = rspuVariantService.findById(request.getVariantId());
@@ -137,6 +150,7 @@ public class RskuService {
         rsku.setFactoryPrice(request.getFactoryPrice());
         rsku.setPriceBand(resolvePriceBand(request.getFactoryPrice()));
         rsku.setProductLevel(productLevel);
+        rsku.setMaterialCode(request.getMaterialCode());
         rsku.setMaterialDescription(request.getMaterialDescription());
         rsku.setLeadTimeDays(request.getLeadTimeDays());
         rsku.setMoq(request.getMoq());
@@ -155,7 +169,7 @@ public class RskuService {
             throw new BusinessException("该工厂对该变体已有报价");
         }
 
-        auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, "admin");
+        auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
     }
 
     private String resolveProductLevel(RskuCreateRequest request, RspuMaster rspu, RspuVariant variant) {
@@ -190,26 +204,38 @@ public class RskuService {
         if (rsku == null || rsku.getDeletedAt() != null) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
+        if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
 
         RskuSupply oldSnapshot = snapshot(rsku);
         rsku.setDeletedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
         rskuSupplyMapper.updateById(rsku);
 
-        auditLogService.logDelete("rsku_supply", rskuId, oldSnapshot, "admin");
+        auditLogService.logDelete("rsku_supply", rskuId, oldSnapshot, SecurityOperatorContext.currentUsername());
     }
 
     /**
      * 更新 RSKU 出厂价，并记录价格历史。
      *
+     * @param rspuId      RSPU ID
      * @param rskuId      RSKU ID
      * @param newPrice    新价格
      * @param changeReason 变更原因
+     * @throws ResourceNotFoundException 当 RSKU 不存在或不属于该 RSPU 时
+     * @throws BusinessException         当价格非法时
      */
     @Transactional
-    public void updateRskuPrice(String rskuId, BigDecimal newPrice, String changeReason) {
+    public void updateRskuPrice(String rspuId, String rskuId, BigDecimal newPrice, String changeReason) {
         RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
         if (rsku == null || rsku.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
+        }
+        if (!rspuId.equals(rsku.getRspuId())) {
+            throw new ResourceNotFoundException("RSKU 不属于该产品: " + rskuId);
+        }
+        if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
         if (newPrice == null || newPrice.compareTo(java.math.BigDecimal.ZERO) < 0) {
@@ -229,12 +255,12 @@ public class RskuService {
         history.setRskuId(rskuId);
         history.setOldPrice(oldPrice);
         history.setNewPrice(newPrice);
-        history.setChangedBy("admin");
+        history.setChangedBy(SecurityOperatorContext.currentUsername());
         history.setChangeReason(changeReason);
         history.setCreatedAt(LocalDateTime.now());
         priceHistoryMapper.insert(history);
 
-        auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, rsku, "admin");
+        auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, rsku, SecurityOperatorContext.currentUsername());
     }
 
     private RskuSupply snapshot(RskuSupply source) {
@@ -247,6 +273,7 @@ public class RskuService {
         copy.setFactoryPrice(source.getFactoryPrice());
         copy.setPriceBand(source.getPriceBand());
         copy.setProductLevel(source.getProductLevel());
+        copy.setMaterialCode(source.getMaterialCode());
         copy.setMaterialDescription(source.getMaterialDescription());
         copy.setLeadTimeDays(source.getLeadTimeDays());
         copy.setMoq(source.getMoq());
@@ -277,15 +304,20 @@ public class RskuService {
     private List<RskuResponse> toResponses(List<RskuSupply> rskus) {
         List<String> factoryCodes = rskus.stream()
             .map(RskuSupply::getFactoryCode)
+            .filter(StringUtils::hasText)
             .distinct()
             .toList();
-        Map<String, FactoryMaster> factoryMap = factoryMasterMapper.selectBatchIds(factoryCodes).stream()
-            .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
-        Map<String, List<String>> capabilityMap = factoryCodes.stream()
-            .collect(Collectors.toMap(
-                code -> code,
-                factoryService::getFactoryCapableLevels
-            ));
+        Map<String, FactoryMaster> factoryMap = factoryCodes.isEmpty()
+            ? Map.of()
+            : factoryMasterMapper.selectBatchIds(factoryCodes).stream()
+                .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
+        Map<String, List<String>> capabilityMap = factoryCodes.isEmpty()
+            ? Map.of()
+            : factoryCodes.stream()
+                .collect(Collectors.toMap(
+                    code -> code,
+                    factoryService::getFactoryCapableLevels
+                ));
 
         return rskus.stream()
             .map(rsku -> toResponse(rsku, factoryMap, capabilityMap))
@@ -304,6 +336,7 @@ public class RskuService {
         response.setFactoryPrice(rsku.getFactoryPrice());
         response.setPriceBand(rsku.getPriceBand());
         response.setProductLevel(rsku.getProductLevel());
+        response.setMaterialCode(rsku.getMaterialCode());
         response.setMaterialDescription(rsku.getMaterialDescription());
         response.setLeadTimeDays(rsku.getLeadTimeDays());
         response.setMoq(rsku.getMoq());

@@ -28,8 +28,10 @@ import { getProductDetail, listProducts, reviewProduct, updateProduct, deletePro
 import { listRskuByRspu, createRsku, deleteRsku } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
-import { listDicts } from '@/api/dict'
+import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct, RecognitionHistoryItem } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuCreateRequest } from '@/types/rsku'
@@ -40,7 +42,15 @@ import type { RspuRelationCreateRequest } from '@/types/relation'
 const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
+const userStore = useUserStore()
 const rspuId = ref(route.params.rspuId as string)
+
+const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
+const canReviewProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_REVIEW))
+const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_UPDATE))
+const canCreateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_CREATE))
+const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
+const canCreateDict = computed(() => userStore.hasPermission(PERMISSIONS.DICT_CREATE))
 
 const loading = ref(false)
 const reviewing = ref(false)
@@ -59,6 +69,7 @@ const rskuForm = ref<RskuCreateRequest>({
   variantId: '',
   factorySku: '',
   factoryPrice: 0,
+  materialCode: '',
   materialDescription: '',
   leadTimeDays: undefined,
   moq: undefined,
@@ -143,6 +154,15 @@ const showEditModal = ref(false)
 const submittingEdit = ref(false)
 const editForm = ref<ProductEditForm>({})
 
+const showDictCreateModal = ref(false)
+const submittingDictCreate = ref(false)
+const dictCreateType = ref<'material' | 'scene'>('material')
+const dictCreateForm = ref({
+  dictCode: '',
+  dictName: '',
+  dictNameEn: ''
+})
+
 const rskuColumns: DataTableColumns<Rsku> = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
@@ -150,6 +170,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
   { title: '出厂价', key: 'factoryPrice', width: 120 },
   { title: '价格带', key: 'priceBand', width: 100 },
   { title: '产品等级', key: 'productLevel', width: 100 },
+  { title: '材质编码', key: 'materialCode', width: 100 },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 },
   {
@@ -170,11 +191,13 @@ const rskuColumns: DataTableColumns<Rsku> = [
     key: 'actions',
     width: 100,
     render(row: Rsku) {
-      return h(
-        NButton,
-        { size: 'small', type: 'error', onClick: (e: MouseEvent) => { e.stopPropagation(); handleDeleteRsku(row.rskuId) } },
-        { default: () => '删除' }
-      )
+      return canDeleteRsku.value
+        ? h(
+            NButton,
+            { size: 'small', type: 'error', onClick: (e: MouseEvent) => { e.stopPropagation(); handleDeleteRsku(row.rskuId) } },
+            { default: () => '删除' }
+          )
+        : null
     }
   }
 ]
@@ -201,6 +224,7 @@ const variantColumns = [
 ]
 
 function createRelationColumns(showDelete: boolean) {
+  const effectiveShowDelete = showDelete && canUpdateProduct.value
   const columns: DataTableColumns<RelatedProduct> = [
     {
       title: '图片',
@@ -250,7 +274,7 @@ function createRelationColumns(showDelete: boolean) {
       }
     }
   ]
-  if (showDelete) {
+  if (effectiveShowDelete) {
     columns.push({
       title: '操作',
       key: 'actions',
@@ -432,6 +456,58 @@ async function handleReview(status: '已确认' | '存疑') {
   }
 }
 
+function openDictCreateModal(type: 'material' | 'scene') {
+  dictCreateType.value = type
+  dictCreateForm.value = { dictCode: '', dictName: '', dictNameEn: '' }
+  showDictCreateModal.value = true
+}
+
+async function handleCreateDict() {
+  const code = dictCreateForm.value.dictCode.trim()
+  const name = dictCreateForm.value.dictName.trim()
+  if (!code) {
+    errorMessage.value = '请输入字典编码'
+    return
+  }
+  if (!name) {
+    errorMessage.value = '请输入字典名称'
+    return
+  }
+
+  submittingDictCreate.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    const created = await createDict({
+      dictType: dictCreateType.value,
+      dictCode: code,
+      dictName: name,
+      dictNameEn: dictCreateForm.value.dictNameEn?.trim() || undefined
+    })
+
+    if (dictCreateType.value === 'material') {
+      materialOptions.value = await listDicts('material')
+      if (!editForm.value.materialTags?.includes(created.dictCode)) {
+        editForm.value.materialTags = [...(editForm.value.materialTags || []), created.dictCode]
+      }
+    } else {
+      sceneOptions.value = await listDicts('scene')
+      if (!editForm.value.sceneTags?.includes(created.dictCode)) {
+        editForm.value.sceneTags = [...(editForm.value.sceneTags || []), created.dictCode]
+      }
+    }
+
+    successMessage.value = `已新增${dictCreateType.value === 'material' ? '材质' : '场景'}标签：${name}`
+    showDictCreateModal.value = false
+  } catch (e) {
+    successMessage.value = ''
+    errorMessage.value = e instanceof Error ? e.message : '创建标签失败'
+  } finally {
+    submittingDictCreate.value = false
+  }
+}
+
 function openEditModal() {
   if (!detail.value) return
   const r = detail.value.rspu
@@ -507,6 +583,7 @@ function openRskuModal() {
     variantId: '',
     factorySku: '',
     factoryPrice: 0,
+    materialCode: '',
     materialDescription: '',
     leadTimeDays: undefined,
     moq: undefined,
@@ -738,7 +815,7 @@ onBeforeRouteUpdate((to, from) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回列表</n-button>
-          <n-button size="small" type="error" @click="handleDeleteProduct">
+          <n-button v-if="canDeleteProduct" size="small" type="error" @click="handleDeleteProduct">
             删除产品
           </n-button>
         </n-space>
@@ -909,7 +986,7 @@ onBeforeRouteUpdate((to, from) => {
           <n-card title="官方搭配" size="small">
             <n-space vertical>
               <n-space>
-                <n-button type="primary" @click="openRelationModal">添加搭配</n-button>
+                <n-button v-if="canUpdateProduct" type="primary" @click="openRelationModal">添加搭配</n-button>
               </n-space>
               <n-data-table
                 :columns="createRelationColumns(true)"
@@ -948,9 +1025,10 @@ onBeforeRouteUpdate((to, from) => {
           </n-card>
 
           <n-card size="small">
-            <n-card title="复核操作" size="small">
+            <n-card v-if="canReviewProduct || canUpdateProduct" title="管理操作" size="small">
               <n-space>
                 <n-button
+                  v-if="canReviewProduct"
                   type="success"
                   :loading="reviewing"
                   :disabled="detail.rspu.reviewStatus === '已确认'"
@@ -959,6 +1037,7 @@ onBeforeRouteUpdate((to, from) => {
                   确认通过
                 </n-button>
                 <n-button
+                  v-if="canReviewProduct"
                   type="error"
                   :loading="reviewing"
                   :disabled="detail.rspu.reviewStatus === '存疑'"
@@ -966,7 +1045,7 @@ onBeforeRouteUpdate((to, from) => {
                 >
                   标记存疑
                 </n-button>
-                <n-button @click="openEditModal">
+                <n-button v-if="canUpdateProduct" @click="openEditModal">
                   编辑元数据
                 </n-button>
               </n-space>
@@ -975,7 +1054,7 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="变体管理" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button type="primary" @click="openVariantModal">新增变体</n-button>
+                  <n-button v-if="canUpdateProduct" type="primary" @click="openVariantModal">新增变体</n-button>
                 </n-space>
                 <n-data-table
                   :columns="variantColumns"
@@ -996,7 +1075,7 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="工厂报价（RSKU）" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button type="primary" @click="openRskuModal">新增报价</n-button>
+                  <n-button v-if="canCreateRsku" type="primary" @click="openRskuModal">新增报价</n-button>
                 </n-space>
                 <n-data-table
                   :columns="rskuColumns"
@@ -1064,6 +1143,9 @@ onBeforeRouteUpdate((to, from) => {
         </n-form-item>
         <n-form-item label="出厂价" required>
           <n-input-number v-model:value="rskuForm.factoryPrice" :min="0" placeholder="出厂价" />
+        </n-form-item>
+        <n-form-item label="材质编码">
+          <n-input v-model:value="rskuForm.materialCode" placeholder="材质编码" />
         </n-form-item>
         <n-form-item label="材质说明">
           <n-input v-model:value="rskuForm.materialDescription" placeholder="材质说明" />
@@ -1190,22 +1272,34 @@ onBeforeRouteUpdate((to, from) => {
           <n-input v-model:value="editForm.colorPrimaryName" placeholder="如：原木色" />
         </n-form-item>
         <n-form-item label="材质标签">
-          <n-select
-            v-model:value="editForm.materialTags"
-            :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="选择材质"
-            multiple
-            filterable
-          />
+          <n-space align="center" style="width: 100%;">
+            <n-select
+              v-model:value="editForm.materialTags"
+              :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="选择材质"
+              multiple
+              filterable
+              style="width: 420px;"
+            />
+            <n-button v-if="canCreateDict" type="primary" ghost size="small" @click="openDictCreateModal('material')">
+              + 新增材质
+            </n-button>
+          </n-space>
         </n-form-item>
         <n-form-item label="场景标签">
-          <n-select
-            v-model:value="editForm.sceneTags"
-            :options="sceneOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="选择场景"
-            multiple
-            filterable
-          />
+          <n-space align="center" style="width: 100%;">
+            <n-select
+              v-model:value="editForm.sceneTags"
+              :options="sceneOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="选择场景"
+              multiple
+              filterable
+              style="width: 420px;"
+            />
+            <n-button v-if="canCreateDict" type="primary" ghost size="small" @click="openDictCreateModal('scene')">
+              + 新增场景
+            </n-button>
+          </n-space>
         </n-form-item>
         <n-form-item label="参考价格带">
           <n-select
@@ -1246,6 +1340,44 @@ onBeforeRouteUpdate((to, from) => {
         <n-button @click="showEditModal = false">取消</n-button>
         <n-button type="primary" :loading="submittingEdit" @click="handleUpdateProduct">
           保存
+        </n-button>
+      </n-space>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showDictCreateModal"
+      :title="dictCreateType === 'material' ? '新增材质标签' : '新增场景标签'"
+      preset="card"
+      style="width: 480px;"
+    >
+      <n-form label-placement="left" label-width="100">
+        <n-form-item label="编码" required>
+          <n-input
+            v-model:value="dictCreateForm.dictCode"
+            placeholder="如 VELVET，仅支持字母和数字"
+            :disabled="submittingDictCreate"
+          />
+        </n-form-item>
+        <n-form-item label="名称" required>
+          <n-input
+            v-model:value="dictCreateForm.dictName"
+            placeholder="如 天鹅绒"
+            :disabled="submittingDictCreate"
+          />
+        </n-form-item>
+        <n-form-item label="英文名称">
+          <n-input
+            v-model:value="dictCreateForm.dictNameEn"
+            placeholder="如 Velvet"
+            :disabled="submittingDictCreate"
+          />
+        </n-form-item>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showDictCreateModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingDictCreate" @click="handleCreateDict">
+          创建
         </n-button>
       </n-space>
     </n-modal>

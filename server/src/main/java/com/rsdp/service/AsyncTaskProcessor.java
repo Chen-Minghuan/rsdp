@@ -100,12 +100,20 @@ public class AsyncTaskProcessor {
             persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
                 labels, processingTime, embedding);
 
+            boolean vectorPersisted = false;
+            String vectorError = null;
             if (embedding != null) {
-                persistVector(imageId, rspuId, embedding, imageBytes.length);
+                vectorPersisted = persistVector(imageId, rspuId, embedding, imageBytes.length);
+                if (!vectorPersisted) {
+                    vectorError = "AI 识别完成，但向量写入 ChromaDB 失败，以图搜图功能可能不可用";
+                }
+            } else {
+                vectorError = "AI 识别完成，但生成图片向量失败，以图搜图功能可能不可用";
             }
 
-            updateTaskStatus(taskId, "done", 100, objectMapper.writeValueAsString(labels), null);
-            log.info("产品录入异步任务完成，taskId={}", taskId);
+            String finalStatus = vectorPersisted ? "done" : "partial_success";
+            updateTaskStatus(taskId, finalStatus, 100, objectMapper.writeValueAsString(labels), vectorError);
+            log.info("产品录入异步任务完成，taskId={}，status={}", taskId, finalStatus);
         } catch (Exception e) {
             log.error("AI 识别失败，taskId={}", taskId, e);
             persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
@@ -169,18 +177,22 @@ public class AsyncTaskProcessor {
         task.setProgress(progress);
         task.setResultData(resultData);
         task.setErrorMessage(errorMessage);
-        if ("done".equals(status) || "failed".equals(status)) {
+        if (isTerminalStatus(status)) {
             task.setCompletedAt(LocalDateTime.now());
         }
         asyncTaskMapper.updateById(task);
     }
 
-    private void persistVector(String imageId, String rspuId, float[] embedding, int imageSize) {
+    private boolean isTerminalStatus(String status) {
+        return "done".equals(status) || "failed".equals(status) || "partial_success".equals(status);
+    }
+
+    private boolean persistVector(String imageId, String rspuId, float[] embedding, int imageSize) {
         try {
             RspuMaster rspu = persistenceService.getRspu(rspuId);
             if (rspu == null) {
                 log.warn("写入向量时 RSPU 不存在，rspuId={}", rspuId);
-                return;
+                return false;
             }
 
             Map<String, Object> metadata = new HashMap<>();
@@ -200,8 +212,10 @@ public class AsyncTaskProcessor {
                 null
             );
             log.info("向量已写入 ChromaDB，imageId={}", imageId);
+            return true;
         } catch (Exception e) {
             log.error("写入 ChromaDB 失败，imageId={}", imageId, e);
+            return false;
         }
     }
 }

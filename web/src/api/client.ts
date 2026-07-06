@@ -16,10 +16,12 @@ export class ApiError extends Error {
 /**
  * 通用 Axios 实例。
  * 开发环境下 Vite 代理会把 /api 转发到 http://localhost:8081。
+ * 使用 withCredentials 让浏览器自动携带 HttpOnly Cookie（JWT）。
  */
 export const apiClient = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json;charset=UTF-8'
   }
@@ -31,7 +33,8 @@ export const apiClient = axios.create({
  */
 export const uploadClient = axios.create({
   baseURL: '/api',
-  timeout: 120000
+  timeout: 120000,
+  withCredentials: true
 })
 
 /**
@@ -59,6 +62,17 @@ async function errorInterceptor(error: AxiosError | ApiError) {
   const response = error.response
   if (!response) {
     return Promise.reject(new Error(error.message || '请求失败'))
+  }
+
+  if (response.status === 401) {
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+    return Promise.reject(new Error('登录已过期，请重新登录'))
+  }
+
+  if (response.status === 403) {
+    return Promise.reject(new Error('权限不足，无法执行该操作'))
   }
 
   let message: string | undefined

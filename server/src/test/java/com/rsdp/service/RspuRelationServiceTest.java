@@ -14,6 +14,7 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -28,6 +29,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.*;
 
 /**
@@ -54,11 +56,16 @@ class RspuRelationServiceTest {
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private RspuRelationService relationService;
 
     @Test
     void listByAnchor_shouldReturnActiveRelations() {
+        lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+
         RspuRelation relation = new RspuRelation();
         relation.setRelationId("REL-001");
         relation.setAnchorRspuId("RSPU-BED");
@@ -242,6 +249,9 @@ class RspuRelationServiceTest {
 
     @Test
     void toResponse_shouldFillMinPriceAndImageUrl() {
+        lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+
+
         RspuRelation relation = new RspuRelation();
         relation.setRelationId("REL-001");
         relation.setAnchorRspuId("RSPU-BED");

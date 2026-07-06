@@ -1,5 +1,8 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
+
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
@@ -8,11 +11,13 @@ import com.rsdp.dto.response.RskuImportFailure;
 import com.rsdp.dto.response.RskuImportResult;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryMaster;
+import com.rsdp.entity.PriceHistory;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.FactoryMasterMapper;
+import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
@@ -58,6 +63,8 @@ public class RskuImportService {
     private final FactoryService factoryService;
     private final DictService dictService;
     private final AuditLogService auditLogService;
+    private final PriceHistoryMapper priceHistoryMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 批量导入 RSKU 报价。
@@ -81,6 +88,7 @@ public class RskuImportService {
         List<RskuSupply> toInsert = new ArrayList<>();
         List<RskuSupply> toUpdate = new ArrayList<>();
         Map<RskuSupply, RskuSupply> updateSnapshots = new IdentityHashMap<>();
+        List<PriceHistory> priceHistories = new ArrayList<>();
 
         // 预加载所有相关工厂、RSPU、变体、现有报价、工厂能力等级
         Map<String, FactoryMaster> factoryMap = preloadFactories(rows);
@@ -102,6 +110,10 @@ public class RskuImportService {
         int rowIndex = 1; // Excel 行号，第 1 行为表头，数据从第 2 行开始
         for (RskuImportRow row : rows) {
             rowIndex++;
+            if (!dataScopeHelper.canAccessRskuFactory(row.getFactoryCode())) {
+                result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "无权为该工厂导入报价"));
+                continue;
+            }
             normalizeRow(row, productLevels, quoteConfidenceLevels);
             String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels);
             if (error != null) {
@@ -121,9 +133,12 @@ public class RskuImportService {
             if (existing != null) {
                 if (updateIfExists) {
                     RskuSupply oldSnapshot = snapshot(existing);
-                    updateExistingRsku(existing, row, productLevel);
+                    BigDecimal oldPrice = updateExistingRsku(existing, row, productLevel);
                     toUpdate.add(existing);
                     updateSnapshots.put(existing, oldSnapshot);
+                    if (shouldRecordPriceHistory(oldPrice, existing.getFactoryPrice())) {
+                        priceHistories.add(buildPriceHistory(existing, oldPrice));
+                    }
                 } else {
                     result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "该工厂对该变体已有报价，已跳过"));
                 }
@@ -141,7 +156,10 @@ public class RskuImportService {
         }
         if (!toUpdate.isEmpty()) {
             toUpdate.forEach(rskuSupplyMapper::updateById);
-            toUpdate.forEach(r -> auditLogService.logUpdate("rsku_supply", r.getRskuId(), updateSnapshots.get(r), r, "admin"));
+            toUpdate.forEach(r -> auditLogService.logUpdate("rsku_supply", r.getRskuId(), updateSnapshots.get(r), r, SecurityOperatorContext.currentUsername()));
+        }
+        if (!priceHistories.isEmpty()) {
+            priceHistories.forEach(priceHistoryMapper::insert);
         }
 
         result.setSuccessCount(toInsert.size() + toUpdate.size() - insertFailures);
@@ -164,7 +182,7 @@ public class RskuImportService {
     private int doInsertBatch(List<RskuSupply> toInsert, List<RskuImportFailure> failures) {
         try {
             rskuSupplyMapper.insertBatchSafe(toInsert);
-            toInsert.forEach(r -> auditLogService.logCreate("rsku_supply", r.getRskuId(), r, "admin"));
+            toInsert.forEach(r -> auditLogService.logCreate("rsku_supply", r.getRskuId(), r, SecurityOperatorContext.currentUsername()));
             return 0;
         } catch (DataIntegrityViolationException e) {
             log.warn("批量插入报价触发唯一约束冲突，尝试逐行回退插入", e);
@@ -172,7 +190,7 @@ public class RskuImportService {
             for (RskuSupply rsku : toInsert) {
                 try {
                     rskuSupplyMapper.insert(rsku);
-                    auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, "admin");
+                    auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
                 } catch (DataIntegrityViolationException ex) {
                     log.warn("逐行插入报价冲突: {} - {}", rsku.getFactoryCode(), rsku.getVariantId(), ex);
                     failures.add(new RskuImportFailure(
@@ -313,6 +331,9 @@ public class RskuImportService {
         if (StringUtils.hasText(row.getFactorySku()) && row.getFactorySku().length() > 64) {
             return "工厂SKU 长度不能超过 64";
         }
+        if (StringUtils.hasText(row.getMaterialCode()) && row.getMaterialCode().length() > 8) {
+            return "材质编码 长度不能超过 8";
+        }
         if (StringUtils.hasText(row.getMaterialDescription()) && row.getMaterialDescription().length() > 1000) {
             return "材质说明 长度不能超过 1000";
         }
@@ -374,6 +395,7 @@ public class RskuImportService {
         row.setFactoryCode(trim(row.getFactoryCode()));
         row.setVariantId(trim(row.getVariantId()));
         row.setFactorySku(trim(row.getFactorySku()));
+        row.setMaterialCode(trim(row.getMaterialCode()));
         row.setMaterialDescription(trim(row.getMaterialDescription()));
         row.setShippingFrom(trim(row.getShippingFrom()));
         row.setDiffNotes(trim(row.getDiffNotes()));
@@ -439,6 +461,7 @@ public class RskuImportService {
         rsku.setFactoryPrice(row.getFactoryPrice());
         rsku.setPriceBand(resolvePriceBand(row.getFactoryPrice()));
         rsku.setProductLevel(productLevel);
+        rsku.setMaterialCode(trim(row.getMaterialCode()));
         rsku.setMaterialDescription(trim(row.getMaterialDescription()));
         rsku.setLeadTimeDays(row.getLeadTimeDays());
         rsku.setMoq(row.getMoq());
@@ -453,11 +476,13 @@ public class RskuImportService {
         return rsku;
     }
 
-    private void updateExistingRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
+    private BigDecimal updateExistingRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
+        BigDecimal oldPrice = existing.getFactoryPrice();
         existing.setFactorySku(trim(row.getFactorySku()));
         existing.setFactoryPrice(row.getFactoryPrice());
         existing.setPriceBand(resolvePriceBand(row.getFactoryPrice()));
         existing.setProductLevel(productLevel);
+        existing.setMaterialCode(trim(row.getMaterialCode()));
         existing.setMaterialDescription(trim(row.getMaterialDescription()));
         existing.setLeadTimeDays(row.getLeadTimeDays());
         existing.setMoq(row.getMoq());
@@ -467,6 +492,25 @@ public class RskuImportService {
         existing.setQuoteConfidence(trim(row.getQuoteConfidence()));
         existing.setPriceUpdated(LocalDate.now());
         existing.setUpdatedAt(LocalDateTime.now());
+        return oldPrice;
+    }
+
+    private boolean shouldRecordPriceHistory(BigDecimal oldPrice, BigDecimal newPrice) {
+        if (newPrice == null) {
+            return oldPrice != null;
+        }
+        return oldPrice == null || oldPrice.compareTo(newPrice) != 0;
+    }
+
+    private PriceHistory buildPriceHistory(RskuSupply rsku, BigDecimal oldPrice) {
+        PriceHistory history = new PriceHistory();
+        history.setRskuId(rsku.getRskuId());
+        history.setOldPrice(oldPrice);
+        history.setNewPrice(rsku.getFactoryPrice());
+        history.setChangedBy(SecurityOperatorContext.currentUsername());
+        history.setChangeReason("批量导入更新");
+        history.setCreatedAt(LocalDateTime.now());
+        return history;
     }
 
     private String resolvePriceBand(BigDecimal price) {
@@ -495,6 +539,7 @@ public class RskuImportService {
         copy.setFactoryPrice(source.getFactoryPrice());
         copy.setPriceBand(source.getPriceBand());
         copy.setProductLevel(source.getProductLevel());
+        copy.setMaterialCode(source.getMaterialCode());
         copy.setMaterialDescription(source.getMaterialDescription());
         copy.setLeadTimeDays(source.getLeadTimeDays());
         copy.setMoq(source.getMoq());

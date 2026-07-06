@@ -2,6 +2,10 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.entity.PriceHistory;
+import com.rsdp.entity.RskuSupply;
+import com.rsdp.exception.BusinessException;
+import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.PriceHistoryService;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +27,8 @@ import java.util.List;
 public class PriceHistoryController {
 
     private final PriceHistoryService priceHistoryService;
+    private final RskuSupplyMapper rskuSupplyMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 查询某 RSKU 的价格历史。
@@ -32,6 +38,13 @@ public class PriceHistoryController {
      */
     @GetMapping
     public Result<List<PriceHistory>> listPriceHistory(@PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId) {
+        RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
+        if (rsku == null) {
+            throw new BusinessException("RSKU 不存在: " + rskuId);
+        }
+        if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
+            throw new BusinessException("无权访问该 RSKU 的价格历史");
+        }
         return Result.ok(priceHistoryService.listByRsku(rskuId));
     }
 }

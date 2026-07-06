@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.rsdp.mapper.FactoryProductCapabilityMapper">
+
+    <select id="selectCapabilitySourcesByFactory" resultType="com.rsdp.dto.FactoryCapabilitySource">
+        SELECT DISTINCT
+            r.factory_code AS factoryCode,
+            rm.category_code AS categoryCode,
+            rm.positioning_label AS styleCode,
+            r.material_code AS materialCode
+        FROM rsku_supply r
+        JOIN rspu_master rm ON r.rspu_id = rm.rspu_id
+        WHERE r.factory_code = #{factoryCode}
+          AND r.deleted_at IS NULL
+          AND rm.deleted_at IS NULL
+    </select>
+
+    <delete id="deleteByFactoryCode">
+        DELETE FROM factory_product_capability
+        WHERE factory_code = #{factoryCode}
+    </delete>
+
+    <insert id="insertBatchIgnoreConflict">
+        INSERT INTO factory_product_capability (
+            factory_code,
+            category_code,
+            style_code,
+            material_code,
+            created_at,
+            updated_at
+        ) VALUES
+        <foreach collection="list" item="item" separator=",">
+            (
+                #{item.factoryCode},
+                #{item.categoryCode},
+                #{item.styleCode},
+                #{item.materialCode},
+                #{item.createdAt},
+                #{item.updatedAt}
+            )
+        </foreach>
+        ON CONFLICT (factory_code, category_code, style_code, material_code) DO UPDATE
+        SET updated_at = EXCLUDED.updated_at
+    </insert>
+
+</mapper>

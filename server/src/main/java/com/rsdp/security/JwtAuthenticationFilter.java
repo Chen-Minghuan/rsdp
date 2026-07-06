@@ -1,0 +1,102 @@
+package com.rsdp.security;
+
+import com.rsdp.entity.SysUser;
+import com.rsdp.mapper.SysUserMapper;
+import com.rsdp.util.JwtUtil;
+import io.jsonwebtoken.Claims;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * JWT 认证过滤器。
+ *
+ * <p>从请求头 {@code Authorization: Bearer <token>} 解析 JWT，
+ * 并将认证信息写入 Spring Security 上下文。</p>
+ */
+@Component
+@RequiredArgsConstructor
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private final JwtUtil jwtUtil;
+    private final SysUserMapper sysUserMapper;
+
+    private static final String AUTHORIZATION_HEADER = "Authorization";
+    private static final String BEARER_PREFIX = "Bearer ";
+    private static final String COOKIE_NAME = "rsdp_token";
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+        String token = resolveToken(request);
+        if (token != null) {
+            Claims claims = jwtUtil.parseToken(token);
+            if (claims != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                String username = claims.getSubject();
+
+                // 校验用户是否存在且未被禁用
+                SysUser user = sysUserMapper.selectByUsername(username);
+                if (user == null || !"active".equals(user.getStatus())) {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    return;
+                }
+
+                // 校验 token 版本号，防止角色/权限变更后旧 token 继续生效
+                Integer tokenVersion = jwtUtil.getTokenVersion(claims);
+                Integer currentVersion = user.getTokenVersion();
+                if (tokenVersion == null || !tokenVersion.equals(currentVersion == null ? 0 : currentVersion)) {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    return;
+                }
+
+                String role = jwtUtil.getRole(claims);
+                List<String> permissions = jwtUtil.getPermissions(claims);
+
+                List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+                if (role != null) {
+                    authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                }
+                permissions.forEach(perm -> authorities.add(new SimpleGrantedAuthority(perm)));
+
+                UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(username, null, authorities);
+                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authentication);
+            }
+        }
+        filterChain.doFilter(request, response);
+    }
+
+    private String resolveToken(HttpServletRequest request) {
+        String bearerToken = request.getHeader(AUTHORIZATION_HEADER);
+        if (StringUtils.hasText(bearerToken) && bearerToken.startsWith(BEARER_PREFIX)) {
+            return bearerToken.substring(BEARER_PREFIX.length());
+        }
+
+        // 兼容 HttpOnly Cookie 方案：前端不再在 localStorage 保存 token
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (Cookie cookie : cookies) {
+                if (COOKIE_NAME.equals(cookie.getName())) {
+                    return cookie.getValue();
+                }
+            }
+        }
+        return null;
+    }
+}

@@ -1,0 +1,7 @@
+# 测试环境专用配置
+# 仅为测试提供本地 fallback，生产环境必须通过环境变量注入真实密钥
+rsdp:
+  jwt:
+    secret: ${RSDP_JWT_SECRET:g3g6Ryj6ty4Dsw0jm1ImR59dbRAOI98q3qKVf7gz0jU=}
+  encryption:
+    key: ${RSDP_ENCRYPTION_KEY:WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=}

@@ -17,10 +17,17 @@ import {
 } from 'naive-ui'
 import { listProducts, deleteProduct } from '@/api/product'
 import { listDicts } from '@/api/dict'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { ProductSummary } from '@/types/product'
 
 const router = useRouter()
 const dialog = useDialog()
+const userStore = useUserStore()
+
+const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
+const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
+const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -118,15 +125,17 @@ const columns: DataTableColumns<ProductSummary> = [
               },
               { default: () => '详情' }
             ),
-            h(
-              NButton,
-              {
-                size: 'small',
-                type: 'error',
-                onClick: () => handleDelete(row.rspuId, row.positioningLabel)
-              },
-              { default: () => '删除' }
-            )
+            canDeleteProduct.value
+              ? h(
+                  NButton,
+                  {
+                    size: 'small',
+                    type: 'error',
+                    onClick: () => handleDelete(row.rspuId, row.positioningLabel)
+                  },
+                  { default: () => '删除' }
+                )
+              : null
           ]
         }
       )
@@ -293,7 +302,7 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
             placeholder="产品等级"
           />
           <n-button type="primary" @click="handleSearch">搜索</n-button>
-          <n-button @click="router.push('/products/import')">
+          <n-button v-if="canImportProduct" @click="router.push('/products/import')">
             批量导入
           </n-button>
         </n-space>
@@ -302,7 +311,7 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
           {{ errorMessage }}
         </n-alert>
 
-        <n-space v-if="hasSelection" align="center">
+        <n-space v-if="hasSelection && canGenerateQuote" align="center">
           <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
           <n-button type="primary" @click="handleBuildQuote">生成报价单</n-button>
         </n-space>

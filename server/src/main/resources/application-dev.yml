@@ -11,10 +11,11 @@ spring:
       database: 0
       enabled: false
 
-# 开发环境默认 AES-256 密钥（仅本地使用，生产环境必须注入 RSDP_ENCRYPTION_KEY）
+# 开发环境 AES-256 密钥必须通过 RSDP_ENCRYPTION_KEY 环境变量注入
+# 切勿提交真实密钥到版本控制
 rsdp:
   encryption:
-    key: ${RSDP_ENCRYPTION_KEY:WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=}
+    key: ${RSDP_ENCRYPTION_KEY}
   migration:
     encrypt-prices:
       # 开发环境默认关闭；需要测试迁移时临时设为 true

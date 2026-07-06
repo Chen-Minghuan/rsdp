@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
@@ -80,7 +81,7 @@ public class RspuVariantService {
             // variant_id 为主键，冲突说明并发生成了重复编码，提示重试
             throw new BusinessException("变体编码冲突，请重试: " + variantId);
         }
-        auditLogService.logCreate("rspu_variant", variantId, variant, "admin");
+        auditLogService.logCreate("rspu_variant", variantId, variant, SecurityOperatorContext.currentUsername());
 
         return toResponse(variant);
     }

@@ -81,9 +81,7 @@ public class RskuController {
     public Result<Void> updatePrice(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                     @PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId,
                                     @Valid @RequestBody RskuPriceUpdateRequest request) {
-        // 先校验 RSKU 是否属于该 RSPU，再更新价格
-        rskuService.getRsku(rspuId, rskuId);
-        rskuService.updateRskuPrice(rskuId, request.getFactoryPrice(), request.getChangeReason());
+        rskuService.updateRskuPrice(rspuId, rskuId, request.getFactoryPrice(), request.getChangeReason());
         return Result.ok();
     }
 }

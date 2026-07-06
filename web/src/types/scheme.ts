@@ -55,6 +55,7 @@ export interface Scheme {
   maxLeadTimeDays: number
   itemCount: number
   status: string
+  createdBy: string
   createdAt: string
   items: SchemeItem[]
 }
@@ -67,5 +68,6 @@ export interface SchemeSummary {
   schemeName: string
   itemCount: number
   totalPrice: number
+  createdBy: string
   createdAt: string
 }

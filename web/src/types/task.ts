@@ -4,7 +4,7 @@
 export interface TaskStatus {
   taskId: string
   taskType: string
-  status: 'pending' | 'processing' | 'done' | 'failed'
+  status: 'pending' | 'processing' | 'done' | 'partial_success' | 'failed'
   progress: number
   result: Record<string, unknown>
   errorMessage: string
@@ -31,7 +31,7 @@ export interface TaskItem {
   rspuId: string
   fileName: string
   imageIds: string[]
-  status: 'pending' | 'processing' | 'done' | 'failed'
+  status: 'pending' | 'processing' | 'done' | 'partial_success' | 'failed'
   progress: number
   result: Record<string, unknown>
   errorMessage: string

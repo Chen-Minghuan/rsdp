@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
@@ -38,6 +39,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
 import java.time.LocalDateTime;
@@ -256,6 +258,10 @@ public class ProductImportService {
         }
         try {
             URLConnection connection = new URL(trimmedUrl).openConnection();
+            // 关闭自动重定向，防止 SSRF 通过 302 跳转到内网地址
+            if (connection instanceof HttpURLConnection httpConnection) {
+                httpConnection.setInstanceFollowRedirects(false);
+            }
             connection.setConnectTimeout(10000);
             connection.setReadTimeout(30000);
             String contentType = connection.getContentType();
@@ -365,7 +371,7 @@ public class ProductImportService {
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
-        auditLogService.logCreate("rspu_master", rspuId, rspu, "admin");
+        auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
         return rspu;
     }
 
@@ -377,7 +383,7 @@ public class ProductImportService {
         }
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
-        auditLogService.logUpdate("rspu_master", rspu.getRspuId(), oldSnapshot, rspu, "admin");
+        auditLogService.logUpdate("rspu_master", rspu.getRspuId(), oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
         return rspu;
     }
 
@@ -526,7 +532,7 @@ public class ProductImportService {
         variant.setCreatedAt(LocalDateTime.now());
         variant.setUpdatedAt(LocalDateTime.now());
         rspuVariantMapper.insert(variant);
-        auditLogService.logCreate("rspu_variant", variantId, variant, "admin");
+        auditLogService.logCreate("rspu_variant", variantId, variant, SecurityOperatorContext.currentUsername());
     }
 
     private void saveImages(String rspuId, List<DownloadedImage> images, int rowIndex,
@@ -565,10 +571,10 @@ public class ProductImportService {
             imageAsset.setAiProcessed(false);
             imageAsset.setFileSize((long) downloaded.bytes.length);
             imageAsset.setFormat(extension);
-            imageAsset.setUploadedBy("admin");
+            imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);
-            auditLogService.logCreate("image_assets", imageId, imageAsset, "admin");
+            auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
         }
     }
 

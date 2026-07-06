@@ -19,12 +19,18 @@ import {
   useDialog
 } from 'naive-ui'
 import { getRsku, listPriceHistory, updateRskuPrice, deleteRsku } from '@/api/rsku'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { PriceHistory, Rsku } from '@/types/rsku'
 
 const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
+const userStore = useUserStore()
 const rspuId = computed(() => route.params.rspuId as string)
+
+const canUpdateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_UPDATE))
+const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
 const rskuId = computed(() => route.params.rskuId as string)
 
 const loading = ref(false)
@@ -162,7 +168,7 @@ onBeforeRouteUpdate((to) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push(`/products/${rspuId}`)">返回产品详情</n-button>
-          <n-button size="small" type="error" @click="handleDeleteRsku">
+          <n-button v-if="canDeleteRsku" size="small" type="error" @click="handleDeleteRsku">
             删除报价
           </n-button>
         </n-space>
@@ -203,6 +209,9 @@ onBeforeRouteUpdate((to) => {
             <n-descriptions-item label="价格带">
               {{ rsku.priceBand }}
             </n-descriptions-item>
+            <n-descriptions-item label="材质编码">
+              {{ rsku.materialCode || '-' }}
+            </n-descriptions-item>
             <n-descriptions-item label="材质说明">
               {{ rsku.materialDescription || '-' }}
             </n-descriptions-item>
@@ -237,7 +246,7 @@ onBeforeRouteUpdate((to) => {
           <n-card title="价格历史" size="small">
             <n-space vertical>
               <n-space>
-                <n-button type="primary" @click="openPriceModal">更新价格</n-button>
+                <n-button v-if="canUpdateRsku" type="primary" @click="openPriceModal">更新价格</n-button>
               </n-space>
               <n-data-table
                 :columns="historyColumns"

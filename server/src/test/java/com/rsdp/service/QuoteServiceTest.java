@@ -11,6 +11,7 @@ import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -47,11 +48,16 @@ class QuoteServiceTest {
     @Mock
     private FactoryService factoryService;
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private QuoteService quoteService;
 
     @Test
     void generateQuote_shouldReturnQuoteWithSummary() {
+        when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-001");
         rsku.setRspuId("RSPU-001");
@@ -123,6 +129,8 @@ class QuoteServiceTest {
 
     @Test
     void generateQuote_shouldRejectRskuWhenFactoryNotCapable() {
+        when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-001");
         rsku.setRspuId("RSPU-001");
@@ -141,6 +149,8 @@ class QuoteServiceTest {
 
     @Test
     void generateQuote_shouldMergeDuplicateRskuQuantities() {
+        when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-001");
         rsku.setRspuId("RSPU-001");
@@ -172,6 +182,8 @@ class QuoteServiceTest {
 
     @Test
     void generateQuote_shouldDefaultNullOrZeroQuantityToOne() {
+        when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-001");
         rsku.setRspuId("RSPU-001");

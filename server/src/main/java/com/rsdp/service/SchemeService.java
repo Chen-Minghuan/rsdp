@@ -1,5 +1,8 @@
 package com.rsdp.service;
 
+import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
+
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
@@ -52,6 +55,7 @@ public class SchemeService {
     private final FactoryMasterMapper factoryMasterMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final QuoteService quoteService;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 创建搭配方案。
@@ -132,7 +136,7 @@ public class SchemeService {
         }
 
         // 同一创建人下不允许存在同名活动方案
-        assertSchemeNameUnique(request.getSchemeName().trim(), null);
+        assertSchemeNameUnique(request.getSchemeName().trim(), SecurityOperatorContext.currentUsername(), null);
 
         // 先写入主表，再写入子表，避免外键约束异常
         Scheme scheme = new Scheme();
@@ -145,7 +149,7 @@ public class SchemeService {
         scheme.setMaxLeadTimeDays(maxLeadTimeDays);
         scheme.setItemCount(distinctItems.size());
         scheme.setStatus("active");
-        scheme.setCreatedBy("admin");
+        scheme.setCreatedBy(SecurityOperatorContext.currentUsername());
         scheme.setCreatedAt(LocalDateTime.now());
         schemeMapper.insert(scheme);
 
@@ -175,6 +179,7 @@ public class SchemeService {
         if (scheme == null || scheme.getDeletedAt() != null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
+        assertSchemeOwnerOrAdmin(scheme);
 
         // 按 rskuId 去重并聚合数量，保留第一次出现的顺序
         Map<String, SchemeItemRequest> uniqueItemMap = new java.util.LinkedHashMap<>();
@@ -237,7 +242,7 @@ public class SchemeService {
         }
 
         // 同一创建人下不允许存在同名活动方案（排除当前方案自身）
-        assertSchemeNameUnique(request.getSchemeName().trim(), schemeId);
+        assertSchemeNameUnique(request.getSchemeName().trim(), scheme.getCreatedBy(), schemeId);
 
         // 物理删除旧子项
         schemeItemMapper.delete(
@@ -259,17 +264,27 @@ public class SchemeService {
         return getSchemeDetail(schemeId);
     }
 
-    private void assertSchemeNameUnique(String schemeName, String excludeSchemeId) {
+    private void assertSchemeNameUnique(String schemeName, String owner, String excludeSchemeId) {
         QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
             .eq("scheme_name", schemeName)
             .eq("status", "active")
-            .eq("created_by", "admin");
+            .eq("created_by", owner);
         if (excludeSchemeId != null) {
             wrapper.ne("scheme_id", excludeSchemeId);
         }
         Long count = schemeMapper.selectCount(wrapper);
         if (count != null && count > 0) {
             throw new BusinessException("已存在同名方案：" + schemeName);
+        }
+    }
+
+    private void assertSchemeOwnerOrAdmin(Scheme scheme) {
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            return;
+        }
+        String currentUser = SecurityOperatorContext.currentUsername();
+        if (scheme.getCreatedBy() == null || !scheme.getCreatedBy().equals(currentUser)) {
+            throw new BusinessException("无权操作该方案");
         }
     }
 
@@ -291,6 +306,7 @@ public class SchemeService {
             summary.setSchemeName(s.getSchemeName());
             summary.setItemCount(s.getItemCount());
             summary.setTotalPrice(s.getTotalPrice());
+            summary.setCreatedBy(s.getCreatedBy());
             summary.setCreatedAt(s.getCreatedAt());
             return summary;
         }).collect(Collectors.toList());
@@ -314,8 +330,26 @@ public class SchemeService {
                 .orderByAsc("sort_order")
         );
 
+        List<String> rspuIds = items.stream().map(SchemeItem::getRspuId).distinct().toList();
+        List<String> rskuIds = items.stream().map(SchemeItem::getRskuId).distinct().toList();
+        // 数据权限过滤：只返回当前用户可见工厂的项
+        items = items.stream()
+            .filter(item -> dataScopeHelper.canAccessRskuFactory(item.getFactoryCode()))
+            .collect(Collectors.toList());
+
+        List<String> factoryCodes = items.stream()
+            .map(SchemeItem::getFactoryCode)
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList();
+
+        Map<String, RspuMaster> rspuMap = batchRspuMap(rspuIds);
+        Map<String, RskuSupply> rskuMap = batchRskuMap(rskuIds);
+        Map<String, FactoryMaster> factoryMap = batchFactoryMap(factoryCodes);
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
+
         List<SchemeItemResponse> itemResponses = items.stream()
-            .map(this::buildItemResponse)
+            .map(item -> buildItemResponse(item, rspuMap, rskuMap, factoryMap, primaryImageUrlMap))
             .collect(Collectors.toList());
 
         SchemeResponse response = new SchemeResponse();
@@ -344,6 +378,7 @@ public class SchemeService {
         if (scheme == null || scheme.getDeletedAt() != null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
+        assertSchemeOwnerOrAdmin(scheme);
         scheme.setStatus("deleted");
         scheme.setDeletedAt(LocalDateTime.now());
         scheme.setUpdatedAt(LocalDateTime.now());
@@ -366,7 +401,12 @@ public class SchemeService {
             new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId)
         );
 
-        List<QuoteItemRequest> quoteItems = items.stream()
+        // 数据权限过滤：无权限的 RSKU 不进入报价单
+        List<SchemeItem> accessibleItems = items.stream()
+            .filter(item -> dataScopeHelper.canAccessRskuFactory(item.getFactoryCode()))
+            .collect(Collectors.toList());
+
+        List<QuoteItemRequest> quoteItems = accessibleItems.stream()
             .map(item -> {
                 QuoteItemRequest req = new QuoteItemRequest();
                 req.setRskuId(item.getRskuId());
@@ -381,7 +421,7 @@ public class SchemeService {
         QuoteResponse quote = quoteService.generateQuote(quoteItems);
 
         // 快照模式：对比方案保存时的价格与当前最新价格
-        List<PriceChangeResponse> priceChanges = items.stream()
+        List<PriceChangeResponse> priceChanges = accessibleItems.stream()
             .map(item -> {
                 RskuSupply currentRsku = rskuSupplyMapper.selectById(item.getRskuId());
                 if (currentRsku == null) {
@@ -408,18 +448,22 @@ public class SchemeService {
         return quote;
     }
 
-    private SchemeItemResponse buildItemResponse(SchemeItem item) {
-        RspuMaster rspu = rspuMapper.selectById(item.getRspuId());
+    private SchemeItemResponse buildItemResponse(SchemeItem item,
+                                                 Map<String, RspuMaster> rspuMap,
+                                                 Map<String, RskuSupply> rskuMap,
+                                                 Map<String, FactoryMaster> factoryMap,
+                                                 Map<String, String> primaryImageUrlMap) {
+        RspuMaster rspu = rspuMap.get(item.getRspuId());
         FactoryMaster factory = item.getFactoryCode() != null
-            ? factoryMasterMapper.selectById(item.getFactoryCode())
+            ? factoryMap.get(item.getFactoryCode())
             : null;
-        RskuSupply rsku = rskuSupplyMapper.selectById(item.getRskuId());
+        RskuSupply rsku = rskuMap.get(item.getRskuId());
 
         SchemeItemResponse response = new SchemeItemResponse();
         response.setSchemeItemId(item.getSchemeItemId());
         response.setRspuId(item.getRspuId());
         response.setRspuName(rspu != null ? rspu.getPositioningLabel() : null);
-        response.setPrimaryImageUrl(findPrimaryImageUrl(item.getRspuId()));
+        response.setPrimaryImageUrl(primaryImageUrlMap.get(item.getRspuId()));
         response.setRskuId(item.getRskuId());
         response.setFactoryCode(item.getFactoryCode());
         response.setFactoryName(factory != null ? factory.getFactoryName() : null);
@@ -436,16 +480,47 @@ public class SchemeService {
         return response;
     }
 
-    private String findPrimaryImageUrl(String rspuId) {
+    private Map<String, RspuMaster> batchRspuMap(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        return rspuMapper.selectList(
+            new QueryWrapper<RspuMaster>().in("rspu_id", rspuIds)
+        ).stream().collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+    }
+
+    private Map<String, RskuSupply> batchRskuMap(List<String> rskuIds) {
+        if (rskuIds.isEmpty()) {
+            return Map.of();
+        }
+        return rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>().in("rsku_id", rskuIds)
+        ).stream().collect(Collectors.toMap(RskuSupply::getRskuId, r -> r));
+    }
+
+    private Map<String, FactoryMaster> batchFactoryMap(List<String> factoryCodes) {
+        if (factoryCodes.isEmpty()) {
+            return Map.of();
+        }
+        return factoryMasterMapper.selectList(
+            new QueryWrapper<FactoryMaster>().in("factory_code", factoryCodes)
+        ).stream().collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
+    }
+
+    private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
         List<ImageAssets> images = imageAssetsMapper.selectList(
             new QueryWrapper<ImageAssets>()
-                .eq("rspu_id", rspuId)
+                .in("rspu_id", rspuIds)
                 .eq("is_primary", true)
-                .last("LIMIT 1")
         );
-        if (images == null || images.isEmpty()) {
-            return null;
-        }
-        return "/api/v1/images/" + images.get(0).getImageId();
+        return images.stream()
+            .collect(Collectors.toMap(
+                ImageAssets::getRspuId,
+                img -> "/api/v1/images/" + img.getImageId(),
+                (a, b) -> a
+            ));
     }
 }

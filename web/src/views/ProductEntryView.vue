@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import axios from 'axios'
 import { useRouter } from 'vue-router'
 import {
   NCard,
@@ -25,6 +26,8 @@ import type { OcrResult } from '@/types/product'
 
 const router = useRouter()
 
+const TASKS_STORAGE_KEY = 'rsdp:product-entry:tasks'
+
 const fileList = ref<UploadFileInfo[]>([])
 const taskList = ref<TaskItem[]>([])
 const uploading = ref(false)
@@ -38,39 +41,94 @@ const selectedFiles = computed(() =>
 
 const hasSelectedFiles = computed(() => selectedFiles.value.length > 0)
 const hasTasks = computed(() => taskList.value.length > 0)
+const terminalStatuses = ['done', 'partial_success', 'failed']
 const pendingTaskCount = computed(
-  () => taskList.value.filter(t => t.status === 'pending' || t.status === 'processing').length
+  () => taskList.value.filter(t => !terminalStatuses.includes(t.status)).length
 )
 
-let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollTimeoutId: ReturnType<typeof setTimeout> | null = null
+let pollAbortController: AbortController | null = null
+let uploadAbortController: AbortController | null = null
+
+function saveTasks() {
+  try {
+    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(taskList.value))
+  } catch (e) {
+    console.error('保存任务列表失败', e)
+  }
+}
+
+function loadTasks() {
+  try {
+    const raw = localStorage.getItem(TASKS_STORAGE_KEY)
+    if (raw) {
+      taskList.value = JSON.parse(raw)
+      if (pendingTaskCount.value > 0) {
+        ensurePolling()
+      }
+    }
+  } catch (e) {
+    console.error('恢复任务列表失败', e)
+  }
+}
+
+function clearStoredTasks() {
+  try {
+    localStorage.removeItem(TASKS_STORAGE_KEY)
+  } catch (e) {
+    console.error('清除任务列表失败', e)
+  }
+}
 
 function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
+  if (pollTimeoutId) {
+    clearTimeout(pollTimeoutId)
+    pollTimeoutId = null
+  }
+  if (pollAbortController) {
+    pollAbortController.abort()
+    pollAbortController = null
   }
 }
 
 function ensurePolling() {
-  if (pollTimer) return
-  pollTimer = setInterval(async () => {
-    await pollAllTasks()
-    if (pendingTaskCount.value === 0) {
-      stopPolling()
-    }
-  }, 1500)
+  if (pollTimeoutId) return
+  pollOnce()
 }
 
-async function pollAllTasks() {
-  const pendingTasks = taskList.value.filter(
-    t => t.status === 'pending' || t.status === 'processing'
-  )
-  await Promise.all(pendingTasks.map(task => pollTask(task)))
-}
+async function pollOnce() {
+  if (pendingTaskCount.value === 0) {
+    pollTimeoutId = null
+    return
+  }
 
-async function pollTask(taskItem: TaskItem) {
+  pollAbortController = new AbortController()
+  const signal = pollAbortController.signal
+
   try {
-    const status = await getTaskStatus(taskItem.taskId)
+    await pollAllTasks(signal)
+  } finally {
+    saveTasks()
+    pollAbortController = null
+
+    if (pendingTaskCount.value > 0 && !signal.aborted) {
+      pollTimeoutId = setTimeout(pollOnce, 1500)
+    } else {
+      pollTimeoutId = null
+    }
+  }
+}
+
+async function pollAllTasks(signal?: AbortSignal) {
+  const pendingTasks = taskList.value.filter(
+    t => !terminalStatuses.includes(t.status)
+  )
+  await Promise.all(pendingTasks.map(task => pollTask(task, signal)))
+}
+
+async function pollTask(taskItem: TaskItem, signal?: AbortSignal) {
+  try {
+    const status = await getTaskStatus(taskItem.taskId, signal)
     taskItem.status = status.status
     taskItem.progress = status.progress
     taskItem.result = status.result
@@ -78,6 +136,9 @@ async function pollTask(taskItem: TaskItem) {
     taskItem.createdAt = status.createdAt
     taskItem.completedAt = status.completedAt
   } catch (e) {
+    if (axios.isCancel(e)) {
+      return
+    }
     taskItem.status = 'failed'
     taskItem.errorMessage = e instanceof Error ? e.message : '轮询失败'
   }
@@ -127,9 +188,14 @@ async function handleStartUpload() {
 
   errorMessage.value = ''
   uploading.value = true
+  uploadAbortController = new AbortController()
 
   try {
-    const result = await uploadProductImages(files, categoryCode.value ?? undefined)
+    const result = await uploadProductImages(
+      files,
+      categoryCode.value ?? undefined,
+      uploadAbortController.signal
+    )
 
     const newTask: TaskItem = {
       taskId: result.taskId,
@@ -144,17 +210,24 @@ async function handleStartUpload() {
 
     // 新任务放到列表前面，方便看最新追加的
     taskList.value.unshift(newTask)
+    saveTasks()
 
     // 清空已选文件，允许继续选择下一批
     fileList.value = []
 
     // 立即轮询一次，然后开启定时轮询
     await pollAllTasks()
+    saveTasks()
     ensurePolling()
   } catch (e) {
-    errorMessage.value = e instanceof Error ? e.message : '上传失败'
+    if (axios.isCancel(e)) {
+      errorMessage.value = '上传已取消'
+    } else {
+      errorMessage.value = e instanceof Error ? e.message : '上传失败'
+    }
   } finally {
     uploading.value = false
+    uploadAbortController = null
   }
 }
 
@@ -163,14 +236,26 @@ function clearAll() {
   taskList.value = []
   errorMessage.value = ''
   stopPolling()
+  clearStoredTasks()
+}
+
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (uploading.value || pendingTaskCount.value > 0) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
 }
 
 onMounted(() => {
   loadCategoryDicts()
+  loadTasks()
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 onUnmounted(() => {
   stopPolling()
+  uploadAbortController?.abort()
+  window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 
 function statusText(status: TaskItem['status']) {
@@ -181,10 +266,25 @@ function statusText(status: TaskItem['status']) {
       return '识别中'
     case 'done':
       return '已完成'
+    case 'partial_success':
+      return '部分成功'
     case 'failed':
       return '失败'
     default:
       return '未知'
+  }
+}
+
+function statusTagType(status: TaskItem['status']) {
+  switch (status) {
+    case 'done':
+      return 'success'
+    case 'failed':
+      return 'error'
+    case 'partial_success':
+      return 'warning'
+    default:
+      return 'warning'
   }
 }
 
@@ -288,7 +388,7 @@ function formatPrice(ocr?: OcrResult): string {
                   </n-button>
                 </span>
               </n-space>
-              <n-tag :type="task.status === 'done' ? 'success' : task.status === 'failed' ? 'error' : 'warning'">
+              <n-tag :type="statusTagType(task.status)">
                 {{ statusText(task.status) }}
               </n-tag>
             </n-space>
@@ -301,6 +401,10 @@ function formatPrice(ocr?: OcrResult): string {
 
             <n-alert v-if="task.status === 'failed'" type="error" :show-icon="true">
               {{ task.errorMessage }}
+            </n-alert>
+
+            <n-alert v-if="task.status === 'partial_success'" type="warning" :show-icon="true">
+              {{ task.errorMessage || 'AI 识别完成，但向量未成功写入，以图搜图可能不可用' }}
             </n-alert>
 
             <n-space
@@ -320,7 +424,7 @@ function formatPrice(ocr?: OcrResult): string {
             </n-space>
 
             <n-card
-              v-if="task.status === 'done' && task.result"
+              v-if="(task.status === 'done' || task.status === 'partial_success') && task.result"
               title="AI 识别结果"
               size="small"
             >

@@ -13,8 +13,9 @@ class ImageUrlValidatorTest {
 
     @Test
     void shouldAllowPublicHttpUrl() {
-        assertThat(ImageUrlValidator.isAllowed("http://example.com/image.jpg", Set.of())).isTrue();
-        assertThat(ImageUrlValidator.isAllowed("https://cdn.example.com/image.jpg", Set.of())).isTrue();
+        // 使用 host 白名单保证测试环境 DNS 不可解析时也能通过
+        assertThat(ImageUrlValidator.isAllowed("http://example.com/image.jpg", Set.of("example.com"))).isTrue();
+        assertThat(ImageUrlValidator.isAllowed("https://cdn.example.com/image.jpg", Set.of("cdn.example.com"))).isTrue();
     }
 
     @Test
@@ -49,5 +50,17 @@ class ImageUrlValidatorTest {
         assertThat(ImageUrlValidator.isAllowed(null, Set.of())).isFalse();
         assertThat(ImageUrlValidator.isAllowed("", Set.of())).isFalse();
         assertThat(ImageUrlValidator.isAllowed("not-a-url", Set.of())).isFalse();
+    }
+
+    @Test
+    void shouldRejectUrlWithUserInfo() {
+        assertThat(ImageUrlValidator.isAllowed("http://10.0.0.1@example.com/image.jpg", Set.of())).isFalse();
+        assertThat(ImageUrlValidator.isAllowed("http://user:pass@example.com/image.jpg", Set.of())).isFalse();
+    }
+
+    @Test
+    void shouldRejectUnresolvableDomain() {
+        // 使用理论上无法解析的域名，验证默认拒绝策略
+        assertThat(ImageUrlValidator.isAllowed("http://rsdp-invalid-domain-99999.local/image.jpg", Set.of())).isFalse();
     }
 }

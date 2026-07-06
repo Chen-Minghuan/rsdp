@@ -76,6 +76,8 @@ class PriceEncryptionMigrationTest {
                 Map.of("rsku_id", "R1", "factory_price", "1234.56"),
                 Map.of("rsku_id", "R2", "factory_price", encryptedPrice)
             ))
+            .thenReturn(List.of())
+            .thenReturn(List.of())
             .thenReturn(List.of());
 
         migration.run();
@@ -107,6 +109,8 @@ class PriceEncryptionMigrationTest {
             .thenReturn(List.of(
                 Map.of("rsku_id", "R3", "factory_price", "not-a-number")
             ))
+            .thenReturn(List.of())
+            .thenReturn(List.of())
             .thenReturn(List.of());
 
         migration.run();
@@ -123,7 +127,8 @@ class PriceEncryptionMigrationTest {
             .thenReturn(List.of())
             .thenReturn(List.of(
                 Map.of("scheme_item_id", 1L, "factory_price", "888.88")
-            ));
+            ))
+            .thenReturn(List.of());
 
         migration.run();
 
