@@ -24,6 +24,9 @@ public class AiApiConfig {
     @Value("${rsdp.chromadb.base-url}")
     private String chromaBaseUrl;
 
+    @Value("${rsdp.chromadb.auth-token:}")
+    private String chromaAuthToken;
+
     @Value("${rsdp.ai.timeout-seconds:60}")
     private int aiTimeoutSeconds;
 
@@ -66,11 +69,14 @@ public class AiApiConfig {
 
     @Bean
     public RestClient chromaRestClient() {
-        return RestClient.builder()
+        RestClient.Builder builder = RestClient.builder()
             .baseUrl(chromaBaseUrl)
             .requestFactory(requestFactory(chromaTimeoutSeconds))
-            .requestInterceptor(new RetryInterceptor(chromaMaxRetries))
-            .build();
+            .requestInterceptor(new RetryInterceptor(chromaMaxRetries));
+        if (chromaAuthToken != null && !chromaAuthToken.isBlank()) {
+            builder.defaultHeader("Authorization", "Bearer " + chromaAuthToken);
+        }
+        return builder.build();
     }
 
     private ClientHttpRequestFactory requestFactory(int timeoutSeconds) {

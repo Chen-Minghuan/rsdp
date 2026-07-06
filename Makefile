@@ -40,7 +40,7 @@ frontend: ## 启动前端开发服务器
 
 test: ## 运行全部测试
 	cd server && mvn test
-	cd web && pnpm type-check && pnpm lint
+	cd web && pnpm install && pnpm type-check && pnpm lint
 
 lint: ## 代码检查
 	cd server && mvn compile -DskipTests

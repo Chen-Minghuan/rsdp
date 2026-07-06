@@ -35,6 +35,7 @@ rsdp:
     collection: rsdp_products
     timeout-seconds: 10
     max-retries: 2
+    auth-token: ${CHROMADB_AUTH_TOKEN:${CHROMA_AUTH_CREDENTIALS:}}
   encryption:
     key: ${RSDP_ENCRYPTION_KEY}
   migration:

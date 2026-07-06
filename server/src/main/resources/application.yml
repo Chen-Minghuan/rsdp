@@ -44,6 +44,8 @@ rsdp:
     collection: rsdp_products
     timeout-seconds: 10
     max-retries: 2
+    # ChromaDB Token 认证凭证；留空表示不启用认证
+    auth-token: ${CHROMADB_AUTH_TOKEN:${CHROMA_AUTH_CREDENTIALS:}}
   encryption:
     # Base64 编码的 32 字节 AES-256 密钥，生产环境必须通过 RSDP_ENCRYPTION_KEY 注入
     key: ${RSDP_ENCRYPTION_KEY:}

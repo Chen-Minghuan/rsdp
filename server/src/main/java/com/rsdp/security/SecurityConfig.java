@@ -61,16 +61,16 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/dicts/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/tasks/*").authenticated()
+                // 敏感读接口：按最小权限显式授权（必须放在对应通配规则之前）
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)
+                .requestMatchers(HttpMethod.GET, "/api/v1/rsku/import-template").hasAuthority(Permissions.RSKU_IMPORT)
+
                 .requestMatchers(HttpMethod.GET, "/api/v1/products").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/relations").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/variants").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/factories").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/factories/*").authenticated()
-
-                // 敏感读接口：按最小权限显式授权
-                .requestMatchers(HttpMethod.GET, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)
-                .requestMatchers(HttpMethod.GET, "/api/v1/rsku/import-template").hasAuthority(Permissions.RSKU_IMPORT)
                 .requestMatchers(HttpMethod.GET, "/api/v1/factories/*/rsku").hasAuthority(Permissions.RSKU_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/rsku/*").hasAuthority(Permissions.RSKU_READ)

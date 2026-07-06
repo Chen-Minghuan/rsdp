@@ -26,6 +26,9 @@ set -a
 source "$ENV_FILE"
 set +a
 
+# 本地开发使用 http，必须关闭 Cookie 的 Secure 属性，否则浏览器不会发送 Cookie
+export RSDP_JWT_COOKIE_SECURE=false
+
 # 校验关键敏感变量
 REQUIRED_VARS=("RSDP_ENCRYPTION_KEY" "RSDP_JWT_SECRET")
 for var in "${REQUIRED_VARS[@]}"; do
@@ -36,6 +39,13 @@ for var in "${REQUIRED_VARS[@]}"; do
         exit 1
     fi
 done
+
+# 若配置了 DASHSCOPE_API_KEY，则不允许使用占位符
+if [ -n "${DASHSCOPE_API_KEY:-}" ] && [ "$DASHSCOPE_API_KEY" = "<CHANGE_ME>" ]; then
+    echo "错误：环境变量 DASHSCOPE_API_KEY 不能为默认值 <CHANGE_ME>"
+    echo "请在 $ENV_FILE 中填入真实的 DashScope API Key，或将其置空"
+    exit 1
+fi
 
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"

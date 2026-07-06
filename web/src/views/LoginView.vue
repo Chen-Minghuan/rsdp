@@ -26,17 +26,16 @@ async function handleLogin() {
   errorMessage.value = ''
 
   try {
-    const result = await login({
+    await login({
       username: form.value.username.trim(),
       password: form.value.password
     })
-    userStore.setUserInfo({
-      userId: result.userId,
-      username: result.username,
-      nickname: result.nickname,
-      roles: result.roles || [result.role || 'USER'],
-      permissions: result.permissions || []
-    })
+    // 登录接口仅设置 HttpOnly Cookie，用户信息统一通过 /auth/me 拉取
+    const info = await userStore.fetchUserInfo()
+    if (!info) {
+      errorMessage.value = '登录成功但获取用户信息失败，请重试'
+      return
+    }
     router.push('/')
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '登录失败'
