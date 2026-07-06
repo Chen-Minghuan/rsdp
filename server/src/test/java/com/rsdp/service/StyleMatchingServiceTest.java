@@ -6,6 +6,7 @@ import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.StyleMatchResult;
 import com.rsdp.entity.ProductStyleMatch;
 import com.rsdp.entity.StyleMatchingFormula;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.StyleMatchingFormulaMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,13 +24,15 @@ class StyleMatchingServiceTest {
 
     private StyleMatchingFormulaMapper formulaMapper;
     private ProductStyleMatchMapper matchMapper;
+    private DictResolverService dictResolver;
     private StyleMatchingService service;
 
     @BeforeEach
     void setUp() {
         formulaMapper = mock(StyleMatchingFormulaMapper.class);
         matchMapper = mock(ProductStyleMatchMapper.class);
-        service = new StyleMatchingService(formulaMapper, matchMapper, new ObjectMapper());
+        dictResolver = mock(DictResolverService.class);
+        service = new StyleMatchingService(formulaMapper, matchMapper, new ObjectMapper(), dictResolver);
     }
 
     @Test
@@ -178,5 +181,39 @@ class StyleMatchingServiceTest {
         // Then
         assertThat(result).isNotNull();
         assertThat(result.getOverallScore()).isGreaterThanOrEqualTo(BigDecimal.ONE);
+    }
+
+    @Test
+    void match_shouldResolveChineseStyleNameToCode() {
+        // Given
+        CategoryDict styleDict = new CategoryDict();
+        styleDict.setDictType("style");
+        styleDict.setDictCode("MC");
+        styleDict.setDictName("中古风");
+        when(dictResolver.resolveCodeByName("style", "中古风")).thenReturn("MC");
+
+        StyleMatchingFormula formula = new StyleMatchingFormula();
+        formula.setFormulaId("FORM-MC-001");
+        formula.setStyleCode("MC");
+        formula.setStatus("active");
+        formula.setFormulaJson("""
+            {
+              "must_have": [{"type": "material", "values": ["胡桃木"], "role": "primary"}],
+              "compatible": [],
+              "avoid": []
+            }
+            """);
+        when(formulaMapper.selectList(any())).thenReturn(List.of(formula));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setMaterialTags(List.of("胡桃木"));
+
+        // When
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-006");
+
+        // Then
+        assertThat(result).isNotNull();
+        assertThat(result.getStyleCode()).isEqualTo("MC");
     }
 }

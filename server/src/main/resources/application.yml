@@ -34,6 +34,8 @@ rsdp:
     api-key: ${DASHSCOPE_API_KEY:your-api-key-here}
     timeout-seconds: 60
     max-retries: 2
+    # 异步 AI 识别允许的最大图片字节数（默认 20MB）
+    max-image-size: 20971520
     # 多模态 embedding 模型，用于以图搜图
     embedding-model: multimodal-embedding-v1
     embedding-base-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding

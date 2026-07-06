@@ -138,7 +138,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/v1/collections/**").hasAuthority(Permissions.COLLECTION_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/collections/**").hasAuthority(Permissions.COLLECTION_DELETE)
 
-                // 设计师画像
+                // 设计师画像（/me 为当前用户自服务，不依赖 designer:profile:update 权限）
+                .requestMatchers(HttpMethod.GET, "/api/v1/designer-profiles/me").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/designer-profiles/me").authenticated()
+                .requestMatchers(HttpMethod.PUT, "/api/v1/designer-profiles/me").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/designer-profiles").hasAuthority(Permissions.DESIGNER_PROFILE_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/designer-profiles/*").hasAuthority(Permissions.DESIGNER_PROFILE_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/designer-profiles").hasAuthority(Permissions.DESIGNER_PROFILE_UPDATE)

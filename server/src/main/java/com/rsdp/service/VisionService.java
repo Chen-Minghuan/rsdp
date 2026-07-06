@@ -36,6 +36,10 @@ public class VisionService {
         只输出 JSON，不要任何其他文字说明。
         """;
 
+    private static final String DEFAULT_STYLE_ENUM = "中古风、奶油风、侘寂风、意式、法式、包豪斯、工业风、新中式、孟菲斯";
+    private static final String DEFAULT_SCENE_ENUM = "客厅、卧室、书房、办公室、酒店、咖啡厅";
+    private static final String DEFAULT_MATERIAL_ENUM = "实木、皮革、亚麻、金属、玻璃、石材";
+
     /**
      * 用户提示词模板。风格、场景、材质枚举会在运行时从 category_dict 动态注入，
      * 确保 AI 输出与平台字典保持一致。
@@ -136,15 +140,24 @@ public class VisionService {
      */
     private String buildEnumText(String dictType) {
         try {
-            return dictService.listByType(dictType).stream()
+            String enumText = dictService.listByType(dictType).stream()
                 .map(CategoryDict::getDictName)
                 .filter(name -> name != null && !name.isBlank())
                 .sorted()
                 .collect(Collectors.joining("、"));
+            if (!enumText.isBlank()) {
+                return enumText;
+            }
+            log.warn("字典枚举为空，使用默认兜底枚举，dictType={}", dictType);
         } catch (Exception e) {
-            log.warn("读取字典枚举失败，dictType={}", dictType, e);
-            return "";
+            log.warn("读取字典枚举失败，使用默认兜底枚举，dictType={}", dictType, e);
         }
+        return switch (dictType) {
+            case "style" -> DEFAULT_STYLE_ENUM;
+            case "scene" -> DEFAULT_SCENE_ENUM;
+            case "material" -> DEFAULT_MATERIAL_ENUM;
+            default -> "";
+        };
     }
 
     /**

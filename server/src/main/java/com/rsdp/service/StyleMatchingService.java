@@ -40,6 +40,7 @@ public class StyleMatchingService {
     private final StyleMatchingFormulaMapper formulaMapper;
     private final ProductStyleMatchMapper matchMapper;
     private final ObjectMapper objectMapper;
+    private final DictResolverService dictResolver;
 
     private static final BigDecimal SCORE_HIGH = new BigDecimal("0.75");
     private static final BigDecimal SCORE_MID = new BigDecimal("0.50");
@@ -99,7 +100,13 @@ public class StyleMatchingService {
     }
 
     /**
-     * 根据风格名称解析风格编码。优先尝试直接匹配 code，再尝试首字母大写形式。
+     * 根据风格名称解析风格编码。
+     *
+     * <p>优先尝试直接按字母数字编码匹配；若失败则通过字典将中文风格名映射为编码，
+     * 以兼容 AI 输出中文风格名（如"中古风"）的场景。</p>
+     *
+     * @param styleName 风格名称或编码
+     * @return 风格编码；无法解析时返回 {@code null}
      */
     private String resolveStyleCode(String styleName) {
         if (!StringUtils.hasText(styleName)) {
@@ -109,8 +116,10 @@ public class StyleMatchingService {
         if (trimmed.length() <= 4 && trimmed.matches("[A-Za-z0-9]+")) {
             return trimmed.toUpperCase();
         }
-        // 简单兜底：尝试从名称中提取双字母或中文风格简称
-        // 实际项目中可扩展为完整的别名映射
+        String code = dictResolver.resolveCodeByName("style", trimmed);
+        if (StringUtils.hasText(code)) {
+            return code.toUpperCase();
+        }
         return null;
     }
 

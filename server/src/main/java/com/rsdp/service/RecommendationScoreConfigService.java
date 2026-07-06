@@ -97,7 +97,11 @@ public class RecommendationScoreConfigService {
         config.setWeights(toJson(request.getWeights()));
         config.setIsDefault(request.getIsDefault() != null ? request.getIsDefault() : false);
         config.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
-        config.setCreatedBy(SecurityOperatorContext.currentUsername());
+        String createdBy = SecurityOperatorContext.currentUserId();
+        if (!StringUtils.hasText(createdBy)) {
+            throw new BusinessException("无法获取当前用户 ID");
+        }
+        config.setCreatedBy(createdBy);
         config.setCreatedAt(LocalDateTime.now());
         config.setUpdatedAt(LocalDateTime.now());
         configMapper.insert(config);

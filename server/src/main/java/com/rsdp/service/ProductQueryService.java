@@ -91,11 +91,12 @@ public class ProductQueryService {
         if (StringUtils.hasText(request.getStatus())) {
             wrapper.eq("status", request.getStatus());
         }
-        if (StringUtils.hasText(request.getReviewStatus())) {
-            wrapper.eq("review_status", request.getReviewStatus());
-        }
-        // 非管理员默认只展示已审核通过的产品
-        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+        // 管理员可按请求参数筛选复核状态；非管理员强制只看已确认产品
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            if (StringUtils.hasText(request.getReviewStatus())) {
+                wrapper.eq("review_status", request.getReviewStatus());
+            }
+        } else {
             wrapper.eq("review_status", ReviewStatus.APPROVED.getDbValue());
         }
         if (StringUtils.hasText(request.getProductLevel())) {

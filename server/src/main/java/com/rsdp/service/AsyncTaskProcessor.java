@@ -49,6 +49,9 @@ public class AsyncTaskProcessor {
     @Value("${rsdp.ai.model}")
     private String aiModel;
 
+    @Value("${rsdp.ai.max-image-size:20971520}")
+    private long maxImageSize = 20 * 1024 * 1024;
+
     /**
      * 异步处理产品录入任务：AI 视觉识别并更新相关记录。
      *
@@ -69,6 +72,13 @@ public class AsyncTaskProcessor {
         byte[] imageBytes;
         try (InputStream imageStream = storageService.get(objectKey)) {
             imageBytes = imageStream.readAllBytes();
+            if (imageBytes.length > maxImageSize) {
+                String msg = "图片大小超过限制：" + imageBytes.length + " 字节（最大允许 " + maxImageSize + " 字节）";
+                log.error("{}，taskId={}", msg, taskId);
+                persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, msg);
+                safeUpdateTaskStatus(taskId, "failed", 100, null, msg);
+                return;
+            }
         } catch (Exception e) {
             log.error("读取图片失败，taskId={}", taskId, e);
             persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());

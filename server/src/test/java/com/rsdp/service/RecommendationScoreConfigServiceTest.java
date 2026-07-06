@@ -8,6 +8,7 @@ import com.rsdp.entity.RecommendationScoreConfig;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.RecommendationScoreConfigMapper;
+import com.rsdp.security.SecurityUser;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,7 +17,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.User;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -45,7 +45,7 @@ class RecommendationScoreConfigServiceTest {
     @BeforeEach
     void setUp() {
         configService = new RecommendationScoreConfigService(configMapper, new ObjectMapper());
-        var user = User.withUsername("admin").password("").authorities("ROLE_ADMIN").build();
+        var user = new SecurityUser("USER-001", "admin", "", org.springframework.security.core.authority.AuthorityUtils.createAuthorityList("ROLE_ADMIN"));
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
     }

@@ -5,6 +5,8 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.util.Optional;
+
 import java.util.Collection;
 import java.util.Collections;
 
@@ -33,6 +35,19 @@ public final class SecurityOperatorContext {
             return userDetails.getUsername();
         }
         return principal.toString();
+    }
+
+    /**
+     * 获取当前登录用户 ID。
+     *
+     * @return {@code sys_user.user_id}；无法获取时返回 {@code null}
+     */
+    public static String currentUserId() {
+        return Optional.ofNullable(getAuthentication())
+            .map(Authentication::getPrincipal)
+            .filter(principal -> principal instanceof SecurityUser)
+            .map(principal -> ((SecurityUser) principal).getUserId())
+            .orElse(null);
     }
 
     /**
