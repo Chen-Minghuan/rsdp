@@ -3,18 +3,20 @@ package com.rsdp.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.entity.CategoryDict;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.web.client.RestClient;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.util.List;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.*;
 
 /**
  * {@link VisionService} 单元测试，使用 WireMock 模拟 DashScope API。
@@ -23,8 +25,7 @@ class VisionServiceTest {
 
     private WireMockServer wireMockServer;
     private VisionService visionService;
-
-
+    private DictService dictService;
 
     @BeforeEach
     void setUp() {
@@ -39,7 +40,25 @@ class VisionServiceTest {
             .requestFactory(new org.springframework.http.client.SimpleClientHttpRequestFactory())
             .build();
 
-        visionService = new VisionService(restClient, new ObjectMapper());
+        dictService = mock(DictService.class);
+        stubDictFor("style", List.of("中古风", "奶油风", "侘寂风"));
+        stubDictFor("scene", List.of("客厅", "书房"));
+        stubDictFor("material", List.of("实木", "布艺"));
+
+        visionService = new VisionService(restClient, new ObjectMapper(), dictService);
+    }
+
+    private void stubDictFor(String dictType, List<String> names) {
+        List<CategoryDict> dicts = names.stream()
+            .map(name -> {
+                CategoryDict d = new CategoryDict();
+                d.setDictType(dictType);
+                d.setDictName(name);
+                d.setDictCode(name);
+                return d;
+            })
+            .toList();
+        when(dictService.listByType(dictType)).thenReturn(dicts);
     }
 
     @AfterEach

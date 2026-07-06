@@ -53,6 +53,9 @@ class AsyncTaskProcessorTest {
     @Mock
     private AiRecognitionPersistenceService persistenceService;
 
+    @Mock
+    private StyleMatchingService styleMatchingService;
+
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks

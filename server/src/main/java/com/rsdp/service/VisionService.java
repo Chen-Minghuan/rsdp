@@ -5,6 +5,7 @@ import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.OpenAiChatMessage;
 import com.rsdp.dto.OpenAiChatRequest;
 import com.rsdp.dto.OpenAiChatResponse;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.ExternalServiceException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Base64;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -24,6 +26,7 @@ public class VisionService {
 
     private final RestClient aiRestClient;
     private final ObjectMapper objectMapper;
+    private final DictService dictService;
 
     @Value("${rsdp.ai.model}")
     private String model;
@@ -33,10 +36,14 @@ public class VisionService {
         只输出 JSON，不要任何其他文字说明。
         """;
 
-    private static final String USER_PROMPT = """
+    /**
+     * 用户提示词模板。风格、场景、材质枚举会在运行时从 category_dict 动态注入，
+     * 确保 AI 输出与平台字典保持一致。
+     */
+    private static final String USER_PROMPT_TEMPLATE = """
         请分析这张家具产品图，输出以下 JSON 字段：
         {
-          "style": "风格名称，如：中古风、奶油风、意式极简、工业风等",
+          "style": "风格名称，必须从以下枚举中精确选择：%s。严禁使用枚举外的风格名称。",
           "sixDimTags": {
             "A": "轮廓形态",
             "B": "靠背/背部特征",
@@ -73,6 +80,10 @@ public class VisionService {
             }
           }
         }
+        风格、场景、材质的枚举约束如下，请优先从中选择：
+        - 风格（style）：%s
+        - 场景（scene）：%s
+        - 材质（material）：%s
         如果无法判断某个字段或图片中没有对应文字，填 null 或 "unknown"。
         只输出 JSON，不要任何其他文字说明。
         """;
@@ -85,11 +96,12 @@ public class VisionService {
             }
             String base64 = Base64.getEncoder().encodeToString(imageBytes);
 
+            String userPrompt = buildUserPrompt();
             OpenAiChatRequest request = OpenAiChatRequest.builder()
                 .model(model)
                 .messages(List.of(
                     OpenAiChatMessage.text("system", SYSTEM_PROMPT),
-                    OpenAiChatMessage.vision("user", USER_PROMPT, base64)
+                    OpenAiChatMessage.vision("user", userPrompt, base64)
                 ))
                 .temperature(0.3)
                 .build();
@@ -100,6 +112,38 @@ public class VisionService {
         } catch (IOException e) {
             log.error("读取图片流失败", e);
             throw new ExternalServiceException("读取图片流失败", e);
+        }
+    }
+
+    /**
+     * 构建用户提示词，运行时从 category_dict 注入风格、场景、材质枚举。
+     * 若字典服务不可用，则使用最小默认枚举，避免完全阻断识别流程。
+     *
+     * @return 完整的用户提示词
+     */
+    private String buildUserPrompt() {
+        String styleEnum = buildEnumText("style");
+        String sceneEnum = buildEnumText("scene");
+        String materialEnum = buildEnumText("material");
+        return USER_PROMPT_TEMPLATE.formatted(styleEnum, styleEnum, sceneEnum, materialEnum);
+    }
+
+    /**
+     * 从字典服务读取指定类型的有效名称，拼接为顿号分隔的枚举文本。
+     *
+     * @param dictType 字典类型
+     * @return 枚举文本，如"中古风、奶油风、侘寂风"
+     */
+    private String buildEnumText(String dictType) {
+        try {
+            return dictService.listByType(dictType).stream()
+                .map(CategoryDict::getDictName)
+                .filter(name -> name != null && !name.isBlank())
+                .sorted()
+                .collect(Collectors.joining("、"));
+        } catch (Exception e) {
+            log.warn("读取字典枚举失败，dictType={}", dictType, e);
+            return "";
         }
     }
 

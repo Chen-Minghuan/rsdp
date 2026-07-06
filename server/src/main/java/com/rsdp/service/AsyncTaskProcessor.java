@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.Dimensions;
 import com.rsdp.dto.OcrResult;
+import com.rsdp.dto.StyleMatchResult;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
@@ -42,6 +43,7 @@ public class AsyncTaskProcessor {
     private final ChromaDbClient chromaDbClient;
     private final StorageService storageService;
     private final AiRecognitionPersistenceService persistenceService;
+    private final StyleMatchingService styleMatchingService;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.ai.model}")
@@ -80,8 +82,16 @@ public class AsyncTaskProcessor {
             labels = visionService.recognizeImage(imageStream);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
-            // OCR 结果后处理：清洗型号/材质，规范化尺寸与材质标签
-            postProcessOcr(labels);
+            // AI 标签后处理：清洗 OCR 字段，规范化尺寸，OCR 材质兜底
+            postProcessLabels(labels);
+
+            // 风格数据库校验：基于 style_matching_formula 计算风格匹配得分
+            StyleMatchResult styleMatch = styleMatchingService.match(labels, rspuId);
+            if (styleMatch != null) {
+                labels.setConfidence(styleMatch.getConfidence());
+                log.info("风格匹配评分完成，rspuId={}，style={}，score={}，confidence={}",
+                    rspuId, styleMatch.getStyleCode(), styleMatch.getOverallScore(), styleMatch.getConfidence());
+            }
 
             updateTaskStatus(taskId, "processing", 60, null, null);
 
@@ -111,7 +121,7 @@ public class AsyncTaskProcessor {
         }
     }
 
-    private void postProcessOcr(AiLabels labels) {
+    private void postProcessLabels(AiLabels labels) {
         if (labels == null) {
             return;
         }
@@ -125,8 +135,7 @@ public class AsyncTaskProcessor {
         // 如果视觉识别没有返回材质标签，尝试用 OCR 材质描述兜底
         if ((labels.getMaterialTags() == null || labels.getMaterialTags().isEmpty())
             && StringUtils.hasText(ocr.getMaterialDescription())) {
-            List<String> parsedMaterials = OcrPostProcessor.parseMaterials(
-                ocr.getMaterialDescription(), labels.getMaterialTags());
+            List<String> parsedMaterials = OcrPostProcessor.parseMaterials(ocr.getMaterialDescription());
             if (!parsedMaterials.isEmpty()) {
                 labels.setMaterialTags(parsedMaterials);
             }

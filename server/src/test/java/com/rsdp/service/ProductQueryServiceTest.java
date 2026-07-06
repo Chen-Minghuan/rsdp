@@ -15,6 +15,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
@@ -76,6 +77,9 @@ class ProductQueryServiceTest {
 
     @Mock
     private RspuSceneMapper rspuSceneMapper;
+
+    @Mock
+    private ProductStyleMatchMapper productStyleMatchMapper;
 
     @Mock
     private AuditLogService auditLogService;
@@ -242,6 +246,7 @@ class ProductQueryServiceTest {
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
         when(aiRecognitionMapper.selectList(any())).thenReturn(List.of());
+        when(productStyleMatchMapper.selectByRspuId("RSPU-TEST01")).thenReturn(List.of());
         when(rspuRelationService.listByAnchor("RSPU-TEST01")).thenReturn(List.of());
         when(rspuRelationService.listByRelated("RSPU-TEST01")).thenReturn(List.of());
 
@@ -250,6 +255,7 @@ class ProductQueryServiceTest {
         assertThat(detail.getRspu()).isNotNull();
         assertThat(detail.getImages()).isEmpty();
         assertThat(detail.getRecognitions()).isEmpty();
+        assertThat(detail.getStyleMatches()).isEmpty();
     }
 
     @Test
@@ -269,6 +275,7 @@ class ProductQueryServiceTest {
         when(rspuMapper.selectById(eq("RSPU-BED"))).thenReturn(rspu);
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
         when(aiRecognitionMapper.selectList(any())).thenReturn(List.of());
+        when(productStyleMatchMapper.selectByRspuId("RSPU-BED")).thenReturn(List.of());
         when(rspuRelationService.listByAnchor("RSPU-BED")).thenReturn(List.of(match));
         when(rspuRelationService.listByRelated("RSPU-BED")).thenReturn(List.of(matchedBy));
 

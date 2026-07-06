@@ -12,6 +12,7 @@ import {
   NImage,
   NTag,
   NDivider,
+  NEmpty,
   NSpin,
   NDataTable,
   NModal,
@@ -31,7 +32,7 @@ import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
-import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct } from '@/types/product'
+import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct, RecognitionHistoryItem } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuCreateRequest } from '@/types/rsku'
 import type { Factory } from '@/types/factory'
@@ -297,6 +298,50 @@ function createRelationColumns(showDelete: boolean) {
   return columns
 }
 
+const recognitionColumns: DataTableColumns<RecognitionHistoryItem> = [
+  {
+    title: '识别时间',
+    key: 'createdAt',
+    width: 180
+  },
+  {
+    title: '模型',
+    key: 'modelName',
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '识别风格',
+    key: 'parsedStyle',
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '置信度',
+    key: 'confidence',
+    width: 100,
+    render(row: RecognitionHistoryItem) {
+      const type = row.confidence === 'high' ? 'success' : row.confidence === 'mid' ? 'warning' : 'default'
+      return h(NTag, { type, size: 'small' }, { default: () => row.confidence || '-' })
+    }
+  },
+  {
+    title: '状态',
+    key: 'status',
+    width: 100,
+    render(row: RecognitionHistoryItem) {
+      const type = row.status === 'done' ? 'success' : row.status === 'failed' ? 'error' : 'warning'
+      return h(NTag, { type, size: 'small' }, { default: () => row.status })
+    }
+  },
+  {
+    title: '错误信息',
+    key: 'errorMessage',
+    ellipsis: { tooltip: true },
+    render(row: RecognitionHistoryItem) {
+      return row.errorMessage || '-'
+    }
+  }
+]
+
 function validateRspuId(): boolean {
   if (!rspuId.value?.trim()) {
     errorMessage.value = '缺少产品 ID'
@@ -315,6 +360,14 @@ async function loadDetail() {
     errorMessage.value = e instanceof Error ? e.message : '加载产品详情失败'
   } finally {
     loading.value = false
+  }
+}
+
+function formatJson(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value || '-'
   }
 }
 
@@ -794,6 +847,15 @@ onBeforeRouteUpdate((to, from) => {
             <n-descriptions-item label="主色">
               {{ detail.rspu.colorPrimaryName || '-' }}
             </n-descriptions-item>
+            <n-descriptions-item label="主色 HSV">
+              {{ Array.isArray(detail.rspu.colorPrimaryHsv) ? detail.rspu.colorPrimaryHsv.join(', ') : '-' }}
+            </n-descriptions-item>
+            <n-descriptions-item label="参考价格带">
+              {{ detail.rspu.referencePriceBand || '-' }}
+            </n-descriptions-item>
+            <n-descriptions-item label="质保年限">
+              {{ detail.rspu.warrantyYears != null ? `${detail.rspu.warrantyYears} 年` : '-' }}
+            </n-descriptions-item>
             <n-descriptions-item label="状态">
               <n-tag :type="detail.rspu.status === 'active' ? 'success' : 'default'">
                 {{ detail.rspu.status }}
@@ -829,9 +891,72 @@ onBeforeRouteUpdate((to, from) => {
                 {{ resolveSceneNames(detail.rspu.sceneTags).join('、') || '-' }}
               </n-descriptions-item>
               <n-descriptions-item label="六维标签">
-                <pre style="margin: 0;">{{ JSON.stringify(detail.rspu.sixDimTags, null, 2) }}</pre>
+                <n-descriptions v-if="detail.rspu.sixDimTags" bordered :column="1" size="small">
+                  <n-descriptions-item label="轮廓形态">
+                    {{ detail.rspu.sixDimTags.A || '-' }}
+                  </n-descriptions-item>
+                  <n-descriptions-item label="靠背特征">
+                    {{ detail.rspu.sixDimTags.B || '-' }}
+                  </n-descriptions-item>
+                  <n-descriptions-item label="扶手特征">
+                    {{ detail.rspu.sixDimTags.C || '-' }}
+                  </n-descriptions-item>
+                  <n-descriptions-item label="腿部/底座">
+                    {{ detail.rspu.sixDimTags.D || '-' }}
+                  </n-descriptions-item>
+                  <n-descriptions-item label="表面材质">
+                    {{ detail.rspu.sixDimTags.E || '-' }}
+                  </n-descriptions-item>
+                  <n-descriptions-item label="软包形态">
+                    {{ detail.rspu.sixDimTags.F || '-' }}
+                  </n-descriptions-item>
+                </n-descriptions>
+              </n-descriptions-item>
+              <n-descriptions-item label="关键规格">
+                <pre v-if="detail.rspu.keySpecs && Object.keys(detail.rspu.keySpecs).length" style="margin: 0;">{{ JSON.stringify(detail.rspu.keySpecs, null, 2) }}</pre>
+                <span v-else>-</span>
               </n-descriptions-item>
             </n-descriptions>
+          </n-card>
+
+          <n-card title="风格匹配评分" size="small">
+            <n-space v-if="detail.styleMatches && detail.styleMatches.length" vertical>
+              <n-descriptions
+                v-for="match in detail.styleMatches"
+                :key="match.matchId"
+                bordered
+                :column="2"
+                size="small"
+              >
+                <n-descriptions-item label="风格">
+                  {{ match.styleName || match.styleCode || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="整体得分">
+                  {{ match.overallScore != null ? (match.overallScore * 100).toFixed(1) + '%' : '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="置信度">
+                  <n-tag
+                    :type="match.confidence === 'high'
+                      ? 'success'
+                      : match.confidence === 'mid'
+                        ? 'warning'
+                        : 'error'"
+                    size="small"
+                  >
+                    {{ match.confidence || '-' }}
+                  </n-tag>
+                </n-descriptions-item>
+                <n-descriptions-item label="匹配明细">
+                  <pre v-if="match.elementMatch" style="margin: 0;">{{ formatJson(match.elementMatch) }}</pre>
+                  <span v-else>-</span>
+                </n-descriptions-item>
+                <n-descriptions-item label="维度得分">
+                  <pre v-if="match.formulaScores" style="margin: 0;">{{ formatJson(match.formulaScores) }}</pre>
+                  <span v-else>-</span>
+                </n-descriptions-item>
+              </n-descriptions>
+            </n-space>
+            <n-empty v-else description="暂无风格匹配数据" />
           </n-card>
 
           <n-card title="图片" size="small">
@@ -846,6 +971,16 @@ onBeforeRouteUpdate((to, from) => {
                 style="border-radius: 4px;"
               />
             </n-space>
+          </n-card>
+
+          <n-card title="AI 识别记录" size="small">
+            <n-data-table
+              :columns="recognitionColumns"
+              :data="detail.recognitions || []"
+              :bordered="true"
+              :single-line="false"
+              size="small"
+            />
           </n-card>
 
           <n-card title="官方搭配" size="small">

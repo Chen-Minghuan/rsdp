@@ -1,7 +1,6 @@
 package com.rsdp.service;
 
 import com.rsdp.entity.CategoryDict;
-import com.rsdp.util.OcrPostProcessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,7 +25,8 @@ public class DictResolverService {
     /**
      * 根据字典类型和中文名称查找字典码。
      *
-     * <p>如果找不到精确匹配，返回 null，调用方应自行决定降级策略。
+     * <p>只接受 {@code category_dict} 中的标准名称，找不到精确匹配时返回 null。
+     * 风格解析不再使用任何硬编码别名，统一走字典与风格数据库。</p>
      *
      * @param dictType 字典类型，如 style、scene、material
      * @param dictName 中文名称，如"中古风"
@@ -42,19 +42,10 @@ public class DictResolverService {
             .map(CategoryDict::getDictCode)
             .findFirst()
             .orElse(null);
-        if (code != null) {
-            return code;
+        if (code == null) {
+            log.warn("未找到字典项: dictType={}, dictName={}", dictType, dictName);
         }
-        // style 类型使用内置别名兜底（如意式极简 → IT、侘寂风 → WJ）
-        if ("style".equals(dictType)) {
-            String aliasCode = OcrPostProcessor.toStyleCode(normalized);
-            if (aliasCode != null) {
-                log.debug("风格别名兜底命中: dictName={} -> {}", dictName, aliasCode);
-                return aliasCode;
-            }
-        }
-        log.warn("未找到字典项: dictType={}, dictName={}", dictType, dictName);
-        return null;
+        return code;
     }
 
     /**

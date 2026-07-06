@@ -3,15 +3,18 @@
 -- 执行方式：在 IDEA 数据库插件的 rsdp@localhost Console 中全选执行
 
 -- =================== 1. 清理旧表 ===================
+DROP TABLE IF EXISTS matching_feedback CASCADE;
+DROP TABLE IF EXISTS product_style_match CASCADE;
+DROP TABLE IF EXISTS style_element CASCADE;
+DROP TABLE IF EXISTS style_matching_formula CASCADE;
+DROP TABLE IF EXISTS style_case CASCADE;
 DROP TABLE IF EXISTS ai_recognition CASCADE;
 DROP TABLE IF EXISTS image_assets CASCADE;
 DROP TABLE IF EXISTS price_history CASCADE;
 DROP TABLE IF EXISTS rsku_supply CASCADE;
-DROP TABLE IF EXISTS factory_level_capability CASCADE;
 DROP TABLE IF EXISTS factory_variant_capacity CASCADE;
 DROP TABLE IF EXISTS factory_warehouse CASCADE;
 DROP TABLE IF EXISTS rspu_variant CASCADE;
-DROP TABLE IF EXISTS rspu_relation CASCADE;
 DROP TABLE IF EXISTS factory_master CASCADE;
 DROP TABLE IF EXISTS rspu_scene CASCADE;
 DROP TABLE IF EXISTS rspu_style CASCADE;
@@ -57,7 +60,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
 -- RSPU 设计原型主表（款式概念）
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
-    external_code VARCHAR(64),                     -- 业务侧外部编码/产品编码，用于 Excel 批量导入匹配
+    external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,
@@ -69,13 +72,13 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     material_tags JSONB,
     scene_tags JSONB,
     reference_price_band VARCHAR(16),
-    product_level VARCHAR(8),
+    product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华
     budget_range JSONB,
     warranty_years INTEGER,
     key_specs JSONB,
     status VARCHAR(16) DEFAULT 'active',
     review_status VARCHAR(16) DEFAULT '待复核',
-    review_comment TEXT,                           -- 复核备注
+    review_comment TEXT,                           -- 复核备注/说明
     aesthetics_confidence VARCHAR(16),
     source_agent_version VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -106,27 +109,6 @@ CREATE TABLE IF NOT EXISTS rspu_scene (
     FOREIGN KEY (dict_type, scene_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
--- RSPU 产品间关系表（原厂搭配 / AI 确认搭配 / 互斥排除）
-CREATE TABLE IF NOT EXISTS rspu_relation (
-    relation_id VARCHAR(64) PRIMARY KEY,
-    anchor_rspu_id VARCHAR(64) NOT NULL,
-    related_rspu_id VARCHAR(64) NOT NULL,
-    relation_type VARCHAR(32) NOT NULL DEFAULT 'official',
-    reason TEXT,
-    sort_order INTEGER DEFAULT 0,
-    status VARCHAR(16) DEFAULT 'active',
-    created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    FOREIGN KEY (anchor_rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (related_rspu_id) REFERENCES rspu_master(rspu_id)
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rspu_relation_unique_active
-    ON rspu_relation(anchor_rspu_id, related_rspu_id)
-    WHERE deleted_at IS NULL;
-
 -- RSPU 变体表
 -- 建议变体编码使用无业务含义顺序号，如 {rspu_id}-V001，避免尺寸/材质变化导致编码变更
 -- 可读名称存入 display_name 字段，尺寸/材质等业务属性存入对应字段
@@ -141,7 +123,6 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     material_code VARCHAR(32),
     material_mix JSONB,
     reference_price_band VARCHAR(16),
-    product_level VARCHAR(8),
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
@@ -169,22 +150,6 @@ CREATE TABLE IF NOT EXISTS factory_master (
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
-
--- 工厂能力等级表（记录工厂可承接的所有等级，主评级 is_primary=true）
-CREATE TABLE IF NOT EXISTS factory_level_capability (
-    id           BIGSERIAL PRIMARY KEY,
-    factory_code VARCHAR(16) NOT NULL,
-    level_code   VARCHAR(8)  NOT NULL,
-    is_primary   BOOLEAN DEFAULT FALSE,
-    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (factory_code, level_code),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
-);
-
--- 每个工厂只能有一个主评级
-CREATE UNIQUE INDEX IF NOT EXISTS idx_factory_level_primary_unique
-    ON factory_level_capability(factory_code)
-    WHERE is_primary = TRUE;
 
 -- 工厂仓库表
 CREATE TABLE IF NOT EXISTS factory_warehouse (
@@ -227,7 +192,7 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     variant_id VARCHAR(64),
     factory_code VARCHAR(16) NOT NULL,
     factory_sku VARCHAR(64),
-    factory_price TEXT,                            -- 出厂价（AES-256-GCM 加密存储，Base64 密文）
+    factory_price DECIMAL(18, 2),
     price_band VARCHAR(16),
     product_level VARCHAR(8),
     material_code VARCHAR(8),
@@ -255,14 +220,6 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id)
 );
-
--- 部分唯一索引：处理 variant_id 可 NULL 的情况，并排除已软删除记录
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique_null_variant
-    ON rsku_supply(rspu_id, factory_code)
-    WHERE variant_id IS NULL AND deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique_non_null_variant
-    ON rsku_supply(rspu_id, variant_id, factory_code)
-    WHERE variant_id IS NOT NULL AND deleted_at IS NULL;
 
 -- 价格历史表
 CREATE TABLE IF NOT EXISTS price_history (
@@ -337,22 +294,6 @@ CREATE TABLE IF NOT EXISTS async_task (
     completed_at TIMESTAMP
 );
 
--- RSPU 业务编码流水号计数器（按品类+风格组合）
-CREATE TABLE IF NOT EXISTS rspu_code_counter (
-    category_code VARCHAR(16) NOT NULL,
-    style_code VARCHAR(16) NOT NULL,
-    sequence_value BIGINT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (category_code, style_code)
-);
-
--- 变体编码流水号计数器（按 RSPU 维度，保证变体 ID 并发唯一）
-CREATE TABLE IF NOT EXISTS variant_code_counter (
-    rspu_id VARCHAR(64) PRIMARY KEY,
-    sequence_value BIGINT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_log (
     id SERIAL PRIMARY KEY,
@@ -377,18 +318,103 @@ CREATE TABLE IF NOT EXISTS user_operator (
     updated_at TIMESTAMP
 );
 
+-- 风格数据库 Skill 表
+
+-- 案例库：成功/失败的设计案例
+CREATE TABLE IF NOT EXISTS style_case (
+    case_id VARCHAR(64) PRIMARY KEY,
+    case_name VARCHAR(128) NOT NULL,
+    dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
+    style_code VARCHAR(32) NOT NULL,
+    room_type VARCHAR(32),
+    is_success BOOLEAN NOT NULL DEFAULT TRUE,
+    source_type VARCHAR(32),
+    source_url TEXT,
+    description TEXT,
+    image_url TEXT,
+    ai_raw_output JSONB,
+    negative_lesson TEXT,
+    review_status VARCHAR(16) DEFAULT '待复核',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
+);
+
+-- 元素库：从案例中拆解出的标准化元素
+CREATE TABLE IF NOT EXISTS style_element (
+    element_id VARCHAR(64) PRIMARY KEY,
+    case_id VARCHAR(64) NOT NULL,
+    element_type VARCHAR(32) NOT NULL,
+    element_value VARCHAR(128) NOT NULL,
+    normalized_code VARCHAR(64),
+    is_primary BOOLEAN DEFAULT FALSE,
+    confidence VARCHAR(16),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (case_id) REFERENCES style_case(case_id)
+);
+
+-- 搭配公式库：可解释的搭配规则
+CREATE TABLE IF NOT EXISTS style_matching_formula (
+    formula_id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(256) NOT NULL,
+    dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
+    style_code VARCHAR(32) NOT NULL,
+    room_type VARCHAR(32),
+    priority INTEGER DEFAULT 0,
+    formula_json JSONB NOT NULL,
+    source_case_ids JSONB,
+    negative_case_ids JSONB,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
+);
+
+-- 产品-风格匹配结果：产品录入后自动计算
+CREATE TABLE IF NOT EXISTS product_style_match (
+    match_id SERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
+    style_code VARCHAR(32) NOT NULL,
+    element_match JSONB,
+    formula_scores JSONB,
+    overall_score DECIMAL(5,4),
+    confidence VARCHAR(16),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    UNIQUE (rspu_id, style_code),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
+);
+
+-- 推荐反馈：用于后续优化公式
+CREATE TABLE IF NOT EXISTS matching_feedback (
+    feedback_id SERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    recommended_rspu_id VARCHAR(64) NOT NULL,
+    formula_id VARCHAR(64),
+    score DECIMAL(5,4),
+    feedback VARCHAR(16),
+    reason TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (recommended_rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (formula_id) REFERENCES style_matching_formula(formula_id)
+);
+
 -- =================== 4. 创建索引 ===================
 CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, status);
 CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rspu_external_code
-    ON rspu_master(external_code) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_scene ON rspu_scene(scene_code);
-CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu_id, status, sort_order);
-CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_variant_rspu ON rspu_variant(rspu_id, status);
 CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);
@@ -403,6 +429,8 @@ CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
 CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code);
+
 CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
@@ -415,128 +443,9 @@ CREATE INDEX IF NOT EXISTS idx_ai_rspu ON ai_recognition(rspu_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
 
--- JSONB GIN 索引（material_tags 用于精确包含查询）
-CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
-
--- 搭配方案主表
-CREATE TABLE IF NOT EXISTS scheme (
-    scheme_id VARCHAR(64) PRIMARY KEY,
-    scheme_name VARCHAR(128) NOT NULL,
-    room_type VARCHAR(32),
-    budget_limit DECIMAL(18, 2),
-    total_price DECIMAL(18, 2) NOT NULL DEFAULT 0,
-    factory_count INTEGER NOT NULL DEFAULT 0,
-    max_lead_time_days INTEGER NOT NULL DEFAULT 0,
-    item_count INTEGER NOT NULL DEFAULT 0,
-    status VARCHAR(16) DEFAULT 'active',
-    created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP
-);
-
--- 搭配方案项表
-CREATE TABLE IF NOT EXISTS scheme_item (
-    scheme_item_id BIGSERIAL PRIMARY KEY,
-    scheme_id VARCHAR(64) NOT NULL,
-    rspu_id VARCHAR(64) NOT NULL,
-    rsku_id VARCHAR(64) NOT NULL,
-    factory_code VARCHAR(16),
-    factory_price TEXT,                            -- 出厂价（AES-256-GCM 加密存储，Base64 密文）
-    lead_time_days INTEGER,
-    moq INTEGER,
-    quantity INTEGER DEFAULT 1 NOT NULL,           -- 产品数量（默认 1）
-    sort_order INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
-);
-
--- 方案索引
-CREATE INDEX IF NOT EXISTS idx_scheme_status ON scheme(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);
-
--- =================== 风格数据库扩展表 ===================
-
--- 案例库：成功/失败的设计案例
-CREATE TABLE IF NOT EXISTS style_case (
-    case_id VARCHAR(64) PRIMARY KEY,
-    case_name VARCHAR(128) NOT NULL,
-    style_code VARCHAR(32) NOT NULL,
-    room_type VARCHAR(32),
-    is_success BOOLEAN NOT NULL DEFAULT TRUE,
-    source_type VARCHAR(32),
-    source_url TEXT,
-    description TEXT,
-    image_url TEXT,
-    ai_raw_output JSONB,
-    review_status VARCHAR(16) DEFAULT '待复核',
-    created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP
-);
-
--- 元素库：从案例中拆解出的标准化元素
-CREATE TABLE IF NOT EXISTS style_element (
-    element_id VARCHAR(64) PRIMARY KEY,
-    case_id VARCHAR(64) NOT NULL,
-    element_type VARCHAR(32) NOT NULL,
-    element_value VARCHAR(128) NOT NULL,
-    normalized_code VARCHAR(64),
-    is_primary BOOLEAN DEFAULT FALSE,
-    confidence VARCHAR(16),
-    notes TEXT,
-    FOREIGN KEY (case_id) REFERENCES style_case(case_id)
-);
-
--- 搭配公式库：可解释的搭配规则
-CREATE TABLE IF NOT EXISTS style_matching_formula (
-    formula_id VARCHAR(64) PRIMARY KEY,
-    name VARCHAR(256) NOT NULL,
-    style_code VARCHAR(32) NOT NULL,
-    room_type VARCHAR(32),
-    priority INTEGER DEFAULT 0,
-    formula_json JSONB NOT NULL,
-    source_case_ids JSONB,
-    negative_case_ids JSONB,
-    success_count INTEGER DEFAULT 0,
-    fail_count INTEGER DEFAULT 0,
-    status VARCHAR(16) DEFAULT 'active',
-    created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP
-);
-
--- 产品-风格匹配结果：产品录入后自动计算
-CREATE TABLE IF NOT EXISTS product_style_match (
-    match_id SERIAL PRIMARY KEY,
-    rspu_id VARCHAR(64) NOT NULL,
-    style_code VARCHAR(32) NOT NULL,
-    element_match JSONB,
-    formula_scores JSONB,
-    overall_score DECIMAL(5,4),
-    confidence VARCHAR(16),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    UNIQUE (rspu_id, style_code)
-);
-
--- 推荐反馈：用于后续优化公式
-CREATE TABLE IF NOT EXISTS matching_feedback (
-    feedback_id SERIAL PRIMARY KEY,
-    rspu_id VARCHAR(64) NOT NULL,
-    recommended_rspu_id VARCHAR(64) NOT NULL,
-    formula_id VARCHAR(64),
-    score DECIMAL(5,4),
-    feedback VARCHAR(16),
-    reason TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 -- 风格数据库索引
 CREATE INDEX IF NOT EXISTS idx_style_case_style ON style_case(style_code, is_success);
+CREATE INDEX IF NOT EXISTS idx_style_case_room ON style_case(room_type, is_success);
 CREATE INDEX IF NOT EXISTS idx_style_element_case ON style_element(case_id);
 CREATE INDEX IF NOT EXISTS idx_style_element_type ON style_element(element_type, normalized_code);
 CREATE INDEX IF NOT EXISTS idx_formula_style_room ON style_matching_formula(style_code, room_type, status);
@@ -729,13 +638,10 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'TB', '茶几', 3),
 ('category', 'FC', '柜类', 4),
 ('category', 'BS', '吧椅', 5),
-('category', 'DT', '桌子', 6),
-('category', 'CB', '柜子', 7),
-('category', 'BD', '床', 8),
-('category', 'OF', '办公家具', 9)
+('category', 'OF', '办公家具', 6)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 家装风格
+-- 家装风格（扩展为 11 个独立风格 + 6 个基础风格，保留 2 位编码）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('style', 'MC', '中古风', 1),
 ('style', 'BA', '包豪斯', 2),
@@ -745,7 +651,15 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('style', 'NC', '新中式', 6),
 ('style', 'CR', '奶油风', 7),
 ('style', 'IN', '工业风', 8),
-('style', 'MP', '孟菲斯', 9)
+('style', 'MP', '孟菲斯', 9),
+('style', 'IL', '意式极简轻奢', 10),
+('style', 'ZS', '新中式宋式', 11),
+('style', 'MB', '现代极简包豪斯', 12),
+('style', 'MD', '孟菲斯多巴胺', 13),
+('style', 'IO', '工业风LOFT', 14),
+('style', 'FN', '法式复古南洋', 15),
+('style', 'HH', '混搭风', 16),
+('style', 'DL', '国外顶尖大牌搭配', 17)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 办公家具职级
@@ -757,20 +671,27 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('grade', 'CO', '会议区', 5)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 材质版本码
+-- 材质版本码（精简为 19 个准确大类，覆盖风格百科高频材质）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('material', 'TN', '真藤', 1),
+('material', 'TN', '真藤/竹编/草编', 1),
 ('material', 'PE', 'PE仿藤', 2),
 ('material', 'LE', '皮革', 3),
 ('material', 'NP', '纳帕皮', 4),
 ('material', 'SU', '磨砂皮', 5),
 ('material', 'MA', '马鞍皮', 6),
-('material', 'LI', '亚麻', 7),
-('material', 'SF', '羊羔绒', 8),
-('material', 'VE', '天鹅绒', 9),
+('material', 'LI', '亚麻/棉麻', 7),
+('material', 'SF', '羊羔绒/泰迪绒', 8),
+('material', 'VE', '天鹅绒/绒布', 9),
 ('material', 'WO', '实木', 10),
 ('material', 'RK', '藤编+实木混血', 11),
-('material', 'MT', '金属', 12)
+('material', 'MT', '金属/不锈钢/黄铜', 12),
+('material', 'WL', '羊毛', 13),
+('material', 'GL', '玻璃', 14),
+('material', 'ST', '天然石材/大理石/洞石/岩板', 15),
+('material', 'CE', '水泥/混凝土/微水泥', 16),
+('material', 'CL', '陶瓷', 17),
+('material', 'GP', '石膏/PU线条', 18),
+('material', 'PL', '塑料/亚克力', 19)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 六维标签 - 休闲椅 A 维度（轮廓）
@@ -812,14 +733,23 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('size', 'TRIPLE', '三人位', 6)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 颜色码
+-- 颜色码（精简为 15 个准确色系，覆盖风格百科高频颜色）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('color', 'CARAMEL', '焦糖棕', 1),
-('color', 'BEIGE', '米白', 2),
-('color', 'NATURAL', '原木色', 3),
-('color', 'BLACK', '黑色', 4),
-('color', 'GRAY', '灰色', 5),
-('color', 'NAVY', '藏青', 6)
+('color', 'BEIGE', '米白/奶油白/燕麦色', 2),
+('color', 'CA', '驼色/奶咖色', 3),
+('color', 'DB', '深棕/胡桃木色', 4),
+('color', 'NATURAL', '原木色', 5),
+('color', 'BLACK', '黑色', 6),
+('color', 'GRAY', '灰色', 7),
+('color', 'NAVY', '藏青/蓝色系', 8),
+('color', 'GN', '绿色系', 9),
+('color', 'PR', '紫色系', 10),
+('color', 'RD', '红色系', 11),
+('color', 'OR', '橙色系', 12),
+('color', 'PK', '粉色系', 13),
+('color', 'YE', '黄色系', 14),
+('color', 'WT', '白色', 15)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 场景标签
@@ -832,25 +762,17 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('scene', 'HOTEL', '酒店', 6)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 空间类型（用于 AI 搭配方案）
+-- 空间类型（风格数据库 case 用）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('room_type', 'LIVING_ROOM', '客厅', 1),
 ('room_type', 'BEDROOM', '卧室', 2),
 ('room_type', 'DINING_ROOM', '餐厅', 3),
-('room_type', 'STUDY', '书房', 4),
-('room_type', 'OFFICE', '办公室', 5)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
--- 报价置信度
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('quote_confidence', 'high', '高', 1),
-('quote_confidence', 'mid', '中', 2),
-('quote_confidence', 'low', '低', 3)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
--- 产品状态
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('product_status', 'active', '在售', 1),
-('product_status', 'discontinued', '停产', 2),
-('product_status', 'draft', '草稿', 3)
+('room_type', 'STUDY_ROOM', '书房', 4),
+('room_type', 'OFFICE_EXECUTIVE', '总裁办公室', 5),
+('room_type', 'OFFICE_STAFF', '职员办公区', 6),
+('room_type', 'OFFICE_MEETING', '会议室', 7),
+('room_type', 'CAFE', '咖啡厅', 8),
+('room_type', 'HOTEL_ROOM', '酒店客房', 9),
+('room_type', 'BAR', '酒吧', 10),
+('room_type', 'OUTDOOR', '户外', 11)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;

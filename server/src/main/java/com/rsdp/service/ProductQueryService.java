@@ -10,6 +10,7 @@ import com.rsdp.common.ReviewStatus;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
+import com.rsdp.dto.response.ProductStyleMatchResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.CategoryDict;
@@ -22,6 +23,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
@@ -50,6 +52,7 @@ public class ProductQueryService {
     private final AiRecognitionMapper aiRecognitionMapper;
     private final RspuStyleMapper rspuStyleMapper;
     private final RspuSceneMapper rspuSceneMapper;
+    private final ProductStyleMatchMapper productStyleMatchMapper;
     private final AuditLogService auditLogService;
     private final DictService dictService;
     private final ObjectMapper objectMapper;
@@ -156,11 +159,13 @@ public class ProductQueryService {
         List<AiRecognition> recognitions = aiRecognitionMapper.selectList(
             new QueryWrapper<AiRecognition>().eq("rspu_id", rspuId).orderByDesc("created_at")
         );
+        List<ProductStyleMatchResponse> styleMatches = listStyleMatches(rspuId);
 
         ProductDetailResponse response = new ProductDetailResponse();
         response.setRspu(rspu);
         response.setImages(images);
         response.setRecognitions(recognitions);
+        response.setStyleMatches(styleMatches);
         response.setOfficialMatches(rspuRelationService.listByAnchor(rspuId));
         response.setMatchedBy(rspuRelationService.listByRelated(rspuId));
         return response;
@@ -413,6 +418,38 @@ public class ProductQueryService {
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
         return copy;
+    }
+
+    private List<ProductStyleMatchResponse> listStyleMatches(String rspuId) {
+        var entities = productStyleMatchMapper.selectByRspuId(rspuId);
+        if (entities == null || entities.isEmpty()) {
+            return List.of();
+        }
+        return entities.stream().map(entity -> {
+            ProductStyleMatchResponse r = new ProductStyleMatchResponse();
+            r.setMatchId(entity.getMatchId());
+            r.setRspuId(entity.getRspuId());
+            r.setStyleCode(entity.getStyleCode());
+            r.setStyleName(resolveStyleName(entity.getStyleCode()));
+            r.setOverallScore(entity.getOverallScore());
+            r.setConfidence(entity.getConfidence());
+            r.setElementMatch(entity.getElementMatch());
+            r.setFormulaScores(entity.getFormulaScores());
+            r.setCreatedAt(entity.getCreatedAt());
+            r.setUpdatedAt(entity.getUpdatedAt());
+            return r;
+        }).collect(Collectors.toList());
+    }
+
+    private String resolveStyleName(String styleCode) {
+        if (!StringUtils.hasText(styleCode)) {
+            return styleCode;
+        }
+        return dictService.listByType("style").stream()
+            .filter(d -> styleCode.equals(d.getDictCode()))
+            .findFirst()
+            .map(com.rsdp.entity.CategoryDict::getDictName)
+            .orElse(styleCode);
     }
 
     private ProductSummaryResponse toSummary(RspuMaster rspu, Map<String, String> primaryImageUrlMap) {
