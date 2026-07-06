@@ -52,6 +52,32 @@ public final class Permissions {
     public static final String USER_DELETE = "user:delete";
     public static final String USER_RESET_PASSWORD = "user:reset-password";
 
+    // 产品集
+    public static final String COLLECTION_READ = "collection:read";
+    public static final String COLLECTION_CREATE = "collection:create";
+    public static final String COLLECTION_UPDATE = "collection:update";
+    public static final String COLLECTION_DELETE = "collection:delete";
+
+    // 工厂产品能力
+    public static final String CAPABILITY_READ = "capability:read";
+    public static final String CAPABILITY_CREATE = "capability:create";
+    public static final String CAPABILITY_UPDATE = "capability:update";
+    public static final String CAPABILITY_DELETE = "capability:delete";
+
+    // 设计师画像
+    public static final String DESIGNER_PROFILE_READ = "designer:profile:read";
+    public static final String DESIGNER_PROFILE_UPDATE = "designer:profile:update";
+
+    // 推荐打分配置
+    public static final String RECOMMENDATION_SCORE_CONFIG_READ = "recommendation:score:config:read";
+    public static final String RECOMMENDATION_SCORE_CONFIG_UPDATE = "recommendation:score:config:update";
+
+    // AI 推荐候选
+    public static final String SCHEME_CANDIDATE_READ = "scheme:candidate:read";
+    public static final String SCHEME_CANDIDATE_CREATE = "scheme:candidate:create";
+    public static final String SCHEME_CANDIDATE_UPDATE = "scheme:candidate:update";
+    public static final String SCHEME_CANDIDATE_DELETE = "scheme:candidate:delete";
+
     // 管理后台
     public static final String ADMIN_ASYNC_METRICS = "admin:async-metrics";
     public static final String ADMIN_VECTOR_BACKFILL = "admin:vector-backfill";

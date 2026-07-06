@@ -45,6 +45,27 @@ export const PERMISSIONS = {
   USER_DELETE: 'user:delete',
   USER_RESET_PASSWORD: 'user:reset-password',
 
+  COLLECTION_READ: 'collection:read',
+  COLLECTION_CREATE: 'collection:create',
+  COLLECTION_UPDATE: 'collection:update',
+  COLLECTION_DELETE: 'collection:delete',
+
+  CAPABILITY_READ: 'capability:read',
+  CAPABILITY_CREATE: 'capability:create',
+  CAPABILITY_UPDATE: 'capability:update',
+  CAPABILITY_DELETE: 'capability:delete',
+
+  DESIGNER_PROFILE_READ: 'designer:profile:read',
+  DESIGNER_PROFILE_UPDATE: 'designer:profile:update',
+
+  RECOMMENDATION_SCORE_CONFIG_READ: 'recommendation:score:config:read',
+  RECOMMENDATION_SCORE_CONFIG_UPDATE: 'recommendation:score:config:update',
+
+  SCHEME_CANDIDATE_READ: 'scheme:candidate:read',
+  SCHEME_CANDIDATE_CREATE: 'scheme:candidate:create',
+  SCHEME_CANDIDATE_UPDATE: 'scheme:candidate:update',
+  SCHEME_CANDIDATE_DELETE: 'scheme:candidate:delete',
+
   ADMIN_ASYNC_METRICS: 'admin:async-metrics',
   ADMIN_VECTOR_BACKFILL: 'admin:vector-backfill'
 } as const

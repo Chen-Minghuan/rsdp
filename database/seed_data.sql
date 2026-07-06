@@ -177,7 +177,23 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('user:delete', '删除用户'),
 ('user:reset-password', '重置密码'),
 ('admin:async-metrics', '查看异步线程池指标'),
-('admin:vector-backfill', '向量回填')
+('admin:vector-backfill', '向量回填'),
+('collection:read', '查看产品集'),
+('collection:create', '创建产品集'),
+('collection:update', '编辑产品集'),
+('collection:delete', '删除产品集'),
+('capability:read', '查看工厂产品能力'),
+('capability:create', '创建工厂产品能力'),
+('capability:update', '编辑工厂产品能力'),
+('capability:delete', '删除工厂产品能力'),
+('designer:profile:read', '查看设计师画像'),
+('designer:profile:update', '编辑设计师画像'),
+('recommendation:score:config:read', '查看推荐打分配置'),
+('recommendation:score:config:update', '编辑推荐打分配置'),
+('scheme:candidate:read', '查看 AI 推荐候选'),
+('scheme:candidate:create', '创建 AI 推荐候选'),
+('scheme:candidate:update', '编辑 AI 推荐候选'),
+('scheme:candidate:delete', '删除 AI 推荐候选')
 ON CONFLICT (permission_code) DO NOTHING;
 
 -- ADMIN 拥有所有权限
@@ -192,7 +208,7 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'EDITOR'
-  AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill')
+  AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill', 'recommendation:score:config:read', 'recommendation:score:config:update')
 ON CONFLICT DO NOTHING;
 
 -- VIEWER：只读
@@ -200,7 +216,7 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'VIEWER'
-  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read')
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
 ON CONFLICT DO NOTHING;
 
 -- FACTORY_SALES：自己工厂报价相关 + 只读
@@ -208,7 +224,7 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'FACTORY_SALES'
-  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import')
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
 ON CONFLICT DO NOTHING;
 
 -- DESIGNER：方案/报价 + 只读
@@ -216,7 +232,7 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'DESIGNER'
-  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'quote:generate', 'quote:export', 'scheme:read', 'scheme:create', 'scheme:update', 'scheme:delete')
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'quote:generate', 'quote:export', 'scheme:read', 'scheme:create', 'scheme:update', 'scheme:delete', 'collection:read', 'capability:read', 'designer:profile:read', 'designer:profile:update', 'scheme:candidate:read', 'scheme:candidate:create', 'scheme:candidate:update', 'scheme:candidate:delete')
 ON CONFLICT DO NOTHING;
 
 -- USER：只读
@@ -224,5 +240,5 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'USER'
-  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read')
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
 ON CONFLICT DO NOTHING;

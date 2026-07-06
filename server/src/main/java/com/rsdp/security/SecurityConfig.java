@@ -75,6 +75,14 @@ public class SecurityConfig {
                 // 产品读接口
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_READ)
 
+                // 工厂产品能力（必须放在工厂读/写通配规则之前）
+                .requestMatchers(HttpMethod.GET, "/api/v1/factories/*/capabilities").hasAuthority(Permissions.CAPABILITY_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/factories/*/capabilities/*").hasAuthority(Permissions.CAPABILITY_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/factories/*/capabilities").hasAuthority(Permissions.CAPABILITY_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/factories/*/capabilities/sync").hasAuthority(Permissions.CAPABILITY_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/factories/*/capabilities/**").hasAuthority(Permissions.CAPABILITY_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/*/capabilities/**").hasAuthority(Permissions.CAPABILITY_DELETE)
+
                 // 工厂读接口
                 .requestMatchers(HttpMethod.GET, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_READ)
 
@@ -122,6 +130,34 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_DELETE)
+
+                // 产品集
+                .requestMatchers(HttpMethod.GET, "/api/v1/collections").hasAuthority(Permissions.COLLECTION_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/collections/*").hasAuthority(Permissions.COLLECTION_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/collections").hasAuthority(Permissions.COLLECTION_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/collections/**").hasAuthority(Permissions.COLLECTION_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/collections/**").hasAuthority(Permissions.COLLECTION_DELETE)
+
+                // 设计师画像
+                .requestMatchers(HttpMethod.GET, "/api/v1/designer-profiles").hasAuthority(Permissions.DESIGNER_PROFILE_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/designer-profiles/*").hasAuthority(Permissions.DESIGNER_PROFILE_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/designer-profiles").hasAuthority(Permissions.DESIGNER_PROFILE_UPDATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/designer-profiles/**").hasAuthority(Permissions.DESIGNER_PROFILE_UPDATE)
+
+                // 推荐打分配置
+                .requestMatchers(HttpMethod.GET, "/api/v1/recommendation-score-configs").hasAuthority(Permissions.RECOMMENDATION_SCORE_CONFIG_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/recommendation-score-configs/*").hasAuthority(Permissions.RECOMMENDATION_SCORE_CONFIG_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/recommendation-score-configs").hasAuthority(Permissions.RECOMMENDATION_SCORE_CONFIG_UPDATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/recommendation-score-configs/**").hasAuthority(Permissions.RECOMMENDATION_SCORE_CONFIG_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/recommendation-score-configs/**").hasAuthority(Permissions.RECOMMENDATION_SCORE_CONFIG_UPDATE)
+
+                // AI 推荐候选
+                .requestMatchers(HttpMethod.GET, "/api/v1/scheme-candidates").hasAuthority(Permissions.SCHEME_CANDIDATE_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/scheme-candidates/*").hasAuthority(Permissions.SCHEME_CANDIDATE_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/scheme-candidates").hasAuthority(Permissions.SCHEME_CANDIDATE_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/scheme-candidates/batch").hasAuthority(Permissions.SCHEME_CANDIDATE_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/scheme-candidates/**").hasAuthority(Permissions.SCHEME_CANDIDATE_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/scheme-candidates/**").hasAuthority(Permissions.SCHEME_CANDIDATE_DELETE)
 
                 // 字典写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAuthority(Permissions.DICT_CREATE)

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.rsdp.mapper.DesignerProfileMapper">
+
+    <select id="selectByUserId" resultType="com.rsdp.entity.DesignerProfile">
+        SELECT
+            profile_id AS profileId,
+            user_id AS userId,
+            real_name AS realName,
+            avatar_url AS avatarUrl,
+            specialties,
+            preferred_styles AS preferredStyles,
+            preferred_categories AS preferredCategories,
+            price_sensitivity AS priceSensitivity,
+            location,
+            company_name AS companyName,
+            contact_phone AS contactPhone,
+            bio,
+            default_budget_min AS defaultBudgetMin,
+            default_budget_max AS defaultBudgetMax,
+            is_public AS isPublic,
+            status,
+            created_at AS createdAt,
+            updated_at AS updatedAt
+        FROM designer_profile
+        WHERE user_id = #{userId}
+        LIMIT 1
+    </select>
+
+</mapper>

@@ -27,6 +27,12 @@ DROP TABLE IF EXISTS style_element CASCADE;
 DROP TABLE IF EXISTS style_case CASCADE;
 DROP TABLE IF EXISTS scheme_item CASCADE;
 DROP TABLE IF EXISTS scheme CASCADE;
+DROP TABLE IF EXISTS scheme_candidate CASCADE;
+DROP TABLE IF EXISTS recommendation_score_config CASCADE;
+DROP TABLE IF EXISTS designer_profile CASCADE;
+DROP TABLE IF EXISTS product_collection_item CASCADE;
+DROP TABLE IF EXISTS product_collection CASCADE;
+DROP TABLE IF EXISTS factory_product_capability CASCADE;
 DROP TABLE IF EXISTS sys_user_factory CASCADE;
 DROP TABLE IF EXISTS sys_user_role CASCADE;
 DROP TABLE IF EXISTS sys_role_permission CASCADE;
@@ -602,6 +608,117 @@ CREATE TABLE IF NOT EXISTS sys_user_factory (
     FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
+
+-- 工厂产品能力档案（用于全产品库去重）
+CREATE TABLE IF NOT EXISTS factory_product_capability (
+    id BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    category_code VARCHAR(16) NOT NULL,
+    style_code VARCHAR(16),
+    material_code VARCHAR(8),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    UNIQUE (factory_code, category_code, style_code, material_code),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+CREATE INDEX IF NOT EXISTS idx_factory_capability_factory ON factory_product_capability(factory_code);
+CREATE INDEX IF NOT EXISTS idx_factory_capability_keys ON factory_product_capability(category_code, style_code, material_code);
+
+-- 产品集（管理员维护的主流搭配集合）
+CREATE TABLE IF NOT EXISTS product_collection (
+    collection_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    collection_code VARCHAR(32) UNIQUE,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    category_codes JSONB,
+    style_codes JSONB,
+    target_segments JSONB,
+    is_featured BOOLEAN DEFAULT false,
+    sort_order INT DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_product_collection_status ON product_collection(status);
+CREATE INDEX IF NOT EXISTS idx_product_collection_featured ON product_collection(is_featured, sort_order);
+
+-- 产品集与 RSPU 关联
+CREATE TABLE IF NOT EXISTS product_collection_item (
+    id BIGSERIAL PRIMARY KEY,
+    collection_id UUID NOT NULL,
+    rspu_id VARCHAR(64) NOT NULL,
+    sort_order INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (collection_id, rspu_id),
+    FOREIGN KEY (collection_id) REFERENCES product_collection(collection_id) ON DELETE CASCADE,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_collection_item_collection ON product_collection_item(collection_id);
+CREATE INDEX IF NOT EXISTS idx_collection_item_rspu ON product_collection_item(rspu_id);
+
+-- 设计师画像
+CREATE TABLE IF NOT EXISTS designer_profile (
+    profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id VARCHAR(64) NOT NULL UNIQUE,
+    real_name VARCHAR(64),
+    avatar_url TEXT,
+    specialties JSONB,
+    preferred_styles JSONB,
+    preferred_categories JSONB,
+    price_sensitivity VARCHAR(16),
+    location VARCHAR(64),
+    company_name VARCHAR(128),
+    contact_phone VARCHAR(32),
+    bio TEXT,
+    default_budget_min DECIMAL(18,2),
+    default_budget_max DECIMAL(18,2),
+    is_public BOOLEAN DEFAULT false,
+    status VARCHAR(16) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES sys_user(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_designer_profile_user ON designer_profile(user_id);
+CREATE INDEX IF NOT EXISTS idx_designer_profile_status ON designer_profile(status);
+
+-- 推荐打分配置
+CREATE TABLE IF NOT EXISTS recommendation_score_config (
+    config_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    config_key VARCHAR(64) NOT NULL UNIQUE,
+    name VARCHAR(128) NOT NULL,
+    description TEXT,
+    weights JSONB NOT NULL,
+    is_default BOOLEAN DEFAULT false,
+    is_active BOOLEAN DEFAULT true,
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_recommendation_config_key ON recommendation_score_config(config_key);
+CREATE INDEX IF NOT EXISTS idx_recommendation_config_default ON recommendation_score_config(is_default, is_active);
+
+-- AI 推荐候选清单
+CREATE TABLE IF NOT EXISTS scheme_candidate (
+    candidate_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    recommend_request_id UUID NOT NULL,
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64),
+    score DECIMAL(5,4),
+    ai_reason TEXT,
+    match_factors JSONB,
+    status VARCHAR(16) DEFAULT 'pending',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
+);
+CREATE INDEX IF NOT EXISTS idx_scheme_candidate_request ON scheme_candidate(recommend_request_id, status);
+CREATE INDEX IF NOT EXISTS idx_scheme_candidate_rspu ON scheme_candidate(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(created_by, status);
 
 -- =================== 5. 插入种子数据 ===================
 

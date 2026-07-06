@@ -433,3 +433,154 @@ GET    /api/v1/enums
 GET    /api/v1/health
        # 健康检查（检查 PostgreSQL + ChromaDB + AI + Redis 连通性）
 ```
+
+### 工厂产品能力档案
+
+```
+GET    /api/v1/factories/{factoryCode}/capabilities
+       # 查询指定工厂的能力档案列表（需 capability:read）
+       # Response: [FactoryProductCapabilityResponse...]
+
+GET    /api/v1/factories/{factoryCode}/capabilities/{id}
+       # 查询单条能力档案（需 capability:read）
+       # Response: FactoryProductCapabilityResponse
+
+POST   /api/v1/factories/{factoryCode}/capabilities
+       # 手工创建能力档案（需 capability:create）
+       # Request: { categoryCode, styleCode?, materialCode? }
+       # Response: FactoryProductCapabilityResponse
+
+PUT    /api/v1/factories/{factoryCode}/capabilities/{id}
+       # 更新能力档案（需 capability:update）
+       # Request: { categoryCode, styleCode?, materialCode? }
+       # Response: FactoryProductCapabilityResponse
+
+DELETE /api/v1/factories/{factoryCode}/capabilities/{id}
+       # 删除能力档案（需 capability:delete）
+       # Response: void
+
+POST   /api/v1/factories/{factoryCode}/capabilities/sync
+       # 根据当前有效 RSKU 重新同步能力档案（需 capability:create）
+       # Response: [FactoryProductCapabilityResponse...]
+```
+
+### 产品集
+
+```
+GET    /api/v1/collections
+       # 查询产品集列表（需 collection:read）
+       # Query: status? (ACTIVE|INACTIVE)
+       # Response: [ProductCollectionResponse...]
+
+GET    /api/v1/collections/{collectionId}
+       # 查询产品集详情（需 collection:read）
+       # Response: ProductCollectionResponse（含 items）
+
+POST   /api/v1/collections
+       # 创建产品集（需 collection:create）
+       # Request: { collectionCode?, name, description?, categoryCodes?: string[],
+       #            styleCodes?: string[], targetSegments?: string[],
+       #            isFeatured?: boolean, sortOrder?: int, rspuIds?: string[] }
+       # Response: ProductCollectionResponse
+
+PUT    /api/v1/collections/{collectionId}
+       # 更新产品集（需 collection:update）
+       # Request: 同创建，字段可选；rspuIds 存在时覆盖原有项
+       # Response: ProductCollectionResponse
+
+DELETE /api/v1/collections/{collectionId}
+       # 删除产品集（需 collection:delete）
+       # Response: void
+```
+
+### 设计师画像
+
+```
+GET    /api/v1/designer-profiles/me
+       # 查询当前登录用户的设计师画像（需 designer:profile:read）
+       # Response: DesignerProfileResponse
+
+GET    /api/v1/designer-profiles
+       # 查询公开的的设计师画像列表（需 designer:profile:read）
+       # Response: [DesignerProfileResponse...]
+
+GET    /api/v1/designer-profiles/{userId}
+       # 根据用户 ID 查询设计师画像（需 designer:profile:read）
+       # Response: DesignerProfileResponse
+
+POST   /api/v1/designer-profiles/me
+PUT    /api/v1/designer-profiles/me
+       # 保存/更新当前登录用户的设计师画像（需 designer:profile:update）
+       # Request: { realName?, avatarUrl?, specialties?: string[],
+       #            preferredStyles?: string[], preferredCategories?: string[],
+       #            priceSensitivity?, location?, companyName?, contactPhone?,
+       #            bio?, defaultBudgetMin?, defaultBudgetMax?, isPublic? }
+       # Response: DesignerProfileResponse
+```
+
+### 推荐打分配置
+
+```
+GET    /api/v1/recommendation-score-configs
+       # 查询所有配置（需 recommendation:score:config:read）
+       # Response: [RecommendationScoreConfigResponse...]
+
+GET    /api/v1/recommendation-score-configs/default
+       # 查询默认配置（需 recommendation:score:config:read）
+       # Response: RecommendationScoreConfigResponse
+
+GET    /api/v1/recommendation-score-configs/{configId}
+       # 查询配置详情（需 recommendation:score:config:read）
+       # Response: RecommendationScoreConfigResponse
+
+POST   /api/v1/recommendation-score-configs
+       # 创建配置（需 recommendation:score:config:update）
+       # Request: { configKey, name, description?, weights: Map<string, number>,
+       #            isDefault?: boolean, isActive?: boolean }
+       # Response: RecommendationScoreConfigResponse
+
+PUT    /api/v1/recommendation-score-configs/{configId}
+       # 更新配置（需 recommendation:score:config:update）
+       # Request: { name?, description?, weights?, isDefault?, isActive? }
+       # Response: RecommendationScoreConfigResponse
+
+DELETE /api/v1/recommendation-score-configs/{configId}
+       # 删除配置（需 recommendation:score:config:update）
+       # Response: void
+```
+
+### AI 推荐候选清单
+
+```
+GET    /api/v1/scheme-candidates
+       # 根据推荐请求 ID 查询候选清单（需 scheme:candidate:read）
+       # Query: recommendRequestId (UUID)
+       # Response: [SchemeCandidateResponse...]
+
+GET    /api/v1/scheme-candidates/mine
+       # 查询当前用户的候选清单（需 scheme:candidate:read）
+       # Response: [SchemeCandidateResponse...]
+
+GET    /api/v1/scheme-candidates/{candidateId}
+       # 查询候选详情（需 scheme:candidate:read）
+       # Response: SchemeCandidateResponse
+
+POST   /api/v1/scheme-candidates
+       # 创建单个候选（需 scheme:candidate:create）
+       # Request: { recommendRequestId, rspuId, rskuId?, score, aiReason?, matchFactors? }
+       # Response: SchemeCandidateResponse
+
+POST   /api/v1/scheme-candidates/batch
+       # 批量创建候选（需 scheme:candidate:create）
+       # Request: { recommendRequestId, candidates: [SchemeCandidateCreateRequest...] }
+       # Response: [SchemeCandidateResponse...]
+
+PUT    /api/v1/scheme-candidates/{candidateId}
+       # 更新候选（需 scheme:candidate:update）
+       # Request: { rskuId?, score?, aiReason?, matchFactors?, status? (pending|accepted|rejected) }
+       # Response: SchemeCandidateResponse
+
+DELETE /api/v1/scheme-candidates/{candidateId}
+       # 删除候选（需 scheme:candidate:delete）
+       # Response: void
+```
