@@ -5,8 +5,10 @@ import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.StyleMatchResult;
 import com.rsdp.entity.ProductStyleMatch;
+import com.rsdp.entity.StyleCase;
 import com.rsdp.entity.StyleMatchingFormula;
 import com.rsdp.mapper.ProductStyleMatchMapper;
+import com.rsdp.mapper.StyleCaseMapper;
 import com.rsdp.mapper.StyleMatchingFormulaMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,14 +24,16 @@ import static org.mockito.Mockito.*;
 class StyleMatchingServiceTest {
 
     private StyleMatchingFormulaMapper formulaMapper;
+    private StyleCaseMapper styleCaseMapper;
     private ProductStyleMatchMapper matchMapper;
     private StyleMatchingService service;
 
     @BeforeEach
     void setUp() {
         formulaMapper = mock(StyleMatchingFormulaMapper.class);
+        styleCaseMapper = mock(StyleCaseMapper.class);
         matchMapper = mock(ProductStyleMatchMapper.class);
-        service = new StyleMatchingService(formulaMapper, matchMapper, new ObjectMapper());
+        service = new StyleMatchingService(formulaMapper, styleCaseMapper, matchMapper, new ObjectMapper());
     }
 
     @Test
@@ -178,5 +182,71 @@ class StyleMatchingServiceTest {
         // Then
         assertThat(result).isNotNull();
         assertThat(result.getOverallScore()).isGreaterThanOrEqualTo(BigDecimal.ONE);
+    }
+
+    @Test
+    void match_shouldUseMaterialSynonyms_whenAiOutputsSpecificWoodName() {
+        // Given: 公式要求"胡桃木"，AI 返回"橡木"，二者在同义词组（实木）中，应命中
+        StyleMatchingFormula formula = new StyleMatchingFormula();
+        formula.setFormulaId("FORM-MC-001");
+        formula.setStyleCode("MC");
+        formula.setStatus("active");
+        formula.setFormulaJson("""
+            {
+              "must_have": [{"type": "material", "values": ["胡桃木"], "role": "primary"}],
+              "compatible": [],
+              "avoid": []
+            }
+            """);
+        when(formulaMapper.selectList(any())).thenReturn(List.of(formula));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("MC");
+        labels.setMaterialTags(List.of("橡木"));
+
+        // When
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-006");
+
+        // Then
+        assertThat(result).isNotNull();
+        assertThat(result.getOverallScore()).isGreaterThanOrEqualTo(BigDecimal.ONE);
+    }
+
+    @Test
+    void match_shouldScoreSixDim_whenAiTagsMatchStyleCaseFeatures() {
+        // Given
+        StyleMatchingFormula formula = new StyleMatchingFormula();
+        formula.setFormulaId("FORM-MC-001");
+        formula.setStyleCode("MC");
+        formula.setStatus("active");
+        formula.setFormulaJson("""
+            {
+              "must_have": [{"type": "material", "values": ["胡桃木"], "role": "primary"}],
+              "compatible": [],
+              "avoid": []
+            }
+            """);
+        when(formulaMapper.selectList(any())).thenReturn(List.of(formula));
+
+        StyleCase styleCase = new StyleCase();
+        styleCase.setCaseId("CASE-MC-001");
+        styleCase.setStyleCode("MC");
+        styleCase.setIsSuccess(true);
+        styleCase.setAiRawOutput("""
+            {"key_characteristics": {"forms": ["弧形沙发", "细腿结构"], "textures": ["木质温润感"]}}
+            """);
+        when(styleCaseMapper.selectList(any())).thenReturn(List.of(styleCase));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("MC");
+        labels.setMaterialTags(List.of("胡桃木"));
+        labels.setSixDimTags(java.util.Map.of("A", "弧形", "B", "高背包裹", "C", "细腿结构"));
+
+        // When
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-007");
+
+        // Then
+        assertThat(result).isNotNull();
+        assertThat(result.getFormulaScores()).anyMatch(fs -> "six_dim".equals(fs.getDimension()) && fs.getScore().compareTo(BigDecimal.ZERO) > 0);
     }
 }

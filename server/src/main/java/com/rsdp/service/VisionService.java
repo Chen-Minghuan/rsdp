@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.config.SixDimSchemaConfig;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.OpenAiChatMessage;
 import com.rsdp.dto.OpenAiChatRequest;
@@ -38,19 +39,19 @@ public class VisionService {
 
     /**
      * 用户提示词模板。风格、场景、材质枚举会在运行时从 category_dict 动态注入，
-     * 确保 AI 输出与平台字典保持一致。
+     * 六维标签维度定义会根据产品类别动态选择。
      */
     private static final String USER_PROMPT_TEMPLATE = """
         请分析这张家具产品图，输出以下 JSON 字段：
         {
           "style": "风格名称，必须从以下枚举中精确选择：%s。严禁使用枚举外的风格名称。",
           "sixDimTags": {
-            "A": "轮廓形态",
-            "B": "靠背/背部特征",
-            "C": "扶手特征",
-            "D": "腿部/底座特征",
-            "E": "表面材质",
-            "F": "软包填充形态"
+            "A": "维度A",
+            "B": "维度B",
+            "C": "维度C",
+            "D": "维度D",
+            "E": "维度E",
+            "F": "维度F"
           },
           "colorPrimaryName": "主色名称，如：焦糖棕、米白、原木色",
           "colorPrimaryHsv": [H值0-360, S值0-1, V值0-1],
@@ -80,6 +81,7 @@ public class VisionService {
             }
           }
         }
+        %s
         风格、场景、材质的枚举约束如下，请优先从中选择：
         - 风格（style）：%s
         - 场景（scene）：%s
@@ -88,7 +90,21 @@ public class VisionService {
         只输出 JSON，不要任何其他文字说明。
         """;
 
+    /**
+     * 识别图片，使用默认（通用）六维标签定义。
+     */
     public AiLabels recognizeImage(InputStream imageStream) {
+        return recognizeImage(imageStream, null);
+    }
+
+    /**
+     * 识别图片，按产品类别使用对应的六维标签定义。
+     *
+     * @param imageStream  图片流
+     * @param categoryCode 产品品类码，如 FS/TB/FC；为空时使用通用定义
+     * @return AI 识别标签
+     */
+    public AiLabels recognizeImage(InputStream imageStream, String categoryCode) {
         try {
             byte[] imageBytes = imageStream.readAllBytes();
             if (imageBytes.length == 0) {
@@ -96,7 +112,7 @@ public class VisionService {
             }
             String base64 = Base64.getEncoder().encodeToString(imageBytes);
 
-            String userPrompt = buildUserPrompt();
+            String userPrompt = buildUserPrompt(categoryCode);
             OpenAiChatRequest request = OpenAiChatRequest.builder()
                 .model(model)
                 .messages(List.of(
@@ -116,16 +132,18 @@ public class VisionService {
     }
 
     /**
-     * 构建用户提示词，运行时从 category_dict 注入风格、场景、材质枚举。
-     * 若字典服务不可用，则使用最小默认枚举，避免完全阻断识别流程。
+     * 构建用户提示词，运行时从 category_dict 注入风格、场景、材质枚举，
+     * 并按品类码注入对应的六维标签维度定义。
      *
+     * @param categoryCode 产品品类码
      * @return 完整的用户提示词
      */
-    private String buildUserPrompt() {
+    private String buildUserPrompt(String categoryCode) {
         String styleEnum = buildEnumText("style");
         String sceneEnum = buildEnumText("scene");
         String materialEnum = buildEnumText("material");
-        return USER_PROMPT_TEMPLATE.formatted(styleEnum, styleEnum, sceneEnum, materialEnum);
+        String sixDimDescription = SixDimSchemaConfig.buildPromptDescription(categoryCode);
+        return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription, styleEnum, sceneEnum, materialEnum);
     }
 
     /**

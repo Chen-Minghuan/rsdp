@@ -7,8 +7,10 @@ import com.rsdp.dto.ElementMatchDetail;
 import com.rsdp.dto.FormulaScore;
 import com.rsdp.dto.StyleMatchResult;
 import com.rsdp.entity.ProductStyleMatch;
+import com.rsdp.entity.StyleCase;
 import com.rsdp.entity.StyleMatchingFormula;
 import com.rsdp.mapper.ProductStyleMatchMapper;
+import com.rsdp.mapper.StyleCaseMapper;
 import com.rsdp.mapper.StyleMatchingFormulaMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -38,12 +40,42 @@ import java.util.stream.Collectors;
 public class StyleMatchingService {
 
     private final StyleMatchingFormulaMapper formulaMapper;
+    private final StyleCaseMapper styleCaseMapper;
     private final ProductStyleMatchMapper matchMapper;
     private final ObjectMapper objectMapper;
 
     private static final BigDecimal SCORE_HIGH = new BigDecimal("0.75");
     private static final BigDecimal SCORE_MID = new BigDecimal("0.50");
     private static final int SCORE_SCALE = 4;
+
+    /**
+     * 同义词组：材质/颜色在匹配时按组扩展，解决 AI 输出具体词与公式使用概括词的差异。
+     */
+    private static final Map<String, List<List<String>>> SYNONYM_GROUPS = Map.of(
+        "material", List.of(
+            List.of("实木", "橡木", "胡桃木", "柚木", "原木", "老木", "木"),
+            List.of("藤编", "真藤", "竹编", "草编", "绳编", "藤条"),
+            List.of("亚麻", "棉麻", "亚麻混纺布", "麻布", "麻"),
+            List.of("皮革", "真皮", "牛皮", "油蜡皮", "纳帕皮", "磨砂皮", "马鞍皮", "pu皮", "仿皮"),
+            List.of("羊羔绒", "泰迪绒", "绒布"),
+            List.of("天鹅绒", "丝绒", "绒面"),
+            List.of("石材", "大理石", "洞石", "岩板"),
+            List.of("金属", "不锈钢", "黄铜", "铁艺", "钢管", "镀铬"),
+            List.of("玻璃", "钢化玻璃"),
+            List.of("水泥", "混凝土", "微水泥"),
+            List.of("陶瓷", "陶艺", "瓷器"),
+            List.of("塑料", "亚克力", "聚丙烯")
+        ),
+        "color", List.of(
+            List.of("原木色", "木色", "自然色", "natural"),
+            List.of("奶油白", "奶白", "米白", "白色", "暖白"),
+            List.of("深棕", "棕色", "咖啡色", "焦糖", "驼色"),
+            List.of("黑色", "深黑"),
+            List.of("灰色", "灰"),
+            List.of("绿色", "墨绿", "橄榄绿", "深绿"),
+            List.of("红色", "砖红", "酒红")
+        )
+    );
 
     /**
      * 对 AI 识别结果进行风格匹配评分，并将结果写入 product_style_match。
@@ -80,6 +112,7 @@ public class StyleMatchingService {
         evaluateMustHave(formulaDto.mustHave, ctx, elementMatches, formulaScores);
         evaluateCompatible(formulaDto.compatible, ctx, elementMatches, formulaScores);
         boolean hasAvoidHit = evaluateAvoid(formulaDto.avoid, ctx, elementMatches, formulaScores);
+        evaluateSixDim(styleCode, ctx, elementMatches, formulaScores);
 
         BigDecimal overallScore = computeOverallScore(formulaScores);
         String confidence = mapConfidence(overallScore);
@@ -241,6 +274,87 @@ public class StyleMatchingService {
         return hitCount > 0;
     }
 
+    /**
+     * 六维标签评分：从 style_case 中读取该风格的典型 forms 与 textures，
+     * 与 AI 识别的六维标签做模糊匹配。
+     */
+    private void evaluateSixDim(String styleCode, MatchContext ctx,
+                                List<ElementMatchDetail> elementMatches,
+                                List<FormulaScore> formulaScores) {
+        List<StyleCase> cases = styleCaseMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<StyleCase>()
+                .eq(StyleCase::getStyleCode, styleCode)
+                .eq(StyleCase::getIsSuccess, true)
+                .orderByDesc(StyleCase::getCreatedAt)
+        );
+        if (cases.isEmpty()) {
+            return;
+        }
+
+        StyleCase styleCase = cases.get(0);
+        List<String> caseKeywords = extractCaseKeywords(styleCase.getAiRawOutput());
+        if (caseKeywords.isEmpty() || ctx.sixDimValues.isEmpty()) {
+            return;
+        }
+
+        List<String> matched = new ArrayList<>();
+        for (String dimValue : ctx.sixDimValues) {
+            for (String keyword : caseKeywords) {
+                if (MatchContext.containsIgnoreCase(dimValue, keyword)
+                        || MatchContext.containsIgnoreCase(keyword, dimValue)) {
+                    matched.add(dimValue);
+                    break;
+                }
+            }
+        }
+
+        boolean hasMatch = !matched.isEmpty();
+        elementMatches.add(ElementMatchDetail.builder()
+            .type("six_dim")
+            .value(String.join(",", ctx.sixDimValues))
+            .role("compatible")
+            .matched(hasMatch)
+            .reason(hasMatch ? "六维标签与风格案例特征匹配" : "六维标签与风格案例特征不匹配")
+            .build());
+
+        BigDecimal score = hasMatch ? new BigDecimal("0.8") : BigDecimal.ZERO;
+        formulaScores.add(FormulaScore.builder()
+            .dimension("six_dim")
+            .score(score)
+            .weight(new BigDecimal("0.20"))
+            .matchedValues(String.join(",", matched))
+            .reason("轮廓/靠背/扶手/腿部/表面材质/软包形态与风格典型特征匹配度")
+            .build());
+    }
+
+    @SneakyThrows
+    private List<String> extractCaseKeywords(String aiRawOutput) {
+        List<String> keywords = new ArrayList<>();
+        if (!StringUtils.hasText(aiRawOutput)) {
+            return keywords;
+        }
+        Map<String, Object> root = objectMapper.readValue(aiRawOutput, new TypeReference<>() {});
+        Object forms = root.get("key_characteristics.forms");
+        if (forms instanceof List<?> list) {
+            list.forEach(f -> keywords.add(String.valueOf(f)));
+        }
+        Object nested = root.get("key_characteristics");
+        if (nested instanceof Map<?, ?> map) {
+            Object formsObj = map.get("forms");
+            if (formsObj instanceof List<?> list) {
+                list.forEach(f -> keywords.add(String.valueOf(f)));
+            }
+            Object texturesObj = map.get("textures");
+            if (texturesObj instanceof List<?> list) {
+                list.forEach(t -> keywords.add(String.valueOf(t)));
+            }
+        }
+        return keywords.stream()
+            .filter(StringUtils::hasText)
+            .distinct()
+            .collect(Collectors.toList());
+    }
+
     private BigDecimal computeOverallScore(List<FormulaScore> formulaScores) {
         if (CollectionUtils.isEmpty(formulaScores)) {
             return BigDecimal.ZERO;
@@ -367,8 +481,33 @@ public class StyleMatchingService {
             }
 
             return ruleValues.stream()
-                .filter(ruleValue -> source.stream().anyMatch(src -> containsIgnoreCase(src, ruleValue)))
+                .filter(ruleValue -> source.stream().anyMatch(src -> matchWithSynonyms(type, src, ruleValue)))
                 .collect(Collectors.toList());
+        }
+
+        private static boolean matchWithSynonyms(String type, String source, String ruleValue) {
+            if (!StringUtils.hasText(source) || !StringUtils.hasText(ruleValue)) {
+                return false;
+            }
+            if ("material".equals(type) || "color".equals(type)) {
+                List<String> sourceSyns = expandSynonyms(type, source);
+                List<String> ruleSyns = expandSynonyms(type, ruleValue);
+                return sourceSyns.stream().anyMatch(s -> ruleSyns.stream().anyMatch(r -> containsIgnoreCase(s, r)));
+            }
+            return containsIgnoreCase(source, ruleValue);
+        }
+
+        private static List<String> expandSynonyms(String type, String value) {
+            if (!"material".equals(type) && !"color".equals(type)) {
+                return List.of(value);
+            }
+            String normalized = value.trim().toLowerCase();
+            for (List<String> group : SYNONYM_GROUPS.getOrDefault(type, List.of())) {
+                if (group.contains(normalized)) {
+                    return group;
+                }
+            }
+            return List.of(value);
         }
 
         private static boolean containsIgnoreCase(String source, String target) {
