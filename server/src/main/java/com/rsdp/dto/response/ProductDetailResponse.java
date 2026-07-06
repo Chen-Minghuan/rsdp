@@ -16,6 +16,7 @@ public class ProductDetailResponse {
     private RspuMaster rspu;
     private List<ImageAssets> images;
     private List<AiRecognition> recognitions;
+    private List<ProductStyleMatchResponse> styleMatches;
 
     /**
      * 官方搭配：本产品搭配了哪些其他产品。

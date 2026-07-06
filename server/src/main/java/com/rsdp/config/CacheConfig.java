@@ -29,6 +29,7 @@ import java.util.Arrays;
 public class CacheConfig {
 
     public static final String CACHE_NAME_DICTS = "dicts";
+    public static final String CACHE_NAME_STYLE_FORMULA = "styleFormula";
 
     /**
      * 基于 Redis 的缓存管理器（生产环境默认启用）。
@@ -53,7 +54,7 @@ public class CacheConfig {
     @ConditionalOnProperty(prefix = "spring.data.redis", name = "enabled", havingValue = "false")
     public CacheManager concurrentMapCacheManager() {
         log.info("Redis 缓存已禁用，回退到 ConcurrentMapCacheManager");
-        return new ConcurrentMapCacheManager(CACHE_NAME_DICTS);
+        return new ConcurrentMapCacheManager(CACHE_NAME_DICTS, CACHE_NAME_STYLE_FORMULA);
     }
 
     /**

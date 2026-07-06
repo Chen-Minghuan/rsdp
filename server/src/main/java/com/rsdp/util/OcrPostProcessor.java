@@ -6,7 +6,6 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -235,46 +234,6 @@ public class OcrPostProcessor {
             return false;
         }
         return a.replaceAll("\\s+", "").equals(b.replaceAll("\\s+", ""));
-    }
-
-    /**
-     * 风格名称 → 字典 code 映射（与 category_dict 中的 style 类型保持一致）。
-     *
-     * <p>仅用于 OCR 文本、批量导入等非 VisionService 场景的风格别名兜底。
-     * VisionService 的提示词已强制 AI 从 category_dict 标准枚举中选择，
-     * 因此此处只保留常见变体/缩写，不再接受数据库外风格。</p>
-     */
-    private static final Map<String, String> STYLE_NAME_TO_CODE = Map.ofEntries(
-        Map.entry("现代包豪斯", "MB"),
-        Map.entry("现代极简包豪斯", "MB"),
-        Map.entry("意式极简", "IT"),
-        Map.entry("意式轻奢", "IL"),
-        Map.entry("意式极简轻奢", "IL"),
-        Map.entry("法式复古南洋", "FN"),
-        Map.entry("法式南洋", "FN"),
-        Map.entry("侘寂风", "WJ"),
-        Map.entry("新中式", "NC"),
-        Map.entry("新中式宋式", "ZS"),
-        Map.entry("宋式", "ZS"),
-        Map.entry("工业风LOFT", "IO"),
-        Map.entry("工业LOFT", "IO"),
-        Map.entry("孟菲斯多巴胺", "MD"),
-        Map.entry("混搭", "HH"),
-        Map.entry("顶尖大牌搭配", "DL")
-    );
-
-    /**
-     * 将风格名称转换为字典 code。
-     *
-     * @param styleName 风格中文名
-     * @return 风格 code，找不到时返回 null
-     */
-    public static String toStyleCode(String styleName) {
-        if (!StringUtils.hasText(styleName)) {
-            return null;
-        }
-        String normalized = styleName.trim();
-        return STYLE_NAME_TO_CODE.get(normalized);
     }
 
     /**

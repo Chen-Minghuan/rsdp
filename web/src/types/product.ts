@@ -87,6 +87,22 @@ export interface RecognitionHistoryItem {
 }
 
 /**
+ * 产品风格匹配结果。
+ */
+export interface ProductStyleMatch {
+  matchId: number
+  rspuId: string
+  styleCode: string
+  styleName: string
+  overallScore: number
+  confidence: string
+  elementMatch: string
+  formulaScores: string
+  createdAt: string
+  updatedAt: string
+}
+
+/**
  * 产品详情。
  */
 export interface ProductDetail {
@@ -118,6 +134,7 @@ export interface ProductDetail {
     isPrimary: boolean
   }>
   recognitions: RecognitionHistoryItem[]
+  styleMatches: ProductStyleMatch[]
   officialMatches?: RelatedProduct[]
   matchedBy?: RelatedProduct[]
 }

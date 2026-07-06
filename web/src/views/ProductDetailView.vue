@@ -12,6 +12,7 @@ import {
   NImage,
   NTag,
   NDivider,
+  NEmpty,
   NSpin,
   NDataTable,
   NModal,
@@ -335,6 +336,14 @@ async function loadDetail() {
     errorMessage.value = e instanceof Error ? e.message : '加载产品详情失败'
   } finally {
     loading.value = false
+  }
+}
+
+function formatJson(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value || '-'
   }
 }
 
@@ -831,6 +840,46 @@ onBeforeRouteUpdate((to, from) => {
                 <span v-else>-</span>
               </n-descriptions-item>
             </n-descriptions>
+          </n-card>
+
+          <n-card title="风格匹配评分" size="small">
+            <n-space v-if="detail.styleMatches && detail.styleMatches.length" vertical>
+              <n-descriptions
+                v-for="match in detail.styleMatches"
+                :key="match.matchId"
+                bordered
+                :column="2"
+                size="small"
+              >
+                <n-descriptions-item label="风格">
+                  {{ match.styleName || match.styleCode || '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="整体得分">
+                  {{ match.overallScore != null ? (match.overallScore * 100).toFixed(1) + '%' : '-' }}
+                </n-descriptions-item>
+                <n-descriptions-item label="置信度">
+                  <n-tag
+                    :type="match.confidence === 'high'
+                      ? 'success'
+                      : match.confidence === 'mid'
+                        ? 'warning'
+                        : 'error'"
+                    size="small"
+                  >
+                    {{ match.confidence || '-' }}
+                  </n-tag>
+                </n-descriptions-item>
+                <n-descriptions-item label="匹配明细">
+                  <pre v-if="match.elementMatch" style="margin: 0;">{{ formatJson(match.elementMatch) }}</pre>
+                  <span v-else>-</span>
+                </n-descriptions-item>
+                <n-descriptions-item label="维度得分">
+                  <pre v-if="match.formulaScores" style="margin: 0;">{{ formatJson(match.formulaScores) }}</pre>
+                  <span v-else>-</span>
+                </n-descriptions-item>
+              </n-descriptions>
+            </n-space>
+            <n-empty v-else description="暂无风格匹配数据" />
           </n-card>
 
           <n-card title="图片" size="small">
