@@ -34,6 +34,12 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
   },
   {
+    path: '/products/document-import',
+    name: 'ProductDocumentImport',
+    component: () => import('@/views/ProductDocumentImportView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
+  },
+  {
     path: '/products/:rspuId',
     name: 'ProductDetail',
     component: () => import('@/views/ProductDetailView.vue'),

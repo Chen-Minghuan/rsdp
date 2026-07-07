@@ -115,6 +115,27 @@ POST   /api/v1/products/import
        #   - 按 RSPU ID → 外部编码顺序匹配已有产品
        #   - 图片 URL 仅支持 http/https，下载失败只记录失败明细，不影响产品数据写入
 
+POST   /api/v1/products/document-import
+       # PDF 产品目录批量导入（已实现）
+       # Request: multipart/form-data
+       #   file: File (必填, PDF, ≤50MB, ≤200 页)
+       #   categoryHint: string (可选, 品类提示如 SF/TB/FC)
+       # Response: {
+       #   batchId: string,
+       #   totalPages: number,
+       #   productPages: number,
+       #   totalProducts: number,
+       #   successCount: number,
+       #   failedCount: number,
+       #   taskIds: string[],
+       #   rspuIds: string[],
+       #   failures: [{ pageIndex, reason }]
+       # }
+       # 说明：
+       #   - 后端将 PDF 渲染为图片，通过 AI 检测产品页和每个产品的位置框（bbox）
+       #   - 按 bbox 裁剪出单产品图后，为每个产品创建 RSPU 草稿并触发异步 AI 识别
+       #   - 前端通过 taskIds 轮询每个产品的识别进度
+
 ### 图片访问
 
 ```

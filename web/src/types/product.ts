@@ -204,3 +204,26 @@ export interface ProductImportResult {
   failedCount: number
   failures: ProductImportFailure[]
 }
+
+/**
+ * 文档导入失败明细。
+ */
+export interface DocumentImportFailure {
+  pageIndex: number
+  reason: string
+}
+
+/**
+ * 文档批量导入结果（PDF/PPT）。
+ */
+export interface DocumentImportResult {
+  batchId: string
+  totalPages: number
+  productPages: number
+  totalProducts: number
+  successCount: number
+  failedCount: number
+  taskIds: string[]
+  rspuIds: string[]
+  failures: DocumentImportFailure[]
+}
