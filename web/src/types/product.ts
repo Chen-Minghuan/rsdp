@@ -12,6 +12,8 @@ export interface ProductListParams {
   reviewStatus?: string
   productLevel?: string
   keyword?: string
+  viewMode?: 'own' | 'full'
+  factoryCode?: string
 }
 
 /**

@@ -28,6 +28,7 @@ public class AuthService {
     private final JwtUtil jwtUtil;
     private final UserRoleService userRoleService;
     private final PermissionService permissionService;
+    private final UserFactoryService userFactoryService;
 
     /**
      * 用户登录。
@@ -58,6 +59,7 @@ public class AuthService {
         String role = getPrimaryRoleCode(user.getUserId());
         List<String> roles = userRoleService.getRoleCodesByUserId(user.getUserId());
         List<String> permissions = permissionService.getPermissionsByUserId(user.getUserId()).stream().toList();
+        List<String> factoryCodes = userFactoryService.getFactoryCodesByUserId(user.getUserId());
         int tokenVersion = user.getTokenVersion() == null ? 0 : user.getTokenVersion();
         String token = jwtUtil.generateToken(user.getUserId(), user.getUsername(), user.getNickname(), role, permissions, tokenVersion);
         return new LoginResponse(
@@ -68,7 +70,9 @@ public class AuthService {
             user.getNickname(),
             role,
             roles,
-            permissions
+            permissions,
+            user.getViewFullCatalog(),
+            factoryCodes
         );
     }
 
@@ -85,6 +89,7 @@ public class AuthService {
         }
         List<String> roles = userRoleService.getRoleCodesByUserId(user.getUserId());
         List<String> permissions = permissionService.getPermissionsByUserId(user.getUserId()).stream().toList();
+        List<String> factoryCodes = userFactoryService.getFactoryCodesByUserId(user.getUserId());
         return new LoginResponse(
             null,
             "Bearer",
@@ -93,7 +98,9 @@ public class AuthService {
             user.getNickname(),
             getPrimaryRoleCode(user.getUserId()),
             roles,
-            permissions
+            permissions,
+            user.getViewFullCatalog(),
+            factoryCodes
         );
     }
 

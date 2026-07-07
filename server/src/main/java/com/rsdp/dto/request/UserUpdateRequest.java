@@ -18,5 +18,7 @@ public class UserUpdateRequest {
     @NotBlank(message = "角色不能为空")
     private String roleCode;
 
+    private Boolean viewFullCatalog;
+
     private List<String> factoryCodes;
 }

@@ -73,7 +73,9 @@ public class AuthController {
             loginResponse.getNickname(),
             loginResponse.getRole(),
             loginResponse.getRoles(),
-            loginResponse.getPermissions()
+            loginResponse.getPermissions(),
+            loginResponse.getViewFullCatalog(),
+            loginResponse.getFactoryCodes()
         );
         return Result.ok(responseBody);
     }

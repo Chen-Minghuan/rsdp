@@ -433,6 +433,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
     nickname VARCHAR(64),
     status VARCHAR(16) DEFAULT 'active',
     token_version INT DEFAULT 0,
+    view_full_catalog BOOLEAN NOT NULL DEFAULT false,
     last_login_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP
@@ -495,7 +496,7 @@ CREATE TABLE IF NOT EXISTS sys_user_factory (
 CREATE TABLE IF NOT EXISTS factory_product_capability (
     id BIGSERIAL PRIMARY KEY,
     factory_code VARCHAR(16) NOT NULL,
-    category_code VARCHAR(16) NOT NULL,
+    category_code VARCHAR(16),
     style_code VARCHAR(16),
     material_code VARCHAR(8),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -12,6 +12,9 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.ImageUploadValidator;
+import com.rsdp.dto.request.FactoryProductEntryRequest;
+import com.rsdp.dto.request.RspuVariantCreateRequest;
+import com.rsdp.dto.request.RskuCreateRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -45,6 +48,9 @@ public class ProductService {
     private final AuditLogService auditLogService;
     private final DictService dictService;
     private final ObjectMapper objectMapper;
+    private final RspuVariantService rspuVariantService;
+    private final RskuService rskuService;
+    private final UserFactoryService userFactoryService;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
     private String maxFileSize;
@@ -155,6 +161,133 @@ public class ProductService {
             "imageIds", imageIds,
             "message", "任务已创建，正在后台识别中"
         );
+    }
+
+    /**
+     * 工厂单条录入新产品。
+     *
+     * <p>在一个事务中完成 RSPU、默认变体、图片资源（可选）和第一条 RSKU 的创建。
+     * 不调用 AI，供工厂管理员手动维护产品使用。</p>
+     *
+     * @param request 工厂录入请求
+     * @param images  产品图片，可选
+     * @return 创建结果，包含 rspuId、variantId、rskuId
+     * @throws IOException 图片存储失败
+     */
+    @Transactional
+    public Map<String, Object> createFactoryEntry(FactoryProductEntryRequest request, List<MultipartFile> images) throws IOException {
+        validateFactoryEntryOwnership(request.getFactoryCode());
+        validateCategoryCode(request.getCategoryCode());
+
+        String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+
+        // 1. 创建 RSPU
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setCategoryCode(request.getCategoryCode().trim().toUpperCase());
+        rspu.setCategoryPath(resolveCategoryPath(rspu.getCategoryCode()));
+        rspu.setPositioningLabel(request.getPositioningLabel().trim().toUpperCase());
+        rspu.setColorPrimaryName(request.getColorPrimaryName());
+        rspu.setMaterialTags(toJson(request.getMaterialTags()));
+        rspu.setSceneTags(toJson(request.getSceneTags()));
+        rspu.setSixDimTags(toJson(request.getSixDimTags()));
+        rspu.setProductLevel(request.getProductLevel().trim().toUpperCase());
+        rspu.setWarrantyYears(request.getWarrantyYears());
+        rspu.setKeySpecs(toJson(request.getKeySpecs()));
+        rspu.setStatus("active");
+        rspu.setReviewStatus("待复核");
+        rspu.setCreatedAt(LocalDateTime.now());
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.insert(rspu);
+        auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+
+        // 2. 创建默认变体
+        RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
+        variantRequest.setDisplayName(request.getVariantDisplayName());
+        variantRequest.setSizeCode(request.getSizeCode());
+        variantRequest.setDimensions(request.getDimensions());
+        variantRequest.setColorCode(request.getColorCode());
+        variantRequest.setMaterialCode(request.getVariantMaterialCode());
+        variantRequest.setMaterialMix(request.getMaterialMix());
+        variantRequest.setProductLevel(rspu.getProductLevel());
+        String variantId = rspuVariantService.createVariant(rspuId, variantRequest).getVariantId();
+
+        // 3. 保存图片（可选）
+        List<String> imageIds = new ArrayList<>();
+        if (images != null && !images.isEmpty()) {
+            long maxSize = parseMaxFileSize(maxFileSize);
+            for (int i = 0; i < images.size(); i++) {
+                MultipartFile image = images.get(i);
+                imageUploadValidator.validate(image, maxSize);
+                String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+                String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
+                String storagePath = storageService.store(image, objectKey);
+
+                boolean isPrimary = i == 0;
+                ImageAssets imageAsset = new ImageAssets();
+                imageAsset.setImageId(imageId);
+                imageAsset.setRspuId(rspuId);
+                imageAsset.setVariantId(variantId);
+                imageAsset.setImageType(isPrimary ? "white_bg" : "detail");
+                imageAsset.setStoragePath(storagePath);
+                imageAsset.setPrimary(isPrimary);
+                imageAsset.setAiProcessed(false);
+                imageAsset.setFileSize(image.getSize());
+                imageAsset.setFormat(getExtension(image.getOriginalFilename()));
+                imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
+                imageAsset.setCreatedAt(LocalDateTime.now());
+                imageAssetsMapper.insert(imageAsset);
+                auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
+                imageIds.add(imageId);
+            }
+        }
+
+        // 4. 创建第一条 RSKU
+        RskuCreateRequest rskuRequest = new RskuCreateRequest();
+        rskuRequest.setRspuId(rspuId);
+        rskuRequest.setVariantId(variantId);
+        rskuRequest.setFactoryCode(request.getFactoryCode());
+        rskuRequest.setFactorySku(request.getFactorySku());
+        rskuRequest.setFactoryPrice(request.getFactoryPrice());
+        rskuRequest.setMaterialCode(request.getVariantMaterialCode());
+        rskuRequest.setMaterialDescription(request.getMaterialDescription());
+        rskuRequest.setLeadTimeDays(request.getLeadTimeDays());
+        rskuRequest.setMoq(request.getMoq());
+        rskuRequest.setWarrantyYears(request.getWarrantyYearsRsku());
+        rskuRequest.setShippingFrom(request.getShippingFrom());
+        rskuRequest.setDiffNotes(request.getDiffNotes());
+        rskuRequest.setQuoteConfidence(request.getQuoteConfidence());
+        rskuRequest.setProductLevel(rspu.getProductLevel());
+        rskuRequest.setAutoExtendCapability(request.getAutoExtendCapability());
+        rskuService.createRsku(rskuRequest);
+
+        return Map.of(
+            "rspuId", rspuId,
+            "variantId", variantId,
+            "imageIds", imageIds,
+            "message", "工厂产品录入成功"
+        );
+    }
+
+    private void validateFactoryEntryOwnership(String factoryCode) {
+        List<String> userFactories = userFactoryService.getFactoryCodesByUsername(
+            SecurityOperatorContext.currentUsername()
+        );
+        if (!userFactories.contains(factoryCode)) {
+            throw new BusinessException("无权为该工厂录入产品: " + factoryCode);
+        }
+    }
+
+    private String toJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.warn("JSON 序列化失败", e);
+            return null;
+        }
     }
 
     private void triggerAsyncProcess(String taskId, String rspuId, String imageId, String objectKey) {

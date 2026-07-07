@@ -68,6 +68,15 @@ public final class SecurityOperatorContext {
     }
 
     /**
+     * 判断当前用户是否为 FACTORY_ADMIN。
+     *
+     * @return 是否拥有 ROLE_FACTORY_ADMIN
+     */
+    public static boolean isCurrentUserFactoryAdmin() {
+        return hasAuthority("ROLE_FACTORY_ADMIN");
+    }
+
+    /**
      * 判断当前用户是否拥有指定权限或角色。
      *
      * @param authority 权限字符串（如 {@code product:read}）或角色字符串（如 {@code ROLE_ADMIN}）

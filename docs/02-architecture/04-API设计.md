@@ -36,6 +36,24 @@ POST   /api/v1/products/entry
        # 说明：AI 识别完成后会自动写入 rspu_style / rspu_scene 关联表，
        #      positioning_label 保存风格码（如 MC），material_tags 保存材质码（如 WO）
 
+POST   /api/v1/products/factory-entry
+       # 工厂单条录入（原子创建 RSPU + 默认变体 + 图片 + 首条 RSKU）
+       # Request: multipart/form-data
+       #   images: File[] (必填, 第一张为主图, 单张 ≤20MB)
+       #   factoryCode: string (必填, 当前用户所属工厂编码)
+       #   categoryCode: string (必填, 如 FS/DT/CB)
+       #   styleCode: string (必填, 如 MC/IT)
+       #   materialCode: string (必填, 如 WO/PE)
+       #   variantName?: string (变体名, 默认"")
+       #   price?: number (出厂价)
+       #   moq?: number (最小起订量)
+       #   leadTimeDays?: number (交期天数)
+       # Response: { rspuId, variantId, rskuId, imageIds: string[] }
+       # 说明：
+       #   - 仅 `FACTORY_ADMIN` 或拥有 `product:create` 权限的用户可调用
+       #   - 必须属于 `factoryCode` 指定工厂，否则返回 403
+       #   - 同一张图片同时作为主图写入 `image_assets`，并用于创建首条 RSKU
+
 GET    /api/v1/tasks/{taskId}
        # 查询异步任务状态（前端轮询用）
        # Response: {
@@ -50,9 +68,16 @@ GET    /api/v1/products
        # 产品列表（分页+多条件筛选，已实现）
        # Query: page, size, categoryCode, positioningLabel（风格码）, sceneCode,
        #        materialTag（材质码）, status, reviewStatus,
-       #        keyword（搜 category_path 或 rspu_id）
+       #        keyword（搜 category_path 或 rspu_id）,
+       #        viewMode: "own" | "full" (可选, 默认 own),
+       #        factoryCode: string (可选, 工厂管理员可指定本厂编码)
        # Response: { total, page, size, rows: [ProductSummary...] }
-       # 说明：positioningLabel / sceneCode / materialTag 均按字典码精确查询
+       # 说明：
+       #   - positioningLabel / sceneCode / materialTag 均按字典码精确查询
+       #   - own：仅返回当前用户所属工厂已录入 RSKU 的 RSPU（工厂管理员/业务员）
+       #   - full：平台全量 RSPU，按 `factory_product_capability` 能力覆盖去重，
+       #     对已被本厂能力覆盖且本厂未报价的 RSPU 进行折叠隐藏；
+       #     仅当用户拥有 `view_full_catalog=true` 或对应权限时可用
 
 GET    /api/v1/products/{rspuId}
        # 产品详情（含图片、AI 识别记录、官方搭配与适配来源，已实现）
@@ -89,6 +114,7 @@ PUT    /api/v1/products/{rspuId}/review
 PUT    /api/v1/products/{rspuId}
        # 更新产品元数据（定位标签、颜色、材质、场景、六维标签、价格带、保修年限等，已实现）
        # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）
+       # 说明：工厂管理员/业务员只能更新本厂已录入 RSKU 的 RSPU；非本厂产品返回 403
 
 DELETE /api/v1/products/{rspuId}
        # 软删除（已实现）

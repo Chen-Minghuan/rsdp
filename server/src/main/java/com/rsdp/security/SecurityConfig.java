@@ -95,6 +95,7 @@ public class SecurityConfig {
 
                 // 产品录入与批量导入
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/factory-entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)
 
                 // RSKU 写接口：必须放在产品写通配规则之前

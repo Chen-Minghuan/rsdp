@@ -26,6 +26,8 @@ public class SysUser {
 
     private Integer tokenVersion;
 
+    private Boolean viewFullCatalog;
+
     private LocalDateTime lastLoginAt;
 
     private LocalDateTime createdAt;

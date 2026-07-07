@@ -13,6 +13,7 @@ export interface LoginResponse {
   role: string
   roles: string[]
   permissions: string[]
+  viewFullCatalog?: boolean
 }
 
 /**

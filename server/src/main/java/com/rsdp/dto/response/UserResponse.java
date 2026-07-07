@@ -23,6 +23,8 @@ public class UserResponse {
 
     private String status;
 
+    private Boolean viewFullCatalog;
+
     private List<String> factoryCodes;
 
     private LocalDateTime lastLoginAt;

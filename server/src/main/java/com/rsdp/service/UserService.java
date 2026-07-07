@@ -84,6 +84,7 @@ public class UserService {
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setNickname(request.getNickname());
         user.setStatus("active");
+        user.setViewFullCatalog(request.getViewFullCatalog() != null ? request.getViewFullCatalog() : false);
         user.setCreatedAt(LocalDateTime.now());
         user.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.insert(user);
@@ -130,6 +131,9 @@ public class UserService {
 
         if (request.getNickname() != null) {
             user.setNickname(request.getNickname());
+        }
+        if (request.getViewFullCatalog() != null) {
+            user.setViewFullCatalog(request.getViewFullCatalog());
         }
         user.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.updateById(user);
@@ -231,6 +235,7 @@ public class UserService {
         response.setUsername(user.getUsername());
         response.setNickname(user.getNickname());
         response.setStatus(user.getStatus());
+        response.setViewFullCatalog(user.getViewFullCatalog());
         response.setLastLoginAt(user.getLastLoginAt());
         response.setCreatedAt(user.getCreatedAt());
         response.setUpdatedAt(user.getUpdatedAt());

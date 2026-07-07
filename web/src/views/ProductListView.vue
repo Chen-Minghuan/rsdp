@@ -7,6 +7,7 @@ import {
   NSpace,
   NInput,
   NSelect,
+  NSwitch,
   NDataTable,
   NPagination,
   NTag,
@@ -18,7 +19,7 @@ import {
 import { listProducts, deleteProduct } from '@/api/product'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { ProductSummary } from '@/types/product'
 
 const router = useRouter()
@@ -28,6 +29,8 @@ const userStore = useUserStore()
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
+const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -42,6 +45,9 @@ const sceneFilter = ref<string | null>(null)
 const materialFilter = ref<string | null>(null)
 const productLevelFilter = ref<string | null>(null)
 const selectedRowKeys = ref<string[]>([])
+const viewMode = ref<'own' | 'full'>('own')
+const factoryCode = ref<string | null>(null)
+const viewFullCatalog = ref(userStore.userInfo?.viewFullCatalog || false)
 
 const reviewStatusOptions = ref<{ label: string; value: string }[]>([
   { label: '全部复核状态', value: '' }
@@ -50,8 +56,19 @@ const styleOptions = ref<{ label: string; value: string }[]>([])
 const sceneOptions = ref<{ label: string; value: string }[]>([])
 const materialOptions = ref<{ label: string; value: string }[]>([])
 const productLevelOptions = ref<{ label: string; value: string }[]>([])
+const factoryOptions = computed(() => [
+  { label: '我的全部工厂', value: '' },
+  ...factoryCodes.value.map(code => ({ label: code, value: code }))
+])
 
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
+
+function toggleFullCatalog(value: boolean) {
+  viewFullCatalog.value = value
+  viewMode.value = value ? 'full' : 'own'
+  page.value = 1
+  loadProducts()
+}
 
 const rowKey = (row: ProductSummary) => row.rspuId
 
@@ -190,7 +207,7 @@ async function loadProducts() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const result = await listProducts({
+    const params: import('@/types/product').ProductListParams = {
       page: page.value,
       size: size.value,
       keyword: keyword.value || undefined,
@@ -199,7 +216,14 @@ async function loadProducts() {
       sceneCode: sceneFilter.value || undefined,
       materialTag: materialFilter.value || undefined,
       productLevel: productLevelFilter.value || undefined
-    })
+    }
+    if (isFactoryAdmin.value) {
+      params.viewMode = viewMode.value
+      if (viewMode.value === 'own' && factoryCode.value) {
+        params.factoryCode = factoryCode.value
+      }
+    }
+    const result = await listProducts(params)
     products.value = result.rows
     total.value = result.total
   } catch (e) {
@@ -248,7 +272,7 @@ onMounted(() => {
   loadProducts()
 })
 
-watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilter], () => {
+watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilter, factoryCode], () => {
   page.value = 1
   loadProducts()
 })
@@ -305,6 +329,24 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
           <n-button v-if="canImportProduct" @click="router.push('/products/import')">
             批量导入
           </n-button>
+        </n-space>
+
+        <n-space v-if="isFactoryAdmin" align="center">
+          <n-select
+            v-model:value="factoryCode"
+            :options="factoryOptions"
+            clearable
+            style="width: 180px;"
+            placeholder="选择工厂"
+            :disabled="viewMode === 'full'"
+          />
+          <n-switch
+            :value="viewFullCatalog"
+            @update:value="toggleFullCatalog"
+          >
+            <template #checked>全库去重视图</template>
+            <template #unchecked>仅自己的产品</template>
+          </n-switch>
         </n-space>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">

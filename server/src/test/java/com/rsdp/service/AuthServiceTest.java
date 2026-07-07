@@ -22,6 +22,8 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -48,6 +50,9 @@ class AuthServiceTest {
     @Mock
     private PermissionService permissionService;
 
+    @Mock
+    private UserFactoryService userFactoryService;
+
     @InjectMocks
     private AuthService authService;
 
@@ -65,6 +70,7 @@ class AuthServiceTest {
         when(sysUserMapper.selectByUsername("admin")).thenReturn(user);
         when(userRoleService.getRoleCodesByUserId("USER-001")).thenReturn(List.of("ADMIN"));
         when(permissionService.getPermissionsByUserId("USER-001")).thenReturn(Set.of("admin:user:manage"));
+        when(userFactoryService.getFactoryCodesByUserId("USER-001")).thenReturn(List.of());
         when(jwtUtil.generateToken("USER-001", "admin", "管理员", "ADMIN", List.of("admin:user:manage"), 0)).thenReturn("jwt-token");
 
         LoginRequest request = new LoginRequest();
@@ -77,7 +83,35 @@ class AuthServiceTest {
         assertThat(response.getRole()).isEqualTo("ADMIN");
         assertThat(response.getRoles()).containsExactly("ADMIN");
         assertThat(response.getPermissions()).containsExactly("admin:user:manage");
+        assertThat(response.getViewFullCatalog()).isNull();
         verify(sysUserMapper).updateById(user);
+    }
+
+    @Test
+    void login_success_shouldReturnViewFullCatalog() {
+        Authentication authentication = mock(Authentication.class);
+        when(authentication.isAuthenticated()).thenReturn(true);
+        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
+            .thenReturn(authentication);
+
+        SysUser user = new SysUser();
+        user.setUserId("USER-002");
+        user.setUsername("factory");
+        user.setNickname("工厂管理员");
+        user.setViewFullCatalog(true);
+        when(sysUserMapper.selectByUsername("factory")).thenReturn(user);
+        when(userRoleService.getRoleCodesByUserId("USER-002")).thenReturn(List.of("FACTORY_ADMIN"));
+        when(permissionService.getPermissionsByUserId("USER-002")).thenReturn(Set.of("product:read", "product:create"));
+        when(userFactoryService.getFactoryCodesByUserId("USER-002")).thenReturn(List.of("F001"));
+        when(jwtUtil.generateToken(eq("USER-002"), eq("factory"), eq("工厂管理员"), eq("FACTORY_ADMIN"), any(), anyInt())).thenReturn("jwt-token-2");
+
+        LoginRequest request = new LoginRequest();
+        request.setUsername("factory");
+        request.setPassword("factory123");
+
+        LoginResponse response = authService.login(request);
+
+        assertThat(response.getViewFullCatalog()).isTrue();
     }
 
     @Test
