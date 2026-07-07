@@ -45,6 +45,7 @@ const message = useMessage()
 const userStore = useUserStore()
 const formRef = ref<InstanceType<typeof NForm> | null>(null)
 
+const canCreateUser = computed(() => userStore.hasPermission(PERMISSIONS.USER_CREATE))
 const canUpdateUser = computed(() => userStore.hasPermission(PERMISSIONS.USER_UPDATE))
 const canDeleteUser = computed(() => userStore.hasPermission(PERMISSIONS.USER_DELETE))
 const canResetPassword = computed(() => userStore.hasPermission(PERMISSIONS.USER_RESET_PASSWORD))
@@ -299,7 +300,7 @@ onMounted(loadUsers)
       <n-space>
         <n-input v-model:value="keyword" placeholder="搜索用户名/昵称" @keydown.enter="loadUsers" />
         <n-button type="primary" @click="loadUsers">搜索</n-button>
-        <n-button @click="openCreate">+ 新增用户</n-button>
+        <n-button v-if="canCreateUser" @click="openCreate">+ 新增用户</n-button>
       </n-space>
 
       <n-data-table :columns="columns" :data="users" :loading="loading" :bordered="false" />

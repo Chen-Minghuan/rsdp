@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert } from 'naive-ui'
+import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert, NDivider } from 'naive-ui'
 import { login } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 
@@ -15,6 +15,23 @@ const form = ref({
 
 const loading = ref(false)
 const errorMessage = ref('')
+
+const isDev = import.meta.env.DEV
+
+const quickAccounts = [
+  { username: 'admin', password: 'admin123', label: '系统管理员' },
+  { username: 'editor', password: 'admin123', label: '编辑员' },
+  { username: 'viewer', password: 'admin123', label: '浏览者' },
+  { username: 'designer', password: 'admin123', label: '设计师' },
+  { username: 'factory', password: 'admin123', label: '工厂管理员' },
+  { username: 'user', password: 'admin123', label: '普通用户' }
+]
+
+async function quickLogin(username: string, password: string) {
+  form.value.username = username
+  form.value.password = password
+  await handleLogin()
+}
 
 async function handleLogin() {
   if (!form.value.username.trim() || !form.value.password) {
@@ -72,6 +89,21 @@ async function handleLogin() {
           登录
         </n-button>
       </n-space>
+
+      <template v-if="isDev">
+        <n-divider>快速登录（开发环境）</n-divider>
+        <n-space wrap>
+          <n-button
+            v-for="account in quickAccounts"
+            :key="account.username"
+            size="small"
+            :loading="loading"
+            @click="quickLogin(account.username, account.password)"
+          >
+            {{ account.label }}
+          </n-button>
+        </n-space>
+      </template>
     </n-card>
   </div>
 </template>
