@@ -8,6 +8,7 @@ import com.rsdp.dto.StyleMatchResult;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.OcrPostProcessor;
@@ -38,6 +39,7 @@ import java.util.UUID;
 public class AsyncTaskProcessor {
 
     private final AsyncTaskMapper asyncTaskMapper;
+    private final RspuMapper rspuMapper;
     private final VisionService visionService;
     private final EmbeddingService embeddingService;
     private final ChromaDbClient chromaDbClient;
@@ -69,6 +71,9 @@ public class AsyncTaskProcessor {
         String modelName = aiModel;
         int processingTime = 0;
 
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        String categoryCode = rspu != null ? rspu.getCategoryCode() : null;
+
         byte[] imageBytes;
         try (InputStream imageStream = storageService.get(objectKey)) {
             imageBytes = imageStream.readAllBytes();
@@ -89,7 +94,7 @@ public class AsyncTaskProcessor {
         AiLabels labels;
         try (InputStream imageStream = new ByteArrayInputStream(imageBytes)) {
             long aiStart = System.currentTimeMillis();
-            labels = visionService.recognizeImage(imageStream);
+            labels = visionService.recognizeImage(imageStream, categoryCode);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
             // AI 标签后处理：清洗 OCR 字段，规范化尺寸，OCR 材质兜底

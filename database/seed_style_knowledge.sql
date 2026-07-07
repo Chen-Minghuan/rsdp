@@ -1,6 +1,7 @@
 -- RSDP 风格数据库种子数据
 -- 自动生成来源：data/style-knowledge/raw/*.json
 -- 覆盖：11 个风格百科正向案例 + 9 个失败案例反向案例 + 搭配公式
+-- 重要限制：当前数据仅覆盖客厅（LIVING_ROOM）。书房、卧室、餐厅等场景的风格案例与搭配公式尚未建立。
 -- 执行方式：psql -h localhost -U postgres -d rsdp -f database/seed_style_knowledge.sql
 
 -- =================== 1. 风格百科正向案例 ===================

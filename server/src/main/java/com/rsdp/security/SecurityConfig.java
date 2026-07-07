@@ -63,6 +63,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/dicts/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/tasks/*").authenticated()
 
+                // 文档导入（必须放在产品读通配规则之前）
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/document-import").hasAuthority(Permissions.PRODUCT_IMPORT)
+
                 // 导入模板：按最小权限显式授权（必须放在对应通配规则之前）
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)
                 .requestMatchers(HttpMethod.GET, "/api/v1/rsku/import-template").hasAuthority(Permissions.RSKU_IMPORT)

@@ -1,12 +1,15 @@
 package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.config.SixDimSchemaConfig;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.Dimensions;
+import com.rsdp.dto.DocumentProductRegion;
 import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.OpenAiChatMessage;
 import com.rsdp.dto.OpenAiChatRequest;
 import com.rsdp.dto.OpenAiChatResponse;
+import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.ExternalServiceException;
 import lombok.RequiredArgsConstructor;
@@ -50,19 +53,19 @@ public class VisionService {
 
     /**
      * 用户提示词模板。风格、场景、材质枚举会在运行时从 category_dict 动态注入，
-     * 确保 AI 输出与平台字典保持一致。
+     * 六维标签维度定义会根据产品类别动态选择。
      */
     private static final String USER_PROMPT_TEMPLATE = """
         请分析这张家具产品图，输出以下 JSON 字段：
         {
           "style": "风格名称，必须从以下枚举中精确选择：%s。严禁使用枚举外的风格名称。",
           "sixDimTags": {
-            "A": "轮廓形态",
-            "B": "靠背/背部特征",
-            "C": "扶手特征",
-            "D": "腿部/底座特征",
-            "E": "表面材质",
-            "F": "软包填充形态"
+            "A": "维度A",
+            "B": "维度B",
+            "C": "维度C",
+            "D": "维度D",
+            "E": "维度E",
+            "F": "维度F"
           },
           "colorPrimaryName": "主色名称，如：焦糖棕、米白、原木色",
           "colorPrimaryHsv": [H值0-360, S值0-1, V值0-1],
@@ -92,6 +95,7 @@ public class VisionService {
             }
           }
         }
+        %s
         风格、场景、材质的枚举约束如下，请优先从中选择：
         - 风格（style）：%s
         - 场景（scene）：%s
@@ -100,7 +104,21 @@ public class VisionService {
         只输出 JSON，不要任何其他文字说明。
         """;
 
+    /**
+     * 识别图片，使用默认（通用）六维标签定义。
+     */
     public AiLabels recognizeImage(InputStream imageStream) {
+        return recognizeImage(imageStream, null);
+    }
+
+    /**
+     * 识别图片，按产品类别使用对应的六维标签定义。
+     *
+     * @param imageStream  图片流
+     * @param categoryCode 产品品类码，如 FS/TB/FC；为空时使用通用定义
+     * @return AI 识别标签
+     */
+    public AiLabels recognizeImage(InputStream imageStream, String categoryCode) {
         try {
             byte[] imageBytes = imageStream.readAllBytes();
             if (imageBytes.length == 0) {
@@ -114,7 +132,7 @@ public class VisionService {
 
             String base64 = Base64.getEncoder().encodeToString(imageBytes);
 
-            String userPrompt = buildUserPrompt();
+            String userPrompt = buildUserPrompt(categoryCode);
             OpenAiChatRequest request = OpenAiChatRequest.builder()
                 .model(model)
                 .messages(List.of(
@@ -189,16 +207,18 @@ public class VisionService {
     }
 
     /**
-     * 构建用户提示词，运行时从 category_dict 注入风格、场景、材质枚举。
-     * 若字典服务不可用，则使用最小默认枚举，避免完全阻断识别流程。
+     * 构建用户提示词，运行时从 category_dict 注入风格、场景、材质枚举，
+     * 并按品类码注入对应的六维标签维度定义。
      *
+     * @param categoryCode 产品品类码
      * @return 完整的用户提示词
      */
-    private String buildUserPrompt() {
+    private String buildUserPrompt(String categoryCode) {
         String styleEnum = buildEnumText("style");
         String sceneEnum = buildEnumText("scene");
         String materialEnum = buildEnumText("material");
-        return USER_PROMPT_TEMPLATE.formatted(styleEnum, styleEnum, sceneEnum, materialEnum);
+        String sixDimDescription = SixDimSchemaConfig.buildPromptDescription(categoryCode);
+        return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription, styleEnum, sceneEnum, materialEnum);
     }
 
     /**
@@ -227,6 +247,180 @@ public class VisionService {
             case "material" -> DEFAULT_MATERIAL_ENUM;
             default -> "";
         };
+    }
+
+    /**
+     * PDF 页面产品区域检测提示词。
+     * 要求 AI 对连续的多张 PDF 页面图片逐页分析，输出产品位置框和页面类型。
+     */
+    private static final String PAGE_DETECTION_SYSTEM_PROMPT = """
+        你是家具产品目录分析专家。请对用户提供的一系列 PDF 页面图片逐页分析，
+        判断每页类型并输出页面中每个产品的相对位置框（bbox）。
+        只输出 JSON 数组，不要任何其他文字说明。
+        """;
+
+    private static final String PAGE_DETECTION_USER_PROMPT_TEMPLATE = """
+        下面是 %d 张连续的 PDF 页面图片，请按顺序逐页分析。
+
+        对每一页，判断其类型并输出产品中每个产品的位置信息：
+        - pageType: product（产品页）/ cover（封面）/ toc（目录）/ separator（分隔页）/ blank（空白页）/ unknown（未知）
+        - products: 当 pageType=product 时，列出该页中所有产品的位置框和预估品类码
+
+        bbox 使用相对于页面宽高的比例坐标（0.0 ~ 1.0）：
+        {"x": 左上角 x, "y": 左上角 y, "w": 宽度, "h": 高度}
+
+        预估品类码必须从以下枚举中精确选择，无法判断时填 null：
+        %s
+
+        输出必须是一个 JSON 数组，数组长度严格等于 %d（图片数量），第 i 个元素对应第 i 张图片：
+        [
+          {
+            "pageType": "product",
+            "products": [
+              {"bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5}, "estimatedCategory": "SF"}
+            ]
+          },
+          ...
+        ]
+
+        只输出 JSON 数组，不要任何其他文字说明。
+        """;
+
+    /**
+     * 对多张 PDF 页面图片进行产品区域检测。
+     *
+     * @param pageImages   页面图片流列表，顺序即为页码顺序
+     * @param categoryHint 品类提示，为空时使用所有品类枚举
+     * @return 每页的产品区域列表，顺序与输入一致
+     */
+    public List<DocumentProductRegion> detectPageRegions(List<InputStream> pageImages, String categoryHint) {
+        if (pageImages == null || pageImages.isEmpty()) {
+            return List.of();
+        }
+        try {
+            List<String> base64Images = new java.util.ArrayList<>();
+            for (InputStream stream : pageImages) {
+                byte[] bytes = stream.readAllBytes();
+                if (bytes.length == 0) {
+                    throw new ExternalServiceException("页面图片流为空");
+                }
+                base64Images.add(Base64.getEncoder().encodeToString(bytes));
+            }
+
+            String categoryEnum = buildCategoryEnumText();
+            String userPrompt = PAGE_DETECTION_USER_PROMPT_TEMPLATE.formatted(
+                base64Images.size(), categoryEnum, base64Images.size());
+
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", PAGE_DETECTION_SYSTEM_PROMPT),
+                    OpenAiChatMessage.multiVision("user", userPrompt, base64Images)
+                ))
+                .temperature(0.2)
+                .build();
+
+            String json = executeChat(request, "PDF 页面区域检测");
+            return parsePageRegions(json, pageImages.size());
+        } catch (IOException e) {
+            log.error("读取页面图片流失败", e);
+            throw new ExternalServiceException("读取页面图片流失败", e);
+        }
+    }
+
+    private String buildCategoryEnumText() {
+        try {
+            return dictService.listByType("category").stream()
+                .filter(d -> d.getDictCode() != null && !d.getDictCode().isBlank())
+                .map(d -> d.getDictCode() + "(" + (d.getDictName() != null ? d.getDictName() : "") + ")")
+                .sorted()
+                .collect(Collectors.joining("、"));
+        } catch (Exception e) {
+            log.warn("读取品类字典失败", e);
+            return "";
+        }
+    }
+
+    private List<DocumentProductRegion> parsePageRegions(String json, int expectedSize) {
+        if (json == null || json.isBlank()) {
+            throw new ExternalServiceException("AI 页面检测返回为空");
+        }
+        try {
+            List<?> rawList = objectMapper.readValue(json, List.class);
+            if (rawList == null || rawList.size() != expectedSize) {
+                throw new ExternalServiceException("AI 页面检测返回数组长度不匹配，期望 " + expectedSize + "，实际 " +
+                    (rawList == null ? 0 : rawList.size()));
+            }
+
+            List<DocumentProductRegion> regions = new java.util.ArrayList<>();
+            for (int i = 0; i < rawList.size(); i++) {
+                DocumentProductRegion region = parseSingleRegion(rawList.get(i));
+                region.setPageIndex(i);
+                regions.add(region);
+            }
+            return regions;
+        } catch (ExternalServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("解析 AI 页面检测结果失败，json={}", json, e);
+            throw new ExternalServiceException("解析 AI 页面检测结果失败", e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private DocumentProductRegion parseSingleRegion(Object raw) {
+        DocumentProductRegion region = new DocumentProductRegion();
+        if (!(raw instanceof Map<?, ?> map)) {
+            region.setPageType("unknown");
+            return region;
+        }
+
+        Object pageType = map.get("pageType");
+        region.setPageType(pageType != null ? pageType.toString() : "unknown");
+
+        Object products = map.get("products");
+        if (products instanceof List<?> productList) {
+            List<DocumentProductRegion.PageProduct> pageProducts = new java.util.ArrayList<>();
+            for (Object p : productList) {
+                if (p instanceof Map<?, ?> pm) {
+                    DocumentProductRegion.PageProduct pp = new DocumentProductRegion.PageProduct();
+                    pp.setBbox(parseBoundingBox(pm.get("bbox")));
+                    Object category = pm.get("estimatedCategory");
+                    pp.setEstimatedCategory(category != null ? category.toString() : null);
+                    pageProducts.add(pp);
+                }
+            }
+            region.setProducts(pageProducts);
+        }
+        return region;
+    }
+
+    @SuppressWarnings("unchecked")
+    private ProductBoundingBox parseBoundingBox(Object raw) {
+        if (!(raw instanceof Map<?, ?> map)) {
+            return null;
+        }
+        try {
+            double x = parseDoubleValue(map.get("x"));
+            double y = parseDoubleValue(map.get("y"));
+            double w = parseDoubleValue(map.get("w"));
+            double h = parseDoubleValue(map.get("h"));
+            ProductBoundingBox bbox = new ProductBoundingBox(x, y, w, h);
+            return bbox.isValid() ? bbox : null;
+        } catch (Exception e) {
+            log.warn("解析 bbox 失败", e);
+            return null;
+        }
+    }
+
+    private double parseDoubleValue(Object value) {
+        if (value == null) {
+            return 0.0;
+        }
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        return Double.parseDouble(value.toString());
     }
 
     /**

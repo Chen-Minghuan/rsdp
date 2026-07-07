@@ -25,6 +25,7 @@ onMounted(async () => {
 
 const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_CREATE))
 const canReadProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_READ))
+const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
 const canReadFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_READ))
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 const canReadScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_READ))
@@ -80,8 +81,15 @@ function handleUserAction(key: string) {
               工厂录入
             </n-button>
             <n-button
+              v-if="canImportProduct"
+              :type="route.path === '/products/document-import' ? 'primary' : 'default'"
+              @click="navigate('/products/document-import')"
+            >
+              PDF 导入
+            </n-button>
+            <n-button
               v-if="canReadProduct"
-              :type="route.path.startsWith('/products') ? 'primary' : 'default'"
+              :type="route.path.startsWith('/products') && route.path !== '/products/document-import' ? 'primary' : 'default'"
               @click="navigate('/products')"
             >
               产品库

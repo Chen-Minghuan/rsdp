@@ -25,6 +25,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -267,6 +268,93 @@ public class ProductService {
             "rskuId", rskuId,
             "imageIds", imageIds,
             "message", "工厂产品录入成功"
+        );
+    }
+
+    /**
+     * 从图片流创建单产品录入。
+     *
+     * <p>与 {@link #createEntry(List, String)} 行为一致，但输入为已校验过的图片字节流，
+     * 用于 PDF/PPT 等文档导入后裁剪出的单产品图。</p>
+     *
+     * @param imageStream  产品主图输入流
+     * @param filename     原始文件名，用于生成对象键和记录格式
+     * @param size         图片字节数
+     * @param categoryCode 品类码
+     * @return 包含 taskId、rspuId、imageIds 的映射
+     * @throws IOException 文件保存失败
+     */
+    @Transactional
+    public Map<String, Object> createEntryFromStream(InputStream imageStream, String filename, long size,
+                                                     String categoryCode) throws IOException {
+        long start = System.currentTimeMillis();
+
+        if (imageStream == null) {
+            throw new BusinessException("图片流不能为空");
+        }
+
+        String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+
+        String effectiveCategoryCode = (categoryCode == null || categoryCode.isBlank()) ? "FS" : categoryCode.trim().toUpperCase();
+        validateCategoryCode(effectiveCategoryCode);
+
+        // 创建 RSPU 草稿
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setCategoryCode(effectiveCategoryCode);
+        rspu.setCategoryPath(resolveCategoryPath(effectiveCategoryCode));
+        rspu.setPositioningLabel("待识别");
+        rspu.setStatus("processing");
+        rspu.setReviewStatus("待复核");
+        rspu.setCreatedAt(LocalDateTime.now());
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.insert(rspu);
+        auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+
+        String extension = getExtension(filename);
+        String objectKey = "images/" + imageId + "." + extension;
+        String storagePath = storageService.store(imageStream, objectKey, size, "image/" + extension);
+
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId(imageId);
+        imageAsset.setRspuId(rspuId);
+        imageAsset.setImageType("white_bg");
+        imageAsset.setStoragePath(storagePath);
+        imageAsset.setPrimary(true);
+        imageAsset.setAiProcessed(false);
+        imageAsset.setFileSize(size);
+        imageAsset.setFormat(extension);
+        imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
+        imageAsset.setCreatedAt(LocalDateTime.now());
+        imageAssetsMapper.insert(imageAsset);
+        auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
+
+        // 创建异步任务
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setTaskType("product_entry");
+        task.setStatus("pending");
+        task.setProgress(0);
+        task.setInputData(objectMapper.writeValueAsString(Map.of(
+            "rspuId", rspuId,
+            "imageId", imageId,
+            "objectKey", storagePath,
+            "originalFilename", filename
+        )));
+        task.setCreatedAt(LocalDateTime.now());
+        asyncTaskMapper.insert(task);
+
+        triggerAsyncProcess(taskId, rspuId, imageId, storagePath);
+
+        log.info("产品录入任务已从流创建，耗时 {}ms，taskId={}", System.currentTimeMillis() - start, taskId);
+
+        return Map.of(
+            "taskId", taskId,
+            "rspuId", rspuId,
+            "imageIds", List.of(imageId),
+            "message", "任务已创建，正在后台识别中"
         );
     }
 

@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
+import type { DocumentImportResult, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 /**
@@ -128,6 +128,29 @@ export async function factoryEntry(formData: FormData): Promise<FactoryProductEn
   const { data: result } = await uploadClient.post<ApiResult<FactoryProductEntryResult>>(
     '/v1/products/factory-entry',
     formData
+  )
+  return result.data
+}
+
+/**
+ * 从 PDF 文档批量导入产品。
+ *
+ * @param file PDF 文件
+ * @param categoryHint 品类提示，如 SF/TB/FC
+ * @param signal 可选的 AbortSignal，用于取消请求
+ * @returns 导入批次结果
+ */
+export async function importProductsFromDocument(file: File, categoryHint?: string, signal?: AbortSignal): Promise<DocumentImportResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (categoryHint) {
+    formData.append('categoryHint', categoryHint)
+  }
+
+  const { data: result } = await uploadClient.post<ApiResult<DocumentImportResult>>(
+    '/v1/products/document-import',
+    formData,
+    { signal }
   )
   return result.data
 }

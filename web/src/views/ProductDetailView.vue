@@ -38,6 +38,7 @@ import type { Rsku, RskuCreateRequest } from '@/types/rsku'
 import type { Factory } from '@/types/factory'
 import type { RspuVariant, RspuVariantCreateRequest } from '@/types/variant'
 import type { RspuRelationCreateRequest } from '@/types/relation'
+import { getSixDimSchema } from '@/utils/sixDimLabels'
 
 const route = useRoute()
 const router = useRouter()
@@ -58,6 +59,8 @@ const reviewing = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const detail = ref<ProductDetail | null>(null)
+
+const sixDimSchema = computed(() => getSixDimSchema(detail.value?.rspu.categoryCode))
 
 const rskuList = ref<Rsku[]>([])
 const rskuLoading = ref(false)
@@ -893,22 +896,22 @@ onBeforeRouteUpdate((to, from) => {
               </n-descriptions-item>
               <n-descriptions-item label="六维标签">
                 <n-descriptions v-if="detail.rspu.sixDimTags" bordered :column="1" size="small">
-                  <n-descriptions-item label="轮廓形态">
+                  <n-descriptions-item :label="sixDimSchema.dims.A?.label ?? '维度 A'">
                     {{ detail.rspu.sixDimTags.A || '-' }}
                   </n-descriptions-item>
-                  <n-descriptions-item label="靠背特征">
+                  <n-descriptions-item :label="sixDimSchema.dims.B?.label ?? '维度 B'">
                     {{ detail.rspu.sixDimTags.B || '-' }}
                   </n-descriptions-item>
-                  <n-descriptions-item label="扶手特征">
+                  <n-descriptions-item :label="sixDimSchema.dims.C?.label ?? '维度 C'">
                     {{ detail.rspu.sixDimTags.C || '-' }}
                   </n-descriptions-item>
-                  <n-descriptions-item label="腿部/底座">
+                  <n-descriptions-item :label="sixDimSchema.dims.D?.label ?? '维度 D'">
                     {{ detail.rspu.sixDimTags.D || '-' }}
                   </n-descriptions-item>
-                  <n-descriptions-item label="表面材质">
+                  <n-descriptions-item :label="sixDimSchema.dims.E?.label ?? '维度 E'">
                     {{ detail.rspu.sixDimTags.E || '-' }}
                   </n-descriptions-item>
-                  <n-descriptions-item label="软包形态">
+                  <n-descriptions-item :label="sixDimSchema.dims.F?.label ?? '维度 F'">
                     {{ detail.rspu.sixDimTags.F || '-' }}
                   </n-descriptions-item>
                 </n-descriptions>

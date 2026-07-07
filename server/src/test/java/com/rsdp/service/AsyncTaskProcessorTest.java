@@ -5,6 +5,7 @@ import com.rsdp.dto.AiLabels;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +57,9 @@ class AsyncTaskProcessorTest {
     @Mock
     private StyleMatchingService styleMatchingService;
 
+    @Mock
+    private RspuMapper rspuMapper;
+
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -79,6 +83,11 @@ class AsyncTaskProcessorTest {
         field = AsyncTaskProcessor.class.getDeclaredField("objectMapper");
         field.setAccessible(true);
         field.set(asyncTaskProcessor, objectMapper);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setCategoryCode("FS");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
     }
 
     @Test
@@ -95,7 +104,7 @@ class AsyncTaskProcessorTest {
         labels.setMaterialTags(List.of("实木", "布艺"));
         labels.setColorPrimaryName("焦糖棕");
         labels.setConfidence("high");
-        when(visionService.recognizeImage(any())).thenReturn(labels);
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
         float[] embedding = new float[]{0.1f, 0.2f, 0.3f};
         when(embeddingService.embedImage(any())).thenReturn(embedding);
@@ -148,7 +157,7 @@ class AsyncTaskProcessorTest {
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
-        when(visionService.recognizeImage(any())).thenReturn(labels);
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
         float[] embedding = new float[]{0.1f, 0.2f, 0.3f};
         when(embeddingService.embedImage(any())).thenReturn(embedding);
@@ -183,7 +192,7 @@ class AsyncTaskProcessorTest {
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
-        when(visionService.recognizeImage(any())).thenReturn(labels);
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
         when(embeddingService.embedImage(any())).thenThrow(new RuntimeException("Embedding 服务异常"));
 
@@ -208,7 +217,7 @@ class AsyncTaskProcessorTest {
 
         InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
         when(storageService.get(objectKey)).thenReturn(imageStream);
-        when(visionService.recognizeImage(any())).thenThrow(new RuntimeException("AI 服务异常"));
+        when(visionService.recognizeImage(any(), eq("FS"))).thenThrow(new RuntimeException("AI 服务异常"));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -230,6 +239,6 @@ class AsyncTaskProcessorTest {
         // Then
         verify(persistenceService).saveFailure(eq(taskId), eq(rspuId), eq(imageId),
             anyString(), eq("qwen3-vl-plus"), eq("存储读取失败"));
-        verify(visionService, times(0)).recognizeImage(any());
+        verify(visionService, times(0)).recognizeImage(any(), any());
     }
 }
