@@ -23,9 +23,9 @@ rsdp:
       batch-size: 100
 
   ai:
-    # 开发环境默认启用 AI Mock，避免无 DashScope Key 时新品录入失败
+    # 开发环境默认关闭 AI Mock；如需使用真实模型，请确保 DASHSCOPE_API_KEY 已配置
     mock:
-      enabled: true
+      enabled: false
 
   import:
     # 开发/测试环境可放开本地图片地址；生产环境应留空，仅允许公网地址
