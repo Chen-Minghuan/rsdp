@@ -10,11 +10,14 @@ import {
   NFormItem,
   NInput,
   NSelect,
+  NSwitch,
   NPagination,
   useMessage
 } from 'naive-ui'
 import { h } from 'vue'
 import { apiClient } from '@/api/client'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { ApiResult } from '@/api/client'
 
 interface User {
@@ -25,6 +28,7 @@ interface User {
   roleName: string
   status: string
   factoryCodes: string[]
+  viewFullCatalog: boolean
   createdAt: string
 }
 
@@ -34,10 +38,16 @@ interface UserForm {
   password: string
   roleCode: string
   factoryCodes: string[]
+  viewFullCatalog: boolean
 }
 
 const message = useMessage()
+const userStore = useUserStore()
 const formRef = ref<InstanceType<typeof NForm> | null>(null)
+
+const canUpdateUser = computed(() => userStore.hasPermission(PERMISSIONS.USER_UPDATE))
+const canDeleteUser = computed(() => userStore.hasPermission(PERMISSIONS.USER_DELETE))
+const canResetPassword = computed(() => userStore.hasPermission(PERMISSIONS.USER_RESET_PASSWORD))
 
 const createRules = {
   username: { required: true, message: '请输入用户名', trigger: 'blur' },
@@ -66,9 +76,23 @@ const form = reactive<UserForm>({
   nickname: '',
   password: '',
   roleCode: 'USER',
-  factoryCodes: []
+  factoryCodes: [],
+  viewFullCatalog: false
 })
 const factoryCodesText = ref('')
+
+const showResetPasswordModal = ref(false)
+const resetPasswordUser = ref<User | null>(null)
+const resetPasswordForm = reactive({ newPassword: '' })
+const resetPasswordFormRef = ref<InstanceType<typeof NForm> | null>(null)
+const resetPasswordRules = {
+  newPassword: {
+    required: true,
+    min: 6,
+    message: '密码长度不能少于 6 位',
+    trigger: 'blur'
+  }
+}
 
 const roleOptions = [
   { label: '系统管理员', value: 'ADMIN' },
@@ -84,6 +108,18 @@ const columns = [
   { title: '昵称', key: 'nickname' },
   { title: '角色', key: 'roleName' },
   { title: '状态', key: 'status' },
+  {
+    title: '全库视图',
+    key: 'viewFullCatalog',
+    width: 100,
+    render(row: User) {
+      return h(NSwitch, {
+        size: 'small',
+        value: row.viewFullCatalog === true,
+        disabled: true
+      })
+    }
+  },
   { title: '创建时间', key: 'createdAt' },
   {
     title: '操作',
@@ -94,13 +130,26 @@ const columns = [
         {},
         {
           default: () => [
-            h(NButton, { size: 'small', onClick: () => openEdit(row) }, { default: () => '编辑' }),
-            h(
-              NButton,
-              { size: 'small', onClick: () => toggleStatus(row) },
-              { default: () => (row.status === 'active' ? '禁用' : '启用') }
-            ),
-            h(NButton, { size: 'small', onClick: () => resetPassword(row) }, { default: () => '重置密码' })
+            canUpdateUser.value
+              ? h(NButton, { size: 'small', onClick: () => openEdit(row) }, { default: () => '编辑' })
+              : null,
+            canUpdateUser.value
+              ? h(
+                  NButton,
+                  { size: 'small', onClick: () => toggleStatus(row) },
+                  { default: () => (row.status === 'active' ? '禁用' : '启用') }
+                )
+              : null,
+            canResetPassword.value
+              ? h(NButton, { size: 'small', onClick: () => openResetPassword(row) }, { default: () => '重置密码' })
+              : null,
+            canDeleteUser.value
+              ? h(
+                  NButton,
+                  { size: 'small', type: 'error', onClick: () => handleDelete(row) },
+                  { default: () => '删除' }
+                )
+              : null
           ]
         }
       )
@@ -131,6 +180,7 @@ function openCreate() {
   form.password = ''
   form.roleCode = 'USER'
   form.factoryCodes = []
+  form.viewFullCatalog = false
   factoryCodesText.value = ''
   showModal.value = true
 }
@@ -142,6 +192,7 @@ function openEdit(user: User) {
   form.password = ''
   form.roleCode = user.roleCode
   form.factoryCodes = user.factoryCodes || []
+  form.viewFullCatalog = user.viewFullCatalog || false
   factoryCodesText.value = (user.factoryCodes || []).join(', ')
   showModal.value = true
 }
@@ -161,7 +212,8 @@ async function saveUser() {
       await apiClient.put(`/v1/admin/users/${editingUser.value.userId}`, {
         nickname: form.nickname,
         roleCode: form.roleCode,
-        factoryCodes: form.factoryCodes
+        factoryCodes: form.factoryCodes,
+        viewFullCatalog: form.viewFullCatalog
       })
       message.success('更新成功')
     } else {
@@ -170,7 +222,8 @@ async function saveUser() {
         nickname: form.nickname,
         password: form.password,
         roleCode: form.roleCode,
-        factoryCodes: form.factoryCodes
+        factoryCodes: form.factoryCodes,
+        viewFullCatalog: form.viewFullCatalog
       })
       message.success('创建成功')
     }
@@ -192,17 +245,43 @@ async function toggleStatus(user: User) {
   }
 }
 
-async function resetPassword(user: User) {
-  const newPassword = window.prompt(`请输入 ${user.username} 的新密码（至少 6 位）`)
-  if (!newPassword || newPassword.length < 6) {
-    message.warning('密码长度不足')
+function openResetPassword(user: User) {
+  resetPasswordUser.value = user
+  resetPasswordForm.newPassword = ''
+  showResetPasswordModal.value = true
+}
+
+function closeResetPassword() {
+  showResetPasswordModal.value = false
+  resetPasswordUser.value = null
+  resetPasswordForm.newPassword = ''
+}
+
+async function confirmResetPassword() {
+  try {
+    await resetPasswordFormRef.value?.validate()
+  } catch {
     return
   }
+  if (!resetPasswordUser.value) return
   try {
-    await apiClient.put(`/v1/admin/users/${user.userId}/reset-password`, { newPassword })
+    await apiClient.put(`/v1/admin/users/${resetPasswordUser.value.userId}/reset-password`, {
+      newPassword: resetPasswordForm.newPassword
+    })
     message.success('密码重置成功')
+    closeResetPassword()
   } catch (err: unknown) {
     message.error(getErrorMessage(err) || '密码重置失败')
+  }
+}
+
+async function handleDelete(user: User) {
+  try {
+    await apiClient.delete(`/v1/admin/users/${user.userId}`)
+    message.success('用户删除成功')
+    loadUsers()
+  } catch (err: unknown) {
+    message.error(getErrorMessage(err) || '删除用户失败')
   }
 }
 
@@ -256,10 +335,31 @@ onMounted(loadUsers)
             placeholder="厂商业务员可填写工厂编码，多个用逗号分隔"
           />
         </n-form-item>
+        <n-form-item label="全库视图">
+          <n-switch v-model:value="form.viewFullCatalog" />
+          <span style="color: #999; font-size: 12px; margin-left: 8px;">开启后可在产品库查看全平台去重后的产品</span>
+        </n-form-item>
       </n-form>
       <n-space justify="end">
         <n-button @click="showModal = false">取消</n-button>
         <n-button type="primary" @click="saveUser">保存</n-button>
+      </n-space>
+    </n-card>
+  </n-modal>
+
+  <n-modal v-model:show="showResetPasswordModal" title="重置密码">
+    <n-card style="width: 420px;">
+      <p v-if="resetPasswordUser" style="margin-bottom: 16px;">
+        正在为 <strong>{{ resetPasswordUser.username }}</strong> 重置密码
+      </p>
+      <n-form ref="resetPasswordFormRef" :model="resetPasswordForm" :rules="resetPasswordRules" label-placement="left" label-width="80">
+        <n-form-item label="新密码" path="newPassword">
+          <n-input v-model:value="resetPasswordForm.newPassword" type="password" placeholder="请输入新密码（至少 6 位）" />
+        </n-form-item>
+      </n-form>
+      <n-space justify="end">
+        <n-button @click="closeResetPassword">取消</n-button>
+        <n-button type="primary" @click="confirmResetPassword">确认重置</n-button>
       </n-space>
     </n-card>
   </n-modal>

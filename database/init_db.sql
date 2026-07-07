@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS rspu_style (
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
+-- RSPU 编码流水计数器（按品类+风格维度生成流水号）
+CREATE TABLE IF NOT EXISTS rspu_code_counter (
+    category_code VARCHAR(16) NOT NULL,
+    style_code VARCHAR(16) NOT NULL,
+    sequence_value BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (category_code, style_code)
+);
+
 -- RSPU 多场景关联表（一个款式可适用于多个场景）
 CREATE TABLE IF NOT EXISTS rspu_scene (
     rspu_id VARCHAR(64) NOT NULL,
@@ -80,10 +89,20 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     material_code VARCHAR(32),                     -- 主材质码
     material_mix JSONB,                            -- 多种材质组合 ["实木框架","布艺座包"]
     reference_price_band VARCHAR(16),              -- 该变体的参考价格带
+    product_level VARCHAR(8),                      -- 产品等级，继承/覆盖 RSPU 等级
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
+);
+
+-- 变体编码流水计数器（按 RSPU 维度生成变体顺序号）
+CREATE TABLE IF NOT EXISTS variant_code_counter (
+    rspu_id VARCHAR(64) NOT NULL,
+    sequence_value BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (rspu_id),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
 
@@ -107,6 +126,18 @@ CREATE TABLE IF NOT EXISTS factory_master (
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
+
+-- 工厂能力等级表（记录工厂可承接的所有等级，其中主评级标记为 is_primary = true）
+CREATE TABLE IF NOT EXISTS factory_level_capability (
+    id BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    level_code VARCHAR(8) NOT NULL,
+    is_primary BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    UNIQUE (factory_code, level_code)
+);
+CREATE INDEX IF NOT EXISTS idx_factory_level_capability_factory ON factory_level_capability(factory_code);
 
 -- 工厂仓库表（一个工厂可有多个发货仓库）
 CREATE TABLE IF NOT EXISTS factory_warehouse (
@@ -149,7 +180,7 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     variant_id VARCHAR(64),                        -- 关联具体变体
     factory_code VARCHAR(16) NOT NULL,
     factory_sku VARCHAR(64),                       -- 工厂原始编码
-    factory_price DECIMAL(18, 2),                  -- 出厂价（建议 AES 加密存储）
+    factory_price TEXT,                              -- 出厂价（AES 加密存储）
     price_band VARCHAR(16),                        -- low/mid/high
     product_level VARCHAR(8),                      -- 产品等级，继承自 RSPU/变体
     material_code VARCHAR(8),                      -- 材质版本码
@@ -182,8 +213,8 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
 CREATE TABLE IF NOT EXISTS price_history (
     history_id SERIAL PRIMARY KEY,
     rsku_id VARCHAR(64) NOT NULL,
-    old_price DECIMAL(18, 2),
-    new_price DECIMAL(18, 2),
+    old_price TEXT,                                  -- AES 加密后密文
+    new_price TEXT,                                  -- AES 加密后密文
     changed_by VARCHAR(64),
     change_reason TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -208,10 +239,30 @@ CREATE TABLE IF NOT EXISTS image_assets (
     quality_score DECIMAL(5, 4),
     uploaded_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
 );
+
+-- RSPU 关系表（原厂搭配 / AI 确认搭配 / 互斥排除）
+CREATE TABLE IF NOT EXISTS rspu_relation (
+    relation_id VARCHAR(64) PRIMARY KEY,
+    anchor_rspu_id VARCHAR(64) NOT NULL,
+    related_rspu_id VARCHAR(64) NOT NULL,
+    relation_type VARCHAR(16) NOT NULL,              -- official / ai_verified / exclude
+    reason TEXT,
+    sort_order INTEGER DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    FOREIGN KEY (anchor_rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (related_rspu_id) REFERENCES rspu_master(rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu_id, relation_type, status);
+CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, relation_type, status);
 
 -- AI 识别记录表
 CREATE TABLE IF NOT EXISTS ai_recognition (
@@ -237,6 +288,46 @@ CREATE TABLE IF NOT EXISTS ai_recognition (
     FOREIGN KEY (image_id) REFERENCES image_assets(image_id),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
+
+-- 搭配方案主表
+CREATE TABLE IF NOT EXISTS scheme (
+    scheme_id VARCHAR(64) PRIMARY KEY,
+    scheme_name VARCHAR(128) NOT NULL,
+    room_type VARCHAR(32),                           -- 空间类型字典码
+    budget_limit DECIMAL(18, 2),                     -- 预算上限
+    total_price DECIMAL(18, 2),                      -- 方案总价
+    factory_count INTEGER,                           -- 涉及工厂数
+    max_lead_time_days INTEGER,                      -- 最长交期
+    item_count INTEGER,                              -- 方案项数
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_scheme_created_by ON scheme(created_by, status);
+
+-- 搭配方案项表
+CREATE TABLE IF NOT EXISTS scheme_item (
+    scheme_item_id BIGSERIAL PRIMARY KEY,
+    scheme_id VARCHAR(64) NOT NULL,
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+    factory_price TEXT,                              -- 加密存储
+    lead_time_days INTEGER,
+    moq INTEGER,
+    quantity INTEGER DEFAULT 1,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);
+CREATE INDEX IF NOT EXISTS idx_scheme_item_rspu ON scheme_item(rspu_id);
 
 -- 异步任务表
 CREATE TABLE IF NOT EXISTS async_task (
@@ -305,7 +396,7 @@ CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
 CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code) WHERE deleted_at IS NULL;
 
 -- 价格历史索引
 CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_at);
@@ -324,8 +415,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id, 
 CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
 
 -- JSONB GIN 索引（按需启用，可加速标签查询）
--- CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
--- CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
 
 -- =================== 风格数据库 Skill 表 ===================
 

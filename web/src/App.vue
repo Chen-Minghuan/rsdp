@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown } from 'naive-ui'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider } from 'naive-ui'
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
@@ -8,13 +8,6 @@ import { PERMISSIONS, ROLES } from '@/utils/constants'
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
-
-async function handleUserAction(key: string) {
-  if (key === 'logout') {
-    await userStore.logout()
-    router.push('/login')
-  }
-}
 
 function navigate(path: string) {
   router.push(path)
@@ -35,6 +28,26 @@ const canReadProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUC
 const canReadFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_READ))
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 const canReadScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_READ))
+const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+
+const userDropdownOptions = computed(() => {
+  const options: { label: string; key: string; disabled?: boolean }[] = [
+    { label: `角色：${userStore.roles.join(', ') || '-'}`, key: 'role', disabled: true }
+  ]
+  if (isFactoryAdmin.value) {
+    options.push({ label: '账号设置', key: 'settings' })
+  }
+  options.push({ label: '退出登录', key: 'logout' })
+  return options
+})
+
+function handleUserAction(key: string) {
+  if (key === 'logout') {
+    userStore.logout().then(() => router.push('/login'))
+  } else if (key === 'settings') {
+    router.push('/settings')
+  }
+}
 </script>
 
 <template>
@@ -58,6 +71,13 @@ const canReadScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_
               @click="navigate('/entry')"
             >
               新品录入
+            </n-button>
+            <n-button
+              v-if="isFactoryAdmin"
+              :type="route.path === '/factory-entry' ? 'primary' : 'default'"
+              @click="navigate('/factory-entry')"
+            >
+              工厂录入
             </n-button>
             <n-button
               v-if="canReadProduct"
@@ -110,10 +130,7 @@ const canReadScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_
             </n-button>
             <n-dropdown
               v-if="userStore.isLoggedIn"
-              :options="[
-                { label: `角色：${userStore.roles.join(', ') || '-'}`, key: 'role', disabled: true },
-                { label: '退出登录', key: 'logout' }
-              ]"
+              :options="userDropdownOptions"
               @select="handleUserAction"
             >
               <n-button>{{ userStore.displayName }}</n-button>
@@ -126,9 +143,13 @@ const canReadScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_
       </n-layout-header>
 
       <n-layout content-style="overflow-y: auto;">
-        <n-dialog-provider>
-          <router-view />
-        </n-dialog-provider>
+        <n-message-provider>
+          <n-notification-provider>
+            <n-dialog-provider>
+              <router-view />
+            </n-dialog-provider>
+          </n-notification-provider>
+        </n-message-provider>
       </n-layout>
     </n-layout>
   </n-config-provider>

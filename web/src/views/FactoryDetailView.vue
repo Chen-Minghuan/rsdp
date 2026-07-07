@@ -16,11 +16,11 @@ import {
   NFormItem,
   NSelect
 } from 'naive-ui'
-import { getFactory, listRskuByFactory, updateFactoryLevel, updateCapableLevels } from '@/api/factory'
+import { getFactory, listRskuByFactory, updateFactoryLevel, updateCapableLevels, listFactoryCapabilities, syncFactoryCapabilities } from '@/api/factory'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
-import type { Factory } from '@/types/factory'
+import type { Factory, FactoryProductCapability } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 import type { DictItem } from '@/types/dict'
 
@@ -30,13 +30,18 @@ const userStore = useUserStore()
 const factoryCode = computed(() => route.params.factoryCode as string)
 
 const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_UPDATE))
+const canReadCapability = computed(() => userStore.hasPermission(PERMISSIONS.CAPABILITY_READ))
+const canCreateCapability = computed(() => userStore.hasPermission(PERMISSIONS.CAPABILITY_CREATE))
 
 const loading = ref(false)
 const rskuLoading = ref(false)
+const capabilityLoading = ref(false)
+const syncingCapabilities = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const factory = ref<Factory | null>(null)
 const rskuList = ref<Rsku[]>([])
+const capabilities = ref<FactoryProductCapability[]>([])
 
 const showLevelModal = ref(false)
 const submittingLevel = ref(false)
@@ -81,6 +86,13 @@ const rskuColumns = [
   }
 ]
 
+const capabilityColumns = [
+  { title: 'ID', key: 'id', width: 80 },
+  { title: '品类', key: 'categoryCode' },
+  { title: '风格', key: 'styleCode' },
+  { title: '材质', key: 'materialCode' }
+]
+
 function validateFactoryCode(): boolean {
   if (!factoryCode.value?.trim()) {
     errorMessage.value = '缺少工厂代码'
@@ -111,6 +123,35 @@ async function loadRskuList() {
     errorMessage.value = e instanceof Error ? e.message : '加载报价列表失败'
   } finally {
     rskuLoading.value = false
+  }
+}
+
+async function loadCapabilities() {
+  if (!canReadCapability.value) return
+  if (!validateFactoryCode()) return
+  capabilityLoading.value = true
+  try {
+    capabilities.value = await listFactoryCapabilities(factoryCode.value)
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '加载产品能力档案失败'
+  } finally {
+    capabilityLoading.value = false
+  }
+}
+
+async function handleSyncCapabilities() {
+  if (!canCreateCapability.value) return
+  if (!validateFactoryCode()) return
+  syncingCapabilities.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    capabilities.value = await syncFactoryCapabilities(factoryCode.value)
+    successMessage.value = `产品能力档案已同步，共 ${capabilities.value.length} 条`
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '同步产品能力档案失败'
+  } finally {
+    syncingCapabilities.value = false
   }
 }
 
@@ -183,6 +224,7 @@ function handleRskuClick(row: Rsku) {
 onMounted(() => {
   loadFactory()
   loadRskuList()
+  loadCapabilities()
   loadLevels()
 })
 
@@ -190,6 +232,7 @@ onBeforeRouteUpdate((to) => {
   if (to.params.factoryCode) {
     loadFactory()
     loadRskuList()
+    loadCapabilities()
   }
 })
 </script>
@@ -269,6 +312,37 @@ onBeforeRouteUpdate((to) => {
                 </n-space>
               </template>
             </n-data-table>
+          </n-card>
+
+          <n-card v-if="canReadCapability" title="产品能力档案" size="small">
+            <n-space vertical>
+              <n-space align="center">
+                <n-button
+                  v-if="canCreateCapability"
+                  type="primary"
+                  :loading="syncingCapabilities"
+                  @click="handleSyncCapabilities"
+                >
+                  重新同步
+                </n-button>
+                <span v-if="!capabilityLoading" style="color: #999; font-size: 12px;">
+                  共 {{ capabilities.length }} 条能力记录
+                </span>
+              </n-space>
+              <n-data-table
+                :columns="capabilityColumns"
+                :data="capabilities"
+                :loading="capabilityLoading"
+                :bordered="true"
+                :single-line="false"
+              >
+                <template #empty>
+                  <n-space justify="center" style="padding: 24px;">
+                    暂无能力档案，点击「重新同步」从现有 RSKU 生成
+                  </n-space>
+                </template>
+              </n-data-table>
+            </n-space>
           </n-card>
         </template>
       </n-space>

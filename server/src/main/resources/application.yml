@@ -36,6 +36,9 @@ rsdp:
     max-retries: 2
     # 异步 AI 识别允许的最大图片字节数（默认 20MB）
     max-image-size: 20971520
+    # Mock 模式：开启后 AI 识别返回固定模拟结果，仅用于本地无密钥联调
+    mock:
+      enabled: false
     # 多模态 embedding 模型，用于以图搜图
     embedding-model: multimodal-embedding-v1
     embedding-base-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding

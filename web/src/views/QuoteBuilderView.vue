@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -25,6 +25,8 @@ import { getProductDetail } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
 import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { ProductDetail } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
 import type { QuoteResponse, QuoteItem } from '@/types/quote'
@@ -32,9 +34,15 @@ import type { Scheme } from '@/types/scheme'
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 
-const editSchemeId = (route.query.editSchemeId as string) || ''
-const isEditMode = computed(() => Boolean(editSchemeId))
+const editSchemeId = computed(() => (route.query.editSchemeId as string) || '')
+const isEditMode = computed(() => Boolean(editSchemeId.value))
+
+const canExportQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_EXPORT))
+const canCreateScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_CREATE))
+const canUpdateScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_UPDATE))
+const canSaveScheme = computed(() => isEditMode.value ? canUpdateScheme.value : canCreateScheme.value)
 
 const rawRspuIds = computed(() => {
   const ids = (route.query.rspuIds as string) || ''
@@ -128,7 +136,7 @@ async function loadData() {
     let ids: string[] = []
 
     if (isEditMode.value) {
-      const scheme = await getSchemeDetail(editSchemeId)
+      const scheme = await getSchemeDetail(editSchemeId.value)
       originalScheme.value = scheme
       schemeName.value = scheme.schemeName
       ids = scheme.items.map(item => item.rspuId)
@@ -266,14 +274,14 @@ async function handleSaveAsScheme() {
   errorMessage.value = ''
   try {
     if (isEditMode.value) {
-      await updateScheme(editSchemeId, {
+      await updateScheme(editSchemeId.value, {
         schemeName: schemeName.value.trim(),
         roomType: originalScheme.value?.roomType,
         budgetLimit: originalScheme.value?.budgetLimit,
         items
       })
       showSaveModal.value = false
-      router.push(`/schemes/${editSchemeId}`)
+      router.push(`/schemes/${editSchemeId.value}`)
     } else {
       await createScheme({
         schemeName: schemeName.value.trim(),
@@ -339,6 +347,18 @@ function selectedSubtotal(rspuId: string): number {
 
 onMounted(() => {
   loadData()
+})
+
+onBeforeRouteUpdate((to) => {
+  // 同组件切换编辑方案或清空编辑方案时，重置状态并重新加载
+  if (to.query.editSchemeId !== route.query.editSchemeId) {
+    originalScheme.value = null
+    schemeName.value = ''
+    selectedRskuMap.value = {}
+    quantityMap.value = {}
+    products.value = []
+    loadData()
+  }
 })
 </script>
 
@@ -436,10 +456,10 @@ onMounted(() => {
             <n-button type="primary" :loading="generating" @click="handleGenerateQuote">
               确认生成报价单
             </n-button>
-            <n-button :loading="exporting" @click="handleExportQuote">
+            <n-button v-if="canExportQuote" :loading="exporting" @click="handleExportQuote">
               导出 Excel
             </n-button>
-            <n-button @click="openSaveModal">
+            <n-button v-if="canSaveScheme" @click="openSaveModal">
               {{ isEditMode ? '更新方案' : '保存为方案' }}
             </n-button>
           </n-space>

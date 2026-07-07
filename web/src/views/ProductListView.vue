@@ -17,13 +17,16 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { listProducts, deleteProduct } from '@/api/product'
+import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { ProductSummary } from '@/types/product'
+import { useMessage } from 'naive-ui'
 
 const router = useRouter()
 const dialog = useDialog()
+const message = useMessage()
 const userStore = useUserStore()
 
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
@@ -45,9 +48,10 @@ const sceneFilter = ref<string | null>(null)
 const materialFilter = ref<string | null>(null)
 const productLevelFilter = ref<string | null>(null)
 const selectedRowKeys = ref<string[]>([])
-const viewMode = ref<'own' | 'full'>('own')
+const viewFullCatalog = computed(() => userStore.userInfo?.viewFullCatalog || false)
+const viewMode = ref<'own' | 'full'>(viewFullCatalog.value ? 'full' : 'own')
 const factoryCode = ref<string | null>(null)
-const viewFullCatalog = ref(userStore.userInfo?.viewFullCatalog || false)
+const savingPreference = ref(false)
 
 const reviewStatusOptions = ref<{ label: string; value: string }[]>([
   { label: '全部复核状态', value: '' }
@@ -62,12 +66,24 @@ const factoryOptions = computed(() => [
 ])
 
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
+const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full')
 
-function toggleFullCatalog(value: boolean) {
-  viewFullCatalog.value = value
-  viewMode.value = value ? 'full' : 'own'
-  page.value = 1
-  loadProducts()
+async function toggleFullCatalog(value: boolean) {
+  if (savingPreference.value) return
+  savingPreference.value = true
+  try {
+    await updateMyPreferences({ viewFullCatalog: value })
+    await userStore.fetchUserInfo()
+    viewMode.value = value ? 'full' : 'own'
+    page.value = 1
+    loadProducts()
+    message.success('视图偏好已保存')
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : '保存失败'
+    message.error(msg)
+  } finally {
+    savingPreference.value = false
+  }
 }
 
 const rowKey = (row: ProductSummary) => row.rspuId
@@ -89,7 +105,23 @@ const columns: DataTableColumns<ProductSummary> = [
             objectFit: 'cover',
             style: 'border-radius: 4px;'
           })
-        : '-'
+        : h(
+            'div',
+            {
+              style: {
+                width: '80px',
+                height: '80px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '4px',
+                background: '#f0f0f0',
+                color: '#999',
+                fontSize: '12px'
+              }
+            },
+            '暂无'
+          )
     }
   },
   { title: 'RSPU ID', key: 'rspuId', width: 160 },
@@ -142,7 +174,7 @@ const columns: DataTableColumns<ProductSummary> = [
               },
               { default: () => '详情' }
             ),
-            canDeleteProduct.value
+            canDeleteProduct.value && !isReadOnlyFullCatalog.value
               ? h(
                   NButton,
                   {
@@ -267,7 +299,11 @@ function handleDelete(rspuId: string, label?: string) {
   })
 }
 
-onMounted(() => {
+onMounted(async () => {
+  if (!userStore.userInfo) {
+    await userStore.fetchUserInfo()
+  }
+  viewMode.value = viewFullCatalog.value ? 'full' : 'own'
   loadDicts()
   loadProducts()
 })
@@ -342,6 +378,7 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
           />
           <n-switch
             :value="viewFullCatalog"
+            :loading="savingPreference"
             @update:value="toggleFullCatalog"
           >
             <template #checked>全库去重视图</template>
@@ -353,7 +390,11 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
           {{ errorMessage }}
         </n-alert>
 
-        <n-space v-if="hasSelection && canGenerateQuote" align="center">
+        <n-alert v-if="isReadOnlyFullCatalog" type="info" :show-icon="true" style="margin-bottom: 12px;">
+          当前为全库只读视图，仅支持查看详情，不能进行编辑、删除、报价等操作。
+        </n-alert>
+
+        <n-space v-if="hasSelection && canGenerateQuote && !isReadOnlyFullCatalog" align="center">
           <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
           <n-button type="primary" @click="handleBuildQuote">生成报价单</n-button>
         </n-space>

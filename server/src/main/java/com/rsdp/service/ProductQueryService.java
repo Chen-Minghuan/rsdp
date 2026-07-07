@@ -89,7 +89,7 @@ public class ProductQueryService {
         String viewMode = resolveViewMode(request.getViewMode());
         boolean isFullView = "full".equals(viewMode) && isFullViewEligible(userFactoryCodes);
 
-        QueryWrapper<RspuMaster> wrapper = buildListWrapper(request);
+        QueryWrapper<RspuMaster> wrapper = buildListWrapper(request, viewMode);
 
         if ("own".equals(viewMode)) {
             applyOwnProductFilter(wrapper, userFactoryCodes);
@@ -118,7 +118,7 @@ public class ProductQueryService {
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
     }
 
-    private QueryWrapper<RspuMaster> buildListWrapper(ProductListRequest request) {
+    private QueryWrapper<RspuMaster> buildListWrapper(ProductListRequest request, String viewMode) {
         QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
 
         if (StringUtils.hasText(request.getCategoryCode())) {
@@ -137,18 +137,24 @@ public class ProductQueryService {
             );
         }
         if (StringUtils.hasText(request.getMaterialTag())) {
-            String tagJson = "[\"" + request.getMaterialTag().trim() + "\"]";
-            wrapper.apply("material_tags @> {0}::jsonb", tagJson);
+            try {
+                String tagJson = objectMapper.writeValueAsString(List.of(request.getMaterialTag().trim()));
+                wrapper.apply("material_tags @> {0}::jsonb", tagJson);
+            } catch (Exception e) {
+                log.warn("材质标签 JSON 序列化失败: {}", request.getMaterialTag(), e);
+                wrapper.apply("1 = 0");
+            }
         }
         if (StringUtils.hasText(request.getStatus())) {
             wrapper.eq("status", request.getStatus());
         }
-        // 管理员可按请求参数筛选复核状态；非管理员强制只看已确认产品
+        // 管理员可按请求参数筛选复核状态；非管理员在「全库视图」下只看已确认产品，
+        // 在「自己的产品」视图下不过滤复核状态，确保工厂管理员能看到自己录入的待复核产品
         if (SecurityOperatorContext.isCurrentUserAdmin()) {
             if (StringUtils.hasText(request.getReviewStatus())) {
                 wrapper.eq("review_status", request.getReviewStatus());
             }
-        } else {
+        } else if (!"own".equals(viewMode)) {
             wrapper.eq("review_status", ReviewStatus.APPROVED.getDbValue());
         }
         if (StringUtils.hasText(request.getProductLevel())) {
@@ -220,10 +226,46 @@ public class ProductQueryService {
             new QueryWrapper<RskuSupply>()
                 .eq("rspu_id", rspuId)
                 .in("factory_code", factoryCodes)
+                .isNull("deleted_at")
         );
         if (count == null || count == 0) {
             throw new BusinessException("只能编辑自己工厂已报价的产品: " + rspuId);
         }
+    }
+
+    /**
+     * 判断当前登录用户是否有权查看指定产品。
+     *
+     * <p>规则：
+     * <ul>
+     *   <li>管理员始终可见。</li>
+     *   <li>已确认（复核通过）产品对所有用户可见。</li>
+     *   <li>非确认产品仅对关联工厂管理员可见（通过 RSKU 工厂归属判断）。</li>
+     * </ul>
+     *
+     * @param rspu 产品主档
+     * @return 是否可见
+     */
+    private boolean canViewProduct(RspuMaster rspu) {
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            return true;
+        }
+        if (ReviewStatus.APPROVED.getDbValue().equals(rspu.getReviewStatus())) {
+            return true;
+        }
+        List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
+            SecurityOperatorContext.currentUsername()
+        );
+        if (factoryCodes.isEmpty()) {
+            return false;
+        }
+        Long count = rskuSupplyMapper.selectCount(
+            new QueryWrapper<RskuSupply>()
+                .eq("rspu_id", rspu.getRspuId())
+                .in("factory_code", factoryCodes)
+                .isNull("deleted_at")
+        );
+        return count != null && count > 0;
     }
 
     private void applyOwnProductFilter(QueryWrapper<RspuMaster> wrapper, List<String> factoryCodes) {
@@ -234,11 +276,21 @@ public class ProductQueryService {
             wrapper.apply("1 = 0");
             return;
         }
-        String codes = factoryCodes.stream()
-            .map(code -> code.replace("'", "''"))
-            .collect(Collectors.joining("','"));
-        wrapper.inSql("rspu_id",
-            "SELECT DISTINCT rspu_id FROM rsku_supply WHERE factory_code IN ('" + codes + "') AND deleted_at IS NULL");
+        List<Object> rspuIdObjs = rskuSupplyMapper.selectObjs(
+            new QueryWrapper<RskuSupply>()
+                .select("DISTINCT rspu_id")
+                .in("factory_code", factoryCodes)
+                .isNull("deleted_at")
+        );
+        List<String> rspuIds = rspuIdObjs.stream()
+            .map(Object::toString)
+            .distinct()
+            .toList();
+        if (rspuIds.isEmpty()) {
+            wrapper.apply("1 = 0");
+        } else {
+            wrapper.in("rspu_id", rspuIds);
+        }
     }
 
     private List<RspuMaster> applyFullViewFilter(List<RspuMaster> candidates, List<String> userFactoryCodes) {
@@ -403,8 +455,7 @@ public class ProductQueryService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
-        if (!SecurityOperatorContext.isCurrentUserAdmin()
-            && !ReviewStatus.APPROVED.getDbValue().equals(rspu.getReviewStatus())) {
+        if (!canViewProduct(rspu)) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 

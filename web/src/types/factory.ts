@@ -46,3 +46,16 @@ export interface FactoryLevelUpdateRequest {
 export interface FactoryLevelCapabilityUpdateRequest {
   capableLevels: string[]
 }
+
+/**
+ * 工厂产品能力档案项。
+ */
+export interface FactoryProductCapability {
+  id: number
+  factoryCode: string
+  categoryCode?: string
+  styleCode?: string
+  materialCode?: string
+  createdAt?: string
+  updatedAt?: string
+}

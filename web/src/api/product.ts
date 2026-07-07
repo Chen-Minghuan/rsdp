@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
+import type { FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 /**
@@ -113,6 +113,20 @@ export async function importProducts(file: File, updateIfExists: boolean): Promi
 
   const { data: result } = await uploadClient.post<ApiResult<ProductImportResult>>(
     '/v1/products/import',
+    formData
+  )
+  return result.data
+}
+
+/**
+ * 工厂单条录入：一次性创建 RSPU + 默认变体 + 首条 RSKU。
+ *
+ * @param formData multipart/form-data，包含 request (JSON 字符串) 与 images
+ * @returns 创建结果
+ */
+export async function factoryEntry(formData: FormData): Promise<FactoryProductEntryResult> {
+  const { data: result } = await uploadClient.post<ApiResult<FactoryProductEntryResult>>(
+    '/v1/products/factory-entry',
     formData
   )
   return result.data

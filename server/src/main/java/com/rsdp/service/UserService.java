@@ -3,6 +3,7 @@ package com.rsdp.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.rsdp.dto.request.UserCreateRequest;
+import com.rsdp.dto.request.UserPreferenceUpdateRequest;
 import com.rsdp.dto.request.UserUpdateRequest;
 import com.rsdp.dto.response.UserResponse;
 import com.rsdp.entity.SysRole;
@@ -145,6 +146,29 @@ public class UserService {
             incrementTokenVersion(userId);
         }
 
+        return toResponse(user);
+    }
+
+    /**
+     * 更新当前登录用户的偏好设置。
+     *
+     * <p>当前仅支持修改「显示全产品库（去重）」开关。</p>
+     *
+     * @param userId  当前登录用户 ID
+     * @param request 偏好更新请求
+     * @return 更新后的用户信息
+     */
+    @Transactional
+    public UserResponse updateMyPreferences(String userId, UserPreferenceUpdateRequest request) {
+        SysUser user = sysUserMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+        if (request.getViewFullCatalog() != null) {
+            user.setViewFullCatalog(request.getViewFullCatalog());
+        }
+        user.setUpdatedAt(LocalDateTime.now());
+        sysUserMapper.updateById(user);
         return toResponse(user);
     }
 

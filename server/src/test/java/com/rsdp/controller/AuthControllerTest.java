@@ -7,6 +7,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.AuthService;
+import com.rsdp.service.UserService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -42,6 +43,9 @@ class AuthControllerTest {
 
     @MockBean
     private AuthService authService;
+
+    @MockBean
+    private UserService userService;
 
     @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;

@@ -1,4 +1,43 @@
 /**
+ * 工厂单条录入结果。
+ */
+export interface FactoryProductEntryResult {
+  rspuId: string
+  variantId: string
+  rskuId: string
+  imageIds: string[]
+}
+
+/**
+ * 工厂单条录入表单（前端用）。
+ */
+export interface FactoryProductEntryForm {
+  // RSPU
+  categoryCode: string | null
+  positioningLabel: string | null
+  colorPrimaryName: string | null
+  materialTags: string[]
+  sceneTags: string[]
+  productLevel: string | null
+  warrantyYears: number | null
+
+  // 变体
+  variantDisplayName: string
+  sizeCode: string | null
+  dimensions: string | null
+  colorCode: string | null
+  variantMaterialCode: string | null
+  materialMix: string[]
+
+  // RSKU
+  factoryCode: string | null
+  factorySku: string | null
+  factoryPrice: number | null
+  moq: number | null
+  leadTimeDays: number | null
+}
+
+/**
  * 产品列表查询参数。
  */
 export interface ProductListParams {

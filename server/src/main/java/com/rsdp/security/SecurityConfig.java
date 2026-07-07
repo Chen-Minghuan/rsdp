@@ -59,6 +59,7 @@ public class SecurityConfig {
 
                 // 认证即可访问的读接口（非敏感）
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
+                .requestMatchers(HttpMethod.PUT, "/api/v1/auth/me/preferences").hasRole("FACTORY_ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/v1/dicts/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/tasks/*").authenticated()
 

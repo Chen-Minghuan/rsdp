@@ -18,8 +18,14 @@ POST   /api/v1/auth/login
 
 GET    /api/v1/auth/me
        # 获取当前登录用户信息（需认证）
-       # Response: { tokenType, userId, username, nickname, role, roles, permissions }
+       # Response: { tokenType, userId, username, nickname, role, roles, permissions, viewFullCatalog, factoryCodes }
        # 说明：token 为空；roles/permissions 用于前端权限控制
+
+PUT    /api/v1/auth/me/preferences
+       # 更新当前登录用户偏好设置（需认证）
+       # Request: { viewFullCatalog: boolean }
+       # Response: UserResponse
+       # 说明：当前仅支持「显示全产品库（去重）」开关；工厂管理员可在账号设置页自更新
 ```
 
 ## 核心 API 端点设计

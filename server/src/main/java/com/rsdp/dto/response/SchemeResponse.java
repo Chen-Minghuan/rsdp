@@ -21,6 +21,7 @@ public class SchemeResponse {
     private Integer maxLeadTimeDays;
     private Integer itemCount;
     private String status;
+    private String createdBy;
     private LocalDateTime createdAt;
     private List<SchemeItemResponse> items;
 }

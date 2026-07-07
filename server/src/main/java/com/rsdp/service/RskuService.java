@@ -106,9 +106,10 @@ public class RskuService {
      * 为 RSPU 新增工厂报价。
      *
      * @param request 报价请求
+     * @return 新创建的 RSKU ID
      */
     @Transactional
-    public void createRsku(RskuCreateRequest request) {
+    public String createRsku(RskuCreateRequest request) {
         RspuMaster rspu = rspuMapper.selectById(request.getRspuId());
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + request.getRspuId());
@@ -170,6 +171,7 @@ public class RskuService {
         }
 
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
+        return rsku.getRskuId();
     }
 
     private String resolveProductLevel(RskuCreateRequest request, RspuMaster rspu, RspuVariant variant) {

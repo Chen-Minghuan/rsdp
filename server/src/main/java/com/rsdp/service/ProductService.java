@@ -259,11 +259,12 @@ public class ProductService {
         rskuRequest.setQuoteConfidence(request.getQuoteConfidence());
         rskuRequest.setProductLevel(rspu.getProductLevel());
         rskuRequest.setAutoExtendCapability(request.getAutoExtendCapability());
-        rskuService.createRsku(rskuRequest);
+        String rskuId = rskuService.createRsku(rskuRequest);
 
         return Map.of(
             "rspuId", rspuId,
             "variantId", variantId,
+            "rskuId", rskuId,
             "imageIds", imageIds,
             "message", "工厂产品录入成功"
         );

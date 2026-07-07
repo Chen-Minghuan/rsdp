@@ -16,10 +16,13 @@ import {
 } from 'naive-ui'
 import { generateRoomScheme } from '@/api/matching'
 import { listDicts } from '@/api/dict'
+import { useUserStore } from '@/stores/user'
+import { PERMISSIONS } from '@/utils/constants'
 import type { RoomSchemeResponse } from '@/types/matching'
 import type { DictItem } from '@/types/dict'
 
 const router = useRouter()
+const userStore = useUserStore()
 
 const roomTypes = ref<DictItem[]>([])
 const styles = ref<DictItem[]>([])
@@ -36,6 +39,7 @@ const scheme = ref<RoomSchemeResponse | null>(null)
 const canGenerate = computed(() =>
   roomType.value !== null && budgetLimit.value > 0
 )
+const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 
 const schemeColumns = [
   { title: 'RSPU', key: 'rspuName' },
@@ -161,7 +165,7 @@ onMounted(() => {
             </n-descriptions>
 
             <n-space>
-              <n-button type="primary" @click="buildQuote">
+              <n-button v-if="canGenerateQuote" type="primary" @click="buildQuote">
                 以此方案生成报价单
               </n-button>
             </n-space>
