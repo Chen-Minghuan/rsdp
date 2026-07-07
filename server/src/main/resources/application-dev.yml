@@ -22,6 +22,11 @@ rsdp:
       enabled: false
       batch-size: 100
 
+  ai:
+    # 开发环境默认关闭 AI Mock；如需使用真实模型，请确保 DASHSCOPE_API_KEY 已配置
+    mock:
+      enabled: false
+
   import:
     # 开发/测试环境可放开本地图片地址；生产环境应留空，仅允许公网地址
     allowed-image-hosts: 127.0.0.1,localhost

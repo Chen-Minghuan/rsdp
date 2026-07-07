@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 
 const routes = [
   {
@@ -20,6 +20,12 @@ const routes = [
     name: 'ProductEntry',
     component: () => import('@/views/ProductEntryView.vue'),
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+  },
+  {
+    path: '/factory-entry',
+    name: 'ProductFactoryEntry',
+    component: () => import('@/views/ProductFactoryEntryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE], roles: [ROLES.FACTORY_ADMIN] }
   },
   {
     path: '/products',
@@ -110,6 +116,12 @@ const routes = [
     name: 'UserManagement',
     component: () => import('@/views/UserManagementView.vue'),
     meta: { requiresAuth: true, roles: ['ADMIN'] }
+  },
+  {
+    path: '/settings',
+    name: 'UserSettings',
+    component: () => import('@/views/UserSettingsView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.FACTORY_ADMIN] }
   }
 ]
 

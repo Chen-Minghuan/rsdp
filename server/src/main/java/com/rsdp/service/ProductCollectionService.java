@@ -96,7 +96,11 @@ public class ProductCollectionService {
         collection.setIsFeatured(request.getIsFeatured() != null ? request.getIsFeatured() : false);
         collection.setSortOrder(request.getSortOrder() != null ? request.getSortOrder() : 0);
         collection.setStatus("ACTIVE");
-        collection.setCreatedBy(SecurityOperatorContext.currentUsername());
+        String createdBy = SecurityOperatorContext.currentUserId();
+        if (!StringUtils.hasText(createdBy)) {
+            throw new BusinessException("无法获取当前用户 ID");
+        }
+        collection.setCreatedBy(createdBy);
         collection.setCreatedAt(LocalDateTime.now());
         collection.setUpdatedAt(LocalDateTime.now());
         collectionMapper.insert(collection);

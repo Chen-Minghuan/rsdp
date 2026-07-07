@@ -362,6 +362,7 @@ public class SchemeService {
         response.setMaxLeadTimeDays(scheme.getMaxLeadTimeDays());
         response.setItemCount(scheme.getItemCount());
         response.setStatus(scheme.getStatus());
+        response.setCreatedBy(scheme.getCreatedBy());
         response.setCreatedAt(scheme.getCreatedAt());
         response.setItems(itemResponses);
         return response;

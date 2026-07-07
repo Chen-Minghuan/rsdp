@@ -59,6 +59,7 @@ public class SecurityConfig {
 
                 // 认证即可访问的读接口（非敏感）
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
+                .requestMatchers(HttpMethod.PUT, "/api/v1/auth/me/preferences").hasRole("FACTORY_ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/v1/dicts/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/tasks/*").authenticated()
 
@@ -98,6 +99,7 @@ public class SecurityConfig {
 
                 // 产品录入与批量导入
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/factory-entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)
 
                 // RSKU 写接口：必须放在产品写通配规则之前
@@ -141,7 +143,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/v1/collections/**").hasAuthority(Permissions.COLLECTION_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/collections/**").hasAuthority(Permissions.COLLECTION_DELETE)
 
-                // 设计师画像
+                // 设计师画像（/me 为当前用户自服务，不依赖 designer:profile:update 权限）
+                .requestMatchers(HttpMethod.GET, "/api/v1/designer-profiles/me").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/designer-profiles/me").authenticated()
+                .requestMatchers(HttpMethod.PUT, "/api/v1/designer-profiles/me").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/designer-profiles").hasAuthority(Permissions.DESIGNER_PROFILE_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/designer-profiles/*").hasAuthority(Permissions.DESIGNER_PROFILE_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/designer-profiles").hasAuthority(Permissions.DESIGNER_PROFILE_UPDATE)

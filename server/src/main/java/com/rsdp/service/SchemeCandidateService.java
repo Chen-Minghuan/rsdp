@@ -61,8 +61,13 @@ public class SchemeCandidateService {
      * @return 候选响应列表
      */
     public List<SchemeCandidateResponse> listByRequestId(String recommendRequestId) {
-        List<SchemeCandidate> candidates = candidateMapper.selectByRequestId(recommendRequestId);
-        return enrich(candidates);
+        QueryWrapper<SchemeCandidate> wrapper = new QueryWrapper<SchemeCandidate>()
+            .eq("recommend_request_id", recommendRequestId)
+            .orderByDesc("score");
+        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+            wrapper.eq("created_by", SecurityOperatorContext.currentUsername());
+        }
+        return enrich(candidateMapper.selectList(wrapper));
     }
 
     /**

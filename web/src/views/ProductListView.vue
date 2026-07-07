@@ -7,6 +7,7 @@ import {
   NSpace,
   NInput,
   NSelect,
+  NSwitch,
   NDataTable,
   NPagination,
   NTag,
@@ -16,18 +17,23 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { listProducts, deleteProduct } from '@/api/product'
+import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { ProductSummary } from '@/types/product'
+import { useMessage } from 'naive-ui'
 
 const router = useRouter()
 const dialog = useDialog()
+const message = useMessage()
 const userStore = useUserStore()
 
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
+const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -42,6 +48,10 @@ const sceneFilter = ref<string | null>(null)
 const materialFilter = ref<string | null>(null)
 const productLevelFilter = ref<string | null>(null)
 const selectedRowKeys = ref<string[]>([])
+const viewFullCatalog = computed(() => userStore.userInfo?.viewFullCatalog || false)
+const viewMode = ref<'own' | 'full'>(viewFullCatalog.value ? 'full' : 'own')
+const factoryCode = ref<string | null>(null)
+const savingPreference = ref(false)
 
 const reviewStatusOptions = ref<{ label: string; value: string }[]>([
   { label: '全部复核状态', value: '' }
@@ -50,8 +60,31 @@ const styleOptions = ref<{ label: string; value: string }[]>([])
 const sceneOptions = ref<{ label: string; value: string }[]>([])
 const materialOptions = ref<{ label: string; value: string }[]>([])
 const productLevelOptions = ref<{ label: string; value: string }[]>([])
+const factoryOptions = computed(() => [
+  { label: '我的全部工厂', value: '' },
+  ...factoryCodes.value.map(code => ({ label: code, value: code }))
+])
 
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
+const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full')
+
+async function toggleFullCatalog(value: boolean) {
+  if (savingPreference.value) return
+  savingPreference.value = true
+  try {
+    await updateMyPreferences({ viewFullCatalog: value })
+    await userStore.fetchUserInfo()
+    viewMode.value = value ? 'full' : 'own'
+    page.value = 1
+    loadProducts()
+    message.success('视图偏好已保存')
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : '保存失败'
+    message.error(msg)
+  } finally {
+    savingPreference.value = false
+  }
+}
 
 const rowKey = (row: ProductSummary) => row.rspuId
 
@@ -72,7 +105,23 @@ const columns: DataTableColumns<ProductSummary> = [
             objectFit: 'cover',
             style: 'border-radius: 4px;'
           })
-        : '-'
+        : h(
+            'div',
+            {
+              style: {
+                width: '80px',
+                height: '80px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '4px',
+                background: '#f0f0f0',
+                color: '#999',
+                fontSize: '12px'
+              }
+            },
+            '暂无'
+          )
     }
   },
   { title: 'RSPU ID', key: 'rspuId', width: 160 },
@@ -125,7 +174,7 @@ const columns: DataTableColumns<ProductSummary> = [
               },
               { default: () => '详情' }
             ),
-            canDeleteProduct.value
+            canDeleteProduct.value && !isReadOnlyFullCatalog.value
               ? h(
                   NButton,
                   {
@@ -190,7 +239,7 @@ async function loadProducts() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const result = await listProducts({
+    const params: import('@/types/product').ProductListParams = {
       page: page.value,
       size: size.value,
       keyword: keyword.value || undefined,
@@ -199,7 +248,14 @@ async function loadProducts() {
       sceneCode: sceneFilter.value || undefined,
       materialTag: materialFilter.value || undefined,
       productLevel: productLevelFilter.value || undefined
-    })
+    }
+    if (isFactoryAdmin.value) {
+      params.viewMode = viewMode.value
+      if (viewMode.value === 'own' && factoryCode.value) {
+        params.factoryCode = factoryCode.value
+      }
+    }
+    const result = await listProducts(params)
     products.value = result.rows
     total.value = result.total
   } catch (e) {
@@ -243,12 +299,16 @@ function handleDelete(rspuId: string, label?: string) {
   })
 }
 
-onMounted(() => {
+onMounted(async () => {
+  if (!userStore.userInfo) {
+    await userStore.fetchUserInfo()
+  }
+  viewMode.value = viewFullCatalog.value ? 'full' : 'own'
   loadDicts()
   loadProducts()
 })
 
-watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilter], () => {
+watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilter, factoryCode], () => {
   page.value = 1
   loadProducts()
 })
@@ -307,11 +367,34 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
           </n-button>
         </n-space>
 
+        <n-space v-if="isFactoryAdmin" align="center">
+          <n-select
+            v-model:value="factoryCode"
+            :options="factoryOptions"
+            clearable
+            style="width: 180px;"
+            placeholder="选择工厂"
+            :disabled="viewMode === 'full'"
+          />
+          <n-switch
+            :value="viewFullCatalog"
+            :loading="savingPreference"
+            @update:value="toggleFullCatalog"
+          >
+            <template #checked>全库去重视图</template>
+            <template #unchecked>仅自己的产品</template>
+          </n-switch>
+        </n-space>
+
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
           {{ errorMessage }}
         </n-alert>
 
-        <n-space v-if="hasSelection && canGenerateQuote" align="center">
+        <n-alert v-if="isReadOnlyFullCatalog" type="info" :show-icon="true" style="margin-bottom: 12px;">
+          当前为全库只读视图，仅支持查看详情，不能进行编辑、删除、报价等操作。
+        </n-alert>
+
+        <n-space v-if="hasSelection && canGenerateQuote && !isReadOnlyFullCatalog" align="center">
           <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
           <n-button type="primary" @click="handleBuildQuote">生成报价单</n-button>
         </n-space>

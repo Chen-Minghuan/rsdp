@@ -41,7 +41,7 @@ public class DataScopeContext {
             return DataScope.ALL;
         }
 
-        if (roleCodes.contains("FACTORY_SALES")) {
+        if (roleCodes.contains("FACTORY_ADMIN")) {
             return DataScope.FACTORY_LIST;
         }
 

@@ -3,7 +3,9 @@ package com.rsdp.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.config.SixDimSchemaConfig;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.dto.Dimensions;
 import com.rsdp.dto.DocumentProductRegion;
+import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.OpenAiChatMessage;
 import com.rsdp.dto.OpenAiChatRequest;
 import com.rsdp.dto.OpenAiChatResponse;
@@ -18,7 +20,9 @@ import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,10 +39,17 @@ public class VisionService {
     @Value("${rsdp.ai.model}")
     private String model;
 
+    @Value("${rsdp.ai.mock.enabled:false}")
+    private boolean mockEnabled;
+
     private static final String SYSTEM_PROMPT = """
         你是家具产品分析专家。请对用户提供的产品图片进行分析，输出 JSON 格式。
         只输出 JSON，不要任何其他文字说明。
         """;
+
+    private static final String DEFAULT_STYLE_ENUM = "中古风、奶油风、侘寂风、意式、法式、包豪斯、工业风、新中式、孟菲斯";
+    private static final String DEFAULT_SCENE_ENUM = "客厅、卧室、书房、办公室、酒店、咖啡厅";
+    private static final String DEFAULT_MATERIAL_ENUM = "实木、皮革、亚麻、金属、玻璃、石材";
 
     /**
      * 用户提示词模板。风格、场景、材质枚举会在运行时从 category_dict 动态注入，
@@ -113,6 +124,12 @@ public class VisionService {
             if (imageBytes.length == 0) {
                 throw new ExternalServiceException("图片流为空");
             }
+
+            if (mockEnabled) {
+                log.info("AI 识别 Mock 已启用，返回模拟识别结果");
+                return buildMockLabels();
+            }
+
             String base64 = Base64.getEncoder().encodeToString(imageBytes);
 
             String userPrompt = buildUserPrompt(categoryCode);
@@ -132,6 +149,61 @@ public class VisionService {
             log.error("读取图片流失败", e);
             throw new ExternalServiceException("读取图片流失败", e);
         }
+    }
+
+    /**
+     * 构造开发/测试环境使用的模拟 AI 识别结果。
+     *
+     * <p>当未配置真实 AI API 密钥或显式启用 Mock 时，返回稳定、合法的结构化数据，
+     * 保证新品录入流程可继续执行，便于本地联调。</p>
+     *
+     * @return 模拟识别标签
+     */
+    private AiLabels buildMockLabels() {
+        AiLabels labels = new AiLabels();
+        labels.setStyle("MC");
+        labels.setSixDimTags(Map.of(
+            "A", "直线轮廓",
+            "B", "高靠背",
+            "C", "直扶手",
+            "D", "金属腿",
+            "E", "仿皮",
+            "F", "海绵软包"
+        ));
+        labels.setColorPrimaryName("米白");
+        labels.setColorPrimaryHsv(List.of(40.0, 0.15, 0.95));
+        labels.setMaterialTags(List.of("PE"));
+        labels.setSceneTags(List.of("LIVING"));
+        labels.setConfidence("mid");
+
+        OcrResult ocr = new OcrResult();
+        ocr.setRawText("MOCK-PRODUCT 休闲椅 560*580*780mm");
+        ocr.setProductName("Mock 休闲椅");
+        ocr.setModelNumber("MOCK-001");
+        ocr.setBrand("Mock Brand");
+        ocr.setFactoryName("Mock Factory");
+        ocr.setDimensionText("560*580*780mm");
+        Dimensions dimensions = new Dimensions();
+        dimensions.setW(560);
+        dimensions.setD(580);
+        dimensions.setH(780);
+        dimensions.setUnit("mm");
+        ocr.setDimensions(dimensions);
+        ocr.setMaterialDescription("PE仿藤+金属框架");
+        ocr.setColorText("米白色");
+        ocr.setPriceText("¥1200");
+        ocr.setPrice(new java.math.BigDecimal("1200"));
+        ocr.setCurrency("CNY");
+        Map<String, Object> otherInfo = new HashMap<>();
+        otherInfo.put("warranty", "3年质保");
+        otherInfo.put("moq", 10);
+        otherInfo.put("leadTimeDays", 30);
+        otherInfo.put("netWeightKg", 12.5);
+        otherInfo.put("packageSize", "600*620*820mm");
+        otherInfo.put("notes", "AI Mock 数据");
+        ocr.setOtherInfo(otherInfo);
+        labels.setOcr(ocr);
+        return labels;
     }
 
     /**
@@ -157,15 +229,24 @@ public class VisionService {
      */
     private String buildEnumText(String dictType) {
         try {
-            return dictService.listByType(dictType).stream()
+            String enumText = dictService.listByType(dictType).stream()
                 .map(CategoryDict::getDictName)
                 .filter(name -> name != null && !name.isBlank())
                 .sorted()
                 .collect(Collectors.joining("、"));
+            if (!enumText.isBlank()) {
+                return enumText;
+            }
+            log.warn("字典枚举为空，使用默认兜底枚举，dictType={}", dictType);
         } catch (Exception e) {
-            log.warn("读取字典枚举失败，dictType={}", dictType, e);
-            return "";
+            log.warn("读取字典枚举失败，使用默认兜底枚举，dictType={}", dictType, e);
         }
+        return switch (dictType) {
+            case "style" -> DEFAULT_STYLE_ENUM;
+            case "scene" -> DEFAULT_SCENE_ENUM;
+            case "material" -> DEFAULT_MATERIAL_ENUM;
+            default -> "";
+        };
     }
 
     /**

@@ -3,7 +3,8 @@ import type {
   Factory,
   FactoryCreateRequest,
   FactoryLevelCapabilityUpdateRequest,
-  FactoryLevelUpdateRequest
+  FactoryLevelUpdateRequest,
+  FactoryProductCapability
 } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 
@@ -52,5 +53,29 @@ export async function updateCapableLevels(
  */
 export async function listRskuByFactory(factoryCode: string): Promise<Rsku[]> {
   const { data: result } = await apiClient.get<ApiResult<Rsku[]>>(`/v1/factories/${factoryCode}/rsku`)
+  return result.data
+}
+
+/**
+ * 查询工厂产品能力档案列表。
+ *
+ * @param factoryCode 工厂编码
+ */
+export async function listFactoryCapabilities(factoryCode: string): Promise<FactoryProductCapability[]> {
+  const { data: result } = await apiClient.get<ApiResult<FactoryProductCapability[]>>(
+    `/v1/factories/${factoryCode}/capabilities`
+  )
+  return result.data
+}
+
+/**
+ * 根据工厂已有 RSKU 重新同步产品能力档案。
+ *
+ * @param factoryCode 工厂编码
+ */
+export async function syncFactoryCapabilities(factoryCode: string): Promise<FactoryProductCapability[]> {
+  const { data: result } = await apiClient.post<ApiResult<FactoryProductCapability[]>>(
+    `/v1/factories/${factoryCode}/capabilities/sync`
+  )
   return result.data
 }

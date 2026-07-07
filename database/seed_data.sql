@@ -155,7 +155,7 @@ INSERT INTO sys_role (role_code, role_name) VALUES
 ('ADMIN', '系统管理员'),
 ('EDITOR', '编辑员'),
 ('VIEWER', '浏览者'),
-('FACTORY_SALES', '厂商业务员'),
+('FACTORY_ADMIN', '工厂管理员'),
 ('DESIGNER', '设计师'),
 ('USER', '普通用户')
 ON CONFLICT (role_code) DO NOTHING;
@@ -233,12 +233,12 @@ WHERE r.role_code = 'VIEWER'
   AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
 ON CONFLICT DO NOTHING;
 
--- FACTORY_SALES：自己工厂报价相关 + 只读
+-- FACTORY_ADMIN：自己工厂产品 + 报价相关 + 只读
 INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
-WHERE r.role_code = 'FACTORY_SALES'
-  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
+WHERE r.role_code = 'FACTORY_ADMIN'
+  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'factory:read', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
 ON CONFLICT DO NOTHING;
 
 -- DESIGNER：方案/报价 + 只读

@@ -22,4 +22,6 @@ public class LoginResponse {
     private String role;
     private List<String> roles;
     private List<String> permissions;
+    private Boolean viewFullCatalog;
+    private List<String> factoryCodes;
 }

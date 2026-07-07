@@ -9,6 +9,8 @@ export interface UserInfo {
   nickname: string
   roles: string[]
   permissions: string[]
+  viewFullCatalog?: boolean
+  factoryCodes?: string[]
 }
 
 interface AuthMeResponse {
@@ -18,6 +20,8 @@ interface AuthMeResponse {
   role: string
   roles: string[]
   permissions: string[]
+  viewFullCatalog?: boolean
+  factoryCodes?: string[]
 }
 
 export const useUserStore = defineStore('user', () => {
@@ -78,7 +82,9 @@ export const useUserStore = defineStore('user', () => {
         username: data.username,
         nickname: data.nickname,
         roles: normalizeRoles(data.roles, data.role),
-        permissions: data.permissions || []
+        permissions: data.permissions || [],
+        viewFullCatalog: data.viewFullCatalog,
+        factoryCodes: data.factoryCodes || []
       }
       userInfo.value = info
       return info

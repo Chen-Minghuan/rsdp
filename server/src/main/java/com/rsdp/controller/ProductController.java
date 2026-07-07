@@ -2,6 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
+import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductReviewRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -67,6 +69,24 @@ public class ProductController {
         for (MultipartFile image : images) {
             imageUploadValidator.validate(image, MAX_IMAGE_SIZE_BYTES);
         }
+    }
+
+    /**
+     * 工厂单条录入新产品（不调用 AI）。
+     *
+     * @param request 录入请求
+     * @param images  产品图片，可选
+     * @return 创建结果
+     * @throws IOException 文件保存失败
+     */
+    @PostMapping("/factory-entry")
+    public Result<Map<String, Object>> factoryEntry(
+        @Valid @RequestPart("request") FactoryProductEntryRequest request,
+        @RequestParam(value = "images", required = false) List<MultipartFile> images) throws IOException {
+        if (images != null && !images.isEmpty()) {
+            validateImages(images);
+        }
+        return Result.ok(productService.createFactoryEntry(request, images));
     }
 
     /**

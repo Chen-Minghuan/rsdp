@@ -14,19 +14,25 @@ import com.rsdp.dto.response.ProductStyleMatchResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.CategoryDict;
+import com.rsdp.entity.FactoryProductCapability;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
+import com.rsdp.entity.RskuSupply;
+import com.rsdp.entity.SysUser;
 import com.rsdp.event.RspuDeletedEvent;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
+import com.rsdp.mapper.FactoryProductCapabilityMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.mapper.SysUserMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -35,8 +41,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -58,15 +66,59 @@ public class ProductQueryService {
     private final ObjectMapper objectMapper;
     private final RspuRelationService rspuRelationService;
     private final ApplicationEventPublisher eventPublisher;
+    private final UserFactoryService userFactoryService;
+    private final FactoryProductCapabilityMapper capabilityMapper;
+    private final RskuSupplyMapper rskuSupplyMapper;
+    private final SysUserMapper sysUserMapper;
 
     /**
      * 分页查询产品列表。
+     *
+     * <p>支持工厂管理员视角：
+     * <ul>
+     *   <li>{@code viewMode=own}：仅返回当前用户关联工厂已录入 RSKU 的产品。</li>
+     *   <li>{@code viewMode=full}：在 {@code view_full_catalog=true} 时返回全库中
+     *       未被本工厂能力覆盖的产品（始终保留自己已有的产品）。</li>
+     * </ul>
      *
      * @param request 查询条件
      * @return 分页结果
      */
     public PageResult<ProductSummaryResponse> listProducts(ProductListRequest request) {
+        List<String> userFactoryCodes = resolveUserFactoryCodes(request.getFactoryCode());
+        String viewMode = resolveViewMode(request.getViewMode());
+        boolean isFullView = "full".equals(viewMode) && isFullViewEligible(userFactoryCodes);
+
+        QueryWrapper<RspuMaster> wrapper = buildListWrapper(request, viewMode);
+
+        if ("own".equals(viewMode)) {
+            applyOwnProductFilter(wrapper, userFactoryCodes);
+        }
+
+        if (isFullView) {
+            // 全库去重视图：先按常规条件查询全部候选，再后过滤去重并手动分页
+            wrapper.orderByDesc("created_at");
+            List<RspuMaster> candidates = rspuMapper.selectList(wrapper);
+            List<RspuMaster> filtered = applyFullViewFilter(candidates, userFactoryCodes);
+            return paginateAndSummarize(filtered, request.getPage(), request.getSize());
+        }
+
         Page<RspuMaster> pageParam = new Page<>(request.getPage(), request.getSize());
+        wrapper.orderByDesc("created_at");
+        Page<RspuMaster> page = rspuMapper.selectPage(pageParam, wrapper);
+
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(
+            page.getRecords().stream().map(RspuMaster::getRspuId).toList()
+        );
+
+        List<ProductSummaryResponse> rows = page.getRecords().stream()
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap))
+            .collect(Collectors.toList());
+
+        return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
+    }
+
+    private QueryWrapper<RspuMaster> buildListWrapper(ProductListRequest request, String viewMode) {
         QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
 
         if (StringUtils.hasText(request.getCategoryCode())) {
@@ -85,17 +137,24 @@ public class ProductQueryService {
             );
         }
         if (StringUtils.hasText(request.getMaterialTag())) {
-            String tagJson = "[\"" + request.getMaterialTag().trim() + "\"]";
-            wrapper.apply("material_tags @> {0}::jsonb", tagJson);
+            try {
+                String tagJson = objectMapper.writeValueAsString(List.of(request.getMaterialTag().trim()));
+                wrapper.apply("material_tags @> {0}::jsonb", tagJson);
+            } catch (Exception e) {
+                log.warn("材质标签 JSON 序列化失败: {}", request.getMaterialTag(), e);
+                wrapper.apply("1 = 0");
+            }
         }
         if (StringUtils.hasText(request.getStatus())) {
             wrapper.eq("status", request.getStatus());
         }
-        if (StringUtils.hasText(request.getReviewStatus())) {
-            wrapper.eq("review_status", request.getReviewStatus());
-        }
-        // 非管理员默认只展示已审核通过的产品
-        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+        // 管理员可按请求参数筛选复核状态；非管理员在「全库视图」下只看已确认产品，
+        // 在「自己的产品」视图下不过滤复核状态，确保工厂管理员能看到自己录入的待复核产品
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            if (StringUtils.hasText(request.getReviewStatus())) {
+                wrapper.eq("review_status", request.getReviewStatus());
+            }
+        } else if (!"own".equals(viewMode)) {
             wrapper.eq("review_status", ReviewStatus.APPROVED.getDbValue());
         }
         if (StringUtils.hasText(request.getProductLevel())) {
@@ -106,18 +165,266 @@ public class ProductQueryService {
             wrapper.and(w -> w.like("category_path", keyword).or().like("rspu_id", keyword));
         }
 
-        wrapper.orderByDesc("created_at");
-        Page<RspuMaster> page = rspuMapper.selectPage(pageParam, wrapper);
+        return wrapper;
+    }
+
+    private List<String> resolveUserFactoryCodes(String requestedFactoryCode) {
+        List<String> userFactoryCodes = userFactoryService.getFactoryCodesByUsername(
+            SecurityOperatorContext.currentUsername()
+        );
+        if (!StringUtils.hasText(requestedFactoryCode)) {
+            return userFactoryCodes;
+        }
+        String code = requestedFactoryCode.trim();
+        if (!userFactoryCodes.contains(code)) {
+            throw new BusinessException("无权查看该工厂数据: " + code);
+        }
+        return List.of(code);
+    }
+
+    private String resolveViewMode(String viewMode) {
+        if (!StringUtils.hasText(viewMode)) {
+            return "own";
+        }
+        String mode = viewMode.trim().toLowerCase();
+        if ("own".equals(mode) || "full".equals(mode)) {
+            return mode;
+        }
+        return "own";
+    }
+
+    private boolean isFullViewEligible(List<String> userFactoryCodes) {
+        if (!SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
+            return false;
+        }
+        if (userFactoryCodes.isEmpty()) {
+            return false;
+        }
+        SysUser currentUser = getCurrentSysUser();
+        return currentUser != null && Boolean.TRUE.equals(currentUser.getViewFullCatalog());
+    }
+
+    private SysUser getCurrentSysUser() {
+        String username = SecurityOperatorContext.currentUsername();
+        if ("anonymous".equals(username)) {
+            return null;
+        }
+        return sysUserMapper.selectByUsername(username);
+    }
+
+    private void assertProductOwnership(String rspuId) {
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            return;
+        }
+        List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
+            SecurityOperatorContext.currentUsername()
+        );
+        if (factoryCodes.isEmpty()) {
+            throw new BusinessException("无权编辑该产品: " + rspuId);
+        }
+        Long count = rskuSupplyMapper.selectCount(
+            new QueryWrapper<RskuSupply>()
+                .eq("rspu_id", rspuId)
+                .in("factory_code", factoryCodes)
+                .isNull("deleted_at")
+        );
+        if (count == null || count == 0) {
+            throw new BusinessException("只能编辑自己工厂已报价的产品: " + rspuId);
+        }
+    }
+
+    /**
+     * 判断当前登录用户是否有权查看指定产品。
+     *
+     * <p>规则：
+     * <ul>
+     *   <li>管理员始终可见。</li>
+     *   <li>已确认（复核通过）产品对所有用户可见。</li>
+     *   <li>非确认产品仅对关联工厂管理员可见（通过 RSKU 工厂归属判断）。</li>
+     * </ul>
+     *
+     * @param rspu 产品主档
+     * @return 是否可见
+     */
+    private boolean canViewProduct(RspuMaster rspu) {
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            return true;
+        }
+        if (ReviewStatus.APPROVED.getDbValue().equals(rspu.getReviewStatus())) {
+            return true;
+        }
+        List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
+            SecurityOperatorContext.currentUsername()
+        );
+        if (factoryCodes.isEmpty()) {
+            return false;
+        }
+        Long count = rskuSupplyMapper.selectCount(
+            new QueryWrapper<RskuSupply>()
+                .eq("rspu_id", rspu.getRspuId())
+                .in("factory_code", factoryCodes)
+                .isNull("deleted_at")
+        );
+        return count != null && count > 0;
+    }
+
+    private void applyOwnProductFilter(QueryWrapper<RspuMaster> wrapper, List<String> factoryCodes) {
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            return;
+        }
+        if (factoryCodes.isEmpty()) {
+            wrapper.apply("1 = 0");
+            return;
+        }
+        List<Object> rspuIdObjs = rskuSupplyMapper.selectObjs(
+            new QueryWrapper<RskuSupply>()
+                .select("DISTINCT rspu_id")
+                .in("factory_code", factoryCodes)
+                .isNull("deleted_at")
+        );
+        List<String> rspuIds = rspuIdObjs.stream()
+            .map(Object::toString)
+            .distinct()
+            .toList();
+        if (rspuIds.isEmpty()) {
+            wrapper.apply("1 = 0");
+        } else {
+            wrapper.in("rspu_id", rspuIds);
+        }
+    }
+
+    private List<RspuMaster> applyFullViewFilter(List<RspuMaster> candidates, List<String> userFactoryCodes) {
+        if (candidates.isEmpty() || userFactoryCodes.isEmpty()) {
+            return candidates;
+        }
+
+        Set<String> ownRspuIds = findOwnRspuIds(userFactoryCodes);
+        CapabilityMatcher matcher = buildCapabilityMatcher(userFactoryCodes);
+
+        return candidates.stream()
+            .filter(rspu -> ownRspuIds.contains(rspu.getRspuId()) || !matcher.isCovered(rspu))
+            .collect(Collectors.toList());
+    }
+
+    private Set<String> findOwnRspuIds(List<String> factoryCodes) {
+        List<RskuSupply> ownRskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>()
+                .in("factory_code", factoryCodes)
+                .isNull("deleted_at")
+        );
+        return ownRskus.stream()
+            .map(RskuSupply::getRspuId)
+            .collect(Collectors.toSet());
+    }
+
+    private CapabilityMatcher buildCapabilityMatcher(List<String> factoryCodes) {
+        List<FactoryProductCapability> capabilities = capabilityMapper.selectList(
+            new QueryWrapper<FactoryProductCapability>()
+                .in("factory_code", factoryCodes)
+        );
+        return new CapabilityMatcher(capabilities, objectMapper);
+    }
+
+    private PageResult<ProductSummaryResponse> paginateAndSummarize(List<RspuMaster> records, long page, long size) {
+        long total = records.size();
+        long from = (page - 1) * size;
+        if (from >= total) {
+            return PageResult.of(total, page, size, List.of());
+        }
+        long to = Math.min(from + size, total);
+        List<RspuMaster> pageRecords = records.subList((int) from, (int) to);
 
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(
-            page.getRecords().stream().map(RspuMaster::getRspuId).toList()
+            pageRecords.stream().map(RspuMaster::getRspuId).toList()
         );
 
-        List<ProductSummaryResponse> rows = page.getRecords().stream()
+        List<ProductSummaryResponse> rows = pageRecords.stream()
             .map(rspu -> toSummary(rspu, primaryImageUrlMap))
             .collect(Collectors.toList());
 
-        return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
+        return PageResult.of(total, page, size, rows);
+    }
+
+    /**
+     * 能力键匹配器。
+     *
+     * <p>支持三级通配：
+     * <ul>
+     *   <li>(category, null, null)：覆盖整个品类。</li>
+     *   <li>(category, style, null)：覆盖该品类下指定风格。</li>
+     *   <li>(category, style, material)：覆盖该品类/风格/材质组合。</li>
+     * </ul>
+     */
+    private class CapabilityMatcher {
+
+        private final Set<String> exactKeys = new HashSet<>();
+        private final Set<String> categoryStyleKeys = new HashSet<>();
+        private final Set<String> categoryKeys = new HashSet<>();
+        private final ObjectMapper mapper;
+
+        CapabilityMatcher(List<FactoryProductCapability> capabilities, ObjectMapper mapper) {
+            this.mapper = mapper;
+            for (FactoryProductCapability cap : capabilities) {
+                String category = cap.getCategoryCode();
+                String style = cap.getStyleCode();
+                String material = cap.getMaterialCode();
+                if (!StringUtils.hasText(category)) {
+                    continue;
+                }
+                boolean hasStyle = StringUtils.hasText(style);
+                boolean hasMaterial = StringUtils.hasText(material);
+                if (hasStyle && hasMaterial) {
+                    exactKeys.add(key(category, style, material));
+                } else if (hasStyle) {
+                    categoryStyleKeys.add(key(category, style));
+                } else {
+                    categoryKeys.add(category);
+                }
+            }
+        }
+
+        boolean isCovered(RspuMaster rspu) {
+            String category = rspu.getCategoryCode();
+            String style = rspu.getPositioningLabel();
+            if (!StringUtils.hasText(category)) {
+                return false;
+            }
+            List<String> materials = parseMaterialTags(rspu.getMaterialTags());
+
+            // 品类级覆盖
+            if (categoryKeys.contains(category)) {
+                return true;
+            }
+            if (!StringUtils.hasText(style)) {
+                return false;
+            }
+            // 品类+风格级覆盖
+            if (categoryStyleKeys.contains(key(category, style))) {
+                return true;
+            }
+            // 精确匹配：任意材质命中
+            for (String material : materials) {
+                if (exactKeys.contains(key(category, style, material))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private List<String> parseMaterialTags(String materialTagsJson) {
+            if (!StringUtils.hasText(materialTagsJson)) {
+                return List.of();
+            }
+            try {
+                return mapper.readValue(materialTagsJson, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+            } catch (Exception e) {
+                return List.of();
+            }
+        }
+
+        private static String key(String... parts) {
+            return String.join(":", parts);
+        }
     }
 
     private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
@@ -148,8 +455,7 @@ public class ProductQueryService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
-        if (!SecurityOperatorContext.isCurrentUserAdmin()
-            && !ReviewStatus.APPROVED.getDbValue().equals(rspu.getReviewStatus())) {
+        if (!canViewProduct(rspu)) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 
@@ -244,6 +550,8 @@ public class ProductQueryService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
+
+        assertProductOwnership(rspuId);
 
         RspuMaster oldSnapshot = snapshot(rspu);
         String oldPositioningLabel = rspu.getPositioningLabel();

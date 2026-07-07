@@ -7,6 +7,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.AuthService;
+import com.rsdp.service.UserService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -44,13 +45,16 @@ class AuthControllerTest {
     private AuthService authService;
 
     @MockBean
+    private UserService userService;
+
+    @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Test
     void login_shouldReturnUserInfoAndSetHttpOnlyCookie() throws Exception {
         LoginResponse response = new LoginResponse(
             "token-xxx", "Bearer", "USER-001", "admin", "管理员", "ADMIN",
-            List.of("ADMIN"), List.of("admin:user:manage")
+            List.of("ADMIN"), List.of("admin:user:manage"), false, List.of()
         );
         when(authService.login(any())).thenReturn(response);
 

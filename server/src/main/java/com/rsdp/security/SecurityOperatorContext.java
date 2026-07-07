@@ -5,6 +5,8 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.util.Optional;
+
 import java.util.Collection;
 import java.util.Collections;
 
@@ -36,6 +38,19 @@ public final class SecurityOperatorContext {
     }
 
     /**
+     * 获取当前登录用户 ID。
+     *
+     * @return {@code sys_user.user_id}；无法获取时返回 {@code null}
+     */
+    public static String currentUserId() {
+        return Optional.ofNullable(getAuthentication())
+            .map(Authentication::getPrincipal)
+            .filter(principal -> principal instanceof SecurityUser)
+            .map(principal -> ((SecurityUser) principal).getUserId())
+            .orElse(null);
+    }
+
+    /**
      * 判断当前是否已认证。
      */
     public static boolean isAuthenticated() {
@@ -50,6 +65,15 @@ public final class SecurityOperatorContext {
      */
     public static boolean isCurrentUserAdmin() {
         return hasAuthority("ROLE_ADMIN");
+    }
+
+    /**
+     * 判断当前用户是否为 FACTORY_ADMIN。
+     *
+     * @return 是否拥有 ROLE_FACTORY_ADMIN
+     */
+    public static boolean isCurrentUserFactoryAdmin() {
+        return hasAuthority("ROLE_FACTORY_ADMIN");
     }
 
     /**

@@ -7,6 +7,7 @@ import com.rsdp.dto.StyleMatchResult;
 import com.rsdp.entity.ProductStyleMatch;
 import com.rsdp.entity.StyleCase;
 import com.rsdp.entity.StyleMatchingFormula;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.StyleCaseMapper;
 import com.rsdp.mapper.StyleMatchingFormulaMapper;
@@ -26,6 +27,7 @@ class StyleMatchingServiceTest {
     private StyleMatchingFormulaMapper formulaMapper;
     private StyleCaseMapper styleCaseMapper;
     private ProductStyleMatchMapper matchMapper;
+    private DictResolverService dictResolver;
     private StyleMatchingService service;
 
     @BeforeEach
@@ -33,7 +35,8 @@ class StyleMatchingServiceTest {
         formulaMapper = mock(StyleMatchingFormulaMapper.class);
         styleCaseMapper = mock(StyleCaseMapper.class);
         matchMapper = mock(ProductStyleMatchMapper.class);
-        service = new StyleMatchingService(formulaMapper, styleCaseMapper, matchMapper, new ObjectMapper());
+        dictResolver = mock(DictResolverService.class);
+        service = new StyleMatchingService(formulaMapper, styleCaseMapper, matchMapper, new ObjectMapper(), dictResolver);
     }
 
     @Test
@@ -184,6 +187,41 @@ class StyleMatchingServiceTest {
         assertThat(result.getOverallScore()).isGreaterThanOrEqualTo(BigDecimal.ONE);
     }
 
+
+    @Test
+    void match_shouldResolveChineseStyleNameToCode() {
+        // Given
+        CategoryDict styleDict = new CategoryDict();
+        styleDict.setDictType("style");
+        styleDict.setDictCode("MC");
+        styleDict.setDictName("中古风");
+        when(dictResolver.resolveCodeByName("style", "中古风")).thenReturn("MC");
+
+        StyleMatchingFormula formula = new StyleMatchingFormula();
+        formula.setFormulaId("FORM-MC-001");
+        formula.setStyleCode("MC");
+        formula.setStatus("active");
+        formula.setFormulaJson("""
+            {
+              "must_have": [{"type": "material", "values": ["胡桃木"], "role": "primary"}],
+              "compatible": [],
+              "avoid": []
+            }
+            """);
+        when(formulaMapper.selectList(any())).thenReturn(List.of(formula));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setMaterialTags(List.of("胡桃木"));
+
+        // When
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-006");
+
+        // Then
+        assertThat(result).isNotNull();
+        assertThat(result.getStyleCode()).isEqualTo("MC");
+    }
+
     @Test
     void match_shouldUseMaterialSynonyms_whenAiOutputsSpecificWoodName() {
         // Given: 公式要求"胡桃木"，AI 返回"橡木"，二者在同义词组（实木）中，应命中
@@ -205,7 +243,7 @@ class StyleMatchingServiceTest {
         labels.setMaterialTags(List.of("橡木"));
 
         // When
-        StyleMatchResult result = service.match(labels, "RSPU-TEST-006");
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-007");
 
         // Then
         assertThat(result).isNotNull();
@@ -243,7 +281,7 @@ class StyleMatchingServiceTest {
         labels.setSixDimTags(java.util.Map.of("A", "弧形", "B", "高背包裹", "C", "细腿结构"));
 
         // When
-        StyleMatchResult result = service.match(labels, "RSPU-TEST-007");
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-008");
 
         // Then
         assertThat(result).isNotNull();

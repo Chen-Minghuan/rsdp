@@ -2,9 +2,14 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.LoginRequest;
+import com.rsdp.dto.request.UserPreferenceUpdateRequest;
 import com.rsdp.dto.response.LoginResponse;
+import com.rsdp.dto.response.UserResponse;
 import com.rsdp.exception.BusinessException;
+import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.SecurityUser;
 import com.rsdp.service.AuthService;
+import com.rsdp.service.UserService;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +20,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -29,6 +35,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final UserService userService;
 
     @Value("${rsdp.jwt.cookie-name:rsdp_token}")
     private String cookieName;
@@ -73,7 +80,9 @@ public class AuthController {
             loginResponse.getNickname(),
             loginResponse.getRole(),
             loginResponse.getRoles(),
-            loginResponse.getPermissions()
+            loginResponse.getPermissions(),
+            loginResponse.getViewFullCatalog(),
+            loginResponse.getFactoryCodes()
         );
         return Result.ok(responseBody);
     }
@@ -106,10 +115,27 @@ public class AuthController {
      * @return 用户信息
      */
     @GetMapping("/me")
-    public Result<LoginResponse> me(@AuthenticationPrincipal String username) {
-        if (!StringUtils.hasText(username)) {
+    public Result<LoginResponse> me(@AuthenticationPrincipal SecurityUser securityUser) {
+        if (securityUser == null || !StringUtils.hasText(securityUser.getUsername())) {
             throw new BusinessException("用户未登录");
         }
-        return Result.ok(authService.getCurrentUser(username));
+        return Result.ok(authService.getCurrentUser(securityUser.getUsername()));
+    }
+
+    /**
+     * 更新当前登录用户偏好设置。
+     *
+     * <p>当前仅支持修改「显示全产品库（去重）」开关。</p>
+     *
+     * @param request 偏好更新请求
+     * @return 更新后的用户信息
+     */
+    @PutMapping("/me/preferences")
+    public Result<UserResponse> updateMyPreferences(@Valid @RequestBody UserPreferenceUpdateRequest request) {
+        String userId = SecurityOperatorContext.currentUserId();
+        if (!StringUtils.hasText(userId)) {
+            throw new BusinessException("用户未登录");
+        }
+        return Result.ok(userService.updateMyPreferences(userId, request));
     }
 }

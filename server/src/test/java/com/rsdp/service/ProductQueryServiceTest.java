@@ -7,18 +7,23 @@ import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
+import com.rsdp.entity.FactoryProductCapability;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
+import com.rsdp.entity.SysUser;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
+import com.rsdp.mapper.FactoryProductCapabilityMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.dto.response.RspuRelationResponse;
 import com.rsdp.event.RspuDeletedEvent;
 import org.junit.jupiter.api.AfterEach;
@@ -42,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -56,6 +62,7 @@ class ProductQueryServiceTest {
         var user = User.withUsername("admin").password("").roles("ADMIN").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
+        lenient().when(userFactoryService.getFactoryCodesByUsername("admin")).thenReturn(List.of());
     }
 
     @AfterEach
@@ -92,6 +99,18 @@ class ProductQueryServiceTest {
 
     @Mock
     private ApplicationEventPublisher eventPublisher;
+
+    @Mock
+    private UserFactoryService userFactoryService;
+
+    @Mock
+    private FactoryProductCapabilityMapper capabilityMapper;
+
+    @Mock
+    private RskuSupplyMapper rskuSupplyMapper;
+
+    @Mock
+    private SysUserMapper sysUserMapper;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -509,5 +528,121 @@ class ProductQueryServiceTest {
 
         assertThatThrownBy(() -> productQueryService.deleteProduct("RSPU-NOTEXIST"))
             .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void listProducts_viewModeOwn_shouldReturnOnlyOwnProducts() {
+        authenticateFactoryAdmin("factory");
+        when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
+
+        ProductListRequest request = new ProductListRequest();
+        request.setViewMode("own");
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-OWN01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("MC");
+        rspu.setReviewStatus("已确认");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows()).hasSize(1);
+        assertThat(result.getRows().get(0).getRspuId()).isEqualTo("RSPU-OWN01");
+    }
+
+    @Test
+    void listProducts_viewModeFull_shouldHideCoveredProductsAndKeepOwn() {
+        authenticateFactoryAdmin("factory");
+        when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
+
+        SysUser user = new SysUser();
+        user.setUsername("factory");
+        user.setViewFullCatalog(true);
+        when(sysUserMapper.selectByUsername("factory")).thenReturn(user);
+
+        ProductListRequest request = new ProductListRequest();
+        request.setViewMode("full");
+        request.setSize(10L);
+
+        // 覆盖产品：品类 FS + 风格 MC + 材质 PE 命中能力
+        RspuMaster covered = new RspuMaster();
+        covered.setRspuId("RSPU-COVERED");
+        covered.setCategoryCode("FS");
+        covered.setPositioningLabel("MC");
+        covered.setMaterialTags("[\"PE\"]");
+        covered.setReviewStatus("已确认");
+
+        // 未覆盖产品：风格不同
+        RspuMaster uncovered = new RspuMaster();
+        uncovered.setRspuId("RSPU-UNCOVERED");
+        uncovered.setCategoryCode("FS");
+        uncovered.setPositioningLabel("BA");
+        uncovered.setMaterialTags("[\"PE\"]");
+        uncovered.setReviewStatus("已确认");
+
+        // 自己产品：即使被覆盖也保留
+        RspuMaster own = new RspuMaster();
+        own.setRspuId("RSPU-OWN");
+        own.setCategoryCode("FS");
+        own.setPositioningLabel("MC");
+        own.setMaterialTags("[\"PE\"]");
+        own.setReviewStatus("已确认");
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of(covered, uncovered, own));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(ownRsku("RSPU-OWN", "F001")));
+
+        FactoryProductCapability capability = new FactoryProductCapability();
+        capability.setFactoryCode("F001");
+        capability.setCategoryCode("FS");
+        capability.setStyleCode("MC");
+        capability.setMaterialCode("PE");
+        when(capabilityMapper.selectList(any())).thenReturn(List.of(capability));
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        List<String> ids = result.getRows().stream().map(ProductSummaryResponse::getRspuId).toList();
+        assertThat(ids).containsExactlyInAnyOrder("RSPU-UNCOVERED", "RSPU-OWN");
+        assertThat(ids).doesNotContain("RSPU-COVERED");
+    }
+
+    @Test
+    void updateProduct_nonOwnerFactoryAdmin_shouldThrow() {
+        authenticateFactoryAdmin("factory");
+        when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-OTHER");
+        rspu.setPositioningLabel("MC");
+
+        when(rspuMapper.selectById(eq("RSPU-OTHER"))).thenReturn(rspu);
+        when(rskuSupplyMapper.selectCount(any())).thenReturn(0L);
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setColorPrimaryName("黑色");
+
+        assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-OTHER", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("只能编辑自己工厂已报价的产品");
+    }
+
+    private void authenticateFactoryAdmin(String username) {
+        SecurityContextHolder.clearContext();
+        var user = User.withUsername(username).password("").roles("FACTORY_ADMIN").build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    private com.rsdp.entity.RskuSupply ownRsku(String rspuId, String factoryCode) {
+        com.rsdp.entity.RskuSupply rsku = new com.rsdp.entity.RskuSupply();
+        rsku.setRspuId(rspuId);
+        rsku.setFactoryCode(factoryCode);
+        return rsku;
     }
 }

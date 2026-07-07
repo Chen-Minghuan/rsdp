@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, h, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -24,7 +24,7 @@ import type { PriceChange, QuoteItem, QuoteResponse } from '@/types/quote'
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
-const schemeId = route.params.schemeId as string
+const schemeId = computed(() => route.params.schemeId as string)
 
 const isAdmin = computed(() => userStore.hasRole(ROLES.ADMIN))
 const currentUsername = computed(() => userStore.userInfo?.username || '')
@@ -164,7 +164,7 @@ const priceChangeColumns = [
 ]
 
 function validateSchemeId(): boolean {
-  if (!schemeId?.trim()) {
+  if (!schemeId.value?.trim()) {
     errorMessage.value = '缺少方案 ID'
     return false
   }
@@ -176,7 +176,7 @@ async function loadDetail() {
   loading.value = true
   errorMessage.value = ''
   try {
-    scheme.value = await getSchemeDetail(schemeId)
+    scheme.value = await getSchemeDetail(schemeId.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载方案详情失败'
   } finally {
@@ -189,7 +189,7 @@ async function handleGenerateQuote() {
   generating.value = true
   errorMessage.value = ''
   try {
-    quoteResult.value = await generateQuoteFromScheme(schemeId)
+    quoteResult.value = await generateQuoteFromScheme(schemeId.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '生成报价单失败'
   } finally {
@@ -221,6 +221,12 @@ async function handleExportQuote() {
 
 onMounted(() => {
   loadDetail()
+})
+
+onBeforeRouteUpdate((to) => {
+  if (to.params.schemeId) {
+    loadDetail()
+  }
 })
 </script>
 

@@ -1,14 +1,22 @@
 package com.rsdp.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rsdp.entity.AuditLog;
 import com.rsdp.mapper.AuditLogMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.util.AesEncryptionUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Iterator;
+import java.util.Set;
 
 /**
  * 审计日志服务。
@@ -19,6 +27,9 @@ import java.time.LocalDateTime;
 public class AuditLogService {
 
     private final AuditLogMapper auditLogMapper;
+    private final ObjectMapper objectMapper;
+
+    private static final Set<String> PRICE_FIELDS = Set.of("factoryPrice", "oldPrice", "newPrice");
 
     /**
      * 记录创建操作。
@@ -76,14 +87,53 @@ public class AuditLogService {
         logEntry.setTableName(tableName);
         logEntry.setRecordId(recordId);
         logEntry.setAction(action);
-        logEntry.setOldValue(oldValue);
-        logEntry.setNewValue(newValue);
+        logEntry.setOldValue(sanitizeValue(oldValue));
+        logEntry.setNewValue(sanitizeValue(newValue));
         logEntry.setOperator(StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername());
         logEntry.setCreatedAt(LocalDateTime.now());
         try {
             auditLogMapper.insert(logEntry);
         } catch (Exception e) {
             log.error("审计日志写入失败: {} {} {}", tableName, recordId, action, e);
+        }
+    }
+
+    private Object sanitizeValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            JsonNode tree = objectMapper.valueToTree(value);
+            sanitizePriceFields(tree);
+            return tree;
+        } catch (Exception e) {
+            log.warn("审计日志快照价格字段加密失败，将原值写入: {}", e.getMessage());
+            return value;
+        }
+    }
+
+    private void sanitizePriceFields(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node.isObject()) {
+            ObjectNode objectNode = (ObjectNode) node;
+            Iterator<String> fieldNames = objectNode.fieldNames();
+            while (fieldNames.hasNext()) {
+                String fieldName = fieldNames.next();
+                JsonNode child = objectNode.get(fieldName);
+                if (PRICE_FIELDS.contains(fieldName) && child.isNumber()) {
+                    BigDecimal price = child.decimalValue();
+                    objectNode.set(fieldName, objectMapper.valueToTree(AesEncryptionUtil.encrypt(price)));
+                } else {
+                    sanitizePriceFields(child);
+                }
+            }
+        } else if (node.isArray()) {
+            ArrayNode arrayNode = (ArrayNode) node;
+            for (int i = 0; i < arrayNode.size(); i++) {
+                sanitizePriceFields(arrayNode.get(i));
+            }
         }
     }
 }

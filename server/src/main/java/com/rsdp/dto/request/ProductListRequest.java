@@ -23,4 +23,6 @@ public class ProductListRequest {
     private String reviewStatus;
     private String productLevel;
     private String keyword;
+    private String viewMode;
+    private String factoryCode;
 }
