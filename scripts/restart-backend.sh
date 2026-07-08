@@ -28,10 +28,22 @@ set -a
 source <(sed 's/\r$//' "$ENV_FILE")
 set +a
 
+# 占位符集合（支持 .env.example 中的 <CHANGE_ME> 和 application.yml 里的 your-api-key-here）
+is_placeholder() {
+    case "$1" in
+        ""|"<CHANGE_ME>"|"your-api-key-here"|"YOUR_API_KEY_HERE"|"your-api-key")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # 如果 .env 把某个关键变量写成了占位符，但系统环境变量已经提供了真实值，则恢复系统值
 for var in "${REQUIRED_VARS[@]}"; do
     value="${!var:-}"
-    if { [ -z "$value" ] || [ "$value" = "<CHANGE_ME>" ]; } && [ -n "${ORIGINAL_ENV[$var]:-}" ]; then
+    if is_placeholder "$value" && [ -n "${ORIGINAL_ENV[$var]:-}" ]; then
         export "$var=${ORIGINAL_ENV[$var]}"
     fi
 done
@@ -45,8 +57,8 @@ for var in "${REQUIRED_VARS[@]}"; do
     # 去除首尾空白
     value="$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     export "$var=$value"
-    if [ -z "$value" ] || [ "$value" = "<CHANGE_ME>" ]; then
-        echo "错误：环境变量 $var 未设置或为默认值 <CHANGE_ME>"
+    if is_placeholder "$value"; then
+        echo "错误：环境变量 $var 未设置或为默认值"
         echo "请在 deploy/.env 中填写，或在启动前通过系统环境变量导出真实值"
         exit 1
     fi
