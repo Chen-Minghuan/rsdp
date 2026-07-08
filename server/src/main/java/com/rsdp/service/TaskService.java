@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.security.SecurityOperatorContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,6 +33,15 @@ public class TaskService {
         AsyncTask task = asyncTaskMapper.selectById(taskId);
         if (task == null) {
             throw new ResourceNotFoundException("任务不存在: " + taskId);
+        }
+
+        // 任务归属校验：平台运营人员可查看任意任务，其他用户只能查看自己创建的任务
+        if (!SecurityOperatorContext.isPlatformStaff()) {
+            String currentUser = SecurityOperatorContext.currentUsername();
+            String creator = task.getCreatedBy();
+            if (creator == null || !creator.equals(currentUser)) {
+                throw new ResourceNotFoundException("任务不存在: " + taskId);
+            }
         }
 
         Object resultData = null;

@@ -470,9 +470,12 @@ public class ProductQueryService {
         List<ImageAssets> images = imageAssetsMapper.selectList(
             new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId).orderByDesc("is_primary")
         );
-        List<AiRecognition> recognitions = aiRecognitionMapper.selectList(
-            new QueryWrapper<AiRecognition>().eq("rspu_id", rspuId).orderByDesc("created_at")
-        );
+        // AI 识别记录（含原始 OCR、模型输出）仅对平台运营人员返回，其他角色只看解析后的产品标签
+        List<AiRecognition> recognitions = SecurityOperatorContext.isPlatformStaff()
+            ? aiRecognitionMapper.selectList(
+                new QueryWrapper<AiRecognition>().eq("rspu_id", rspuId).orderByDesc("created_at")
+            )
+            : List.of();
         List<ProductStyleMatchResponse> styleMatches = listStyleMatches(rspuId);
 
         ProductDetailResponse response = new ProductDetailResponse();

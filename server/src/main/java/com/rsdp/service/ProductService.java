@@ -154,6 +154,7 @@ public class ProductService {
             "objectKey", primaryObjectKey,
             "originalFilename", primaryImage.getOriginalFilename()
         )));
+        task.setCreatedBy(SecurityOperatorContext.currentUsername());
         task.setCreatedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
 
@@ -354,6 +355,7 @@ public class ProductService {
             "objectKey", storagePath,
             "originalFilename", filename
         )));
+        task.setCreatedBy(SecurityOperatorContext.currentUsername());
         task.setCreatedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
 

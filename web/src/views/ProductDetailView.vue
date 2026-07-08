@@ -1015,7 +1015,7 @@ onBeforeRouteUpdate((to, from) => {
             </n-space>
           </n-card>
 
-          <n-card title="AI 识别记录" size="small">
+          <n-card v-if="isPlatformStaff" title="AI 识别记录" size="small">
             <n-data-table
               :columns="recognitionColumns"
               :data="detail.recognitions || []"

@@ -361,6 +361,7 @@ CREATE TABLE IF NOT EXISTS async_task (
     input_data JSONB,
     result_data JSONB,
     error_message TEXT,
+    created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );

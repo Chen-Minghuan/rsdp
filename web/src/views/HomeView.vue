@@ -6,6 +6,7 @@ import { computed } from 'vue'
 
 const userStore = useUserStore()
 const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_CREATE))
+const canReadProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_READ))
 </script>
 
 <template>
@@ -16,7 +17,7 @@ const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PROD
         <router-link v-if="canCreateProduct" to="/entry">
           <n-button type="primary">开始录入</n-button>
         </router-link>
-        <router-link to="/products">
+        <router-link v-if="canReadProduct" to="/products">
           <n-button>产品库</n-button>
         </router-link>
       </n-space>

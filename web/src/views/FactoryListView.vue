@@ -31,6 +31,12 @@ const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACT
 const canImportRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_IMPORT))
 const showManagementCard = computed(() => canCreateFactory.value || canImportRsku.value)
 
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+function canEditFactory(row: Factory) {
+  return canUpdateFactory.value && (isPlatformStaff.value || factoryCodes.value.includes(row.factoryCode))
+}
+
 const factories = ref<Factory[]>([])
 const loading = ref(false)
 const submitting = ref(false)
@@ -111,7 +117,7 @@ const columns = [
     key: 'actions',
     width: 100,
     render(row: Factory) {
-      return canUpdateFactory.value
+      return canEditFactory(row)
         ? h(
             NButton,
             { size: 'small', onClick: () => router.push(`/factories/${row.factoryCode}`) },
