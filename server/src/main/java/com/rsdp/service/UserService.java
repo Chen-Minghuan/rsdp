@@ -16,11 +16,13 @@ import com.rsdp.mapper.SysUserFactoryMapper;
 import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.mapper.SysUserRoleMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -44,6 +46,7 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final UserRoleService userRoleService;
     private final UserFactoryService userFactoryService;
+    private final PermissionService permissionService;
 
     /**
      * 分页查询用户列表。
@@ -164,6 +167,7 @@ public class UserService {
         if (roleChanged) {
             incrementTokenVersion(userId);
         }
+        permissionService.clearPermissionCache(userId);
 
         return toResponse(user);
     }
