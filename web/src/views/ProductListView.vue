@@ -33,6 +33,7 @@ const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PROD
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
 
 const loading = ref(false)
@@ -49,7 +50,9 @@ const materialFilter = ref<string | null>(null)
 const productLevelFilter = ref<string | null>(null)
 const selectedRowKeys = ref<string[]>([])
 const viewFullCatalog = computed(() => userStore.userInfo?.viewFullCatalog || false)
-const viewMode = ref<'own' | 'full'>(viewFullCatalog.value ? 'full' : 'own')
+const viewMode = ref<'own' | 'full'>(
+  isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
+)
 const factoryCode = ref<string | null>(null)
 const savingPreference = ref(false)
 
@@ -66,7 +69,8 @@ const factoryOptions = computed(() => [
 ])
 
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
-const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full')
+// 全库视图对工厂管理员只读；平台运营人员（ADMIN/EDITOR）在全库视图下仍可编辑
+const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value)
 
 async function toggleFullCatalog(value: boolean) {
   if (savingPreference.value) return
@@ -249,11 +253,17 @@ async function loadProducts() {
       materialTag: materialFilter.value || undefined,
       productLevel: productLevelFilter.value || undefined
     }
-    if (isFactoryAdmin.value) {
+    if (isPlatformStaff.value) {
+      // 平台运营人员默认全库视图，可编辑所有产品
+      params.viewMode = 'full'
+    } else if (isFactoryAdmin.value) {
       params.viewMode = viewMode.value
       if (viewMode.value === 'own' && factoryCode.value) {
         params.factoryCode = factoryCode.value
       }
+    } else {
+      // 普通用户、浏览者、设计师等只能看到已复核通过的产品
+      params.viewMode = 'full'
     }
     const result = await listProducts(params)
     products.value = result.rows
@@ -303,7 +313,7 @@ onMounted(async () => {
   if (!userStore.userInfo) {
     await userStore.fetchUserInfo()
   }
-  viewMode.value = viewFullCatalog.value ? 'full' : 'own'
+  viewMode.value = isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
   loadDicts()
   loadProducts()
 })

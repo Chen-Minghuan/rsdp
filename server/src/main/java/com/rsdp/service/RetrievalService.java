@@ -202,13 +202,13 @@ public class RetrievalService {
     }
 
     /**
-     * 按复核状态过滤候选产品。非管理员只能看到已审核通过的产品。
+     * 按复核状态过滤候选产品。非平台运营人员只能看到已审核通过的产品。
      *
      * @param candidates 候选产品列表
      * @return 过滤后的列表
      */
     private List<SimilarProductResponse> filterByReviewStatus(List<SimilarProductResponse> candidates) {
-        if (SecurityOperatorContext.isCurrentUserAdmin() || candidates.isEmpty()) {
+        if (SecurityOperatorContext.isPlatformStaff() || candidates.isEmpty()) {
             return candidates;
         }
         Set<String> rspuIds = candidates.stream()

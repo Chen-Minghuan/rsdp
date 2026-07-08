@@ -227,12 +227,12 @@ class RspuRelationServiceTest {
         relation.setStatus("active");
 
         when(relationMapper.selectById("REL-001")).thenReturn(relation);
+        when(relationMapper.deleteById("REL-001")).thenReturn(1);
 
         relationService.deleteRelation("RSPU-BED", "REL-001");
 
-        assertThat(relation.getStatus()).isEqualTo("inactive");
-        assertThat(relation.getDeletedAt()).isNotNull();
-        verify(relationMapper).updateById(relation);
+        verify(relationMapper).deleteById("REL-001");
+        verify(auditLogService).logDelete(eq("rspu_relation"), eq("REL-001"), any(), any());
     }
 
     @Test

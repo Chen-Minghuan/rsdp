@@ -173,11 +173,11 @@ public class RspuRelationService {
         }
 
         RspuRelation oldSnapshot = snapshot(relation);
-        relation.setStatus("inactive");
-        relation.setDeletedAt(LocalDateTime.now());
-        relation.setUpdatedAt(LocalDateTime.now());
-        relationMapper.updateById(relation);
-        auditLogService.logUpdate("rspu_relation", relationId, oldSnapshot, relation, SecurityOperatorContext.currentUsername());
+        int affected = relationMapper.deleteById(relationId);
+        if (affected == 0) {
+            throw new ResourceNotFoundException("搭配关系不存在或已被删除: " + relationId);
+        }
+        auditLogService.logDelete("rspu_relation", relationId, oldSnapshot, SecurityOperatorContext.currentUsername());
     }
 
     private void validateRspuExists(String rspuId) {

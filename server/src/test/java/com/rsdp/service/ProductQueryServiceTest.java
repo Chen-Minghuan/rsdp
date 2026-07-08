@@ -469,19 +469,18 @@ class ProductQueryServiceTest {
     }
 
     @Test
-    void deleteProduct_shouldMarkDeletedAtAndPublishEvent() {
+    void deleteProduct_shouldSoftDeleteAndPublishEvent() {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setStatus("active");
 
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuMapper.deleteById(eq("RSPU-TEST01"))).thenReturn(1);
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         productQueryService.deleteProduct("RSPU-TEST01");
 
-        assertThat(rspu.getDeletedAt()).isNotNull();
-        assertThat(rspu.getUpdatedAt()).isNotNull();
-        verify(rspuMapper).updateById(rspu);
+        verify(rspuMapper).deleteById("RSPU-TEST01");
         verify(auditLogService).logDelete(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq("admin"));
 
         ArgumentCaptor<RspuDeletedEvent> eventCaptor = ArgumentCaptor.forClass(RspuDeletedEvent.class);
@@ -500,9 +499,12 @@ class ProductQueryServiceTest {
         image.setImageId("IMG-01");
 
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuMapper.deleteById(eq("RSPU-TEST01"))).thenReturn(1);
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
 
         productQueryService.deleteProduct("RSPU-TEST01");
+
+        verify(rspuMapper).deleteById("RSPU-TEST01");
 
         ArgumentCaptor<RspuDeletedEvent> eventCaptor = ArgumentCaptor.forClass(RspuDeletedEvent.class);
         verify(eventPublisher).publishEvent(eventCaptor.capture());

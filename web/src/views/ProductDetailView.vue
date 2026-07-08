@@ -52,7 +52,8 @@ const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PROD
 const canCreateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_CREATE))
 const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
 const canCreateDict = computed(() => userStore.hasPermission(PERMISSIONS.DICT_CREATE))
-const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true)
+// 平台运营人员（ADMIN/EDITOR）即使开启全库视图也不应只读
+const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true && !userStore.isPlatformStaff)
 
 const loading = ref(false)
 const reviewing = ref(false)

@@ -211,9 +211,10 @@ public class RskuService {
         }
 
         RskuSupply oldSnapshot = snapshot(rsku);
-        rsku.setDeletedAt(LocalDateTime.now());
-        rsku.setUpdatedAt(LocalDateTime.now());
-        rskuSupplyMapper.updateById(rsku);
+        int affected = rskuSupplyMapper.deleteById(rskuId);
+        if (affected == 0) {
+            throw new ResourceNotFoundException("RSKU 不存在或已被删除: " + rskuId);
+        }
 
         auditLogService.logDelete("rsku_supply", rskuId, oldSnapshot, SecurityOperatorContext.currentUsername());
     }

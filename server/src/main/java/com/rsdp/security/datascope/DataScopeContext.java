@@ -7,7 +7,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Set;
 
 /**
  * 当前用户数据范围上下文。
@@ -19,7 +18,6 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class DataScopeContext {
 
-    private static final Set<String> ADMIN_ROLES = Set.of("ADMIN");
 
     private final UserRoleService userRoleService;
     private final UserFactoryService userFactoryService;
@@ -52,7 +50,7 @@ public class DataScopeContext {
             return DataScope.PUBLIC_ONLY;
         }
 
-        if (roleCodes.stream().anyMatch(ADMIN_ROLES::contains)) {
+        if (SecurityOperatorContext.isPlatformStaff()) {
             return DataScope.ALL;
         }
 

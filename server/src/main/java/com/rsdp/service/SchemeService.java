@@ -380,10 +380,10 @@ public class SchemeService {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
         assertSchemeOwnerOrAdmin(scheme);
-        scheme.setStatus("deleted");
-        scheme.setDeletedAt(LocalDateTime.now());
-        scheme.setUpdatedAt(LocalDateTime.now());
-        schemeMapper.updateById(scheme);
+        int affected = schemeMapper.deleteById(schemeId);
+        if (affected == 0) {
+            throw new ResourceNotFoundException("方案不存在或已被删除: " + schemeId);
+        }
     }
 
     /**

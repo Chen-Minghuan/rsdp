@@ -68,6 +68,36 @@ public final class SecurityOperatorContext {
     }
 
     /**
+     * 判断当前用户是否为 EDITOR。
+     *
+     * @return 是否拥有 ROLE_EDITOR
+     */
+    public static boolean isCurrentUserEditor() {
+        return hasAuthority("ROLE_EDITOR");
+    }
+
+    /**
+     * 判断当前用户是否为平台运营人员（ADMIN 或 EDITOR）。
+     *
+     * <p>平台运营人员拥有全库数据视图，可协助管理员处理产品/工厂/方案等业务数据，
+     * 但不具备用户管理、系统配置等高级管理员权限。</p>
+     *
+     * @return 是否拥有 ROLE_ADMIN 或 ROLE_EDITOR
+     */
+    public static boolean isPlatformStaff() {
+        return isCurrentUserAdmin() || isCurrentUserEditor();
+    }
+
+    /**
+     * 判断当前用户是否为 DESIGNER。
+     *
+     * @return 是否拥有 ROLE_DESIGNER
+     */
+    public static boolean isCurrentUserDesigner() {
+        return hasAuthority("ROLE_DESIGNER");
+    }
+
+    /**
      * 判断当前用户是否为 FACTORY_ADMIN。
      *
      * @return 是否拥有 ROLE_FACTORY_ADMIN

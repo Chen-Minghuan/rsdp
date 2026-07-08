@@ -229,12 +229,11 @@ class SchemeServiceTest {
         scheme.setCreatedBy("testuser");
 
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeMapper.deleteById("SCHEME-001")).thenReturn(1);
 
         schemeService.deleteScheme("SCHEME-001");
 
-        assertThat(scheme.getStatus()).isEqualTo("deleted");
-        assertThat(scheme.getDeletedAt()).isNotNull();
-        verify(schemeMapper).updateById(scheme);
+        verify(schemeMapper).deleteById("SCHEME-001");
     }
 
     @Test

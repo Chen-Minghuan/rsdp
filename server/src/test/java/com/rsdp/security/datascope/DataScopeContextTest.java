@@ -77,6 +77,14 @@ class DataScopeContextTest {
     }
 
     @Test
+    void currentDataScope_editorShouldReturnAll() {
+        authenticate("editor", "EDITOR");
+        when(userRoleService.getRoleCodesByUsername("editor")).thenReturn(List.of("EDITOR"));
+
+        assertThat(dataScopeContext.currentDataScope()).isEqualTo(DataScope.ALL);
+    }
+
+    @Test
     void currentDataScope_anonymousShouldReturnPublicOnly() {
         assertThat(dataScopeContext.currentDataScope()).isEqualTo(DataScope.PUBLIC_ONLY);
     }

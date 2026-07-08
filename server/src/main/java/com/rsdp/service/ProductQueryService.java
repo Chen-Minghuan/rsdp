@@ -148,9 +148,10 @@ public class ProductQueryService {
         if (StringUtils.hasText(request.getStatus())) {
             wrapper.eq("status", request.getStatus());
         }
-        // 管理员可按请求参数筛选复核状态；非管理员在「全库视图」下只看已确认产品，
+        // 平台运营人员（ADMIN/EDITOR）和设计师可按请求参数筛选复核状态；
+        // 其他非运营人员在「全库视图」下只看已确认产品，
         // 在「自己的产品」视图下不过滤复核状态，确保工厂管理员能看到自己录入的待复核产品
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (SecurityOperatorContext.isPlatformStaff() || SecurityOperatorContext.isCurrentUserDesigner()) {
             if (StringUtils.hasText(request.getReviewStatus())) {
                 wrapper.eq("review_status", request.getReviewStatus());
             }
@@ -213,7 +214,7 @@ public class ProductQueryService {
     }
 
     private void assertProductOwnership(String rspuId) {
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (SecurityOperatorContext.isPlatformStaff()) {
             return;
         }
         List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
@@ -238,7 +239,7 @@ public class ProductQueryService {
      *
      * <p>规则：
      * <ul>
-     *   <li>管理员始终可见。</li>
+     *   <li>平台运营人员（ADMIN/EDITOR）和设计师始终可见。</li>
      *   <li>已确认（复核通过）产品对所有用户可见。</li>
      *   <li>非确认产品仅对关联工厂管理员可见（通过 RSKU 工厂归属判断）。</li>
      * </ul>
@@ -247,7 +248,7 @@ public class ProductQueryService {
      * @return 是否可见
      */
     private boolean canViewProduct(RspuMaster rspu) {
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (SecurityOperatorContext.isPlatformStaff() || SecurityOperatorContext.isCurrentUserDesigner()) {
             return true;
         }
         if (ReviewStatus.APPROVED.getDbValue().equals(rspu.getReviewStatus())) {
@@ -269,7 +270,7 @@ public class ProductQueryService {
     }
 
     private void applyOwnProductFilter(QueryWrapper<RspuMaster> wrapper, List<String> factoryCodes) {
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (SecurityOperatorContext.isPlatformStaff()) {
             return;
         }
         if (factoryCodes.isEmpty()) {
@@ -516,9 +517,10 @@ public class ProductQueryService {
         }
 
         RspuMaster oldSnapshot = snapshot(rspu);
-        rspu.setDeletedAt(LocalDateTime.now());
-        rspu.setUpdatedAt(LocalDateTime.now());
-        rspuMapper.updateById(rspu);
+        int affected = rspuMapper.deleteById(rspuId);
+        if (affected == 0) {
+            throw new ResourceNotFoundException("产品不存在或已被删除: " + rspuId);
+        }
 
         auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, SecurityOperatorContext.currentUsername());
 

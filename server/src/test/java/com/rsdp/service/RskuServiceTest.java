@@ -404,19 +404,18 @@ class RskuServiceTest {
     }
 
     @Test
-    void deleteRsku_shouldMarkDeletedAt() {
+    void deleteRsku_shouldSoftDelete() {
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-TEST01");
         rsku.setRspuId("RSPU-TEST01");
         rsku.setFactoryCode("F001");
 
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+        when(rskuSupplyMapper.deleteById("RSKU-TEST01")).thenReturn(1);
 
         rskuService.deleteRsku("RSKU-TEST01");
 
-        assertThat(rsku.getDeletedAt()).isNotNull();
-        assertThat(rsku.getUpdatedAt()).isNotNull();
-        verify(rskuSupplyMapper).updateById(rsku);
+        verify(rskuSupplyMapper).deleteById("RSKU-TEST01");
         verify(auditLogService).logDelete(eq("rsku_supply"), eq("RSKU-TEST01"), any(), eq("admin"));
     }
 
