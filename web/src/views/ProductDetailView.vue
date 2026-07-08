@@ -72,6 +72,11 @@ const canManageProduct = computed(() =>
   !isReadOnly.value && isAssociated.value
 )
 
+// 新增报价按钮：工厂管理员只要有本厂关联即可为本 RSPU 录入首条报价
+const canCreateRskuForProduct = computed(() =>
+  canCreateRsku.value && !isReadOnly.value && (isPlatformStaff.value || isFactoryAdmin.value)
+)
+
 function canManageRsku(row: Rsku): boolean {
   if (isReadOnly.value) return false
   if (isPlatformStaff.value) return true
@@ -1115,7 +1120,7 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="工厂报价（RSKU）" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button v-if="canCreateRsku && canManageProduct" type="primary" @click="openRskuModal">新增报价</n-button>
+                  <n-button v-if="canCreateRskuForProduct" type="primary" @click="openRskuModal">新增报价</n-button>
                 </n-space>
                 <n-data-table
                   :columns="rskuColumns"
