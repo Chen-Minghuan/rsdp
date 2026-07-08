@@ -37,4 +37,9 @@ public class ExcelAiMappingResponse {
      * AI 对本次映射的说明。
      */
     private String notes;
+
+    /**
+     * 识别出的价格列列表（如「价格-A级布」）。
+     */
+    private List<PriceColumnInfo> priceColumns = new ArrayList<>();
 }

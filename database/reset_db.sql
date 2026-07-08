@@ -396,11 +396,12 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     failed_count INT DEFAULT 0,
     column_mapping JSONB,
     preview_rows JSONB,
+    price_columns JSONB,
     failures JSONB,
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
+    updated_at TIMESTAMP
+    -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加
 );
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_created_by ON excel_import_batch(created_by);
@@ -580,6 +581,13 @@ CREATE TABLE IF NOT EXISTS sys_user (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sys_user_username ON sys_user(username);
+
+-- 补齐 excel_import_batch 外键（该表在 sys_user 之前创建）
+ALTER TABLE excel_import_batch
+    DROP CONSTRAINT IF EXISTS fk_excel_import_batch_created_by;
+ALTER TABLE excel_import_batch
+    ADD CONSTRAINT fk_excel_import_batch_created_by
+        FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
 
 -- 角色表
 CREATE TABLE IF NOT EXISTS sys_role (

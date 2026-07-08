@@ -175,15 +175,19 @@ POST   /api/v1/products/excel-ai-import/preview
        # Response: {
        #   batchId: string,
        #   headers: string[],
-       #   sampleRows: [string[]],
-       #   suggestedMapping: { categoryCode?, styleCode?, sceneCode?, materialCode?, colorCode?,
-       #                       sizeCode?, dimensions?, productName?, description?, variantName?,
-       #                       factoryCode?, materialVersion?, price?, moq?, leadTimeDays?,
-       #                       externalCode?, imageColumn? }
+       #   previewRows: { [header: string]: string }[],
+       #   suggestedMapping: { [header: string]: string },
+       #   priceColumns: [{ header: string, materialName: string, suggestedField: string }],
+       #   categoryGuess: string,
+       #   notes: string
        # }
        # 说明：
-       #   - 第一行为原始表头，AI 根据表头语义和样例数据推荐字段映射
-       #   - 返回的 mapping key 对应后续确认导入接口的字段名
+       #   - 支持单行/多行表头：先清洗表头（去掉英文备注、括号单位），再合并父子表头
+       #   - AI 根据清洗后的表头和样例数据推荐字段映射；value 为标准字段名
+       #   - 复合表头「型号品名」会映射为 "externalCode,productName"，导入时按空格/斜杠拆分
+       #   - 多材质价格列（如「价格-A级布」「价格-AA级布」）映射为特殊字段 "__PRICE__:材质名"，
+       #     并在 priceColumns 中独立列出，供前端勾选
+       #   - 返回的 mapping key 为合并后的原始表头，对应后续确认导入接口的字段名
        #   - 原始 Excel 文件会持久化到 storage，用于确认阶段重新读取和内嵌图片提取
        #   - 文件大小上限 200MB；单次导入行数上限 500 行；单张内嵌/URL 图片上限 20MB
        #   - 200MB 大文件内含大量图片时，内嵌图片提取可能占用较多内存，建议优先使用图片 URL
@@ -191,7 +195,15 @@ POST   /api/v1/products/excel-ai-import/preview
 POST   /api/v1/products/excel-ai-import/import
        # Excel AI 辅助确认导入（已实现）
        # Request: JSON Body
-       #   { batchId: string, columnMapping: object }
+       #   {
+       #     batchId: string,
+       #     mapping: { [header: string]: string },
+       #     categoryHint: string,          // 品类提示，如 FS；Excel 无品类列时必填
+       #     selectedPriceColumns: string[], // 要导入的价格列 header 列表；为空则导入全部
+       #     defaultFactoryCode: string,    // 默认工厂编码，用于生成 RSKU
+       #     defaultShippingFrom: string,   // 默认发货地
+       #     defaultMoq: number             // 默认最小起订量
+       #   }
        # Response: {
        #   batchId: string,
        #   totalRows: number,
@@ -202,7 +214,8 @@ POST   /api/v1/products/excel-ai-import/import
        #   failures: [{ rowIndex, reason }]
        # }
        # 说明：
-       #   - 按 columnMapping 读取 Excel 每一行，逐行独立事务写入 RSPU / 变体 / 图片 / RSKU
+       #   - 按 mapping 读取 Excel 每一行，逐行独立事务写入 RSPU / 变体 / 图片 / RSKU
+       #   - 每行先创建 1 个 RSPU；每个选中的价格列创建 1 个变体 + 1 条 RSKU（工厂报价）
        #   - 支持内嵌图片（按 sheet+行分组）和 URL 图片（http/https）
        #   - 主数据创建成功后为每个 RSPU 触发异步 AI 识别任务，前端通过 taskIds 轮询
        #   - 失败行不影响其他行，失败原因写入返回结果

@@ -4,7 +4,9 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,4 +36,25 @@ public class ExcelAiMappingRequest {
      * 品类提示，当 Excel 中无品类字段时使用。
      */
     private String categoryHint;
+
+    /**
+     * 默认工厂编码，用于为每个价格列创建 RSKU。
+     */
+    private String defaultFactoryCode;
+
+    /**
+     * 默认发货地，用于为每个价格列创建 RSKU。
+     */
+    private String defaultShippingFrom;
+
+    /**
+     * 默认最小起订量，用于为每个价格列创建 RSKU。
+     */
+    private Integer defaultMoq;
+
+    /**
+     * 用户确认要导入的价格列原始表头列表。
+     * 为空表示全部导入。
+     */
+    private List<String> selectedPriceColumns = new ArrayList<>();
 }

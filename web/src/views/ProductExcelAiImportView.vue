@@ -12,10 +12,13 @@ import {
   NTag,
   NProgress,
   NSelect,
+  NInput,
+  NInputNumber,
   NDescriptions,
   NDescriptionsItem,
   NDataTable,
   NCheckbox,
+  NCheckboxGroup,
   NSteps,
   NStep,
   type UploadFileInfo,
@@ -65,6 +68,12 @@ const updateIfExists = ref(false)
 
 const importResult = ref<ExcelAiImportResult | null>(null)
 const taskList = ref<TaskItem[]>([])
+
+// 价格列与默认供应信息
+const selectedPriceColumns = ref<string[]>([])
+const defaultFactoryCode = ref<string>('')
+const defaultShippingFrom = ref<string>('')
+const defaultMoq = ref<number | null>(1)
 
 const selectedFile = computed(() => {
   const item = fileList.value[0]
@@ -182,6 +191,8 @@ async function handlePreview() {
     const result = await previewExcelAiImport(file, uploadAbortController.signal)
     mappingResponse.value = result
     confirmedMapping.value = { ...result.suggestedMapping }
+    // 默认全选所有识别出的价格列
+    selectedPriceColumns.value = (result.priceColumns || []).map(p => p.header)
     currentStep.value = 2
   } catch (e) {
     if (axios.isCancel(e)) {
@@ -223,7 +234,11 @@ async function handleImport() {
       batchId: mappingResponse.value.batchId,
       mapping,
       updateIfExists: updateIfExists.value,
-      categoryHint: categoryHint.value ?? undefined
+      categoryHint: categoryHint.value ?? undefined,
+      defaultFactoryCode: defaultFactoryCode.value || undefined,
+      defaultShippingFrom: defaultShippingFrom.value || undefined,
+      defaultMoq: defaultMoq.value ?? undefined,
+      selectedPriceColumns: selectedPriceColumns.value
     })
 
     importResult.value = result
@@ -255,6 +270,10 @@ function clearAll() {
   fileList.value = []
   mappingResponse.value = null
   confirmedMapping.value = {}
+  selectedPriceColumns.value = []
+  defaultFactoryCode.value = ''
+  defaultShippingFrom.value = ''
+  defaultMoq.value = 1
   importResult.value = null
   taskList.value = []
   currentStep.value = 1
@@ -422,10 +441,33 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
 
           <n-data-table
             :columns="mappingColumns"
-            :data="mappingResponse?.headers.map(h => ({ header: h, value: confirmedMapping[h] ?? '' })) ?? []"
+            :data="mappingResponse?.headers
+              .filter(h => !mappingResponse?.priceColumns.some(p => p.header === h))
+              .map(h => ({ header: h, value: confirmedMapping[h] ?? '' })) ?? []"
             :bordered="true"
             :single-line="false"
           />
+
+          <n-card v-if="mappingResponse?.priceColumns && mappingResponse.priceColumns.length > 0" title="价格列（每列将创建一个变体 + RSKU）" size="small">
+            <n-space vertical :size="12">
+              <n-checkbox-group v-model:value="selectedPriceColumns">
+                <n-space>
+                  <n-checkbox
+                    v-for="col in mappingResponse.priceColumns"
+                    :key="col.header"
+                    :value="col.header"
+                    :label="`${col.header}（材质：${col.materialName || '未知'}）`"
+                  />
+                </n-space>
+              </n-checkbox-group>
+
+              <n-space>
+                <n-input v-model:value="defaultFactoryCode" placeholder="默认工厂编码" style="width: 160px;" />
+                <n-input v-model:value="defaultShippingFrom" placeholder="默认发货地" style="width: 160px;" />
+                <n-input-number v-model:value="defaultMoq" placeholder="默认 MOQ" :min="1" style="width: 120px;" />
+              </n-space>
+            </n-space>
+          </n-card>
 
           <n-space>
             <n-button @click="currentStep = 1">

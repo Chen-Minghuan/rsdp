@@ -32,6 +32,9 @@ public class ExcelImportBatch {
     private String previewRows;
 
     @TableField(typeHandler = JsonbTypeHandler.class)
+    private String priceColumns;
+
+    @TableField(typeHandler = JsonbTypeHandler.class)
     private String failures;
 
     private String createdBy;
