@@ -27,6 +27,7 @@ const router = useRouter()
 const userStore = useUserStore()
 
 const canCreateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_CREATE))
+const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_UPDATE))
 const canImportRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_IMPORT))
 const showManagementCard = computed(() => canCreateFactory.value || canImportRsku.value)
 
@@ -104,7 +105,21 @@ const columns = [
   },
   { title: '地区', key: 'region', width: 120 },
   { title: '联系人', key: 'contactPerson', width: 120 },
-  { title: '联系电话', key: 'contactPhone', width: 140 }
+  { title: '联系电话', key: 'contactPhone', width: 140 },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 100,
+    render(row: Factory) {
+      return canUpdateFactory.value
+        ? h(
+            NButton,
+            { size: 'small', onClick: () => router.push(`/factories/${row.factoryCode}`) },
+            { default: () => '编辑' }
+          )
+        : null
+    }
+  }
 ]
 
 async function loadFactories() {
