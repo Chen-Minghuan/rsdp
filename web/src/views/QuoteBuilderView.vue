@@ -104,7 +104,7 @@ const totalPriceCents = computed(() => {
     const rskuId = selectedRskuMap.value[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
-    if (rsku) {
+    if (rsku && rsku.factoryPrice != null) {
       const quantity = quantityMap.value[rspuId] ?? 1
       total += Math.round(rsku.factoryPrice * 100 * quantity)
     }
@@ -175,15 +175,21 @@ async function loadData() {
     ids.forEach((id, index) => {
       const list = rskuResults[index]
       map[id] = list
-      // 非编辑模式下默认选中价格最低的 RSKU
+      // 非编辑模式下默认选中有价格且最低的 RSKU
       if (!isEditMode.value && list.length > 0 && !selectedRskuMap.value[id]) {
-        const cheapest = list.reduce((min, r) => (r.factoryPrice < min.factoryPrice ? r : min), list[0])
-        selectedRskuMap.value[id] = cheapest.rskuId
+        const selectable = list.filter(r => r.factoryPrice != null)
+        if (selectable.length > 0) {
+          const cheapest = selectable.reduce((min, r) => (r.factoryPrice! < min.factoryPrice! ? r : min), selectable[0])
+          selectedRskuMap.value[id] = cheapest.rskuId
+        }
       }
       // 编辑模式下如果上次选中的 RSKU 已不在列表中，则 fallback 到最低价
       if (isEditMode.value && list.length > 0 && !list.some(r => r.rskuId === selectedRskuMap.value[id])) {
-        const cheapest = list.reduce((min, r) => (r.factoryPrice < min.factoryPrice ? r : min), list[0])
-        selectedRskuMap.value[id] = cheapest.rskuId
+        const selectable = list.filter(r => r.factoryPrice != null)
+        if (selectable.length > 0) {
+          const cheapest = selectable.reduce((min, r) => (r.factoryPrice! < min.factoryPrice! ? r : min), selectable[0])
+          selectedRskuMap.value[id] = cheapest.rskuId
+        }
       }
     })
     rskuMap.value = map
@@ -340,7 +346,7 @@ function selectedRsku(rspuId: string): Rsku | undefined {
 
 function selectedSubtotal(rspuId: string): number {
   const rsku = selectedRsku(rspuId)
-  if (!rsku) return 0
+  if (!rsku || rsku.factoryPrice == null) return 0
   const quantity = quantityMap.value[rspuId] ?? 1
   return rsku.factoryPrice * quantity
 }
@@ -417,9 +423,11 @@ onBeforeRouteUpdate((to) => {
                   v-model:value="selectedRskuMap[product.rspu.rspuId]"
                   :options="rskuMap[product.rspu.rspuId]?.map(r => {
                     const capable = isFactoryCapable(r)
+                    const hasPrice = r.factoryPrice != null
                     return {
-                      label: `${r.factoryName || r.factoryCode} - ¥${r.factoryPrice.toFixed(2)}${capable ? '' : ` [工厂未声明 ${r.productLevel} 级能力]`}`,
-                      value: r.rskuId
+                      label: `${r.factoryName || r.factoryCode}${hasPrice ? ` - ¥${r.factoryPrice.toFixed(2)}` : ' - 暂无报价'}${capable ? '' : ` [工厂未声明 ${r.productLevel || '—'} 级能力]`}`,
+                      value: r.rskuId,
+                      disabled: !hasPrice
                     }
                   }) || []"
                   placeholder="选择工厂报价"
@@ -480,7 +488,7 @@ onBeforeRouteUpdate((to) => {
 
             <n-descriptions bordered :column="4" label-placement="left" style="margin-top: 16px;">
               <n-descriptions-item label="总价">
-                ¥{{ quoteResult.summary.totalPrice.toFixed(2) }}
+                ¥{{ (quoteResult.summary.totalPrice ?? 0).toFixed(2) }}
               </n-descriptions-item>
               <n-descriptions-item label="项数">
                 {{ quoteResult.summary.itemCount }}

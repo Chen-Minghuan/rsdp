@@ -136,7 +136,7 @@ const priceChangeColumns = [
     key: 'oldPrice',
     width: 140,
     render(row: PriceChange) {
-      return `¥${row.oldPrice.toFixed(2)}`
+      return formatPrice(row.oldPrice)
     }
   },
   {
@@ -144,7 +144,7 @@ const priceChangeColumns = [
     key: 'newPrice',
     width: 140,
     render(row: PriceChange) {
-      return `¥${row.newPrice.toFixed(2)}`
+      return formatPrice(row.newPrice)
     }
   },
   {
@@ -152,7 +152,9 @@ const priceChangeColumns = [
     key: 'diff',
     width: 120,
     render(row: PriceChange) {
-      const diff = row.newPrice - row.oldPrice
+      const oldPrice = row.oldPrice ?? 0
+      const newPrice = row.newPrice ?? 0
+      const diff = newPrice - oldPrice
       const sign = diff > 0 ? '+' : ''
       return h(
         'span',
@@ -265,7 +267,7 @@ onBeforeRouteUpdate((to) => {
               {{ scheme.items.reduce((sum, item) => sum + (item.quantity ?? 1), 0) }}
             </n-descriptions-item>
             <n-descriptions-item label="总价">
-              ¥{{ scheme.totalPrice.toFixed(2) }}
+              ¥{{ (scheme.totalPrice ?? 0).toFixed(2) }}
             </n-descriptions-item>
             <n-descriptions-item label="涉及工厂">
               {{ scheme.factoryCount }} 家
@@ -328,7 +330,7 @@ onBeforeRouteUpdate((to) => {
               />
               <n-descriptions bordered :column="4" label-placement="left" style="margin-top: 16px;">
                 <n-descriptions-item label="总价">
-                  ¥{{ quoteResult.summary.totalPrice.toFixed(2) }}
+                  ¥{{ (quoteResult.summary.totalPrice ?? 0).toFixed(2) }}
                 </n-descriptions-item>
                 <n-descriptions-item label="项数">
                   {{ quoteResult.summary.itemCount }}

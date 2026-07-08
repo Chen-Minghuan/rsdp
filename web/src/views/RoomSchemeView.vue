@@ -154,10 +154,10 @@ onMounted(() => {
                 {{ scheme.roomType }}
               </n-descriptions-item>
               <n-descriptions-item label="预算上限">
-                ¥{{ scheme.budgetLimit.toFixed(2) }}
+                ¥{{ (scheme.budgetLimit ?? 0).toFixed(2) }}
               </n-descriptions-item>
               <n-descriptions-item label="方案总价">
-                ¥{{ scheme.totalPrice.toFixed(2) }}
+                ¥{{ (scheme.totalPrice ?? 0).toFixed(2) }}
               </n-descriptions-item>
               <n-descriptions-item label="产品数量">
                 {{ scheme.itemCount }}

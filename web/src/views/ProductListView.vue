@@ -320,6 +320,7 @@ onMounted(async () => {
   if (!userStore.userInfo) {
     await userStore.fetchUserInfo()
   }
+  selectedRowKeys.value = []
   viewMode.value = isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
   loadDicts()
   loadProducts()
@@ -408,10 +409,10 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
         </n-alert>
 
         <n-alert v-if="isReadOnlyFullCatalog" type="info" :show-icon="true" style="margin-bottom: 12px;">
-          当前为全库只读视图，仅支持查看详情，不能进行编辑、删除、报价等操作。
+          当前为全库去重只读视图，仅支持查看详情与生成报价单；编辑、删除等维护操作需切换到自己的产品视图或由平台运营人员执行。
         </n-alert>
 
-        <n-space v-if="hasSelection && canGenerateQuote && !isReadOnlyFullCatalog" align="center">
+        <n-space v-if="hasSelection && canGenerateQuote" align="center">
           <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
           <n-button type="primary" @click="handleBuildQuote">生成报价单</n-button>
         </n-space>
