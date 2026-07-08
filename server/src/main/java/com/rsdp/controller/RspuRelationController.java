@@ -4,10 +4,12 @@ import com.rsdp.common.Result;
 import com.rsdp.dto.request.RspuRelationCreateRequest;
 import com.rsdp.dto.request.RspuRelationUpdateRequest;
 import com.rsdp.dto.response.RspuRelationResponse;
+import com.rsdp.security.Permissions;
 import com.rsdp.service.RspuRelationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,6 +40,7 @@ public class RspuRelationController {
      * @return 搭配关系列表
      */
     @GetMapping
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_READ + "')")
     public Result<List<RspuRelationResponse>> listRelations(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
         return Result.ok(relationService.listByAnchor(rspuId));
     }
@@ -50,6 +53,7 @@ public class RspuRelationController {
      * @return 空结果
      */
     @PostMapping
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
     public Result<Void> createRelation(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                        @Valid @RequestBody RspuRelationCreateRequest request) {
         relationService.createRelation(rspuId, request);
@@ -65,6 +69,7 @@ public class RspuRelationController {
      * @return 空结果
      */
     @PutMapping("/{relationId}")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
     public Result<Void> updateRelation(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                        @PathVariable @NotBlank(message = "关系 ID 不能为空") String relationId,
                                        @Valid @RequestBody RspuRelationUpdateRequest request) {
@@ -80,6 +85,7 @@ public class RspuRelationController {
      * @return 空结果
      */
     @DeleteMapping("/{relationId}")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
     public Result<Void> deleteRelation(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                        @PathVariable @NotBlank(message = "关系 ID 不能为空") String relationId) {
         relationService.deleteRelation(rspuId, relationId);

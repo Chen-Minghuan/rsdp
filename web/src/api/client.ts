@@ -1,4 +1,5 @@
 import axios, { type AxiosResponse, type AxiosError } from 'axios'
+import { createDiscreteApi } from 'naive-ui'
 
 /**
  * 业务错误。后端返回的 code 不等于 CODE_OK 时抛出。
@@ -12,6 +13,12 @@ export class ApiError extends Error {
     this.code = code
   }
 }
+
+/**
+ * 轻量级全局消息提示（用于模块顶层等非 setup 场景）。
+ */
+const discreteApi =
+  typeof window !== 'undefined' ? createDiscreteApi(['message']) : null
 
 /**
  * 通用 Axios 实例。
@@ -44,6 +51,9 @@ function businessCodeInterceptor(response: AxiosResponse) {
   const data = response?.data
   if (data && typeof data === 'object' && 'code' in data && 'message' in data) {
     if (data.code !== 200) {
+      if (data.code === 403 && discreteApi) {
+        discreteApi.message.error(data.message || '权限不足，无法执行该操作')
+      }
       return Promise.reject(new ApiError(data.code, data.message || '请求失败'))
     }
   }
@@ -72,6 +82,9 @@ async function errorInterceptor(error: AxiosError | ApiError) {
   }
 
   if (response.status === 403) {
+    if (discreteApi) {
+      discreteApi.message.error('权限不足，无法执行该操作')
+    }
     return Promise.reject(new Error('权限不足，无法执行该操作'))
   }
 

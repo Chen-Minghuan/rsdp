@@ -1,9 +1,11 @@
 package com.rsdp.controller;
 
 import com.rsdp.common.Result;
+import com.rsdp.security.Permissions;
 import com.rsdp.service.RskuService;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,6 +30,7 @@ public class SkuController {
      * @return 空结果
      */
     @DeleteMapping("/{rskuId}")
+    @PreAuthorize("hasAuthority('" + Permissions.RSKU_DELETE + "')")
     public Result<Void> delete(@PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId) {
         rskuService.deleteRsku(rskuId);
         return Result.ok();

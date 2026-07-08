@@ -5,9 +5,11 @@ import com.rsdp.dto.request.AnchorMatchingRequest;
 import com.rsdp.dto.request.RoomSchemeRequest;
 import com.rsdp.dto.response.AnchorMatchingResponse;
 import com.rsdp.dto.response.RoomSchemeResponse;
+import com.rsdp.security.Permissions;
 import com.rsdp.service.AiMatchingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -32,6 +34,7 @@ public class MatchingController {
      * @return 搭配方案
      */
     @PostMapping("/room-scheme")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_READ + "')")
     public Result<RoomSchemeResponse> roomScheme(@Valid @RequestBody RoomSchemeRequest request) {
         return Result.ok(aiMatchingService.generateRoomScheme(request));
     }
@@ -43,6 +46,7 @@ public class MatchingController {
      * @return 推荐结果
      */
     @PostMapping("/recommend")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_READ + "')")
     public Result<AnchorMatchingResponse> recommend(@Valid @RequestBody AnchorMatchingRequest request) {
         return Result.ok(aiMatchingService.recommendByAnchor(request));
     }
