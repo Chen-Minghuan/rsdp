@@ -1,10 +1,12 @@
 package com.rsdp.config;
 
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -44,6 +46,19 @@ public class AiApiConfig {
 
     @Value("${rsdp.chromadb.max-retries:2}")
     private int chromaMaxRetries;
+
+    /**
+     * 启动时校验 AI API Key，避免使用默认/空值调用外部接口导致 401。
+     */
+    @PostConstruct
+    public void validateApiKey() {
+        if (!StringUtils.hasText(apiKey)) {
+            throw new IllegalStateException("AI API Key 未配置：请设置环境变量 DASHSCOPE_API_KEY 或在 deploy/.env 中填写有效 Key");
+        }
+        if (apiKey.contains("your-api-key") || apiKey.contains("CHANGE_ME")) {
+            throw new IllegalStateException("AI API Key 为占位符：请将 deploy/.env 中的 DASHSCOPE_API_KEY 替换为真实 Key");
+        }
+    }
 
     @Bean
     public RestClient aiRestClient() {

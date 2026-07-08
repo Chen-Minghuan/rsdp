@@ -25,7 +25,7 @@ export RSDP_JWT_COOKIE_SECURE=false
 export DB_USERNAME="${POSTGRES_USER:-rsdp}"
 export DB_PASSWORD="${POSTGRES_PASSWORD:-rsdp}"
 
-REQUIRED_VARS=("RSDP_ENCRYPTION_KEY" "RSDP_JWT_SECRET")
+REQUIRED_VARS=("RSDP_ENCRYPTION_KEY" "RSDP_JWT_SECRET" "DASHSCOPE_API_KEY")
 for var in "${REQUIRED_VARS[@]}"; do
     value="${!var:-}"
     if [ -z "$value" ] || [ "$value" = "<CHANGE_ME>" ]; then

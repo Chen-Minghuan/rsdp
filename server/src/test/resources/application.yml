@@ -5,3 +5,5 @@ rsdp:
     secret: ${RSDP_JWT_SECRET:g3g6Ryj6ty4Dsw0jm1ImR59dbRAOI98q3qKVf7gz0jU=}
   encryption:
     key: ${RSDP_ENCRYPTION_KEY:WYs8rXkOCYazXad8RLS2lP5qmWI6fYPCd0HQ72fXSnY=}
+  ai:
+    api-key: ${DASHSCOPE_API_KEY:test-dummy-key-for-unit-tests-only}
