@@ -242,24 +242,28 @@ function parseJsonArray(value?: string): string[] {
   }
 }
 
+function stringifyJsonArray(val: string[]): string {
+  return val.length > 0 ? JSON.stringify(val) : '[]'
+}
+
 const editEquipmentList = computed({
   get: () => parseJsonArray(editForm.value.equipmentList),
-  set: (val: string[]) => { editForm.value.equipmentList = val.length > 0 ? JSON.stringify(val) : undefined }
+  set: (val: string[]) => { editForm.value.equipmentList = stringifyJsonArray(val) }
 })
 
 const editQcItems = computed({
   get: () => parseJsonArray(editForm.value.qcItems),
-  set: (val: string[]) => { editForm.value.qcItems = val.length > 0 ? JSON.stringify(val) : undefined }
+  set: (val: string[]) => { editForm.value.qcItems = stringifyJsonArray(val) }
 })
 
 const editLogisticsMethods = computed({
   get: () => parseJsonArray(editForm.value.logisticsMethods),
-  set: (val: string[]) => { editForm.value.logisticsMethods = val.length > 0 ? JSON.stringify(val) : undefined }
+  set: (val: string[]) => { editForm.value.logisticsMethods = stringifyJsonArray(val) }
 })
 
 const editDefaultPackaging = computed({
   get: () => parseJsonArray(editForm.value.defaultPackaging),
-  set: (val: string[]) => { editForm.value.defaultPackaging = val.length > 0 ? JSON.stringify(val) : undefined }
+  set: (val: string[]) => { editForm.value.defaultPackaging = stringifyJsonArray(val) }
 })
 
 function openLevelModal() {
