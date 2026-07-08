@@ -168,6 +168,56 @@ POST   /api/v1/products/document-import
        #   - 按 bbox 裁剪出单产品图后，为每个产品创建 RSPU 草稿并触发异步 AI 识别
        #   - 前端通过 taskIds 轮询每个产品的识别进度
 
+POST   /api/v1/products/excel-ai-import/preview
+       # Excel AI 辅助字段映射预览（已实现）
+       # Request: multipart/form-data
+       #   file: File (必填, Excel .xlsx/.xls, ≤200MB)
+       # Response: {
+       #   batchId: string,
+       #   headers: string[],
+       #   sampleRows: [string[]],
+       #   suggestedMapping: { categoryCode?, styleCode?, sceneCode?, materialCode?, colorCode?,
+       #                       sizeCode?, dimensions?, productName?, description?, variantName?,
+       #                       factoryCode?, materialVersion?, price?, moq?, leadTimeDays?,
+       #                       externalCode?, imageColumn? }
+       # }
+       # 说明：
+       #   - 第一行为原始表头，AI 根据表头语义和样例数据推荐字段映射
+       #   - 返回的 mapping key 对应后续确认导入接口的字段名
+       #   - 原始 Excel 文件会持久化到 storage，用于确认阶段重新读取和内嵌图片提取
+       #   - 文件大小上限 200MB；单次导入行数上限 500 行；单张内嵌/URL 图片上限 20MB
+       #   - 200MB 大文件内含大量图片时，内嵌图片提取可能占用较多内存，建议优先使用图片 URL
+
+POST   /api/v1/products/excel-ai-import/import
+       # Excel AI 辅助确认导入（已实现）
+       # Request: JSON Body
+       #   { batchId: string, columnMapping: object }
+       # Response: {
+       #   batchId: string,
+       #   totalRows: number,
+       #   successCount: number,
+       #   failedCount: number,
+       #   taskIds: string[],
+       #   rspuIds: string[],
+       #   failures: [{ rowIndex, reason }]
+       # }
+       # 说明：
+       #   - 按 columnMapping 读取 Excel 每一行，逐行独立事务写入 RSPU / 变体 / 图片 / RSKU
+       #   - 支持内嵌图片（按 sheet+行分组）和 URL 图片（http/https）
+       #   - 主数据创建成功后为每个 RSPU 触发异步 AI 识别任务，前端通过 taskIds 轮询
+       #   - 失败行不影响其他行，失败原因写入返回结果
+
+GET    /api/v1/products/excel-ai-import/{batchId}
+       # 查询 Excel AI 导入批次状态（已实现）
+       # Response: {
+       #   batchId: string,
+       #   status: "pending"|"processing"|"done"|"failed",
+       #   totalRows: number,
+       #   successCount: number,
+       #   failedCount: number,
+       #   failures: [{ rowIndex, reason }]
+       # }
+
 ### 图片访问
 
 ```

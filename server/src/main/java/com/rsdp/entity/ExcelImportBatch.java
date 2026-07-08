@@ -1,0 +1,40 @@
+package com.rsdp.entity;
+
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import com.rsdp.config.typehandler.JsonbTypeHandler;
+import lombok.Data;
+
+import java.time.LocalDateTime;
+
+/**
+ * Excel AI 辅助导入批次记录。
+ */
+@Data
+@TableName("excel_import_batch")
+public class ExcelImportBatch {
+
+    @TableId
+    private String batchId;
+
+    private String fileName;
+    private String storagePath;
+    private String status;
+    private Integer totalRows;
+    private Integer successCount;
+    private Integer failedCount;
+
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String columnMapping;
+
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String previewRows;
+
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String failures;
+
+    private String createdBy;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+}

@@ -342,6 +342,26 @@ CREATE TABLE IF NOT EXISTS async_task (
     completed_at TIMESTAMP
 );
 
+-- Excel AI 辅助导入批次表
+CREATE TABLE IF NOT EXISTS excel_import_batch (
+    batch_id VARCHAR(32) PRIMARY KEY,
+    file_name VARCHAR(255) NOT NULL,
+    storage_path VARCHAR(512),                      -- 原始 Excel 文件存储路径
+    status VARCHAR(20) DEFAULT 'pending',
+    total_rows INT DEFAULT 0,
+    success_count INT DEFAULT 0,
+    failed_count INT DEFAULT 0,
+    column_mapping JSONB,
+    preview_rows JSONB,
+    failures JSONB,
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
+CREATE INDEX IF NOT EXISTS idx_excel_import_batch_created_by ON excel_import_batch(created_by);
+
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_log (
     id SERIAL PRIMARY KEY,

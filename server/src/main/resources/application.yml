@@ -3,8 +3,8 @@ spring:
     name: rsdp-server
   servlet:
     multipart:
-      max-file-size: 20MB
-      max-request-size: 20MB
+      max-file-size: 200MB
+      max-request-size: 200MB
   jackson:
     serialization:
       write-dates-as-timestamps: false
@@ -83,3 +83,18 @@ rsdp:
   import:
     # 产品批量导入时允许下载图片的 host 白名单，逗号分隔；留空表示仅允许公网地址
     allowed-image-hosts: ${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:}
+  document-import:
+    pdf:
+      # PDF 导入文件大小上限（MB）
+      max-file-size-mb: 50
+      # PDF 最大页数
+      max-pages: 200
+      # 渲染 DPI
+      render-dpi: 150
+      # 页面区域检测每批最大页数
+      # 注意：AI 对长 JSON 输出有截断风险，MVP 阶段建议保持 <=5，确保每批返回结果完整
+      detect-batch-size: 5
+      # 裁剪输出图片格式
+      output-format: jpg
+      # 裁剪输出图片质量（1-100，仅对 jpg 有效）
+      output-quality: 90

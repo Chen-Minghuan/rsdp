@@ -88,8 +88,15 @@ function handleUserAction(key: string) {
               PDF 导入
             </n-button>
             <n-button
+              v-if="canImportProduct"
+              :type="route.path === '/products/excel-ai-import' ? 'primary' : 'default'"
+              @click="navigate('/products/excel-ai-import')"
+            >
+              Excel AI 导入
+            </n-button>
+            <n-button
               v-if="canReadProduct"
-              :type="route.path.startsWith('/products') && route.path !== '/products/document-import' ? 'primary' : 'default'"
+              :type="route.path.startsWith('/products') && !['/products/document-import', '/products/excel-ai-import'].includes(route.path) ? 'primary' : 'default'"
               @click="navigate('/products')"
             >
               产品库
