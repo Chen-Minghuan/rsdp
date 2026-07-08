@@ -104,6 +104,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)
 
                 // RSKU 写接口：必须放在产品写通配规则之前
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/rsku/batch").hasAuthority(Permissions.RSKU_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/rsku/**").hasAuthority(Permissions.RSKU_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAuthority(Permissions.RSKU_DELETE)

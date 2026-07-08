@@ -47,6 +47,44 @@ export interface RskuCreateRequest {
 }
 
 /**
+ * RSKU 批量创建请求。
+ */
+export interface RskuBatchCreateRequest {
+  variantId: string
+  factoryCodes: string[]
+  factorySku?: string
+  factoryPrice: number
+  materialCode?: string
+  materialDescription?: string
+  leadTimeDays?: number
+  moq?: number
+  warrantyYears?: number
+  shippingFrom?: string
+  diffNotes?: string
+  quoteConfidence?: string
+  productLevel?: string
+  autoExtendCapability?: boolean
+}
+
+/**
+ * RSKU 批量创建失败明细。
+ */
+export interface RskuBatchCreateFailure {
+  factoryCode: string
+  reason: string
+}
+
+/**
+ * RSKU 批量创建结果。
+ */
+export interface RskuBatchCreateResult {
+  successCount: number
+  failedCount: number
+  rskuIds: string[]
+  failures: RskuBatchCreateFailure[]
+}
+
+/**
  * RSKU 价格更新请求。
  */
 export interface RskuPriceUpdateRequest {

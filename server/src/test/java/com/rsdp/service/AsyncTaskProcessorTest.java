@@ -60,6 +60,9 @@ class AsyncTaskProcessorTest {
     @Mock
     private RspuMapper rspuMapper;
 
+    @Mock
+    private RspuVariantService rspuVariantService;
+
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -129,6 +132,7 @@ class AsyncTaskProcessorTest {
             org.mockito.ArgumentMatchers.anyInt(), embeddingCaptor.capture());
         assertThat(labelsCaptor.getValue().getStyle()).isEqualTo("中古风");
         assertThat(embeddingCaptor.getValue()).containsExactly(0.1f, 0.2f, 0.3f);
+        verify(rspuVariantService).initializeDefaultVariant(eq(rspuId), any(AiLabels.class));
 
         ArgumentCaptor<List<String>> idsCaptor = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<List<float[]>> embeddingsCaptor = ArgumentCaptor.forClass(List.class);
@@ -173,6 +177,9 @@ class AsyncTaskProcessorTest {
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
 
         // Then
+        verify(rspuVariantService).initializeDefaultVariant(eq(rspuId), any(AiLabels.class));
+
+        // Then
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());
         AsyncTask finalTask = taskCaptor.getValue();
@@ -200,6 +207,7 @@ class AsyncTaskProcessorTest {
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
 
         // Then
+        verify(rspuVariantService).initializeDefaultVariant(eq(rspuId), any(AiLabels.class));
         verify(chromaDbClient, times(0)).upsert(any(), any(), any(), any());
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());

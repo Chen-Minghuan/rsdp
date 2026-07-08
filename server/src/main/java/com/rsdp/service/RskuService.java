@@ -23,6 +23,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.rsdp.dto.request.RskuBatchCreateRequest;
+import com.rsdp.dto.response.RskuBatchCreateResponse;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -172,6 +175,50 @@ public class RskuService {
 
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
         return rsku.getRskuId();
+    }
+
+    /**
+     * 批量为 RSPU 创建多家工厂报价。
+     *
+     * <p>每个工厂单独处理，失败工厂记录原因，成功工厂继续。整批操作在同一个事务中。</p>
+     *
+     * @param rspuId  RSPU ID
+     * @param request 批量创建请求
+     * @return 批量创建结果
+     */
+    @Transactional
+    public RskuBatchCreateResponse batchCreateRskus(String rspuId, RskuBatchCreateRequest request) {
+        RskuBatchCreateResponse response = new RskuBatchCreateResponse();
+
+        for (String factoryCode : request.getFactoryCodes()) {
+            RskuCreateRequest item = new RskuCreateRequest();
+            item.setRspuId(rspuId);
+            item.setVariantId(request.getVariantId());
+            item.setFactoryCode(factoryCode);
+            item.setFactorySku(request.getFactorySku());
+            item.setFactoryPrice(request.getFactoryPrice());
+            item.setMaterialCode(request.getMaterialCode());
+            item.setMaterialDescription(request.getMaterialDescription());
+            item.setLeadTimeDays(request.getLeadTimeDays());
+            item.setMoq(request.getMoq());
+            item.setWarrantyYears(request.getWarrantyYears());
+            item.setShippingFrom(request.getShippingFrom());
+            item.setDiffNotes(request.getDiffNotes());
+            item.setQuoteConfidence(request.getQuoteConfidence());
+            item.setProductLevel(request.getProductLevel());
+            item.setAutoExtendCapability(request.getAutoExtendCapability());
+
+            try {
+                String rskuId = createRsku(item);
+                response.getRskuIds().add(rskuId);
+                response.setSuccessCount(response.getSuccessCount() + 1);
+            } catch (Exception e) {
+                response.setFailedCount(response.getFailedCount() + 1);
+                response.getFailures().add(new RskuBatchCreateResponse.FailureDetail(factoryCode, e.getMessage()));
+            }
+        }
+
+        return response;
     }
 
     private String resolveProductLevel(RskuCreateRequest request, RspuMaster rspu, RspuVariant variant) {
