@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
@@ -37,6 +38,7 @@ public class RspuVariantService {
     private final DictService dictService;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 为指定 RSPU 创建变体。
@@ -51,6 +53,7 @@ public class RspuVariantService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
+        dataScopeHelper.assertCanAccessRspu(rspuId);
 
         validateVariantCodes(request);
         if (StringUtils.hasText(request.getProductLevel())) {

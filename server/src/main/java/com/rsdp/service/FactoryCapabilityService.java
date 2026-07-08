@@ -1,6 +1,8 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.rsdp.exception.BusinessException;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.dto.FactoryCapabilitySource;
 import com.rsdp.dto.request.FactoryProductCapabilityCreateRequest;
 import com.rsdp.dto.request.FactoryProductCapabilityUpdateRequest;
@@ -28,6 +30,7 @@ public class FactoryCapabilityService {
 
     private final FactoryProductCapabilityMapper capabilityMapper;
     private final FactoryMasterMapper factoryMasterMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 查询指定工厂的能力档案列表。
@@ -67,6 +70,7 @@ public class FactoryCapabilityService {
     @Transactional
     public FactoryProductCapabilityResponse create(FactoryProductCapabilityCreateRequest request) {
         assertFactoryExists(request.getFactoryCode());
+        assertCanMaintainCapability(request.getFactoryCode());
         assertUnique(request.getFactoryCode(), request.getCategoryCode(),
             request.getStyleCode(), request.getMaterialCode(), null);
 
@@ -94,6 +98,7 @@ public class FactoryCapabilityService {
         if (cap == null) {
             throw new ResourceNotFoundException("能力档案不存在: " + id);
         }
+        assertCanMaintainCapability(cap.getFactoryCode());
         assertUnique(cap.getFactoryCode(), request.getCategoryCode(),
             request.getStyleCode(), request.getMaterialCode(), id);
 
@@ -116,6 +121,7 @@ public class FactoryCapabilityService {
         if (cap == null) {
             throw new ResourceNotFoundException("能力档案不存在: " + id);
         }
+        assertCanMaintainCapability(cap.getFactoryCode());
         capabilityMapper.deleteById(id);
     }
 
@@ -130,6 +136,7 @@ public class FactoryCapabilityService {
     @Transactional
     public List<FactoryProductCapabilityResponse> syncByFactory(String factoryCode) {
         assertFactoryExists(factoryCode);
+        assertCanMaintainCapability(factoryCode);
 
         List<FactoryCapabilitySource> sources = capabilityMapper.selectCapabilitySourcesByFactory(factoryCode);
         List<FactoryProductCapability> capabilities = sources.stream()
@@ -157,6 +164,12 @@ public class FactoryCapabilityService {
     private void assertFactoryExists(String factoryCode) {
         if (factoryMasterMapper.selectById(factoryCode) == null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
+        }
+    }
+
+    private void assertCanMaintainCapability(String factoryCode) {
+        if (!dataScopeHelper.canAccessFactory(factoryCode)) {
+            throw new BusinessException("无权维护该工厂能力档案: " + factoryCode);
         }
     }
 

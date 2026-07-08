@@ -11,12 +11,16 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryLevelCapabilityMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import static org.mockito.Mockito.lenient;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -44,8 +48,16 @@ class FactoryServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private FactoryService factoryService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+    }
 
     private List<CategoryDict> factoryLevelDicts() {
         CategoryDict s = new CategoryDict();

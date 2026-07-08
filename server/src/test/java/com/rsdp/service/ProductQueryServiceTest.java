@@ -24,6 +24,7 @@ import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SysUserMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.dto.response.RspuRelationResponse;
 import com.rsdp.event.RspuDeletedEvent;
 import org.junit.jupiter.api.AfterEach;
@@ -47,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -63,6 +65,8 @@ class ProductQueryServiceTest {
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
         lenient().when(userFactoryService.getFactoryCodesByUsername("admin")).thenReturn(List.of());
+        lenient().when(dataScopeHelper.canAccessRspu(any())).thenReturn(true);
+        lenient().when(dataScopeHelper.isOnlyAssociatedFactoryForRspu(any())).thenReturn(true);
     }
 
     @AfterEach
@@ -111,6 +115,9 @@ class ProductQueryServiceTest {
 
     @Mock
     private SysUserMapper sysUserMapper;
+
+    @Mock
+    private DataScopeHelper dataScopeHelper;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -617,14 +624,14 @@ class ProductQueryServiceTest {
     @Test
     void updateProduct_nonOwnerFactoryAdmin_shouldThrow() {
         authenticateFactoryAdmin("factory");
-        when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-OTHER");
         rspu.setPositioningLabel("MC");
 
         when(rspuMapper.selectById(eq("RSPU-OTHER"))).thenReturn(rspu);
-        when(rskuSupplyMapper.selectCount(any())).thenReturn(0L);
+        doThrow(new BusinessException("只能编辑自己工厂已报价的产品"))
+            .when(dataScopeHelper).assertCanAccessRspu("RSPU-OTHER");
 
         ProductUpdateRequest request = new ProductUpdateRequest();
         request.setColorPrimaryName("黑色");

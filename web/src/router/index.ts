@@ -122,6 +122,24 @@ const routes = [
     name: 'UserSettings',
     component: () => import('@/views/UserSettingsView.vue'),
     meta: { requiresAuth: true, roles: [ROLES.FACTORY_ADMIN] }
+  },
+  {
+    path: '/403',
+    name: 'Forbidden',
+    component: () => import('@/views/ForbiddenView.vue'),
+    meta: { public: true }
+  },
+  {
+    path: '/404',
+    name: 'NotFound',
+    component: () => import('@/views/NotFoundView.vue'),
+    meta: { public: true }
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'CatchAll',
+    component: () => import('@/views/NotFoundView.vue'),
+    meta: { public: true }
   }
 ]
 
@@ -156,14 +174,22 @@ router.beforeEach(async (to, _from, next) => {
 
   if (requiresRoleCheck) {
     if (!userStore.hasAnyRole(to.meta.roles as string[])) {
-      next('/')
+      next('/403')
       return
     }
   }
 
   if (requiresPermissionCheck) {
     if (!userStore.hasAnyPermission(to.meta.permissions as string[])) {
-      next('/')
+      next('/403')
+      return
+    }
+  }
+
+  // 编辑已有方案时额外校验 scheme:update 权限
+  if (to.path === '/quotes/build' && to.query.editSchemeId) {
+    if (!userStore.hasPermission(PERMISSIONS.SCHEME_UPDATE)) {
+      next('/403')
       return
     }
   }

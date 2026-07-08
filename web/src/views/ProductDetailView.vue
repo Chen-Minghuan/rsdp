@@ -31,7 +31,7 @@ import { listFactories } from '@/api/factory'
 import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct, RecognitionHistoryItem } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuCreateRequest } from '@/types/rsku'
@@ -52,8 +52,39 @@ const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PROD
 const canCreateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_CREATE))
 const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
 const canCreateDict = computed(() => userStore.hasPermission(PERMISSIONS.DICT_CREATE))
+const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+
 // 平台运营人员（ADMIN/EDITOR）即使开启全库视图也不应只读
-const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true && !userStore.isPlatformStaff)
+const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true && !isPlatformStaff.value)
+
+// 工厂管理员仅当本厂已对该 RSPU 报价时才可维护
+const isAssociated = computed(() => {
+  if (isPlatformStaff.value) return true
+  const codes = factoryCodes.value
+  if (codes.length === 0) return false
+  return rskuList.value.some(r => codes.includes(r.factoryCode))
+})
+
+// 综合数据范围后的可维护判定（用于 RSPU 级写操作）
+const canManageProduct = computed(() =>
+  !isReadOnly.value && isAssociated.value
+)
+
+function canManageRsku(row: Rsku): boolean {
+  if (isReadOnly.value) return false
+  if (isPlatformStaff.value) return true
+  return factoryCodes.value.includes(row.factoryCode)
+}
+
+// 工厂管理员新增报价时，只能选择自己关联的工厂
+const selectableFactories = computed(() => {
+  if (isFactoryAdmin.value && factoryCodes.value.length > 0) {
+    return factories.value.filter(f => factoryCodes.value.includes(f.factoryCode))
+  }
+  return factories.value
+})
 
 const loading = ref(false)
 const reviewing = ref(false)
@@ -196,7 +227,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
     key: 'actions',
     width: 100,
     render(row: Rsku) {
-      return canDeleteRsku.value && !isReadOnly.value
+      return canDeleteRsku.value && canManageRsku(row)
         ? h(
             NButton,
             { size: 'small', type: 'error', onClick: (e: MouseEvent) => { e.stopPropagation(); handleDeleteRsku(row.rskuId) } },
@@ -229,7 +260,7 @@ const variantColumns = [
 ]
 
 function createRelationColumns(showDelete: boolean) {
-  const effectiveShowDelete = showDelete && canUpdateProduct.value && !isReadOnly.value
+  const effectiveShowDelete = showDelete && canUpdateProduct.value && canManageProduct.value
   const columns: DataTableColumns<RelatedProduct> = [
     {
       title: '图片',
@@ -583,8 +614,9 @@ async function handleUpdateProduct() {
 }
 
 function openRskuModal() {
+  const factories = selectableFactories.value
   rskuForm.value = {
-    factoryCode: '',
+    factoryCode: factories.length === 1 ? factories[0].factoryCode : '',
     variantId: '',
     factorySku: '',
     factoryPrice: 0,
@@ -820,7 +852,7 @@ onBeforeRouteUpdate((to, from) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回列表</n-button>
-          <n-button v-if="canDeleteProduct && !isReadOnly" size="small" type="error" @click="handleDeleteProduct">
+          <n-button v-if="canDeleteProduct && canManageProduct" size="small" type="error" @click="handleDeleteProduct">
             删除产品
           </n-button>
         </n-space>
@@ -991,7 +1023,7 @@ onBeforeRouteUpdate((to, from) => {
           <n-card title="官方搭配" size="small">
             <n-space vertical>
               <n-space>
-                <n-button v-if="canUpdateProduct && !isReadOnly" type="primary" @click="openRelationModal">添加搭配</n-button>
+                <n-button v-if="canUpdateProduct && canManageProduct" type="primary" @click="openRelationModal">添加搭配</n-button>
               </n-space>
               <n-data-table
                 :columns="createRelationColumns(true)"
@@ -1033,10 +1065,10 @@ onBeforeRouteUpdate((to, from) => {
             <n-alert v-if="isReadOnly" type="info" :show-icon="true" style="margin-bottom: 16px;">
               当前为全库只读视图，此产品仅支持查看详情，不能进行编辑、复核、删除等操作。
             </n-alert>
-            <n-card v-if="!isReadOnly && (canReviewProduct || canUpdateProduct)" title="管理操作" size="small">
+            <n-card v-if="canManageProduct && (canReviewProduct || canUpdateProduct)" title="管理操作" size="small">
               <n-space>
                 <n-button
-                  v-if="canReviewProduct"
+                  v-if="canReviewProduct && canManageProduct"
                   type="success"
                   :loading="reviewing"
                   :disabled="detail.rspu.reviewStatus === '已确认'"
@@ -1045,7 +1077,7 @@ onBeforeRouteUpdate((to, from) => {
                   确认通过
                 </n-button>
                 <n-button
-                  v-if="canReviewProduct"
+                  v-if="canReviewProduct && canManageProduct"
                   type="error"
                   :loading="reviewing"
                   :disabled="detail.rspu.reviewStatus === '存疑'"
@@ -1053,7 +1085,7 @@ onBeforeRouteUpdate((to, from) => {
                 >
                   标记存疑
                 </n-button>
-                <n-button v-if="canUpdateProduct" @click="openEditModal">
+                <n-button v-if="canUpdateProduct && canManageProduct" @click="openEditModal">
                   编辑元数据
                 </n-button>
               </n-space>
@@ -1062,7 +1094,7 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="变体管理" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button v-if="canUpdateProduct && !isReadOnly" type="primary" @click="openVariantModal">新增变体</n-button>
+                  <n-button v-if="canUpdateProduct && canManageProduct" type="primary" @click="openVariantModal">新增变体</n-button>
                 </n-space>
                 <n-data-table
                   :columns="variantColumns"
@@ -1083,7 +1115,7 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="工厂报价（RSKU）" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button v-if="canCreateRsku && !isReadOnly" type="primary" @click="openRskuModal">新增报价</n-button>
+                  <n-button v-if="canCreateRsku && canManageProduct" type="primary" @click="openRskuModal">新增报价</n-button>
                 </n-space>
                 <n-data-table
                   :columns="rskuColumns"
@@ -1117,7 +1149,7 @@ onBeforeRouteUpdate((to, from) => {
         <n-form-item label="工厂" required>
           <n-select
             v-model:value="rskuForm.factoryCode"
-            :options="factories.map(f => ({ label: `${f.factoryName} (${f.factoryCode})`, value: f.factoryCode }))"
+            :options="selectableFactories.map(f => ({ label: `${f.factoryName} (${f.factoryCode})`, value: f.factoryCode }))"
             placeholder="选择工厂"
           />
         </n-form-item>

@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -41,6 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +72,7 @@ public class ProductQueryService {
     private final FactoryProductCapabilityMapper capabilityMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
     private final SysUserMapper sysUserMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 分页查询产品列表。
@@ -107,12 +110,12 @@ public class ProductQueryService {
         wrapper.orderByDesc("created_at");
         Page<RspuMaster> page = rspuMapper.selectPage(pageParam, wrapper);
 
-        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(
-            page.getRecords().stream().map(RspuMaster::getRspuId).toList()
-        );
+        List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
+        Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
 
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap))
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
@@ -211,27 +214,6 @@ public class ProductQueryService {
             return null;
         }
         return sysUserMapper.selectByUsername(username);
-    }
-
-    private void assertProductOwnership(String rspuId) {
-        if (SecurityOperatorContext.isPlatformStaff()) {
-            return;
-        }
-        List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
-            SecurityOperatorContext.currentUsername()
-        );
-        if (factoryCodes.isEmpty()) {
-            throw new BusinessException("无权编辑该产品: " + rspuId);
-        }
-        Long count = rskuSupplyMapper.selectCount(
-            new QueryWrapper<RskuSupply>()
-                .eq("rspu_id", rspuId)
-                .in("factory_code", factoryCodes)
-                .isNull("deleted_at")
-        );
-        if (count == null || count == 0) {
-            throw new BusinessException("只能编辑自己工厂已报价的产品: " + rspuId);
-        }
     }
 
     /**
@@ -335,12 +317,12 @@ public class ProductQueryService {
         long to = Math.min(from + size, total);
         List<RspuMaster> pageRecords = records.subList((int) from, (int) to);
 
-        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(
-            pageRecords.stream().map(RspuMaster::getRspuId).toList()
-        );
+        List<String> pageRspuIds = pageRecords.stream().map(RspuMaster::getRspuId).toList();
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(pageRspuIds);
+        Map<String, List<String>> factoryCodeMap = batchFactoryCodes(pageRspuIds);
 
         List<ProductSummaryResponse> rows = pageRecords.stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap))
             .collect(Collectors.toList());
 
         return PageResult.of(total, page, size, rows);
@@ -446,6 +428,31 @@ public class ProductQueryService {
     }
 
     /**
+     * 批量查询 RSPU 关联的工厂编码列表（用于列表项展示与前端删除权限判断）。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return RSPU ID -> 工厂编码列表（去重）
+     */
+    private Map<String, List<String>> batchFactoryCodes(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>()
+                .in("rspu_id", rspuIds)
+                .isNull("deleted_at")
+        );
+        return rskus.stream()
+            .collect(Collectors.groupingBy(
+                RskuSupply::getRspuId,
+                Collectors.mapping(
+                    RskuSupply::getFactoryCode,
+                    Collectors.collectingAndThen(Collectors.toSet(), ArrayList::new)
+                )
+            ));
+    }
+
+    /**
      * 查询产品详情。
      *
      * @param rspuId RSPU ID
@@ -491,6 +498,7 @@ public class ProductQueryService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
+        dataScopeHelper.assertCanAccessRspu(rspuId);
 
         RspuMaster oldSnapshot = snapshot(rspu);
         rspu.setReviewStatus(reviewStatus);
@@ -514,6 +522,10 @@ public class ProductQueryService {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+        dataScopeHelper.assertCanAccessRspu(rspuId);
+        if (!dataScopeHelper.isOnlyAssociatedFactoryForRspu(rspuId)) {
+            throw new BusinessException("其他工厂已关联该产品，无法删除: " + rspuId);
         }
 
         RspuMaster oldSnapshot = snapshot(rspu);
@@ -553,7 +565,7 @@ public class ProductQueryService {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 
-        assertProductOwnership(rspuId);
+        dataScopeHelper.assertCanAccessRspu(rspuId);
 
         RspuMaster oldSnapshot = snapshot(rspu);
         String oldPositioningLabel = rspu.getPositioningLabel();
@@ -762,7 +774,9 @@ public class ProductQueryService {
             .orElse(styleCode);
     }
 
-    private ProductSummaryResponse toSummary(RspuMaster rspu, Map<String, String> primaryImageUrlMap) {
+    private ProductSummaryResponse toSummary(RspuMaster rspu,
+                                             Map<String, String> primaryImageUrlMap,
+                                             Map<String, List<String>> factoryCodeMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
         summary.setCategoryCode(rspu.getCategoryCode());
@@ -776,6 +790,7 @@ public class ProductQueryService {
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());
         summary.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));
+        summary.setFactoryCodes(factoryCodeMap.getOrDefault(rspu.getRspuId(), List.of()));
         return summary;
     }
 

@@ -10,6 +10,7 @@ import com.rsdp.entity.CategoryDict;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -46,6 +48,9 @@ class RspuVariantServiceTest {
 
     @Mock
     private AuditLogService auditLogService;
+
+    @Mock
+    private DataScopeHelper dataScopeHelper;
 
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -81,6 +86,7 @@ class RspuVariantServiceTest {
     @BeforeEach
     void setUp() {
         rspuId = "RSPU-TEST01";
+        lenient().when(dataScopeHelper.canAccessRspu(any())).thenReturn(true);
     }
 
     @Test

@@ -33,6 +33,13 @@ const canUpdateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_UP
 const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
 const rskuId = computed(() => route.params.rskuId as string)
 
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+// 工厂管理员只能维护本厂报价
+const isMyRsku = computed(() =>
+  isPlatformStaff.value || (rsku.value !== null && factoryCodes.value.includes(rsku.value.factoryCode))
+)
+
 const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
@@ -168,7 +175,7 @@ onBeforeRouteUpdate((to) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push(`/products/${rspuId}`)">返回产品详情</n-button>
-          <n-button v-if="canDeleteRsku" size="small" type="error" @click="handleDeleteRsku">
+          <n-button v-if="canDeleteRsku && isMyRsku" size="small" type="error" @click="handleDeleteRsku">
             删除报价
           </n-button>
         </n-space>
@@ -246,7 +253,7 @@ onBeforeRouteUpdate((to) => {
           <n-card title="价格历史" size="small">
             <n-space vertical>
               <n-space>
-                <n-button v-if="canUpdateRsku" type="primary" @click="openPriceModal">更新价格</n-button>
+                <n-button v-if="canUpdateRsku && isMyRsku" type="primary" @click="openPriceModal">更新价格</n-button>
               </n-space>
               <n-data-table
                 :columns="historyColumns"

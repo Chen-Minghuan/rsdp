@@ -54,6 +54,7 @@ public class SecurityConfig {
                 // 用户管理（管理员）
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/users").hasAuthority(Permissions.USER_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/admin/users/*/reset-password").hasAuthority(Permissions.USER_RESET_PASSWORD)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_UPDATE)
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 

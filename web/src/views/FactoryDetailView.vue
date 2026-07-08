@@ -47,6 +47,11 @@ const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACT
 const canReadCapability = computed(() => userStore.hasPermission(PERMISSIONS.CAPABILITY_READ))
 const canCreateCapability = computed(() => userStore.hasPermission(PERMISSIONS.CAPABILITY_CREATE))
 
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+// 工厂管理员只能维护自己关联的工厂资料
+const isMyFactory = computed(() => isPlatformStaff.value || factoryCodes.value.includes(factoryCode.value))
+
 const loading = ref(false)
 const rskuLoading = ref(false)
 const capabilityLoading = ref(false)
@@ -465,7 +470,7 @@ onBeforeRouteUpdate((to) => {
         <n-spin v-if="loading" size="large" />
 
         <template v-if="factory && !loading">
-          <n-space v-if="canUpdateFactory">
+          <n-space v-if="canUpdateFactory && isMyFactory">
             <n-button type="primary" @click="openEditModal">编辑工厂资料</n-button>
             <n-button size="small" @click="openLevelModal">变更主等级</n-button>
             <n-button size="small" @click="openCapableModal">编辑兼做等级</n-button>
@@ -637,7 +642,7 @@ onBeforeRouteUpdate((to) => {
             <n-space vertical>
               <n-space align="center">
                 <n-button
-                  v-if="canCreateCapability"
+                  v-if="canCreateCapability && isMyFactory"
                   type="primary"
                   :loading="syncingCapabilities"
                   @click="handleSyncCapabilities"

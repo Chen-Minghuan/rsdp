@@ -69,6 +69,7 @@ export interface ProductSummary {
   aestheticsConfidence: string
   productLevel?: string
   primaryImageUrl: string
+  factoryCodes?: string[]
   createdAt: string
   updatedAt: string
 }

@@ -15,6 +15,7 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -61,6 +62,11 @@ class RspuRelationServiceTest {
 
     @InjectMocks
     private RspuRelationService relationService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(dataScopeHelper.canAccessRspu(any())).thenReturn(true);
+    }
 
     @Test
     void listByAnchor_shouldReturnActiveRelations() {

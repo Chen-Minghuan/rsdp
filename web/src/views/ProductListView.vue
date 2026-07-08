@@ -92,6 +92,13 @@ async function toggleFullCatalog(value: boolean) {
 
 const rowKey = (row: ProductSummary) => row.rspuId
 
+function canDeleteRow(row: ProductSummary): boolean {
+  if (!canDeleteProduct.value || isReadOnlyFullCatalog.value) return false
+  if (isPlatformStaff.value) return true
+  const codes = row.factoryCodes || []
+  return factoryCodes.value.some((c) => codes.includes(c))
+}
+
 const columns: DataTableColumns<ProductSummary> = [
   {
     type: 'selection'
@@ -178,7 +185,7 @@ const columns: DataTableColumns<ProductSummary> = [
               },
               { default: () => '详情' }
             ),
-            canDeleteProduct.value && !isReadOnlyFullCatalog.value
+            canDeleteRow(row)
               ? h(
                   NButton,
                   {

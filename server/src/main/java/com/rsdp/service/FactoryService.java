@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.FactoryCreateRequest;
@@ -39,6 +40,7 @@ public class FactoryService {
     private final FactoryLevelCapabilityMapper capabilityMapper;
     private final DictService dictService;
     private final AuditLogService auditLogService;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 查询所有有效工厂。
@@ -142,6 +144,7 @@ public class FactoryService {
         if (factory == null || factory.getDeletedAt() != null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
+        assertCanUpdateFactory(factoryCode);
         if (newLevel == null || newLevel.isBlank()) {
             throw new BusinessException("工厂等级不能为空");
         }
@@ -169,6 +172,7 @@ public class FactoryService {
         if (factory == null || factory.getDeletedAt() != null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
+        assertCanUpdateFactory(factoryCode);
 
         validateFactoryExtendedFields(request);
 
@@ -256,6 +260,12 @@ public class FactoryService {
         auditLogService.logUpdate("factory_master", factoryCode, oldSnapshot, factory, SecurityOperatorContext.currentUsername());
     }
 
+    private void assertCanUpdateFactory(String factoryCode) {
+        if (!dataScopeHelper.canAccessFactory(factoryCode)) {
+            throw new BusinessException("无权维护该工厂资料: " + factoryCode);
+        }
+    }
+
     private void validateFactoryExtendedFields(FactoryUpdateRequest request) {
         if (request.getFactoryArea() != null && request.getFactoryArea().compareTo(BigDecimal.ZERO) < 0) {
             throw new BusinessException("工厂面积不能为负数");
@@ -286,6 +296,7 @@ public class FactoryService {
         if (factory == null || factory.getDeletedAt() != null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
+        assertCanUpdateFactory(factoryCode);
 
         String primaryLevel = factory.getFactoryLevel();
         Set<String> capableLevels = normalizeCapableLevels(request.getCapableLevels(), primaryLevel);
@@ -516,6 +527,7 @@ public class FactoryService {
         if (factory == null || factory.getDeletedAt() != null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
+        assertCanUpdateFactory(factoryCode);
         validateFactoryLevel(level);
 
         FactoryLevelCapability existing = capabilityMapper.selectOne(
