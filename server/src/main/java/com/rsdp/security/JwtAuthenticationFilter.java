@@ -2,6 +2,7 @@ package com.rsdp.security;
 
 import com.rsdp.entity.SysUser;
 import com.rsdp.mapper.SysUserMapper;
+import com.rsdp.security.datascope.DataScopeContext;
 import com.rsdp.util.JwtUtil;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
@@ -35,6 +36,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
     private final SysUserMapper sysUserMapper;
+    private final DataScopeContext dataScopeContext;
 
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
@@ -46,45 +48,50 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        String token = resolveToken(request);
-        if (token != null) {
-            Claims claims = jwtUtil.parseToken(token);
-            if (claims != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                String username = claims.getSubject();
+        try {
+            String token = resolveToken(request);
+            if (token != null) {
+                Claims claims = jwtUtil.parseToken(token);
+                if (claims != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                    String username = claims.getSubject();
 
-                // 校验用户是否存在且未被禁用
-                SysUser user = sysUserMapper.selectByUsername(username);
-                if (user == null || !"active".equals(user.getStatus())) {
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    return;
+                    // 校验用户是否存在且未被禁用
+                    SysUser user = sysUserMapper.selectByUsername(username);
+                    if (user == null || !"active".equals(user.getStatus())) {
+                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                        return;
+                    }
+
+                    // 校验 token 版本号，防止角色/权限变更后旧 token 继续生效
+                    Integer tokenVersion = jwtUtil.getTokenVersion(claims);
+                    Integer currentVersion = user.getTokenVersion();
+                    if (tokenVersion == null || !tokenVersion.equals(currentVersion == null ? 0 : currentVersion)) {
+                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                        return;
+                    }
+
+                    String role = jwtUtil.getRole(claims);
+                    List<String> permissions = jwtUtil.getPermissions(claims);
+
+                    List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+                    if (role != null) {
+                        authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                    }
+                    permissions.forEach(perm -> authorities.add(new SimpleGrantedAuthority(perm)));
+
+                    SecurityUser securityUser = new SecurityUser(
+                        user.getUserId(), username, user.getPasswordHash(), authorities);
+                    UsernamePasswordAuthenticationToken authentication =
+                        new UsernamePasswordAuthenticationToken(securityUser, null, authorities);
+                    authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
                 }
-
-                // 校验 token 版本号，防止角色/权限变更后旧 token 继续生效
-                Integer tokenVersion = jwtUtil.getTokenVersion(claims);
-                Integer currentVersion = user.getTokenVersion();
-                if (tokenVersion == null || !tokenVersion.equals(currentVersion == null ? 0 : currentVersion)) {
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    return;
-                }
-
-                String role = jwtUtil.getRole(claims);
-                List<String> permissions = jwtUtil.getPermissions(claims);
-
-                List<SimpleGrantedAuthority> authorities = new ArrayList<>();
-                if (role != null) {
-                    authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
-                }
-                permissions.forEach(perm -> authorities.add(new SimpleGrantedAuthority(perm)));
-
-                SecurityUser securityUser = new SecurityUser(
-                    user.getUserId(), username, user.getPasswordHash(), authorities);
-                UsernamePasswordAuthenticationToken authentication =
-                    new UsernamePasswordAuthenticationToken(securityUser, null, authorities);
-                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(authentication);
             }
+            filterChain.doFilter(request, response);
+        } finally {
+            // 清理数据范围缓存，避免线程复用导致旧请求数据泄漏
+            dataScopeContext.clearCache();
         }
-        filterChain.doFilter(request, response);
     }
 
     private String resolveToken(HttpServletRequest request) {

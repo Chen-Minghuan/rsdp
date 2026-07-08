@@ -29,6 +29,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -107,7 +108,7 @@ class RskuServiceTest {
 
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
         when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of());
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S", "A")));
 
         List<RskuResponse> result = rskuService.listByRspu("RSPU-TEST01");
 
@@ -125,6 +126,31 @@ class RskuServiceTest {
         assertThat(result).isEmpty();
         verifyNoInteractions(factoryMasterMapper);
         verifyNoInteractions(factoryService);
+    }
+
+    @Test
+    void listByRspu_shouldBatchQueryCapabilitiesForMultipleFactories() {
+        RskuSupply rsku1 = new RskuSupply();
+        rsku1.setRskuId("RSKU-TEST01");
+        rsku1.setRspuId("RSPU-TEST01");
+        rsku1.setFactoryCode("F001");
+
+        RskuSupply rsku2 = new RskuSupply();
+        rsku2.setRskuId("RSKU-TEST02");
+        rsku2.setRspuId("RSPU-TEST01");
+        rsku2.setFactoryCode("F002");
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku1, rsku2));
+        when(factoryMasterMapper.selectBatchIds(List.of("F001", "F002"))).thenReturn(List.of());
+        when(factoryService.batchListCapableLevels(List.of("F001", "F002")))
+            .thenReturn(Map.of("F001", List.of("S"), "F002", List.of("A", "B")));
+
+        List<RskuResponse> result = rskuService.listByRspu("RSPU-TEST01");
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getFactoryCapableLevels()).containsExactly("S");
+        assertThat(result.get(1).getFactoryCapableLevels()).containsExactly("A", "B");
+        verify(factoryService, times(1)).batchListCapableLevels(any());
     }
 
     @Test

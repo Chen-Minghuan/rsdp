@@ -1,31 +1,17 @@
 package com.rsdp.dto.request;
 
-import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * 工厂创建请求。
+ * 工厂更新请求（部分字段更新）。
  */
 @Data
-public class FactoryCreateRequest {
+public class FactoryUpdateRequest {
 
-    @NotBlank(message = "工厂代码不能为空")
-    private String factoryCode;
-
-    @NotBlank(message = "工厂名称不能为空")
     private String factoryName;
-
-    @NotBlank(message = "工厂等级不能为空")
-    private String factoryLevel;
-
-    /**
-     * 兼做等级列表，不包含主等级时会自动把主等级加入。
-     */
-    private List<String> capableLevels;
-
     private String homeCommercialTag;
     private String region;
     private String address;

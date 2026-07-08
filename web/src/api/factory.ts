@@ -4,7 +4,8 @@ import type {
   FactoryCreateRequest,
   FactoryLevelCapabilityUpdateRequest,
   FactoryLevelUpdateRequest,
-  FactoryProductCapability
+  FactoryProductCapability,
+  FactoryUpdateRequest
 } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 
@@ -29,6 +30,13 @@ export async function getFactory(factoryCode: string): Promise<Factory> {
  */
 export async function createFactory(request: FactoryCreateRequest): Promise<void> {
   await apiClient.post<ApiResult<void>>('/v1/factories', request)
+}
+
+/**
+ * 更新工厂基本信息。
+ */
+export async function updateFactory(factoryCode: string, request: FactoryUpdateRequest): Promise<void> {
+  await apiClient.put<ApiResult<void>>(`/v1/factories/${factoryCode}`, request)
 }
 
 /**

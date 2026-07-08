@@ -36,12 +36,24 @@ const submitting = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const levelOptions = ref<DictItem[]>([])
+const searchKeyword = ref('')
 
 const page = ref(1)
 const pageSize = ref(10)
+
+const filteredFactories = computed(() => {
+  const keyword = searchKeyword.value.trim().toLowerCase()
+  if (!keyword) return factories.value
+  return factories.value.filter(f =>
+    (f.factoryName?.toLowerCase().includes(keyword)) ||
+    (f.factoryCode?.toLowerCase().includes(keyword)) ||
+    (f.region?.toLowerCase().includes(keyword))
+  )
+})
+
 const pagedFactories = computed(() => {
   const start = (page.value - 1) * pageSize.value
-  return factories.value.slice(start, start + pageSize.value)
+  return filteredFactories.value.slice(start, start + pageSize.value)
 })
 
 const form = ref<FactoryCreateRequest>({
@@ -232,6 +244,15 @@ onMounted(() => {
           </n-space>
         </n-card>
 
+        <n-space>
+          <n-input
+            v-model:value="searchKeyword"
+            placeholder="搜索工厂名称/代码/地区"
+            clearable
+            style="width: 280px;"
+          />
+        </n-space>
+
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
           {{ errorMessage }}
         </n-alert>
@@ -251,10 +272,10 @@ onMounted(() => {
         />
 
         <n-pagination
-          v-if="factories.length > pageSize"
+          v-if="filteredFactories.length > pageSize"
           v-model:page="page"
           v-model:page-size="pageSize"
-          :item-count="factories.length"
+          :item-count="filteredFactories.length"
           :page-sizes="[10, 20, 50]"
           show-size-picker
         />

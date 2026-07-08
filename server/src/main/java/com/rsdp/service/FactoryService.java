@@ -5,6 +5,7 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.request.FactoryCreateRequest;
 import com.rsdp.dto.request.FactoryLevelCapabilityUpdateRequest;
+import com.rsdp.dto.request.FactoryUpdateRequest;
 import com.rsdp.dto.response.FactoryResponse;
 import com.rsdp.entity.FactoryLevelCapability;
 import com.rsdp.entity.FactoryMaster;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -102,6 +104,22 @@ public class FactoryService {
         factory.setNotes(request.getNotes());
         factory.setCertification(request.getCertification());
         factory.setEngineeringCases(request.getEngineeringCases());
+        factory.setFactoryArea(request.getFactoryArea());
+        factory.setEmployeeCount(request.getEmployeeCount());
+        factory.setMonthlyCapacity(request.getMonthlyCapacity());
+        factory.setFoundedYear(request.getFoundedYear());
+        factory.setEquipmentList(request.getEquipmentList());
+        factory.setFrameWood(request.getFrameWood());
+        factory.setSpongeSupplier(request.getSpongeSupplier());
+        factory.setLeatherFabricSource(request.getLeatherFabricSource());
+        factory.setHardwareSupplier(request.getHardwareSupplier());
+        factory.setQcItems(request.getQcItems());
+        factory.setQcStaffCount(request.getQcStaffCount());
+        factory.setShippingFrom(request.getShippingFrom());
+        factory.setLogisticsMethods(request.getLogisticsMethods());
+        factory.setDefaultPackaging(request.getDefaultPackaging());
+        factory.setAuditorSignature(request.getAuditorSignature());
+        factory.setFactoryImages(request.getFactoryImages());
         factory.setStatus("active");
         factory.setCreatedAt(LocalDateTime.now());
         factory.setUpdatedAt(LocalDateTime.now());
@@ -137,6 +155,123 @@ public class FactoryService {
         syncPrimaryCapability(factoryCode, newLevel);
 
         auditLogService.logUpdate("factory_master", factoryCode, oldSnapshot, factory, SecurityOperatorContext.currentUsername());
+    }
+
+    /**
+     * 更新工厂基本信息（部分字段更新）。
+     *
+     * @param factoryCode 工厂代码
+     * @param request     更新请求
+     */
+    @Transactional
+    public void updateFactory(String factoryCode, FactoryUpdateRequest request) {
+        FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
+        if (factory == null || factory.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
+        }
+
+        validateFactoryExtendedFields(request);
+
+        FactoryMaster oldSnapshot = snapshot(factory);
+
+        if (request.getFactoryName() != null) {
+            factory.setFactoryName(request.getFactoryName());
+        }
+        if (request.getHomeCommercialTag() != null) {
+            factory.setHomeCommercialTag(request.getHomeCommercialTag());
+        }
+        if (request.getRegion() != null) {
+            factory.setRegion(request.getRegion());
+        }
+        if (request.getAddress() != null) {
+            factory.setAddress(request.getAddress());
+        }
+        if (request.getContactPerson() != null) {
+            factory.setContactPerson(request.getContactPerson());
+        }
+        if (request.getContactPhone() != null) {
+            factory.setContactPhone(request.getContactPhone());
+        }
+        if (request.getNotes() != null) {
+            factory.setNotes(request.getNotes());
+        }
+        if (request.getCertification() != null) {
+            factory.setCertification(request.getCertification());
+        }
+        if (request.getEngineeringCases() != null) {
+            factory.setEngineeringCases(request.getEngineeringCases());
+        }
+        if (request.getFactoryArea() != null) {
+            factory.setFactoryArea(request.getFactoryArea());
+        }
+        if (request.getEmployeeCount() != null) {
+            factory.setEmployeeCount(request.getEmployeeCount());
+        }
+        if (request.getMonthlyCapacity() != null) {
+            factory.setMonthlyCapacity(request.getMonthlyCapacity());
+        }
+        if (request.getFoundedYear() != null) {
+            factory.setFoundedYear(request.getFoundedYear());
+        }
+        if (request.getEquipmentList() != null) {
+            factory.setEquipmentList(request.getEquipmentList());
+        }
+        if (request.getFrameWood() != null) {
+            factory.setFrameWood(request.getFrameWood());
+        }
+        if (request.getSpongeSupplier() != null) {
+            factory.setSpongeSupplier(request.getSpongeSupplier());
+        }
+        if (request.getLeatherFabricSource() != null) {
+            factory.setLeatherFabricSource(request.getLeatherFabricSource());
+        }
+        if (request.getHardwareSupplier() != null) {
+            factory.setHardwareSupplier(request.getHardwareSupplier());
+        }
+        if (request.getQcItems() != null) {
+            factory.setQcItems(request.getQcItems());
+        }
+        if (request.getQcStaffCount() != null) {
+            factory.setQcStaffCount(request.getQcStaffCount());
+        }
+        if (request.getShippingFrom() != null) {
+            factory.setShippingFrom(request.getShippingFrom());
+        }
+        if (request.getLogisticsMethods() != null) {
+            factory.setLogisticsMethods(request.getLogisticsMethods());
+        }
+        if (request.getDefaultPackaging() != null) {
+            factory.setDefaultPackaging(request.getDefaultPackaging());
+        }
+        if (request.getAuditorSignature() != null) {
+            factory.setAuditorSignature(request.getAuditorSignature());
+        }
+        if (request.getFactoryImages() != null) {
+            factory.setFactoryImages(request.getFactoryImages());
+        }
+
+        factory.setUpdatedAt(LocalDateTime.now());
+        factoryMasterMapper.updateById(factory);
+
+        auditLogService.logUpdate("factory_master", factoryCode, oldSnapshot, factory, SecurityOperatorContext.currentUsername());
+    }
+
+    private void validateFactoryExtendedFields(FactoryUpdateRequest request) {
+        if (request.getFactoryArea() != null && request.getFactoryArea().compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException("工厂面积不能为负数");
+        }
+        if (request.getEmployeeCount() != null && request.getEmployeeCount() < 0) {
+            throw new BusinessException("员工人数不能为负数");
+        }
+        if (request.getMonthlyCapacity() != null && request.getMonthlyCapacity() < 0) {
+            throw new BusinessException("月产能不能为负数");
+        }
+        if (request.getFoundedYear() != null && (request.getFoundedYear() < 1800 || request.getFoundedYear() > 2100)) {
+            throw new BusinessException("成立年份不合法");
+        }
+        if (request.getQcStaffCount() != null && request.getQcStaffCount() < 0) {
+            throw new BusinessException("QC 人数不能为负数");
+        }
     }
 
     /**
@@ -240,6 +375,24 @@ public class FactoryService {
         copy.setContactPerson(source.getContactPerson());
         copy.setContactPhone(source.getContactPhone());
         copy.setNotes(source.getNotes());
+        copy.setCertification(source.getCertification());
+        copy.setEngineeringCases(source.getEngineeringCases());
+        copy.setFactoryArea(source.getFactoryArea());
+        copy.setEmployeeCount(source.getEmployeeCount());
+        copy.setMonthlyCapacity(source.getMonthlyCapacity());
+        copy.setFoundedYear(source.getFoundedYear());
+        copy.setEquipmentList(source.getEquipmentList());
+        copy.setFrameWood(source.getFrameWood());
+        copy.setSpongeSupplier(source.getSpongeSupplier());
+        copy.setLeatherFabricSource(source.getLeatherFabricSource());
+        copy.setHardwareSupplier(source.getHardwareSupplier());
+        copy.setQcItems(source.getQcItems());
+        copy.setQcStaffCount(source.getQcStaffCount());
+        copy.setShippingFrom(source.getShippingFrom());
+        copy.setLogisticsMethods(source.getLogisticsMethods());
+        copy.setDefaultPackaging(source.getDefaultPackaging());
+        copy.setAuditorSignature(source.getAuditorSignature());
+        copy.setFactoryImages(source.getFactoryImages());
         copy.setStatus(source.getStatus());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
@@ -262,9 +415,27 @@ public class FactoryService {
         response.setAddress(factory.getAddress());
         response.setContactPerson(factory.getContactPerson());
         response.setContactPhone(factory.getContactPhone());
+        response.setFirstAuditDate(factory.getFirstAuditDate());
+        response.setNextVisitDate(factory.getNextVisitDate());
         response.setNotes(factory.getNotes());
         response.setCertification(factory.getCertification());
         response.setEngineeringCases(factory.getEngineeringCases());
+        response.setFactoryArea(factory.getFactoryArea());
+        response.setEmployeeCount(factory.getEmployeeCount());
+        response.setMonthlyCapacity(factory.getMonthlyCapacity());
+        response.setFoundedYear(factory.getFoundedYear());
+        response.setEquipmentList(factory.getEquipmentList());
+        response.setFrameWood(factory.getFrameWood());
+        response.setSpongeSupplier(factory.getSpongeSupplier());
+        response.setLeatherFabricSource(factory.getLeatherFabricSource());
+        response.setHardwareSupplier(factory.getHardwareSupplier());
+        response.setQcItems(factory.getQcItems());
+        response.setQcStaffCount(factory.getQcStaffCount());
+        response.setShippingFrom(factory.getShippingFrom());
+        response.setLogisticsMethods(factory.getLogisticsMethods());
+        response.setDefaultPackaging(factory.getDefaultPackaging());
+        response.setAuditorSignature(factory.getAuditorSignature());
+        response.setFactoryImages(factory.getFactoryImages());
         response.setStatus(factory.getStatus());
         response.setCreatedAt(factory.getCreatedAt());
         response.setUpdatedAt(factory.getUpdatedAt());
@@ -282,7 +453,13 @@ public class FactoryService {
         return sortLevels(levels);
     }
 
-    private Map<String, List<String>> batchListCapableLevels(List<String> factoryCodes) {
+    /**
+     * 批量查询多个工厂的能力等级列表。
+     *
+     * @param factoryCodes 工厂编码列表
+     * @return key 为工厂编码，value 为该工厂的能力等级代码列表
+     */
+    public Map<String, List<String>> batchListCapableLevels(List<String> factoryCodes) {
         if (factoryCodes.isEmpty()) {
             return Map.of();
         }

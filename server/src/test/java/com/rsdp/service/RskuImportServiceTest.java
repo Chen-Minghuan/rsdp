@@ -30,6 +30,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -118,7 +119,7 @@ class RskuImportServiceTest {
         // Given
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
@@ -151,12 +152,11 @@ class RskuImportServiceTest {
         assertThat(result.getSuccessCount()).isEqualTo(1);
         assertThat(result.getFailedCount()).isEqualTo(0);
 
-        ArgumentCaptor<List<RskuSupply>> captor = ArgumentCaptor.forClass(List.class);
-        verify(rskuSupplyMapper).insertBatchSafe(captor.capture());
-        assertThat(captor.getValue()).hasSize(1);
-        assertThat(captor.getValue().get(0).getFactoryPrice()).isEqualByComparingTo(new BigDecimal("1500"));
-        assertThat(captor.getValue().get(0).getQuoteConfidence()).isEqualTo("high");
-        assertThat(captor.getValue().get(0).getProductLevel()).isEqualTo("S");
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getFactoryPrice()).isEqualByComparingTo(new BigDecimal("1500"));
+        assertThat(captor.getValue().getQuoteConfidence()).isEqualTo("high");
+        assertThat(captor.getValue().getProductLevel()).isEqualTo("S");
     }
 
     @Test
@@ -164,7 +164,7 @@ class RskuImportServiceTest {
         // Given
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
@@ -201,7 +201,7 @@ class RskuImportServiceTest {
         assertThat(result.getSuccessCount()).isEqualTo(0);
         assertThat(result.getFailedCount()).isEqualTo(1);
         assertThat(result.getFailures().get(0).getReason()).contains("已有报价");
-        verify(rskuSupplyMapper, never()).insertBatchSafe(any());
+        verify(rskuSupplyMapper, never()).insert(any(RskuSupply.class));
     }
 
     @Test
@@ -209,7 +209,7 @@ class RskuImportServiceTest {
         // Given
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
@@ -246,7 +246,7 @@ class RskuImportServiceTest {
         assertThat(result.getSuccessCount()).isEqualTo(1);
         assertThat(result.getFailedCount()).isEqualTo(0);
         verify(rskuSupplyMapper).updateById(any(RskuSupply.class));
-        verify(rskuSupplyMapper, never()).insertBatchSafe(any());
+        verify(rskuSupplyMapper, never()).insert(any(RskuSupply.class));
     }
 
     @Test
@@ -287,7 +287,7 @@ class RskuImportServiceTest {
         // Given
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
@@ -321,7 +321,7 @@ class RskuImportServiceTest {
         assertThat(result.getSuccessCount()).isEqualTo(1);
         assertThat(result.getFailedCount()).isEqualTo(1);
         assertThat(result.getFailures().get(0).getReason()).contains("重复报价行");
-        verify(rskuSupplyMapper).insertBatchSafe(anyList());
+        verify(rskuSupplyMapper).insert(any(RskuSupply.class));
     }
 
     @Test
@@ -329,7 +329,7 @@ class RskuImportServiceTest {
         // Given
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
@@ -391,7 +391,7 @@ class RskuImportServiceTest {
         // Given
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
@@ -419,9 +419,9 @@ class RskuImportServiceTest {
 
         // Then
         assertThat(result.getSuccessCount()).isEqualTo(1);
-        ArgumentCaptor<List<RskuSupply>> captor = ArgumentCaptor.forClass(List.class);
-        verify(rskuSupplyMapper).insertBatchSafe(captor.capture());
-        RskuSupply saved = captor.getValue().get(0);
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        RskuSupply saved = captor.getValue();
         assertThat(saved.getQuoteConfidence()).isEqualTo("mid");
         assertThat(saved.getProductLevel()).isEqualTo("S");
     }
@@ -449,6 +449,55 @@ class RskuImportServiceTest {
         assertThat(result.getFailedCount()).isEqualTo(1);
         String reason = result.getFailures().get(0).getReason();
         assertThat(reason).contains("出厂价");
+    }
+
+    @Test
+    void importRskus_shouldProcessRemainingRowsWhenOneRowConflicts() throws Exception {
+        // Given
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+
+        RspuVariant variant2 = new RspuVariant();
+        variant2.setVariantId("VAR-002");
+        variant2.setRspuId("RSPU-001");
+        variant2.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant, variant2));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.insert(any(RskuSupply.class)))
+            .thenReturn(1)
+            .thenThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate"));
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001,1500",
+            "RSPU-001,F001,VAR-002,2000"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then
+        assertThat(result.getTotalRows()).isEqualTo(2);
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        verify(rskuSupplyMapper, times(2)).insert(any(RskuSupply.class));
     }
 
     private byte[] buildExcelWithRows(List<String> csvRows) throws Exception {

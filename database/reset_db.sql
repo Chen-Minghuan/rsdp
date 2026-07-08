@@ -163,6 +163,29 @@ CREATE TABLE IF NOT EXISTS factory_master (
     first_audit_date DATE,
     next_visit_date DATE,
     notes TEXT,
+    -- 规模信息
+    factory_area DECIMAL(10,2),
+    employee_count INTEGER,
+    monthly_capacity INTEGER,
+    founded_year INTEGER,
+    -- 设备清单
+    equipment_list JSONB,
+    -- 原料来源
+    frame_wood VARCHAR(32),
+    sponge_supplier VARCHAR(128),
+    leather_fabric_source VARCHAR(128),
+    hardware_supplier VARCHAR(128),
+    -- 品质控制
+    qc_items JSONB,
+    qc_staff_count INTEGER,
+    -- 物流信息
+    shipping_from VARCHAR(128),
+    logistics_methods JSONB,
+    default_packaging JSONB,
+    -- 验厂信息
+    auditor_signature VARCHAR(64),
+    -- 工厂图片
+    factory_images JSONB,
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
@@ -853,6 +876,40 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('scene', 'CAFE', '咖啡厅', 4),
 ('scene', 'OFFICE', '办公室', 5),
 ('scene', 'HOTEL', '酒店', 6)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 设备类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('equipment_type', 'CNC', 'CNC五轴加工中心', 1),
+('equipment_type', 'CUTTING', '自动裁皮机', 2),
+('equipment_type', 'SEWING', '数控缝纫机', 3),
+('equipment_type', 'HOT_PRESS', '热压机', 4),
+('equipment_type', 'PAINTING', '喷漆房', 5),
+('equipment_type', 'DRYING', '烘干房', 6),
+('equipment_type', 'OTHER', '其他', 7)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 物流方式
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('logistics_method', 'SPECIAL', '专线物流', 1),
+('logistics_method', 'DEPPON', '德邦', 2),
+('logistics_method', 'SF', '顺丰', 3),
+('logistics_method', 'SELF', '自提', 4)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 包装类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('packaging_type', 'CARTON', '纸箱', 1),
+('packaging_type', 'WOODEN', '木架', 2),
+('packaging_type', 'WOVEN', '编织袋', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 木材类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('wood_type', 'PINE', '进口松木', 1),
+('wood_type', 'OAK', '橡木', 2),
+('wood_type', 'MIXED', '杂木', 3),
+('wood_type', 'OTHER', '其他', 4)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 空间类型（风格数据库 case 用）

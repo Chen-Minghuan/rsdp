@@ -315,11 +315,7 @@ public class RskuService {
                 .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
         Map<String, List<String>> capabilityMap = factoryCodes.isEmpty()
             ? Map.of()
-            : factoryCodes.stream()
-                .collect(Collectors.toMap(
-                    code -> code,
-                    factoryService::getFactoryCapableLevels
-                ));
+            : factoryService.batchListCapableLevels(factoryCodes);
 
         return rskus.stream()
             .map(rsku -> toResponse(rsku, factoryMap, capabilityMap))
@@ -355,7 +351,12 @@ public class RskuService {
         if (factory != null) {
             response.setFactoryName(factory.getFactoryName());
         }
-        response.setFactoryCapableLevels(capabilityMap.getOrDefault(rsku.getFactoryCode(), List.of()));
+        List<String> capableLevels = capabilityMap.getOrDefault(rsku.getFactoryCode(), List.of());
+        // 老数据兼容： capability 表无记录时，回退到工厂主等级
+        if (capableLevels.isEmpty() && factory != null && factory.getFactoryLevel() != null) {
+            capableLevels = List.of(factory.getFactoryLevel());
+        }
+        response.setFactoryCapableLevels(capableLevels);
         return response;
     }
 }

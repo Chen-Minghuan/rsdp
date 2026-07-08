@@ -11,6 +11,9 @@ import java.util.Set;
 
 /**
  * 当前用户数据范围上下文。
+ *
+ * <p>对 {@link #currentDataScope()} 与 {@link #currentFactoryCodes()} 增加请求级
+ * ThreadLocal 缓存，避免同一请求内多次查询用户角色/工厂关联。</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -21,12 +24,24 @@ public class DataScopeContext {
     private final UserRoleService userRoleService;
     private final UserFactoryService userFactoryService;
 
+    private final ThreadLocal<DataScopeCache> cacheHolder = new ThreadLocal<>();
+
     /**
      * 获取当前登录用户的数据范围。
      *
      * @return 数据范围
      */
     public DataScope currentDataScope() {
+        DataScopeCache cache = getCache();
+        if (cache.scope != null) {
+            return cache.scope;
+        }
+        DataScope scope = computeDataScope();
+        cache.scope = scope;
+        return scope;
+    }
+
+    private DataScope computeDataScope() {
         String username = SecurityOperatorContext.currentUsername();
         if ("anonymous".equals(username)) {
             return DataScope.PUBLIC_ONLY;
@@ -60,10 +75,47 @@ public class DataScopeContext {
      * @return 工厂编码列表
      */
     public List<String> currentFactoryCodes() {
+        DataScopeCache cache = getCache();
+        if (cache.factoryCodes != null) {
+            return cache.factoryCodes;
+        }
+        List<String> factoryCodes = computeFactoryCodes();
+        cache.factoryCodes = factoryCodes;
+        return factoryCodes;
+    }
+
+    private List<String> computeFactoryCodes() {
         String username = SecurityOperatorContext.currentUsername();
         if ("anonymous".equals(username)) {
             return List.of();
         }
         return userFactoryService.getFactoryCodesByUsername(username);
+    }
+
+    private DataScopeCache getCache() {
+        DataScopeCache cache = cacheHolder.get();
+        if (cache == null) {
+            cache = new DataScopeCache();
+            cacheHolder.set(cache);
+        }
+        return cache;
+    }
+
+    /**
+     * 清理当前请求的数据范围缓存。
+     *
+     * <p>应在请求结束时（如 JWT 过滤器的 {@code finally} 块）调用，防止 ThreadLocal
+     * 在线程复用场景下泄漏旧请求的数据。</p>
+     */
+    public void clearCache() {
+        cacheHolder.remove();
+    }
+
+    /**
+     * 请求级数据范围缓存。
+     */
+    private static final class DataScopeCache {
+        private DataScope scope;
+        private List<String> factoryCodes;
     }
 }

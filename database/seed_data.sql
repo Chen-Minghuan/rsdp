@@ -133,6 +133,40 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('scene', 'HOTEL', '酒店', 6)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
+-- 设备类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('equipment_type', 'CNC', 'CNC五轴加工中心', 1),
+('equipment_type', 'CUTTING', '自动裁皮机', 2),
+('equipment_type', 'SEWING', '数控缝纫机', 3),
+('equipment_type', 'HOT_PRESS', '热压机', 4),
+('equipment_type', 'PAINTING', '喷漆房', 5),
+('equipment_type', 'DRYING', '烘干房', 6),
+('equipment_type', 'OTHER', '其他', 7)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 物流方式
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('logistics_method', 'SPECIAL', '专线物流', 1),
+('logistics_method', 'DEPPON', '德邦', 2),
+('logistics_method', 'SF', '顺丰', 3),
+('logistics_method', 'SELF', '自提', 4)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 包装类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('packaging_type', 'CARTON', '纸箱', 1),
+('packaging_type', 'WOODEN', '木架', 2),
+('packaging_type', 'WOVEN', '编织袋', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 木材类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('wood_type', 'PINE', '进口松木', 1),
+('wood_type', 'OAK', '橡木', 2),
+('wood_type', 'MIXED', '杂木', 3),
+('wood_type', 'OTHER', '其他', 4)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
 -- 空间类型（风格数据库 case 用）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('room_type', 'LIVING_ROOM', '客厅', 1),
