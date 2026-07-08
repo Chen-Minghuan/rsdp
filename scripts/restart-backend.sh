@@ -15,21 +15,39 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
+# 读取 .env 前，先保存关键环境变量的当前值（允许用户通过系统环境变量覆盖 .env 占位符）
+REQUIRED_VARS=("RSDP_ENCRYPTION_KEY" "RSDP_JWT_SECRET" "DASHSCOPE_API_KEY")
+declare -A ORIGINAL_ENV
+for var in "${REQUIRED_VARS[@]}"; do
+    ORIGINAL_ENV[$var]="${!var:-}"
+done
+
 # 读取 .env 文件中的变量（兼容 Windows CRLF）
 set -a
 # shellcheck source=/dev/null
 source <(sed 's/\r$//' "$ENV_FILE")
 set +a
 
+# 如果 .env 把某个关键变量写成了占位符，但系统环境变量已经提供了真实值，则恢复系统值
+for var in "${REQUIRED_VARS[@]}"; do
+    value="${!var:-}"
+    if { [ -z "$value" ] || [ "$value" = "<CHANGE_ME>" ]; } && [ -n "${ORIGINAL_ENV[$var]:-}" ]; then
+        export "$var=${ORIGINAL_ENV[$var]}"
+    fi
+done
+
 export RSDP_JWT_COOKIE_SECURE=false
 export DB_USERNAME="${POSTGRES_USER:-rsdp}"
 export DB_PASSWORD="${POSTGRES_PASSWORD:-rsdp}"
 
-REQUIRED_VARS=("RSDP_ENCRYPTION_KEY" "RSDP_JWT_SECRET" "DASHSCOPE_API_KEY")
 for var in "${REQUIRED_VARS[@]}"; do
     value="${!var:-}"
+    # 去除首尾空白
+    value="$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    export "$var=$value"
     if [ -z "$value" ] || [ "$value" = "<CHANGE_ME>" ]; then
         echo "错误：环境变量 $var 未设置或为默认值 <CHANGE_ME>"
+        echo "请在 deploy/.env 中填写，或在启动前通过系统环境变量导出真实值"
         exit 1
     fi
 done
