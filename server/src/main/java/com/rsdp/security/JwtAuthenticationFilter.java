@@ -55,36 +55,35 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 if (claims != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                     String username = claims.getSubject();
 
-                    // 校验用户是否存在且未被禁用
+                    // 校验用户是否存在且未被禁用；若校验失败则仅清空上下文并放行，
+                    // 由后续 Spring Security 根据请求路径决定是否拒绝，避免旧 token 阻塞 login 等 permitAll 接口。
                     SysUser user = sysUserMapper.selectByUsername(username);
                     if (user == null || !"active".equals(user.getStatus())) {
-                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                        return;
+                        SecurityContextHolder.clearContext();
+                    } else {
+                        // 校验 token 版本号，防止角色/权限变更后旧 token 继续生效
+                        Integer tokenVersion = jwtUtil.getTokenVersion(claims);
+                        Integer currentVersion = user.getTokenVersion();
+                        if (tokenVersion == null || !tokenVersion.equals(currentVersion == null ? 0 : currentVersion)) {
+                            SecurityContextHolder.clearContext();
+                        } else {
+                            String role = jwtUtil.getRole(claims);
+                            List<String> permissions = jwtUtil.getPermissions(claims);
+
+                            List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+                            if (role != null) {
+                                authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                            }
+                            permissions.forEach(perm -> authorities.add(new SimpleGrantedAuthority(perm)));
+
+                            SecurityUser securityUser = new SecurityUser(
+                                user.getUserId(), username, user.getPasswordHash(), authorities);
+                            UsernamePasswordAuthenticationToken authentication =
+                                new UsernamePasswordAuthenticationToken(securityUser, null, authorities);
+                            authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                            SecurityContextHolder.getContext().setAuthentication(authentication);
+                        }
                     }
-
-                    // 校验 token 版本号，防止角色/权限变更后旧 token 继续生效
-                    Integer tokenVersion = jwtUtil.getTokenVersion(claims);
-                    Integer currentVersion = user.getTokenVersion();
-                    if (tokenVersion == null || !tokenVersion.equals(currentVersion == null ? 0 : currentVersion)) {
-                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                        return;
-                    }
-
-                    String role = jwtUtil.getRole(claims);
-                    List<String> permissions = jwtUtil.getPermissions(claims);
-
-                    List<SimpleGrantedAuthority> authorities = new ArrayList<>();
-                    if (role != null) {
-                        authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
-                    }
-                    permissions.forEach(perm -> authorities.add(new SimpleGrantedAuthority(perm)));
-
-                    SecurityUser securityUser = new SecurityUser(
-                        user.getUserId(), username, user.getPasswordHash(), authorities);
-                    UsernamePasswordAuthenticationToken authentication =
-                        new UsernamePasswordAuthenticationToken(securityUser, null, authorities);
-                    authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
                 }
             }
             filterChain.doFilter(request, response);

@@ -404,9 +404,15 @@ function handleRskuClick(row: Rsku) {
   router.push(`/products/${row.rspuId}/rsku/${row.rskuId}`)
 }
 
-function renderJsonTags(value?: string) {
-  const items = parseJsonArray(value)
-  if (items.length === 0) return '-'
+/**
+ * 通用 JSON 标签列表（局部函数式组件）。
+ * 空值时渲染占位符“-”，避免把字符串“-”当作组件标签名传给 `<component :is>`。
+ */
+function JsonTags(props: { value?: string }) {
+  const items = parseJsonArray(props.value)
+  if (items.length === 0) {
+    return h('span', '-')
+  }
   return h(
     NSpace,
     { size: 4 },
@@ -418,9 +424,14 @@ function renderJsonTags(value?: string) {
   )
 }
 
-function renderFactoryImages(value?: string) {
-  const items = parseJsonArray(value)
-  if (items.length === 0) return '-'
+/**
+ * 工厂图片列表（局部函数式组件）。
+ */
+function FactoryImages(props: { value?: string }) {
+  const items = parseJsonArray(props.value)
+  if (items.length === 0) {
+    return h('span', '-')
+  }
   return h(
     NSpace,
     { size: 8 },
@@ -543,7 +554,7 @@ onBeforeRouteUpdate((to) => {
           <!-- 设备清单 -->
           <n-card title="设备清单" size="small">
             <div style="padding: 8px 0;">
-              <component :is="renderJsonTags(factory.equipmentList)" />
+              <JsonTags :value="factory.equipmentList" />
             </div>
           </n-card>
 
@@ -569,7 +580,7 @@ onBeforeRouteUpdate((to) => {
           <n-card title="品质控制" size="small">
             <n-descriptions bordered :column="2" label-placement="left">
               <n-descriptions-item label="QC 项目">
-                <component :is="renderJsonTags(factory.qcItems)" />
+                <JsonTags :value="factory.qcItems" />
               </n-descriptions-item>
               <n-descriptions-item label="QC 人数">
                 {{ factory.qcStaffCount ?? '-' }}
@@ -580,7 +591,7 @@ onBeforeRouteUpdate((to) => {
           <!-- 认证资质 -->
           <n-card title="认证资质" size="small">
             <div style="padding: 8px 0;">
-              <component :is="renderJsonTags(factory.certification)" />
+              <JsonTags :value="factory.certification" />
             </div>
           </n-card>
 
@@ -591,10 +602,10 @@ onBeforeRouteUpdate((to) => {
                 {{ factory.shippingFrom || '-' }}
               </n-descriptions-item>
               <n-descriptions-item label="常用物流方式">
-                <component :is="renderJsonTags(factory.logisticsMethods)" />
+                <JsonTags :value="factory.logisticsMethods" />
               </n-descriptions-item>
               <n-descriptions-item label="默认包装">
-                <component :is="renderJsonTags(factory.defaultPackaging)" />
+                <JsonTags :value="factory.defaultPackaging" />
               </n-descriptions-item>
             </n-descriptions>
           </n-card>
@@ -614,7 +625,7 @@ onBeforeRouteUpdate((to) => {
           <!-- 工厂图片 -->
           <n-card title="工厂图片" size="small">
             <div style="padding: 8px 0;">
-              <component :is="renderFactoryImages(factory.factoryImages)" />
+              <FactoryImages :value="factory.factoryImages" />
             </div>
           </n-card>
 

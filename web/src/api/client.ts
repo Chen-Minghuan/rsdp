@@ -82,6 +82,13 @@ async function errorInterceptor(error: AxiosError | ApiError) {
   }
 
   if (response.status === 403) {
+    // /auth/me 返回 403 通常是因为 token 版本过期或已登出，按未登录处理
+    if (error.config?.url?.endsWith('/auth/me')) {
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+      return Promise.reject(new Error('登录已过期，请重新登录'))
+    }
     if (discreteApi) {
       discreteApi.message.error('权限不足，无法执行该操作')
     }
