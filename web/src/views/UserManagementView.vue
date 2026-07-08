@@ -16,6 +16,7 @@ import {
 } from 'naive-ui'
 import { h } from 'vue'
 import { apiClient } from '@/api/client'
+import { listFactories } from '@/api/factory'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
 import type { ApiResult } from '@/api/client'
@@ -80,7 +81,7 @@ const form = reactive<UserForm>({
   factoryCodes: [],
   viewFullCatalog: false
 })
-const factoryCodesText = ref('')
+const factoryOptions = ref<{ label: string; value: string }[]>([])
 
 const showResetPasswordModal = ref(false)
 const resetPasswordUser = ref<User | null>(null)
@@ -182,7 +183,6 @@ function openCreate() {
   form.roleCode = 'USER'
   form.factoryCodes = []
   form.viewFullCatalog = false
-  factoryCodesText.value = ''
   showModal.value = true
 }
 
@@ -194,7 +194,6 @@ function openEdit(user: User) {
   form.roleCode = user.roleCode
   form.factoryCodes = user.factoryCodes || []
   form.viewFullCatalog = user.viewFullCatalog || false
-  factoryCodesText.value = (user.factoryCodes || []).join(', ')
   showModal.value = true
 }
 
@@ -204,10 +203,6 @@ async function saveUser() {
   } catch {
     return
   }
-  form.factoryCodes = factoryCodesText.value
-    .split(/[,，]/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
   try {
     if (editingUser.value) {
       await apiClient.put(`/v1/admin/users/${editingUser.value.userId}`, {
@@ -291,7 +286,22 @@ function getErrorMessage(err: unknown): string {
   return String(err)
 }
 
-onMounted(loadUsers)
+async function loadFactoryOptions() {
+  try {
+    const factories = await listFactories()
+    factoryOptions.value = factories.map((f) => ({
+      label: `${f.factoryCode} - ${f.factoryName}`,
+      value: f.factoryCode
+    }))
+  } catch {
+    message.error('加载工厂列表失败')
+  }
+}
+
+onMounted(() => {
+  loadUsers()
+  loadFactoryOptions()
+})
 </script>
 
 <template>
@@ -330,10 +340,13 @@ onMounted(loadUsers)
           <n-select v-model:value="form.roleCode" :options="roleOptions" />
         </n-form-item>
         <n-form-item label="关联工厂">
-          <n-input
-            v-model:value="factoryCodesText"
-            type="textarea"
-            placeholder="厂商业务员可填写工厂编码，多个用逗号分隔"
+          <n-select
+            v-model:value="form.factoryCodes"
+            multiple
+            filterable
+            clearable
+            placeholder="请选择该用户可管理的工厂（工厂管理员必选）"
+            :options="factoryOptions"
           />
         </n-form-item>
         <n-form-item label="全库视图">

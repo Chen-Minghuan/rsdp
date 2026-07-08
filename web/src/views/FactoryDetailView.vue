@@ -33,7 +33,7 @@ import {
 } from '@/api/factory'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { Factory, FactoryProductCapability, FactoryUpdateRequest } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 import type { DictItem } from '@/types/dict'
@@ -47,10 +47,11 @@ const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACT
 const canReadCapability = computed(() => userStore.hasPermission(PERMISSIONS.CAPABILITY_READ))
 const canCreateCapability = computed(() => userStore.hasPermission(PERMISSIONS.CAPABILITY_CREATE))
 
-const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
-// 工厂管理员只能维护自己关联的工厂资料
-const isMyFactory = computed(() => isPlatformStaff.value || factoryCodes.value.includes(factoryCode.value))
+// 平台运营人员（ADMIN/EDITOR）可编辑任意工厂；工厂管理员只能维护自己关联的工厂
+const isMyFactory = computed(() =>
+  userStore.hasAnyRole([ROLES.ADMIN, ROLES.EDITOR]) || factoryCodes.value.includes(factoryCode.value)
+)
 
 const loading = ref(false)
 const rskuLoading = ref(false)
