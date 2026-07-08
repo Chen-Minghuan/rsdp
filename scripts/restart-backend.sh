@@ -37,8 +37,23 @@ done
 BACKEND_LOG="$LOG_DIR/backend.log"
 
 echo "[1/2] 停止现有后端进程..."
-pkill -f "mvn spring-boot:run" || true
-pkill -f "rsdp-server" || true
+
+stop_backend_by_port() {
+  local port="$1"
+  case "$(uname -s)" in
+    MINGW*|CYGWIN*|MSYS*)
+      # Windows Git Bash：通过占用端口的 PID 结束进程
+      powershell.exe -Command "try { \$p = Get-Process -Id (Get-NetTCPConnection -LocalPort $port -ErrorAction Stop).OwningProcess; Stop-Process -Id \$p.Id -Force } catch {}" >/dev/null 2>&1 || true
+      ;;
+    *)
+      # Linux / macOS / WSL
+      pkill -f "mvn spring-boot:run" || true
+      pkill -f "rsdp-server" || true
+      ;;
+  esac
+}
+
+stop_backend_by_port 8081
 sleep 2
 
 echo "[2/2] 启动后端 Spring Boot（端口 8081）..."
