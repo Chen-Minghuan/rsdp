@@ -1,20 +1,22 @@
 import { apiClient, type ApiResult } from './client'
 import type { QuoteGenerateRequest, QuoteResponse } from '@/types/quote'
+import type { ApiOptions } from './product'
 
 /**
  * 根据 RSKU 列表生成报价单。
  */
-export async function generateQuote(request: QuoteGenerateRequest): Promise<QuoteResponse> {
-  const { data: result } = await apiClient.post<ApiResult<QuoteResponse>>('/v1/quotes/generate', request)
+export async function generateQuote(request: QuoteGenerateRequest, options?: ApiOptions): Promise<QuoteResponse> {
+  const { data: result } = await apiClient.post<ApiResult<QuoteResponse>>('/v1/quotes/generate', request, { signal: options?.signal })
   return result.data
 }
 
 /**
  * 根据 RSKU 列表导出 Excel 报价单，触发浏览器下载。
  */
-export async function exportQuote(request: QuoteGenerateRequest): Promise<void> {
+export async function exportQuote(request: QuoteGenerateRequest, options?: ApiOptions): Promise<void> {
   const response = await apiClient.post('/v1/quotes/export', request, {
-    responseType: 'blob'
+    responseType: 'blob',
+    signal: options?.signal
   })
 
   const blob = new Blob([response.data as BlobPart], {

@@ -1,5 +1,6 @@
 import { apiClient, type ApiResult } from './client'
 import type { DictItem } from '@/types/dict'
+import type { ApiOptions } from './product'
 
 export interface DictCreatePayload {
   dictType: string
@@ -11,8 +12,8 @@ export interface DictCreatePayload {
 /**
  * 查询指定类型的字典项。
  */
-export async function listDicts(dictType: string): Promise<DictItem[]> {
-  const { data: result } = await apiClient.get<ApiResult<DictItem[]>>(`/v1/dicts/${dictType}`)
+export async function listDicts(dictType: string, options?: ApiOptions): Promise<DictItem[]> {
+  const { data: result } = await apiClient.get<ApiResult<DictItem[]>>(`/v1/dicts/${dictType}`, { signal: options?.signal })
   return result.data
 }
 
@@ -21,7 +22,7 @@ export async function listDicts(dictType: string): Promise<DictItem[]> {
  *
  * 当前仅支持扩展 material / scene 两类标签字典。
  */
-export async function createDict(payload: DictCreatePayload): Promise<DictItem> {
-  const { data: result } = await apiClient.post<ApiResult<DictItem>>('/v1/dicts', payload)
+export async function createDict(payload: DictCreatePayload, options?: ApiOptions): Promise<DictItem> {
+  const { data: result } = await apiClient.post<ApiResult<DictItem>>('/v1/dicts', payload, { signal: options?.signal })
   return result.data
 }

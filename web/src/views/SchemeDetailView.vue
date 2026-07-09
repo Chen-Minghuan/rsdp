@@ -18,12 +18,14 @@ import { getSchemeDetail, generateQuoteFromScheme } from '@/api/scheme'
 import { exportQuote } from '@/api/quote'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { Scheme, SchemeItem } from '@/types/scheme'
 import type { PriceChange, QuoteItem, QuoteResponse } from '@/types/quote'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 const schemeId = computed(() => route.params.schemeId as string)
 
 const isAdmin = computed(() => userStore.hasRole(ROLES.ADMIN))
@@ -178,7 +180,7 @@ async function loadDetail() {
   loading.value = true
   errorMessage.value = ''
   try {
-    scheme.value = await getSchemeDetail(schemeId.value)
+    scheme.value = await getSchemeDetail(schemeId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载方案详情失败'
   } finally {
@@ -191,7 +193,7 @@ async function handleGenerateQuote() {
   generating.value = true
   errorMessage.value = ''
   try {
-    quoteResult.value = await generateQuoteFromScheme(schemeId.value)
+    quoteResult.value = await generateQuoteFromScheme(schemeId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '生成报价单失败'
   } finally {
@@ -213,7 +215,7 @@ async function handleExportQuote() {
       rskuId: item.rskuId,
       quantity: item.quantity ?? 1
     }))
-    await exportQuote({ items })
+    await exportQuote({ items }, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '导出报价单失败'
   } finally {

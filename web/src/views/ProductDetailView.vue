@@ -39,8 +39,10 @@ import type { Factory } from '@/types/factory'
 import type { RspuVariant, RspuVariantCreateRequest } from '@/types/variant'
 import type { RspuRelationCreateRequest } from '@/types/relation'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 
 const route = useRoute()
+const signal = useRequestAbort()
 const router = useRouter()
 const dialog = useDialog()
 const userStore = useUserStore()
@@ -291,7 +293,14 @@ const rskuColumns: DataTableColumns<Rsku> = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
   { title: '工厂代码', key: 'factoryCode', width: 120 },
-  { title: '出厂价', key: 'factoryPrice', width: 120 },
+  {
+    title: '出厂价',
+    key: 'factoryPrice',
+    width: 120,
+    render(row: Rsku) {
+      return row.factoryPrice != null ? `¥${Number(row.factoryPrice).toFixed(2)}` : '-'
+    }
+  },
   { title: '价格带', key: 'priceBand', width: 100 },
   { title: '产品等级', key: 'productLevel', width: 100 },
   { title: '材质编码', key: 'materialCode', width: 100 },
@@ -479,7 +488,7 @@ async function loadDetail() {
   loading.value = true
   errorMessage.value = ''
   try {
-    detail.value = await getProductDetail(rspuId.value)
+    detail.value = await getProductDetail(rspuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载产品详情失败'
   } finally {
@@ -499,7 +508,7 @@ async function loadRskuList() {
   if (!validateRspuId()) return
   rskuLoading.value = true
   try {
-    rskuList.value = await listRskuByRspu(rspuId.value)
+    rskuList.value = await listRskuByRspu(rspuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载报价失败'
   } finally {
@@ -511,7 +520,7 @@ async function loadVariants() {
   if (!validateRspuId()) return
   variantLoading.value = true
   try {
-    variantList.value = await listVariantsByRspu(rspuId.value)
+    variantList.value = await listVariantsByRspu(rspuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载变体失败'
   } finally {
@@ -521,7 +530,7 @@ async function loadVariants() {
 
 async function loadFactories() {
   try {
-    factories.value = await listFactories()
+    factories.value = await listFactories({ signal })
   } catch (e) {
     console.error('加载工厂列表失败', e)
   }
@@ -530,13 +539,13 @@ async function loadFactories() {
 async function loadDicts() {
   try {
     const [quoteConfidence, sizes, colors, materials, styles, scenes, levels] = await Promise.all([
-      listDicts('quote_confidence'),
-      listDicts('size'),
-      listDicts('color'),
-      listDicts('material'),
-      listDicts('style'),
-      listDicts('scene'),
-      listDicts('factory_level')
+      listDicts('quote_confidence', { signal }),
+      listDicts('size', { signal }),
+      listDicts('color', { signal }),
+      listDicts('material', { signal }),
+      listDicts('style', { signal }),
+      listDicts('scene', { signal }),
+      listDicts('factory_level', { signal })
     ])
     quoteConfidenceOptions.value = quoteConfidence
     sizeOptions.value = sizes

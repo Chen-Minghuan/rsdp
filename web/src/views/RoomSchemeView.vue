@@ -17,12 +17,14 @@ import {
 import { generateRoomScheme } from '@/api/matching'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 import { PERMISSIONS } from '@/utils/constants'
 import type { RoomSchemeResponse } from '@/types/matching'
 import type { DictItem } from '@/types/dict'
 
 const router = useRouter()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 
 const roomTypes = ref<DictItem[]>([])
 const styles = ref<DictItem[]>([])
@@ -53,8 +55,8 @@ async function loadDicts() {
   loadingDicts.value = true
   try {
     const [roomTypeDicts, styleDicts] = await Promise.all([
-      listDicts('room_type'),
-      listDicts('style')
+      listDicts('room_type', { signal }),
+      listDicts('style', { signal })
     ])
     roomTypes.value = roomTypeDicts
     styles.value = [{ dictCode: '', dictName: '不限风格' }, ...styleDicts]
@@ -80,7 +82,7 @@ async function handleGenerate() {
       roomType: roomType.value,
       budgetLimit: budgetLimit.value,
       stylePreference: stylePreference.value || undefined
-    })
+    }, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '生成方案失败'
   } finally {
@@ -90,8 +92,11 @@ async function handleGenerate() {
 
 function buildQuote() {
   if (!scheme.value || scheme.value.items.length === 0) return
-  const rspuIds = scheme.value.items.map(item => item.rspuId).join(',')
-  router.push(`/quotes/build?rspuIds=${rspuIds}`)
+  const items = scheme.value.items
+  const rspuIds = items.map(item => item.rspuId).join(',')
+  const rskuIds = items.map(item => item.rskuId).join(',')
+  const quantities = items.map(item => item.quantity ?? 1).join(',')
+  router.push(`/quotes/build?rspuIds=${rspuIds}&rskuIds=${rskuIds}&quantities=${quantities}`)
 }
 
 onMounted(() => {

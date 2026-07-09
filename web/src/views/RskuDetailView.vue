@@ -20,6 +20,7 @@ import {
 } from 'naive-ui'
 import { getRsku, listPriceHistory, updateRskuPrice, deleteRsku } from '@/api/rsku'
 import { useUserStore } from '@/stores/user'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 import { PERMISSIONS } from '@/utils/constants'
 import type { PriceHistory, Rsku } from '@/types/rsku'
 
@@ -27,6 +28,7 @@ const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 const rspuId = computed(() => route.params.rspuId as string)
 
 const canUpdateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_UPDATE))
@@ -76,7 +78,7 @@ async function loadRsku() {
   loading.value = true
   errorMessage.value = ''
   try {
-    rsku.value = await getRsku(rspuId.value, rskuId.value)
+    rsku.value = await getRsku(rspuId.value, rskuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载 RSKU 详情失败'
   } finally {
@@ -91,7 +93,7 @@ async function loadPriceHistory() {
   }
   historyLoading.value = true
   try {
-    priceHistory.value = await listPriceHistory(rskuId.value)
+    priceHistory.value = await listPriceHistory(rskuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载价格历史失败'
   } finally {
@@ -106,8 +108,8 @@ function openPriceModal() {
 }
 
 async function handleUpdatePrice() {
-  if (newPrice.value === null || newPrice.value < 0) {
-    errorMessage.value = '请填写有效的价格'
+  if (newPrice.value === null || newPrice.value <= 0) {
+    errorMessage.value = '请填写有效的出厂价（必须大于 0）'
     return
   }
 
@@ -210,7 +212,7 @@ onBeforeRouteUpdate((to) => {
               {{ rsku.factorySku || '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="出厂价">
-              {{ rsku.factoryPrice }}
+              {{ rsku.factoryPrice != null ? `¥${Number(rsku.factoryPrice).toFixed(2)}` : '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="产品等级">
               {{ rsku.productLevel || '-' }}

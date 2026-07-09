@@ -69,6 +69,11 @@ async function errorInterceptor(error: AxiosError | ApiError) {
     return Promise.reject(error)
   }
 
+  // 主动取消的请求不再向上抛错误，避免组件卸载后触发错误提示
+  if (axios.isCancel(error)) {
+    return Promise.reject(new Error('请求已取消'))
+  }
+
   const response = error.response
   if (!response) {
     return Promise.reject(new Error(error.message || '请求失败'))

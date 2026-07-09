@@ -21,6 +21,7 @@ import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSummary } from '@/types/product'
 import { useMessage } from 'naive-ui'
 
@@ -28,6 +29,7 @@ const router = useRouter()
 const dialog = useDialog()
 const message = useMessage()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
@@ -206,11 +208,11 @@ const columns: DataTableColumns<ProductSummary> = [
 async function loadDicts() {
   try {
     const [reviewDicts, styleDicts, sceneDicts, materialDicts, levelDicts] = await Promise.all([
-      listDicts('review_status'),
-      listDicts('style'),
-      listDicts('scene'),
-      listDicts('material'),
-      listDicts('factory_level')
+      listDicts('review_status', { signal }),
+      listDicts('style', { signal }),
+      listDicts('scene', { signal }),
+      listDicts('material', { signal }),
+      listDicts('factory_level', { signal })
     ])
     reviewStatusOptions.value = [
       { label: '全部复核状态', value: '' },
@@ -272,7 +274,7 @@ async function loadProducts() {
       // 普通用户、浏览者、设计师等只能看到已复核通过的产品
       params.viewMode = 'full'
     }
-    const result = await listProducts(params)
+    const result = await listProducts(params, { signal })
     products.value = result.rows
     total.value = result.total
   } catch (e) {

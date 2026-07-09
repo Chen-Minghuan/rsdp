@@ -2,6 +2,10 @@ import { apiClient, uploadClient, type ApiResult } from './client'
 import type { DocumentImportResult, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
+export interface ApiOptions {
+  signal?: AbortSignal
+}
+
 /**
  * 新品录入：上传多张产品图片。
  *
@@ -31,8 +35,8 @@ export async function uploadProductImages(files: File[], categoryCode?: string, 
  * @param params 查询参数
  * @returns 分页结果
  */
-export async function listProducts(params: ProductListParams): Promise<PageResult<ProductSummary>> {
-  const { data: result } = await apiClient.get<ApiResult<PageResult<ProductSummary>>>('/v1/products', { params })
+export async function listProducts(params: ProductListParams, options?: ApiOptions): Promise<PageResult<ProductSummary>> {
+  const { data: result } = await apiClient.get<ApiResult<PageResult<ProductSummary>>>('/v1/products', { params, signal: options?.signal })
   return result.data
 }
 
@@ -42,8 +46,8 @@ export async function listProducts(params: ProductListParams): Promise<PageResul
  * @param rspuId RSPU ID
  * @returns 产品详情
  */
-export async function getProductDetail(rspuId: string): Promise<ProductDetail> {
-  const { data: result } = await apiClient.get<ApiResult<ProductDetail>>(`/v1/products/${rspuId}`)
+export async function getProductDetail(rspuId: string, options?: ApiOptions): Promise<ProductDetail> {
+  const { data: result } = await apiClient.get<ApiResult<ProductDetail>>(`/v1/products/${rspuId}`, { signal: options?.signal })
   return result.data
 }
 

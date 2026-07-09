@@ -1,12 +1,20 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert, NDivider } from 'naive-ui'
 import { login } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
+
+const redirectPath = computed(() => {
+  const redirect = route.query.redirect
+  if (typeof redirect !== 'string') return '/'
+  // 仅允许站内路径，防止开放重定向
+  return redirect.startsWith('/') && !redirect.includes('://') ? redirect : '/'
+})
 
 const form = ref({
   username: '',
@@ -53,7 +61,7 @@ async function handleLogin() {
       errorMessage.value = '登录成功但获取用户信息失败，请重试'
       return
     }
-    router.push('/')
+    router.push(redirectPath.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '登录失败'
   } finally {

@@ -34,6 +34,7 @@ import {
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { Factory, FactoryProductCapability, FactoryUpdateRequest } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 import type { DictItem } from '@/types/dict'
@@ -41,6 +42,7 @@ import type { DictItem } from '@/types/dict'
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 const factoryCode = computed(() => route.params.factoryCode as string)
 
 const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_UPDATE))
@@ -158,7 +160,7 @@ async function loadFactory() {
   loading.value = true
   errorMessage.value = ''
   try {
-    factory.value = await getFactory(factoryCode.value)
+    factory.value = await getFactory(factoryCode.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载工厂详情失败'
   } finally {
@@ -170,7 +172,7 @@ async function loadRskuList() {
   if (!validateFactoryCode()) return
   rskuLoading.value = true
   try {
-    rskuList.value = await listRskuByFactory(factoryCode.value)
+    rskuList.value = await listRskuByFactory(factoryCode.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载报价列表失败'
   } finally {
@@ -183,7 +185,7 @@ async function loadCapabilities() {
   if (!validateFactoryCode()) return
   capabilityLoading.value = true
   try {
-    capabilities.value = await listFactoryCapabilities(factoryCode.value)
+    capabilities.value = await listFactoryCapabilities(factoryCode.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载产品能力档案失败'
   } finally {
@@ -198,7 +200,7 @@ async function handleSyncCapabilities() {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    capabilities.value = await syncFactoryCapabilities(factoryCode.value)
+    capabilities.value = await syncFactoryCapabilities(factoryCode.value, { signal })
     successMessage.value = `产品能力档案已同步，共 ${capabilities.value.length} 条`
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '同步产品能力档案失败'
@@ -209,7 +211,7 @@ async function handleSyncCapabilities() {
 
 async function loadLevels() {
   try {
-    levelOptions.value = await listDicts('factory_level')
+    levelOptions.value = await listDicts('factory_level', { signal })
   } catch (e) {
     console.error('加载工厂等级字典失败', e)
   }
@@ -218,10 +220,10 @@ async function loadLevels() {
 async function loadDicts() {
   try {
     const [equipment, logistics, packaging, wood] = await Promise.all([
-      listDicts('equipment_type'),
-      listDicts('logistics_method'),
-      listDicts('packaging_type'),
-      listDicts('wood_type')
+      listDicts('equipment_type', { signal }),
+      listDicts('logistics_method', { signal }),
+      listDicts('packaging_type', { signal }),
+      listDicts('wood_type', { signal })
     ])
     equipmentOptions.value = equipment
     logisticsOptions.value = logistics

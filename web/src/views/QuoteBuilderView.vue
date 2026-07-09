@@ -27,6 +27,7 @@ import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductDetail } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
 import type { QuoteResponse, QuoteItem } from '@/types/quote'
@@ -35,6 +36,7 @@ import type { Scheme } from '@/types/scheme'
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 
 const editSchemeId = computed(() => (route.query.editSchemeId as string) || '')
 const isEditMode = computed(() => Boolean(editSchemeId.value))
@@ -47,6 +49,19 @@ const canSaveScheme = computed(() => isEditMode.value ? canUpdateScheme.value : 
 const rawRspuIds = computed(() => {
   const ids = (route.query.rspuIds as string) || ''
   return ids.split(',').filter(Boolean)
+})
+
+const rawSelectedRskuIds = computed(() => {
+  const ids = (route.query.rskuIds as string) || ''
+  return ids.split(',').filter(Boolean)
+})
+
+const rawQuantities = computed(() => {
+  const values = (route.query.quantities as string) || ''
+  return values.split(',').filter(Boolean).map(v => {
+    const n = Number(v)
+    return Number.isNaN(n) || n < 1 ? 1 : Math.floor(n)
+  })
 })
 
 const duplicateRspuIds = computed(() => {
@@ -136,7 +151,7 @@ async function loadData() {
     let ids: string[] = []
 
     if (isEditMode.value) {
-      const scheme = await getSchemeDetail(editSchemeId.value)
+      const scheme = await getSchemeDetail(editSchemeId.value, { signal })
       originalScheme.value = scheme
       schemeName.value = scheme.schemeName
       ids = scheme.items.map(item => item.rspuId)
@@ -150,6 +165,17 @@ async function loadData() {
       if (uniqueRawCount.value > MAX_ITEMS) {
         errorMessage.value = `URL 中产品数量超过 ${MAX_ITEMS}，已自动截断前 ${MAX_ITEMS} 个`
       }
+      // 回填 AI 空间搭配推荐的 RSKU 与数量（如 RoomSchemeView 传入）
+      rawRspuIds.value.forEach((id, index) => {
+        const rskuId = rawSelectedRskuIds.value[index]
+        if (rskuId) {
+          selectedRskuMap.value[id] = rskuId
+        }
+        const quantity = rawQuantities.value[index]
+        if (quantity != null) {
+          quantityMap.value[id] = quantity
+        }
+      })
     }
 
     if (ids.length > MAX_ITEMS) {
@@ -162,7 +188,7 @@ async function loadData() {
       return
     }
 
-    const detailResults = await Promise.all(ids.map(id => getProductDetail(id)))
+    const detailResults = await Promise.all(ids.map(id => getProductDetail(id, { signal })))
     products.value = detailResults
     products.value.forEach(p => {
       if (quantityMap.value[p.rspu.rspuId] == null) {
@@ -170,7 +196,7 @@ async function loadData() {
       }
     })
 
-    const rskuResults = await Promise.all(ids.map(id => listRskuByRspu(id)))
+    const rskuResults = await Promise.all(ids.map(id => listRskuByRspu(id, { signal })))
     const map: Record<string, Rsku[]> = {}
     ids.forEach((id, index) => {
       const list = rskuResults[index]
@@ -211,12 +237,17 @@ async function handleGenerateQuote() {
     errorMessage.value = '请至少选择一个 RSKU'
     return
   }
+  const moqError = validateMoq()
+  if (moqError) {
+    errorMessage.value = moqError
+    return
+  }
 
   generating.value = true
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    quoteResult.value = await generateQuote({ items })
+    quoteResult.value = await generateQuote({ items }, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '生成报价单失败'
   } finally {
@@ -235,12 +266,17 @@ async function handleExportQuote() {
     errorMessage.value = '请至少选择一个 RSKU'
     return
   }
+  const moqError = validateMoq()
+  if (moqError) {
+    errorMessage.value = moqError
+    return
+  }
 
   exporting.value = true
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    await exportQuote({ items })
+    await exportQuote({ items }, { signal })
     successMessage.value = '报价单已开始下载'
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '导出报价单失败'
@@ -267,6 +303,12 @@ async function handleSaveAsScheme() {
     return
   }
 
+  const moqError = validateMoq()
+  if (moqError) {
+    errorMessage.value = moqError
+    return
+  }
+
   const items = Object.entries(selectedRskuMap.value)
     .filter(([, rskuId]) => rskuId)
     .map(([rspuId, rskuId], index) => ({
@@ -285,14 +327,14 @@ async function handleSaveAsScheme() {
         roomType: originalScheme.value?.roomType,
         budgetLimit: originalScheme.value?.budgetLimit,
         items
-      })
+      }, { signal })
       showSaveModal.value = false
       router.push(`/schemes/${editSchemeId.value}`)
     } else {
       await createScheme({
         schemeName: schemeName.value.trim(),
         items
-      })
+      }, { signal })
       showSaveModal.value = false
       router.push('/schemes')
     }
@@ -344,11 +386,33 @@ function selectedRsku(rspuId: string): Rsku | undefined {
   return rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
 }
 
+function roundPrice(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
 function selectedSubtotal(rspuId: string): number {
   const rsku = selectedRsku(rspuId)
   if (!rsku || rsku.factoryPrice == null) return 0
   const quantity = quantityMap.value[rspuId] ?? 1
-  return rsku.factoryPrice * quantity
+  return roundPrice(rsku.factoryPrice * quantity)
+}
+
+function resolveMoq(rspuId: string): number {
+  const rsku = selectedRsku(rspuId)
+  return rsku?.moq ?? 1
+}
+
+function validateMoq(): string | null {
+  for (const [rspuId, rskuId] of Object.entries(selectedRskuMap.value)) {
+    if (!rskuId) continue
+    const moq = resolveMoq(rspuId)
+    const quantity = quantityMap.value[rspuId] ?? 1
+    if (quantity < moq) {
+      const rsku = selectedRsku(rspuId)
+      return `${rsku?.factoryName || rsku?.factoryCode || rskuId} 的 MOQ 为 ${moq}，当前数量 ${quantity} 不足`
+    }
+  }
+  return null
 }
 
 onMounted(() => {
@@ -435,7 +499,7 @@ onBeforeRouteUpdate((to) => {
                 />
                 <n-input-number
                   v-model:value="quantityMap[product.rspu.rspuId]"
-                  :min="1"
+                  :min="resolveMoq(product.rspu.rspuId)"
                   :precision="0"
                   placeholder="数量"
                   style="width: 100px;"
