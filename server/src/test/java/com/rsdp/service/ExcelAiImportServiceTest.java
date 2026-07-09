@@ -19,6 +19,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.storage.StorageService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -39,12 +40,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -86,8 +90,22 @@ class ExcelAiImportServiceTest {
     private VariantCodeMapper variantCodeMapper;
     @Mock
     private PlatformTransactionManager transactionManager;
+    @Mock
+    private RspuFactoryMappingService rspuFactoryMappingService;
+    @Mock
+    private FactoryLeadTimeRuleService factoryLeadTimeRuleService;
+    @Mock
+    private ExcelImportRowService excelImportRowService;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(excelImportRowService.initRow(anyString(), anyInt(), anyString(), anyMap(), any()))
+            .thenAnswer(inv -> System.nanoTime());
+        lenient().when(factoryLeadTimeRuleService.calculateLeadTime(anyString(), any(), any(), anyString(), anyInt()))
+            .thenReturn(null);
+    }
 
     @Test
     void previewMapping_shouldCallAiAndSaveBatch() throws IOException {

@@ -37,6 +37,18 @@ public class ExcelImportBatch {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String failures;
 
+    private String factoryCode;
+    private String factoryName;
+    private String shippingWarehouseId;
+    private String shippingFrom;
+    private Integer defaultLeadTimeDays;
+    private Integer defaultMoq;
+    private String categoryHint;
+    private Integer headerRowCount;
+    private Integer dataStartRow;
+    private String importNote;
+    private LocalDateTime processedAt;
+
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

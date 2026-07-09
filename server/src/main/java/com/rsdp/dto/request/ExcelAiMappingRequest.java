@@ -43,6 +43,11 @@ public class ExcelAiMappingRequest {
     private String defaultFactoryCode;
 
     /**
+     * 默认发货仓库 ID。
+     */
+    private String shippingWarehouseId;
+
+    /**
      * 默认发货地，用于为每个价格列创建 RSKU。
      */
     private String defaultShippingFrom;
@@ -51,6 +56,16 @@ public class ExcelAiMappingRequest {
      * 默认最小起订量，用于为每个价格列创建 RSKU。
      */
     private Integer defaultMoq;
+
+    /**
+     * 默认交期天数，未配置规则时使用。
+     */
+    private Integer defaultLeadTimeDays;
+
+    /**
+     * 导入备注。
+     */
+    private String importNote;
 
     /**
      * 用户确认要导入的价格列原始表头列表。

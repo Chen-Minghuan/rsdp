@@ -12,6 +12,12 @@ DROP TABLE IF EXISTS ai_recognition CASCADE;
 DROP TABLE IF EXISTS image_assets CASCADE;
 DROP TABLE IF EXISTS price_history CASCADE;
 DROP TABLE IF EXISTS rsku_supply CASCADE;
+DROP TABLE IF EXISTS rspu_price_column_mapping CASCADE;
+DROP TABLE IF EXISTS excel_import_price_column CASCADE;
+DROP TABLE IF EXISTS excel_import_row CASCADE;
+DROP TABLE IF EXISTS factory_lead_time_rule CASCADE;
+DROP TABLE IF EXISTS rspu_factory_mapping CASCADE;
+DROP TABLE IF EXISTS factory_capacity_assessment CASCADE;
 DROP TABLE IF EXISTS factory_variant_capacity CASCADE;
 DROP TABLE IF EXISTS factory_warehouse CASCADE;
 DROP TABLE IF EXISTS factory_level_capability CASCADE;
@@ -164,11 +170,18 @@ CREATE TABLE IF NOT EXISTS factory_master (
     first_audit_date DATE,
     next_visit_date DATE,
     notes TEXT,
+    capacity_tier_score DECIMAL(5,2),                -- 最新综合评分
+    last_assessment_period VARCHAR(16),              -- 最近评估周期
+    last_assessment_date DATE,                       -- 最近评估日期
+    import_batch_source VARCHAR(32),                 -- 首次来源导入批次
+    source_type VARCHAR(16) DEFAULT 'manual',        -- manual/excel_import/api_sync
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
+
+COMMENT ON COLUMN factory_master.factory_level IS '工厂层级: S级战略厂/A级核心厂/B级合作厂/C级备选厂，由 capacity_tier_score 自动计算或手动指定';
 
 -- 工厂能力等级表
 CREATE TABLE IF NOT EXISTS factory_level_capability (
@@ -215,6 +228,78 @@ CREATE TABLE IF NOT EXISTS factory_variant_capacity (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
 );
+
+-- RSPU-工厂多对多关联表（V2 新增）
+CREATE TABLE IF NOT EXISTS rspu_factory_mapping (
+    mapping_id BIGSERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+    is_primary BOOLEAN DEFAULT FALSE,
+    shipping_warehouse_id VARCHAR(64),
+    moq INTEGER,
+    base_lead_time_days INTEGER,
+    status VARCHAR(16) DEFAULT 'active',
+    notes TEXT,
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id),
+    UNIQUE (rspu_id, factory_code)
+);
+CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_rspu ON rspu_factory_mapping(rspu_id, status);
+CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_factory ON rspu_factory_mapping(factory_code, status);
+CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_warehouse ON rspu_factory_mapping(shipping_warehouse_id);
+
+-- 工厂交期规则表（V2 新增）
+CREATE TABLE IF NOT EXISTS factory_lead_time_rule (
+    rule_id BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    category_code VARCHAR(16),
+    material_grade_code VARCHAR(32),
+    process_type VARCHAR(32) DEFAULT 'standard',
+    base_days INTEGER NOT NULL DEFAULT 30,
+    batch_size_threshold INTEGER,
+    batch_extra_days INTEGER DEFAULT 0,
+    material_switch_extra_days INTEGER DEFAULT 0,
+    priority INTEGER DEFAULT 100,
+    status VARCHAR(16) DEFAULT 'active',
+    notes TEXT,
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    UNIQUE (factory_code, category_code, material_grade_code, process_type)
+);
+CREATE INDEX IF NOT EXISTS idx_lead_time_rule_factory ON factory_lead_time_rule(factory_code, status);
+CREATE INDEX IF NOT EXISTS idx_lead_time_rule_match ON factory_lead_time_rule(factory_code, category_code, material_grade_code, process_type);
+
+-- 工厂产能评估历史表（V2 新增）
+CREATE TABLE IF NOT EXISTS factory_capacity_assessment (
+    assessment_id BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    assessment_period VARCHAR(16) NOT NULL,
+    score_capacity_scale INTEGER,
+    score_on_time_rate INTEGER,
+    score_quality INTEGER,
+    score_equipment INTEGER,
+    score_staffing INTEGER,
+    score_flexibility INTEGER,
+    tier_score DECIMAL(5,2) NOT NULL,
+    calculated_tier VARCHAR(8),
+    monthly_capacity_avg INTEGER,
+    on_time_rate DECIMAL(5,4),
+    quality_return_rate DECIMAL(5,4),
+    active_rspu_count INTEGER,
+    active_rsku_count INTEGER,
+    assessed_by VARCHAR(64),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+CREATE INDEX IF NOT EXISTS idx_assessment_factory ON factory_capacity_assessment(factory_code, assessment_period);
+CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(assessment_period);
 
 -- RSKU 供应单元子表
 CREATE TABLE IF NOT EXISTS rsku_supply (
@@ -398,6 +483,17 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     preview_rows JSONB,
     price_columns JSONB,
     failures JSONB,
+    factory_code VARCHAR(16),
+    factory_name VARCHAR(128),
+    shipping_warehouse_id VARCHAR(64),
+    shipping_from VARCHAR(128),
+    default_lead_time_days INTEGER,
+    default_moq INTEGER,
+    category_hint VARCHAR(16),
+    header_row_count INTEGER DEFAULT 2,
+    data_start_row INTEGER DEFAULT 3,
+    import_note TEXT,
+    processed_at TIMESTAMP,
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP
@@ -405,6 +501,79 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
 );
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_created_by ON excel_import_batch(created_by);
+CREATE INDEX IF NOT EXISTS idx_excel_import_batch_factory ON excel_import_batch(factory_code);
+
+-- Excel 行级导入记录表（V2 新增）
+CREATE TABLE IF NOT EXISTS excel_import_row (
+    row_id BIGSERIAL PRIMARY KEY,
+    batch_id VARCHAR(32) NOT NULL,
+    excel_row_number INTEGER NOT NULL,
+    row_type VARCHAR(16) NOT NULL,
+    parent_row_id BIGINT,
+    raw_data JSONB NOT NULL,
+    mapped_fields JSONB,
+    selected_price_columns JSONB,
+    status VARCHAR(16) DEFAULT 'pending',
+    processing_stage VARCHAR(32),
+    generated_rspu_id VARCHAR(64),
+    generated_variant_id VARCHAR(64),
+    generated_rsku_ids JSONB,
+    failure_reason TEXT,
+    failure_stage VARCHAR(32),
+    extracted_image_count INTEGER DEFAULT 0,
+    image_asset_ids JSONB,
+    ai_task_id VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id),
+    FOREIGN KEY (parent_row_id) REFERENCES excel_import_row(row_id),
+    FOREIGN KEY (generated_rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (generated_variant_id) REFERENCES rspu_variant(variant_id),
+    UNIQUE (batch_id, excel_row_number)
+);
+CREATE INDEX IF NOT EXISTS idx_import_row_batch ON excel_import_row(batch_id, status);
+CREATE INDEX IF NOT EXISTS idx_import_row_type ON excel_import_row(batch_id, row_type);
+CREATE INDEX IF NOT EXISTS idx_import_row_rspu ON excel_import_row(generated_rspu_id);
+CREATE INDEX IF NOT EXISTS idx_import_row_parent ON excel_import_row(parent_row_id);
+
+-- RSPU 价格列映射记录表（V2 新增）
+CREATE TABLE IF NOT EXISTS rspu_price_column_mapping (
+    mapping_id BIGSERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    batch_id VARCHAR(32) NOT NULL,
+    price_column_name VARCHAR(64) NOT NULL,
+    material_grade_code VARCHAR(32),
+    material_code VARCHAR(32),
+    factory_price DECIMAL(18,2),
+    factory_code VARCHAR(16),
+    is_selected BOOLEAN DEFAULT TRUE,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+CREATE INDEX IF NOT EXISTS idx_price_col_mapping_rspu ON rspu_price_column_mapping(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_price_col_mapping_batch ON rspu_price_column_mapping(batch_id);
+
+-- 批次价格列识别表（V2 新增）
+CREATE TABLE IF NOT EXISTS excel_import_price_column (
+    column_id BIGSERIAL PRIMARY KEY,
+    batch_id VARCHAR(32) NOT NULL,
+    excel_column_letter VARCHAR(8) NOT NULL,
+    column_header_name VARCHAR(128) NOT NULL,
+    raw_header_name VARCHAR(256),
+    suggested_material_grade VARCHAR(32),
+    is_selected BOOLEAN DEFAULT TRUE,
+    sample_values JSONB,
+    data_type VARCHAR(16),
+    value_count INTEGER,
+    min_value DECIMAL(18,2),
+    max_value DECIMAL(18,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id)
+);
+CREATE INDEX IF NOT EXISTS idx_import_price_col_batch ON excel_import_price_column(batch_id);
 
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -897,4 +1066,59 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('room_type', 'HOTEL_ROOM', '酒店客房', 9),
 ('room_type', 'BAR', '酒吧', 10),
 ('room_type', 'OUTDOOR', '户外', 11)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- =================== V2 新增字典（工厂模块 + 导入增强） ===================
+
+-- 材质等级字典（对应Excel中的价格列名）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('material_grade', 'FABRIC_A', 'A级布', 1),
+('material_grade', 'FABRIC_AA', 'AA级布', 2),
+('material_grade', 'FABRIC_S', 'S级布', 3),
+('material_grade', 'FABRIC_SS', 'SS级进口布', 4),
+('material_grade', 'LEATHER_HALF', '半皮', 10),
+('material_grade', 'LEATHER_A', 'A级全皮', 11),
+('material_grade', 'LEATHER_AA', 'AA级全皮', 12),
+('material_grade', 'LEATHER_S', 'S级全皮', 13),
+('material_grade', 'LEATHER_SS', 'SS级全皮', 14)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 工艺类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('process_type', 'STANDARD', '标准工艺', 1),
+('process_type', 'MODULAR', '模块化组合', 2),
+('process_type', 'CUSTOM', '非标定制', 3),
+('process_type', 'IRREGULAR', '异形/特殊', 4),
+('process_type', 'QUICK', '快单/现货', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 导入行状态字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('import_row_status', 'PENDING', '待处理', 1),
+('import_row_status', 'PROCESSING', '处理中', 2),
+('import_row_status', 'SUCCESS', '成功', 3),
+('import_row_status', 'FAILED', '失败', 4),
+('import_row_status', 'SKIPPED', '已跳过', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 映射状态字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('mapping_status', 'ACTIVE', '生效中', 1),
+('mapping_status', 'PAUSED', '暂停', 2),
+('mapping_status', 'DISCONTINUED', '已终止', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 工厂来源类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('factory_source_type', 'MANUAL', '手动录入', 1),
+('factory_source_type', 'EXCEL_IMPORT', 'Excel导入', 2),
+('factory_source_type', 'API_SYNC', '接口同步', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 导入行类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('import_row_type', 'PRODUCT', '产品型号行', 1),
+('import_row_type', 'MODULE', '模块行', 2),
+('import_row_type', 'HEADER', '表头行', 3),
+('import_row_type', 'UNKNOWN', '未知', 4)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;

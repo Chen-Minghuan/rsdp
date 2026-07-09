@@ -36,6 +36,13 @@ public class FactoryMaster {
     private LocalDate firstAuditDate;
     private LocalDate nextVisitDate;
     private String notes;
+
+    private java.math.BigDecimal capacityTierScore;
+    private String lastAssessmentPeriod;
+    private LocalDate lastAssessmentDate;
+    private String importBatchSource;
+    private String sourceType;
+
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

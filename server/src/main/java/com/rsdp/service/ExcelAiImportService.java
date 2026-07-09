@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.excel.ProductImportRow;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
+import com.rsdp.dto.request.RspuFactoryMappingRequest;
 import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.response.ExcelAiImportFailure;
@@ -150,6 +151,9 @@ public class ExcelAiImportService {
     private final VariantCodeMapper variantCodeMapper;
     private final ObjectMapper objectMapper;
     private final PlatformTransactionManager transactionManager;
+    private final RspuFactoryMappingService rspuFactoryMappingService;
+    private final FactoryLeadTimeRuleService factoryLeadTimeRuleService;
+    private final ExcelImportRowService excelImportRowService;
 
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
@@ -244,23 +248,38 @@ public class ExcelAiImportService {
         List<String> rspuIds = new ArrayList<>();
         List<String> taskIds = new ArrayList<>();
 
+        // 保存批次级工厂/发货地信息
+        applyBatchFactoryInfo(batch, request);
+
         int rowIndex = 1; // 第 1 行为表头
         for (Map<String, String> dataRow : rawDataRows) {
             rowIndex++;
+            Long importRowId = null;
             try {
+                importRowId = excelImportRowService.initRow(batch.getBatchId(), rowIndex, "product", dataRow, null);
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
-                    selectedPriceColumns, request, embeddedImages, dictCache, rowIndex);
+                    selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId);
                 if (rowResult.rspuId != null) {
                     rspuIds.add(rowResult.rspuId);
+                    excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
+                        rowResult.rskuIds, rowResult.imageCount, rowResult.imageAssetIds, rowResult.taskId);
+                } else if (rowResult.skipped) {
+                    excelImportRowService.markSkipped(importRowId, rowResult.skipReason);
                 }
                 if (rowResult.taskId != null) {
                     taskIds.add(rowResult.taskId);
                 }
             } catch (BusinessException e) {
                 failures.add(new ExcelAiImportFailure(rowIndex, e.getMessage()));
+                if (importRowId != null) {
+                    excelImportRowService.markFailed(importRowId, "validate_or_create", e.getMessage());
+                }
             } catch (Exception e) {
                 log.error("Excel AI 导入行处理异常，rowIndex={}", rowIndex, e);
                 failures.add(new ExcelAiImportFailure(rowIndex, "系统异常: " + e.getMessage()));
+                if (importRowId != null) {
+                    excelImportRowService.markFailed(importRowId, "system", e.getMessage());
+                }
             }
         }
 
@@ -270,7 +289,7 @@ public class ExcelAiImportService {
         result.setTaskIds(taskIds);
         result.setFailures(failures);
 
-        updateBatchResult(batch, result);
+        updateBatchResult(batch, request, result);
         return result;
     }
 
@@ -728,12 +747,13 @@ public class ExcelAiImportService {
                                               List<PriceColumnInfo> priceColumns,
                                               ExcelAiMappingRequest request,
                                               Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages,
-                                              Map<String, List<CategoryDict>> dictCache, int rowIndex) {
+                                              Map<String, List<CategoryDict>> dictCache, int rowIndex,
+                                              Long importRowId) {
         DefaultTransactionDefinition def = new DefaultTransactionDefinition();
         TransactionStatus status = transactionManager.getTransaction(def);
         try {
             RowResult result = processRow(dataRow, mapping, categoryHint, priceColumns, request,
-                embeddedImages, dictCache, rowIndex);
+                embeddedImages, dictCache, rowIndex, importRowId);
             transactionManager.commit(status);
             return result;
         } catch (Exception e) {
@@ -749,41 +769,43 @@ public class ExcelAiImportService {
                                  List<PriceColumnInfo> priceColumns,
                                  ExcelAiMappingRequest request,
                                  Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages,
-                                 Map<String, List<CategoryDict>> dictCache, int rowIndex) {
+                                 Map<String, List<CategoryDict>> dictCache, int rowIndex, Long importRowId) {
         if (isNoteOrEmptyRow(dataRow)) {
             log.debug("第 {} 行为说明或空行，已跳过", rowIndex);
-            return new RowResult(null, null);
+            return RowResult.skipped("说明或空行");
         }
 
+        excelImportRowService.updateStage(importRowId, "build_product_row");
         ProductImportRow row = buildProductImportRow(dataRow, mapping, categoryHint, dictCache);
         String error = validateRow(row, dictCache);
         if (error != null) {
             throw new BusinessException(error);
         }
 
+        excelImportRowService.updateStage(importRowId, "download_images");
         List<DownloadedImage> images = new ArrayList<>();
         images.addAll(downloadUrlImages(row, rowIndex));
         images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex));
 
+        excelImportRowService.updateStage(importRowId, "create_rspu");
         String rspuId = createRspu(row, dictCache);
         saveStylesAndScenes(rspuId, row, dictCache);
         String primaryObjectKey = saveImages(rspuId, null, images);
 
-        // 为每个选中的价格列创建变体 + RSKU
-        if (priceColumns != null && !priceColumns.isEmpty()) {
-            createVariantsAndRskus(rspuId, dataRow, row, priceColumns, request, dictCache);
-        } else {
-            // 没有价格列时，创建默认变体
-            String variantId = createVariantIfNeeded(rspuId, row, dictCache);
-            saveImages(rspuId, variantId, List.of()); // 已保存过主图，这里只是占位
-        }
+        // 创建 RSPU-工厂关联
+        excelImportRowService.updateStage(importRowId, "create_factory_mapping");
+        String variantId = createRspuFactoryMappingAndVariants(rspuId, dataRow, row, priceColumns, request,
+            dictCache, importRowId);
 
+        excelImportRowService.updateStage(importRowId, "create_async_task");
         String taskId = null;
         if (primaryObjectKey != null) {
             taskId = createAsyncTask(rspuId, primaryObjectKey);
         }
 
-        return new RowResult(rspuId, taskId);
+        int imageCount = images.size();
+        List<String> imageAssetIds = List.of(); // 目前 saveImages 未返回 ID 列表，后续可扩展
+        return RowResult.success(rspuId, variantId, List.of(), imageCount, imageAssetIds, taskId);
     }
 
     private ProductImportRow buildProductImportRow(Map<String, String> dataRow, Map<String, String> mapping,
@@ -1132,64 +1154,144 @@ public class ExcelAiImportService {
         return variantResponse.getVariantId();
     }
 
-    private void createVariantsAndRskus(String rspuId, Map<String, String> dataRow, ProductImportRow baseRow,
-                                        List<PriceColumnInfo> priceColumns, ExcelAiMappingRequest request,
-                                        Map<String, List<CategoryDict>> dictCache) {
-        Integer leadTimeDays = parseLeadTimeDays(dataRow);
-        Integer moq = request.getDefaultMoq() != null ? request.getDefaultMoq() : 1;
+    private String createRspuFactoryMappingAndVariants(String rspuId, Map<String, String> dataRow,
+                                                        ProductImportRow baseRow,
+                                                        List<PriceColumnInfo> priceColumns,
+                                                        ExcelAiMappingRequest request,
+                                                        Map<String, List<CategoryDict>> dictCache,
+                                                        Long importRowId) {
         String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
             ? request.getDefaultFactoryCode()
             : null;
         String shippingFrom = StringUtils.hasText(request.getDefaultShippingFrom())
             ? request.getDefaultShippingFrom()
             : null;
+        String shippingWarehouseId = StringUtils.hasText(request.getShippingWarehouseId())
+            ? request.getShippingWarehouseId()
+            : null;
+        Integer moq = request.getDefaultMoq() != null ? request.getDefaultMoq() : 1;
+        String categoryCode = baseRow.getCategoryCode();
 
-        for (PriceColumnInfo priceColumn : priceColumns) {
-            String priceText = dataRow.getOrDefault(priceColumn.getHeader(), "").trim();
-            if (!StringUtils.hasText(priceText)) {
-                continue;
-            }
-            BigDecimal price = parsePrice(priceText);
-            if (price == null) {
-                log.warn("价格解析失败，header={}, value={}", priceColumn.getHeader(), priceText);
-                continue;
-            }
+        // 创建 RSPU-工厂映射（仅当指定工厂时）
+        if (factoryCode != null) {
+            createRspuFactoryMapping(rspuId, factoryCode, shippingWarehouseId, moq,
+                request.getDefaultLeadTimeDays(), importRowId);
+        }
 
-            String materialName = priceColumn.getMaterialName();
-            String materialCode = resolveMaterialCode(materialName, dictCache.get("material"));
+        String firstVariantId = null;
+        // 为每个选中的价格列创建变体 + RSKU
+        if (priceColumns != null && !priceColumns.isEmpty()) {
+            for (PriceColumnInfo priceColumn : priceColumns) {
+                String priceText = dataRow.getOrDefault(priceColumn.getHeader(), "").trim();
+                if (!StringUtils.hasText(priceText)) {
+                    continue;
+                }
+                BigDecimal price = parsePrice(priceText);
+                if (price == null) {
+                    log.warn("价格解析失败，header={}, value={}", priceColumn.getHeader(), priceText);
+                    continue;
+                }
 
-            // 创建变体
-            RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
-            variantRequest.setDisplayName(StringUtils.hasText(materialName) ? materialName : "默认变体");
-            variantRequest.setMaterialCode(materialCode);
-            variantRequest.setReferencePriceBand(resolvePriceBand(price));
-            variantRequest.setProductLevel(baseRow.getProductLevel());
-            var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
-            if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
-                log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
-                continue;
-            }
+                String materialName = priceColumn.getMaterialName();
+                String materialGradeCode = resolveMaterialGradeCode(materialName);
+                String materialCode = resolveMaterialCode(materialName, dictCache.get("material"));
 
-            // 创建 RSKU
-            if (factoryCode != null) {
-                RskuCreateRequest rskuRequest = new RskuCreateRequest();
-                rskuRequest.setRspuId(rspuId);
-                rskuRequest.setVariantId(variantResponse.getVariantId());
-                rskuRequest.setFactoryCode(factoryCode);
-                rskuRequest.setFactoryPrice(price);
-                rskuRequest.setMaterialCode(materialCode);
-                rskuRequest.setMaterialDescription(materialName);
-                rskuRequest.setLeadTimeDays(leadTimeDays);
-                rskuRequest.setMoq(moq);
-                rskuRequest.setShippingFrom(shippingFrom);
-                rskuRequest.setProductLevel(baseRow.getProductLevel());
-                try {
-                    rskuService.createRsku(rskuRequest);
-                } catch (Exception e) {
-                    log.warn("为价格列创建 RSKU 失败，header={}", priceColumn.getHeader(), e);
+                // 动态计算交期
+                Integer leadTimeDays = calculateLeadTime(factoryCode, categoryCode, materialGradeCode,
+                    request.getDefaultLeadTimeDays());
+
+                // 创建变体
+                RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
+                variantRequest.setDisplayName(StringUtils.hasText(materialName) ? materialName : "默认变体");
+                variantRequest.setMaterialCode(materialCode);
+                variantRequest.setReferencePriceBand(resolvePriceBand(price));
+                variantRequest.setProductLevel(baseRow.getProductLevel());
+                var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
+                if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
+                    log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
+                    continue;
+                }
+                if (firstVariantId == null) {
+                    firstVariantId = variantResponse.getVariantId();
+                }
+
+                // 创建 RSKU
+                if (factoryCode != null) {
+                    RskuCreateRequest rskuRequest = new RskuCreateRequest();
+                    rskuRequest.setRspuId(rspuId);
+                    rskuRequest.setVariantId(variantResponse.getVariantId());
+                    rskuRequest.setFactoryCode(factoryCode);
+                    rskuRequest.setFactoryPrice(price);
+                    rskuRequest.setMaterialCode(materialCode);
+                    rskuRequest.setMaterialDescription(materialName);
+                    rskuRequest.setLeadTimeDays(leadTimeDays);
+                    rskuRequest.setMoq(moq);
+                    rskuRequest.setShippingFrom(shippingFrom);
+                    rskuRequest.setShippingWarehouseId(shippingWarehouseId);
+                    rskuRequest.setProductLevel(baseRow.getProductLevel());
+                    try {
+                        rskuService.createRsku(rskuRequest);
+                    } catch (Exception e) {
+                        log.warn("为价格列创建 RSKU 失败，header={}", priceColumn.getHeader(), e);
+                    }
                 }
             }
+        } else {
+            // 没有价格列时，创建默认变体
+            String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache);
+            firstVariantId = variantId;
+            saveImages(rspuId, variantId, List.of());
         }
+
+        return firstVariantId;
+    }
+
+    private void createRspuFactoryMapping(String rspuId, String factoryCode, String shippingWarehouseId,
+                                          Integer moq, Integer baseLeadTimeDays, Long importRowId) {
+        try {
+            RspuFactoryMappingRequest mappingRequest = new RspuFactoryMappingRequest();
+            mappingRequest.setRspuId(rspuId);
+            mappingRequest.setFactoryCode(factoryCode);
+            mappingRequest.setIsPrimary(true);
+            mappingRequest.setShippingWarehouseId(shippingWarehouseId);
+            mappingRequest.setMoq(moq);
+            mappingRequest.setBaseLeadTimeDays(baseLeadTimeDays);
+            mappingRequest.setStatus("active");
+            rspuFactoryMappingService.saveMapping(mappingRequest);
+        } catch (BusinessException e) {
+            // 已存在则不报错
+            if (!e.getMessage().contains("已关联此工厂")) {
+                log.warn("创建 RSPU-工厂映射失败，rspuId={}, factoryCode={}", rspuId, factoryCode, e);
+            }
+        }
+    }
+
+    private Integer calculateLeadTime(String factoryCode, String categoryCode, String materialGradeCode,
+                                      Integer defaultLeadTimeDays) {
+        if (factoryCode == null) {
+            return defaultLeadTimeDays;
+        }
+        Integer ruleDays = factoryLeadTimeRuleService.calculateLeadTime(factoryCode, categoryCode, materialGradeCode,
+            "standard", 1);
+        return ruleDays != null ? ruleDays : defaultLeadTimeDays;
+    }
+
+    private String resolveMaterialGradeCode(String materialName) {
+        if (!StringUtils.hasText(materialName)) {
+            return null;
+        }
+        return switch (materialName.trim()) {
+            case "A级布" -> "FABRIC_A";
+            case "AA级布" -> "FABRIC_AA";
+            case "S级布" -> "FABRIC_S";
+            case "SS级进口布" -> "FABRIC_SS";
+            case "半皮" -> "LEATHER_HALF";
+            case "A级全皮" -> "LEATHER_A";
+            case "AA级全皮" -> "LEATHER_AA";
+            case "S级全皮" -> "LEATHER_S";
+            case "SS级全皮" -> "LEATHER_SS";
+            default -> null;
+        };
     }
 
     private Integer parseLeadTimeDays(Map<String, String> dataRow) {
@@ -1373,10 +1475,22 @@ public class ExcelAiImportService {
         }
     }
 
-    private void updateBatchResult(ExcelImportBatch batch, ExcelAiImportResult result) {
+    private void applyBatchFactoryInfo(ExcelImportBatch batch, ExcelAiMappingRequest request) {
+        batch.setFactoryCode(request.getDefaultFactoryCode());
+        batch.setShippingWarehouseId(request.getShippingWarehouseId());
+        batch.setShippingFrom(request.getDefaultShippingFrom());
+        batch.setDefaultLeadTimeDays(request.getDefaultLeadTimeDays());
+        batch.setDefaultMoq(request.getDefaultMoq());
+        batch.setCategoryHint(request.getCategoryHint());
+        batch.setImportNote(request.getImportNote());
+    }
+
+    private void updateBatchResult(ExcelImportBatch batch, ExcelAiMappingRequest request, ExcelAiImportResult result) {
+        applyBatchFactoryInfo(batch, request);
         batch.setStatus("done");
         batch.setSuccessCount(result.getSuccessCount());
         batch.setFailedCount(result.getFailedCount());
+        batch.setProcessedAt(LocalDateTime.now());
         batch.setUpdatedAt(LocalDateTime.now());
         try {
             batch.setFailures(objectMapper.writeValueAsString(result.getFailures()));
@@ -1452,7 +1566,18 @@ public class ExcelAiImportService {
     private record ProcessedMapping(Map<String, String> mapping, List<PriceColumnInfo> priceColumns) {
     }
 
-    private record RowResult(String rspuId, String taskId) {
+    private record RowResult(String rspuId, String variantId, List<String> rskuIds,
+                              Integer imageCount, List<String> imageAssetIds,
+                              String taskId, boolean skipped, String skipReason) {
+
+        static RowResult success(String rspuId, String variantId, List<String> rskuIds,
+                                 Integer imageCount, List<String> imageAssetIds, String taskId) {
+            return new RowResult(rspuId, variantId, rskuIds, imageCount, imageAssetIds, taskId, false, null);
+        }
+
+        static RowResult skipped(String reason) {
+            return new RowResult(null, null, null, 0, null, null, true, reason);
+        }
     }
 
     private record DownloadedImage(String source, byte[] bytes, String contentType, boolean primary) {

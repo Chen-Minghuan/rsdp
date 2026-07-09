@@ -30,6 +30,7 @@ public class RskuCreateRequest {
     private Integer moq;
     private Integer warrantyYears;
     private String shippingFrom;
+    private String shippingWarehouseId;
     private String diffNotes;
     private String quoteConfidence;
 
