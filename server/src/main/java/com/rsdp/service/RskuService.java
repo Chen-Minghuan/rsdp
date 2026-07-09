@@ -24,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.rsdp.dto.request.RskuBatchCreateRequest;
+import com.rsdp.dto.request.RskuBatchFactoryQuote;
 import com.rsdp.dto.response.RskuBatchCreateResponse;
 
 import java.math.BigDecimal;
@@ -33,6 +34,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * RSKU 报价服务。
@@ -50,6 +54,7 @@ public class RskuService {
     private final PriceHistoryMapper priceHistoryMapper;
     private final AuditLogService auditLogService;
     private final DataScopeHelper dataScopeHelper;
+    private final PlatformTransactionManager transactionManager;
 
     /**
      * 查询某 RSPU 下的所有 RSKU 报价。
@@ -180,41 +185,60 @@ public class RskuService {
     /**
      * 批量为 RSPU 创建多家工厂报价。
      *
-     * <p>每个工厂单独处理，失败工厂记录原因，成功工厂继续。整批操作在同一个事务中。</p>
+     * <p>每个（变体，工厂）组合单独一个事务处理，失败只回滚当前组合，不影响其他组合。
+     * 同一家工厂的报价信息会应用到所有选中的变体。</p>
      *
      * @param rspuId  RSPU ID
      * @param request 批量创建请求
      * @return 批量创建结果
      */
-    @Transactional
     public RskuBatchCreateResponse batchCreateRskus(String rspuId, RskuBatchCreateRequest request) {
         RskuBatchCreateResponse response = new RskuBatchCreateResponse();
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
 
-        for (String factoryCode : request.getFactoryCodes()) {
-            RskuCreateRequest item = new RskuCreateRequest();
-            item.setRspuId(rspuId);
-            item.setVariantId(request.getVariantId());
-            item.setFactoryCode(factoryCode);
-            item.setFactorySku(request.getFactorySku());
-            item.setFactoryPrice(request.getFactoryPrice());
-            item.setMaterialCode(request.getMaterialCode());
-            item.setMaterialDescription(request.getMaterialDescription());
-            item.setLeadTimeDays(request.getLeadTimeDays());
-            item.setMoq(request.getMoq());
-            item.setWarrantyYears(request.getWarrantyYears());
-            item.setShippingFrom(request.getShippingFrom());
-            item.setDiffNotes(request.getDiffNotes());
-            item.setQuoteConfidence(request.getQuoteConfidence());
-            item.setProductLevel(request.getProductLevel());
-            item.setAutoExtendCapability(request.getAutoExtendCapability());
-
+        for (String variantId : request.getVariantIds()) {
+            RspuVariant variant;
             try {
-                String rskuId = createRsku(item);
-                response.getRskuIds().add(rskuId);
-                response.setSuccessCount(response.getSuccessCount() + 1);
+                variant = rspuVariantService.findById(variantId);
+                if (!rspuId.equals(variant.getRspuId())) {
+                    throw new BusinessException("变体不属于该产品: " + variantId);
+                }
             } catch (Exception e) {
-                response.setFailedCount(response.getFailedCount() + 1);
-                response.getFailures().add(new RskuBatchCreateResponse.FailureDetail(factoryCode, e.getMessage()));
+                for (RskuBatchFactoryQuote quote : request.getFactoryQuotes()) {
+                    response.setFailedCount(response.getFailedCount() + 1);
+                    response.getFailures().add(new RskuBatchCreateResponse.FailureDetail(
+                        quote.getFactoryCode(), variantId, e.getMessage()));
+                }
+                continue;
+            }
+
+            for (RskuBatchFactoryQuote quote : request.getFactoryQuotes()) {
+                RskuCreateRequest item = new RskuCreateRequest();
+                item.setRspuId(rspuId);
+                item.setVariantId(variantId);
+                item.setFactoryCode(quote.getFactoryCode());
+                item.setFactorySku(quote.getFactorySku());
+                item.setFactoryPrice(quote.getFactoryPrice());
+                item.setMaterialCode(quote.getMaterialCode());
+                item.setMaterialDescription(quote.getMaterialDescription());
+                item.setLeadTimeDays(quote.getLeadTimeDays());
+                item.setMoq(quote.getMoq());
+                item.setWarrantyYears(quote.getWarrantyYears());
+                item.setShippingFrom(quote.getShippingFrom());
+                item.setDiffNotes(quote.getDiffNotes());
+                item.setQuoteConfidence(quote.getQuoteConfidence());
+                item.setProductLevel(request.getProductLevel());
+                item.setAutoExtendCapability(request.getAutoExtendCapability());
+
+                try {
+                    String rskuId = transactionTemplate.execute(status -> createRsku(item));
+                    response.getRskuIds().add(rskuId);
+                    response.setSuccessCount(response.getSuccessCount() + 1);
+                } catch (Exception e) {
+                    response.setFailedCount(response.getFailedCount() + 1);
+                    response.getFailures().add(new RskuBatchCreateResponse.FailureDetail(
+                        quote.getFactoryCode(), variantId, e.getMessage()));
+                }
             }
         }
 

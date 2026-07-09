@@ -19,10 +19,12 @@ public class RskuBatchCreateResponse {
     @Data
     public static class FailureDetail {
         private String factoryCode;
+        private String variantId;
         private String reason;
 
-        public FailureDetail(String factoryCode, String reason) {
+        public FailureDetail(String factoryCode, String variantId, String reason) {
             this.factoryCode = factoryCode;
+            this.variantId = variantId;
             this.reason = reason;
         }
     }

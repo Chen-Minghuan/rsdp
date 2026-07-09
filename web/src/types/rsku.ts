@@ -47,11 +47,12 @@ export interface RskuCreateRequest {
 }
 
 /**
- * RSKU 批量创建请求。
+ * 批量创建 RSKU 时单个工厂的报价信息。
+ *
+ * 该报价会应用到请求中所有选中的变体。
  */
-export interface RskuBatchCreateRequest {
-  variantId: string
-  factoryCodes: string[]
+export interface RskuBatchFactoryQuote {
+  factoryCode: string
   factorySku?: string
   factoryPrice: number
   materialCode?: string
@@ -62,6 +63,14 @@ export interface RskuBatchCreateRequest {
   shippingFrom?: string
   diffNotes?: string
   quoteConfidence?: string
+}
+
+/**
+ * RSKU 批量创建请求。
+ */
+export interface RskuBatchCreateRequest {
+  variantIds: string[]
+  factoryQuotes: RskuBatchFactoryQuote[]
   productLevel?: string
   autoExtendCapability?: boolean
 }
@@ -71,6 +80,7 @@ export interface RskuBatchCreateRequest {
  */
 export interface RskuBatchCreateFailure {
   factoryCode: string
+  variantId?: string
   reason: string
 }
 

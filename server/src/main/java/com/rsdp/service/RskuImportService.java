@@ -273,6 +273,7 @@ public class RskuImportService {
         return rskuSupplyMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
                 .in("variant_id", variantIds)
+                .isNull("deleted_at")
         ).stream()
             .collect(Collectors.toMap(
                 r -> r.getFactoryCode() + "|" + r.getVariantId(),

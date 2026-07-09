@@ -8,18 +8,16 @@ import lombok.Data;
 import java.math.BigDecimal;
 
 /**
- * RSKU 报价创建请求。
+ * 批量创建 RSKU 时，为单个工厂录入的统一报价信息。
+ *
+ * <p>该报价会应用到请求中所有选中的变体。</p>
  */
 @Data
-public class RskuCreateRequest {
-
-    private String rspuId;
+public class RskuBatchFactoryQuote {
 
     @NotBlank(message = "工厂代码不能为空")
     private String factoryCode;
 
-    @NotBlank(message = "变体 ID 不能为空")
-    private String variantId;
     private String factorySku;
 
     @NotNull(message = "出厂价不能为空")
@@ -34,10 +32,4 @@ public class RskuCreateRequest {
     private String shippingFrom;
     private String diffNotes;
     private String quoteConfidence;
-
-    /** 产品等级，为空时按 变体 > RSPU 继承。 */
-    private String productLevel;
-
-    /** 工厂无对应能力等级时，是否自动扩展工厂能力。 */
-    private Boolean autoExtendCapability;
 }

@@ -500,6 +500,46 @@ class RskuImportServiceTest {
         verify(rskuSupplyMapper, times(2)).insert(any(RskuSupply.class));
     }
 
+    @Test
+    void importRskus_shouldExcludeDeletedRskuWhenPreloadingExisting() throws Exception {
+        // Given
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001,1500"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        rskuImportService.importRskus(file, false);
+
+        // Then
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>> wrapperCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.QueryWrapper.class);
+        verify(rskuSupplyMapper).selectList(wrapperCaptor.capture());
+        String sqlSegment = wrapperCaptor.getValue().getCustomSqlSegment();
+        assertThat(sqlSegment).containsIgnoringCase("deleted_at IS NULL");
+    }
+
     private byte[] buildExcelWithRows(List<String> csvRows) throws Exception {
         // 使用 CSV 格式生成简单测试数据，EasyExcel 也能读取 CSV
         ByteArrayOutputStream out = new ByteArrayOutputStream();
