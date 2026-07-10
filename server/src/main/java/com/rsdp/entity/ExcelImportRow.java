@@ -1,6 +1,7 @@
 package com.rsdp.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.rsdp.config.typehandler.JsonbTypeHandler;
@@ -17,7 +18,7 @@ import java.time.LocalDateTime;
 @TableName("excel_import_row")
 public class ExcelImportRow {
 
-    @TableId
+    @TableId(type = IdType.AUTO)
     private Long rowId;
 
     private String batchId;

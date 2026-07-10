@@ -1,5 +1,6 @@
 package com.rsdp.entity;
 
+import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -16,7 +17,7 @@ import java.time.LocalDateTime;
 @TableName("product_style_match")
 public class ProductStyleMatch {
 
-    @TableId
+    @TableId(type = IdType.AUTO)
     private Long matchId;
 
     private String rspuId;

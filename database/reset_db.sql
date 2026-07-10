@@ -1122,3 +1122,19 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('import_row_type', 'HEADER', '表头行', 3),
 ('import_row_type', 'UNKNOWN', '未知', 4)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+
+-- ============================================================
+-- 自增序列对齐（接入自 database/V3__align_sequences.sql）
+-- 背景：以下 8 张表的主键实体已改为 IdType.AUTO，由数据库自增序列生成主键。
+--       本段保证重置后序列与当前 MAX(id) 一致，避免后续自增值与已有主键冲突。
+--       幂等：可重复执行；空表对齐到 1，非空表对齐到 MAX(id)。
+-- ============================================================
+SELECT setval('sys_role_role_id_seq',                 COALESCE((SELECT MAX(role_id) FROM sys_role), 1),                 (SELECT MAX(role_id) IS NOT NULL FROM sys_role));
+SELECT setval('sys_permission_permission_id_seq',     COALESCE((SELECT MAX(permission_id) FROM sys_permission), 1),     (SELECT MAX(permission_id) IS NOT NULL FROM sys_permission));
+SELECT setval('sys_role_permission_id_seq',           COALESCE((SELECT MAX(id) FROM sys_role_permission), 1),           (SELECT MAX(id) IS NOT NULL FROM sys_role_permission));
+SELECT setval('sys_user_role_id_seq',                 COALESCE((SELECT MAX(id) FROM sys_user_role), 1),                 (SELECT MAX(id) IS NOT NULL FROM sys_user_role));
+SELECT setval('sys_user_factory_id_seq',              COALESCE((SELECT MAX(id) FROM sys_user_factory), 1),              (SELECT MAX(id) IS NOT NULL FROM sys_user_factory));
+SELECT setval('rspu_factory_mapping_mapping_id_seq',  COALESCE((SELECT MAX(mapping_id) FROM rspu_factory_mapping), 1),  (SELECT MAX(mapping_id) IS NOT NULL FROM rspu_factory_mapping));
+SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_id) FROM factory_lead_time_rule), 1),   (SELECT MAX(rule_id) IS NOT NULL FROM factory_lead_time_rule));
+SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));

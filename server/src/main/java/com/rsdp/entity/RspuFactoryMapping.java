@@ -1,5 +1,6 @@
 package com.rsdp.entity;
 
+import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -15,7 +16,7 @@ import java.time.LocalDateTime;
 @TableName("rspu_factory_mapping")
 public class RspuFactoryMapping {
 
-    @TableId
+    @TableId(type = IdType.AUTO)
     private Long mappingId;
 
     private String rspuId;

@@ -1,5 +1,6 @@
 package com.rsdp.entity;
 
+import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -15,7 +16,7 @@ import java.time.LocalDateTime;
 @TableName("factory_lead_time_rule")
 public class FactoryLeadTimeRule {
 
-    @TableId
+    @TableId(type = IdType.AUTO)
     private Long ruleId;
 
     private String factoryCode;
