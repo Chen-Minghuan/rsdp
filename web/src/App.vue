@@ -3,7 +3,8 @@ import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpac
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { ROLES } from '@/utils/constants'
+import { flatNavItems, type NavItem } from '@/config/navigation'
 
 const router = useRouter()
 const route = useRoute()
@@ -44,13 +45,25 @@ onMounted(async () => {
   }
 })
 
-const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_CREATE))
-const canReadProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_READ))
-const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
-const canReadFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_READ))
-const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
-const canReadScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_READ))
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+
+/** 导航项可见性：按配置中的权限/角色要求判定。 */
+function isItemVisible(item: NavItem): boolean {
+  if (item.permission && !userStore.hasPermission(item.permission)) return false
+  if (item.role && !userStore.hasRole(item.role)) return false
+  return true
+}
+
+/** 导航项高亮：exact 精确匹配；prefix 前缀匹配并支持排除子路径。 */
+function isItemActive(item: NavItem): boolean {
+  if (item.activeMatch === 'prefix') {
+    if (!route.path.startsWith(item.path)) return false
+    return !(item.activeExcludes ?? []).includes(route.path)
+  }
+  return route.path === item.path
+}
+
+const visibleNavItems = computed(() => flatNavItems.filter(isItemVisible))
 
 const userDropdownOptions = computed(() => {
   const options: { label: string; key: string; disabled?: boolean }[] = [
@@ -83,87 +96,12 @@ async function handleUserAction(key: string) {
           </div>
           <n-space align="center">
             <n-button
-              :type="route.path === '/' ? 'primary' : 'default'"
-              @click="navigate('/')"
+              v-for="item in visibleNavItems"
+              :key="item.key"
+              :type="isItemActive(item) ? 'primary' : 'default'"
+              @click="navigate(item.path)"
             >
-              首页
-            </n-button>
-            <n-button
-              v-if="canCreateProduct"
-              :type="route.path === '/entry' ? 'primary' : 'default'"
-              @click="navigate('/entry')"
-            >
-              新品录入
-            </n-button>
-            <n-button
-              v-if="isFactoryAdmin"
-              :type="route.path === '/factory-entry' ? 'primary' : 'default'"
-              @click="navigate('/factory-entry')"
-            >
-              工厂录入
-            </n-button>
-            <n-button
-              v-if="canImportProduct"
-              :type="route.path === '/products/document-import' ? 'primary' : 'default'"
-              @click="navigate('/products/document-import')"
-            >
-              PDF 导入
-            </n-button>
-            <n-button
-              v-if="canImportProduct"
-              :type="route.path === '/products/excel-ai-import' ? 'primary' : 'default'"
-              @click="navigate('/products/excel-ai-import')"
-            >
-              Excel AI 导入
-            </n-button>
-            <n-button
-              v-if="canReadProduct"
-              :type="route.path.startsWith('/products') && !['/products/document-import', '/products/excel-ai-import'].includes(route.path) ? 'primary' : 'default'"
-              @click="navigate('/products')"
-            >
-              产品库
-            </n-button>
-            <n-button
-              v-if="canReadFactory"
-              :type="route.path === '/factories' ? 'primary' : 'default'"
-              @click="navigate('/factories')"
-            >
-              工厂管理
-            </n-button>
-            <n-button
-              v-if="canGenerateQuote"
-              :type="route.path === '/quotes/build' ? 'primary' : 'default'"
-              @click="navigate('/quotes/build')"
-            >
-              报价单生成器
-            </n-button>
-            <n-button
-              v-if="canReadScheme"
-              :type="route.path.startsWith('/schemes') ? 'primary' : 'default'"
-              @click="navigate('/schemes')"
-            >
-              搭配方案
-            </n-button>
-            <n-button
-              v-if="canReadProduct"
-              :type="route.path.startsWith('/matching') ? 'primary' : 'default'"
-              @click="navigate('/matching/room-scheme')"
-            >
-              AI 搭配方案
-            </n-button>
-            <n-button
-              v-if="canReadProduct"
-              :type="route.path === '/visual-search' ? 'primary' : 'default'"
-              @click="navigate('/visual-search')"
-            >
-              以图搜图
-            </n-button>
-            <n-button
-              v-if="userStore.hasRole(ROLES.ADMIN)"
-              :type="route.path === '/admin/users' ? 'primary' : 'default'"
-              @click="navigate('/admin/users')"
-            >
-              用户管理
+              {{ item.label }}
             </n-button>
             <n-dropdown
               v-if="userStore.isLoggedIn"
