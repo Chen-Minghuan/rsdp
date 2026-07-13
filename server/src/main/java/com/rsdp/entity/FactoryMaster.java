@@ -75,6 +75,12 @@ public class FactoryMaster {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String factoryImages;
 
+    private java.math.BigDecimal capacityTierScore;
+    private String lastAssessmentPeriod;
+    private LocalDate lastAssessmentDate;
+    private String importBatchSource;
+    private String sourceType;
+
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

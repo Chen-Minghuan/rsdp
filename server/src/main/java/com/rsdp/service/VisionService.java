@@ -1,5 +1,7 @@
 package com.rsdp.service;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.config.SixDimSchemaConfig;
 import com.rsdp.dto.AiLabels;
@@ -283,6 +285,7 @@ public class VisionService {
           ...
         ]
 
+        关键约束：即使页面很多，也必须输出完整、合法的 JSON 数组，不能省略结尾括号或截断任何对象。
         只输出 JSON 数组，不要任何其他文字说明。
         """;
 
@@ -362,9 +365,42 @@ public class VisionService {
         } catch (ExternalServiceException e) {
             throw e;
         } catch (Exception e) {
+            log.warn("AI 页面检测结果 JSON 可能截断，尝试流式解析已完整对象，expectedSize={}", expectedSize);
+            List<DocumentProductRegion> recovered = parsePageRegionsStreaming(json, expectedSize);
+            if (recovered != null && !recovered.isEmpty()) {
+                log.info("流式解析恢复 {} 页结果", recovered.size());
+                return recovered;
+            }
             log.error("解析 AI 页面检测结果失败，json={}", json, e);
             throw new ExternalServiceException("解析 AI 页面检测结果失败", e);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<DocumentProductRegion> parsePageRegionsStreaming(String json, int expectedSize) {
+        List<DocumentProductRegion> regions = new java.util.ArrayList<>();
+        try (JsonParser parser = objectMapper.getFactory().createParser(json)) {
+            if (parser.nextToken() != JsonToken.START_ARRAY) {
+                return null;
+            }
+            while (parser.nextToken() == JsonToken.START_OBJECT) {
+                Map<String, Object> map = parser.readValueAs(Map.class);
+                DocumentProductRegion region = parseSingleRegion(map);
+                region.setPageIndex(regions.size());
+                regions.add(region);
+            }
+        } catch (Exception e) {
+            log.warn("流式解析 AI 页面检测结果中断，已恢复 {} 页", regions.size());
+        }
+        if (regions.size() < expectedSize) {
+            for (int i = regions.size(); i < expectedSize; i++) {
+                DocumentProductRegion fallback = new DocumentProductRegion();
+                fallback.setPageIndex(i);
+                fallback.setPageType("unknown");
+                regions.add(fallback);
+            }
+        }
+        return regions;
     }
 
     @SuppressWarnings("unchecked")

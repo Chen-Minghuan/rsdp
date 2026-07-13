@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
+import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -155,6 +155,42 @@ export async function importProductsFromDocument(file: File, categoryHint?: stri
     '/v1/products/document-import',
     formData,
     { signal }
+  )
+  return result.data
+}
+
+/**
+ * Excel AI 辅助导入：上传文件并预览字段映射。
+ */
+export async function previewExcelAiImport(file: File, signal?: AbortSignal): Promise<ExcelAiMappingResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const { data: result } = await uploadClient.post<ApiResult<ExcelAiMappingResponse>>(
+    '/v1/products/excel-ai-import/preview',
+    formData,
+    { signal }
+  )
+  return result.data
+}
+
+/**
+ * Excel AI 辅助导入：确认映射并执行导入。
+ */
+export async function confirmExcelAiImport(request: ExcelAiMappingRequest): Promise<ExcelAiImportResult> {
+  const { data: result } = await apiClient.post<ApiResult<ExcelAiImportResult>>(
+    '/v1/products/excel-ai-import/import',
+    request
+  )
+  return result.data
+}
+
+/**
+ * 查询 Excel AI 辅助导入批次状态。
+ */
+export async function getExcelAiImportStatus(batchId: string): Promise<ExcelAiImportStatus> {
+  const { data: result } = await apiClient.get<ApiResult<ExcelAiImportStatus>>(
+    `/v1/products/excel-ai-import/${batchId}`
   )
   return result.data
 }

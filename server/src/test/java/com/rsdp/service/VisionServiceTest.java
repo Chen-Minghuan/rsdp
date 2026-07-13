@@ -126,4 +126,59 @@ class VisionServiceTest {
             .isInstanceOf(RuntimeException.class)
             .hasMessageContaining("API 返回为空");
     }
+
+    @Test
+    void detectPageRegions_shouldParseCompleteJson() throws Exception {
+        String aiJson = """
+            [
+              {"pageType": "product", "products": [{"bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5}, "estimatedCategory": "SF"}]},
+              {"pageType": "cover", "products": []}
+            ]
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        List<InputStream> images = List.of(
+            new ByteArrayInputStream("fake-page-1".getBytes()),
+            new ByteArrayInputStream("fake-page-2".getBytes())
+        );
+
+        var regions = visionService.detectPageRegions(images, null);
+
+        assertThat(regions).hasSize(2);
+        assertThat(regions.get(0).getPageType()).isEqualTo("product");
+        assertThat(regions.get(0).getProducts()).hasSize(1);
+        assertThat(regions.get(0).getProducts().get(0).getEstimatedCategory()).isEqualTo("SF");
+        assertThat(regions.get(1).getPageType()).isEqualTo("cover");
+    }
+
+    @Test
+    void detectPageRegions_shouldRecoverFromTruncatedJson() throws Exception {
+        String aiJson = """
+            [
+              {"pageType": "product", "products": [{"bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5}, "estimatedCategory": "SF"}]},
+              {"pageType": "product", "products": [{"bbox": {"x": 0.6, "y": 0.2, "w": 0.3, "h": 0.4
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        List<InputStream> images = List.of(
+            new ByteArrayInputStream("fake-page-1".getBytes()),
+            new ByteArrayInputStream("fake-page-2".getBytes())
+        );
+
+        var regions = visionService.detectPageRegions(images, null);
+
+        assertThat(regions).hasSize(2);
+        assertThat(regions.get(0).getPageType()).isEqualTo("product");
+        assertThat(regions.get(1).getPageType()).isEqualTo("unknown");
+    }
 }

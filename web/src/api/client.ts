@@ -40,7 +40,7 @@ export const apiClient = axios.create({
  */
 export const uploadClient = axios.create({
   baseURL: '/api',
-  timeout: 120000,
+  timeout: 300000,
   withCredentials: true
 })
 

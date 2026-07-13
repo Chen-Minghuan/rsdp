@@ -269,3 +269,74 @@ export interface DocumentImportResult {
   rspuIds: string[]
   failures: DocumentImportFailure[]
 }
+
+/**
+ * Excel AI 导入中识别出的价格列。
+ */
+export interface PriceColumnInfo {
+  header: string
+  materialName: string
+  suggestedField: string
+}
+
+/**
+ * Excel AI 辅助导入字段映射预览响应。
+ */
+export interface ExcelAiMappingResponse {
+  batchId: string
+  headers: string[]
+  suggestedMapping: Record<string, string | null>
+  previewRows: Record<string, string>[]
+  priceColumns: PriceColumnInfo[]
+  notes?: string
+}
+
+/**
+ * Excel AI 辅助导入确认请求。
+ */
+export interface ExcelAiMappingRequest {
+  batchId: string
+  mapping: Record<string, string>
+  updateIfExists?: boolean
+  categoryHint?: string
+  defaultFactoryCode?: string
+  defaultShippingFrom?: string
+  defaultMoq?: number
+  selectedPriceColumns?: string[]
+}
+
+/**
+ * Excel AI 辅助导入失败明细。
+ */
+export interface ExcelAiImportFailure {
+  rowIndex: number
+  reason: string
+}
+
+/**
+ * Excel AI 辅助导入执行结果。
+ */
+export interface ExcelAiImportResult {
+  batchId: string
+  totalRows: number
+  successCount: number
+  failedCount: number
+  taskIds: string[]
+  rspuIds: string[]
+  failures: ExcelAiImportFailure[]
+}
+
+/**
+ * Excel AI 辅助导入批次状态。
+ */
+export interface ExcelAiImportStatus {
+  batchId: string
+  fileName: string
+  status: string
+  totalRows: number
+  successCount: number
+  failedCount: number
+  failures: ExcelAiImportFailure[]
+  createdAt: string
+  updatedAt: string
+}

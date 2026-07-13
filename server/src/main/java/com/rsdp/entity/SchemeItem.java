@@ -3,6 +3,7 @@ package com.rsdp.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.rsdp.config.typehandler.EncryptTypeHandler;
 import lombok.Data;
@@ -32,4 +33,7 @@ public class SchemeItem {
     private Integer quantity;
     private Integer sortOrder;
     private LocalDateTime createdAt;
+
+    @TableLogic(value = "null", delval = "now()")
+    private LocalDateTime deletedAt;
 }

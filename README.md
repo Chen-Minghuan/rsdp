@@ -85,7 +85,7 @@ cp deploy/.env.example deploy/.env
 cd deploy && docker compose up -d
 ```
 
-首次启动时，PostgreSQL 会自动执行 `database/init_db.sql` 和 `database/seed_data.sql` 完成数据库初始化。
+首次启动时，PostgreSQL 会自动执行 `database/V1__init_db.sql`、`database/V1__seed_data.sql` 和 `database/V2__factory_module.sql` 完成数据库初始化。
 
 访问：http://localhost（Nginx 会强转 HTTPS，若使用自签名证书请忽略浏览器安全警告）
 

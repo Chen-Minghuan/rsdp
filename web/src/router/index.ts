@@ -46,6 +46,12 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
   },
   {
+    path: '/products/excel-ai-import',
+    name: 'ProductExcelAiImport',
+    component: () => import('@/views/ProductExcelAiImportView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
+  },
+  {
     path: '/products/:rspuId',
     name: 'ProductDetail',
     component: () => import('@/views/ProductDetailView.vue'),

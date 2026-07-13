@@ -47,7 +47,7 @@ class PdfImportServiceTest {
         setField("maxFileSizeMb", 50);
         setField("maxPages", 200);
         setField("renderDpi", 72f);
-        setField("detectBatchSize", 20);
+        setField("detectBatchSize", 5);
         setField("outputQuality", 0.9f);
     }
 

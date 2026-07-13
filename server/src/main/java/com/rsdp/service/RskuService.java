@@ -165,6 +165,7 @@ public class RskuService {
         rsku.setMoq(request.getMoq());
         rsku.setWarrantyYears(request.getWarrantyYears());
         rsku.setShippingFrom(request.getShippingFrom());
+        rsku.setShippingWarehouseId(request.getShippingWarehouseId());
         rsku.setDiffNotes(request.getDiffNotes());
         rsku.setQuoteConfidence(request.getQuoteConfidence());
         rsku.setReviewStatus("待复核");

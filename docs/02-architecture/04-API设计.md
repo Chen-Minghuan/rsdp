@@ -168,6 +168,75 @@ POST   /api/v1/products/document-import
        #   - 按 bbox 裁剪出单产品图后，为每个产品创建 RSPU 草稿并触发异步 AI 识别
        #   - 前端通过 taskIds 轮询每个产品的识别进度
 
+POST   /api/v1/products/excel-ai-import/preview
+       # Excel AI 辅助字段映射预览（已实现）
+       # Request: multipart/form-data
+       #   file: File (必填, Excel .xlsx/.xls, ≤200MB)
+       # Response: {
+       #   batchId: string,
+       #   headers: string[],
+       #   previewRows: { [header: string]: string }[],
+       #   suggestedMapping: { [header: string]: string },
+       #   priceColumns: [{ header: string, materialName: string, suggestedField: string }],
+       #   categoryGuess: string,
+       #   notes: string
+       # }
+       # 说明：
+       #   - 支持单行/多行表头：先清洗表头（去掉英文备注、括号单位），再合并父子表头
+       #   - AI 根据清洗后的表头和样例数据推荐字段映射；value 为标准字段名
+       #   - 复合表头「型号品名」会映射为 "externalCode,productName"，导入时按空格/斜杠拆分
+       #   - 多材质价格列（如「价格-A级布」「价格-AA级布」）映射为特殊字段 "__PRICE__:材质名"，
+       #     并在 priceColumns 中独立列出，供前端勾选
+       #   - 返回的 mapping key 为合并后的原始表头，对应后续确认导入接口的字段名
+       #   - 原始 Excel 文件会持久化到 storage，用于确认阶段重新读取和内嵌图片提取
+       #   - 文件大小上限 200MB；单次导入行数上限 500 行；单张内嵌/URL 图片上限 20MB
+       #   - 200MB 大文件内含大量图片时，内嵌图片提取可能占用较多内存，建议优先使用图片 URL
+
+POST   /api/v1/products/excel-ai-import/import
+       # Excel AI 辅助确认导入（已实现）
+       # Request: JSON Body
+       #   {
+       #     batchId: string,
+       #     mapping: { [header: string]: string },
+       #     categoryHint: string,          // 品类提示，如 FS；Excel 无品类列时必填
+       #     selectedPriceColumns: string[], // 要导入的价格列 header 列表；为空则导入全部
+       #     defaultFactoryCode: string,    // 默认工厂编码，用于生成 RSKU 与 RSPU-工厂映射
+       #     shippingWarehouseId: string,   // 默认发货仓库 ID（关联 factory_warehouse）
+       #     defaultShippingFrom: string,   // 默认发货地（冗余显示字段）
+       #     defaultLeadTimeDays: number,   // 默认基础交期天数；未配置时按工厂交期规则动态计算
+       #     defaultMoq: number             // 默认最小起订量
+       #   }
+       # Response: {
+       #   batchId: string,
+       #   totalRows: number,
+       #   successCount: number,
+       #   failedCount: number,
+       #   taskIds: string[],
+       #   rspuIds: string[],
+       #   failures: [{ rowIndex, reason }]
+       # }
+       # 说明：
+       #   - 按 mapping 读取 Excel 每一行，逐行独立事务写入 RSPU / 变体 / 图片 / RSKU
+       #   - 每行先创建 1 个 RSPU；每个选中的价格列创建 1 个变体 + 1 条 RSKU（工厂报价）
+       #   - 支持内嵌图片（按 sheet+行分组）和 URL 图片（http/https）
+       #   - 主数据创建成功后为每个 RSPU 触发异步 AI 识别任务，前端通过 taskIds 轮询
+       #   - 失败行不影响其他行，失败原因写入返回结果
+       #   - 当指定 defaultFactoryCode 时，会为每个 RSPU 创建 RSPU-工厂关联（rspu_factory_mapping），
+       #     并标记为主供工厂；同时每个价格列生成的 RSKU 会写入工厂报价、发货地、MOQ、动态交期
+       #   - 动态交期优先按 factory_lead_time_rule 精确匹配，无规则时使用 defaultLeadTimeDays
+       #   - 每行 Excel 数据会写入 excel_import_row，记录原始值、处理阶段、生成实体 ID 与失败原因
+
+GET    /api/v1/products/excel-ai-import/{batchId}
+       # 查询 Excel AI 导入批次状态（已实现）
+       # Response: {
+       #   batchId: string,
+       #   status: "pending"|"processing"|"done"|"failed",
+       #   totalRows: number,
+       #   successCount: number,
+       #   failedCount: number,
+       #   failures: [{ rowIndex, reason }]
+       # }
+
 ### 图片访问
 
 ```
@@ -300,6 +369,72 @@ GET    /api/v1/factories/{code}
 GET    /api/v1/factories/{code}/rsku
        # 查询某工厂的所有 RSKU 报价（已实现）
        # Response: [RskuSupply...]
+
+GET    /api/v1/factories/{code}/lead-time-rules
+       # 查询某工厂的所有生效交期规则（已实现）
+       # Response: [FactoryLeadTimeRuleResponse...]
+
+POST   /api/v1/factories/{code}/lead-time-rules
+       # 创建/更新工厂交期规则（已实现）
+       # Request: {
+       #   ruleId?,                 // 为空则创建，否则更新
+       #   categoryCode?,           // 品类码，如 FS；为空表示通配
+       #   materialGradeCode?,      // 材质等级码，如 FABRIC_A；为空表示通配
+       #   processType?,            // 工艺类型，默认 standard
+       #   baseDays: number,        // 基础交期天数（必填）
+       #   batchSizeThreshold?,     // 批量阈值，超过则加 batchExtraDays
+       #   batchExtraDays?,         // 批量额外天数
+       #   materialSwitchExtraDays?,// 换材质额外天数（预留）
+       #   priority?,               // 优先级，数字越小越优先，默认 100
+       #   status?,                 // 默认 active
+       #   notes?
+       # }
+       # Response: { ruleId: number }
+
+DELETE /api/v1/factories/{code}/lead-time-rules/{ruleId}
+       # 删除交期规则（已实现）
+
+GET    /api/v1/factories/{code}/lead-time-rules/calculate
+       # 动态计算交期（已实现）
+       # Query: categoryCode?, materialGradeCode?, processType?（默认 standard）, quantity?（默认 1）
+       # Response: { leadTimeDays: number | null }
+       # 说明：按 精确匹配 → 忽略材质 → 忽略工艺 → 工厂默认 的优先级返回交期；无规则返回 null
+```
+
+### RSPU-工厂关联
+
+```
+GET    /api/v1/products/{rspuId}/factories
+       # 查询某 RSPU 的所有工厂关联（已实现）
+       # Query: province?（发货省份，如"广东"）
+       # Response: [RspuFactoryMappingResponse...]
+       # 说明：返回字段含 factoryName、factoryLevel、warehouseName、province、city、moq、baseLeadTimeDays
+
+POST   /api/v1/products/{rspuId}/factories
+       # 创建/更新 RSPU-工厂关联（已实现）
+       # Request: {
+       #   mappingId?,              // 为空则创建，否则更新
+       #   factoryCode: string,     // 工厂编码（必填）
+       #   isPrimary?: boolean,     // 是否主供工厂；为 true 时自动取消该 RSPU 其他主供
+       #   shippingWarehouseId?: string, // 发货仓库 ID，必须属于 factoryCode 指定工厂
+       #   moq?: number,
+       #   baseLeadTimeDays?: number,
+       #   status?: string,         // 默认 active
+       #   notes?: string
+       # }
+       # Response: { mappingId: number }
+
+DELETE /api/v1/products/{rspuId}/factories/{mappingId}
+       # 删除 RSPU-工厂关联（已实现）
+```
+
+### Excel 导入行记录
+
+```
+GET    /api/v1/products/excel-ai-import/{batchId}/rows
+       # 查询某导入批次下所有行级记录（已实现）
+       # Response: [ExcelImportRow...]
+       # 说明：用于导入后逐行核对成功/失败/跳过状态、原始值、生成实体与失败原因
 ```
 
 ### 导出

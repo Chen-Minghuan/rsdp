@@ -96,8 +96,9 @@
 │   ├── .env.example               # 环境变量模板
 │   └── nginx/nginx.conf           # 反向代理配置
 ├── database/                      # 数据库脚本
-│   ├── init_db.sql                # PostgreSQL 建表 DDL
-│   ├── seed_data.sql              # PostgreSQL 种子数据
+│   ├── V1__init_db.sql            # PostgreSQL 建表 DDL（V1）
+│   ├── V1__seed_data.sql          # PostgreSQL 种子数据（V1）
+│   ├── V2__factory_module.sql     # 工厂模块 + 导入增强（V2）
 │   └── reset_db.sql               # 数据库重置脚本
 ├── ops/                           # 运维脚本
 │   └── anchor_encode.sh           # 锚点图批量编码
@@ -216,8 +217,9 @@ make clean
 
 ## 八、数据库脚本
 
-- **建表脚本**：`database/init_db.sql`
-- **种子数据**：`database/seed_data.sql`
+- **建表脚本**：`database/V1__init_db.sql`
+- **种子数据**：`database/V1__seed_data.sql`
+- **工厂模块迁移**：`database/V2__factory_module.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **开发数据库连接**：`server/src/main/resources/application-dev.yml`
 
