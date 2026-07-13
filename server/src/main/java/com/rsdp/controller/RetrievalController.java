@@ -3,11 +3,13 @@ package com.rsdp.controller;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.SimilarProductRequest;
 import com.rsdp.dto.response.SimilarProductResponse;
+import com.rsdp.security.Permissions;
 import com.rsdp.service.RetrievalService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -36,6 +38,7 @@ public class RetrievalController {
      */
     @PostMapping("/similar")
     @Operation(summary = "相似产品检索", description = "上传图片或输入文本，检索相似产品")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_READ + "')")
     public Result<List<SimilarProductResponse>> searchSimilar(@Valid @ModelAttribute SimilarProductRequest request) {
         List<SimilarProductResponse> results = retrievalService.searchSimilar(request);
         return Result.ok(results);

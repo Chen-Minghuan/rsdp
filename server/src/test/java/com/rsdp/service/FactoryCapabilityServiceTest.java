@@ -10,6 +10,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.FactoryProductCapabilityMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,6 +18,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+
+import static org.mockito.Mockito.lenient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -36,11 +39,15 @@ class FactoryCapabilityServiceTest {
     @Mock
     private FactoryMasterMapper factoryMasterMapper;
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     private FactoryCapabilityService factoryCapabilityService;
 
     @BeforeEach
     void setUp() {
-        factoryCapabilityService = new FactoryCapabilityService(capabilityMapper, factoryMasterMapper);
+        factoryCapabilityService = new FactoryCapabilityService(capabilityMapper, factoryMasterMapper, dataScopeHelper);
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
     }
 
     @Test

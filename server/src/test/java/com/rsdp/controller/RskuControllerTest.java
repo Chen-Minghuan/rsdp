@@ -86,4 +86,30 @@ class RskuControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(400));
     }
+
+    @Test
+    void updatePrice_shouldReturnBadRequestWhenPriceIsZero() throws Exception {
+        RskuPriceUpdateRequest request = new RskuPriceUpdateRequest();
+        request.setFactoryPrice(BigDecimal.ZERO);
+        request.setChangeReason("价格调整为 0");
+
+        mockMvc.perform(put("/api/v1/products/RSPU-001/rsku/RSKU-001/price")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400));
+    }
+
+    @Test
+    void updatePrice_shouldReturnBadRequestWhenPriceIsNegative() throws Exception {
+        RskuPriceUpdateRequest request = new RskuPriceUpdateRequest();
+        request.setFactoryPrice(new BigDecimal("-100"));
+        request.setChangeReason("价格调整为负数");
+
+        mockMvc.perform(put("/api/v1/products/RSPU-001/rsku/RSKU-001/price")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400));
+    }
 }

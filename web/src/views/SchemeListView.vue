@@ -64,7 +64,7 @@ const columns: DataTableColumns<SchemeSummary> = [
     key: 'totalPrice',
     width: 140,
     render(row: SchemeSummary) {
-      return `¥${row.totalPrice.toFixed(2)}`
+      return `¥${(row.totalPrice ?? 0).toFixed(2)}`
     }
   },
   {

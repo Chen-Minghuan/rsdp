@@ -64,7 +64,7 @@ public class SchemeCandidateService {
         QueryWrapper<SchemeCandidate> wrapper = new QueryWrapper<SchemeCandidate>()
             .eq("recommend_request_id", recommendRequestId)
             .orderByDesc("score");
-        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (!SecurityOperatorContext.isPlatformStaff()) {
             wrapper.eq("created_by", SecurityOperatorContext.currentUsername());
         }
         return enrich(candidateMapper.selectList(wrapper));
@@ -203,7 +203,7 @@ public class SchemeCandidateService {
     }
 
     private void assertOwnerOrAdmin(SchemeCandidate candidate) {
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (SecurityOperatorContext.isPlatformStaff()) {
             return;
         }
         String currentUser = SecurityOperatorContext.currentUsername();

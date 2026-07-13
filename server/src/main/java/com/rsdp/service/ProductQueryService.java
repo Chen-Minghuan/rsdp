@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -41,6 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +72,7 @@ public class ProductQueryService {
     private final FactoryProductCapabilityMapper capabilityMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
     private final SysUserMapper sysUserMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 分页查询产品列表。
@@ -107,12 +110,12 @@ public class ProductQueryService {
         wrapper.orderByDesc("created_at");
         Page<RspuMaster> page = rspuMapper.selectPage(pageParam, wrapper);
 
-        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(
-            page.getRecords().stream().map(RspuMaster::getRspuId).toList()
-        );
+        List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
+        Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
 
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap))
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
@@ -148,9 +151,10 @@ public class ProductQueryService {
         if (StringUtils.hasText(request.getStatus())) {
             wrapper.eq("status", request.getStatus());
         }
-        // 管理员可按请求参数筛选复核状态；非管理员在「全库视图」下只看已确认产品，
+        // 平台运营人员（ADMIN/EDITOR）和设计师可按请求参数筛选复核状态；
+        // 其他非运营人员在「全库视图」下只看已确认产品，
         // 在「自己的产品」视图下不过滤复核状态，确保工厂管理员能看到自己录入的待复核产品
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (SecurityOperatorContext.isPlatformStaff() || SecurityOperatorContext.isCurrentUserDesigner()) {
             if (StringUtils.hasText(request.getReviewStatus())) {
                 wrapper.eq("review_status", request.getReviewStatus());
             }
@@ -212,33 +216,12 @@ public class ProductQueryService {
         return sysUserMapper.selectByUsername(username);
     }
 
-    private void assertProductOwnership(String rspuId) {
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
-            return;
-        }
-        List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
-            SecurityOperatorContext.currentUsername()
-        );
-        if (factoryCodes.isEmpty()) {
-            throw new BusinessException("无权编辑该产品: " + rspuId);
-        }
-        Long count = rskuSupplyMapper.selectCount(
-            new QueryWrapper<RskuSupply>()
-                .eq("rspu_id", rspuId)
-                .in("factory_code", factoryCodes)
-                .isNull("deleted_at")
-        );
-        if (count == null || count == 0) {
-            throw new BusinessException("只能编辑自己工厂已报价的产品: " + rspuId);
-        }
-    }
-
     /**
      * 判断当前登录用户是否有权查看指定产品。
      *
      * <p>规则：
      * <ul>
-     *   <li>管理员始终可见。</li>
+     *   <li>平台运营人员（ADMIN/EDITOR）和设计师始终可见。</li>
      *   <li>已确认（复核通过）产品对所有用户可见。</li>
      *   <li>非确认产品仅对关联工厂管理员可见（通过 RSKU 工厂归属判断）。</li>
      * </ul>
@@ -247,7 +230,7 @@ public class ProductQueryService {
      * @return 是否可见
      */
     private boolean canViewProduct(RspuMaster rspu) {
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (SecurityOperatorContext.isPlatformStaff() || SecurityOperatorContext.isCurrentUserDesigner()) {
             return true;
         }
         if (ReviewStatus.APPROVED.getDbValue().equals(rspu.getReviewStatus())) {
@@ -269,7 +252,7 @@ public class ProductQueryService {
     }
 
     private void applyOwnProductFilter(QueryWrapper<RspuMaster> wrapper, List<String> factoryCodes) {
-        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (SecurityOperatorContext.isPlatformStaff()) {
             return;
         }
         if (factoryCodes.isEmpty()) {
@@ -334,12 +317,12 @@ public class ProductQueryService {
         long to = Math.min(from + size, total);
         List<RspuMaster> pageRecords = records.subList((int) from, (int) to);
 
-        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(
-            pageRecords.stream().map(RspuMaster::getRspuId).toList()
-        );
+        List<String> pageRspuIds = pageRecords.stream().map(RspuMaster::getRspuId).toList();
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(pageRspuIds);
+        Map<String, List<String>> factoryCodeMap = batchFactoryCodes(pageRspuIds);
 
         List<ProductSummaryResponse> rows = pageRecords.stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap))
             .collect(Collectors.toList());
 
         return PageResult.of(total, page, size, rows);
@@ -445,6 +428,31 @@ public class ProductQueryService {
     }
 
     /**
+     * 批量查询 RSPU 关联的工厂编码列表（用于列表项展示与前端删除权限判断）。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return RSPU ID -> 工厂编码列表（去重）
+     */
+    private Map<String, List<String>> batchFactoryCodes(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>()
+                .in("rspu_id", rspuIds)
+                .isNull("deleted_at")
+        );
+        return rskus.stream()
+            .collect(Collectors.groupingBy(
+                RskuSupply::getRspuId,
+                Collectors.mapping(
+                    RskuSupply::getFactoryCode,
+                    Collectors.collectingAndThen(Collectors.toSet(), ArrayList::new)
+                )
+            ));
+    }
+
+    /**
      * 查询产品详情。
      *
      * @param rspuId RSPU ID
@@ -462,9 +470,12 @@ public class ProductQueryService {
         List<ImageAssets> images = imageAssetsMapper.selectList(
             new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId).orderByDesc("is_primary")
         );
-        List<AiRecognition> recognitions = aiRecognitionMapper.selectList(
-            new QueryWrapper<AiRecognition>().eq("rspu_id", rspuId).orderByDesc("created_at")
-        );
+        // AI 识别记录（含原始 OCR、模型输出）仅对平台运营人员返回，其他角色只看解析后的产品标签
+        List<AiRecognition> recognitions = SecurityOperatorContext.isPlatformStaff()
+            ? aiRecognitionMapper.selectList(
+                new QueryWrapper<AiRecognition>().eq("rspu_id", rspuId).orderByDesc("created_at")
+            )
+            : List.of();
         List<ProductStyleMatchResponse> styleMatches = listStyleMatches(rspuId);
 
         ProductDetailResponse response = new ProductDetailResponse();
@@ -490,6 +501,7 @@ public class ProductQueryService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
+        dataScopeHelper.assertCanAccessRspu(rspuId);
 
         RspuMaster oldSnapshot = snapshot(rspu);
         rspu.setReviewStatus(reviewStatus);
@@ -514,11 +526,16 @@ public class ProductQueryService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
+        dataScopeHelper.assertCanAccessRspu(rspuId);
+        if (!dataScopeHelper.isOnlyAssociatedFactoryForRspu(rspuId)) {
+            throw new BusinessException("其他工厂已关联该产品，无法删除: " + rspuId);
+        }
 
         RspuMaster oldSnapshot = snapshot(rspu);
-        rspu.setDeletedAt(LocalDateTime.now());
-        rspu.setUpdatedAt(LocalDateTime.now());
-        rspuMapper.updateById(rspu);
+        int affected = rspuMapper.deleteById(rspuId);
+        if (affected == 0) {
+            throw new ResourceNotFoundException("产品不存在或已被删除: " + rspuId);
+        }
 
         auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, SecurityOperatorContext.currentUsername());
 
@@ -551,7 +568,7 @@ public class ProductQueryService {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 
-        assertProductOwnership(rspuId);
+        dataScopeHelper.assertCanAccessRspu(rspuId);
 
         RspuMaster oldSnapshot = snapshot(rspu);
         String oldPositioningLabel = rspu.getPositioningLabel();
@@ -760,7 +777,9 @@ public class ProductQueryService {
             .orElse(styleCode);
     }
 
-    private ProductSummaryResponse toSummary(RspuMaster rspu, Map<String, String> primaryImageUrlMap) {
+    private ProductSummaryResponse toSummary(RspuMaster rspu,
+                                             Map<String, String> primaryImageUrlMap,
+                                             Map<String, List<String>> factoryCodeMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
         summary.setCategoryCode(rspu.getCategoryCode());
@@ -774,6 +793,7 @@ public class ProductQueryService {
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());
         summary.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));
+        summary.setFactoryCodes(factoryCodeMap.getOrDefault(rspu.getRspuId(), List.of()));
         return summary;
     }
 

@@ -24,6 +24,7 @@ public class AsyncTask {
     private String resultData;
 
     private String errorMessage;
+    private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
 }

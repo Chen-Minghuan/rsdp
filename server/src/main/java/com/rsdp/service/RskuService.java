@@ -23,6 +23,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.rsdp.dto.request.RskuBatchCreateRequest;
+import com.rsdp.dto.request.RskuBatchFactoryQuote;
+import com.rsdp.dto.response.RskuBatchCreateResponse;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -30,6 +34,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * RSKU 报价服务。
@@ -47,6 +54,7 @@ public class RskuService {
     private final PriceHistoryMapper priceHistoryMapper;
     private final AuditLogService auditLogService;
     private final DataScopeHelper dataScopeHelper;
+    private final PlatformTransactionManager transactionManager;
 
     /**
      * 查询某 RSPU 下的所有 RSKU 报价。
@@ -175,6 +183,69 @@ public class RskuService {
         return rsku.getRskuId();
     }
 
+    /**
+     * 批量为 RSPU 创建多家工厂报价。
+     *
+     * <p>每个（变体，工厂）组合单独一个事务处理，失败只回滚当前组合，不影响其他组合。
+     * 同一家工厂的报价信息会应用到所有选中的变体。</p>
+     *
+     * @param rspuId  RSPU ID
+     * @param request 批量创建请求
+     * @return 批量创建结果
+     */
+    public RskuBatchCreateResponse batchCreateRskus(String rspuId, RskuBatchCreateRequest request) {
+        RskuBatchCreateResponse response = new RskuBatchCreateResponse();
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+
+        for (String variantId : request.getVariantIds()) {
+            RspuVariant variant;
+            try {
+                variant = rspuVariantService.findById(variantId);
+                if (!rspuId.equals(variant.getRspuId())) {
+                    throw new BusinessException("变体不属于该产品: " + variantId);
+                }
+            } catch (Exception e) {
+                for (RskuBatchFactoryQuote quote : request.getFactoryQuotes()) {
+                    response.setFailedCount(response.getFailedCount() + 1);
+                    response.getFailures().add(new RskuBatchCreateResponse.FailureDetail(
+                        quote.getFactoryCode(), variantId, e.getMessage()));
+                }
+                continue;
+            }
+
+            for (RskuBatchFactoryQuote quote : request.getFactoryQuotes()) {
+                RskuCreateRequest item = new RskuCreateRequest();
+                item.setRspuId(rspuId);
+                item.setVariantId(variantId);
+                item.setFactoryCode(quote.getFactoryCode());
+                item.setFactorySku(quote.getFactorySku());
+                item.setFactoryPrice(quote.getFactoryPrice());
+                item.setMaterialCode(quote.getMaterialCode());
+                item.setMaterialDescription(quote.getMaterialDescription());
+                item.setLeadTimeDays(quote.getLeadTimeDays());
+                item.setMoq(quote.getMoq());
+                item.setWarrantyYears(quote.getWarrantyYears());
+                item.setShippingFrom(quote.getShippingFrom());
+                item.setDiffNotes(quote.getDiffNotes());
+                item.setQuoteConfidence(quote.getQuoteConfidence());
+                item.setProductLevel(request.getProductLevel());
+                item.setAutoExtendCapability(request.getAutoExtendCapability());
+
+                try {
+                    String rskuId = transactionTemplate.execute(status -> createRsku(item));
+                    response.getRskuIds().add(rskuId);
+                    response.setSuccessCount(response.getSuccessCount() + 1);
+                } catch (Exception e) {
+                    response.setFailedCount(response.getFailedCount() + 1);
+                    response.getFailures().add(new RskuBatchCreateResponse.FailureDetail(
+                        quote.getFactoryCode(), variantId, e.getMessage()));
+                }
+            }
+        }
+
+        return response;
+    }
+
     private String resolveProductLevel(RskuCreateRequest request, RspuMaster rspu, RspuVariant variant) {
         if (StringUtils.hasText(request.getProductLevel())) {
             return request.getProductLevel().trim();
@@ -212,9 +283,10 @@ public class RskuService {
         }
 
         RskuSupply oldSnapshot = snapshot(rsku);
-        rsku.setDeletedAt(LocalDateTime.now());
-        rsku.setUpdatedAt(LocalDateTime.now());
-        rskuSupplyMapper.updateById(rsku);
+        int affected = rskuSupplyMapper.deleteById(rskuId);
+        if (affected == 0) {
+            throw new ResourceNotFoundException("RSKU 不存在或已被删除: " + rskuId);
+        }
 
         auditLogService.logDelete("rsku_supply", rskuId, oldSnapshot, SecurityOperatorContext.currentUsername());
     }
@@ -316,11 +388,7 @@ public class RskuService {
                 .collect(Collectors.toMap(FactoryMaster::getFactoryCode, f -> f));
         Map<String, List<String>> capabilityMap = factoryCodes.isEmpty()
             ? Map.of()
-            : factoryCodes.stream()
-                .collect(Collectors.toMap(
-                    code -> code,
-                    factoryService::getFactoryCapableLevels
-                ));
+            : factoryService.batchListCapableLevels(factoryCodes);
 
         return rskus.stream()
             .map(rsku -> toResponse(rsku, factoryMap, capabilityMap))
@@ -356,7 +424,12 @@ public class RskuService {
         if (factory != null) {
             response.setFactoryName(factory.getFactoryName());
         }
-        response.setFactoryCapableLevels(capabilityMap.getOrDefault(rsku.getFactoryCode(), List.of()));
+        List<String> capableLevels = capabilityMap.getOrDefault(rsku.getFactoryCode(), List.of());
+        // 老数据兼容： capability 表无记录时，回退到工厂主等级
+        if (capableLevels.isEmpty() && factory != null && factory.getFactoryLevel() != null) {
+            capableLevels = List.of(factory.getFactoryLevel());
+        }
+        response.setFactoryCapableLevels(capableLevels);
         return response;
     }
 }

@@ -121,6 +121,29 @@ CREATE TABLE IF NOT EXISTS factory_master (
     first_audit_date DATE,
     next_visit_date DATE,
     notes TEXT,
+    -- 规模信息
+    factory_area DECIMAL(10,2),
+    employee_count INTEGER,
+    monthly_capacity INTEGER,
+    founded_year INTEGER,
+    -- 设备清单
+    equipment_list JSONB,
+    -- 原料来源
+    frame_wood VARCHAR(32),
+    sponge_supplier VARCHAR(128),
+    leather_fabric_source VARCHAR(128),
+    hardware_supplier VARCHAR(128),
+    -- 品质控制
+    qc_items JSONB,
+    qc_staff_count INTEGER,
+    -- 物流信息
+    shipping_from VARCHAR(128),
+    logistics_methods JSONB,
+    default_packaging JSONB,
+    -- 验厂信息
+    auditor_signature VARCHAR(64),
+    -- 工厂图片
+    factory_images JSONB,
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
@@ -338,6 +361,7 @@ CREATE TABLE IF NOT EXISTS async_task (
     input_data JSONB,
     result_data JSONB,
     error_message TEXT,
+    created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );

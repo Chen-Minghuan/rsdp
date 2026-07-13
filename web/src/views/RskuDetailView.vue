@@ -20,6 +20,7 @@ import {
 } from 'naive-ui'
 import { getRsku, listPriceHistory, updateRskuPrice, deleteRsku } from '@/api/rsku'
 import { useUserStore } from '@/stores/user'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 import { PERMISSIONS } from '@/utils/constants'
 import type { PriceHistory, Rsku } from '@/types/rsku'
 
@@ -27,11 +28,21 @@ const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 const rspuId = computed(() => route.params.rspuId as string)
 
 const canUpdateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_UPDATE))
 const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
 const rskuId = computed(() => route.params.rskuId as string)
+
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+// 全库只读视图下，即使是本厂 RSKU 也禁止写操作
+const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true && !isPlatformStaff.value)
+// 工厂管理员只能维护本厂报价
+const isMyRsku = computed(() =>
+  isPlatformStaff.value || (rsku.value !== null && factoryCodes.value.includes(rsku.value.factoryCode))
+)
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -67,7 +78,7 @@ async function loadRsku() {
   loading.value = true
   errorMessage.value = ''
   try {
-    rsku.value = await getRsku(rspuId.value, rskuId.value)
+    rsku.value = await getRsku(rspuId.value, rskuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载 RSKU 详情失败'
   } finally {
@@ -82,7 +93,7 @@ async function loadPriceHistory() {
   }
   historyLoading.value = true
   try {
-    priceHistory.value = await listPriceHistory(rskuId.value)
+    priceHistory.value = await listPriceHistory(rskuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载价格历史失败'
   } finally {
@@ -97,8 +108,8 @@ function openPriceModal() {
 }
 
 async function handleUpdatePrice() {
-  if (newPrice.value === null || newPrice.value < 0) {
-    errorMessage.value = '请填写有效的价格'
+  if (newPrice.value === null || newPrice.value <= 0) {
+    errorMessage.value = '请填写有效的出厂价（必须大于 0）'
     return
   }
 
@@ -168,7 +179,7 @@ onBeforeRouteUpdate((to) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push(`/products/${rspuId}`)">返回产品详情</n-button>
-          <n-button v-if="canDeleteRsku" size="small" type="error" @click="handleDeleteRsku">
+          <n-button v-if="!isReadOnly && canDeleteRsku && isMyRsku" size="small" type="error" @click="handleDeleteRsku">
             删除报价
           </n-button>
         </n-space>
@@ -201,7 +212,7 @@ onBeforeRouteUpdate((to) => {
               {{ rsku.factorySku || '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="出厂价">
-              {{ rsku.factoryPrice }}
+              {{ rsku.factoryPrice != null ? `¥${Number(rsku.factoryPrice).toFixed(2)}` : '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="产品等级">
               {{ rsku.productLevel || '-' }}
@@ -246,7 +257,7 @@ onBeforeRouteUpdate((to) => {
           <n-card title="价格历史" size="small">
             <n-space vertical>
               <n-space>
-                <n-button v-if="canUpdateRsku" type="primary" @click="openPriceModal">更新价格</n-button>
+                <n-button v-if="!isReadOnly && canUpdateRsku && isMyRsku" type="primary" @click="openPriceModal">更新价格</n-button>
               </n-space>
               <n-data-table
                 :columns="historyColumns"

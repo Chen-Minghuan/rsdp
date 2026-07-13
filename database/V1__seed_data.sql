@@ -133,6 +133,40 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('scene', 'HOTEL', '酒店', 6)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
+-- 设备类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('equipment_type', 'CNC', 'CNC五轴加工中心', 1),
+('equipment_type', 'CUTTING', '自动裁皮机', 2),
+('equipment_type', 'SEWING', '数控缝纫机', 3),
+('equipment_type', 'HOT_PRESS', '热压机', 4),
+('equipment_type', 'PAINTING', '喷漆房', 5),
+('equipment_type', 'DRYING', '烘干房', 6),
+('equipment_type', 'OTHER', '其他', 7)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 物流方式
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('logistics_method', 'SPECIAL', '专线物流', 1),
+('logistics_method', 'DEPPON', '德邦', 2),
+('logistics_method', 'SF', '顺丰', 3),
+('logistics_method', 'SELF', '自提', 4)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 包装类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('packaging_type', 'CARTON', '纸箱', 1),
+('packaging_type', 'WOODEN', '木架', 2),
+('packaging_type', 'WOVEN', '编织袋', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 木材类型
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('wood_type', 'PINE', '进口松木', 1),
+('wood_type', 'OAK', '橡木', 2),
+('wood_type', 'MIXED', '杂木', 3),
+('wood_type', 'OTHER', '其他', 4)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
 -- 空间类型（风格数据库 case 用）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('room_type', 'LIVING_ROOM', '客厅', 1),
@@ -233,12 +267,12 @@ WHERE r.role_code = 'VIEWER'
   AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
 ON CONFLICT DO NOTHING;
 
--- FACTORY_ADMIN：自己工厂产品 + 报价相关 + 只读
+-- FACTORY_ADMIN：自己工厂产品 + 工厂资料维护 + 报价相关 + 只读
 INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'FACTORY_ADMIN'
-  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'factory:read', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
+  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
 ON CONFLICT DO NOTHING;
 
 -- DESIGNER：方案/报价 + 只读
@@ -256,3 +290,47 @@ FROM sys_role r, sys_permission p
 WHERE r.role_code = 'USER'
   AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
 ON CONFLICT DO NOTHING;
+
+-- =================== 开发测试账号（仅在开发/演示环境使用） ===================
+
+-- 测试工厂
+INSERT INTO factory_master (factory_code, factory_name, factory_level, region, status) VALUES
+('TEST', '测试工厂', 'A', '广东', 'active')
+ON CONFLICT (factory_code) DO NOTHING;
+
+-- 测试用户（密码统一为 admin123）
+-- 按 username 冲突更新，确保开发环境重置后密码与快速登录按钮一致
+INSERT INTO sys_user (user_id, username, password_hash, nickname, status, view_full_catalog) VALUES
+('USER-ADMIN-00000001', 'admin', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '系统管理员', 'active', true),
+('USER-EDITOR-00000001', 'editor', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '编辑员', 'active', true),
+('USER-VIEWER-00000001', 'viewer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '浏览者', 'active', false),
+('USER-DESIGNER-00000001', 'designer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '设计师', 'active', false),
+('USER-FACTORY-00000001', 'factory', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '工厂管理员', 'active', false),
+('USER-USER-00000001', 'user', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '普通用户', 'active', false)
+ON CONFLICT (username) DO UPDATE SET
+  password_hash = EXCLUDED.password_hash,
+  nickname = EXCLUDED.nickname,
+  status = EXCLUDED.status,
+  view_full_catalog = EXCLUDED.view_full_catalog;
+
+-- 测试用户角色关联
+INSERT INTO sys_user_role (user_id, role_id)
+SELECT u.user_id, r.role_id
+FROM sys_user u, sys_role r
+WHERE u.username IN ('admin', 'editor', 'viewer', 'designer', 'factory', 'user')
+  AND r.role_code = CASE u.username
+    WHEN 'admin' THEN 'ADMIN'
+    WHEN 'editor' THEN 'EDITOR'
+    WHEN 'viewer' THEN 'VIEWER'
+    WHEN 'designer' THEN 'DESIGNER'
+    WHEN 'factory' THEN 'FACTORY_ADMIN'
+    WHEN 'user' THEN 'USER'
+  END
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- 工厂管理员绑定测试工厂
+INSERT INTO sys_user_factory (user_id, factory_code)
+SELECT u.user_id, 'TEST'
+FROM sys_user u
+WHERE u.username = 'factory'
+ON CONFLICT (user_id, factory_code) DO NOTHING;

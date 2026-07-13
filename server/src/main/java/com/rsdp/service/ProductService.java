@@ -32,6 +32,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
 /**
  * 产品录入服务，负责接收图片、创建 RSPU 草稿和异步任务，并触发后台 AI 识别。
  */
@@ -103,6 +106,7 @@ public class ProductService {
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
         List<String> imageIds = new ArrayList<>();
+        List<String> storedObjectKeys = new ArrayList<>();
         String primaryImageId = null;
         String primaryObjectKey = null;
 
@@ -111,6 +115,7 @@ public class ProductService {
             String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
             String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
             String storagePath = storageService.store(image, objectKey);
+            storedObjectKeys.add(storagePath);
 
             boolean isPrimary = i == 0;
             ImageAssets imageAsset = new ImageAssets();
@@ -134,6 +139,8 @@ public class ProductService {
             }
         }
 
+        registerStorageRollbackCleanup(storedObjectKeys);
+
         // 创建异步任务（仅针对主图做 AI 识别）
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);
@@ -147,6 +154,7 @@ public class ProductService {
             "objectKey", primaryObjectKey,
             "originalFilename", primaryImage.getOriginalFilename()
         )));
+        task.setCreatedBy(SecurityOperatorContext.currentUsername());
         task.setCreatedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
 
@@ -215,6 +223,7 @@ public class ProductService {
 
         // 3. 保存图片（可选）
         List<String> imageIds = new ArrayList<>();
+        List<String> storedObjectKeys = new ArrayList<>();
         if (images != null && !images.isEmpty()) {
             long maxSize = parseMaxFileSize(maxFileSize);
             for (int i = 0; i < images.size(); i++) {
@@ -223,6 +232,7 @@ public class ProductService {
                 String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
                 String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
                 String storagePath = storageService.store(image, objectKey);
+                storedObjectKeys.add(storagePath);
 
                 boolean isPrimary = i == 0;
                 ImageAssets imageAsset = new ImageAssets();
@@ -241,6 +251,7 @@ public class ProductService {
                 auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
                 imageIds.add(imageId);
             }
+            registerStorageRollbackCleanup(storedObjectKeys);
         }
 
         // 4. 创建第一条 RSKU
@@ -316,6 +327,7 @@ public class ProductService {
         String extension = getExtension(filename);
         String objectKey = "images/" + imageId + "." + extension;
         String storagePath = storageService.store(imageStream, objectKey, size, "image/" + extension);
+        registerStorageRollbackCleanup(List.of(storagePath));
 
         ImageAssets imageAsset = new ImageAssets();
         imageAsset.setImageId(imageId);
@@ -343,6 +355,7 @@ public class ProductService {
             "objectKey", storagePath,
             "originalFilename", filename
         )));
+        task.setCreatedBy(SecurityOperatorContext.currentUsername());
         task.setCreatedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
 
@@ -390,6 +403,32 @@ public class ProductService {
         } else {
             asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
         }
+    }
+
+    /**
+     * 注册事务回滚清理：若当前事务最终回滚，则删除已写入存储的文件，避免孤儿文件。
+     *
+     * @param objectKeys 已存储文件的对象键列表
+     */
+    private void registerStorageRollbackCleanup(List<String> objectKeys) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive() || objectKeys.isEmpty()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status != STATUS_ROLLED_BACK) {
+                    return;
+                }
+                for (String objectKey : objectKeys) {
+                    try {
+                        storageService.delete(objectKey);
+                    } catch (IOException e) {
+                        log.warn("事务回滚后清理文件失败: {}", objectKey, e);
+                    }
+                }
+            }
+        });
     }
 
     private void validateCategoryCode(String categoryCode) {

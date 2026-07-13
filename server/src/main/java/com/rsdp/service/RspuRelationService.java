@@ -91,6 +91,7 @@ public class RspuRelationService {
     public void createRelation(String anchorRspuId, RspuRelationCreateRequest request) {
         validateRspuExists(anchorRspuId);
         validateRspuExists(request.getRelatedRspuId());
+        dataScopeHelper.assertCanAccessRspu(anchorRspuId);
         if (anchorRspuId.equals(request.getRelatedRspuId())) {
             throw new BusinessException("产品不能与自己建立搭配关系");
         }
@@ -137,6 +138,7 @@ public class RspuRelationService {
             || !anchorRspuId.equals(relation.getAnchorRspuId())) {
             throw new ResourceNotFoundException("搭配关系不存在: " + relationId);
         }
+        dataScopeHelper.assertCanAccessRspu(anchorRspuId);
 
         RspuRelation oldSnapshot = snapshot(relation);
         if (StringUtils.hasText(request.getRelationType())) {
@@ -171,13 +173,14 @@ public class RspuRelationService {
             || !anchorRspuId.equals(relation.getAnchorRspuId())) {
             throw new ResourceNotFoundException("搭配关系不存在: " + relationId);
         }
+        dataScopeHelper.assertCanAccessRspu(anchorRspuId);
 
         RspuRelation oldSnapshot = snapshot(relation);
-        relation.setStatus("inactive");
-        relation.setDeletedAt(LocalDateTime.now());
-        relation.setUpdatedAt(LocalDateTime.now());
-        relationMapper.updateById(relation);
-        auditLogService.logUpdate("rspu_relation", relationId, oldSnapshot, relation, SecurityOperatorContext.currentUsername());
+        int affected = relationMapper.deleteById(relationId);
+        if (affected == 0) {
+            throw new ResourceNotFoundException("搭配关系不存在或已被删除: " + relationId);
+        }
+        auditLogService.logDelete("rspu_relation", relationId, oldSnapshot, SecurityOperatorContext.currentUsername());
     }
 
     private void validateRspuExists(String rspuId) {

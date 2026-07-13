@@ -1,8 +1,10 @@
 package com.rsdp.controller;
 
 import com.rsdp.common.Result;
+import com.rsdp.dto.request.RskuBatchCreateRequest;
 import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.request.RskuPriceUpdateRequest;
+import com.rsdp.dto.response.RskuBatchCreateResponse;
 import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.service.RskuService;
 import jakarta.validation.Valid;
@@ -67,6 +69,19 @@ public class RskuController {
         request.setRspuId(rspuId);
         rskuService.createRsku(request);
         return Result.ok();
+    }
+
+    /**
+     * 批量为 RSPU 新增多家工厂报价。
+     *
+     * @param rspuId  RSPU ID
+     * @param request 批量报价请求
+     * @return 批量创建结果（成功数、失败明细）
+     */
+    @PostMapping("/batch")
+    public Result<RskuBatchCreateResponse> batchCreate(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
+                                                       @Valid @RequestBody RskuBatchCreateRequest request) {
+        return Result.ok(rskuService.batchCreateRskus(rspuId, request));
     }
 
     /**

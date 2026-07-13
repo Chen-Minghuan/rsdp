@@ -15,6 +15,7 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -61,6 +62,11 @@ class RspuRelationServiceTest {
 
     @InjectMocks
     private RspuRelationService relationService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(dataScopeHelper.canAccessRspu(any())).thenReturn(true);
+    }
 
     @Test
     void listByAnchor_shouldReturnActiveRelations() {
@@ -227,12 +233,12 @@ class RspuRelationServiceTest {
         relation.setStatus("active");
 
         when(relationMapper.selectById("REL-001")).thenReturn(relation);
+        when(relationMapper.deleteById("REL-001")).thenReturn(1);
 
         relationService.deleteRelation("RSPU-BED", "REL-001");
 
-        assertThat(relation.getStatus()).isEqualTo("inactive");
-        assertThat(relation.getDeletedAt()).isNotNull();
-        verify(relationMapper).updateById(relation);
+        verify(relationMapper).deleteById("REL-001");
+        verify(auditLogService).logDelete(eq("rspu_relation"), eq("REL-001"), any(), any());
     }
 
     @Test

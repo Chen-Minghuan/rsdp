@@ -335,7 +335,20 @@ POST   /api/v1/factories
        # }
 
 PUT    /api/v1/factories/{code}
-       # 更新工厂（已实现）
+       # 更新工厂基本信息（部分字段更新，已实现）
+       # Request: {
+       #   factoryName?, homeCommercialTag?, region?, address?,
+       #   contactPerson?, contactPhone?, notes?,
+       #   certification?（JSON 字符串）, engineeringCases?（JSON 字符串）,
+       #   factoryArea?, employeeCount?, monthlyCapacity?, foundedYear?,
+       #   equipmentList?（JSON 数组字符串）, frameWood?, spongeSupplier?,
+       #   leatherFabricSource?, hardwareSupplier?,
+       #   qcItems?（JSON 数组字符串）, qcStaffCount?,
+       #   shippingFrom?, logisticsMethods?（JSON 数组字符串）,
+       #   defaultPackaging?（JSON 数组字符串）, auditorSignature?, factoryImages?（JSON 数组字符串）
+       # }
+       # Response: void
+       # 说明：仅更新请求中非 null 字段；需要 `factory:update` 权限
 
 PUT    /api/v1/factories/{code}/level
        # 更新工厂主等级，工厂代码保持不变（已实现）

@@ -1,8 +1,11 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.dto.AiLabels;
+import com.rsdp.dto.Dimensions;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.RspuMaster;
@@ -37,6 +40,7 @@ public class RspuVariantService {
     private final DictService dictService;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 为指定 RSPU 创建变体。
@@ -51,6 +55,7 @@ public class RspuVariantService {
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
+        dataScopeHelper.assertCanAccessRspu(rspuId);
 
         validateVariantCodes(request);
         if (StringUtils.hasText(request.getProductLevel())) {
@@ -99,6 +104,68 @@ public class RspuVariantService {
                 .orderByAsc("created_at")
         );
         return variants.stream().map(this::toResponse).collect(Collectors.toList());
+    }
+
+    /**
+     * 为 RSPU 初始化默认变体（供 AI 识别异步任务调用）。
+     *
+     * <p>若该 RSPU 已存在变体，则直接返回；否则根据 AI 识别结果创建一个默认变体，
+     * 使后续批量绑定工厂报价时不必再手工创建变体。</p>
+     *
+     * @param rspuId RSPU ID
+     * @param labels AI 识别结果
+     * @return 变体 ID（新建或已存在）
+     */
+    public String initializeDefaultVariant(String rspuId, AiLabels labels) {
+        List<RspuVariant> existing = variantMapper.selectList(
+            new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId)
+        );
+        if (!existing.isEmpty()) {
+            return existing.get(0).getVariantId();
+        }
+
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null || rspu.getDeletedAt() != null) {
+            log.warn("初始化默认变体时 RSPU 不存在，rspuId={}", rspuId);
+            return null;
+        }
+
+        String variantId = generateVariantId(rspuId);
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId(variantId);
+        variant.setRspuId(rspuId);
+        variant.setDisplayName("默认变体");
+        variant.setVariantCode("M");
+        variant.setDimensions(extractDimensionsJson(labels));
+        variant.setProductLevel(rspu.getProductLevel());
+        variant.setStatus("active");
+        variant.setCreatedAt(LocalDateTime.now());
+        variant.setUpdatedAt(LocalDateTime.now());
+
+        try {
+            variantMapper.insert(variant);
+            log.info("AI 识别后为 RSPU 自动创建默认变体，rspuId={}，variantId={}", rspuId, variantId);
+            return variantId;
+        } catch (DataIntegrityViolationException e) {
+            log.warn("默认变体编码冲突，rspuId={}", rspuId, e);
+            return null;
+        }
+    }
+
+    private String extractDimensionsJson(AiLabels labels) {
+        if (labels == null || labels.getOcr() == null) {
+            return null;
+        }
+        Dimensions dims = labels.getOcr().getDimensions();
+        if (dims == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(dims);
+        } catch (Exception e) {
+            log.warn("AI 识别尺寸 JSON 序列化失败", e);
+            return null;
+        }
     }
 
     /**

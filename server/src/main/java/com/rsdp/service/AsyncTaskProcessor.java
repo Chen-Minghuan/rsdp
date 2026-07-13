@@ -46,6 +46,7 @@ public class AsyncTaskProcessor {
     private final StorageService storageService;
     private final AiRecognitionPersistenceService persistenceService;
     private final StyleMatchingService styleMatchingService;
+    private final RspuVariantService rspuVariantService;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.ai.model}")
@@ -114,6 +115,9 @@ public class AsyncTaskProcessor {
 
             persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
                 labels, processingTime, embedding);
+
+            // AI 识别成功后，若该 RSPU 尚无变体，自动创建默认变体，便于后续批量绑定工厂报价
+            rspuVariantService.initializeDefaultVariant(rspuId, labels);
 
             boolean vectorPersisted = false;
             String vectorError = null;

@@ -4,6 +4,7 @@ import com.rsdp.common.Result;
 import com.rsdp.dto.request.FactoryCreateRequest;
 import com.rsdp.dto.request.FactoryLevelCapabilityUpdateRequest;
 import com.rsdp.dto.request.FactoryLevelUpdateRequest;
+import com.rsdp.dto.request.FactoryUpdateRequest;
 import com.rsdp.dto.response.FactoryResponse;
 import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.service.FactoryService;
@@ -64,6 +65,20 @@ public class FactoryController {
     @PostMapping
     public Result<Void> create(@Valid @RequestBody FactoryCreateRequest request) {
         factoryService.createFactory(request);
+        return Result.ok();
+    }
+
+    /**
+     * 更新工厂基本信息（部分字段更新）。
+     *
+     * @param factoryCode 工厂代码
+     * @param request     更新请求
+     * @return 空结果
+     */
+    @PutMapping("/{factoryCode}")
+    public Result<Void> update(@PathVariable @NotBlank(message = "工厂代码不能为空") String factoryCode,
+                               @Valid @RequestBody FactoryUpdateRequest request) {
+        factoryService.updateFactory(factoryCode, request);
         return Result.ok();
     }
 

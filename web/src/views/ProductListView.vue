@@ -21,6 +21,7 @@ import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSummary } from '@/types/product'
 import { useMessage } from 'naive-ui'
 
@@ -28,11 +29,13 @@ const router = useRouter()
 const dialog = useDialog()
 const message = useMessage()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
 
 const loading = ref(false)
@@ -49,7 +52,9 @@ const materialFilter = ref<string | null>(null)
 const productLevelFilter = ref<string | null>(null)
 const selectedRowKeys = ref<string[]>([])
 const viewFullCatalog = computed(() => userStore.userInfo?.viewFullCatalog || false)
-const viewMode = ref<'own' | 'full'>(viewFullCatalog.value ? 'full' : 'own')
+const viewMode = ref<'own' | 'full'>(
+  isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
+)
 const factoryCode = ref<string | null>(null)
 const savingPreference = ref(false)
 
@@ -66,7 +71,8 @@ const factoryOptions = computed(() => [
 ])
 
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
-const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full')
+// 全库视图对工厂管理员只读；平台运营人员（ADMIN/EDITOR）在全库视图下仍可编辑
+const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value)
 
 async function toggleFullCatalog(value: boolean) {
   if (savingPreference.value) return
@@ -87,6 +93,13 @@ async function toggleFullCatalog(value: boolean) {
 }
 
 const rowKey = (row: ProductSummary) => row.rspuId
+
+function canDeleteRow(row: ProductSummary): boolean {
+  if (!canDeleteProduct.value || isReadOnlyFullCatalog.value) return false
+  if (isPlatformStaff.value) return true
+  const codes = row.factoryCodes || []
+  return factoryCodes.value.some((c) => codes.includes(c))
+}
 
 const columns: DataTableColumns<ProductSummary> = [
   {
@@ -174,7 +187,7 @@ const columns: DataTableColumns<ProductSummary> = [
               },
               { default: () => '详情' }
             ),
-            canDeleteProduct.value && !isReadOnlyFullCatalog.value
+            canDeleteRow(row)
               ? h(
                   NButton,
                   {
@@ -195,11 +208,11 @@ const columns: DataTableColumns<ProductSummary> = [
 async function loadDicts() {
   try {
     const [reviewDicts, styleDicts, sceneDicts, materialDicts, levelDicts] = await Promise.all([
-      listDicts('review_status'),
-      listDicts('style'),
-      listDicts('scene'),
-      listDicts('material'),
-      listDicts('factory_level')
+      listDicts('review_status', { signal }),
+      listDicts('style', { signal }),
+      listDicts('scene', { signal }),
+      listDicts('material', { signal }),
+      listDicts('factory_level', { signal })
     ])
     reviewStatusOptions.value = [
       { label: '全部复核状态', value: '' },
@@ -249,13 +262,19 @@ async function loadProducts() {
       materialTag: materialFilter.value || undefined,
       productLevel: productLevelFilter.value || undefined
     }
-    if (isFactoryAdmin.value) {
+    if (isPlatformStaff.value) {
+      // 平台运营人员默认全库视图，可编辑所有产品
+      params.viewMode = 'full'
+    } else if (isFactoryAdmin.value) {
       params.viewMode = viewMode.value
       if (viewMode.value === 'own' && factoryCode.value) {
         params.factoryCode = factoryCode.value
       }
+    } else {
+      // 普通用户、浏览者、设计师等只能看到已复核通过的产品
+      params.viewMode = 'full'
     }
-    const result = await listProducts(params)
+    const result = await listProducts(params, { signal })
     products.value = result.rows
     total.value = result.total
   } catch (e) {
@@ -303,7 +322,8 @@ onMounted(async () => {
   if (!userStore.userInfo) {
     await userStore.fetchUserInfo()
   }
-  viewMode.value = viewFullCatalog.value ? 'full' : 'own'
+  selectedRowKeys.value = []
+  viewMode.value = isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
   loadDicts()
   loadProducts()
 })
@@ -391,10 +411,10 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
         </n-alert>
 
         <n-alert v-if="isReadOnlyFullCatalog" type="info" :show-icon="true" style="margin-bottom: 12px;">
-          当前为全库只读视图，仅支持查看详情，不能进行编辑、删除、报价等操作。
+          当前为全库去重只读视图，仅支持查看详情与生成报价单；编辑、删除等维护操作需切换到自己的产品视图或由平台运营人员执行。
         </n-alert>
 
-        <n-space v-if="hasSelection && canGenerateQuote && !isReadOnlyFullCatalog" align="center">
+        <n-space v-if="hasSelection && canGenerateQuote" align="center">
           <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
           <n-button type="primary" @click="handleBuildQuote">生成报价单</n-button>
         </n-space>

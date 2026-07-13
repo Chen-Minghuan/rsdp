@@ -16,6 +16,8 @@ import org.springframework.security.core.userdetails.User;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -41,6 +43,7 @@ class DataScopeContextTest {
     @AfterEach
     void clearSecurityContext() {
         SecurityContextHolder.clearContext();
+        dataScopeContext.clearCache();
     }
 
     private void authenticate(String username, String role) {
@@ -74,6 +77,14 @@ class DataScopeContextTest {
     }
 
     @Test
+    void currentDataScope_editorShouldReturnAll() {
+        authenticate("editor", "EDITOR");
+        when(userRoleService.getRoleCodesByUsername("editor")).thenReturn(List.of("EDITOR"));
+
+        assertThat(dataScopeContext.currentDataScope()).isEqualTo(DataScope.ALL);
+    }
+
+    @Test
     void currentDataScope_anonymousShouldReturnPublicOnly() {
         assertThat(dataScopeContext.currentDataScope()).isEqualTo(DataScope.PUBLIC_ONLY);
     }
@@ -84,5 +95,44 @@ class DataScopeContextTest {
         when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001", "F002"));
 
         assertThat(dataScopeContext.currentFactoryCodes()).containsExactly("F001", "F002");
+    }
+
+    @Test
+    void currentDataScope_shouldCacheRoleQueryWithinRequest() {
+        authenticate("factory", "FACTORY_ADMIN");
+        when(userRoleService.getRoleCodesByUsername("factory")).thenReturn(List.of("FACTORY_ADMIN"));
+
+        assertThat(dataScopeContext.currentDataScope()).isEqualTo(DataScope.FACTORY_LIST);
+        assertThat(dataScopeContext.currentDataScope()).isEqualTo(DataScope.FACTORY_LIST);
+
+        verify(userRoleService, times(1)).getRoleCodesByUsername("factory");
+    }
+
+    @Test
+    void currentFactoryCodes_shouldCacheFactoryQueryWithinRequest() {
+        authenticate("factory", "FACTORY_ADMIN");
+        when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001", "F002"));
+
+        assertThat(dataScopeContext.currentFactoryCodes()).containsExactly("F001", "F002");
+        assertThat(dataScopeContext.currentFactoryCodes()).containsExactly("F001", "F002");
+
+        verify(userFactoryService, times(1)).getFactoryCodesByUsername("factory");
+    }
+
+    @Test
+    void clearCache_shouldForceRequery() {
+        authenticate("factory", "FACTORY_ADMIN");
+        when(userRoleService.getRoleCodesByUsername("factory")).thenReturn(List.of("FACTORY_ADMIN"));
+        when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
+
+        dataScopeContext.currentDataScope();
+        dataScopeContext.currentFactoryCodes();
+        dataScopeContext.clearCache();
+
+        dataScopeContext.currentDataScope();
+        dataScopeContext.currentFactoryCodes();
+
+        verify(userRoleService, times(2)).getRoleCodesByUsername("factory");
+        verify(userFactoryService, times(2)).getFactoryCodesByUsername("factory");
     }
 }

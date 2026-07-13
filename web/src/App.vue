@@ -42,11 +42,12 @@ const userDropdownOptions = computed(() => {
   return options
 })
 
-function handleUserAction(key: string) {
+async function handleUserAction(key: string) {
   if (key === 'logout') {
-    userStore.logout().then(() => router.push('/login'))
+    await userStore.logout()
+    await router.replace('/login')
   } else if (key === 'settings') {
-    router.push('/settings')
+    await router.push('/settings')
   }
 }
 </script>

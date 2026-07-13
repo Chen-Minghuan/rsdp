@@ -14,24 +14,46 @@ import {
   NModal,
   NForm,
   NFormItem,
-  NSelect
+  NSelect,
+  NInput,
+  NInputNumber,
+  NGrid,
+  NGridItem,
+  NDivider,
+  NImage
 } from 'naive-ui'
-import { getFactory, listRskuByFactory, updateFactoryLevel, updateCapableLevels, listFactoryCapabilities, syncFactoryCapabilities } from '@/api/factory'
+import {
+  getFactory,
+  listRskuByFactory,
+  updateFactoryLevel,
+  updateCapableLevels,
+  listFactoryCapabilities,
+  syncFactoryCapabilities,
+  updateFactory
+} from '@/api/factory'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS } from '@/utils/constants'
-import type { Factory, FactoryProductCapability } from '@/types/factory'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { useRequestAbort } from '@/composables/useRequestAbort'
+import type { Factory, FactoryProductCapability, FactoryUpdateRequest } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
 import type { DictItem } from '@/types/dict'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 const factoryCode = computed(() => route.params.factoryCode as string)
 
 const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_UPDATE))
 const canReadCapability = computed(() => userStore.hasPermission(PERMISSIONS.CAPABILITY_READ))
 const canCreateCapability = computed(() => userStore.hasPermission(PERMISSIONS.CAPABILITY_CREATE))
+
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+// 平台运营人员（ADMIN/EDITOR）可编辑任意工厂；工厂管理员只能维护自己关联的工厂
+const isMyFactory = computed(() =>
+  userStore.hasAnyRole([ROLES.ADMIN, ROLES.EDITOR]) || factoryCodes.value.includes(factoryCode.value)
+)
 
 const loading = ref(false)
 const rskuLoading = ref(false)
@@ -52,6 +74,22 @@ const showCapableModal = ref(false)
 const submittingCapable = ref(false)
 const newCapableLevels = ref<string[]>([])
 
+const showEditModal = ref(false)
+const submittingEdit = ref(false)
+const editForm = ref<FactoryUpdateRequest>({})
+
+const equipmentOptions = ref<DictItem[]>([])
+const logisticsOptions = ref<DictItem[]>([])
+const packagingOptions = ref<DictItem[]>([])
+const woodOptions = ref<DictItem[]>([])
+const qcItemOptions = ref<DictItem[]>([
+  { dictCode: 'INCOMING', dictName: '来料检验' },
+  { dictCode: 'PROCESS', dictName: '过程巡检' },
+  { dictCode: 'FINAL', dictName: '成品全检' },
+  { dictCode: 'THIRD_PARTY', dictName: '第三方检测' },
+  { dictCode: 'OTHER', dictName: '其他' }
+])
+
 const levelSelectOptions = computed(() =>
   levelOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
 )
@@ -60,6 +98,22 @@ const otherCapableLevels = computed(() => {
   if (!factory.value) return []
   return (factory.value.capableLevels || []).filter(l => l !== factory.value?.factoryLevel)
 })
+
+const equipmentSelectOptions = computed(() =>
+  equipmentOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+)
+const logisticsSelectOptions = computed(() =>
+  logisticsOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+)
+const packagingSelectOptions = computed(() =>
+  packagingOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+)
+const woodSelectOptions = computed(() =>
+  woodOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+)
+const qcItemSelectOptions = computed(() =>
+  qcItemOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+)
 
 const rskuColumns = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
@@ -106,7 +160,7 @@ async function loadFactory() {
   loading.value = true
   errorMessage.value = ''
   try {
-    factory.value = await getFactory(factoryCode.value)
+    factory.value = await getFactory(factoryCode.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载工厂详情失败'
   } finally {
@@ -118,7 +172,7 @@ async function loadRskuList() {
   if (!validateFactoryCode()) return
   rskuLoading.value = true
   try {
-    rskuList.value = await listRskuByFactory(factoryCode.value)
+    rskuList.value = await listRskuByFactory(factoryCode.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载报价列表失败'
   } finally {
@@ -131,7 +185,7 @@ async function loadCapabilities() {
   if (!validateFactoryCode()) return
   capabilityLoading.value = true
   try {
-    capabilities.value = await listFactoryCapabilities(factoryCode.value)
+    capabilities.value = await listFactoryCapabilities(factoryCode.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载产品能力档案失败'
   } finally {
@@ -146,7 +200,7 @@ async function handleSyncCapabilities() {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    capabilities.value = await syncFactoryCapabilities(factoryCode.value)
+    capabilities.value = await syncFactoryCapabilities(factoryCode.value, { signal })
     successMessage.value = `产品能力档案已同步，共 ${capabilities.value.length} 条`
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '同步产品能力档案失败'
@@ -157,11 +211,62 @@ async function handleSyncCapabilities() {
 
 async function loadLevels() {
   try {
-    levelOptions.value = await listDicts('factory_level')
+    levelOptions.value = await listDicts('factory_level', { signal })
   } catch (e) {
     console.error('加载工厂等级字典失败', e)
   }
 }
+
+async function loadDicts() {
+  try {
+    const [equipment, logistics, packaging, wood] = await Promise.all([
+      listDicts('equipment_type', { signal }),
+      listDicts('logistics_method', { signal }),
+      listDicts('packaging_type', { signal }),
+      listDicts('wood_type', { signal })
+    ])
+    equipmentOptions.value = equipment
+    logisticsOptions.value = logistics
+    packagingOptions.value = packaging
+    woodOptions.value = wood
+  } catch (e) {
+    console.error('加载工厂资料字典失败', e)
+  }
+}
+
+function parseJsonArray(value?: string): string[] {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function stringifyJsonArray(val: string[]): string {
+  return val.length > 0 ? JSON.stringify(val) : '[]'
+}
+
+const editEquipmentList = computed({
+  get: () => parseJsonArray(editForm.value.equipmentList),
+  set: (val: string[]) => { editForm.value.equipmentList = stringifyJsonArray(val) }
+})
+
+const editQcItems = computed({
+  get: () => parseJsonArray(editForm.value.qcItems),
+  set: (val: string[]) => { editForm.value.qcItems = stringifyJsonArray(val) }
+})
+
+const editLogisticsMethods = computed({
+  get: () => parseJsonArray(editForm.value.logisticsMethods),
+  set: (val: string[]) => { editForm.value.logisticsMethods = stringifyJsonArray(val) }
+})
+
+const editDefaultPackaging = computed({
+  get: () => parseJsonArray(editForm.value.defaultPackaging),
+  set: (val: string[]) => { editForm.value.defaultPackaging = stringifyJsonArray(val) }
+})
 
 function openLevelModal() {
   newLevel.value = factory.value?.factoryLevel || null
@@ -217,8 +322,134 @@ async function handleUpdateCapableLevels() {
   }
 }
 
+function openEditModal() {
+  if (!factory.value) return
+  editForm.value = {
+    factoryName: factory.value.factoryName,
+    homeCommercialTag: factory.value.homeCommercialTag,
+    region: factory.value.region,
+    address: factory.value.address,
+    contactPerson: factory.value.contactPerson,
+    contactPhone: factory.value.contactPhone,
+    notes: factory.value.notes,
+    certification: factory.value.certification,
+    engineeringCases: factory.value.engineeringCases,
+    factoryArea: factory.value.factoryArea,
+    employeeCount: factory.value.employeeCount,
+    monthlyCapacity: factory.value.monthlyCapacity,
+    foundedYear: factory.value.foundedYear,
+    equipmentList: factory.value.equipmentList,
+    frameWood: factory.value.frameWood,
+    spongeSupplier: factory.value.spongeSupplier,
+    leatherFabricSource: factory.value.leatherFabricSource,
+    hardwareSupplier: factory.value.hardwareSupplier,
+    qcItems: factory.value.qcItems,
+    qcStaffCount: factory.value.qcStaffCount,
+    shippingFrom: factory.value.shippingFrom,
+    logisticsMethods: factory.value.logisticsMethods,
+    defaultPackaging: factory.value.defaultPackaging,
+    auditorSignature: factory.value.auditorSignature,
+    factoryImages: factory.value.factoryImages
+  }
+  showEditModal.value = true
+}
+
+function buildUpdateRequest(): FactoryUpdateRequest {
+  const request: FactoryUpdateRequest = {}
+  const source = editForm.value
+  if (source.factoryName !== undefined) request.factoryName = source.factoryName
+  if (source.homeCommercialTag !== undefined) request.homeCommercialTag = source.homeCommercialTag
+  if (source.region !== undefined) request.region = source.region
+  if (source.address !== undefined) request.address = source.address
+  if (source.contactPerson !== undefined) request.contactPerson = source.contactPerson
+  if (source.contactPhone !== undefined) request.contactPhone = source.contactPhone
+  if (source.notes !== undefined) request.notes = source.notes
+  if (source.certification !== undefined) request.certification = source.certification
+  if (source.engineeringCases !== undefined) request.engineeringCases = source.engineeringCases
+  if (source.factoryArea !== undefined) request.factoryArea = source.factoryArea
+  if (source.employeeCount !== undefined) request.employeeCount = source.employeeCount
+  if (source.monthlyCapacity !== undefined) request.monthlyCapacity = source.monthlyCapacity
+  if (source.foundedYear !== undefined) request.foundedYear = source.foundedYear
+  if (source.equipmentList !== undefined) request.equipmentList = source.equipmentList
+  if (source.frameWood !== undefined) request.frameWood = source.frameWood
+  if (source.spongeSupplier !== undefined) request.spongeSupplier = source.spongeSupplier
+  if (source.leatherFabricSource !== undefined) request.leatherFabricSource = source.leatherFabricSource
+  if (source.hardwareSupplier !== undefined) request.hardwareSupplier = source.hardwareSupplier
+  if (source.qcItems !== undefined) request.qcItems = source.qcItems
+  if (source.qcStaffCount !== undefined) request.qcStaffCount = source.qcStaffCount
+  if (source.shippingFrom !== undefined) request.shippingFrom = source.shippingFrom
+  if (source.logisticsMethods !== undefined) request.logisticsMethods = source.logisticsMethods
+  if (source.defaultPackaging !== undefined) request.defaultPackaging = source.defaultPackaging
+  if (source.auditorSignature !== undefined) request.auditorSignature = source.auditorSignature
+  if (source.factoryImages !== undefined) request.factoryImages = source.factoryImages
+  return request
+}
+
+async function handleUpdateFactory() {
+  submittingEdit.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await updateFactory(factoryCode.value, buildUpdateRequest())
+    successMessage.value = '工厂资料更新成功'
+    showEditModal.value = false
+    await loadFactory()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '更新工厂资料失败'
+  } finally {
+    submittingEdit.value = false
+  }
+}
+
 function handleRskuClick(row: Rsku) {
   router.push(`/products/${row.rspuId}/rsku/${row.rskuId}`)
+}
+
+/**
+ * 通用 JSON 标签列表（局部函数式组件）。
+ * 空值时渲染占位符“-”，避免把字符串“-”当作组件标签名传给 `<component :is>`。
+ */
+function JsonTags(props: { value?: string }) {
+  const items = parseJsonArray(props.value)
+  if (items.length === 0) {
+    return h('span', '-')
+  }
+  return h(
+    NSpace,
+    { size: 4 },
+    {
+      default: () => items.map(item =>
+        h(NTag, { size: 'small', type: 'info' }, { default: () => item })
+      )
+    }
+  )
+}
+
+/**
+ * 工厂图片列表（局部函数式组件）。
+ */
+function FactoryImages(props: { value?: string }) {
+  const items = parseJsonArray(props.value)
+  if (items.length === 0) {
+    return h('span', '-')
+  }
+  return h(
+    NSpace,
+    { size: 8 },
+    {
+      default: () => items.map((item, index) =>
+        h(NImage, {
+          src: item,
+          width: 120,
+          height: 90,
+          objectFit: 'cover',
+          fallbackSrc: '',
+          alt: `工厂图片 ${index + 1}`
+        })
+      )
+    }
+  )
 }
 
 onMounted(() => {
@@ -226,6 +457,7 @@ onMounted(() => {
   loadRskuList()
   loadCapabilities()
   loadLevels()
+  loadDicts()
 })
 
 onBeforeRouteUpdate((to) => {
@@ -256,45 +488,155 @@ onBeforeRouteUpdate((to) => {
         <n-spin v-if="loading" size="large" />
 
         <template v-if="factory && !loading">
-          <n-descriptions bordered :column="2" label-placement="left">
-            <n-descriptions-item label="工厂代码">
-              {{ factory.factoryCode }}
-            </n-descriptions-item>
-            <n-descriptions-item label="工厂名称">
-              {{ factory.factoryName }}
-            </n-descriptions-item>
-            <n-descriptions-item label="主等级">
-              {{ factory.factoryLevel }}
-            </n-descriptions-item>
-            <n-descriptions-item label="兼做等级">
-              <n-space v-if="otherCapableLevels.length > 0" size="small">
-                <n-tag v-for="level in otherCapableLevels" :key="level" type="info" size="small">
-                  {{ level }}
-                </n-tag>
-              </n-space>
-              <span v-else>-</span>
-            </n-descriptions-item>
-            <n-descriptions-item label="地区">
-              {{ factory.region || '-' }}
-            </n-descriptions-item>
-            <n-descriptions-item label="联系人">
-              {{ factory.contactPerson || '-' }}
-            </n-descriptions-item>
-            <n-descriptions-item label="联系电话">
-              {{ factory.contactPhone || '-' }}
-            </n-descriptions-item>
-            <n-descriptions-item label="地址" :span="2">
-              {{ factory.address || '-' }}
-            </n-descriptions-item>
-            <n-descriptions-item label="备注" :span="2">
-              {{ factory.notes || '-' }}
-            </n-descriptions-item>
-          </n-descriptions>
-
-          <n-space v-if="canUpdateFactory">
-            <n-button type="primary" @click="openLevelModal">变更主等级</n-button>
-            <n-button @click="openCapableModal">编辑兼做等级</n-button>
+          <n-space v-if="canUpdateFactory && isMyFactory">
+            <n-button type="primary" @click="openEditModal">编辑工厂资料</n-button>
+            <n-button size="small" @click="openLevelModal">变更主等级</n-button>
+            <n-button size="small" @click="openCapableModal">编辑兼做等级</n-button>
           </n-space>
+
+          <!-- 基本信息 -->
+          <n-card title="基本信息" size="small">
+            <n-descriptions bordered :column="2" label-placement="left">
+              <n-descriptions-item label="工厂代码">
+                {{ factory.factoryCode }}
+              </n-descriptions-item>
+              <n-descriptions-item label="工厂名称">
+                {{ factory.factoryName }}
+              </n-descriptions-item>
+              <n-descriptions-item label="主等级">
+                {{ factory.factoryLevel }}
+              </n-descriptions-item>
+              <n-descriptions-item label="兼做等级">
+                <n-space v-if="otherCapableLevels.length > 0" size="small">
+                  <n-tag v-for="level in otherCapableLevels" :key="level" type="info" size="small">
+                    {{ level }}
+                  </n-tag>
+                </n-space>
+                <span v-else>-</span>
+              </n-descriptions-item>
+              <n-descriptions-item label="地区">
+                {{ factory.region || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="联系人">
+                {{ factory.contactPerson || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="联系电话">
+                {{ factory.contactPhone || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="家用/商用标签">
+                {{ factory.homeCommercialTag || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="地址" :span="2">
+                {{ factory.address || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="备注" :span="2">
+                {{ factory.notes || '-' }}
+              </n-descriptions-item>
+            </n-descriptions>
+          </n-card>
+
+          <!-- 规模信息 -->
+          <n-card title="规模信息" size="small">
+            <n-descriptions bordered :column="2" label-placement="left">
+              <n-descriptions-item label="工厂面积（㎡）">
+                {{ factory.factoryArea ?? '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="员工人数">
+                {{ factory.employeeCount ?? '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="月产能（件）">
+                {{ factory.monthlyCapacity ?? '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="成立年份">
+                {{ factory.foundedYear ?? '-' }}
+              </n-descriptions-item>
+            </n-descriptions>
+          </n-card>
+
+          <!-- 设备清单 -->
+          <n-card title="设备清单" size="small">
+            <div style="padding: 8px 0;">
+              <JsonTags :value="factory.equipmentList" />
+            </div>
+          </n-card>
+
+          <!-- 原料来源 -->
+          <n-card title="原料来源" size="small">
+            <n-descriptions bordered :column="2" label-placement="left">
+              <n-descriptions-item label="框架木材">
+                {{ factory.frameWood || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="海绵供应商">
+                {{ factory.spongeSupplier || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="面料皮革来源">
+                {{ factory.leatherFabricSource || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="五金配件供应商">
+                {{ factory.hardwareSupplier || '-' }}
+              </n-descriptions-item>
+            </n-descriptions>
+          </n-card>
+
+          <!-- 品质控制 -->
+          <n-card title="品质控制" size="small">
+            <n-descriptions bordered :column="2" label-placement="left">
+              <n-descriptions-item label="QC 项目">
+                <JsonTags :value="factory.qcItems" />
+              </n-descriptions-item>
+              <n-descriptions-item label="QC 人数">
+                {{ factory.qcStaffCount ?? '-' }}
+              </n-descriptions-item>
+            </n-descriptions>
+          </n-card>
+
+          <!-- 认证资质 -->
+          <n-card title="认证资质" size="small">
+            <div style="padding: 8px 0;">
+              <JsonTags :value="factory.certification" />
+            </div>
+          </n-card>
+
+          <!-- 物流信息 -->
+          <n-card title="物流信息" size="small">
+            <n-descriptions bordered :column="2" label-placement="left">
+              <n-descriptions-item label="发货地">
+                {{ factory.shippingFrom || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="常用物流方式">
+                <JsonTags :value="factory.logisticsMethods" />
+              </n-descriptions-item>
+              <n-descriptions-item label="默认包装">
+                <JsonTags :value="factory.defaultPackaging" />
+              </n-descriptions-item>
+            </n-descriptions>
+          </n-card>
+
+          <!-- 验厂信息 -->
+          <n-card title="验厂信息" size="small">
+            <n-descriptions bordered :column="2" label-placement="left">
+              <n-descriptions-item label="验厂日期">
+                {{ factory.firstAuditDate || '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="验厂人员签名">
+                {{ factory.auditorSignature || '-' }}
+              </n-descriptions-item>
+            </n-descriptions>
+          </n-card>
+
+          <!-- 工厂图片 -->
+          <n-card title="工厂图片" size="small">
+            <div style="padding: 8px 0;">
+              <FactoryImages :value="factory.factoryImages" />
+            </div>
+          </n-card>
+
+          <!-- 工程案例 -->
+          <n-card title="工程案例" size="small">
+            <div style="padding: 8px 0; white-space: pre-wrap;">
+              {{ factory.engineeringCases || '-' }}
+            </div>
+          </n-card>
 
           <n-card title="该工厂报价（RSKU）" size="small">
             <n-data-table
@@ -318,7 +660,7 @@ onBeforeRouteUpdate((to) => {
             <n-space vertical>
               <n-space align="center">
                 <n-button
-                  v-if="canCreateCapability"
+                  v-if="canCreateCapability && isMyFactory"
                   type="primary"
                   :loading="syncingCapabilities"
                   @click="handleSyncCapabilities"
@@ -347,6 +689,186 @@ onBeforeRouteUpdate((to) => {
         </template>
       </n-space>
     </n-card>
+
+    <!-- 编辑工厂资料弹窗 -->
+    <n-modal
+      v-model:show="showEditModal"
+      title="编辑工厂资料"
+      preset="card"
+      style="width: 800px; max-height: 85vh; overflow: auto;"
+    >
+      <n-form label-placement="left" label-width="120">
+        <n-divider title-placement="left">基本信息</n-divider>
+        <n-grid :cols="2" :x-gap="16">
+          <n-grid-item>
+            <n-form-item label="工厂名称">
+              <n-input v-model:value="editForm.factoryName" placeholder="工厂名称" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="家用/商用标签">
+              <n-input v-model:value="editForm.homeCommercialTag" placeholder="如 家用级/商用级" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="地区">
+              <n-input v-model:value="editForm.region" placeholder="地区" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="联系人">
+              <n-input v-model:value="editForm.contactPerson" placeholder="联系人" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="联系电话">
+              <n-input v-model:value="editForm.contactPhone" placeholder="联系电话" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item :span="2">
+            <n-form-item label="地址">
+              <n-input v-model:value="editForm.address" placeholder="地址" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item :span="2">
+            <n-form-item label="备注">
+              <n-input v-model:value="editForm.notes" type="textarea" placeholder="备注" />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+
+        <n-divider title-placement="left">规模信息</n-divider>
+        <n-grid :cols="2" :x-gap="16">
+          <n-grid-item>
+            <n-form-item label="工厂面积（㎡）">
+              <n-input-number v-model:value="editForm.factoryArea" :min="0" placeholder="工厂面积" style="width: 100%;" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="员工人数">
+              <n-input-number v-model:value="editForm.employeeCount" :min="0" placeholder="员工人数" style="width: 100%;" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="月产能（件）">
+              <n-input-number v-model:value="editForm.monthlyCapacity" :min="0" placeholder="月产能" style="width: 100%;" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="成立年份">
+              <n-input-number v-model:value="editForm.foundedYear" :min="1800" :max="2100" placeholder="成立年份" style="width: 100%;" />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+
+        <n-divider title-placement="left">设备与品控</n-divider>
+        <n-grid :cols="2" :x-gap="16">
+          <n-grid-item :span="2">
+            <n-form-item label="设备清单">
+              <n-select
+                v-model:value="editEquipmentList"
+                :options="equipmentSelectOptions"
+                multiple
+                placeholder="选择设备"
+              />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item :span="2">
+            <n-form-item label="QC 项目">
+              <n-select
+                v-model:value="editQcItems"
+                :options="qcItemSelectOptions"
+                multiple
+                placeholder="选择 QC 项目"
+              />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="QC 人数">
+              <n-input-number v-model:value="editForm.qcStaffCount" :min="0" placeholder="QC 人数" style="width: 100%;" />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+
+        <n-divider title-placement="left">原料来源</n-divider>
+        <n-grid :cols="2" :x-gap="16">
+          <n-grid-item>
+            <n-form-item label="框架木材">
+              <n-select v-model:value="editForm.frameWood" :options="woodSelectOptions" clearable placeholder="选择框架木材" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="海绵供应商">
+              <n-input v-model:value="editForm.spongeSupplier" placeholder="海绵供应商" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="面料皮革来源">
+              <n-input v-model:value="editForm.leatherFabricSource" placeholder="面料皮革来源" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="五金配件供应商">
+              <n-input v-model:value="editForm.hardwareSupplier" placeholder="五金配件供应商" />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+
+        <n-divider title-placement="left">物流信息</n-divider>
+        <n-grid :cols="2" :x-gap="16">
+          <n-grid-item>
+            <n-form-item label="发货地">
+              <n-input v-model:value="editForm.shippingFrom" placeholder="发货地" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item :span="2">
+            <n-form-item label="常用物流方式">
+              <n-select
+                v-model:value="editLogisticsMethods"
+                :options="logisticsSelectOptions"
+                multiple
+                placeholder="选择物流方式"
+              />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item :span="2">
+            <n-form-item label="默认包装">
+              <n-select
+                v-model:value="editDefaultPackaging"
+                :options="packagingSelectOptions"
+                multiple
+                placeholder="选择默认包装"
+              />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+
+        <n-divider title-placement="left">验厂与图片</n-divider>
+        <n-grid :cols="2" :x-gap="16">
+          <n-grid-item>
+            <n-form-item label="验厂人员签名">
+              <n-input v-model:value="editForm.auditorSignature" placeholder="验厂人员签名" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item :span="2">
+            <n-form-item label="工厂图片">
+              <n-input
+                v-model:value="editForm.factoryImages"
+                type="textarea"
+                placeholder="JSON 数组，如 [&quot;img/1.jpg&quot;,&quot;img/2.jpg&quot;]"
+              />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+      </n-form>
+
+      <n-space justify="end">
+        <n-button @click="showEditModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingEdit" @click="handleUpdateFactory">
+          保存
+        </n-button>
+      </n-space>
+    </n-modal>
 
     <n-modal
       v-model:show="showLevelModal"

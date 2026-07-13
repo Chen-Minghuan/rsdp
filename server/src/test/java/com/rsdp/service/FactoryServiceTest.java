@@ -2,6 +2,7 @@ package com.rsdp.service;
 
 import com.rsdp.dto.request.FactoryCreateRequest;
 import com.rsdp.dto.request.FactoryLevelCapabilityUpdateRequest;
+import com.rsdp.dto.request.FactoryUpdateRequest;
 import com.rsdp.dto.response.FactoryResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryLevelCapability;
@@ -10,6 +11,8 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryLevelCapabilityMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -17,6 +20,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import static org.mockito.Mockito.lenient;
+
+import java.math.BigDecimal;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,8 +48,16 @@ class FactoryServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private FactoryService factoryService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+    }
 
     private List<CategoryDict> factoryLevelDicts() {
         CategoryDict s = new CategoryDict();
@@ -277,5 +291,100 @@ class FactoryServiceTest {
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getCapableLevels()).containsExactly("S", "A", "C");
+    }
+
+    @Test
+    void createFactory_withExtendedFields_shouldPersistAllFields() {
+        FactoryCreateRequest request = new FactoryCreateRequest();
+        request.setFactoryCode("F001");
+        request.setFactoryName("测试工厂");
+        request.setFactoryLevel("S");
+        request.setFactoryArea(new BigDecimal("5000.50"));
+        request.setEmployeeCount(120);
+        request.setMonthlyCapacity(3000);
+        request.setFoundedYear(2010);
+        request.setEquipmentList("[\"CNC\",\"CUTTING\"]");
+        request.setFrameWood("OAK");
+        request.setSpongeSupplier("东亚海绵");
+        request.setQcItems("[\"INCOMING\",\"FINAL\"]");
+        request.setQcStaffCount(8);
+        request.setLogisticsMethods("[\"SPECIAL\",\"SF\"]");
+        request.setDefaultPackaging("[\"CARTON\"]");
+        request.setAuditorSignature("张三");
+        request.setFactoryImages("[\"img/1.jpg\"]");
+
+        when(factoryMasterMapper.selectById("F001")).thenReturn(null);
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        factoryService.createFactory(request);
+
+        ArgumentCaptor<FactoryMaster> captor = ArgumentCaptor.forClass(FactoryMaster.class);
+        verify(factoryMasterMapper, times(1)).insert(captor.capture());
+        FactoryMaster saved = captor.getValue();
+        assertThat(saved.getFactoryArea()).isEqualByComparingTo("5000.50");
+        assertThat(saved.getEmployeeCount()).isEqualTo(120);
+        assertThat(saved.getMonthlyCapacity()).isEqualTo(3000);
+        assertThat(saved.getFoundedYear()).isEqualTo(2010);
+        assertThat(saved.getEquipmentList()).isEqualTo("[\"CNC\",\"CUTTING\"]");
+        assertThat(saved.getFrameWood()).isEqualTo("OAK");
+        assertThat(saved.getQcStaffCount()).isEqualTo(8);
+        assertThat(saved.getAuditorSignature()).isEqualTo("张三");
+    }
+
+    @Test
+    void updateFactory_shouldUpdateNonNullFieldsAndIgnoreNullFields() {
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        factory.setFactoryName("旧名称");
+        factory.setFactoryLevel("S");
+        factory.setRegion("广东");
+        factory.setEmployeeCount(50);
+
+        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+
+        FactoryUpdateRequest request = new FactoryUpdateRequest();
+        request.setFactoryName("新名称");
+        request.setFactoryArea(new BigDecimal("8000"));
+        request.setQcStaffCount(10);
+        // region 和 employeeCount 不传，应保持原值
+
+        factoryService.updateFactory("F001", request);
+
+        assertThat(factory.getFactoryName()).isEqualTo("新名称");
+        assertThat(factory.getFactoryArea()).isEqualByComparingTo("8000");
+        assertThat(factory.getQcStaffCount()).isEqualTo(10);
+        assertThat(factory.getRegion()).isEqualTo("广东");
+        assertThat(factory.getEmployeeCount()).isEqualTo(50);
+        verify(factoryMasterMapper).updateById(factory);
+        verify(auditLogService).logUpdate(eq("factory_master"), eq("F001"), any(), any(), any());
+    }
+
+    @Test
+    void updateFactory_shouldThrowWhenFactoryNotFound() {
+        when(factoryMasterMapper.selectById("F999")).thenReturn(null);
+
+        FactoryUpdateRequest request = new FactoryUpdateRequest();
+        request.setFactoryName("新名称");
+
+        assertThatThrownBy(() -> factoryService.updateFactory("F999", request))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .hasMessageContaining("工厂不存在");
+    }
+
+    @Test
+    void updateFactory_shouldRejectNegativeEmployeeCount() {
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        factory.setFactoryName("测试工厂");
+        factory.setFactoryLevel("S");
+
+        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+
+        FactoryUpdateRequest request = new FactoryUpdateRequest();
+        request.setEmployeeCount(-1);
+
+        assertThatThrownBy(() -> factoryService.updateFactory("F001", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("员工人数不能为负数");
     }
 }

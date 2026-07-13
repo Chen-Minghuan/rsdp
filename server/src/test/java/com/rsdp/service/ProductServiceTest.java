@@ -20,13 +20,19 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -214,5 +220,103 @@ class ProductServiceTest {
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper).insert(rspuCaptor.capture());
         assertThat(rspuCaptor.getValue().getCategoryCode()).isEqualTo("FS");
+    }
+
+    @Test
+    void createEntry_shouldDeleteStoredFilesWhenTransactionRollsBack() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
+
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            productService.createEntry(List.of(image), null);
+
+            List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
+            assertThat(syncs).isNotEmpty();
+            for (TransactionSynchronization sync : syncs) {
+                sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+            }
+
+            verify(storageService).delete("images/IMG-XXX.jpg");
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
+    }
+
+    @Test
+    void createEntry_shouldNotDeleteStoredFilesWhenTransactionCommits() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
+
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            productService.createEntry(List.of(image), null);
+
+            List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
+            for (TransactionSynchronization sync : syncs) {
+                sync.afterCompletion(TransactionSynchronization.STATUS_COMMITTED);
+            }
+
+            verify(storageService, never()).delete(anyString());
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
+    }
+
+    @Test
+    void createEntryFromStream_shouldDeleteFileWhenTransactionRollsBack() throws Exception {
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString()))
+            .thenReturn("images/IMG-STREAM.jpg");
+
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            productService.createEntryFromStream(
+                new ByteArrayInputStream("fake-image".getBytes()), "chair.jpg", 100, null
+            );
+
+            List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
+            assertThat(syncs).isNotEmpty();
+            for (TransactionSynchronization sync : syncs) {
+                sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+            }
+
+            verify(storageService).delete("images/IMG-STREAM.jpg");
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
+    }
+
+    @Test
+    void createEntryFromStream_shouldNotDeleteFileWhenTransactionCommits() throws Exception {
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString()))
+            .thenReturn("images/IMG-STREAM.jpg");
+
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            productService.createEntryFromStream(
+                new ByteArrayInputStream("fake-image".getBytes()), "chair.jpg", 100, null
+            );
+
+            List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
+            for (TransactionSynchronization sync : syncs) {
+                sync.afterCompletion(TransactionSynchronization.STATUS_COMMITTED);
+            }
+
+            verify(storageService, never()).delete(anyString());
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
     }
 }

@@ -27,8 +27,15 @@ const router = useRouter()
 const userStore = useUserStore()
 
 const canCreateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_CREATE))
+const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_UPDATE))
 const canImportRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_IMPORT))
 const showManagementCard = computed(() => canCreateFactory.value || canImportRsku.value)
+
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+function canEditFactory(row: Factory) {
+  return canUpdateFactory.value && (isPlatformStaff.value || factoryCodes.value.includes(row.factoryCode))
+}
 
 const factories = ref<Factory[]>([])
 const loading = ref(false)
@@ -36,12 +43,24 @@ const submitting = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const levelOptions = ref<DictItem[]>([])
+const searchKeyword = ref('')
 
 const page = ref(1)
 const pageSize = ref(10)
+
+const filteredFactories = computed(() => {
+  const keyword = searchKeyword.value.trim().toLowerCase()
+  if (!keyword) return factories.value
+  return factories.value.filter(f =>
+    (f.factoryName?.toLowerCase().includes(keyword)) ||
+    (f.factoryCode?.toLowerCase().includes(keyword)) ||
+    (f.region?.toLowerCase().includes(keyword))
+  )
+})
+
 const pagedFactories = computed(() => {
   const start = (page.value - 1) * pageSize.value
-  return factories.value.slice(start, start + pageSize.value)
+  return filteredFactories.value.slice(start, start + pageSize.value)
 })
 
 const form = ref<FactoryCreateRequest>({
@@ -92,7 +111,21 @@ const columns = [
   },
   { title: '地区', key: 'region', width: 120 },
   { title: '联系人', key: 'contactPerson', width: 120 },
-  { title: '联系电话', key: 'contactPhone', width: 140 }
+  { title: '联系电话', key: 'contactPhone', width: 140 },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 100,
+    render(row: Factory) {
+      return canEditFactory(row)
+        ? h(
+            NButton,
+            { size: 'small', onClick: () => router.push(`/factories/${row.factoryCode}`) },
+            { default: () => '编辑' }
+          )
+        : null
+    }
+  }
 ]
 
 async function loadFactories() {
@@ -232,6 +265,15 @@ onMounted(() => {
           </n-space>
         </n-card>
 
+        <n-space>
+          <n-input
+            v-model:value="searchKeyword"
+            placeholder="搜索工厂名称/代码/地区"
+            clearable
+            style="width: 280px;"
+          />
+        </n-space>
+
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
           {{ errorMessage }}
         </n-alert>
@@ -251,10 +293,10 @@ onMounted(() => {
         />
 
         <n-pagination
-          v-if="factories.length > pageSize"
+          v-if="filteredFactories.length > pageSize"
           v-model:page="page"
           v-model:page-size="pageSize"
-          :item-count="factories.length"
+          :item-count="filteredFactories.length"
           :page-sizes="[10, 20, 50]"
           show-size-picker
         />

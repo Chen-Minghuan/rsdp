@@ -2,6 +2,7 @@ package com.rsdp.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -22,6 +23,7 @@ public class RskuCreateRequest {
     private String factorySku;
 
     @NotNull(message = "出厂价不能为空")
+    @Positive(message = "出厂价必须大于 0")
     private BigDecimal factoryPrice;
 
     private String materialCode;

@@ -8,12 +8,14 @@ import com.rsdp.dto.request.ProductReviewRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
+import com.rsdp.security.Permissions;
 import com.rsdp.service.ProductQueryService;
 import com.rsdp.service.ProductService;
 import com.rsdp.util.ImageUploadValidator;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -80,6 +82,7 @@ public class ProductController {
      * @throws IOException 文件保存失败
      */
     @PostMapping("/factory-entry")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_CREATE + "') and hasRole('FACTORY_ADMIN')")
     public Result<Map<String, Object>> factoryEntry(
         @Valid @RequestPart("request") FactoryProductEntryRequest request,
         @RequestParam(value = "images", required = false) List<MultipartFile> images) throws IOException {

@@ -8,19 +8,28 @@ import com.rsdp.dto.request.UserUpdateRequest;
 import com.rsdp.dto.response.UserResponse;
 import com.rsdp.entity.SysRole;
 import com.rsdp.entity.SysUser;
+import com.rsdp.entity.SysUserFactory;
+import com.rsdp.entity.SysUserRole;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.SysRoleMapper;
+import com.rsdp.mapper.SysUserFactoryMapper;
 import com.rsdp.mapper.SysUserMapper;
+import com.rsdp.mapper.SysUserRoleMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -32,9 +41,12 @@ public class UserService {
 
     private final SysUserMapper sysUserMapper;
     private final SysRoleMapper sysRoleMapper;
+    private final SysUserRoleMapper sysUserRoleMapper;
+    private final SysUserFactoryMapper sysUserFactoryMapper;
     private final PasswordEncoder passwordEncoder;
     private final UserRoleService userRoleService;
     private final UserFactoryService userFactoryService;
+    private final PermissionService permissionService;
 
     /**
      * 分页查询用户列表。
@@ -53,8 +65,18 @@ public class UserService {
         wrapper.orderByDesc("created_at");
         Page<SysUser> userPage = sysUserMapper.selectPage(new Page<>(page, size), wrapper);
 
+        List<String> userIds = userPage.getRecords().stream()
+            .map(SysUser::getUserId)
+            .collect(Collectors.toList());
+        Map<String, SysRole> roleMap = batchGetRoleMap(userIds);
+        Map<String, List<String>> factoryCodeMap = batchGetFactoryCodeMap(userIds);
+
         List<UserResponse> records = userPage.getRecords().stream()
-            .map(this::toResponse)
+            .map(user -> toListResponse(
+                user,
+                roleMap.get(user.getUserId()),
+                factoryCodeMap.getOrDefault(user.getUserId(), Collections.emptyList())
+            ))
             .collect(Collectors.toList());
 
         Page<UserResponse> result = new Page<>(userPage.getCurrent(), userPage.getSize(), userPage.getTotal());
@@ -145,6 +167,7 @@ public class UserService {
         if (roleChanged) {
             incrementTokenVersion(userId);
         }
+        permissionService.clearPermissionCache(userId);
 
         return toResponse(user);
     }
@@ -254,6 +277,63 @@ public class UserService {
     }
 
     private UserResponse toResponse(SysUser user) {
+        List<String> roleCodes = userRoleService.getRoleCodesByUserId(user.getUserId());
+        SysRole role = roleCodes.isEmpty() ? null : sysRoleMapper.selectByRoleCode(roleCodes.get(0));
+        List<String> factoryCodes = userFactoryService.getFactoryCodesByUserId(user.getUserId());
+        return toListResponse(user, role, factoryCodes);
+    }
+
+    /**
+     * 按用户列表批量查询每个用户的第一个角色信息。
+     *
+     * @param userIds 用户 ID 列表
+     * @return key 为用户 ID，value 为该用户的第一个角色
+     */
+    private Map<String, SysRole> batchGetRoleMap(List<String> userIds) {
+        if (userIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<SysUserRole> userRoles = sysUserRoleMapper.selectList(
+            new QueryWrapper<SysUserRole>().in("user_id", userIds)
+        );
+        List<Long> roleIds = userRoles.stream()
+            .map(SysUserRole::getRoleId)
+            .distinct()
+            .collect(Collectors.toList());
+        Map<Long, SysRole> roleMap = roleIds.isEmpty()
+            ? Collections.emptyMap()
+            : sysRoleMapper.selectBatchIds(roleIds).stream()
+                .collect(Collectors.toMap(SysRole::getRoleId, Function.identity(), (a, b) -> a));
+        return userRoles.stream()
+            .filter(ur -> roleMap.containsKey(ur.getRoleId()))
+            .collect(Collectors.toMap(
+                SysUserRole::getUserId,
+                ur -> roleMap.get(ur.getRoleId()),
+                (existing, replacement) -> existing
+            ));
+    }
+
+    /**
+     * 按用户列表批量查询每个用户关联的工厂编码。
+     *
+     * @param userIds 用户 ID 列表
+     * @return key 为用户 ID，value 为该用户的工厂编码列表
+     */
+    private Map<String, List<String>> batchGetFactoryCodeMap(List<String> userIds) {
+        if (userIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<SysUserFactory> userFactories = sysUserFactoryMapper.selectList(
+            new QueryWrapper<SysUserFactory>().in("user_id", userIds)
+        );
+        return userFactories.stream()
+            .collect(Collectors.groupingBy(
+                SysUserFactory::getUserId,
+                Collectors.mapping(SysUserFactory::getFactoryCode, Collectors.toList())
+            ));
+    }
+
+    private UserResponse toListResponse(SysUser user, SysRole role, List<String> factoryCodes) {
         UserResponse response = new UserResponse();
         response.setUserId(user.getUserId());
         response.setUsername(user.getUsername());
@@ -263,18 +343,11 @@ public class UserService {
         response.setLastLoginAt(user.getLastLoginAt());
         response.setCreatedAt(user.getCreatedAt());
         response.setUpdatedAt(user.getUpdatedAt());
-
-        List<String> roleCodes = userRoleService.getRoleCodesByUserId(user.getUserId());
-        if (!roleCodes.isEmpty()) {
-            String roleCode = roleCodes.get(0);
-            response.setRoleCode(roleCode);
-            SysRole role = sysRoleMapper.selectByRoleCode(roleCode);
-            if (role != null) {
-                response.setRoleName(role.getRoleName());
-            }
+        if (role != null) {
+            response.setRoleCode(role.getRoleCode());
+            response.setRoleName(role.getRoleName());
         }
-
-        response.setFactoryCodes(userFactoryService.getFactoryCodesByUserId(user.getUserId()));
+        response.setFactoryCodes(factoryCodes);
         return response;
     }
 }

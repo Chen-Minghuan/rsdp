@@ -33,6 +33,9 @@ export const useUserStore = defineStore('user', () => {
   const roles = computed(() => userInfo.value?.roles || [])
   const permissions = computed(() => userInfo.value?.permissions || [])
   const roleCode = computed(() => roles.value[0] || '')
+  const isAdmin = computed(() => roles.value.includes('ADMIN'))
+  const isEditor = computed(() => roles.value.includes('EDITOR'))
+  const isPlatformStaff = computed(() => isAdmin.value || isEditor.value)
 
   function hasRole(role: string): boolean {
     return roles.value.includes(role)
@@ -117,6 +120,9 @@ export const useUserStore = defineStore('user', () => {
     roleCode,
     roles,
     permissions,
+    isAdmin,
+    isEditor,
+    isPlatformStaff,
     hasRole,
     hasAnyRole,
     hasPermission,

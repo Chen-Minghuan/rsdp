@@ -38,7 +38,6 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -69,11 +68,14 @@ public class RskuImportService {
     /**
      * 批量导入 RSKU 报价。
      *
+     * <p>本方法负责文件校验、Excel 解析、数据预加载与行级分发；每一行有效数据
+     * 通过独立的 {@link #processRowInTransaction} 处理并提交，避免单点失败导致
+     * 整批回滚，同时缩短锁持有时间。</p>
+     *
      * @param file           Excel 文件
      * @param updateIfExists 当工厂+变体已存在报价时，是否更新价格；false 则跳过
      * @return 导入结果
      */
-    @Transactional
     public RskuImportResult importRskus(MultipartFile file, boolean updateIfExists) {
         validateFile(file);
 
@@ -84,11 +86,6 @@ public class RskuImportService {
 
         RskuImportResult result = new RskuImportResult();
         result.setTotalRows(rows.size());
-
-        List<RskuSupply> toInsert = new ArrayList<>();
-        List<RskuSupply> toUpdate = new ArrayList<>();
-        Map<RskuSupply, RskuSupply> updateSnapshots = new IdentityHashMap<>();
-        List<PriceHistory> priceHistories = new ArrayList<>();
 
         // 预加载所有相关工厂、RSPU、变体、现有报价、工厂能力等级
         Map<String, FactoryMaster> factoryMap = preloadFactories(rows);
@@ -130,41 +127,63 @@ public class RskuImportService {
             RskuSupply existing = existingMap.get(key);
             String productLevel = resolveProductLevel(row, variantMap.get(row.getVariantId()), rspuMap.get(row.getRspuId()));
 
-            if (existing != null) {
-                if (updateIfExists) {
-                    RskuSupply oldSnapshot = snapshot(existing);
-                    BigDecimal oldPrice = updateExistingRsku(existing, row, productLevel);
-                    toUpdate.add(existing);
-                    updateSnapshots.put(existing, oldSnapshot);
-                    if (shouldRecordPriceHistory(oldPrice, existing.getFactoryPrice())) {
-                        priceHistories.add(buildPriceHistory(existing, oldPrice));
+            try {
+                if (existing != null) {
+                    if (updateIfExists) {
+                        updateSingleRsku(existing, row, productLevel);
+                        result.setSuccessCount(result.getSuccessCount() + 1);
+                    } else {
+                        result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "该工厂对该变体已有报价，已跳过"));
                     }
                 } else {
-                    result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "该工厂对该变体已有报价，已跳过"));
+                    insertSingleRsku(buildRskuSupply(row, productLevel));
+                    result.setSuccessCount(result.getSuccessCount() + 1);
                 }
-                continue;
+            } catch (DataIntegrityViolationException e) {
+                log.warn("导入报价冲突: {} - {}", row.getFactoryCode(), row.getVariantId(), e);
+                result.getFailures().add(new RskuImportFailure(
+                    rowIndex,
+                    row.getRspuId(),
+                    row.getFactoryCode(),
+                    row.getVariantId(),
+                    "数据库唯一约束冲突（可能与其他导入并发或存在重复报价）"
+                ));
+            } catch (BusinessException e) {
+                result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), e.getMessage()));
             }
-
-            RskuSupply rsku = buildRskuSupply(row, productLevel);
-            toInsert.add(rsku);
         }
 
-        // 写入
-        int insertFailures = 0;
-        if (!toInsert.isEmpty()) {
-            insertFailures = doInsertBatch(toInsert, result.getFailures());
-        }
-        if (!toUpdate.isEmpty()) {
-            toUpdate.forEach(rskuSupplyMapper::updateById);
-            toUpdate.forEach(r -> auditLogService.logUpdate("rsku_supply", r.getRskuId(), updateSnapshots.get(r), r, SecurityOperatorContext.currentUsername()));
-        }
-        if (!priceHistories.isEmpty()) {
-            priceHistories.forEach(priceHistoryMapper::insert);
-        }
-
-        result.setSuccessCount(toInsert.size() + toUpdate.size() - insertFailures);
         result.setFailedCount(result.getFailures().size());
         return result;
+    }
+
+    /**
+     * 在独立事务中插入单条 RSKU 报价。
+     *
+     * @param rsku 待插入的 RSKU
+     */
+    @Transactional
+    protected void insertSingleRsku(RskuSupply rsku) {
+        rskuSupplyMapper.insert(rsku);
+        auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
+    }
+
+    /**
+     * 在独立事务中更新单条 RSKU 报价，并记录价格历史。
+     *
+     * @param existing     现有报价
+     * @param row          导入行
+     * @param productLevel 解析后的产品等级
+     */
+    @Transactional
+    protected void updateSingleRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
+        RskuSupply oldSnapshot = snapshot(existing);
+        BigDecimal oldPrice = updateExistingRsku(existing, row, productLevel);
+        rskuSupplyMapper.updateById(existing);
+        if (shouldRecordPriceHistory(oldPrice, existing.getFactoryPrice())) {
+            priceHistoryMapper.insert(buildPriceHistory(existing, oldPrice));
+        }
+        auditLogService.logUpdate("rsku_supply", existing.getRskuId(), oldSnapshot, existing, SecurityOperatorContext.currentUsername());
     }
 
     private void validateFile(MultipartFile file) {
@@ -176,34 +195,6 @@ public class RskuImportService {
         }
         if (!ExcelFileValidator.isExcelOrCsv(file)) {
             throw new BusinessException("仅支持 Excel (.xlsx/.xls) 或 CSV 文件");
-        }
-    }
-
-    private int doInsertBatch(List<RskuSupply> toInsert, List<RskuImportFailure> failures) {
-        try {
-            rskuSupplyMapper.insertBatchSafe(toInsert);
-            toInsert.forEach(r -> auditLogService.logCreate("rsku_supply", r.getRskuId(), r, SecurityOperatorContext.currentUsername()));
-            return 0;
-        } catch (DataIntegrityViolationException e) {
-            log.warn("批量插入报价触发唯一约束冲突，尝试逐行回退插入", e);
-            int failureCount = 0;
-            for (RskuSupply rsku : toInsert) {
-                try {
-                    rskuSupplyMapper.insert(rsku);
-                    auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
-                } catch (DataIntegrityViolationException ex) {
-                    log.warn("逐行插入报价冲突: {} - {}", rsku.getFactoryCode(), rsku.getVariantId(), ex);
-                    failures.add(new RskuImportFailure(
-                        -1,
-                        rsku.getRspuId(),
-                        rsku.getFactoryCode(),
-                        rsku.getVariantId(),
-                        "数据库唯一约束冲突（可能与其他导入并发或存在重复报价）"
-                    ));
-                    failureCount++;
-                }
-            }
-            return failureCount;
         }
     }
 
@@ -282,6 +273,7 @@ public class RskuImportService {
         return rskuSupplyMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
                 .in("variant_id", variantIds)
+                .isNull("deleted_at")
         ).stream()
             .collect(Collectors.toMap(
                 r -> r.getFactoryCode() + "|" + r.getVariantId(),
@@ -291,11 +283,11 @@ public class RskuImportService {
     }
 
     private Map<String, List<String>> preloadCapableLevels(Map<String, FactoryMaster> factoryMap) {
-        Map<String, List<String>> result = new HashMap<>();
-        for (String factoryCode : factoryMap.keySet()) {
-            result.put(factoryCode, factoryService.getFactoryCapableLevels(factoryCode));
+        List<String> codes = factoryMap.keySet().stream().toList();
+        if (codes.isEmpty()) {
+            return Map.of();
         }
-        return result;
+        return factoryService.batchListCapableLevels(codes);
     }
 
     private String validateRow(RskuImportRow row,

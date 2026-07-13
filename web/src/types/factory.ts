@@ -11,7 +11,27 @@ export interface Factory {
   address?: string
   contactPerson?: string
   contactPhone?: string
+  firstAuditDate?: string
+  nextVisitDate?: string
   notes?: string
+  certification?: string
+  engineeringCases?: string
+  factoryArea?: number
+  employeeCount?: number
+  monthlyCapacity?: number
+  foundedYear?: number
+  equipmentList?: string
+  frameWood?: string
+  spongeSupplier?: string
+  leatherFabricSource?: string
+  hardwareSupplier?: string
+  qcItems?: string
+  qcStaffCount?: number
+  shippingFrom?: string
+  logisticsMethods?: string
+  defaultPackaging?: string
+  auditorSignature?: string
+  factoryImages?: string
   status: string
   createdAt: string
   updatedAt: string
@@ -31,6 +51,53 @@ export interface FactoryCreateRequest {
   contactPerson?: string
   contactPhone?: string
   notes?: string
+  factoryArea?: number
+  employeeCount?: number
+  monthlyCapacity?: number
+  foundedYear?: number
+  equipmentList?: string
+  frameWood?: string
+  spongeSupplier?: string
+  leatherFabricSource?: string
+  hardwareSupplier?: string
+  qcItems?: string
+  qcStaffCount?: number
+  shippingFrom?: string
+  logisticsMethods?: string
+  defaultPackaging?: string
+  auditorSignature?: string
+  factoryImages?: string
+}
+
+/**
+ * 工厂更新请求（部分字段更新）。
+ */
+export interface FactoryUpdateRequest {
+  factoryName?: string
+  homeCommercialTag?: string
+  region?: string
+  address?: string
+  contactPerson?: string
+  contactPhone?: string
+  notes?: string
+  certification?: string
+  engineeringCases?: string
+  factoryArea?: number
+  employeeCount?: number
+  monthlyCapacity?: number
+  foundedYear?: number
+  equipmentList?: string
+  frameWood?: string
+  spongeSupplier?: string
+  leatherFabricSource?: string
+  hardwareSupplier?: string
+  qcItems?: string
+  qcStaffCount?: number
+  shippingFrom?: string
+  logisticsMethods?: string
+  defaultPackaging?: string
+  auditorSignature?: string
+  factoryImages?: string
 }
 
 /**

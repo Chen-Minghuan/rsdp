@@ -6,7 +6,9 @@ import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.service.RspuVariantService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import com.rsdp.security.Permissions;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -36,6 +38,7 @@ public class RspuVariantController {
      * @return 创建的变体
      */
     @PostMapping
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
     public Result<RspuVariantResponse> createVariant(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                                      @Valid @RequestBody RspuVariantCreateRequest request) {
         return Result.ok(variantService.createVariant(rspuId, request));
@@ -48,6 +51,7 @@ public class RspuVariantController {
      * @return 变体列表
      */
     @GetMapping
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_READ + "')")
     public Result<List<RspuVariantResponse>> listVariants(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
         return Result.ok(variantService.listVariantsByRspu(rspuId));
     }

@@ -4,6 +4,7 @@ import com.rsdp.common.Result;
 import com.rsdp.service.TaskService;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,6 +31,7 @@ public class TaskController {
      * @return 任务状态、进度、结果
      */
     @GetMapping("/{taskId}")
+    @PreAuthorize("isAuthenticated()")
     public Result<Map<String, Object>> getTask(@PathVariable @NotBlank(message = "任务 ID 不能为空") String taskId) {
         return Result.ok(taskService.getTaskStatus(taskId));
     }

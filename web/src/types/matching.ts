@@ -19,6 +19,7 @@ export interface SchemeItem {
   factoryName?: string
   factorySku?: string
   factoryPrice: number
+  quantity?: number
   leadTimeDays?: number
   moq?: number
 }

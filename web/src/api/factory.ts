@@ -4,23 +4,25 @@ import type {
   FactoryCreateRequest,
   FactoryLevelCapabilityUpdateRequest,
   FactoryLevelUpdateRequest,
-  FactoryProductCapability
+  FactoryProductCapability,
+  FactoryUpdateRequest
 } from '@/types/factory'
 import type { Rsku } from '@/types/rsku'
+import type { ApiOptions } from './product'
 
 /**
  * 查询工厂列表。
  */
-export async function listFactories(): Promise<Factory[]> {
-  const { data: result } = await apiClient.get<ApiResult<Factory[]>>('/v1/factories')
+export async function listFactories(options?: ApiOptions): Promise<Factory[]> {
+  const { data: result } = await apiClient.get<ApiResult<Factory[]>>('/v1/factories', { signal: options?.signal })
   return result.data
 }
 
 /**
  * 查询工厂详情。
  */
-export async function getFactory(factoryCode: string): Promise<Factory> {
-  const { data: result } = await apiClient.get<ApiResult<Factory>>(`/v1/factories/${factoryCode}`)
+export async function getFactory(factoryCode: string, options?: ApiOptions): Promise<Factory> {
+  const { data: result } = await apiClient.get<ApiResult<Factory>>(`/v1/factories/${factoryCode}`, { signal: options?.signal })
   return result.data
 }
 
@@ -29,6 +31,13 @@ export async function getFactory(factoryCode: string): Promise<Factory> {
  */
 export async function createFactory(request: FactoryCreateRequest): Promise<void> {
   await apiClient.post<ApiResult<void>>('/v1/factories', request)
+}
+
+/**
+ * 更新工厂基本信息。
+ */
+export async function updateFactory(factoryCode: string, request: FactoryUpdateRequest): Promise<void> {
+  await apiClient.put<ApiResult<void>>(`/v1/factories/${factoryCode}`, request)
 }
 
 /**
@@ -51,8 +60,8 @@ export async function updateCapableLevels(
 /**
  * 查询某工厂的所有 RSKU 报价。
  */
-export async function listRskuByFactory(factoryCode: string): Promise<Rsku[]> {
-  const { data: result } = await apiClient.get<ApiResult<Rsku[]>>(`/v1/factories/${factoryCode}/rsku`)
+export async function listRskuByFactory(factoryCode: string, options?: ApiOptions): Promise<Rsku[]> {
+  const { data: result } = await apiClient.get<ApiResult<Rsku[]>>(`/v1/factories/${factoryCode}/rsku`, { signal: options?.signal })
   return result.data
 }
 
@@ -61,9 +70,10 @@ export async function listRskuByFactory(factoryCode: string): Promise<Rsku[]> {
  *
  * @param factoryCode 工厂编码
  */
-export async function listFactoryCapabilities(factoryCode: string): Promise<FactoryProductCapability[]> {
+export async function listFactoryCapabilities(factoryCode: string, options?: ApiOptions): Promise<FactoryProductCapability[]> {
   const { data: result } = await apiClient.get<ApiResult<FactoryProductCapability[]>>(
-    `/v1/factories/${factoryCode}/capabilities`
+    `/v1/factories/${factoryCode}/capabilities`,
+    { signal: options?.signal }
   )
   return result.data
 }
@@ -73,9 +83,11 @@ export async function listFactoryCapabilities(factoryCode: string): Promise<Fact
  *
  * @param factoryCode 工厂编码
  */
-export async function syncFactoryCapabilities(factoryCode: string): Promise<FactoryProductCapability[]> {
+export async function syncFactoryCapabilities(factoryCode: string, options?: ApiOptions): Promise<FactoryProductCapability[]> {
   const { data: result } = await apiClient.post<ApiResult<FactoryProductCapability[]>>(
-    `/v1/factories/${factoryCode}/capabilities/sync`
+    `/v1/factories/${factoryCode}/capabilities/sync`,
+    null,
+    { signal: options?.signal }
   )
   return result.data
 }

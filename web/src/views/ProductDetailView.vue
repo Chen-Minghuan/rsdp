@@ -25,22 +25,24 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { getProductDetail, listProducts, reviewProduct, updateProduct, deleteProduct } from '@/api/product'
-import { listRskuByRspu, createRsku, deleteRsku } from '@/api/rsku'
+import { listRskuByRspu, createRsku, deleteRsku, batchCreateRskus } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
 import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct, RecognitionHistoryItem } from '@/types/product'
 import type { DictItem } from '@/types/dict'
-import type { Rsku, RskuCreateRequest } from '@/types/rsku'
+import type { Rsku, RskuBatchCreateRequest, RskuBatchCreateResult, RskuBatchFactoryQuote, RskuCreateRequest } from '@/types/rsku'
 import type { Factory } from '@/types/factory'
 import type { RspuVariant, RspuVariantCreateRequest } from '@/types/variant'
 import type { RspuRelationCreateRequest } from '@/types/relation'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 
 const route = useRoute()
+const signal = useRequestAbort()
 const router = useRouter()
 const dialog = useDialog()
 const userStore = useUserStore()
@@ -52,7 +54,44 @@ const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PROD
 const canCreateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_CREATE))
 const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
 const canCreateDict = computed(() => userStore.hasPermission(PERMISSIONS.DICT_CREATE))
-const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true)
+const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
+const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+
+// 平台运营人员（ADMIN/EDITOR）即使开启全库视图也不应只读
+const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true && !isPlatformStaff.value)
+
+// 工厂管理员仅当本厂已对该 RSPU 报价时才可维护
+const isAssociated = computed(() => {
+  if (isPlatformStaff.value) return true
+  const codes = factoryCodes.value
+  if (codes.length === 0) return false
+  return rskuList.value.some(r => codes.includes(r.factoryCode))
+})
+
+// 综合数据范围后的可维护判定（用于 RSPU 级写操作）
+const canManageProduct = computed(() =>
+  !isReadOnly.value && isAssociated.value
+)
+
+// 新增报价按钮：工厂管理员只要有本厂关联即可为本 RSPU 录入首条报价
+const canCreateRskuForProduct = computed(() =>
+  canCreateRsku.value && !isReadOnly.value && (isPlatformStaff.value || isFactoryAdmin.value)
+)
+
+function canManageRsku(row: Rsku): boolean {
+  if (isReadOnly.value) return false
+  if (isPlatformStaff.value) return true
+  return factoryCodes.value.includes(row.factoryCode)
+}
+
+// 工厂管理员新增报价时，只能选择自己关联的工厂
+const selectableFactories = computed(() => {
+  if (isFactoryAdmin.value && factoryCodes.value.length > 0) {
+    return factories.value.filter(f => factoryCodes.value.includes(f.factoryCode))
+  }
+  return factories.value
+})
 
 const loading = ref(false)
 const reviewing = ref(false)
@@ -83,6 +122,89 @@ const rskuForm = ref<RskuCreateRequest>({
   quoteConfidence: ''
 })
 
+const showBatchRskuModal = ref(false)
+const submittingBatchRsku = ref(false)
+const batchRskuForm = ref<RskuBatchCreateRequest>({
+  variantIds: [],
+  factoryQuotes: [],
+  productLevel: undefined,
+  autoExtendCapability: false
+})
+const batchRskuResult = ref<RskuBatchCreateResult | null>(null)
+
+const BATCH_RSKU_LIMIT = 20
+
+const batchUniformQuote = ref<RskuBatchFactoryQuote>({
+  factoryCode: '',
+  factorySku: '',
+  factoryPrice: 0,
+  materialCode: '',
+  materialDescription: '',
+  leadTimeDays: undefined,
+  moq: undefined,
+  warrantyYears: undefined,
+  shippingFrom: '',
+  diffNotes: '',
+  quoteConfidence: ''
+})
+
+const selectedBatchVariants = computed(() =>
+  variantList.value.filter(v => batchRskuForm.value.variantIds.includes(v.variantId))
+)
+
+function createQuoteFromUniform(factoryCode: string): RskuBatchFactoryQuote {
+  return {
+    factoryCode,
+    factorySku: batchUniformQuote.value.factorySku,
+    factoryPrice: batchUniformQuote.value.factoryPrice,
+    materialCode: batchUniformQuote.value.materialCode,
+    materialDescription: batchUniformQuote.value.materialDescription,
+    leadTimeDays: batchUniformQuote.value.leadTimeDays,
+    moq: batchUniformQuote.value.moq,
+    warrantyYears: batchUniformQuote.value.warrantyYears,
+    shippingFrom: batchUniformQuote.value.shippingFrom,
+    diffNotes: batchUniformQuote.value.diffNotes,
+    quoteConfidence: batchUniformQuote.value.quoteConfidence
+  }
+}
+
+const batchFactoryCodes = computed<string[]>({
+  get: () => batchRskuForm.value.factoryQuotes.map(q => q.factoryCode),
+  set: (codes) => {
+    const existing = new Map(batchRskuForm.value.factoryQuotes.map(q => [q.factoryCode, q]))
+    batchRskuForm.value.factoryQuotes = codes.map(code =>
+      existing.get(code) ?? createQuoteFromUniform(code)
+    )
+  }
+})
+
+function applyUniformToAllFactories() {
+  for (const quote of batchRskuForm.value.factoryQuotes) {
+    quote.factoryPrice = batchUniformQuote.value.factoryPrice
+    quote.materialCode = batchUniformQuote.value.materialCode
+    quote.materialDescription = batchUniformQuote.value.materialDescription
+    quote.leadTimeDays = batchUniformQuote.value.leadTimeDays
+    quote.moq = batchUniformQuote.value.moq
+    quote.warrantyYears = batchUniformQuote.value.warrantyYears
+    quote.shippingFrom = batchUniformQuote.value.shippingFrom
+    quote.diffNotes = batchUniformQuote.value.diffNotes
+    quote.quoteConfidence = batchUniformQuote.value.quoteConfidence
+    // factorySku 保留各家已填的值，不统一覆盖
+  }
+}
+
+const batchRskuTotalCount = computed(() =>
+  batchRskuForm.value.variantIds.length * batchRskuForm.value.factoryQuotes.length
+)
+
+const batchRskuProductLevel = computed(() => {
+  if (batchRskuForm.value.productLevel) return batchRskuForm.value.productLevel
+  const variants = selectedBatchVariants.value
+  const levels = new Set(variants.map(v => v.productLevel).filter(Boolean))
+  if (levels.size === 1) return [...levels][0]
+  return detail.value?.rspu.productLevel
+})
+
 const quoteConfidenceOptions = ref<DictItem[]>([])
 
 const variantList = ref<RspuVariant[]>([])
@@ -95,7 +217,7 @@ const selectedVariant = computed(() =>
 )
 
 const rskuProductLevel = computed(() => {
-  return selectedVariant.value?.productLevel || detail.value?.rspu.productLevel
+  return rskuForm.value.productLevel || selectedVariant.value?.productLevel || detail.value?.rspu.productLevel
 })
 
 const selectedFactory = computed(() =>
@@ -171,7 +293,14 @@ const rskuColumns: DataTableColumns<Rsku> = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
   { title: '工厂代码', key: 'factoryCode', width: 120 },
-  { title: '出厂价', key: 'factoryPrice', width: 120 },
+  {
+    title: '出厂价',
+    key: 'factoryPrice',
+    width: 120,
+    render(row: Rsku) {
+      return row.factoryPrice != null ? `¥${Number(row.factoryPrice).toFixed(2)}` : '-'
+    }
+  },
   { title: '价格带', key: 'priceBand', width: 100 },
   { title: '产品等级', key: 'productLevel', width: 100 },
   { title: '材质编码', key: 'materialCode', width: 100 },
@@ -195,7 +324,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
     key: 'actions',
     width: 100,
     render(row: Rsku) {
-      return canDeleteRsku.value && !isReadOnly.value
+      return canDeleteRsku.value && canManageRsku(row)
         ? h(
             NButton,
             { size: 'small', type: 'error', onClick: (e: MouseEvent) => { e.stopPropagation(); handleDeleteRsku(row.rskuId) } },
@@ -228,7 +357,7 @@ const variantColumns = [
 ]
 
 function createRelationColumns(showDelete: boolean) {
-  const effectiveShowDelete = showDelete && canUpdateProduct.value && !isReadOnly.value
+  const effectiveShowDelete = showDelete && canUpdateProduct.value && canManageProduct.value
   const columns: DataTableColumns<RelatedProduct> = [
     {
       title: '图片',
@@ -359,7 +488,7 @@ async function loadDetail() {
   loading.value = true
   errorMessage.value = ''
   try {
-    detail.value = await getProductDetail(rspuId.value)
+    detail.value = await getProductDetail(rspuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载产品详情失败'
   } finally {
@@ -379,7 +508,7 @@ async function loadRskuList() {
   if (!validateRspuId()) return
   rskuLoading.value = true
   try {
-    rskuList.value = await listRskuByRspu(rspuId.value)
+    rskuList.value = await listRskuByRspu(rspuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载报价失败'
   } finally {
@@ -391,7 +520,7 @@ async function loadVariants() {
   if (!validateRspuId()) return
   variantLoading.value = true
   try {
-    variantList.value = await listVariantsByRspu(rspuId.value)
+    variantList.value = await listVariantsByRspu(rspuId.value, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载变体失败'
   } finally {
@@ -401,7 +530,7 @@ async function loadVariants() {
 
 async function loadFactories() {
   try {
-    factories.value = await listFactories()
+    factories.value = await listFactories({ signal })
   } catch (e) {
     console.error('加载工厂列表失败', e)
   }
@@ -410,13 +539,13 @@ async function loadFactories() {
 async function loadDicts() {
   try {
     const [quoteConfidence, sizes, colors, materials, styles, scenes, levels] = await Promise.all([
-      listDicts('quote_confidence'),
-      listDicts('size'),
-      listDicts('color'),
-      listDicts('material'),
-      listDicts('style'),
-      listDicts('scene'),
-      listDicts('factory_level')
+      listDicts('quote_confidence', { signal }),
+      listDicts('size', { signal }),
+      listDicts('color', { signal }),
+      listDicts('material', { signal }),
+      listDicts('style', { signal }),
+      listDicts('scene', { signal }),
+      listDicts('factory_level', { signal })
     ])
     quoteConfidenceOptions.value = quoteConfidence
     sizeOptions.value = sizes
@@ -582,8 +711,9 @@ async function handleUpdateProduct() {
 }
 
 function openRskuModal() {
+  const factories = selectableFactories.value
   rskuForm.value = {
-    factoryCode: '',
+    factoryCode: factories.length === 1 ? factories[0].factoryCode : '',
     variantId: '',
     factorySku: '',
     factoryPrice: 0,
@@ -635,6 +765,96 @@ async function handleCreateRsku() {
     errorMessage.value = e instanceof Error ? e.message : '添加报价失败'
   } finally {
     submittingRsku.value = false
+  }
+}
+
+function openBatchRskuModal() {
+  batchRskuResult.value = null
+  batchRskuForm.value = {
+    variantIds: variantList.value.length > 0 ? [variantList.value[0].variantId] : [],
+    factoryQuotes: [],
+    productLevel: undefined,
+    autoExtendCapability: false
+  }
+  batchUniformQuote.value = {
+    factoryCode: '',
+    factorySku: '',
+    factoryPrice: 0,
+    materialCode: '',
+    materialDescription: '',
+    leadTimeDays: undefined,
+    moq: undefined,
+    warrantyYears: undefined,
+    shippingFrom: '',
+    diffNotes: '',
+    quoteConfidence: ''
+  }
+  showBatchRskuModal.value = true
+}
+
+function getBatchFactoryName(code: string): string {
+  const factory = factories.value.find(f => f.factoryCode === code)
+  return factory ? `${factory.factoryName} (${code})` : code
+}
+
+function getBatchVariantLabel(variantId?: string): string {
+  const variant = variantList.value.find(v => v.variantId === variantId)
+  return variant ? `${variant.displayName} (${variant.variantId})` : (variantId || '')
+}
+
+async function handleBatchCreateRsku() {
+  if (batchRskuForm.value.variantIds.length === 0) {
+    successMessage.value = ''
+    errorMessage.value = '请至少选择一个变体'
+    return
+  }
+  if (batchRskuForm.value.factoryQuotes.length === 0) {
+    successMessage.value = ''
+    errorMessage.value = '请至少选择一个工厂'
+    return
+  }
+  for (const quote of batchRskuForm.value.factoryQuotes) {
+    if (!quote.factoryPrice || quote.factoryPrice <= 0) {
+      successMessage.value = ''
+      errorMessage.value = `请为 ${getBatchFactoryName(quote.factoryCode)} 填写有效的出厂价`
+      return
+    }
+  }
+
+  const level = batchRskuProductLevel.value
+  if (!level) {
+    successMessage.value = ''
+    errorMessage.value = '请先为产品或变体设置产品等级，或在下方选择产品等级'
+    return
+  }
+  if (batchRskuTotalCount.value > BATCH_RSKU_LIMIT) {
+    successMessage.value = ''
+    errorMessage.value = `单次最多创建 ${BATCH_RSKU_LIMIT} 条报价，当前组合为 ${batchRskuTotalCount.value} 条，请减少变体或工厂数量`
+    return
+  }
+
+  submittingBatchRsku.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  batchRskuResult.value = null
+
+  try {
+    const result = await batchCreateRskus(rspuId.value, batchRskuForm.value)
+    batchRskuResult.value = result
+    if (result.failedCount === 0) {
+      successMessage.value = `成功创建 ${result.successCount} 条报价`
+      showBatchRskuModal.value = false
+    } else if (result.successCount === 0) {
+      errorMessage.value = '所有报价创建失败，请查看失败明细'
+    } else {
+      successMessage.value = `成功 ${result.successCount} 条，失败 ${result.failedCount} 条`
+    }
+    await loadRskuList()
+  } catch (e) {
+    successMessage.value = ''
+    errorMessage.value = e instanceof Error ? e.message : '批量添加报价失败'
+  } finally {
+    submittingBatchRsku.value = false
   }
 }
 
@@ -819,7 +1039,7 @@ onBeforeRouteUpdate((to, from) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回列表</n-button>
-          <n-button v-if="canDeleteProduct && !isReadOnly" size="small" type="error" @click="handleDeleteProduct">
+          <n-button v-if="canDeleteProduct && canManageProduct" size="small" type="error" @click="handleDeleteProduct">
             删除产品
           </n-button>
         </n-space>
@@ -977,7 +1197,7 @@ onBeforeRouteUpdate((to, from) => {
             </n-space>
           </n-card>
 
-          <n-card title="AI 识别记录" size="small">
+          <n-card v-if="isPlatformStaff" title="AI 识别记录" size="small">
             <n-data-table
               :columns="recognitionColumns"
               :data="detail.recognitions || []"
@@ -990,7 +1210,7 @@ onBeforeRouteUpdate((to, from) => {
           <n-card title="官方搭配" size="small">
             <n-space vertical>
               <n-space>
-                <n-button v-if="canUpdateProduct && !isReadOnly" type="primary" @click="openRelationModal">添加搭配</n-button>
+                <n-button v-if="canUpdateProduct && canManageProduct" type="primary" @click="openRelationModal">添加搭配</n-button>
               </n-space>
               <n-data-table
                 :columns="createRelationColumns(true)"
@@ -1032,10 +1252,10 @@ onBeforeRouteUpdate((to, from) => {
             <n-alert v-if="isReadOnly" type="info" :show-icon="true" style="margin-bottom: 16px;">
               当前为全库只读视图，此产品仅支持查看详情，不能进行编辑、复核、删除等操作。
             </n-alert>
-            <n-card v-if="!isReadOnly && (canReviewProduct || canUpdateProduct)" title="管理操作" size="small">
+            <n-card v-if="canManageProduct && (canReviewProduct || canUpdateProduct)" title="管理操作" size="small">
               <n-space>
                 <n-button
-                  v-if="canReviewProduct"
+                  v-if="canReviewProduct && canManageProduct"
                   type="success"
                   :loading="reviewing"
                   :disabled="detail.rspu.reviewStatus === '已确认'"
@@ -1044,7 +1264,7 @@ onBeforeRouteUpdate((to, from) => {
                   确认通过
                 </n-button>
                 <n-button
-                  v-if="canReviewProduct"
+                  v-if="canReviewProduct && canManageProduct"
                   type="error"
                   :loading="reviewing"
                   :disabled="detail.rspu.reviewStatus === '存疑'"
@@ -1052,7 +1272,7 @@ onBeforeRouteUpdate((to, from) => {
                 >
                   标记存疑
                 </n-button>
-                <n-button v-if="canUpdateProduct" @click="openEditModal">
+                <n-button v-if="canUpdateProduct && canManageProduct" @click="openEditModal">
                   编辑元数据
                 </n-button>
               </n-space>
@@ -1061,7 +1281,7 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="变体管理" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button v-if="canUpdateProduct && !isReadOnly" type="primary" @click="openVariantModal">新增变体</n-button>
+                  <n-button v-if="canUpdateProduct && canManageProduct" type="primary" @click="openVariantModal">新增变体</n-button>
                 </n-space>
                 <n-data-table
                   :columns="variantColumns"
@@ -1082,7 +1302,8 @@ onBeforeRouteUpdate((to, from) => {
             <n-card title="工厂报价（RSKU）" size="small">
               <n-space vertical>
                 <n-space>
-                  <n-button v-if="canCreateRsku && !isReadOnly" type="primary" @click="openRskuModal">新增报价</n-button>
+                  <n-button v-if="canCreateRskuForProduct" type="primary" @click="openRskuModal">新增报价</n-button>
+                  <n-button v-if="canCreateRskuForProduct" type="info" @click="openBatchRskuModal">批量新增报价</n-button>
                 </n-space>
                 <n-data-table
                   :columns="rskuColumns"
@@ -1116,7 +1337,7 @@ onBeforeRouteUpdate((to, from) => {
         <n-form-item label="工厂" required>
           <n-select
             v-model:value="rskuForm.factoryCode"
-            :options="factories.map(f => ({ label: `${f.factoryName} (${f.factoryCode})`, value: f.factoryCode }))"
+            :options="selectableFactories.map(f => ({ label: `${f.factoryName} (${f.factoryCode})`, value: f.factoryCode }))"
             placeholder="选择工厂"
           />
         </n-form-item>
@@ -1128,7 +1349,13 @@ onBeforeRouteUpdate((to, from) => {
           />
         </n-form-item>
         <n-form-item label="产品等级">
-          <n-input :value="rskuProductLevel || '未设置'" disabled />
+          <n-input v-if="rskuProductLevel" :value="rskuProductLevel" disabled />
+          <n-select
+            v-else
+            v-model:value="rskuForm.productLevel"
+            :options="productLevelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="请选择产品等级"
+          />
         </n-form-item>
         <n-alert
           v-if="rskuForm.factoryCode && rskuProductLevel && !isFactoryCapable"
@@ -1186,6 +1413,177 @@ onBeforeRouteUpdate((to, from) => {
         <n-button @click="showRskuModal = false">取消</n-button>
         <n-button type="primary" :loading="submittingRsku" @click="handleCreateRsku">
           提交报价
+        </n-button>
+      </n-space>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showBatchRskuModal"
+      title="批量新增工厂报价"
+      preset="card"
+      style="width: 650px;"
+    >
+      <n-alert v-if="variantList.length === 0" type="warning" :show-icon="true" style="margin-bottom: 16px;">
+        当前产品暂无变体，请先添加变体，或等待 AI 识别完成后自动创建默认变体。
+      </n-alert>
+
+      <n-form label-placement="left" label-width="100">
+        <n-form-item label="变体" required>
+          <n-select
+            v-model:value="batchRskuForm.variantIds"
+            multiple
+            :options="variantList.map(v => ({ label: `${v.displayName} (${v.variantId})`, value: v.variantId }))"
+            placeholder="选择要录入报价的变体（可多选）"
+          />
+        </n-form-item>
+        <n-form-item label="产品等级">
+          <n-input v-if="batchRskuProductLevel" :value="batchRskuProductLevel" disabled />
+          <n-select
+            v-else
+            v-model:value="batchRskuForm.productLevel"
+            :options="productLevelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="请选择产品等级"
+          />
+        </n-form-item>
+        <n-form-item label="工厂" required>
+          <n-select
+            v-model:value="batchFactoryCodes"
+            multiple
+            :options="selectableFactories.map(f => ({ label: `${f.factoryName} (${f.factoryCode})`, value: f.factoryCode }))"
+            placeholder="选择要录入报价的工厂（可多选）"
+          />
+        </n-form-item>
+      </n-form>
+
+      <n-divider style="margin: 16px 0;" />
+
+      <n-alert type="info" :show-icon="true" style="margin-bottom: 12px;">
+        先统一填写下方报价模板，选择工厂时会自动带入；也可在下方点击「应用到所有已选工厂」覆盖已选工厂的报价。
+      </n-alert>
+
+      <n-form label-placement="left" label-width="100">
+        <n-form-item label="统一出厂价">
+          <n-input-number v-model:value="batchUniformQuote.factoryPrice" :min="0" placeholder="统一出厂价" style="width: 100%;" />
+        </n-form-item>
+        <n-form-item label="工厂SKU模板">
+          <n-input v-model:value="batchUniformQuote.factorySku" placeholder="各家工厂默认型号（可选）" />
+        </n-form-item>
+        <n-form-item label="材质编码">
+          <n-input v-model:value="batchUniformQuote.materialCode" placeholder="材质编码" />
+        </n-form-item>
+        <n-form-item label="材质说明">
+          <n-input v-model:value="batchUniformQuote.materialDescription" placeholder="材质说明" />
+        </n-form-item>
+        <n-form-item label="交期(天)">
+          <n-input-number v-model:value="batchUniformQuote.leadTimeDays" :min="0" placeholder="交期天数" style="width: 100%;" />
+        </n-form-item>
+        <n-form-item label="MOQ">
+          <n-input-number v-model:value="batchUniformQuote.moq" :min="1" placeholder="最小起订量" style="width: 100%;" />
+        </n-form-item>
+        <n-form-item label="质保(年)">
+          <n-input-number v-model:value="batchUniformQuote.warrantyYears" :min="0" placeholder="质保年限" style="width: 100%;" />
+        </n-form-item>
+        <n-form-item label="发货地">
+          <n-input v-model:value="batchUniformQuote.shippingFrom" placeholder="发货地" />
+        </n-form-item>
+        <n-form-item label="差异备注">
+          <n-input v-model:value="batchUniformQuote.diffNotes" type="textarea" placeholder="差异备注" />
+        </n-form-item>
+        <n-form-item label="报价置信度">
+          <n-select
+            v-model:value="batchUniformQuote.quoteConfidence"
+            :options="quoteConfidenceOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="报价置信度"
+            clearable
+          />
+        </n-form-item>
+        <n-form-item>
+          <n-button type="primary" secondary :disabled="batchRskuForm.factoryQuotes.length === 0" @click="applyUniformToAllFactories">
+            应用到所有已选工厂
+          </n-button>
+        </n-form-item>
+      </n-form>
+
+      <n-alert
+        type="info"
+        :show-icon="true"
+        style="margin: 16px 0;"
+      >
+        将创建 {{ batchRskuTotalCount }} 条 RSKU（{{ batchRskuForm.variantIds.length }} 个变体 × {{ batchRskuForm.factoryQuotes.length }} 家工厂）
+      </n-alert>
+      <n-alert
+        v-if="batchRskuTotalCount > BATCH_RSKU_LIMIT"
+        type="warning"
+        :show-icon="true"
+        style="margin-bottom: 16px;"
+      >
+        单次最多创建 {{ BATCH_RSKU_LIMIT }} 条报价，当前 {{ batchRskuTotalCount }} 条，请减少变体或工厂数量
+      </n-alert>
+
+      <n-card
+        v-for="quote in batchRskuForm.factoryQuotes"
+        :key="quote.factoryCode"
+        :title="getBatchFactoryName(quote.factoryCode)"
+        size="small"
+        style="margin-bottom: 12px;"
+      >
+        <n-form label-placement="left" label-width="90">
+          <n-form-item label="工厂SKU">
+            <n-input v-model:value="quote.factorySku" placeholder="工厂内部型号" />
+          </n-form-item>
+          <n-form-item label="出厂价" required>
+            <n-input-number v-model:value="quote.factoryPrice" :min="0" placeholder="出厂价" style="width: 100%;" />
+          </n-form-item>
+          <n-form-item label="材质编码">
+            <n-input v-model:value="quote.materialCode" placeholder="材质编码" />
+          </n-form-item>
+          <n-form-item label="材质说明">
+            <n-input v-model:value="quote.materialDescription" placeholder="材质说明" />
+          </n-form-item>
+          <n-form-item label="交期(天)">
+            <n-input-number v-model:value="quote.leadTimeDays" :min="0" placeholder="交期天数" style="width: 100%;" />
+          </n-form-item>
+          <n-form-item label="MOQ">
+            <n-input-number v-model:value="quote.moq" :min="1" placeholder="最小起订量" style="width: 100%;" />
+          </n-form-item>
+          <n-form-item label="质保(年)">
+            <n-input-number v-model:value="quote.warrantyYears" :min="0" placeholder="质保年限" style="width: 100%;" />
+          </n-form-item>
+          <n-form-item label="发货地">
+            <n-input v-model:value="quote.shippingFrom" placeholder="发货地" />
+          </n-form-item>
+          <n-form-item label="差异备注">
+            <n-input v-model:value="quote.diffNotes" type="textarea" placeholder="差异备注" />
+          </n-form-item>
+          <n-form-item label="报价置信度">
+            <n-select
+              v-model:value="quote.quoteConfidence"
+              :options="quoteConfidenceOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="报价置信度"
+              clearable
+            />
+          </n-form-item>
+        </n-form>
+      </n-card>
+
+      <n-alert
+        v-if="batchRskuResult && batchRskuResult.failedCount > 0"
+        type="warning"
+        :show-icon="true"
+        style="margin-bottom: 16px;"
+      >
+        <div>成功 {{ batchRskuResult.successCount }} 条，失败 {{ batchRskuResult.failedCount }} 条</div>
+        <ul style="margin: 8px 0 0 0; padding-left: 16px;">
+          <li v-for="f in batchRskuResult.failures" :key="`${f.factoryCode}-${f.variantId}`">
+            {{ getBatchFactoryName(f.factoryCode) }} / {{ getBatchVariantLabel(f.variantId) }}：{{ f.reason }}
+          </li>
+        </ul>
+      </n-alert>
+
+      <n-space justify="end">
+        <n-button @click="showBatchRskuModal = false">取消</n-button>
+        <n-button type="primary" :loading="submittingBatchRsku" @click="handleBatchCreateRsku">
+          批量提交
         </n-button>
       </n-space>
     </n-modal>
