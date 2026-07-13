@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider } from 'naive-ui'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, type GlobalThemeOverrides } from 'naive-ui'
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
@@ -8,6 +8,27 @@ import { PERMISSIONS, ROLES } from '@/utils/constants'
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
+
+/**
+ * Naive UI 全局主题覆盖，色值与 styles/tokens.css 保持一致。
+ */
+const themeOverrides: GlobalThemeOverrides = {
+  common: {
+    primaryColor: '#2453FC',
+    primaryColorHover: '#4A73FD',
+    primaryColorPressed: '#1B3FC4',
+    primaryColorSuppl: '#E8EDFF',
+    borderRadius: '8px',
+    fontFamily:
+      '"Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif'
+  },
+  Card: {
+    borderRadius: '12px'
+  },
+  Button: {
+    borderRadiusMedium: '8px'
+  }
+}
 
 function navigate(path: string) {
   router.push(path)
@@ -53,7 +74,7 @@ async function handleUserAction(key: string) {
 </script>
 
 <template>
-  <n-config-provider :locale="zhCN" :date-locale="dateZhCN">
+  <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme-overrides="themeOverrides">
     <n-layout style="height: 100vh;">
       <n-layout-header v-if="route.path !== '/login'" bordered style="padding: 12px 24px;">
         <n-space align="center" justify="space-between">
