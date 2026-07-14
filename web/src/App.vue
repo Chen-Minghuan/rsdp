@@ -104,10 +104,12 @@ async function handleUserAction(key: string) {
 <template>
   <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme-overrides="themeOverrides">
     <n-layout style="height: 100vh;">
-      <n-layout-header v-if="route.path !== '/login'" bordered style="padding: 12px 24px;">
-        <n-space align="center" justify="space-between">
-          <div style="font-size: 18px; font-weight: bold; cursor: pointer;" @click="navigate('/')">
-            RSDP 家具数据平台
+      <n-layout-header v-if="route.path !== '/login'" bordered class="app-header">
+        <n-space align="center" justify="space-between" style="height: 100%;">
+          <div class="brand" @click="navigate('/')">
+            <span class="brand-name">RSDP</span>
+            <span class="brand-divider" />
+            <span class="brand-sub">家居全案平台</span>
           </div>
           <n-space align="center">
             <template v-for="group in visibleNavGroups" :key="group.key">
@@ -134,9 +136,9 @@ async function handleUserAction(key: string) {
               :options="userDropdownOptions"
               @select="handleUserAction"
             >
-              <n-button>{{ userStore.displayName }}</n-button>
+              <n-button quaternary class="user-button">{{ userStore.displayName }}</n-button>
             </n-dropdown>
-            <n-button v-else @click="navigate('/login')">
+            <n-button v-else quaternary @click="navigate('/login')">
               登录
             </n-button>
           </n-space>
@@ -166,5 +168,47 @@ async function handleUserAction(key: string) {
 #app {
   width: 100vw;
   height: 100vh;
+}
+</style>
+
+<style scoped>
+.app-header {
+  height: var(--rsdp-header-height);
+  padding: 0 var(--rsdp-page-padding);
+  background: var(--rsdp-card-bg);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.brand-name {
+  font-family: var(--rsdp-font-display);
+  font-size: 24px;
+  letter-spacing: 1px;
+  color: var(--rsdp-primary);
+  line-height: 1;
+}
+
+.brand-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--rsdp-border);
+  align-self: center;
+}
+
+.brand-sub {
+  font-size: 14px;
+  color: var(--rsdp-text);
+  letter-spacing: 2px;
+}
+
+.user-button {
+  font-weight: 600;
+  color: var(--rsdp-text);
 }
 </style>
