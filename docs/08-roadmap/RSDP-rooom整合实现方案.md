@@ -375,7 +375,7 @@ CREATE TABLE project (
     project_name  VARCHAR(128) NOT NULL,
     project_type  VARCHAR(32),                       -- project_type 字典码
     company_name  VARCHAR(128),
-    owner_id      UUID NOT NULL REFERENCES sys_user(user_id),
+    owner_id      VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     status        VARCHAR(20) NOT NULL DEFAULT 'active',
     remark        VARCHAR(512),
     deleted_at    TIMESTAMP,
@@ -386,7 +386,7 @@ CREATE INDEX idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
 
 ALTER TABLE scheme ADD COLUMN project_id    VARCHAR(40) REFERENCES project(project_id);
 ALTER TABLE scheme ADD COLUMN is_template   BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE scheme ADD COLUMN template_tags JSONB;
+ALTER TABLE scheme ADD COLUMN template_tags TEXT;    -- JSON 字符串，与项目 TEXT 约定一致
 CREATE INDEX idx_scheme_project ON scheme(project_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_scheme_template ON scheme(is_template) WHERE is_template = true AND deleted_at IS NULL;
 ```

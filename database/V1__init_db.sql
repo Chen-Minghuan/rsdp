@@ -323,12 +323,17 @@ CREATE TABLE IF NOT EXISTS scheme (
     max_lead_time_days INTEGER,                      -- 最长交期
     item_count INTEGER,                              -- 方案项数
     status VARCHAR(16) DEFAULT 'active',
+    project_id VARCHAR(40),                          -- 所属设计项目（V4 并入）
+    is_template BOOLEAN NOT NULL DEFAULT false,      -- 是否为方案模板（V4 并入）
+    template_tags TEXT,                              -- 模板标签 JSON 数组（V4 并入）
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_scheme_created_by ON scheme(created_by, status);
+CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_scheme_template ON scheme(is_template) WHERE is_template = true AND deleted_at IS NULL;
 
 -- 搭配方案项表
 CREATE TABLE IF NOT EXISTS scheme_item (
@@ -756,3 +761,18 @@ CREATE TABLE IF NOT EXISTS user_favorite (
     UNIQUE (user_id, rspu_id)
 );
 CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
+
+-- 设计项目（V4 并入）
+CREATE TABLE IF NOT EXISTS project (
+    project_id VARCHAR(40) PRIMARY KEY,
+    project_name VARCHAR(128) NOT NULL,
+    project_type VARCHAR(32),
+    company_name VARCHAR(128),
+    owner_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    remark VARCHAR(512),
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;

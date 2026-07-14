@@ -334,3 +334,42 @@ SELECT u.user_id, 'TEST'
 FROM sys_user u
 WHERE u.username = 'factory'
 ON CONFLICT (user_id, factory_code) DO NOTHING;
+
+-- 项目类型字典（V4 并入）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('project_type', 'whole_house', '全屋', 1),
+('project_type', 'space', '单空间', 2),
+('project_type', 'custom', '定制', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 项目权限（V4 并入；ADMIN 全量与 EDITOR 排除式映射自动覆盖）
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('project:read', '查看设计项目'),
+('project:create', '创建设计项目'),
+('project:update', '编辑设计项目'),
+('project:delete', '删除设计项目')
+ON CONFLICT (permission_code) DO NOTHING;
+
+-- DESIGNER：项目全量权限
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'DESIGNER'
+  AND p.permission_code LIKE 'project:%'
+ON CONFLICT DO NOTHING;
+
+-- ADMIN / EDITOR：项目全量权限（通用映射先于本权限插入执行，需显式补插）
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('ADMIN', 'EDITOR')
+  AND p.permission_code LIKE 'project:%'
+ON CONFLICT DO NOTHING;
+
+-- VIEWER / USER：项目只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('VIEWER', 'USER')
+  AND p.permission_code = 'project:read'
+ON CONFLICT DO NOTHING;
