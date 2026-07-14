@@ -41,6 +41,7 @@ DROP TABLE IF EXISTS recommendation_score_config CASCADE;
 DROP TABLE IF EXISTS designer_profile CASCADE;
 DROP TABLE IF EXISTS product_collection_item CASCADE;
 DROP TABLE IF EXISTS product_collection CASCADE;
+DROP TABLE IF EXISTS user_favorite CASCADE;
 DROP TABLE IF EXISTS factory_product_capability CASCADE;
 DROP TABLE IF EXISTS sys_user_factory CASCADE;
 DROP TABLE IF EXISTS sys_user_role CASCADE;
@@ -943,6 +944,17 @@ CREATE TABLE IF NOT EXISTS scheme_candidate (
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_request ON scheme_candidate(recommend_request_id, status);
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_rspu ON scheme_candidate(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(created_by, status);
+
+-- 收藏夹（V4 并入）：用户级产品收藏，支持分组
+CREATE TABLE IF NOT EXISTS user_favorite (
+    favorite_id VARCHAR(40) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    rspu_id VARCHAR(40) NOT NULL REFERENCES rspu_master(rspu_id),
+    group_name VARCHAR(64),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
 
 -- =================== 5. 插入种子数据 ===================
 
