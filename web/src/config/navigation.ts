@@ -90,6 +90,12 @@ export const navGroups: NavGroup[] = [
         label: '以图搜图',
         path: '/visual-search',
         permission: PERMISSIONS.PRODUCT_READ
+      },
+      {
+        key: 'favorites',
+        label: '我的收藏',
+        path: '/favorites',
+        permission: PERMISSIONS.PRODUCT_READ
       }
     ]
   },

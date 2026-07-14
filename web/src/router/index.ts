@@ -58,6 +58,12 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
   },
   {
+    path: '/favorites',
+    name: 'Favorites',
+    component: () => import('@/views/FavoritesView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
     path: '/factories',
     name: 'FactoryList',
     component: () => import('@/views/FactoryListView.vue'),
