@@ -35,7 +35,7 @@ export interface NavGroup {
 
 /**
  * 顶栏导航配置。
- * 注意：当前分组顺序的扁平化结果与历史 12 按钮顺序保持一致，0.4 切换分组 UI 时再行调整。
+ * 单项分组渲染为直接按钮，多项分组渲染为下拉菜单。
  */
 export const navGroups: NavGroup[] = [
   {
@@ -79,35 +79,17 @@ export const navGroups: NavGroup[] = [
     items: [
       {
         key: 'products',
-        label: '产品库',
+        label: '产品列表',
         path: '/products',
         permission: PERMISSIONS.PRODUCT_READ,
         activeMatch: 'prefix',
         activeExcludes: ['/products/document-import', '/products/excel-ai-import']
-      }
-    ]
-  },
-  {
-    key: 'factories',
-    label: '工厂管理',
-    items: [
+      },
       {
-        key: 'factories',
-        label: '工厂管理',
-        path: '/factories',
-        permission: PERMISSIONS.FACTORY_READ
-      }
-    ]
-  },
-  {
-    key: 'quotes',
-    label: '报价单生成器',
-    items: [
-      {
-        key: 'quotes-build',
-        label: '报价单生成器',
-        path: '/quotes/build',
-        permission: PERMISSIONS.QUOTE_GENERATE
+        key: 'visual-search',
+        label: '以图搜图',
+        path: '/visual-search',
+        permission: PERMISSIONS.PRODUCT_READ
       }
     ]
   },
@@ -117,7 +99,7 @@ export const navGroups: NavGroup[] = [
     items: [
       {
         key: 'schemes',
-        label: '搭配方案',
+        label: '方案列表',
         path: '/schemes',
         permission: PERMISSIONS.SCHEME_READ,
         activeMatch: 'prefix'
@@ -132,14 +114,26 @@ export const navGroups: NavGroup[] = [
     ]
   },
   {
-    key: 'visual-search',
-    label: '以图搜图',
+    key: 'quotes',
+    label: '报价',
     items: [
       {
-        key: 'visual-search',
-        label: '以图搜图',
-        path: '/visual-search',
-        permission: PERMISSIONS.PRODUCT_READ
+        key: 'quotes-build',
+        label: '报价单生成器',
+        path: '/quotes/build',
+        permission: PERMISSIONS.QUOTE_GENERATE
+      }
+    ]
+  },
+  {
+    key: 'factories',
+    label: '工厂',
+    items: [
+      {
+        key: 'factories',
+        label: '工厂管理',
+        path: '/factories',
+        permission: PERMISSIONS.FACTORY_READ
       }
     ]
   },
@@ -156,6 +150,3 @@ export const navGroups: NavGroup[] = [
     ]
   }
 ]
-
-/** 扁平化的全部导航项（保持历史按钮顺序）。 */
-export const flatNavItems: NavItem[] = navGroups.flatMap((group) => group.items)

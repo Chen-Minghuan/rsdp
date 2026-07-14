@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, type GlobalThemeOverrides } from 'naive-ui'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, type GlobalThemeOverrides, type DropdownOption } from 'naive-ui'
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ROLES } from '@/utils/constants'
-import { flatNavItems, type NavItem } from '@/config/navigation'
+import { navGroups, type NavGroup, type NavItem } from '@/config/navigation'
 
 const router = useRouter()
 const route = useRoute()
@@ -63,7 +63,22 @@ function isItemActive(item: NavItem): boolean {
   return route.path === item.path
 }
 
-const visibleNavItems = computed(() => flatNavItems.filter(isItemVisible))
+/** 导航分组可见性：组内至少保留一个可见项，空组不渲染。 */
+const visibleNavGroups = computed<NavGroup[]>(() =>
+  navGroups
+    .map((group) => ({ ...group, items: group.items.filter(isItemVisible) }))
+    .filter((group) => group.items.length > 0)
+)
+
+/** 导航组高亮：组内任意项命中当前路由即高亮。 */
+function isGroupActive(group: NavGroup): boolean {
+  return group.items.some(isItemActive)
+}
+
+/** 下拉菜单选项：以路径作为 key，select 时直接跳转。 */
+function groupDropdownOptions(group: NavGroup): DropdownOption[] {
+  return group.items.map((item) => ({ label: item.label, key: item.path }))
+}
 
 const userDropdownOptions = computed(() => {
   const options: { label: string; key: string; disabled?: boolean }[] = [
@@ -95,14 +110,25 @@ async function handleUserAction(key: string) {
             RSDP 家具数据平台
           </div>
           <n-space align="center">
-            <n-button
-              v-for="item in visibleNavItems"
-              :key="item.key"
-              :type="isItemActive(item) ? 'primary' : 'default'"
-              @click="navigate(item.path)"
-            >
-              {{ item.label }}
-            </n-button>
+            <template v-for="group in visibleNavGroups" :key="group.key">
+              <n-button
+                v-if="group.items.length === 1"
+                :type="isItemActive(group.items[0]) ? 'primary' : 'default'"
+                @click="navigate(group.items[0].path)"
+              >
+                {{ group.label }}
+              </n-button>
+              <n-dropdown
+                v-else
+                trigger="hover"
+                :options="groupDropdownOptions(group)"
+                @select="navigate"
+              >
+                <n-button :type="isGroupActive(group) ? 'primary' : 'default'">
+                  {{ group.label }} ▾
+                </n-button>
+              </n-dropdown>
+            </template>
             <n-dropdown
               v-if="userStore.isLoggedIn"
               :options="userDropdownOptions"
