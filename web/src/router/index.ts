@@ -64,6 +64,12 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
   },
   {
+    path: '/projects',
+    name: 'ProjectList',
+    component: () => import('@/views/ProjectListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PROJECT_READ] }
+  },
+  {
     path: '/factories',
     name: 'FactoryList',
     component: () => import('@/views/FactoryListView.vue'),

@@ -44,6 +44,18 @@ export const navGroups: NavGroup[] = [
     items: [{ key: 'home', label: '首页', path: '/' }]
   },
   {
+    key: 'projects',
+    label: '项目',
+    items: [
+      {
+        key: 'project-list',
+        label: '设计项目',
+        path: '/projects',
+        permission: PERMISSIONS.PROJECT_READ
+      }
+    ]
+  },
+  {
     key: 'entry',
     label: '录入中心',
     items: [
