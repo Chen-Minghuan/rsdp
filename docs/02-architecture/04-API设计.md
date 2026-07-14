@@ -694,6 +694,30 @@ DELETE /api/v1/collections/{collectionId}
        # Response: void
 ```
 
+### 收藏夹
+
+```
+GET    /api/v1/favorites
+       # 查询当前用户的收藏列表（需登录，数据按用户隔离）
+       # Query: group? 分组筛选
+       # Response: [FavoriteResponse...]
+       #   { favoriteId, rspuId, groupName?, productName?, primaryImageUrl?, createdAt }
+
+POST   /api/v1/favorites
+       # 收藏产品（需登录；产品不存在 404，重复收藏报错）
+       # Request: { rspuId, groupName? (max 64) }
+       # Response: FavoriteResponse
+
+DELETE /api/v1/favorites/{rspuId}
+       # 取消收藏（需登录；未收藏返回 404）
+       # Response: void
+
+GET    /api/v1/favorites/check
+       # 批量检查收藏状态（需登录）
+       # Query: rspuIds（可重复传参）
+       # Response: string[]（其中已收藏的 rspuId 列表）
+```
+
 ### 设计师画像
 
 ```
