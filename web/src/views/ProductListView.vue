@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, h, onMounted, watch, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -27,6 +27,7 @@ import type { ProductSummary } from '@/types/product'
 import { useMessage } from 'naive-ui'
 
 const router = useRouter()
+const route = useRoute()
 const dialog = useDialog()
 const message = useMessage()
 const userStore = useUserStore()
@@ -384,6 +385,12 @@ onMounted(async () => {
   }
   selectedRowKeys.value = []
   viewMode.value = isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
+  // 支持从首页分级导航等入口带筛选参数进入
+  const query = route.query
+  if (typeof query.keyword === 'string') keyword.value = query.keyword
+  if (typeof query.positioningLabel === 'string') styleFilter.value = query.positioningLabel
+  if (typeof query.sceneCode === 'string') sceneFilter.value = query.sceneCode
+  if (typeof query.materialTag === 'string') materialFilter.value = query.materialTag
   loadDicts()
   loadProducts()
 })
