@@ -23,6 +23,9 @@ public class SchemeCreateRequest {
     /** 空间类型（可选）。 */
     private String roomType;
 
+    /** 所属设计项目 ID（可选，存在时校验项目归属）。 */
+    private String projectId;
+
     /** 预算上限（可选）。 */
     private BigDecimal budgetLimit;
 

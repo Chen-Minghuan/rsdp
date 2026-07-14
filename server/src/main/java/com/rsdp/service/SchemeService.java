@@ -4,10 +4,16 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
+import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
+import com.rsdp.dto.response.CopyFromTemplateResponse;
 import com.rsdp.dto.response.PriceChangeResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.SchemeItemResponse;
@@ -15,6 +21,7 @@ import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.Project;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.Scheme;
@@ -34,6 +41,7 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +64,8 @@ public class SchemeService {
     private final ImageAssetsMapper imageAssetsMapper;
     private final QuoteService quoteService;
     private final DataScopeHelper dataScopeHelper;
+    private final ProjectService projectService;
+    private final ObjectMapper objectMapper;
 
     /**
      * 创建搭配方案。
@@ -143,6 +153,10 @@ public class SchemeService {
         scheme.setSchemeId(schemeId);
         scheme.setSchemeName(request.getSchemeName().trim());
         scheme.setRoomType(request.getRoomType());
+        if (StringUtils.hasText(request.getProjectId())) {
+            Project project = projectService.getAccessibleProject(request.getProjectId());
+            scheme.setProjectId(project.getProjectId());
+        }
         scheme.setBudgetLimit(request.getBudgetLimit());
         scheme.setTotalPrice(totalPrice);
         scheme.setFactoryCount(factoryCodes.size());
@@ -251,6 +265,10 @@ public class SchemeService {
 
         scheme.setSchemeName(request.getSchemeName().trim());
         scheme.setRoomType(request.getRoomType());
+        if (StringUtils.hasText(request.getProjectId())) {
+            Project project = projectService.getAccessibleProject(request.getProjectId());
+            scheme.setProjectId(project.getProjectId());
+        }
         scheme.setBudgetLimit(request.getBudgetLimit());
         scheme.setTotalPrice(totalPrice);
         scheme.setFactoryCount(factoryCodes.size());
@@ -294,22 +312,43 @@ public class SchemeService {
      * @return 方案摘要列表
      */
     public List<SchemeSummaryResponse> listSchemes() {
-        List<Scheme> schemes = schemeMapper.selectList(
-            new QueryWrapper<Scheme>()
-                .eq("status", "active")
-                .orderByDesc("created_at")
-        );
+        return listSchemes(null, null);
+    }
 
-        return schemes.stream().map(s -> {
-            SchemeSummaryResponse summary = new SchemeSummaryResponse();
-            summary.setSchemeId(s.getSchemeId());
-            summary.setSchemeName(s.getSchemeName());
-            summary.setItemCount(s.getItemCount());
-            summary.setTotalPrice(s.getTotalPrice());
-            summary.setCreatedBy(s.getCreatedBy());
-            summary.setCreatedAt(s.getCreatedAt());
-            return summary;
-        }).collect(Collectors.toList());
+    /**
+     * 查询方案列表（支持模板筛选与标签筛选）。
+     *
+     * @param isTemplate 是否仅查模板（可选）
+     * @param tag        模板标签筛选（可选）
+     * @return 方案摘要列表
+     */
+    public List<SchemeSummaryResponse> listSchemes(Boolean isTemplate, String tag) {
+        QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
+            .eq("status", "active")
+            .orderByDesc("created_at");
+        if (isTemplate != null) {
+            wrapper.eq("is_template", isTemplate);
+        }
+        List<Scheme> schemes = schemeMapper.selectList(wrapper);
+
+        return schemes.stream()
+            .map(this::toSummary)
+            .filter(s -> !StringUtils.hasText(tag)
+                || (s.getTemplateTags() != null && s.getTemplateTags().contains(tag)))
+            .collect(Collectors.toList());
+    }
+
+    private SchemeSummaryResponse toSummary(Scheme s) {
+        SchemeSummaryResponse summary = new SchemeSummaryResponse();
+        summary.setSchemeId(s.getSchemeId());
+        summary.setSchemeName(s.getSchemeName());
+        summary.setItemCount(s.getItemCount());
+        summary.setTotalPrice(s.getTotalPrice());
+        summary.setCreatedBy(s.getCreatedBy());
+        summary.setCreatedAt(s.getCreatedAt());
+        summary.setIsTemplate(s.getIsTemplate());
+        summary.setTemplateTags(fromJson(s.getTemplateTags()));
+        return summary;
     }
 
     /**
@@ -362,6 +401,9 @@ public class SchemeService {
         response.setMaxLeadTimeDays(scheme.getMaxLeadTimeDays());
         response.setItemCount(scheme.getItemCount());
         response.setStatus(scheme.getStatus());
+        response.setProjectId(scheme.getProjectId());
+        response.setIsTemplate(scheme.getIsTemplate());
+        response.setTemplateTags(fromJson(scheme.getTemplateTags()));
         response.setCreatedBy(scheme.getCreatedBy());
         response.setCreatedAt(scheme.getCreatedAt());
         response.setItems(itemResponses);
@@ -383,6 +425,184 @@ public class SchemeService {
         int affected = schemeMapper.deleteById(schemeId);
         if (affected == 0) {
             throw new ResourceNotFoundException("方案不存在或已被删除: " + schemeId);
+        }
+    }
+
+    /**
+     * 设为/取消方案模板。
+     *
+     * @param schemeId 方案 ID
+     * @param request  模板设置请求
+     * @return 更新后的方案详情
+     */
+    @Transactional
+    public SchemeResponse setTemplate(String schemeId, SchemeTemplateRequest request) {
+        Scheme scheme = schemeMapper.selectById(schemeId);
+        if (scheme == null || scheme.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("方案不存在: " + schemeId);
+        }
+        assertSchemeOwnerOrAdmin(scheme);
+
+        scheme.setIsTemplate(request.getIsTemplate());
+        scheme.setTemplateTags(Boolean.TRUE.equals(request.getIsTemplate())
+            ? toJson(request.getTemplateTags())
+            : null);
+        scheme.setUpdatedAt(LocalDateTime.now());
+        schemeMapper.updateById(scheme);
+        return getSchemeDetail(schemeId);
+    }
+
+    /**
+     * 套用模板创建新方案：复制方案项并取 RSKU 当前最新价，模板自身不被修改。
+     *
+     * @param schemeId 模板方案 ID
+     * @param request  套用请求（目标项目 + 可选新方案名）
+     * @return 新方案详情与价格变动对比
+     */
+    @Transactional
+    public CopyFromTemplateResponse copyFromTemplate(String schemeId, CopyFromTemplateRequest request) {
+        Scheme template = schemeMapper.selectById(schemeId);
+        if (template == null || template.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("方案不存在: " + schemeId);
+        }
+        if (!Boolean.TRUE.equals(template.getIsTemplate())) {
+            throw new BusinessException("该方案不是模板，无法套用");
+        }
+        Project project = projectService.getAccessibleProject(request.getProjectId());
+
+        List<SchemeItem> templateItems = schemeItemMapper.selectList(
+            new QueryWrapper<SchemeItem>()
+                .eq("scheme_id", schemeId)
+                .orderByAsc("sort_order")
+        );
+        if (templateItems.isEmpty()) {
+            throw new BusinessException("模板方案没有可套用的方案项");
+        }
+
+        String newSchemeId = "SCHEME-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        BigDecimal totalPrice = BigDecimal.ZERO;
+        int maxLeadTimeDays = 0;
+        Set<String> factoryCodes = new HashSet<>();
+        List<SchemeItem> newItems = new java.util.ArrayList<>();
+        List<PriceChangeResponse> priceChanges = new java.util.ArrayList<>();
+        List<String> skippedRskuIds = new java.util.ArrayList<>();
+
+        int sortOrder = 0;
+        for (SchemeItem templateItem : templateItems) {
+            RskuSupply rsku = rskuSupplyMapper.selectById(templateItem.getRskuId());
+            if (rsku == null || rsku.getDeletedAt() != null) {
+                skippedRskuIds.add(templateItem.getRskuId());
+                continue;
+            }
+            int quantity = templateItem.getQuantity() != null && templateItem.getQuantity() > 0
+                ? templateItem.getQuantity()
+                : 1;
+
+            // 价格快照对比：模板保存价 vs 当前最新价
+            if (templateItem.getFactoryPrice() != null && rsku.getFactoryPrice() != null
+                && templateItem.getFactoryPrice().compareTo(rsku.getFactoryPrice()) != 0) {
+                RspuMaster rspu = rspuMapper.selectById(templateItem.getRspuId());
+                PriceChangeResponse change = new PriceChangeResponse();
+                change.setRspuId(templateItem.getRspuId());
+                change.setRspuName(rspu != null ? rspu.getPositioningLabel() : null);
+                change.setRskuId(templateItem.getRskuId());
+                change.setOldPrice(templateItem.getFactoryPrice());
+                change.setNewPrice(rsku.getFactoryPrice());
+                priceChanges.add(change);
+            }
+
+            if (rsku.getFactoryPrice() != null) {
+                totalPrice = totalPrice.add(rsku.getFactoryPrice().multiply(BigDecimal.valueOf(quantity)));
+            }
+            if (rsku.getLeadTimeDays() != null && rsku.getLeadTimeDays() > maxLeadTimeDays) {
+                maxLeadTimeDays = rsku.getLeadTimeDays();
+            }
+            if (rsku.getFactoryCode() != null) {
+                factoryCodes.add(rsku.getFactoryCode());
+            }
+
+            SchemeItem item = new SchemeItem();
+            item.setSchemeId(newSchemeId);
+            item.setRspuId(templateItem.getRspuId());
+            item.setRskuId(templateItem.getRskuId());
+            item.setFactoryCode(rsku.getFactoryCode());
+            item.setFactoryPrice(rsku.getFactoryPrice());
+            item.setLeadTimeDays(rsku.getLeadTimeDays());
+            item.setMoq(rsku.getMoq());
+            item.setQuantity(quantity);
+            item.setSortOrder(sortOrder++);
+            item.setCreatedAt(LocalDateTime.now());
+            newItems.add(item);
+        }
+        if (newItems.isEmpty()) {
+            throw new BusinessException("模板中的 RSKU 均已失效，无法套用");
+        }
+
+        String baseName = StringUtils.hasText(request.getSchemeName())
+            ? request.getSchemeName().trim()
+            : template.getSchemeName() + "-套用";
+        String newName = resolveUniqueSchemeName(baseName, SecurityOperatorContext.currentUsername());
+
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId(newSchemeId);
+        scheme.setSchemeName(newName);
+        scheme.setRoomType(template.getRoomType());
+        scheme.setBudgetLimit(template.getBudgetLimit());
+        scheme.setTotalPrice(totalPrice);
+        scheme.setFactoryCount(factoryCodes.size());
+        scheme.setMaxLeadTimeDays(maxLeadTimeDays);
+        scheme.setItemCount(newItems.size());
+        scheme.setStatus("active");
+        scheme.setProjectId(project.getProjectId());
+        scheme.setIsTemplate(false);
+        scheme.setCreatedBy(SecurityOperatorContext.currentUsername());
+        scheme.setCreatedAt(LocalDateTime.now());
+        schemeMapper.insert(scheme);
+
+        schemeItemMapper.insertBatchSafe(newItems);
+
+        CopyFromTemplateResponse response = new CopyFromTemplateResponse();
+        response.setScheme(getSchemeDetail(newSchemeId));
+        response.setPriceChanges(priceChanges);
+        response.setSkippedRskuIds(skippedRskuIds);
+        return response;
+    }
+
+    private String resolveUniqueSchemeName(String baseName, String owner) {
+        String name = baseName;
+        int suffix = 1;
+        while (true) {
+            Long count = schemeMapper.selectCount(new QueryWrapper<Scheme>()
+                .eq("scheme_name", name)
+                .eq("status", "active")
+                .eq("created_by", owner));
+            if (count == null || count == 0) {
+                return name;
+            }
+            name = baseName + "-" + (++suffix);
+        }
+    }
+
+    private String toJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException("JSON 序列化失败: " + e.getMessage());
+        }
+    }
+
+    private List<String> fromJson(String json) {
+        if (!StringUtils.hasText(json)) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<String>>() {
+            });
+        } catch (JsonProcessingException e) {
+            throw new BusinessException("JSON 反序列化失败: " + e.getMessage());
         }
     }
 

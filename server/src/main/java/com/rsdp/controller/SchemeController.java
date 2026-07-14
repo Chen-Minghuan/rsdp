@@ -1,8 +1,11 @@
 package com.rsdp.controller;
 
 import com.rsdp.common.Result;
+import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
+import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
+import com.rsdp.dto.response.CopyFromTemplateResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
@@ -18,6 +21,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -45,13 +49,45 @@ public class SchemeController {
     }
 
     /**
-     * 查询方案列表。
+     * 查询方案列表（支持模板与标签筛选）。
      *
+     * @param isTemplate 是否仅查模板（可选）
+     * @param tag        模板标签筛选（可选）
      * @return 方案列表
      */
     @GetMapping
-    public Result<List<SchemeSummaryResponse>> list() {
-        return Result.ok(schemeService.listSchemes());
+    public Result<List<SchemeSummaryResponse>> list(
+        @RequestParam(required = false) Boolean isTemplate,
+        @RequestParam(required = false) String tag) {
+        return Result.ok(schemeService.listSchemes(isTemplate, tag));
+    }
+
+    /**
+     * 套用模板创建新方案（价格取 RSKU 当前最新价）。
+     *
+     * @param schemeId 模板方案 ID
+     * @param request  套用请求
+     * @return 新方案与价格变动对比
+     */
+    @PostMapping("/{schemeId}/copy-from-template")
+    public Result<CopyFromTemplateResponse> copyFromTemplate(
+        @PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
+        @Valid @RequestBody CopyFromTemplateRequest request) {
+        return Result.ok(schemeService.copyFromTemplate(schemeId, request));
+    }
+
+    /**
+     * 设为/取消方案模板。
+     *
+     * @param schemeId 方案 ID
+     * @param request  模板设置请求
+     * @return 更新后的方案详情
+     */
+    @PutMapping("/{schemeId}/template")
+    public Result<SchemeResponse> setTemplate(
+        @PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
+        @Valid @RequestBody SchemeTemplateRequest request) {
+        return Result.ok(schemeService.setTemplate(schemeId, request));
     }
 
     /**

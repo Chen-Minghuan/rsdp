@@ -1,15 +1,20 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
+import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
+import com.rsdp.dto.response.CopyFromTemplateResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.SchemeItemResponse;
 import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.Project;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.Scheme;
@@ -27,8 +32,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -36,12 +43,15 @@ import org.springframework.security.core.userdetails.User;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -74,6 +84,12 @@ class SchemeServiceTest {
 
     @Mock
     private DataScopeHelper dataScopeHelper;
+
+    @Mock
+    private ProjectService projectService;
+
+    @Spy
+    private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private SchemeService schemeService;
@@ -389,5 +405,154 @@ class SchemeServiceTest {
         r.setRskuId(rskuId);
         r.setQuantity(quantity);
         return r;
+    }
+
+    @Test
+    void copyFromTemplate_shouldCopyItemsWithLatestPricesAndKeepTemplateUntouched() {
+        Scheme template = new Scheme();
+        template.setSchemeId("SCHEME-TPL");
+        template.setSchemeName("现代客厅模板");
+        template.setIsTemplate(true);
+        template.setCreatedBy("testuser");
+
+        Project project = new Project();
+        project.setProjectId("PROJ-1");
+        when(projectService.getAccessibleProject("PROJ-1")).thenReturn(project);
+
+        SchemeItem tplItem = new SchemeItem();
+        tplItem.setSchemeId("SCHEME-TPL");
+        tplItem.setRspuId("RSPU-001");
+        tplItem.setRskuId("RSKU-001");
+        tplItem.setFactoryCode("F001");
+        tplItem.setFactoryPrice(new BigDecimal("2000"));
+        tplItem.setQuantity(1);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(tplItem));
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-001");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("2500"));
+        rsku.setLeadTimeDays(20);
+        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setPositioningLabel("布艺沙发");
+        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
+        when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(schemeMapper.selectCount(any())).thenReturn(0L);
+
+        AtomicReference<Scheme> inserted = new AtomicReference<>();
+        when(schemeMapper.insert(any(Scheme.class))).thenAnswer(inv -> {
+            inserted.set(inv.getArgument(0));
+            return 1;
+        });
+        when(schemeMapper.selectById(anyString())).thenAnswer(inv -> {
+            String id = inv.getArgument(0);
+            if ("SCHEME-TPL".equals(id)) {
+                return template;
+            }
+            Scheme saved = inserted.get();
+            return saved != null && saved.getSchemeId().equals(id) ? saved : null;
+        });
+
+        CopyFromTemplateRequest request = new CopyFromTemplateRequest();
+        request.setProjectId("PROJ-1");
+
+        CopyFromTemplateResponse response = schemeService.copyFromTemplate("SCHEME-TPL", request);
+
+        assertThat(response.getPriceChanges()).hasSize(1);
+        assertThat(response.getPriceChanges().get(0).getOldPrice()).isEqualByComparingTo("2000");
+        assertThat(response.getPriceChanges().get(0).getNewPrice()).isEqualByComparingTo("2500");
+        assertThat(response.getSkippedRskuIds()).isEmpty();
+        assertThat(response.getScheme().getProjectId()).isEqualTo("PROJ-1");
+        assertThat(response.getScheme().getIsTemplate()).isFalse();
+        assertThat(response.getScheme().getTotalPrice()).isEqualByComparingTo("2500");
+        assertThat(response.getScheme().getSchemeName()).startsWith("现代客厅模板-套用");
+
+        // 模板自身不被修改
+        verify(schemeMapper, never()).updateById(any(Scheme.class));
+    }
+
+    @Test
+    void copyFromTemplate_shouldRejectNonTemplateScheme() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-1");
+        scheme.setIsTemplate(false);
+        when(schemeMapper.selectById("SCHEME-1")).thenReturn(scheme);
+
+        CopyFromTemplateRequest request = new CopyFromTemplateRequest();
+        request.setProjectId("PROJ-1");
+
+        assertThatThrownBy(() -> schemeService.copyFromTemplate("SCHEME-1", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不是模板");
+    }
+
+    @Test
+    void setTemplate_shouldPersistTemplateFlagAndTags() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-1");
+        scheme.setSchemeName("客厅方案");
+        scheme.setIsTemplate(false);
+        scheme.setCreatedBy("testuser");
+        when(schemeMapper.selectById("SCHEME-1")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of());
+
+        SchemeTemplateRequest request = new SchemeTemplateRequest();
+        request.setIsTemplate(true);
+        request.setTemplateTags(List.of("客厅", "现代"));
+
+        SchemeResponse response = schemeService.setTemplate("SCHEME-1", request);
+
+        ArgumentCaptor<Scheme> captor = ArgumentCaptor.forClass(Scheme.class);
+        verify(schemeMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getIsTemplate()).isTrue();
+        assertThat(captor.getValue().getTemplateTags()).isEqualTo("[\"客厅\",\"现代\"]");
+        assertThat(response.getIsTemplate()).isTrue();
+        assertThat(response.getTemplateTags()).containsExactly("客厅", "现代");
+    }
+
+    @Test
+    void setTemplate_shouldRejectNonOwner() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-1");
+        scheme.setCreatedBy("otheruser");
+        when(schemeMapper.selectById("SCHEME-1")).thenReturn(scheme);
+
+        SchemeTemplateRequest request = new SchemeTemplateRequest();
+        request.setIsTemplate(true);
+
+        assertThatThrownBy(() -> schemeService.setTemplate("SCHEME-1", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无权操作");
+        verify(schemeMapper, never()).updateById(any(Scheme.class));
+    }
+
+    @Test
+    void listSchemes_shouldFilterByTagInMemory() {
+        Scheme template = new Scheme();
+        template.setSchemeId("SCHEME-T1");
+        template.setSchemeName("现代客厅模板");
+        template.setIsTemplate(true);
+        template.setTemplateTags("[\"客厅\"]");
+        template.setStatus("active");
+
+        Scheme normal = new Scheme();
+        normal.setSchemeId("SCHEME-N1");
+        normal.setSchemeName("普通方案");
+        normal.setIsTemplate(false);
+        normal.setStatus("active");
+
+        when(schemeMapper.selectList(any())).thenReturn(List.of(template, normal));
+
+        assertThat(schemeService.listSchemes()).hasSize(2);
+        assertThat(schemeService.listSchemes(null, "客厅"))
+            .extracting("schemeId")
+            .containsExactly("SCHEME-T1");
     }
 }

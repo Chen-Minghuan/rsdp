@@ -138,7 +138,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/quotes/generate").hasAuthority(Permissions.QUOTE_GENERATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/quotes/export").hasAuthority(Permissions.QUOTE_EXPORT)
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/quote").hasAuthority(Permissions.QUOTE_GENERATE)
-
+                .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/copy-from-template").hasAuthority(Permissions.SCHEME_CREATE)
                 // 搭配方案写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_UPDATE)
