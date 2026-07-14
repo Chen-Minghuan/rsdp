@@ -94,6 +94,12 @@ public class SecurityConfig {
                 // 方案读接口
                 .requestMatchers(HttpMethod.GET, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_READ)
 
+                // 设计项目接口
+                .requestMatchers(HttpMethod.GET, "/api/v1/projects", "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/projects").hasAuthority(Permissions.PROJECT_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_DELETE)
+
                 // 检索/推荐接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/matching/**").hasAuthority(Permissions.PRODUCT_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/retrieval/**").hasAuthority(Permissions.PRODUCT_READ)
