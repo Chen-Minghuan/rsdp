@@ -17,6 +17,7 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { listProducts, deleteProduct } from '@/api/product'
+import { addFavorite, removeFavorite, checkFavorites } from '@/api/favorite'
 import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
@@ -73,6 +74,45 @@ const factoryOptions = computed(() => [
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
 // 全库视图对工厂管理员只读；平台运营人员（ADMIN/EDITOR）在全库视图下仍可编辑
 const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value)
+
+/** 当前页产品的收藏状态（rspuId 集合）。 */
+const favoritedIds = ref<Set<string>>(new Set())
+const favoriteToggling = ref<string | null>(null)
+
+async function refreshFavoritedStatus() {
+  if (products.value.length === 0) {
+    favoritedIds.value = new Set()
+    return
+  }
+  try {
+    const ids = await checkFavorites(products.value.map(p => p.rspuId))
+    favoritedIds.value = new Set(ids)
+  } catch (e) {
+    console.error('加载收藏状态失败', e)
+  }
+}
+
+async function toggleFavorite(row: ProductSummary) {
+  if (favoriteToggling.value) return
+  favoriteToggling.value = row.rspuId
+  try {
+    if (favoritedIds.value.has(row.rspuId)) {
+      await removeFavorite(row.rspuId)
+      favoritedIds.value.delete(row.rspuId)
+      message.success('已取消收藏')
+    } else {
+      await addFavorite({ rspuId: row.rspuId })
+      favoritedIds.value.add(row.rspuId)
+      message.success('已收藏')
+    }
+    // 触发响应式更新
+    favoritedIds.value = new Set(favoritedIds.value)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '收藏操作失败')
+  } finally {
+    favoriteToggling.value = null
+  }
+}
 
 async function toggleFullCatalog(value: boolean) {
   if (savingPreference.value) return
@@ -167,6 +207,25 @@ const columns: DataTableColumns<ProductSummary> = [
           ? 'error'
           : 'warning'
       return h(NTag, { type, size: 'small' }, { default: () => row.reviewStatus || '-' })
+    }
+  },
+  {
+    title: '收藏',
+    key: 'favorite',
+    width: 70,
+    render(row: ProductSummary) {
+      const favorited = favoritedIds.value.has(row.rspuId)
+      return h(
+        NButton,
+        {
+          size: 'small',
+          quaternary: true,
+          type: favorited ? 'error' : 'default',
+          loading: favoriteToggling.value === row.rspuId,
+          onClick: () => toggleFavorite(row)
+        },
+        { default: () => (favorited ? '♥' : '♡') }
+      )
     }
   },
   {
@@ -277,6 +336,7 @@ async function loadProducts() {
     const result = await listProducts(params, { signal })
     products.value = result.rows
     total.value = result.total
+    refreshFavoritedStatus()
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载产品列表失败'
   } finally {
