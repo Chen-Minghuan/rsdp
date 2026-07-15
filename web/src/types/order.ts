@@ -87,3 +87,31 @@ export const ORDER_STATUS_TEXT: Record<string, string> = {
   COMPLETED: '已完成',
   CANCELLED: '已取消'
 }
+
+/**
+ * 邀请页订单明细视图（公开，仅到手价）。
+ */
+export interface OrderInviteItem {
+  productName?: string
+  model?: string
+  imageId?: string
+  quantity?: number
+  finalPrice?: number
+  subtotal?: number
+}
+
+/**
+ * 邀请页订单视图（免登录公开访问，不含出厂价/工厂信息）。
+ */
+export interface OrderInviteView {
+  orderNo: string
+  status: string
+  receiverArea?: string
+  finalTotalPrice?: number
+  itemCount?: number
+  expectedLeadTime?: number
+  expireAt?: string
+  confirmed: boolean
+  confirmedAt?: string
+  items: OrderInviteItem[]
+}

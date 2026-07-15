@@ -10,6 +10,12 @@ const routes = [
     meta: { public: true }
   },
   {
+    path: '/invite/order/:token',
+    name: 'OrderInvite',
+    component: () => import('@/views/OrderInviteView.vue'),
+    meta: { public: true }
+  },
+  {
     path: '/',
     name: 'Home',
     component: () => import('@/views/HomeView.vue'),
