@@ -588,6 +588,67 @@ GET    /api/v1/statistics/factories
        # Response: [{ factoryCode, factoryName, totalAmount, itemCount }]
 ```
 
+### 设计订单
+
+```
+GET    /api/v1/orders
+       # 分页查询订单列表（需 order:read；非 ADMIN 仅可见自己创建的订单）
+       # Query: status? (PENDING/CONFIRMED/PRODUCING/COMPLETED/CANCELLED), page=1, size=10
+       # Response: { total, page, rows: [OrderResponse...], statusCounts: { 状态: 数量 } }
+
+POST   /api/v1/orders
+       # 由方案生成订单（需 order:create + 方案归属或 ADMIN）
+       # 说明：价格快照 = RSKU 当前出厂价 × 全局折扣率 price_rate（保留两位），生成后价格不可变
+       # Request: { schemeId, projectId?, receiverName?, receiverPhone?, receiverArea?,
+       #            receiverAddress?, remark? }
+       # Response: OrderDetailResponse
+
+GET    /api/v1/orders/{orderId}
+       # 查询订单详情（需 order:read + 归属或 ADMIN）
+       # Response: OrderDetailResponse（含 items: [{ id, rspuId, rskuId, productName, model,
+       #   imageId, quantity, originalPrice, finalPrice, factoryCode, subtotal }]）
+
+PUT    /api/v1/orders/{orderId}
+       # 更新收件信息与备注（需 order:update + 归属；仅 PENDING 可改）
+       # Request: { receiverName?, receiverPhone?, receiverArea?, receiverAddress?, remark? }
+
+PUT    /api/v1/orders/{orderId}/status
+       # 状态机迁移（需 order:update + 归属）
+       # PENDING→CONFIRMED/CANCELLED，CONFIRMED→PRODUCING/CANCELLED，PRODUCING→COMPLETED
+       # Request: { status }
+
+POST   /api/v1/orders/{orderId}/invite
+       # 生成客户邀请链接 token（需 order:update + 归属；重新生成后旧链接立即失效）
+       # Response: { token, expireAt }（默认 7 天有效，库里只存 token 的 SHA-256 哈希）
+
+GET    /api/v1/orders/contract-template
+       # 下载采购合同 docx 模板（需 order:read）
+```
+
+### 订单邀请公开接口（免登录）
+
+```
+GET    /api/v1/public/orders/invite/{token}
+       # 查看邀请页订单视图（HMAC-SHA256 签名 + 过期 + 库存哈希三重校验）
+       # Response: { orderNo, status, receiverArea, finalTotalPrice, itemCount,
+       #   expectedLeadTime, expireAt, confirmed, confirmedAt,
+       #   items: [{ productName, model, imageId, quantity, finalPrice, subtotal }] }
+       # 安全约束：绝不返回 originalPrice/factoryCode/rskuId 等敏感字段
+
+POST   /api/v1/public/orders/invite/{token}/confirm
+       # 客户确认订单（PENDING→CONFIRMED，一次性，确认后链接不可再次确认）
+```
+
+### 系统配置
+
+```
+GET    /api/v1/configs/{key}
+       # 读取配置（price_rate 需 order:read）
+
+PUT    /api/v1/configs/{key}
+       # 更新配置（仅 ADMIN），如 price_rate 全局折扣率
+```
+
 ### 视觉/语义检索
 
 ```
