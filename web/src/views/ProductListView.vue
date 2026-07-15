@@ -122,6 +122,10 @@ function toggleFilter(key: FilterKey, value: string) {
   filterModels[key].value = filterModels[key].value === value ? null : value
 }
 
+function clearFilter(key: FilterKey) {
+  filterModels[key].value = null
+}
+
 function resetFilters() {
   ;(Object.keys(filterModels) as FilterKey[]).forEach(k => (filterModels[k].value = null))
 }
@@ -460,7 +464,7 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
             v-model:value="keyword"
             placeholder="搜索品类或风格"
             clearable
-            style="width: 240px;"
+            style="width: 260px;"
             @keydown.enter="handleSearch"
           />
           <n-button type="primary" @click="handleSearch">搜索</n-button>
@@ -497,23 +501,32 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
         </n-alert>
 
         <n-layout has-sider class="filter-layout">
-          <n-layout-sider :width="220" bordered class="filter-sider">
-            <div class="filter-header">
-              <span class="filter-title">筛选</span>
-              <n-button v-if="hasActiveFilter" size="tiny" quaternary type="primary" @click="resetFilters">
-                重置
-              </n-button>
-            </div>
-            <div v-for="group in filterGroups" :key="group.key" class="filter-group">
-              <div class="filter-group-title">{{ group.title }}</div>
-              <div
-                v-for="opt in groupOptionsFor(group.key)"
-                :key="opt.value"
-                class="filter-option"
-                :class="{ active: filterValue(group.key) === opt.value }"
-                @click="toggleFilter(group.key, opt.value)"
-              >
-                {{ opt.label }}
+          <n-layout-sider :width="240" bordered class="filter-sider">
+            <div class="filter-panel">
+              <div class="filter-header">
+                <span class="filter-title">筛选</span>
+                <n-button v-if="hasActiveFilter" size="tiny" quaternary type="primary" @click="resetFilters">
+                  重置全部
+                </n-button>
+              </div>
+              <div v-for="group in filterGroups" :key="group.key" class="filter-group">
+                <div class="filter-group-title">{{ group.title }}</div>
+                <div
+                  class="filter-option"
+                  :class="{ active: !filterValue(group.key) }"
+                  @click="clearFilter(group.key)"
+                >
+                  不限
+                </div>
+                <div
+                  v-for="opt in groupOptionsFor(group.key)"
+                  :key="opt.value"
+                  class="filter-option"
+                  :class="{ active: filterValue(group.key) === opt.value }"
+                  @click="toggleFilter(group.key, opt.value)"
+                >
+                  {{ opt.label }}
+                </div>
               </div>
             </div>
           </n-layout-sider>
@@ -532,6 +545,7 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
               :loading="loading"
               :bordered="true"
               :single-line="false"
+              :scroll-x="1150"
             />
 
             <n-space justify="end" style="margin-top: 12px;">
@@ -556,14 +570,25 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
 
 .filter-sider {
   background: transparent;
-  padding: 4px 16px 4px 0;
+  padding: 4px 0 4px 0;
+  /* 宽表格挤压 flex 行时，筛选面板宽度必须保持 240 不被压缩 */
+  flex-shrink: 0;
+}
+
+/* 面板独立滚动：风格/材质选项较多时不高度过载，底部留出呼吸空间 */
+.filter-panel {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 0 16px 24px 4px;
 }
 
 .filter-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .filter-title {
@@ -572,15 +597,22 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
   color: var(--rsdp-text);
 }
 
+/* 分组之间用分隔线拉开层级，标题突出 */
 .filter-group {
-  margin-bottom: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--rsdp-border);
+}
+
+.filter-group:first-of-type {
+  border-top: none;
+  padding-top: 4px;
 }
 
 .filter-group-title {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   font-size: 13px;
-  font-weight: 600;
-  color: var(--rsdp-text-secondary);
+  font-weight: 700;
+  color: var(--rsdp-text);
 }
 
 .filter-option {
@@ -605,5 +637,7 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
 .filter-content {
   padding-left: 16px;
   background: transparent;
+  /* flex 子项默认 min-width:auto，宽表格会撑破布局压到左侧筛选面板，必须允许收缩 */
+  min-width: 0;
 }
 </style>
