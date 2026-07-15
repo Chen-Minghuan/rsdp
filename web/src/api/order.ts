@@ -70,3 +70,37 @@ export async function createOrderInvite(orderId: string): Promise<{ token: strin
   )
   return result.data
 }
+
+/**
+ * 更新订单收件信息与备注（仅 PENDING 可改）。
+ *
+ * @param orderId 订单 ID
+ * @param request 更新请求
+ * @returns 更新后的订单
+ */
+export async function updateOrder(orderId: string, request: {
+  receiverName?: string
+  receiverPhone?: string
+  receiverArea?: string
+  receiverAddress?: string
+  remark?: string
+}): Promise<Order> {
+  const { data: result } = await apiClient.put<ApiResult<Order>>(`/v1/orders/${orderId}`, request)
+  return result.data
+}
+
+/**
+ * 下载采购合同 docx 模板，触发浏览器下载。
+ */
+export async function downloadContractTemplate(): Promise<void> {
+  const response = await apiClient.get('/v1/orders/contract-template', { responseType: 'blob' })
+  const blob = new Blob([response.data as BlobPart], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = '采购合同模板.docx'
+  link.click()
+  window.URL.revokeObjectURL(url)
+}

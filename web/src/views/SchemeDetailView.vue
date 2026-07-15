@@ -24,6 +24,7 @@ import {
 } from 'naive-ui'
 import { getSchemeDetail, generateQuoteFromScheme, setSchemeTemplate, copyFromTemplate } from '@/api/scheme'
 import { exportQuote } from '@/api/quote'
+import { createOrder } from '@/api/order'
 import { listProjects } from '@/api/project'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
@@ -49,6 +50,45 @@ const canEditScheme = computed(() => {
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 const canExportQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_EXPORT))
 const canCreateScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_CREATE))
+const canCreateOrder = computed(() => userStore.hasPermission(PERMISSIONS.ORDER_CREATE))
+
+/** 转订单弹窗。 */
+const showOrderModal = ref(false)
+const orderCreating = ref(false)
+const orderForm = ref({
+  receiverName: '',
+  receiverPhone: '',
+  receiverArea: '',
+  receiverAddress: '',
+  remark: ''
+})
+
+function openOrderModal() {
+  orderForm.value = { receiverName: '', receiverPhone: '', receiverArea: '', receiverAddress: '', remark: '' }
+  showOrderModal.value = true
+}
+
+async function handleCreateOrder() {
+  orderCreating.value = true
+  errorMessage.value = ''
+  try {
+    const result = await createOrder({
+      schemeId: schemeId.value,
+      receiverName: orderForm.value.receiverName || undefined,
+      receiverPhone: orderForm.value.receiverPhone || undefined,
+      receiverArea: orderForm.value.receiverArea || undefined,
+      receiverAddress: orderForm.value.receiverAddress || undefined,
+      remark: orderForm.value.remark || undefined
+    })
+    showOrderModal.value = false
+    message.success(`订单 ${result.orderNo} 已生成`)
+    router.push(`/orders/${result.orderId}`)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '生成订单失败')
+  } finally {
+    orderCreating.value = false
+  }
+}
 
 /** 设为模板弹窗。 */
 const showTemplateModal = ref(false)
@@ -365,6 +405,9 @@ onBeforeRouteUpdate((to) => {
           <n-button v-if="canGenerateQuote" type="primary" :loading="generating" @click="handleGenerateQuote">
             生成报价单
           </n-button>
+          <n-button v-if="canCreateOrder && scheme && !scheme.isTemplate" type="info" @click="openOrderModal">
+            转订单
+          </n-button>
           <n-button v-if="canExportQuote" :loading="exporting" @click="handleExportQuote">
             导出 Excel
           </n-button>
@@ -534,6 +577,41 @@ onBeforeRouteUpdate((to) => {
         <n-space justify="end">
           <n-button @click="showApplyModal = false">取消</n-button>
           <n-button type="primary" :loading="applying" @click="handleApplyTemplate">创建方案</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+    <!-- 转订单弹窗 -->
+    <n-modal
+      v-model:show="showOrderModal"
+      preset="card"
+      title="方案转订单"
+      style="width: 520px;"
+      :mask-closable="false"
+    >
+      <n-form label-placement="left" label-width="90">
+        <n-form-item label="收件人">
+          <n-input v-model:value="orderForm.receiverName" placeholder="收件人姓名（可稍后补充）" />
+        </n-form-item>
+        <n-form-item label="联系电话">
+          <n-input v-model:value="orderForm.receiverPhone" placeholder="联系电话" />
+        </n-form-item>
+        <n-form-item label="收件地区">
+          <n-input v-model:value="orderForm.receiverArea" placeholder="省市区" />
+        </n-form-item>
+        <n-form-item label="详细地址">
+          <n-input v-model:value="orderForm.receiverAddress" placeholder="详细地址" />
+        </n-form-item>
+        <n-form-item label="备注">
+          <n-input v-model:value="orderForm.remark" type="textarea" :rows="3" placeholder="订单备注" />
+        </n-form-item>
+      </n-form>
+      <p style="color: #999; font-size: 12px; margin: 0;">
+        将按当前 RSKU 出厂价 × 全局折扣率生成价格快照，订单生成后价格不可变。
+      </p>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showOrderModal = false">取消</n-button>
+          <n-button type="primary" :loading="orderCreating" @click="handleCreateOrder">生成订单</n-button>
         </n-space>
       </template>
     </n-modal>

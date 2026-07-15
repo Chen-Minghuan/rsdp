@@ -82,6 +82,12 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
   },
   {
+    path: '/orders/:orderId',
+    name: 'OrderDetail',
+    component: () => import('@/views/OrderDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
+  },
+  {
     path: '/statistics',
     name: 'Statistics',
     component: () => import('@/views/StatisticsView.vue'),
