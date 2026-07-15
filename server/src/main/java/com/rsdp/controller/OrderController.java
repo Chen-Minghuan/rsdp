@@ -4,10 +4,14 @@ import com.rsdp.common.Result;
 import com.rsdp.dto.request.OrderCreateRequest;
 import com.rsdp.dto.request.OrderStatusRequest;
 import com.rsdp.dto.request.OrderUpdateRequest;
+import com.rsdp.dto.response.InviteTokenResponse;
 import com.rsdp.dto.response.OrderDetailResponse;
 import com.rsdp.dto.response.OrderListResponse;
 import com.rsdp.dto.response.OrderResponse;
+import com.rsdp.service.ContractTemplateService;
+import com.rsdp.service.OrderInviteService;
 import com.rsdp.service.OrderService;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +25,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+
 /**
  * 设计订单接口。
  */
@@ -31,6 +39,8 @@ import org.springframework.web.bind.annotation.RestController;
 public class OrderController {
 
     private final OrderService orderService;
+    private final OrderInviteService orderInviteService;
+    private final ContractTemplateService contractTemplateService;
 
     /**
      * 由方案生成订单（价格快照 × 全局折扣率）。
@@ -97,5 +107,32 @@ public class OrderController {
         @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId,
         @RequestBody @Valid OrderStatusRequest request) {
         return Result.ok(orderService.updateStatus(orderId, request.getStatus()));
+    }
+
+    /**
+     * 生成订单邀请链接（重新生成后旧链接立即失效）。
+     *
+     * @param orderId 订单 ID
+     * @return 邀请 token 与过期时间
+     */
+    @PostMapping("/{orderId}/invite")
+    public Result<InviteTokenResponse> createInvite(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId) {
+        return Result.ok(orderInviteService.createInvite(orderId));
+    }
+
+    /**
+     * 下载采购合同 docx 模板。
+     *
+     * @param response HTTP 响应
+     * @throws IOException 写出失败时抛出
+     */
+    @GetMapping("/contract-template")
+    public void downloadContractTemplate(HttpServletResponse response) throws IOException {
+        byte[] content = contractTemplateService.generateContractTemplate();
+        response.setContentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        response.setHeader("Content-Disposition",
+            "attachment; filename*=UTF-8''" + URLEncoder.encode("采购合同模板.docx", StandardCharsets.UTF_8));
+        response.getOutputStream().write(content);
     }
 }

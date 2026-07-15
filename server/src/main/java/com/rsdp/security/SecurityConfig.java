@@ -50,6 +50,8 @@ public class SecurityConfig {
                 // 公开接口
                 .requestMatchers("/api/v1/auth/login").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/images/**").permitAll()
+                // 订单邀请公开页（免登录，token 自校验）
+                .requestMatchers("/api/v1/public/**").permitAll()
 
                 // 用户管理（管理员）
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_READ)
@@ -103,6 +105,7 @@ public class SecurityConfig {
                 // 设计订单接口
                 .requestMatchers(HttpMethod.GET, "/api/v1/orders", "/api/v1/orders/**").hasAuthority(Permissions.ORDER_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/orders").hasAuthority(Permissions.ORDER_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/orders/*/invite").hasAuthority(Permissions.ORDER_UPDATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_DELETE)
 
