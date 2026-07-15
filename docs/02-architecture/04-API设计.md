@@ -498,17 +498,19 @@ POST   /api/v1/schemes
 
 GET    /api/v1/schemes
        # 查询搭配方案列表（已实现）
-       # Response: [SchemeSummary...]
+       # Query: isTemplate? (true 仅查模板), tag? (模板标签筛选)
+       # Response: [SchemeSummary...]（含 isTemplate / templateTags）
 
 GET    /api/v1/schemes/{schemeId}
        # 查询搭配方案详情（已实现）
-       # Response: SchemeResponse
+       # Response: SchemeResponse（含 projectId / isTemplate / templateTags）
 
 PUT    /api/v1/schemes/{schemeId}
        # 更新搭配方案（已实现）
        # Request: {
        #   schemeName (max 128 字符),
        #   roomType?,
+       #   projectId?（非空时校验项目归属并更新关联）,
        #   budgetLimit?,
        #   items: [{ rspuId, rskuId, quantity?, sortOrder? }] (1..50 项)
        # }
@@ -525,6 +527,48 @@ POST   /api/v1/schemes/{schemeId}/quote
        #      重新生成报价单时，报价单按 RSKU 最新价格计算；若与快照不一致，
        #      会在 response.priceChanges 中列出变动项：
        #      [{ rspuId, rspuName, rskuId, oldPrice, newPrice }]
+
+PUT    /api/v1/schemes/{schemeId}/template
+       # 设为/取消方案模板（已实现，需 scheme:update + 方案归属）
+       # Request: { isTemplate, templateTags?: string[] }
+       # Response: SchemeResponse
+       # 说明：取消模板时自动清空 templateTags
+
+POST   /api/v1/schemes/{schemeId}/copy-from-template
+       # 套用模板创建新方案（已实现，需 scheme:create）
+       # Request: { projectId, schemeName? }
+       # Response: { scheme: SchemeResponse, priceChanges: [...], skippedRskuIds: [...] }
+       # 说明：复制模板方案项，价格取 RSKU 当前最新价；与模板保存价的差异列入
+       #      priceChanges；已失效 RSKU 跳过并列入 skippedRskuIds；模板自身不修改
+```
+
+### 设计项目
+
+```
+GET    /api/v1/projects
+       # 分页查询项目列表（需 project:read；非 ADMIN 仅可见自己的项目）
+       # Query: keyword?, page=1, size=10
+       # Response: PageResult<ProjectResponse>
+       #   { projectId, projectName, projectType, companyName, ownerId, status,
+       #     remark, schemeCount, totalPrice, createdAt, updatedAt }
+
+POST   /api/v1/projects
+       # 创建设计项目（需 project:create）
+       # Request: { projectName, projectType?, companyName?, remark? }
+       # Response: ProjectResponse
+
+GET    /api/v1/projects/{projectId}
+       # 查询项目详情（需 project:read + 归属或 ADMIN）
+       # Response: ProjectDetailResponse（含 schemes: [SchemeSummary...]）
+
+PUT    /api/v1/projects/{projectId}
+       # 更新设计项目（需 project:update + 归属或 ADMIN）
+       # Request: { projectName, projectType?, companyName?, remark? }
+       # Response: ProjectResponse
+
+DELETE /api/v1/projects/{projectId}
+       # 软删除设计项目（需 project:delete + 归属或 ADMIN）
+       # 说明：项目下方案保留，project_id 置空
 ```
 
 ### 视觉/语义检索
