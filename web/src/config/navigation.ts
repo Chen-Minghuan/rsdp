@@ -56,6 +56,18 @@ export const navGroups: NavGroup[] = [
     ]
   },
   {
+    key: 'statistics',
+    label: '统计',
+    items: [
+      {
+        key: 'statistics',
+        label: '运营统计',
+        path: '/statistics',
+        permission: PERMISSIONS.SCHEME_READ
+      }
+    ]
+  },
+  {
     key: 'entry',
     label: '录入中心',
     items: [
