@@ -43,6 +43,9 @@ DROP TABLE IF EXISTS product_collection_item CASCADE;
 DROP TABLE IF EXISTS product_collection CASCADE;
 DROP TABLE IF EXISTS user_favorite CASCADE;
 DROP TABLE IF EXISTS project CASCADE;
+DROP TABLE IF EXISTS design_order_item CASCADE;
+DROP TABLE IF EXISTS design_order CASCADE;
+DROP TABLE IF EXISTS sys_config CASCADE;
 DROP TABLE IF EXISTS factory_product_capability CASCADE;
 DROP TABLE IF EXISTS sys_user_factory CASCADE;
 DROP TABLE IF EXISTS sys_user_role CASCADE;
@@ -977,6 +980,63 @@ CREATE TABLE IF NOT EXISTS project (
 );
 CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
 
+-- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
+CREATE TABLE IF NOT EXISTS design_order (
+    order_id VARCHAR(40) PRIMARY KEY,
+    order_no VARCHAR(32) NOT NULL UNIQUE,
+    project_id VARCHAR(40) REFERENCES project(project_id),
+    scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
+    receiver_name VARCHAR(64),
+    receiver_phone VARCHAR(32),
+    receiver_area VARCHAR(128),
+    receiver_address VARCHAR(256),
+    original_total_price TEXT,
+    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1,
+    final_total_price TEXT,
+    item_count INT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    expected_lead_time INT,
+    remark VARCHAR(512),
+    invite_token_hash VARCHAR(128),
+    invite_expire_at TIMESTAMP,
+    invite_confirmed_at TIMESTAMP,
+    created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
+
+-- 订单明细（V5 并入）
+CREATE TABLE IF NOT EXISTS design_order_item (
+    id BIGSERIAL PRIMARY KEY,
+    order_id VARCHAR(40) NOT NULL REFERENCES design_order(order_id),
+    rspu_id VARCHAR(40) NOT NULL,
+    rsku_id VARCHAR(40),
+    variant_id VARCHAR(40),
+    product_name VARCHAR(256),
+    model VARCHAR(128),
+    image_id VARCHAR(40),
+    quantity INT NOT NULL DEFAULT 1,
+    original_price TEXT,
+    final_price TEXT,
+    factory_code VARCHAR(16),
+    snapshot_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_item_order ON design_order_item(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_rspu ON design_order_item(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_factory ON design_order_item(factory_code);
+
+-- 轻量配置表（V5 并入）
+CREATE TABLE IF NOT EXISTS sys_config (
+    config_key VARCHAR(64) PRIMARY KEY,
+    config_value TEXT,
+    remark VARCHAR(256),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- =================== 5. 插入种子数据 ===================
 
 -- 产品类别
@@ -1363,6 +1423,35 @@ SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code IN ('VIEWER', 'USER')
   AND p.permission_code = 'project:read'
+ON CONFLICT DO NOTHING;
+
+-- 订单全局折扣率（V5 并入）
+INSERT INTO sys_config (config_key, config_value, remark) VALUES
+('order.price_rate', '1', '订单全局折扣率')
+ON CONFLICT (config_key) DO NOTHING;
+
+-- 订单状态字典（V5 并入）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('design_order_status', 'PENDING', '待确认', 1),
+('design_order_status', 'CONFIRMED', '已确认', 2),
+('design_order_status', 'PRODUCING', '生产中', 3),
+('design_order_status', 'COMPLETED', '已完成', 4),
+('design_order_status', 'CANCELLED', '已取消', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 订单权限（V5 并入；方案约定 ADMIN + DESIGNER 授予，显式补插）
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('order:read', '查看订单'),
+('order:create', '创建订单'),
+('order:update', '编辑订单'),
+('order:delete', '删除订单')
+ON CONFLICT (permission_code) DO NOTHING;
+
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('ADMIN', 'DESIGNER')
+  AND p.permission_code LIKE 'order:%'
 ON CONFLICT DO NOTHING;
 
 -- =================== 开发测试账号（仅在开发/演示环境使用） ===================

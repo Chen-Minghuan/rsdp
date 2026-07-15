@@ -776,3 +776,61 @@ CREATE TABLE IF NOT EXISTS project (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
+
+
+-- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
+CREATE TABLE IF NOT EXISTS design_order (
+    order_id VARCHAR(40) PRIMARY KEY,
+    order_no VARCHAR(32) NOT NULL UNIQUE,
+    project_id VARCHAR(40) REFERENCES project(project_id),
+    scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
+    receiver_name VARCHAR(64),
+    receiver_phone VARCHAR(32),
+    receiver_area VARCHAR(128),
+    receiver_address VARCHAR(256),
+    original_total_price TEXT,
+    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1,
+    final_total_price TEXT,
+    item_count INT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    expected_lead_time INT,
+    remark VARCHAR(512),
+    invite_token_hash VARCHAR(128),
+    invite_expire_at TIMESTAMP,
+    invite_confirmed_at TIMESTAMP,
+    created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
+
+-- 订单明细（V5 并入）
+CREATE TABLE IF NOT EXISTS design_order_item (
+    id BIGSERIAL PRIMARY KEY,
+    order_id VARCHAR(40) NOT NULL REFERENCES design_order(order_id),
+    rspu_id VARCHAR(40) NOT NULL,
+    rsku_id VARCHAR(40),
+    variant_id VARCHAR(40),
+    product_name VARCHAR(256),
+    model VARCHAR(128),
+    image_id VARCHAR(40),
+    quantity INT NOT NULL DEFAULT 1,
+    original_price TEXT,
+    final_price TEXT,
+    factory_code VARCHAR(16),
+    snapshot_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_item_order ON design_order_item(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_rspu ON design_order_item(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_factory ON design_order_item(factory_code);
+
+-- 轻量配置表（V5 并入）
+CREATE TABLE IF NOT EXISTS sys_config (
+    config_key VARCHAR(64) PRIMARY KEY,
+    config_value TEXT,
+    remark VARCHAR(256),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);

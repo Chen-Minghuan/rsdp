@@ -84,6 +84,12 @@ public final class Permissions {
     public static final String PROJECT_UPDATE = "project:update";
     public static final String PROJECT_DELETE = "project:delete";
 
+    // 设计订单
+    public static final String ORDER_READ = "order:read";
+    public static final String ORDER_CREATE = "order:create";
+    public static final String ORDER_UPDATE = "order:update";
+    public static final String ORDER_DELETE = "order:delete";
+
     // 管理后台
     public static final String ADMIN_ASYNC_METRICS = "admin:async-metrics";
     public static final String ADMIN_VECTOR_BACKFILL = "admin:vector-backfill";

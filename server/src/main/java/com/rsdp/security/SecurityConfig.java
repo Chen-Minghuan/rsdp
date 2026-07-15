@@ -100,6 +100,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_DELETE)
 
+                // 设计订单接口
+                .requestMatchers(HttpMethod.GET, "/api/v1/orders", "/api/v1/orders/**").hasAuthority(Permissions.ORDER_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/orders").hasAuthority(Permissions.ORDER_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_DELETE)
+
                 // 检索/推荐接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/matching/**").hasAuthority(Permissions.PRODUCT_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/retrieval/**").hasAuthority(Permissions.PRODUCT_READ)
@@ -142,6 +148,10 @@ public class SecurityConfig {
 
                 // 运营统计接口（复用方案读权限）
                 .requestMatchers(HttpMethod.GET, "/api/v1/statistics/**").hasAuthority(Permissions.SCHEME_READ)
+
+                // 系统配置：读取需订单读权限，修改仅 ADMIN
+                .requestMatchers(HttpMethod.GET, "/api/v1/configs/**").hasAuthority(Permissions.ORDER_READ)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/configs/**").hasRole("ADMIN")
                 // 搭配方案写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_UPDATE)

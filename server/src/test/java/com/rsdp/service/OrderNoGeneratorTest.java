@@ -1,0 +1,49 @@
+package com.rsdp.service;
+
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.rsdp.mapper.DesignOrderMapper;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+/**
+ * {@link OrderNoGenerator} 单元测试。
+ */
+@ExtendWith(MockitoExtension.class)
+class OrderNoGeneratorTest {
+
+    @Mock
+    private DesignOrderMapper designOrderMapper;
+
+    @InjectMocks
+    private OrderNoGenerator orderNoGenerator;
+
+    @Test
+    void generateShouldStartFrom001WhenNoOrdersToday() {
+        when(designOrderMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+
+        String orderNo = orderNoGenerator.generate();
+
+        String datePart = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        assertThat(orderNo).isEqualTo("DO-" + datePart + "-001");
+    }
+
+    @Test
+    void generateShouldIncrementSequenceBasedOnTodayCount() {
+        when(designOrderMapper.selectCount(any(QueryWrapper.class))).thenReturn(9L);
+
+        String orderNo = orderNoGenerator.generate();
+
+        String datePart = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        assertThat(orderNo).isEqualTo("DO-" + datePart + "-010");
+    }
+}

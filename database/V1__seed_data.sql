@@ -373,3 +373,32 @@ FROM sys_role r, sys_permission p
 WHERE r.role_code IN ('VIEWER', 'USER')
   AND p.permission_code = 'project:read'
 ON CONFLICT DO NOTHING;
+
+-- 订单全局折扣率（V5 并入）
+INSERT INTO sys_config (config_key, config_value, remark) VALUES
+('order.price_rate', '1', '订单全局折扣率')
+ON CONFLICT (config_key) DO NOTHING;
+
+-- 订单状态字典（V5 并入）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('design_order_status', 'PENDING', '待确认', 1),
+('design_order_status', 'CONFIRMED', '已确认', 2),
+('design_order_status', 'PRODUCING', '生产中', 3),
+('design_order_status', 'COMPLETED', '已完成', 4),
+('design_order_status', 'CANCELLED', '已取消', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 订单权限（V5 并入；方案约定 ADMIN + DESIGNER 授予，显式补插）
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('order:read', '查看订单'),
+('order:create', '创建订单'),
+('order:update', '编辑订单'),
+('order:delete', '删除订单')
+ON CONFLICT (permission_code) DO NOTHING;
+
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('ADMIN', 'DESIGNER')
+  AND p.permission_code LIKE 'order:%'
+ON CONFLICT DO NOTHING;
