@@ -32,9 +32,10 @@ public class ProjectController {
     private final ProjectService projectService;
 
     /**
-     * 分页查询项目列表（非 ADMIN 仅可见自己的项目）。
+     * 分页查询项目列表。
      *
      * @param keyword 关键词（可选）
+     * @param scope   范围：all=全部（仅 ADMIN 生效），mine=仅自己的（可选）
      * @param page    页码
      * @param size    每页条数
      * @return 分页结果
@@ -42,9 +43,10 @@ public class ProjectController {
     @GetMapping
     public Result<PageResult<ProjectResponse>> list(
         @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) String scope,
         @RequestParam(defaultValue = "1") long page,
         @RequestParam(defaultValue = "10") long size) {
-        return Result.ok(projectService.list(keyword, page, size));
+        return Result.ok(projectService.list(keyword, scope, page, size));
     }
 
     /**

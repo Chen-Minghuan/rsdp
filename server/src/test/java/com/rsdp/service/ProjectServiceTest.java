@@ -164,11 +164,49 @@ class ProjectServiceTest {
             when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
             when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
 
-            PageResult<ProjectResponse> result = projectService.list(null, 1, 10);
+            PageResult<ProjectResponse> result = projectService.list(null, null, 1, 10);
 
             assertThat(result.getTotal()).isEqualTo(1);
             assertThat(result.getRows()).hasSize(1);
             assertThat(result.getRows().get(0).getProjectName()).isEqualTo("滨江一号全屋");
         }
+    }
+
+    @Test
+    void listShouldApplyOwnerFilterWhenAdminChoosesMine() {
+        Page<Project> page = Page.of(1, 10);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(projectMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("admin-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(true);
+
+            projectService.list(null, "mine", 1, 10);
+        }
+
+        ArgumentCaptor<QueryWrapper> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(projectMapper).selectPage(any(Page.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).contains("owner_id");
+    }
+
+    @Test
+    void listShouldSkipOwnerFilterWhenAdminChoosesAll() {
+        Page<Project> page = Page.of(1, 10);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(projectMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("admin-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(true);
+
+            projectService.list(null, "all", 1, 10);
+        }
+
+        ArgumentCaptor<QueryWrapper> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(projectMapper).selectPage(any(Page.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).doesNotContain("owner_id");
     }
 }

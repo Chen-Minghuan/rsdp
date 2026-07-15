@@ -17,6 +17,8 @@ import {
   NTag,
   NPagination,
   NAlert,
+  NRadioGroup,
+  NRadioButton,
   useDialog,
   useMessage,
   type FormRules
@@ -25,7 +27,7 @@ import PageContainer from '@/components/PageContainer.vue'
 import { listProjects, createProject, deleteProject } from '@/api/project'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { Project, ProjectRequest } from '@/types/project'
 import type { DictItem } from '@/types/dict'
 
@@ -36,6 +38,10 @@ const userStore = useUserStore()
 
 const canCreateProject = computed(() => userStore.hasPermission(PERMISSIONS.PROJECT_CREATE))
 const canDeleteProject = computed(() => userStore.hasPermission(PERMISSIONS.PROJECT_DELETE))
+const isAdmin = computed(() => userStore.hasRole(ROLES.ADMIN))
+
+/** 运营视角：ADMIN 可切换全部/我的项目，默认全部。 */
+const scope = ref<'all' | 'mine'>('all')
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -74,6 +80,7 @@ async function loadProjects() {
   try {
     const result = await listProjects({
       keyword: keyword.value || undefined,
+      scope: isAdmin.value ? scope.value : undefined,
       page: page.value,
       size: size.value
     })
@@ -87,6 +94,12 @@ async function loadProjects() {
 }
 
 function handleSearch() {
+  page.value = 1
+  loadProjects()
+}
+
+function handleScopeChange(value: 'all' | 'mine') {
+  scope.value = value
   page.value = 1
   loadProjects()
 }
@@ -169,6 +182,15 @@ onMounted(async () => {
 <template>
   <PageContainer title="设计项目" subtitle="按项目组织方案与报价">
     <template #actions>
+      <n-radio-group
+        v-if="isAdmin"
+        :value="scope"
+        size="small"
+        @update:value="(value: 'all' | 'mine') => handleScopeChange(value)"
+      >
+        <n-radio-button value="all">全部项目</n-radio-button>
+        <n-radio-button value="mine">我的项目</n-radio-button>
+      </n-radio-group>
       <n-input
         v-model:value="keyword"
         placeholder="搜索项目名称或企业"
@@ -203,6 +225,7 @@ onMounted(async () => {
               </n-tag>
             </div>
             <div class="card-company">{{ project.companyName || '未填写企业' }}</div>
+            <div v-if="isAdmin && scope === 'all'" class="card-owner">负责人：{{ project.ownerId }}</div>
             <div class="card-stats">
               <span>{{ project.schemeCount }} 个方案</span>
               <span class="card-price">{{ formatPrice(project.totalPrice) }}</span>
@@ -304,6 +327,12 @@ onMounted(async () => {
 .card-company {
   margin-top: 6px;
   font-size: 13px;
+  color: var(--rsdp-text-secondary);
+}
+
+.card-owner {
+  margin-top: 2px;
+  font-size: 12px;
   color: var(--rsdp-text-secondary);
 }
 

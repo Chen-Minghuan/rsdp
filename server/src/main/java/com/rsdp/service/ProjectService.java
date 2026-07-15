@@ -39,17 +39,21 @@ public class ProjectService {
     private final SchemeMapper schemeMapper;
 
     /**
-     * 分页查询项目列表（非 ADMIN 仅可见自己的项目）。
+     * 分页查询项目列表。
      *
      * @param keyword 关键词（匹配项目名称/企业名称，可选）
+     * @param scope   范围：all=全部（仅 ADMIN 生效），mine=仅自己的；为空时非 ADMIN 仅自己的、ADMIN 全部
      * @param page    页码（从 1 开始）
      * @param size    每页条数
      * @return 分页结果
      */
-    public PageResult<ProjectResponse> list(String keyword, long page, long size) {
+    public PageResult<ProjectResponse> list(String keyword, String scope, long page, long size) {
         String userId = currentUserIdRequired();
+        boolean admin = SecurityOperatorContext.isCurrentUserAdmin();
+        boolean ownerOnly = !admin || "mine".equalsIgnoreCase(scope);
+
         QueryWrapper<Project> wrapper = new QueryWrapper<>();
-        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+        if (ownerOnly) {
             wrapper.eq("owner_id", userId);
         }
         if (StringUtils.hasText(keyword)) {

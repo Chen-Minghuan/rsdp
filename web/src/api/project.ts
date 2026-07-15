@@ -3,13 +3,14 @@ import type { PageResult } from '@/types/product'
 import type { Project, ProjectDetail, ProjectRequest } from '@/types/project'
 
 /**
- * 分页查询项目列表（非 ADMIN 仅可见自己的项目）。
+ * 分页查询项目列表。
  *
- * @param params 查询参数
+ * @param params 查询参数（scope=all 仅 ADMIN 生效，mine=仅自己的）
  * @returns 分页结果
  */
 export async function listProjects(params: {
   keyword?: string
+  scope?: 'all' | 'mine'
   page?: number
   size?: number
 }): Promise<PageResult<Project>> {
