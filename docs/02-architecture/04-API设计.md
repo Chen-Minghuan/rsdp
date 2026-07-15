@@ -547,7 +547,7 @@ POST   /api/v1/schemes/{schemeId}/copy-from-template
 ```
 GET    /api/v1/projects
        # 分页查询项目列表（需 project:read；非 ADMIN 仅可见自己的项目）
-       # Query: keyword?, page=1, size=10
+       # Query: keyword?, scope? (all=全部，仅 ADMIN 生效；mine=仅自己的), page=1, size=10
        # Response: PageResult<ProjectResponse>
        #   { projectId, projectName, projectType, companyName, ownerId, status,
        #     remark, schemeCount, totalPrice, createdAt, updatedAt }
@@ -569,6 +569,23 @@ PUT    /api/v1/projects/{projectId}
 DELETE /api/v1/projects/{projectId}
        # 软删除设计项目（需 project:delete + 归属或 ADMIN）
        # 说明：项目下方案保留，project_id 置空
+```
+
+### 运营统计
+
+```
+GET    /api/v1/statistics/overview
+       # 统计总览（需 scheme:read；非 ADMIN 仅统计自己的方案/项目）
+       # Response: { schemeCount, totalAmount, projectCount, avgSchemeAmount, monthNewSchemes }
+
+GET    /api/v1/statistics/trends
+       # 按月趋势（需 scheme:read；缺失月份补零）
+       # Query: months=6 (1~24)
+       # Response: [{ month, schemeCount, totalAmount }]
+
+GET    /api/v1/statistics/factories
+       # 工厂维度方案金额 TOP10（需 scheme:read；按方案项出厂价×数量聚合）
+       # Response: [{ factoryCode, factoryName, totalAmount, itemCount }]
 ```
 
 ### 视觉/语义检索
