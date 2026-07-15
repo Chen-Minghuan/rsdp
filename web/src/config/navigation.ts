@@ -56,6 +56,19 @@ export const navGroups: NavGroup[] = [
     ]
   },
   {
+    key: 'orders',
+    label: '订单',
+    items: [
+      {
+        key: 'order-list',
+        label: '设计订单',
+        path: '/orders',
+        permission: PERMISSIONS.ORDER_READ,
+        activeMatch: 'prefix'
+      }
+    ]
+  },
+  {
     key: 'statistics',
     label: '统计',
     items: [
