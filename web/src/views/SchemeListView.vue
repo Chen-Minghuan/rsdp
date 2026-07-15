@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, h, computed, onMounted } from 'vue'
+import { ref, h, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NCard,
@@ -11,6 +11,9 @@ import {
   NAlert,
   NPopconfirm,
   NPagination,
+  NSwitch,
+  NSelect,
+  NTag,
   type DataTableColumns
 } from 'naive-ui'
 import { listSchemes, deleteScheme } from '@/api/scheme'
@@ -32,6 +35,15 @@ const canDeleteScheme = (row: SchemeSummary) =>
 const loading = ref(false)
 const errorMessage = ref('')
 const schemes = ref<SchemeSummary[]>([])
+
+/** 模板筛选：仅看模板 + 标签筛选。 */
+const templateOnly = ref(false)
+const tagFilter = ref<string | null>(null)
+const tagOptions = computed(() => {
+  const tags = new Set<string>()
+  schemes.value.forEach(s => s.templateTags?.forEach(t => tags.add(t)))
+  return [...tags].map(t => ({ label: t, value: t }))
+})
 
 const page = ref(1)
 const pageSize = ref(10)
@@ -73,6 +85,26 @@ const columns: DataTableColumns<SchemeSummary> = [
     width: 180,
     render(row: SchemeSummary) {
       return formatDateTime(row.createdAt)
+    }
+  },
+  {
+    title: '模板',
+    key: 'isTemplate',
+    width: 180,
+    render(row: SchemeSummary) {
+      if (!row.isTemplate) return '-'
+      return h(
+        NSpace,
+        { size: 4 },
+        {
+          default: () => [
+            h(NTag, { size: 'small', type: 'warning' }, { default: () => '模板' }),
+            ...(row.templateTags ?? []).map(t =>
+              h(NTag, { size: 'small' }, { default: () => t })
+            )
+          ]
+        }
+      )
     }
   },
   {
@@ -118,7 +150,10 @@ async function loadSchemes() {
   loading.value = true
   errorMessage.value = ''
   try {
-    schemes.value = await listSchemes()
+    schemes.value = await listSchemes({
+      isTemplate: templateOnly.value || undefined,
+      tag: tagFilter.value || undefined
+    })
     page.value = 1
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载方案列表失败'
@@ -126,6 +161,10 @@ async function loadSchemes() {
     loading.value = false
   }
 }
+
+watch([templateOnly, tagFilter], () => {
+  loadSchemes()
+})
 
 async function handleDelete(schemeId: string) {
   try {
@@ -148,6 +187,20 @@ onMounted(() => {
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回产品库</n-button>
           <n-button v-if="canCreateScheme" type="primary" @click="router.push('/quotes/build')">新建搭配方案</n-button>
+        </n-space>
+
+        <n-space align="center">
+          <n-switch v-model:value="templateOnly">
+            <template #checked>仅看模板</template>
+            <template #unchecked>仅看模板</template>
+          </n-switch>
+          <n-select
+            v-model:value="tagFilter"
+            :options="tagOptions"
+            clearable
+            placeholder="按模板标签筛选"
+            style="width: 200px;"
+          />
         </n-space>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
