@@ -64,7 +64,14 @@ export const navGroups: NavGroup[] = [
         label: '设计订单',
         path: '/orders',
         permission: PERMISSIONS.ORDER_READ,
-        activeMatch: 'prefix'
+        activeMatch: 'prefix',
+        activeExcludes: ['/orders/statistics']
+      },
+      {
+        key: 'order-statistics',
+        label: '订单统计',
+        path: '/orders/statistics',
+        permission: PERMISSIONS.ORDER_READ
       }
     ]
   },

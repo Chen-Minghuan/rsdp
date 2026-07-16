@@ -88,6 +88,13 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
   },
   {
+    // 静态路径优先于 /orders/:orderId 匹配，声明顺序保持在详情之前
+    path: '/orders/statistics',
+    name: 'OrderStatistics',
+    component: () => import('@/views/OrderStatisticsView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
+  },
+  {
     path: '/orders/:orderId',
     name: 'OrderDetail',
     component: () => import('@/views/OrderDetailView.vue'),
