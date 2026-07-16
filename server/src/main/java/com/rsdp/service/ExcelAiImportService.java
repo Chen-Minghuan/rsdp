@@ -107,6 +107,7 @@ public class ExcelAiImportService {
         - colorCode（颜色码；对应：颜色码、COLOR CODE）
         - materialCode（材质码，字典码如 WO/PE/FA；对应：材质码、面料码、MATERIAL CODE）
         - dimensions（尺寸文字，如 800*900*1000mm；对应：尺寸、产品尺寸、SIZE CM、DIMENSIONS）
+        - leadTimeDays（交期天数，数字，单位天；对应：交期、货期、生产周期、交货期、PRODUCTION CYCLE、LEAD TIME）
 
         复合表头处理规则：
         - 「型号品名」这类同时包含型号和名称的列，请映射为 "externalCode,productName"（用英文逗号分隔）。
@@ -121,7 +122,6 @@ public class ExcelAiImportService {
 
         无需映射的列：
         - 产品图样/PICTURE/图片/IMAGE 等含图片列：value 填 null，系统会自动提取内嵌图片。
-        - 交期/PRODUCTION CYCLE 等供应字段：当前作为整行共用属性处理，单独列 value 填 null。
 
         输出 JSON：
         {
@@ -169,7 +169,7 @@ public class ExcelAiImportService {
         validateFile(file);
 
         byte[] fileBytes = readFileBytes(file);
-        List<Map<Integer, String>> rawRows = parseExcelRaw(fileBytes);
+        List<IndexedRow> rawRows = parseExcelRaw(fileBytes);
         if (rawRows.isEmpty()) {
             throw new BusinessException("Excel 文件为空");
         }
@@ -178,9 +178,9 @@ public class ExcelAiImportService {
         }
 
         // 检测并合并多行表头
-        int headerRowCount = detectHeaderRowCount(rawRows);
-        List<Map<Integer, String>> headerRows = rawRows.subList(0, headerRowCount);
-        List<Map<Integer, String>> dataRows = rawRows.subList(headerRowCount, rawRows.size());
+        int headerRowCount = detectHeaderRowCount(valuesOf(rawRows));
+        List<Map<Integer, String>> headerRows = valuesOf(rawRows.subList(0, headerRowCount));
+        List<Map<Integer, String>> dataRows = valuesOf(rawRows.subList(headerRowCount, rawRows.size()));
 
         Map<Integer, String> mergedHeaders = ExcelHeaderNormalizer.mergeHeaderRows(headerRows);
         Map<Integer, String> cleanHeaders = new LinkedHashMap<>();
@@ -233,11 +233,15 @@ public class ExcelAiImportService {
             throw new BusinessException("Excel 数据为空，无法导入");
         }
 
+        // 型号/品名列向下填充（纵向合并单元格语义，模块行继承上行型号）
+        forwardFillKeyColumns(rawDataRows, mapping);
+
         List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
         List<PriceColumnInfo> selectedPriceColumns = filterSelectedPriceColumns(priceColumns, request.getSelectedPriceColumns());
 
-        // 从 storage 读取原始 Excel，提取内嵌图片
+        // 从 storage 读取原始 Excel，提取内嵌图片并重建数据行物理行号（图片锚点行对齐用）
         Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages = loadEmbeddedImages(batch);
+        List<Integer> dataRowPhysicalIndexes = loadDataRowPhysicalIndexes(batch);
 
         Map<String, List<CategoryDict>> dictCache = preloadDicts();
         ExcelAiImportResult result = new ExcelAiImportResult();
@@ -252,13 +256,20 @@ public class ExcelAiImportService {
         applyBatchFactoryInfo(batch, request);
 
         int rowIndex = 1; // 第 1 行为表头
+        int dataRowOrdinal = 0;
         for (Map<String, String> dataRow : rawDataRows) {
             rowIndex++;
+            // 数据行物理行号：优先取重建结果（与 previewRows 顺序一一对应），缺失回退旧换算
+            Integer physicalRowIndex =
+                dataRowPhysicalIndexes != null && dataRowOrdinal < dataRowPhysicalIndexes.size()
+                    ? dataRowPhysicalIndexes.get(dataRowOrdinal)
+                    : null;
+            dataRowOrdinal++;
             Long importRowId = null;
             try {
                 importRowId = excelImportRowService.initRow(batch.getBatchId(), rowIndex, "product", dataRow, null);
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
-                    selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId);
+                    selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex);
                 if (rowResult.rspuId != null) {
                     rspuIds.add(rowResult.rspuId);
                     excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
@@ -346,13 +357,23 @@ public class ExcelAiImportService {
         }
     }
 
-    private List<Map<Integer, String>> parseExcelRaw(byte[] fileBytes) {
-        List<Map<Integer, String>> rows = new ArrayList<>();
+    /**
+     * 解析 Excel 全部非空行，并保留每行的物理行号（0-based）。
+     *
+     * <p>物理行号用于将 EasyExcel 行与 POI 图片锚点行精确对齐——真实工厂表格
+     * 常见双行表头/标题行/中间空行，不能用「数据序号 + 1」反推物理行号。</p>
+     *
+     * @param fileBytes Excel 文件字节
+     * @return 非空行列表（含物理行号）
+     */
+    private List<IndexedRow> parseExcelRaw(byte[] fileBytes) {
+        List<IndexedRow> rows = new ArrayList<>();
         try (InputStream stream = new ByteArrayInputStream(fileBytes)) {
             EasyExcel.read(stream, new ReadListener<Map<Integer, String>>() {
                 @Override
                 public void invoke(Map<Integer, String> row, AnalysisContext context) {
-                    rows.add(row);
+                    Integer rowIndex = context.readRowHolder().getRowIndex();
+                    rows.add(new IndexedRow(rowIndex != null ? rowIndex : rows.size(), row));
                 }
 
                 @Override
@@ -364,6 +385,22 @@ public class ExcelAiImportService {
             throw new BusinessException("解析 Excel 失败，请检查文件格式");
         }
         return rows;
+    }
+
+    /**
+     * 提取行的数据部分（丢弃物理行号）。
+     *
+     * @param rows 含物理行号的行列表
+     * @return 数据行列表
+     */
+    private List<Map<Integer, String>> valuesOf(List<IndexedRow> rows) {
+        return rows.stream().map(IndexedRow::values).toList();
+    }
+
+    /**
+     * Excel 非空行（含物理行号，0-based）。
+     */
+    record IndexedRow(int physicalRowIndex, Map<Integer, String> values) {
     }
 
     private String buildHeadersText(Map<Integer, String> headerMap) {
@@ -523,6 +560,78 @@ public class ExcelAiImportService {
         return !hasAnyValue;
     }
 
+    /**
+     * 判断一行是否是「重复表头行」：工厂 Excel 常在每个品类区块前重复一次表头，
+     * 此类行的单元格值与列名高度自指（如「价格-A级布」列的值为「A级布」、
+     * 「型号品名」列的值为「型号品名」），而非真实产品数据。
+     *
+     * @param dataRow 数据行（表头 → 值）
+     * @return 多数非空值均与各自列名自指时为 true
+     */
+    private boolean isRepeatedHeaderRow(Map<String, String> dataRow) {
+        if (dataRow == null || dataRow.isEmpty()) {
+            return false;
+        }
+        int nonBlank = 0;
+        int selfRef = 0;
+        for (Map.Entry<String, String> entry : dataRow.entrySet()) {
+            if (!StringUtils.hasText(entry.getValue())) {
+                continue;
+            }
+            String value = ExcelHeaderNormalizer.clean(entry.getValue());
+            if (!StringUtils.hasText(value) || value.length() < 2) {
+                continue;
+            }
+            nonBlank++;
+            String header = ExcelHeaderNormalizer.clean(entry.getKey());
+            if (StringUtils.hasText(header) && header.contains(value)) {
+                selfRef++;
+            }
+        }
+        return nonBlank >= 2 && selfRef >= 2 && selfRef * 2 >= nonBlank;
+    }
+
+    /**
+     * 型号/品名列向下填充（纵向合并单元格语义）。
+     *
+     * <p>工厂 Excel 常把「型号品名」做成纵向合并单元格：同一产品的多个模块行
+     * 只有首行有型号，后续行该列为空。导入前把映射到 externalCode/productName
+     * 的列向下填充，让模块行继承所属产品的型号品名。重复表头行不参与填充，
+     * 避免表头文本污染。</p>
+     *
+     * @param dataRows 数据行列表（就地修改）
+     * @param mapping  确认后的字段映射（表头 → 标准字段）
+     */
+    private void forwardFillKeyColumns(List<Map<String, String>> dataRows, Map<String, String> mapping) {
+        List<String> fillHeaders = mapping.entrySet().stream()
+            .filter(e -> {
+                String field = e.getValue();
+                return field != null && (field.contains("externalCode") || field.contains("productName"));
+            })
+            .map(Map.Entry::getKey)
+            .toList();
+        if (fillHeaders.isEmpty()) {
+            return;
+        }
+        Map<String, String> lastValues = new HashMap<>();
+        for (Map<String, String> row : dataRows) {
+            if (isRepeatedHeaderRow(row)) {
+                continue;
+            }
+            for (String header : fillHeaders) {
+                String value = row.get(header);
+                if (StringUtils.hasText(value)) {
+                    lastValues.put(header, value);
+                } else {
+                    String last = lastValues.get(header);
+                    if (last != null) {
+                        row.put(header, last);
+                    }
+                }
+            }
+        }
+    }
+
     private Map<String, String> sanitizeMapping(Map<String, String> mapping) {
         if (mapping == null) {
             return Map.of();
@@ -577,6 +686,10 @@ public class ExcelAiImportService {
         }
         if (h.contains("变体") || h.contains("模块") || h.contains("module") || h.contains("component")) {
             return "variantDisplayName";
+        }
+        if (h.contains("交期") || h.contains("货期") || h.contains("生产周期") || h.contains("交货期")
+            || h.contains("lead time") || h.contains("cycle")) {
+            return "leadTimeDays";
         }
         if (h.contains("价格") || h.contains("price") || h.contains("出厂价")) {
             return "referencePriceBand";
@@ -726,6 +839,35 @@ public class ExcelAiImportService {
         }
     }
 
+    /**
+     * 重建导入数据行的物理行号序列（与 previewRows 顺序一一对应）。
+     *
+     * <p>与预览时解析同一原始文件（EasyExcel 行序确定，两次解析必然一致），
+     * 用真实物理行号把数据行与 POI 图片锚点行精确对齐，根治「表头行数假设」
+     * 导致的图片挂错行问题。失败时返回 null，调用方回退旧的序号换算行为。</p>
+     *
+     * @param batch 导入批次
+     * @return 数据行物理行号列表（0-based），失败为 null
+     */
+    private List<Integer> loadDataRowPhysicalIndexes(ExcelImportBatch batch) {
+        if (!StringUtils.hasText(batch.getStoragePath())) {
+            return null;
+        }
+        try (InputStream in = storageService.get(batch.getStoragePath())) {
+            byte[] bytes = in.readAllBytes();
+            List<IndexedRow> rawRows = parseExcelRaw(bytes);
+            int headerRowCount = detectHeaderRowCount(valuesOf(rawRows));
+            List<Integer> indexes = new ArrayList<>();
+            for (int i = headerRowCount; i < rawRows.size(); i++) {
+                indexes.add(rawRows.get(i).physicalRowIndex());
+            }
+            return indexes;
+        } catch (Exception e) {
+            log.warn("重建数据行物理行号失败，batchId={}", batch.getBatchId(), e);
+            return null;
+        }
+    }
+
     private Map<String, List<CategoryDict>> preloadDicts() {
         Map<String, List<CategoryDict>> cache = new HashMap<>();
         cache.put("category", safeList(dictService.listByType("category")));
@@ -748,12 +890,12 @@ public class ExcelAiImportService {
                                               ExcelAiMappingRequest request,
                                               Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages,
                                               Map<String, List<CategoryDict>> dictCache, int rowIndex,
-                                              Long importRowId) {
+                                              Long importRowId, Integer physicalRowIndex) {
         DefaultTransactionDefinition def = new DefaultTransactionDefinition();
         TransactionStatus status = transactionManager.getTransaction(def);
         try {
             RowResult result = processRow(dataRow, mapping, categoryHint, priceColumns, request,
-                embeddedImages, dictCache, rowIndex, importRowId);
+                embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex);
             transactionManager.commit(status);
             return result;
         } catch (Exception e) {
@@ -769,10 +911,15 @@ public class ExcelAiImportService {
                                  List<PriceColumnInfo> priceColumns,
                                  ExcelAiMappingRequest request,
                                  Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages,
-                                 Map<String, List<CategoryDict>> dictCache, int rowIndex, Long importRowId) {
+                                 Map<String, List<CategoryDict>> dictCache, int rowIndex, Long importRowId,
+                                 Integer physicalRowIndex) {
         if (isNoteOrEmptyRow(dataRow)) {
             log.debug("第 {} 行为说明或空行，已跳过", rowIndex);
             return RowResult.skipped("说明或空行");
+        }
+        if (isRepeatedHeaderRow(dataRow)) {
+            log.debug("第 {} 行为重复表头行，已跳过", rowIndex);
+            return RowResult.skipped("重复表头行");
         }
 
         excelImportRowService.updateStage(importRowId, "build_product_row");
@@ -785,7 +932,7 @@ public class ExcelAiImportService {
         excelImportRowService.updateStage(importRowId, "download_images");
         List<DownloadedImage> images = new ArrayList<>();
         images.addAll(downloadUrlImages(row, rowIndex));
-        images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex));
+        images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex));
 
         excelImportRowService.updateStage(importRowId, "create_rspu");
         String rspuId = createRspu(row, dictCache);
@@ -847,6 +994,7 @@ public class ExcelAiImportService {
         row.setSizeCode(getValue(standardValues, "sizeCode"));
         row.setColorCode(getValue(standardValues, "colorCode"));
         row.setMaterialCode(getValue(standardValues, "materialCode"));
+        row.setLeadTimeDays(parseDaysValue(getValue(standardValues, "leadTimeDays")));
 
         String categoryCode = getValue(standardValues, "categoryCode");
         if (!StringUtils.hasText(categoryCode)) {
@@ -902,6 +1050,27 @@ public class ExcelAiImportService {
         }
         try {
             return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 解析天数类数值，容忍「30天」「约30天」「25-30天」等写法（取首个数字串）。
+     *
+     * @param value 原始文本
+     * @return 天数，无法解析时为 null
+     */
+    private Integer parseDaysValue(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d+").matcher(value);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(matcher.group());
         } catch (NumberFormatException e) {
             return null;
         }
@@ -1055,14 +1224,12 @@ public class ExcelAiImportService {
     }
 
     private List<DownloadedImage> extractEmbeddedImagesForRow(
-        Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages, int rowIndex) {
-        // rowIndex 是全局数据行号（从 2 开始，第 1 行为表头）
-        // Excel 物理行号 = rowIndex - 1（因为表头占第 0 行）
-        // ExcelImageExtractor 的 key 格式为 "sheetIndex,physicalRowIndex"
-        // rowIndex 从表头开始为 1，表头对应 physicalRowIndex=0，所以 physicalRowIndex = rowIndex - 1
-        // 这里只处理第一个 Sheet 的内嵌图片，后续可扩展
-        int physicalRowIndex = rowIndex - 1;
-        String key = "0," + physicalRowIndex;
+        Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages, int rowIndex, Integer physicalRowIndex) {
+        // 物理行号（0-based）：优先取导入时重建的真实行号（双行表头/标题行/空行场景仍精确）；
+        // 缺失时回退旧的「rowIndex - 1」换算（表头 1 行假设），保证行为不劣化。
+        // ExcelImageExtractor 的 key 格式为 "sheetIndex,physicalRowIndex"，这里只处理第一个 Sheet。
+        int physicalRow = physicalRowIndex != null ? physicalRowIndex : rowIndex - 1;
+        String key = "0," + physicalRow;
         List<ExcelImageExtractor.EmbeddedImage> images = embeddedImages.get(key);
         if (images == null || images.isEmpty()) {
             return Collections.emptyList();
@@ -1172,17 +1339,22 @@ public class ExcelAiImportService {
         Integer moq = request.getDefaultMoq() != null ? request.getDefaultMoq() : 1;
         String categoryCode = baseRow.getCategoryCode();
 
-        // 创建 RSPU-工厂映射（仅当指定工厂时）
+        // 创建 RSPU-工厂映射（仅当指定工厂时）；交期行级 Excel 值优先于请求默认值
         if (factoryCode != null) {
+            Integer mappingLeadTimeDays = baseRow.getLeadTimeDays() != null
+                ? baseRow.getLeadTimeDays()
+                : request.getDefaultLeadTimeDays();
             createRspuFactoryMapping(rspuId, factoryCode, shippingWarehouseId, moq,
-                request.getDefaultLeadTimeDays(), importRowId);
+                mappingLeadTimeDays, importRowId);
         }
 
         String firstVariantId = null;
         // 为每个选中的价格列创建变体 + RSKU
         if (priceColumns != null && !priceColumns.isEmpty()) {
             for (PriceColumnInfo priceColumn : priceColumns) {
-                String priceText = dataRow.getOrDefault(priceColumn.getHeader(), "").trim();
+                // 注意：previewRows 中价格列可能 key 存在但 value 为 null，必须先判空再 trim
+                String rawPrice = dataRow.get(priceColumn.getHeader());
+                String priceText = rawPrice != null ? rawPrice.trim() : "";
                 if (!StringUtils.hasText(priceText)) {
                     continue;
                 }
@@ -1196,9 +1368,11 @@ public class ExcelAiImportService {
                 String materialGradeCode = resolveMaterialGradeCode(materialName);
                 String materialCode = resolveMaterialCode(materialName, dictCache.get("material"));
 
-                // 动态计算交期
-                Integer leadTimeDays = calculateLeadTime(factoryCode, categoryCode, materialGradeCode,
-                    request.getDefaultLeadTimeDays());
+                // 交期：行级 Excel 值优先，否则按工厂交期规则动态计算
+                Integer leadTimeDays = baseRow.getLeadTimeDays() != null
+                    ? baseRow.getLeadTimeDays()
+                    : calculateLeadTime(factoryCode, categoryCode, materialGradeCode,
+                        request.getDefaultLeadTimeDays());
 
                 // 创建变体
                 RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
@@ -1292,16 +1466,6 @@ public class ExcelAiImportService {
             case "SS级全皮" -> "LEATHER_SS";
             default -> null;
         };
-    }
-
-    private Integer parseLeadTimeDays(Map<String, String> dataRow) {
-        for (Map.Entry<String, String> entry : dataRow.entrySet()) {
-            String header = ExcelHeaderNormalizer.clean(entry.getKey());
-            if (header.contains("交期") || header.contains("周期") || header.contains("cycle")) {
-                return parseInt(entry.getValue());
-            }
-        }
-        return null;
     }
 
     private BigDecimal parsePrice(String text) {

@@ -53,7 +53,8 @@ const STANDARD_FIELDS = [
   { label: '尺寸码 (sizeCode)', value: 'sizeCode' },
   { label: '颜色码 (colorCode)', value: 'colorCode' },
   { label: '材质码 (materialCode)', value: 'materialCode' },
-  { label: '尺寸文字 (dimensions)', value: 'dimensions' }
+  { label: '尺寸文字 (dimensions)', value: 'dimensions' },
+  { label: '交期天数 (leadTimeDays)', value: 'leadTimeDays' }
 ]
 
 const fileList = ref<UploadFileInfo[]>([])
