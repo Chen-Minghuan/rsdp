@@ -60,6 +60,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -239,9 +240,9 @@ public class ExcelAiImportService {
         List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
         List<PriceColumnInfo> selectedPriceColumns = filterSelectedPriceColumns(priceColumns, request.getSelectedPriceColumns());
 
-        // 从 storage 读取原始 Excel，提取内嵌图片并重建数据行物理行号（图片锚点行对齐用）
+        // 从 storage 读取原始 Excel，提取内嵌图片并重建数据行物理布局（图片锚点行/列对齐用）
         Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages = loadEmbeddedImages(batch);
-        List<Integer> dataRowPhysicalIndexes = loadDataRowPhysicalIndexes(batch);
+        PhysicalLayout physicalLayout = loadPhysicalLayout(batch);
 
         Map<String, List<CategoryDict>> dictCache = preloadDicts();
         ExcelAiImportResult result = new ExcelAiImportResult();
@@ -257,23 +258,36 @@ public class ExcelAiImportService {
 
         int rowIndex = 1; // 第 1 行为表头
         int dataRowOrdinal = 0;
+        ProductGroup currentGroup = null;
         for (Map<String, String> dataRow : rawDataRows) {
             rowIndex++;
             // 数据行物理行号：优先取重建结果（与 previewRows 顺序一一对应），缺失回退旧换算
             Integer physicalRowIndex =
-                dataRowPhysicalIndexes != null && dataRowOrdinal < dataRowPhysicalIndexes.size()
-                    ? dataRowPhysicalIndexes.get(dataRowOrdinal)
+                physicalLayout != null && dataRowOrdinal < physicalLayout.dataRowPhysicalIndexes().size()
+                    ? physicalLayout.dataRowPhysicalIndexes().get(dataRowOrdinal)
                     : null;
             dataRowOrdinal++;
             Long importRowId = null;
             try {
                 importRowId = excelImportRowService.initRow(batch.getBatchId(), rowIndex, "product", dataRow, null);
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
-                    selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex);
+                    selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
+                    currentGroup, physicalLayout);
                 if (rowResult.rspuId != null) {
                     rspuIds.add(rowResult.rspuId);
                     excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
                         rowResult.rskuIds, rowResult.imageCount, rowResult.imageAssetIds, rowResult.taskId);
+                    // 行提交成功后更新产品组状态（回滚行不影响组）
+                    if (rowResult.createdNewRspu) {
+                        currentGroup = new ProductGroup();
+                        currentGroup.externalCode = rowResult.groupKey;
+                        currentGroup.rspuId = rowResult.rspuId;
+                        currentGroup.hasPrimaryImage = rowResult.primaryImageSaved;
+                        currentGroup.hasAiTask = rowResult.taskId != null;
+                    } else if (currentGroup != null) {
+                        currentGroup.hasPrimaryImage |= rowResult.primaryImageSaved;
+                        currentGroup.hasAiTask |= rowResult.taskId != null;
+                    }
                 } else if (rowResult.skipped) {
                     excelImportRowService.markSkipped(importRowId, rowResult.skipReason);
                 }
@@ -553,7 +567,8 @@ public class ExcelAiImportService {
             hasAnyValue = true;
             String v = value.trim();
             if (v.contains("产品下单说明") || v.contains("注意事项") || v.contains("温馨提示")
-                || v.startsWith("由于") || v.contains("特别声明") || v.contains("免责声明")) {
+                || v.startsWith("由于") || v.contains("特别声明") || v.contains("免责声明")
+                || v.contains("更新日期") || v.contains("修订日期") || v.startsWith("更新：")) {
                 return true;
             }
         }
@@ -840,30 +855,48 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 重建导入数据行的物理行号序列（与 previewRows 顺序一一对应）。
+     * 重建导入数据行的物理布局（与 previewRows 顺序一一对应）。
      *
      * <p>与预览时解析同一原始文件（EasyExcel 行序确定，两次解析必然一致），
      * 用真实物理行号把数据行与 POI 图片锚点行精确对齐，根治「表头行数假设」
-     * 导致的图片挂错行问题。失败时返回 null，调用方回退旧的序号换算行为。</p>
+     * 导致的图片挂错行问题。同时从合并表头提取图片列的真实物理列索引——
+     * previewRows 经 jsonb 存储后键序被打乱，不能用于推断列位置。
+     * 失败时返回 null，调用方回退旧的序号换算行为。</p>
      *
      * @param batch 导入批次
-     * @return 数据行物理行号列表（0-based），失败为 null
+     * @return 物理布局（数据行物理行号序列 + 图片列索引 + 数据列边界），失败为 null
      */
-    private List<Integer> loadDataRowPhysicalIndexes(ExcelImportBatch batch) {
+    private PhysicalLayout loadPhysicalLayout(ExcelImportBatch batch) {
         if (!StringUtils.hasText(batch.getStoragePath())) {
             return null;
         }
         try (InputStream in = storageService.get(batch.getStoragePath())) {
             byte[] bytes = in.readAllBytes();
             List<IndexedRow> rawRows = parseExcelRaw(bytes);
-            int headerRowCount = detectHeaderRowCount(valuesOf(rawRows));
+            List<Map<Integer, String>> rawValues = valuesOf(rawRows);
+            int headerRowCount = detectHeaderRowCount(rawValues);
             List<Integer> indexes = new ArrayList<>();
             for (int i = headerRowCount; i < rawRows.size(); i++) {
                 indexes.add(rawRows.get(i).physicalRowIndex());
             }
-            return indexes;
+            // 图片列/数据列边界：用合并表头的真实物理列索引（不接受 jsonb 乱序的 previewRows 键序）
+            Set<Integer> imageColumns = new HashSet<>();
+            int minCol = Integer.MAX_VALUE;
+            int maxCol = -1;
+            if (headerRowCount > 0 && rawValues.size() >= headerRowCount) {
+                Map<Integer, String> headerMap = ExcelHeaderNormalizer.mergeHeaderRows(
+                    rawValues.subList(0, headerRowCount));
+                for (Map.Entry<Integer, String> entry : headerMap.entrySet()) {
+                    minCol = Math.min(minCol, entry.getKey());
+                    maxCol = Math.max(maxCol, entry.getKey());
+                    if (isEmbeddedImageHeader(entry.getValue())) {
+                        imageColumns.add(entry.getKey());
+                    }
+                }
+            }
+            return new PhysicalLayout(indexes, imageColumns, minCol, maxCol);
         } catch (Exception e) {
-            log.warn("重建数据行物理行号失败，batchId={}", batch.getBatchId(), e);
+            log.warn("重建数据行物理布局失败，batchId={}", batch.getBatchId(), e);
             return null;
         }
     }
@@ -890,12 +923,14 @@ public class ExcelAiImportService {
                                               ExcelAiMappingRequest request,
                                               Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages,
                                               Map<String, List<CategoryDict>> dictCache, int rowIndex,
-                                              Long importRowId, Integer physicalRowIndex) {
+                                              Long importRowId, Integer physicalRowIndex,
+                                              ProductGroup currentGroup, PhysicalLayout physicalLayout) {
         DefaultTransactionDefinition def = new DefaultTransactionDefinition();
         TransactionStatus status = transactionManager.getTransaction(def);
         try {
             RowResult result = processRow(dataRow, mapping, categoryHint, priceColumns, request,
-                embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex);
+                embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
+                currentGroup, physicalLayout);
             transactionManager.commit(status);
             return result;
         } catch (Exception e) {
@@ -912,7 +947,8 @@ public class ExcelAiImportService {
                                  ExcelAiMappingRequest request,
                                  Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages,
                                  Map<String, List<CategoryDict>> dictCache, int rowIndex, Long importRowId,
-                                 Integer physicalRowIndex) {
+                                 Integer physicalRowIndex,
+                                 ProductGroup currentGroup, PhysicalLayout physicalLayout) {
         if (isNoteOrEmptyRow(dataRow)) {
             log.debug("第 {} 行为说明或空行，已跳过", rowIndex);
             return RowResult.skipped("说明或空行");
@@ -932,12 +968,28 @@ public class ExcelAiImportService {
         excelImportRowService.updateStage(importRowId, "download_images");
         List<DownloadedImage> images = new ArrayList<>();
         images.addAll(downloadUrlImages(row, rowIndex));
-        images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex));
+        images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex, physicalLayout));
+
+        // 同型号连续行归入上一产品的 RSPU（规格模块共享产品主图，不再创建独立产品）
+        String groupKey = trim(row.getExternalCode());
+        boolean sameProduct = currentGroup != null && StringUtils.hasText(groupKey)
+            && groupKey.equals(currentGroup.externalCode);
 
         excelImportRowService.updateStage(importRowId, "create_rspu");
-        String rspuId = createRspu(row, dictCache);
-        saveStylesAndScenes(rspuId, row, dictCache);
-        String primaryObjectKey = saveImages(rspuId, null, images);
+        String rspuId;
+        boolean createdNewRspu;
+        if (sameProduct) {
+            rspuId = currentGroup.rspuId;
+            createdNewRspu = false;
+            log.debug("第 {} 行与上一产品同型号（{}），归入已有 RSPU {}", rowIndex, groupKey, rspuId);
+        } else {
+            rspuId = createRspu(row, dictCache);
+            saveStylesAndScenes(rspuId, row, dictCache);
+            createdNewRspu = true;
+        }
+        // 模块行图片：组内已有主图时全部作为详情图；组内尚无主图时允许本行首图升为主图
+        boolean allowPrimary = !sameProduct || !currentGroup.hasPrimaryImage;
+        String primaryObjectKey = saveImages(rspuId, null, images, allowPrimary);
 
         // 创建 RSPU-工厂关联
         excelImportRowService.updateStage(importRowId, "create_factory_mapping");
@@ -947,12 +999,17 @@ public class ExcelAiImportService {
         excelImportRowService.updateStage(importRowId, "create_async_task");
         String taskId = null;
         if (primaryObjectKey != null) {
-            taskId = createAsyncTask(rspuId, primaryObjectKey);
+            // 同组行仅在组内尚无 AI 任务时补建（主图后至的场景），避免重复识别
+            boolean needTask = !sameProduct || !currentGroup.hasAiTask;
+            if (needTask) {
+                taskId = createAsyncTask(rspuId, primaryObjectKey);
+            }
         }
 
         int imageCount = images.size();
         List<String> imageAssetIds = List.of(); // 目前 saveImages 未返回 ID 列表，后续可扩展
-        return RowResult.success(rspuId, variantId, List.of(), imageCount, imageAssetIds, taskId);
+        return RowResult.success(rspuId, variantId, List.of(), imageCount, imageAssetIds, taskId,
+            groupKey, createdNewRspu, primaryObjectKey != null);
     }
 
     private ProductImportRow buildProductImportRow(Map<String, String> dataRow, Map<String, String> mapping,
@@ -1224,7 +1281,8 @@ public class ExcelAiImportService {
     }
 
     private List<DownloadedImage> extractEmbeddedImagesForRow(
-        Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages, int rowIndex, Integer physicalRowIndex) {
+        Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages, int rowIndex, Integer physicalRowIndex,
+        PhysicalLayout physicalLayout) {
         // 物理行号（0-based）：优先取导入时重建的真实行号（双行表头/标题行/空行场景仍精确）；
         // 缺失时回退旧的「rowIndex - 1」换算（表头 1 行假设），保证行为不劣化。
         // ExcelImageExtractor 的 key 格式为 "sheetIndex,physicalRowIndex"，这里只处理第一个 Sheet。
@@ -1235,8 +1293,17 @@ public class ExcelAiImportService {
             return Collections.emptyList();
         }
         List<DownloadedImage> result = new ArrayList<>();
-        for (int i = 0; i < images.size(); i++) {
-            ExcelImageExtractor.EmbeddedImage img = images.get(i);
+        for (ExcelImageExtractor.EmbeddedImage img : images) {
+            boolean primary = false;
+            if (physicalLayout != null && physicalLayout.maxDataColumn() >= 0) {
+                // 数据区域之外的图（logo/二维码/装饰图）不视为产品图
+                if (img.colIndex() < physicalLayout.minDataColumn() || img.colIndex() > physicalLayout.maxDataColumn()) {
+                    log.debug("第 {} 行忽略数据区域外的内嵌图，colIndex={}", rowIndex, img.colIndex());
+                    continue;
+                }
+                // 锚定在图片列的图是产品主图候选；其他数据列（如规格/模块列）的图是模块图，作为详情图
+                primary = physicalLayout.imageColumns().contains(img.colIndex());
+            }
             String contentType = switch (img.extension().toLowerCase()) {
                 case "png" -> "image/png";
                 case "gif" -> "image/gif";
@@ -1244,7 +1311,7 @@ public class ExcelAiImportService {
                 default -> "image/jpeg";
             };
             result.add(new DownloadedImage("embedded://" + img.rowIndex() + "-" + img.colIndex(),
-                img.bytes(), contentType, i == 0));
+                img.bytes(), contentType, primary));
         }
         return result;
     }
@@ -1414,7 +1481,7 @@ public class ExcelAiImportService {
             // 没有价格列时，创建默认变体
             String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache);
             firstVariantId = variantId;
-            saveImages(rspuId, variantId, List.of());
+            saveImages(rspuId, variantId, List.of(), true);
         }
 
         return firstVariantId;
@@ -1558,7 +1625,17 @@ public class ExcelAiImportService {
         }
     }
 
-    private String saveImages(String rspuId, String variantId, List<DownloadedImage> images) {
+    /**
+     * 保存图片到存储并登记 image_assets。
+     *
+     * @param rspuId       所属 RSPU
+     * @param variantId    所属变体（可为 null）
+     * @param images       图片列表
+     * @param allowPrimary 是否允许产生主图；false 时全部登记为详情图
+     *                     （同产品模块行的规格图不应覆盖组主图）
+     * @return 主图 objectKey，未产生主图时为 null
+     */
+    private String saveImages(String rspuId, String variantId, List<DownloadedImage> images, boolean allowPrimary) {
         if (images == null || images.isEmpty()) {
             return null;
         }
@@ -1578,7 +1655,7 @@ public class ExcelAiImportService {
                 continue;
             }
 
-            boolean isPrimary = downloaded.primary || (!hasPrimary && i == 0);
+            boolean isPrimary = allowPrimary && (downloaded.primary || (!hasPrimary && i == 0));
             ImageAssets imageAsset = new ImageAssets();
             imageAsset.setImageId(imageId);
             imageAsset.setRspuId(rspuId);
@@ -1732,16 +1809,42 @@ public class ExcelAiImportService {
 
     private record RowResult(String rspuId, String variantId, List<String> rskuIds,
                               Integer imageCount, List<String> imageAssetIds,
-                              String taskId, boolean skipped, String skipReason) {
+                              String taskId, boolean skipped, String skipReason,
+                              String groupKey, boolean createdNewRspu, boolean primaryImageSaved) {
 
         static RowResult success(String rspuId, String variantId, List<String> rskuIds,
-                                 Integer imageCount, List<String> imageAssetIds, String taskId) {
-            return new RowResult(rspuId, variantId, rskuIds, imageCount, imageAssetIds, taskId, false, null);
+                                 Integer imageCount, List<String> imageAssetIds, String taskId,
+                                 String groupKey, boolean createdNewRspu, boolean primaryImageSaved) {
+            return new RowResult(rspuId, variantId, rskuIds, imageCount, imageAssetIds, taskId, false, null,
+                groupKey, createdNewRspu, primaryImageSaved);
         }
 
         static RowResult skipped(String reason) {
-            return new RowResult(null, null, null, 0, null, null, true, reason);
+            return new RowResult(null, null, null, 0, null, null, true, reason, null, false, false);
         }
+    }
+
+    /**
+     * 导入循环内维护的「当前产品组」状态：同型号（合并单元格语义）的连续模块行
+     * 归入同一 RSPU，组内共享主图与 AI 识别任务。
+     */
+    private static class ProductGroup {
+        String externalCode;
+        String rspuId;
+        boolean hasPrimaryImage;
+        boolean hasAiTask;
+    }
+
+    /**
+     * 从原始文件重建的物理布局：数据行物理行号序列 + 图片列物理索引 + 数据列边界。
+     *
+     * @param dataRowPhysicalIndexes 数据行物理行号（0-based，与 previewRows 一一对应）
+     * @param imageColumns           图片列的物理列索引（表头含 图样/picture/image 等）
+     * @param minDataColumn          数据区域最小列索引
+     * @param maxDataColumn          数据区域最大列索引（界外视为 logo/装饰图）
+     */
+    private record PhysicalLayout(List<Integer> dataRowPhysicalIndexes, Set<Integer> imageColumns,
+                                  int minDataColumn, int maxDataColumn) {
     }
 
     private record DownloadedImage(String source, byte[] bytes, String contentType, boolean primary) {

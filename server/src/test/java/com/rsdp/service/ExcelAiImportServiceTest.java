@@ -730,15 +730,101 @@ class ExcelAiImportServiceTest {
         assertEquals(0, result.getFailedCount());
         verify(excelImportRowService, times(2)).markSkipped(any(), anyString());
 
-        // 第 2 个 RSPU 继承上一行型号（合并单元格向下填充）
+        // 产品归组：行 2 型号继承行 1（合并单元格填充），同型号归入同一 RSPU，
+        // 只新建 2 个产品（MJ-S96、MJ-S97），模块行不再成为独立产品
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
-        verify(rspuMapper, times(3)).insert(rspuCaptor.capture());
+        verify(rspuMapper, times(2)).insert(rspuCaptor.capture());
         assertEquals("MJ-S96", rspuCaptor.getAllValues().get(0).getExternalCode());
-        assertEquals("MJ-S96", rspuCaptor.getAllValues().get(1).getExternalCode());
-        assertEquals("MJ-S97", rspuCaptor.getAllValues().get(2).getExternalCode());
+        assertEquals("MJ-S97", rspuCaptor.getAllValues().get(1).getExternalCode());
+
+        // 变体按「行 × 价格列」创建：行1（2）+ 行2（1）+ 行3（2）= 5 个
+        verify(rspuVariantService, times(5)).createVariant(anyString(), any());
 
         // RSKU：行1（2 个价格）+ 行2（1 个价格，AA级布为空跳过）+ 行3（2 个价格）= 5 个
         verify(rskuService, times(5)).createRsku(any());
+    }
+
+    @Test
+    void confirmAndImport_shouldShareGroupPrimaryImageAndFilterNonImageColumns() throws IOException {
+        // 图片语义：同产品模块行共享组主图，模块行的图降级为详情图；
+        // 非图片列的内嵌图（logo/二维码）不识别为产品图
+        byte[] excelBytes = createExcelWithModuleImagesAndLogo();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode\",\"规格/模块\":\"variantDisplayName\",\"价格\":\"__PRICE__:A级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithModuleImagesAndLogo()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-GROUP");
+            return 1;
+        });
+
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+        request.setSelectedPriceColumns(preview.getPriceColumns().stream()
+            .map(PriceColumnInfo::getHeader).toList());
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(2, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+
+        // 归组：两个模块行只创建一个 RSPU
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+
+        // 图片：共 2 张入库（PNG1 主图 + PNG2 详情图），col5 的 logo 被过滤
+        ArgumentCaptor<com.rsdp.entity.ImageAssets> imageCaptor =
+            ArgumentCaptor.forClass(com.rsdp.entity.ImageAssets.class);
+        verify(imageAssetsMapper, times(2)).insert(imageCaptor.capture());
+        var savedImages = imageCaptor.getAllValues();
+        assertTrue(savedImages.get(0).getPrimary(), "行 1 图片应成为组主图");
+        assertEquals("white_bg", savedImages.get(0).getImageType());
+        assertEquals(Boolean.FALSE, savedImages.get(1).getPrimary(), "行 2 模块图应降级为详情图，不覆盖组主图");
+        assertEquals("detail", savedImages.get(1).getImageType());
+        assertEquals(savedImages.get(0).getRspuId(), savedImages.get(1).getRspuId(), "模块图应挂在同一 RSPU 下");
+
+        // 组内 AI 识别任务只建一次（基于组主图）
+        verify(asyncTaskMapper, times(1)).insert(any(com.rsdp.entity.AsyncTask.class));
     }
 
     @Test
@@ -956,6 +1042,50 @@ class ExcelAiImportServiceTest {
             anchor.setRow2(3);
             anchor.setCol2(1);
             drawing.createPicture(anchor, picIdx);
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithModuleImagesAndLogo() {
+        // PNG1：产品主图（行 1 图片列）；PNG2：模块图（行 2 图片列）；PNG3：logo（行 2 数据区域外）
+        // 注意：col0 是无表头的空列，图片列在 col1——验证图片列索引用物理列而非 keySet 位置
+        // （previewRows 经 jsonb 存储后键序乱序，位置推断会错位）
+        byte[] pngBytes = java.util.Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(1).setCellValue("产品图样 PICTURE");
+            header.createCell(2).setCellValue("型号品名");
+            header.createCell(3).setCellValue("规格/模块");
+            header.createCell(4).setCellValue("价格（PRICE）");
+            var data1 = sheet.createRow(1);
+            data1.createCell(2).setCellValue("MJ-S96");
+            data1.createCell(3).setCellValue("模块A");
+            data1.createCell(4).setCellValue("8720");
+            // 行 2：型号列为空（纵向合并单元格）
+            var data2 = sheet.createRow(2);
+            data2.createCell(3).setCellValue("模块B");
+            data2.createCell(4).setCellValue("9780");
+
+            var helper = workbook.getCreationHelper();
+            var drawing = sheet.createDrawingPatriarch();
+            // PNG1 锚定：行 1 图片列（col1）
+            var anchor1 = helper.createClientAnchor();
+            anchor1.setRow1(1); anchor1.setCol1(1); anchor1.setRow2(2); anchor1.setCol2(2);
+            drawing.createPicture(anchor1, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            // PNG2 锚定：行 2 图片列（col1）
+            var anchor2 = helper.createClientAnchor();
+            anchor2.setRow1(2); anchor2.setCol1(1); anchor2.setRow2(3); anchor2.setCol2(2);
+            drawing.createPicture(anchor2, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            // PNG3 锚定：行 2 数据区域外（col6，模拟 logo/二维码）
+            var anchor3 = helper.createClientAnchor();
+            anchor3.setRow1(2); anchor3.setCol1(6); anchor3.setRow2(3); anchor3.setCol2(7);
+            drawing.createPicture(anchor3, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {
