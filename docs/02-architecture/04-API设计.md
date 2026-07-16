@@ -554,6 +554,7 @@ GET    /api/v1/projects
 
 POST   /api/v1/projects
        # 创建设计项目（需 project:create）
+       # 说明：companyName 留空时默认取当前登录用户的企业名称（sys_user.company_name）
        # Request: { projectName, projectType?, companyName?, remark? }
        # Response: ProjectResponse
 
@@ -623,6 +624,14 @@ POST   /api/v1/orders/{orderId}/invite
 
 GET    /api/v1/orders/contract-template
        # 下载采购合同 docx 模板（需 order:read）
+
+GET    /api/v1/orders/statistics
+       # 订单统计（需 order:read；排除 CANCELLED；非 ADMIN 仅统计自己创建的订单）
+       # 说明：到手价为 AES 加密列，实体级解密后内存聚合；商品名/图取订单明细快照
+       # Query: dim=product|factory（必填）, from?, to?（yyyy-MM-dd，含当日，可空）
+       # Response(dim=product):  [{ rspuId, productName, imageId, totalQuantity, totalAmount }]
+       # Response(dim=factory):  [{ factoryCode, factoryName, orderCount, totalQuantity, totalAmount }]
+       # 均按 totalAmount 降序
 ```
 
 ### 订单邀请公开接口（免登录）
@@ -721,19 +730,22 @@ POST   /api/v1/style-knowledge/feedback
 ```
 GET    /api/v1/admin/users
        # 用户列表（分页+关键字搜索）
-       # Query: page, size, keyword（搜 username/nickname）
+       # Query: page, size, keyword（搜 username/nickname/company_name/group_name）
        # Response: { total, page, size, rows: [UserAdminResponse...] }
-       # UserAdminResponse: { userId, username, nickname, roleCode, roleName, status,
+       # UserAdminResponse: { userId, username, nickname, companyName?, groupName?,
+       #                      roleCode, roleName, status, viewFullCatalog,
        #                      factoryCodes: string[], lastLoginAt, createdAt, updatedAt }
 
 POST   /api/v1/admin/users
        # 创建用户
-       # Request: { username, nickname?, password, roleCode, factoryCodes?: string[] }
+       # Request: { username, nickname?, companyName?, groupName?, password, roleCode,
+       #            factoryCodes?: string[], viewFullCatalog? }
        # Response: UserAdminResponse
 
 PUT    /api/v1/admin/users/{userId}
-       # 编辑用户
-       # Request: { nickname?, roleCode, factoryCodes?: string[] }
+       # 编辑用户（字段缺省/null 时不覆盖原值）
+       # Request: { nickname?, companyName?, groupName?, roleCode, factoryCodes?: string[],
+       #            viewFullCatalog? }
        # Response: UserAdminResponse
 
 PUT    /api/v1/admin/users/{userId}/reset-password
