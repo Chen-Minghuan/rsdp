@@ -9,10 +9,12 @@ import com.rsdp.dto.response.ProjectDetailResponse;
 import com.rsdp.dto.response.ProjectResponse;
 import com.rsdp.entity.Project;
 import com.rsdp.entity.Scheme;
+import com.rsdp.entity.SysUser;
 import com.rsdp.exception.ForbiddenException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.ProjectMapper;
 import com.rsdp.mapper.SchemeMapper;
+import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -43,6 +45,9 @@ class ProjectServiceTest {
 
     @Mock
     private SchemeMapper schemeMapper;
+
+    @Mock
+    private SysUserMapper sysUserMapper;
 
     @InjectMocks
     private ProjectService projectService;
@@ -76,6 +81,64 @@ class ProjectServiceTest {
         verify(projectMapper).insert(captor.capture());
         assertThat(captor.getValue().getProjectId()).startsWith("PROJ-");
         assertThat(captor.getValue().getCreatedAt()).isNotNull();
+    }
+
+    @Test
+    void createShouldFallbackToUserCompanyWhenRequestCompanyBlank() {
+        ProjectRequest request = new ProjectRequest();
+        request.setProjectName("滨江一号全屋");
+        SysUser user = new SysUser();
+        user.setUserId("user-1");
+        user.setCompanyName("示例设计工作室");
+        when(sysUserMapper.selectById("user-1")).thenReturn(user);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            ProjectResponse response = projectService.create(request);
+
+            assertThat(response.getCompanyName()).isEqualTo("示例设计工作室");
+        }
+
+        ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
+        verify(projectMapper).insert(captor.capture());
+        assertThat(captor.getValue().getCompanyName()).isEqualTo("示例设计工作室");
+    }
+
+    @Test
+    void createShouldPreferRequestCompanyOverUserCompany() {
+        ProjectRequest request = new ProjectRequest();
+        request.setProjectName("滨江一号全屋");
+        request.setCompanyName("指定企业");
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            ProjectResponse response = projectService.create(request);
+
+            assertThat(response.getCompanyName()).isEqualTo("指定企业");
+        }
+
+        ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
+        verify(projectMapper).insert(captor.capture());
+        assertThat(captor.getValue().getCompanyName()).isEqualTo("指定企业");
+    }
+
+    @Test
+    void createShouldSetNullCompanyWhenUserHasNoCompany() {
+        ProjectRequest request = new ProjectRequest();
+        request.setProjectName("滨江一号全屋");
+        SysUser user = new SysUser();
+        user.setUserId("user-1");
+        when(sysUserMapper.selectById("user-1")).thenReturn(user);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            ProjectResponse response = projectService.create(request);
+
+            assertThat(response.getCompanyName()).isNull();
+        }
     }
 
     @Test

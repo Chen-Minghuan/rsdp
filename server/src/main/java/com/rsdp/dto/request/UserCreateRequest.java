@@ -24,6 +24,12 @@ public class UserCreateRequest {
     @Size(max = 64, message = "昵称长度不能超过 64")
     private String nickname;
 
+    @Size(max = 128, message = "企业名称长度不能超过 128")
+    private String companyName;
+
+    @Size(max = 64, message = "团队分组长度不能超过 64")
+    private String groupName;
+
     @NotBlank(message = "角色不能为空")
     private String roleCode;
 

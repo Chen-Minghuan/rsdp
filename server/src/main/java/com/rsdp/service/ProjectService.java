@@ -10,11 +10,13 @@ import com.rsdp.dto.response.ProjectResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
 import com.rsdp.entity.Project;
 import com.rsdp.entity.Scheme;
+import com.rsdp.entity.SysUser;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ForbiddenException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.ProjectMapper;
 import com.rsdp.mapper.SchemeMapper;
+import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -37,6 +39,7 @@ public class ProjectService {
 
     private final ProjectMapper projectMapper;
     private final SchemeMapper schemeMapper;
+    private final SysUserMapper sysUserMapper;
 
     /**
      * 分页查询项目列表。
@@ -71,25 +74,43 @@ public class ProjectService {
     }
 
     /**
-     * 创建设计项目。
+     * 创建设计项目。企业名称留空时默认取当前登录用户的企业（企业团队轻量版）。
      *
      * @param request 创建请求
      * @return 创建后的项目
      */
     @Transactional
     public ProjectResponse create(ProjectRequest request) {
+        String userId = currentUserIdRequired();
         Project project = new Project();
         project.setProjectId("PROJ-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         project.setProjectName(request.getProjectName().trim());
         project.setProjectType(StringUtils.hasText(request.getProjectType()) ? request.getProjectType() : null);
-        project.setCompanyName(StringUtils.hasText(request.getCompanyName()) ? request.getCompanyName() : null);
+        project.setCompanyName(resolveCompanyName(request, userId));
         project.setRemark(StringUtils.hasText(request.getRemark()) ? request.getRemark() : null);
-        project.setOwnerId(currentUserIdRequired());
+        project.setOwnerId(userId);
         project.setStatus("active");
         project.setCreatedAt(LocalDateTime.now());
         project.setUpdatedAt(LocalDateTime.now());
         projectMapper.insert(project);
         return toResponse(project, null);
+    }
+
+    /**
+     * 解析项目企业名称：请求值优先；为空时回退当前登录用户的企业名称。
+     *
+     * @param request 创建请求
+     * @param userId  当前登录用户 ID
+     * @return 企业名称，请求与用户均无企业时为 null
+     */
+    private String resolveCompanyName(ProjectRequest request, String userId) {
+        if (StringUtils.hasText(request.getCompanyName())) {
+            return request.getCompanyName();
+        }
+        SysUser currentUser = sysUserMapper.selectById(userId);
+        return currentUser != null && StringUtils.hasText(currentUser.getCompanyName())
+            ? currentUser.getCompanyName()
+            : null;
     }
 
     /**
