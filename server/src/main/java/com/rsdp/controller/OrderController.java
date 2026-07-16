@@ -11,10 +11,12 @@ import com.rsdp.dto.response.OrderResponse;
 import com.rsdp.service.ContractTemplateService;
 import com.rsdp.service.OrderInviteService;
 import com.rsdp.service.OrderService;
+import com.rsdp.service.OrderStatisticsService;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 
 /**
  * 设计订单接口。
@@ -41,6 +44,7 @@ public class OrderController {
     private final OrderService orderService;
     private final OrderInviteService orderInviteService;
     private final ContractTemplateService contractTemplateService;
+    private final OrderStatisticsService orderStatisticsService;
 
     /**
      * 由方案生成订单（价格快照 × 全局折扣率）。
@@ -67,6 +71,23 @@ public class OrderController {
         @RequestParam(defaultValue = "1") long page,
         @RequestParam(defaultValue = "10") long size) {
         return Result.ok(orderService.list(status, page, size));
+    }
+
+    /**
+     * 订单统计（产品/工厂维度，排除已取消订单，非 ADMIN 仅统计自己创建的订单）。
+     * 字面量路径 /statistics 优先于模板路径 /{orderId}，声明顺序保持在 /{orderId} 之前。
+     *
+     * @param dim  统计维度（product / factory）
+     * @param from 起始日期（含，可空，格式 yyyy-MM-dd）
+     * @param to   截止日期（含，可空，格式 yyyy-MM-dd）
+     * @return 对应维度的统计列表（按总金额降序）
+     */
+    @GetMapping("/statistics")
+    public Result<?> statistics(
+        @RequestParam @NotBlank(message = "统计维度不能为空") String dim,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return Result.ok(orderStatisticsService.statistics(dim, from, to));
     }
 
     /**
