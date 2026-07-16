@@ -300,16 +300,18 @@ ON CONFLICT (factory_code) DO NOTHING;
 
 -- 测试用户（密码统一为 admin123）
 -- 按 username 冲突更新，确保开发环境重置后密码与快速登录按钮一致
-INSERT INTO sys_user (user_id, username, password_hash, nickname, status, view_full_catalog) VALUES
-('USER-ADMIN-00000001', 'admin', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '系统管理员', 'active', true),
-('USER-EDITOR-00000001', 'editor', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '编辑员', 'active', true),
-('USER-VIEWER-00000001', 'viewer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '浏览者', 'active', false),
-('USER-DESIGNER-00000001', 'designer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '设计师', 'active', false),
-('USER-FACTORY-00000001', 'factory', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '工厂管理员', 'active', false),
-('USER-USER-00000001', 'user', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '普通用户', 'active', false)
+INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, group_name, status, view_full_catalog) VALUES
+('USER-ADMIN-00000001', 'admin', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '系统管理员', 'RSDP 平台', '平台运营组', 'active', true),
+('USER-EDITOR-00000001', 'editor', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '编辑员', 'RSDP 平台', '内容编辑组', 'active', true),
+('USER-VIEWER-00000001', 'viewer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '浏览者', 'RSDP 平台', '平台运营组', 'active', false),
+('USER-DESIGNER-00000001', 'designer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '设计师', '示例设计工作室', '方案一组', 'active', false),
+('USER-FACTORY-00000001', 'factory', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '工厂管理员', '测试家具工厂', '销售部', 'active', false),
+('USER-USER-00000001', 'user', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '普通用户', '示例设计工作室', '方案二组', 'active', false)
 ON CONFLICT (username) DO UPDATE SET
   password_hash = EXCLUDED.password_hash,
   nickname = EXCLUDED.nickname,
+  company_name = EXCLUDED.company_name,
+  group_name = EXCLUDED.group_name,
   status = EXCLUDED.status,
   view_full_catalog = EXCLUDED.view_full_catalog;
 

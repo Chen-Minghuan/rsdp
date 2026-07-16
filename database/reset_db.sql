@@ -775,6 +775,8 @@ CREATE TABLE IF NOT EXISTS sys_user (
     username VARCHAR(64) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     nickname VARCHAR(64),
+    company_name VARCHAR(128),
+    group_name VARCHAR(64),
     status VARCHAR(16) DEFAULT 'active',
     token_version INT DEFAULT 0,
     view_full_catalog BOOLEAN NOT NULL DEFAULT false,
