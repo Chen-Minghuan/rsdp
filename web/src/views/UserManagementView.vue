@@ -15,32 +15,18 @@ import {
   useMessage
 } from 'naive-ui'
 import { h } from 'vue'
-import { apiClient } from '@/api/client'
 import { listFactories } from '@/api/factory'
+import {
+  listUsers,
+  createUser,
+  updateUser,
+  updateUserStatus,
+  resetUserPassword,
+  deleteUser
+} from '@/api/user'
+import type { User, UserForm } from '@/types/user'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
-import type { ApiResult } from '@/api/client'
-
-interface User {
-  userId: string
-  username: string
-  nickname: string
-  roleCode: string
-  roleName: string
-  status: string
-  factoryCodes: string[]
-  viewFullCatalog: boolean
-  createdAt: string
-}
-
-interface UserForm {
-  username: string
-  nickname: string
-  password: string
-  roleCode: string
-  factoryCodes: string[]
-  viewFullCatalog: boolean
-}
 
 const message = useMessage()
 const userStore = useUserStore()
@@ -76,6 +62,8 @@ const editingUser = ref<User | null>(null)
 const form = reactive<UserForm>({
   username: '',
   nickname: '',
+  companyName: '',
+  groupName: '',
   password: '',
   roleCode: 'USER',
   factoryCodes: [],
@@ -108,6 +96,16 @@ const roleOptions = [
 const columns = [
   { title: '用户名', key: 'username' },
   { title: '昵称', key: 'nickname' },
+  {
+    title: '企业',
+    key: 'companyName',
+    render: (row: User) => row.companyName || '—'
+  },
+  {
+    title: '分组',
+    key: 'groupName',
+    render: (row: User) => row.groupName || '—'
+  },
   { title: '角色', key: 'roleName' },
   { title: '状态', key: 'status' },
   {
@@ -162,12 +160,9 @@ const columns = [
 async function loadUsers() {
   loading.value = true
   try {
-    const { data: result } = await apiClient.get<ApiResult<{ total: number; rows: User[] }>>(
-      '/v1/admin/users',
-      { params: { page: page.value, size: size.value, keyword: keyword.value } }
-    )
-    users.value = result.data.rows
-    total.value = result.data.total
+    const result = await listUsers({ page: page.value, size: size.value, keyword: keyword.value })
+    users.value = result.rows
+    total.value = result.total
   } catch {
     message.error('加载用户列表失败')
   } finally {
@@ -179,6 +174,8 @@ function openCreate() {
   editingUser.value = null
   form.username = ''
   form.nickname = ''
+  form.companyName = ''
+  form.groupName = ''
   form.password = ''
   form.roleCode = 'USER'
   form.factoryCodes = []
@@ -190,6 +187,8 @@ function openEdit(user: User) {
   editingUser.value = user
   form.username = user.username
   form.nickname = user.nickname || ''
+  form.companyName = user.companyName || ''
+  form.groupName = user.groupName || ''
   form.password = ''
   form.roleCode = user.roleCode
   form.factoryCodes = user.factoryCodes || []
@@ -205,17 +204,21 @@ async function saveUser() {
   }
   try {
     if (editingUser.value) {
-      await apiClient.put(`/v1/admin/users/${editingUser.value.userId}`, {
+      await updateUser(editingUser.value.userId, {
         nickname: form.nickname,
+        companyName: form.companyName,
+        groupName: form.groupName,
         roleCode: form.roleCode,
         factoryCodes: form.factoryCodes,
         viewFullCatalog: form.viewFullCatalog
       })
       message.success('更新成功')
     } else {
-      await apiClient.post('/v1/admin/users', {
+      await createUser({
         username: form.username,
         nickname: form.nickname,
+        companyName: form.companyName,
+        groupName: form.groupName,
         password: form.password,
         roleCode: form.roleCode,
         factoryCodes: form.factoryCodes,
@@ -233,7 +236,7 @@ async function saveUser() {
 async function toggleStatus(user: User) {
   const status = user.status === 'active' ? 'disabled' : 'active'
   try {
-    await apiClient.put(`/v1/admin/users/${user.userId}/status?status=${status}`)
+    await updateUserStatus(user.userId, status)
     message.success('状态更新成功')
     loadUsers()
   } catch (err: unknown) {
@@ -261,9 +264,7 @@ async function confirmResetPassword() {
   }
   if (!resetPasswordUser.value) return
   try {
-    await apiClient.put(`/v1/admin/users/${resetPasswordUser.value.userId}/reset-password`, {
-      newPassword: resetPasswordForm.newPassword
-    })
+    await resetUserPassword(resetPasswordUser.value.userId, resetPasswordForm.newPassword)
     message.success('密码重置成功')
     closeResetPassword()
   } catch (err: unknown) {
@@ -273,7 +274,7 @@ async function confirmResetPassword() {
 
 async function handleDelete(user: User) {
   try {
-    await apiClient.delete(`/v1/admin/users/${user.userId}`)
+    await deleteUser(user.userId)
     message.success('用户删除成功')
     loadUsers()
   } catch (err: unknown) {
@@ -308,7 +309,7 @@ onMounted(() => {
   <n-card title="用户管理">
     <n-space vertical>
       <n-space>
-        <n-input v-model:value="keyword" placeholder="搜索用户名/昵称" @keydown.enter="loadUsers" />
+        <n-input v-model:value="keyword" placeholder="搜索用户名/昵称/企业/分组" @keydown.enter="loadUsers" />
         <n-button type="primary" @click="loadUsers">搜索</n-button>
         <n-button v-if="canCreateUser" @click="openCreate">+ 新增用户</n-button>
       </n-space>
@@ -332,6 +333,12 @@ onMounted(() => {
         </n-form-item>
         <n-form-item label="昵称">
           <n-input v-model:value="form.nickname" placeholder="请输入昵称" />
+        </n-form-item>
+        <n-form-item label="企业">
+          <n-input v-model:value="form.companyName" placeholder="请输入企业名称（可选）" maxlength="128" />
+        </n-form-item>
+        <n-form-item label="分组">
+          <n-input v-model:value="form.groupName" placeholder="请输入团队分组（可选）" maxlength="64" />
         </n-form-item>
         <n-form-item v-if="!editingUser" label="密码">
           <n-input v-model:value="form.password" type="password" placeholder="请输入密码" />
