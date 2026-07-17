@@ -185,6 +185,7 @@ POST   /api/v1/products/excel-ai-import/preview
        #   - 支持单行/多行表头：先清洗表头（去掉英文备注、括号单位），再合并父子表头
        #   - AI 根据清洗后的表头和样例数据推荐字段映射；value 为标准字段名
        #   - 复合表头「型号品名」会映射为 "externalCode,productName"，导入时按空格/斜杠拆分
+       #   - 交期列（交期/货期/生产周期/LEAD TIME 等）映射为标准字段 leadTimeDays
        #   - 多材质价格列（如「价格-A级布」「价格-AA级布」）映射为特殊字段 "__PRICE__:材质名"，
        #     并在 priceColumns 中独立列出，供前端勾选
        #   - 返回的 mapping key 为合并后的原始表头，对应后续确认导入接口的字段名
@@ -203,7 +204,7 @@ POST   /api/v1/products/excel-ai-import/import
        #     defaultFactoryCode: string,    // 默认工厂编码，用于生成 RSKU 与 RSPU-工厂映射
        #     shippingWarehouseId: string,   // 默认发货仓库 ID（关联 factory_warehouse）
        #     defaultShippingFrom: string,   // 默认发货地（冗余显示字段）
-       #     defaultLeadTimeDays: number,   // 默认基础交期天数；未配置时按工厂交期规则动态计算
+       #     defaultLeadTimeDays: number,   // 默认基础交期天数；优先级：Excel 行级交期列 > 工厂交期规则 > 本默认值
        #     defaultMoq: number             // 默认最小起订量
        #   }
        # Response: {
@@ -217,13 +218,20 @@ POST   /api/v1/products/excel-ai-import/import
        # }
        # 说明：
        #   - 按 mapping 读取 Excel 每一行，逐行独立事务写入 RSPU / 变体 / 图片 / RSKU
-       #   - 每行先创建 1 个 RSPU；每个选中的价格列创建 1 个变体 + 1 条 RSKU（工厂报价）
-       #   - 支持内嵌图片（按 sheet+行分组）和 URL 图片（http/https）
+       #   - 产品归组：型号/品名列按纵向合并单元格语义向下填充后，同型号连续行归入同一 RSPU
+       #     （共享主图与 AI 识别任务），每个规格模块行 + 每个选中的价格列创建 1 个变体 + 1 条 RSKU
+       #   - 内嵌图片按「物理行号 + 物理列索引」精确关联（重解析原始文件重建布局，不受 jsonb 键序影响）：
+       #     产品图样列的图 = 主图候选；其他数据列（如规格/模块列）的图 = 模块样式图，
+       #     挂本行变体（image_assets.variant_id）且永不当主图；数据区域外的图（logo/二维码）忽略；
+       #     严格主图模式：表格有图片列时，行内无产品图样图则该产品无主图，模块图不兜底升主图
+       #   - 容错：空价格列跳过不报错；文件中间重复的表头行自动识别跳过；
+       #     「更新日期/产品下单说明/注意事项」等说明尾注行自动跳过
+       #   - 交期：Excel 行级交期列（映射 leadTimeDays，容忍「30天」「25-30天」写法）优先，
+       #     其次按 factory_lead_time_rule 动态计算，最后回退 defaultLeadTimeDays
        #   - 主数据创建成功后为每个 RSPU 触发异步 AI 识别任务，前端通过 taskIds 轮询
        #   - 失败行不影响其他行，失败原因写入返回结果
        #   - 当指定 defaultFactoryCode 时，会为每个 RSPU 创建 RSPU-工厂关联（rspu_factory_mapping），
        #     并标记为主供工厂；同时每个价格列生成的 RSKU 会写入工厂报价、发货地、MOQ、动态交期
-       #   - 动态交期优先按 factory_lead_time_rule 精确匹配，无规则时使用 defaultLeadTimeDays
        #   - 每行 Excel 数据会写入 excel_import_row，记录原始值、处理阶段、生成实体 ID 与失败原因
 
 GET    /api/v1/products/excel-ai-import/{batchId}
