@@ -483,9 +483,24 @@ public class ProductQueryService {
         response.setImages(images);
         response.setRecognitions(recognitions);
         response.setStyleMatches(styleMatches);
+        response.setStyleCodes(listStyleCodes(rspuId, rspu.getPositioningLabel()));
         response.setOfficialMatches(rspuRelationService.listByAnchor(rspuId));
         response.setMatchedBy(rspuRelationService.listByRelated(rspuId));
         return response;
+    }
+
+    /**
+     * 查询产品的风格字典码列表（主风格在前）。
+     *
+     * <p>无关联记录的老数据回退为 positioningLabel 单值。</p>
+     */
+    private List<String> listStyleCodes(String rspuId, String positioningLabel) {
+        List<RspuStyle> styles = rspuStyleMapper.selectList(new QueryWrapper<RspuStyle>()
+            .eq("rspu_id", rspuId).orderByDesc("is_primary"));
+        if (styles.isEmpty()) {
+            return StringUtils.hasText(positioningLabel) ? List.of(positioningLabel) : List.of();
+        }
+        return styles.stream().map(RspuStyle::getStyleCode).toList();
     }
 
     /**
@@ -574,8 +589,15 @@ public class ProductQueryService {
         String oldPositioningLabel = rspu.getPositioningLabel();
         String oldSceneTagsJson = rspu.getSceneTags();
 
+        List<String> styleCodes = null;
+        if (request.getStyleCodes() != null && !request.getStyleCodes().isEmpty()) {
+            // 多风格：首值为主风格写 positioning_label，全量重写 rspu_style
+            styleCodes = normalizeCodes(request.getStyleCodes());
+            validateDictCodes("style", styleCodes);
+            rspu.setPositioningLabel(styleCodes.get(0));
+        }
         String styleCode = null;
-        if (StringUtils.hasText(request.getPositioningLabel())) {
+        if (styleCodes == null && StringUtils.hasText(request.getPositioningLabel())) {
             styleCode = request.getPositioningLabel().trim().toUpperCase();
             validateDictCode("style", styleCode);
             rspu.setPositioningLabel(styleCode);
@@ -618,7 +640,9 @@ public class ProductQueryService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
-        if (StringUtils.hasText(styleCode)
+        if (styleCodes != null) {
+            updateStyles(rspuId, styleCodes);
+        } else if (StringUtils.hasText(styleCode)
             && !styleCode.equals(oldPositioningLabel)) {
             updatePrimaryStyle(rspuId, styleCode);
         }
@@ -640,6 +664,31 @@ public class ProductQueryService {
         style.setIsPrimary(true);
         style.setCreatedAt(LocalDateTime.now());
         rspuStyleMapper.insert(style);
+    }
+
+    /**
+     * 全量重写产品风格关联：第一个为主风格，其余为辅风格（自动去重）。
+     *
+     * @param rspuId     RSPU ID
+     * @param styleCodes 风格字典码列表（非空，首值主风格）
+     */
+    private void updateStyles(String rspuId, List<String> styleCodes) {
+        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        boolean first = true;
+        for (String code : styleCodes) {
+            if (!StringUtils.hasText(code) || !seen.add(code)) {
+                continue;
+            }
+            RspuStyle style = new RspuStyle();
+            style.setRspuId(rspuId);
+            style.setDictType("style");
+            style.setStyleCode(code);
+            style.setIsPrimary(first);
+            style.setCreatedAt(LocalDateTime.now());
+            rspuStyleMapper.insert(style);
+            first = false;
+        }
     }
 
     private void updateScenes(String rspuId, List<String> sceneCodes) {

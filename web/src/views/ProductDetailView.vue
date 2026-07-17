@@ -682,6 +682,9 @@ function openEditModal() {
   const r = detail.value.rspu
   editForm.value = {
     positioningLabel: r.positioningLabel,
+    styleCodes: detail.value.styleCodes?.length
+      ? [...detail.value.styleCodes]
+      : (r.positioningLabel ? [r.positioningLabel] : []),
     colorPrimaryName: r.colorPrimaryName,
     colorPrimaryHsv: Array.isArray(r.colorPrimaryHsv) ? [...r.colorPrimaryHsv] : [],
     materialTags: Array.isArray(r.materialTags) ? [...r.materialTags] : [],
@@ -696,7 +699,7 @@ function openEditModal() {
 }
 
 async function handleUpdateProduct() {
-  if (!editForm.value.positioningLabel) {
+  if (!editForm.value.styleCodes || editForm.value.styleCodes.length === 0) {
     errorMessage.value = '请选择风格/定位标签'
     return
   }
@@ -717,7 +720,8 @@ async function handleUpdateProduct() {
   }
 
   const request: ProductUpdateRequest = {
-    positioningLabel: editForm.value.positioningLabel,
+    positioningLabel: editForm.value.styleCodes[0],
+    styleCodes: editForm.value.styleCodes,
     colorPrimaryName: editForm.value.colorPrimaryName,
     colorPrimaryHsv: editForm.value.colorPrimaryHsv,
     materialTags: editForm.value.materialTags,
@@ -1714,9 +1718,10 @@ onBeforeRouteUpdate((to, from) => {
       <n-form label-placement="left" label-width="100">
         <n-form-item label="风格/定位" required>
           <n-select
-            v-model:value="editForm.positioningLabel"
+            v-model:value="editForm.styleCodes"
             :options="styleOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="选择风格"
+            placeholder="选择风格（可多选，第一个为主风格）"
+            multiple
           />
         </n-form-item>
         <n-form-item label="主色名">

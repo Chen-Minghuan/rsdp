@@ -19,6 +19,11 @@ public class ProductDetailResponse {
     private List<ProductStyleMatchResponse> styleMatches;
 
     /**
+     * 风格字典码列表（主风格在前，其余为辅风格），供编辑表单回填。
+     */
+    private List<String> styleCodes;
+
+    /**
      * 官方搭配：本产品搭配了哪些其他产品。
      */
     private List<RspuRelationResponse> officialMatches;

@@ -908,6 +908,89 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void confirmAndImport_shouldSaveMultipleStylesWithFirstAsPrimary() throws IOException {
+        // 风格列多值（「中古风/奶油风」）：首值为主风格写 positioning_label + is_primary=true，
+        // 其余为辅风格写 rspu_style(is_primary=false)
+        byte[] excelBytes = createExcelWithMultiStyle();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号\":\"externalCode\",\"名称\":\"productName\",\"风格\":\"positioningLabel\",\"价格\":\"__PRICE__:A级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithMultiStyle()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of(
+            createDict("style", "MC", "中古风"),
+            createDict("style", "CR", "奶油风")));
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-TEST");
+            return 1;
+        });
+
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+        request.setSelectedPriceColumns(preview.getPriceColumns().stream()
+            .map(PriceColumnInfo::getHeader).toList());
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+
+        // 主风格写入 positioning_label
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper).insert(rspuCaptor.capture());
+        assertEquals("MC", rspuCaptor.getValue().getPositioningLabel(), "主字段应存第一个风格");
+
+        // rspu_style 两条：MC 主、CR 辅
+        ArgumentCaptor<com.rsdp.entity.RspuStyle> styleCaptor =
+            ArgumentCaptor.forClass(com.rsdp.entity.RspuStyle.class);
+        verify(rspuStyleMapper, times(2)).insert(styleCaptor.capture());
+        var styles = styleCaptor.getAllValues();
+        assertEquals("MC", styles.get(0).getStyleCode());
+        assertEquals(Boolean.TRUE, styles.get(0).getIsPrimary(), "第一个风格应为主风格");
+        assertEquals("CR", styles.get(1).getStyleCode());
+        assertEquals(Boolean.FALSE, styles.get(1).getIsPrimary(), "后续风格应为辅风格");
+    }
+
+    @Test
     void getStatus_shouldReturnBatchStatus() {
         ExcelImportBatch batch = new ExcelImportBatch();
         batch.setBatchId("BATCH-TEST");
@@ -1196,6 +1279,27 @@ class ExcelAiImportServiceTest {
             var anchor = helper.createClientAnchor();
             anchor.setRow1(1); anchor.setCol1(3); anchor.setRow2(2); anchor.setCol2(4);
             drawing.createPicture(anchor, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithMultiStyle() {
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("型号");
+            header.createCell(1).setCellValue("名称");
+            header.createCell(2).setCellValue("风格");
+            header.createCell(3).setCellValue("价格（PRICE）");
+            var data = sheet.createRow(1);
+            data.createCell(0).setCellValue("ABC-001");
+            data.createCell(1).setCellValue("休闲椅 A");
+            data.createCell(2).setCellValue("中古风/奶油风");
+            data.createCell(3).setCellValue("1999");
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {

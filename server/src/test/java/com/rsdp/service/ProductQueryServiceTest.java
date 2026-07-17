@@ -50,6 +50,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -372,6 +373,39 @@ class ProductQueryServiceTest {
         verify(rspuSceneMapper).delete(any());
         verify(rspuSceneMapper).insert(any(RspuScene.class));
         verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq(rspu), eq("admin"));
+    }
+
+    @Test
+    void updateProduct_shouldUpdateMultipleStylesWithFirstAsPrimary() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setPositioningLabel("OLD");
+        rspu.setSceneTags("[]");
+
+        com.rsdp.entity.CategoryDict cr = new com.rsdp.entity.CategoryDict();
+        cr.setDictType("style");
+        cr.setDictCode("CR");
+        cr.setDictName("奶油风");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(dictService.listByType("style")).thenReturn(List.of(styleDicts().get(0), cr));
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setStyleCodes(List.of("MC", "CR"));
+
+        productQueryService.updateProduct("RSPU-TEST01", request);
+
+        // 首值为主风格写 positioning_label
+        assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
+
+        // rspu_style 全量重写：MC 主、CR 辅
+        ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
+        verify(rspuStyleMapper).delete(any());
+        verify(rspuStyleMapper, times(2)).insert(styleCaptor.capture());
+        assertThat(styleCaptor.getAllValues().get(0).getStyleCode()).isEqualTo("MC");
+        assertThat(styleCaptor.getAllValues().get(0).getIsPrimary()).isTrue();
+        assertThat(styleCaptor.getAllValues().get(1).getStyleCode()).isEqualTo("CR");
+        assertThat(styleCaptor.getAllValues().get(1).getIsPrimary()).isFalse();
     }
 
 

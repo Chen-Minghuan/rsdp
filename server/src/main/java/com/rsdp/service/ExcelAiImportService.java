@@ -1153,9 +1153,12 @@ public class ExcelAiImportService {
         }
 
         if (StringUtils.hasText(row.getPositioningLabel())) {
-            String styleCode = normalizeDictCode(row.getPositioningLabel(), dictCache.get("style"));
-            if (!isValidDictCode(styleCode, dictCache.get("style"))) {
-                return "定位标签不存在: " + row.getPositioningLabel();
+            // 多风格：每个值都必须是合法字典风格
+            for (String styleName : splitCsv(row.getPositioningLabel())) {
+                String styleCode = normalizeDictCode(styleName, dictCache.get("style"));
+                if (!isValidDictCode(styleCode, dictCache.get("style"))) {
+                    return "定位标签不存在: " + styleName;
+                }
             }
         }
         if (StringUtils.hasText(row.getProductLevel())) {
@@ -1334,8 +1337,10 @@ public class ExcelAiImportService {
         rspu.setExternalCode(trim(row.getExternalCode()));
         rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
         rspu.setCategoryPath(resolveCategoryPath(rspu.getCategoryCode()));
-        rspu.setPositioningLabel(StringUtils.hasText(row.getPositioningLabel())
-            ? normalizeDictCode(row.getPositioningLabel(), dictCache.get("style"))
+        // 多风格时主字段存第一个风格（主风格），其余进 rspu_style 辅风格
+        String primaryStyleName = splitCsv(row.getPositioningLabel()).stream().findFirst().orElse(null);
+        rspu.setPositioningLabel(StringUtils.hasText(primaryStyleName)
+            ? normalizeDictCode(primaryStyleName, dictCache.get("style"))
             : "待识别");
         rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
@@ -1605,17 +1610,24 @@ public class ExcelAiImportService {
                                      Map<String, List<CategoryDict>> dictCache) {
         rspuStyleMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuStyle>()
             .eq("rspu_id", rspuId));
-        if (StringUtils.hasText(row.getPositioningLabel())) {
-            String styleCode = normalizeDictCode(row.getPositioningLabel(), dictCache.get("style"));
-            if (styleCode != null) {
-                RspuStyle style = new RspuStyle();
-                style.setRspuId(rspuId);
-                style.setDictType("style");
-                style.setStyleCode(styleCode);
-                style.setIsPrimary(true);
-                style.setCreatedAt(LocalDateTime.now());
-                rspuStyleMapper.insert(style);
+        // 风格支持多值（「中古风,奶油风」「中古风/奶油风」等写法）：
+        // 第一个值为主风格，其余为辅风格，均可被风格筛选命中
+        List<String> styleNames = splitCsv(row.getPositioningLabel());
+        java.util.Set<String> seenStyleCodes = new java.util.HashSet<>();
+        boolean firstStyle = true;
+        for (String styleName : styleNames) {
+            String styleCode = normalizeDictCode(styleName, dictCache.get("style"));
+            if (styleCode == null || !seenStyleCodes.add(styleCode)) {
+                continue;
             }
+            RspuStyle style = new RspuStyle();
+            style.setRspuId(rspuId);
+            style.setDictType("style");
+            style.setStyleCode(styleCode);
+            style.setIsPrimary(firstStyle);
+            style.setCreatedAt(LocalDateTime.now());
+            rspuStyleMapper.insert(style);
+            firstStyle = false;
         }
 
         rspuSceneMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuScene>()
@@ -1789,7 +1801,7 @@ public class ExcelAiImportService {
         if (!StringUtils.hasText(value)) {
             return result;
         }
-        for (String part : value.split("[，,]")) {
+        for (String part : value.split("[，,/、／]")) {
             if (StringUtils.hasText(part)) {
                 result.add(part.trim());
             }

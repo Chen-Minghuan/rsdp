@@ -10,6 +10,7 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.common.ReviewStatus;
 import com.rsdp.exception.ExternalServiceException;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.mapper.RspuMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -54,6 +55,8 @@ public class RetrievalService {
     private final ImageAssetsMapper imageAssetsMapper;
     private final ObjectMapper objectMapper;
     private final VisionService visionService;
+    private final RspuStyleMapper rspuStyleMapper;
+    private final DictService dictService;
 
     /**
      * 以图/以文搜索相似产品。
@@ -245,6 +248,9 @@ public class RetrievalService {
             : rspuMapper.selectBatchIds(rspuIds).stream()
                 .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
 
+        // 批量加载候选 RSPU 的风格集合（主+辅风格），避免 N+1
+        Map<String, Set<String>> rspuStylesMap = loadRspuStyles(rspuIds);
+
         // 按向量分排序后做跨 RSPU 同款去重
         candidates = candidates.stream()
             .sorted(Comparator.comparing(SimilarProductResponse::getVectorScore).reversed())
@@ -278,15 +284,14 @@ public class RetrievalService {
                     boost += 0.03;
                     reasons.add("类别一致");
                 }
-                if (request.getPositioningLabel() != null && !request.getPositioningLabel().isBlank()
-                    && request.getPositioningLabel().equals(rspu.getPositioningLabel())) {
+                if (matchesAnyStyle(request.getPositioningLabel(), rspu, rspuStylesMap)) {
                     boost += 0.03;
                     reasons.add("风格/定位一致");
                 }
 
                 // 查询图片视觉标签匹配加成
                 if (queryLabels != null) {
-                    boost += computeLabelBoost(queryLabels, rspu, reasons);
+                    boost += computeLabelBoost(queryLabels, rspu, reasons, rspuStylesMap);
                 }
             }
 
@@ -326,14 +331,15 @@ public class RetrievalService {
             + materials;
     }
 
-    private double computeLabelBoost(AiLabels queryLabels, RspuMaster rspu, List<String> reasons) {
+    private double computeLabelBoost(AiLabels queryLabels, RspuMaster rspu, List<String> reasons,
+                                     Map<String, Set<String>> rspuStylesMap) {
         double boost = 0.0;
 
-        // 风格一致
+        // 风格一致（主风格或任一辅风格命中均可）
         if (queryLabels.getStyle() != null && !queryLabels.getStyle().isBlank()
-            && queryLabels.getStyle().equalsIgnoreCase(rspu.getPositioningLabel())) {
+            && matchesAnyStyle(queryLabels.getStyle(), rspu, rspuStylesMap)) {
             boost += 0.05;
-            reasons.add("风格一致：" + rspu.getPositioningLabel());
+            reasons.add("风格一致：" + queryLabels.getStyle());
         }
 
         // 主色一致
@@ -379,6 +385,58 @@ public class RetrievalService {
         }
 
         return Math.min(boost, 0.20);
+    }
+
+    /**
+     * 批量加载 RSPU 的风格集合（主风格 + 辅风格），避免逐个候选查询的 N+1。
+     *
+     * <p>集合内同时包含风格 code 与字典名称两种形态：Excel 导入归一化后存 code、
+     * AI 识别输出名称，两种请求形态都能命中；无关联记录的老数据由
+     * {@link #matchesAnyStyle} 回退 positioningLabel 单值比对。</p>
+     */
+    private Map<String, Set<String>> loadRspuStyles(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<com.rsdp.entity.RspuStyle> styles = rspuStyleMapper.selectList(
+            new QueryWrapper<com.rsdp.entity.RspuStyle>().in("rspu_id", rspuIds));
+        if (styles == null || styles.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> codeToName = new HashMap<>();
+        List<com.rsdp.entity.CategoryDict> styleDicts = dictService.listByType("style");
+        if (styleDicts != null) {
+            for (com.rsdp.entity.CategoryDict d : styleDicts) {
+                if (d.getDictName() != null) {
+                    codeToName.put(d.getDictCode(), d.getDictName());
+                }
+            }
+        }
+        Map<String, Set<String>> result = new HashMap<>();
+        for (com.rsdp.entity.RspuStyle style : styles) {
+            Set<String> values = result.computeIfAbsent(style.getRspuId(), k -> new HashSet<>());
+            values.add(style.getStyleCode());
+            String name = codeToName.get(style.getStyleCode());
+            if (name != null) {
+                values.add(name);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 判断查询风格（code 或名称）是否命中 RSPU 的任一风格（主风格或辅风格）；
+     * 无风格关联记录时回退 positioningLabel 单值比对，兼容老数据。
+     */
+    private boolean matchesAnyStyle(String queryStyle, RspuMaster rspu, Map<String, Set<String>> rspuStylesMap) {
+        if (queryStyle == null || queryStyle.isBlank() || rspu == null) {
+            return false;
+        }
+        Set<String> styles = rspuStylesMap.get(rspu.getRspuId());
+        if (styles == null || styles.isEmpty()) {
+            return queryStyle.equalsIgnoreCase(Objects.toString(rspu.getPositioningLabel(), ""));
+        }
+        return styles.stream().anyMatch(s -> s.equalsIgnoreCase(queryStyle));
     }
 
     private List<String> normalizeTags(List<String> tags) {
