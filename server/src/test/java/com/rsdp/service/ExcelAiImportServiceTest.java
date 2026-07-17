@@ -38,6 +38,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -822,9 +823,88 @@ class ExcelAiImportServiceTest {
         assertEquals(Boolean.FALSE, savedImages.get(1).getPrimary(), "行 2 模块图应降级为详情图，不覆盖组主图");
         assertEquals("detail", savedImages.get(1).getImageType());
         assertEquals(savedImages.get(0).getRspuId(), savedImages.get(1).getRspuId(), "模块图应挂在同一 RSPU 下");
+        assertNull(savedImages.get(0).getVariantId(), "产品图样列的图归属 RSPU 产品级");
+        assertNull(savedImages.get(1).getVariantId(), "产品图样列的图归属 RSPU 产品级");
 
         // 组内 AI 识别任务只建一次（基于组主图）
         verify(asyncTaskMapper, times(1)).insert(any(com.rsdp.entity.AsyncTask.class));
+    }
+
+    @Test
+    void confirmAndImport_shouldNotPromoteModuleExampleImageToPrimary() throws IOException {
+        // 表格有图片列，但产品行的图只锚在「规格/模块」列（模块样式示例图）：
+        // 示例图只能作为详情图，不得升为主图，也不应触发 AI 识别任务
+        byte[] excelBytes = createExcelWithModuleOnlyImage();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode\",\"规格/模块\":\"variantDisplayName\",\"价格\":\"__PRICE__:A级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithModuleOnlyImage()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-TEST");
+            return 1;
+        });
+
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+        request.setSelectedPriceColumns(preview.getPriceColumns().stream()
+            .map(PriceColumnInfo::getHeader).toList());
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+
+        // 示例图入库但必须是详情图，不能升为主图
+        ArgumentCaptor<com.rsdp.entity.ImageAssets> imageCaptor =
+            ArgumentCaptor.forClass(com.rsdp.entity.ImageAssets.class);
+        verify(imageAssetsMapper, times(1)).insert(imageCaptor.capture());
+        assertEquals(Boolean.FALSE, imageCaptor.getValue().getPrimary(), "模块示例图不得升为主图");
+        assertEquals("detail", imageCaptor.getValue().getImageType());
+        assertEquals("V-A", imageCaptor.getValue().getVariantId(), "模块示例图应挂到本行变体");
+
+        // 无主图 → 不建 AI 识别任务
+        verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
     }
 
     @Test
@@ -1086,6 +1166,36 @@ class ExcelAiImportServiceTest {
             var anchor3 = helper.createClientAnchor();
             anchor3.setRow1(2); anchor3.setCol1(6); anchor3.setRow2(3); anchor3.setCol2(7);
             drawing.createPicture(anchor3, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithModuleOnlyImage() {
+        // 有图片列表头（col1），但唯一一张图锚在「规格/模块」列（col3）——模块样式示例图
+        byte[] pngBytes = java.util.Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(1).setCellValue("产品图样 PICTURE");
+            header.createCell(2).setCellValue("型号品名");
+            header.createCell(3).setCellValue("规格/模块");
+            header.createCell(4).setCellValue("价格（PRICE）");
+            var data1 = sheet.createRow(1);
+            data1.createCell(2).setCellValue("MJ-S96");
+            data1.createCell(3).setCellValue("模块A");
+            data1.createCell(4).setCellValue("8720");
+
+            var helper = workbook.getCreationHelper();
+            var drawing = sheet.createDrawingPatriarch();
+            // 图锚定：行 1 规格/模块列（col3），图片列（col1）无图
+            var anchor = helper.createClientAnchor();
+            anchor.setRow1(1); anchor.setCol1(3); anchor.setRow2(2); anchor.setCol2(4);
+            drawing.createPicture(anchor, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {

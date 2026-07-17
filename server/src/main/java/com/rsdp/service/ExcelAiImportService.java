@@ -987,14 +987,21 @@ public class ExcelAiImportService {
             saveStylesAndScenes(rspuId, row, dictCache);
             createdNewRspu = true;
         }
-        // 模块行图片：组内已有主图时全部作为详情图；组内尚无主图时允许本行首图升为主图
-        boolean allowPrimary = !sameProduct || !currentGroup.hasPrimaryImage;
-        String primaryObjectKey = saveImages(rspuId, null, images, allowPrimary);
-
-        // 创建 RSPU-工厂关联
+        // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）
         excelImportRowService.updateStage(importRowId, "create_factory_mapping");
         String variantId = createRspuFactoryMappingAndVariants(rspuId, dataRow, row, priceColumns, request,
             dictCache, importRowId);
+
+        // 模块行图片：组内已有主图时全部作为详情图；组内尚无主图时允许本行首图升为主图
+        boolean allowPrimary = !sameProduct || !currentGroup.hasPrimaryImage;
+        // 表格有图片列时启用严格主图模式：规格模块示例图不兜底升主图，避免示例图被当成产品主图
+        boolean strictPrimary = physicalLayout != null && !physicalLayout.imageColumns().isEmpty();
+        // 产品级图：URL 图 + 产品图样列内嵌图 → 挂 RSPU；
+        // 变体级图：规格模块示例图（锚在模块列等非图片列）→ 挂本行变体，变体无图时展示层回退产品主图
+        List<DownloadedImage> productImages = images.stream().filter(img -> !img.variantLevel()).toList();
+        List<DownloadedImage> variantImages = images.stream().filter(DownloadedImage::variantLevel).toList();
+        String primaryObjectKey = saveImages(rspuId, null, productImages, allowPrimary, strictPrimary);
+        saveImages(rspuId, variantId, variantImages, false, false);
 
         excelImportRowService.updateStage(importRowId, "create_async_task");
         String taskId = null;
@@ -1272,7 +1279,7 @@ public class ExcelAiImportService {
                 if (bytes.length == 0 || bytes.length > MAX_IMAGE_SIZE) {
                     return null;
                 }
-                return new DownloadedImage(url, bytes, contentType, primary);
+                return new DownloadedImage(url, bytes, contentType, primary, false);
             }
         } catch (Exception e) {
             log.warn("下载图片失败: {}", url, e);
@@ -1295,14 +1302,17 @@ public class ExcelAiImportService {
         List<DownloadedImage> result = new ArrayList<>();
         for (ExcelImageExtractor.EmbeddedImage img : images) {
             boolean primary = false;
+            boolean variantLevel = false;
             if (physicalLayout != null && physicalLayout.maxDataColumn() >= 0) {
                 // 数据区域之外的图（logo/二维码/装饰图）不视为产品图
                 if (img.colIndex() < physicalLayout.minDataColumn() || img.colIndex() > physicalLayout.maxDataColumn()) {
                     log.debug("第 {} 行忽略数据区域外的内嵌图，colIndex={}", rowIndex, img.colIndex());
                     continue;
                 }
-                // 锚定在图片列的图是产品主图候选；其他数据列（如规格/模块列）的图是模块图，作为详情图
+                // 锚定在图片列的图是产品主图候选；
+                // 其他数据列（如规格/模块列）的图是模块样式示例图，归属本行变体
                 primary = physicalLayout.imageColumns().contains(img.colIndex());
+                variantLevel = !physicalLayout.imageColumns().isEmpty() && !primary;
             }
             String contentType = switch (img.extension().toLowerCase()) {
                 case "png" -> "image/png";
@@ -1311,7 +1321,7 @@ public class ExcelAiImportService {
                 default -> "image/jpeg";
             };
             result.add(new DownloadedImage("embedded://" + img.rowIndex() + "-" + img.colIndex(),
-                img.bytes(), contentType, primary));
+                img.bytes(), contentType, primary, variantLevel));
         }
         return result;
     }
@@ -1481,7 +1491,7 @@ public class ExcelAiImportService {
             // 没有价格列时，创建默认变体
             String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache);
             firstVariantId = variantId;
-            saveImages(rspuId, variantId, List.of(), true);
+            saveImages(rspuId, variantId, List.of(), true, false);
         }
 
         return firstVariantId;
@@ -1628,14 +1638,19 @@ public class ExcelAiImportService {
     /**
      * 保存图片到存储并登记 image_assets。
      *
-     * @param rspuId       所属 RSPU
-     * @param variantId    所属变体（可为 null）
-     * @param images       图片列表
-     * @param allowPrimary 是否允许产生主图；false 时全部登记为详情图
-     *                     （同产品模块行的规格图不应覆盖组主图）
+     * @param rspuId        所属 RSPU
+     * @param variantId     所属变体（可为 null）
+     * @param images        图片列表
+     * @param allowPrimary  是否允许产生主图；false 时全部登记为详情图
+     *                      （同产品模块行的规格图不应覆盖组主图）
+     * @param strictPrimary 严格主图模式（表格有明确图片列时启用）：
+     *                      true 时只有标记为 primary 的图（产品图样列的图）才能成为主图，
+     *                      规格模块示例图等不再兜底升主图，行内无产品图样图则该产品无主图；
+     *                      false 时保持旧行为（无 primary 标记则首图升主图）
      * @return 主图 objectKey，未产生主图时为 null
      */
-    private String saveImages(String rspuId, String variantId, List<DownloadedImage> images, boolean allowPrimary) {
+    private String saveImages(String rspuId, String variantId, List<DownloadedImage> images,
+                              boolean allowPrimary, boolean strictPrimary) {
         if (images == null || images.isEmpty()) {
             return null;
         }
@@ -1655,7 +1670,8 @@ public class ExcelAiImportService {
                 continue;
             }
 
-            boolean isPrimary = allowPrimary && (downloaded.primary || (!hasPrimary && i == 0));
+            boolean isPrimary = allowPrimary
+                && (downloaded.primary || (!strictPrimary && !hasPrimary && i == 0));
             ImageAssets imageAsset = new ImageAssets();
             imageAsset.setImageId(imageId);
             imageAsset.setRspuId(rspuId);
@@ -1847,7 +1863,8 @@ public class ExcelAiImportService {
                                   int minDataColumn, int maxDataColumn) {
     }
 
-    private record DownloadedImage(String source, byte[] bytes, String contentType, boolean primary) {
+    private record DownloadedImage(String source, byte[] bytes, String contentType, boolean primary,
+                                   boolean variantLevel) {
     }
 
     /**
