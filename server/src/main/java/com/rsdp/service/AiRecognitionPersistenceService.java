@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -107,12 +108,27 @@ public class AiRecognitionPersistenceService {
         }
 
         RspuMaster oldSnapshot = snapshot(rspu);
-        rspu.setPositioningLabel(styleCode != null ? styleCode : labels.getStyle());
-        rspu.setSixDimTags(toJson(labels.getSixDimTags()));
-        rspu.setColorPrimaryName(labels.getColorPrimaryName());
-        rspu.setColorPrimaryHsv(toJson(labels.getColorPrimaryHsv()));
-        rspu.setMaterialTags(toJson(materialCodes));
-        rspu.setSceneTags(toJson(sceneCodes));
+        // 人工/Excel 已明确提供的字段不被 AI 覆盖，AI 只补空缺
+        // （来源判断 = 字段是否为空；Excel 导入与人工录入提供过的字段必然非空）
+        if (isBlankOrUnidentified(rspu.getPositioningLabel())) {
+            rspu.setPositioningLabel(styleCode != null ? styleCode : labels.getStyle());
+        }
+        if (isEmptyJson(rspu.getSixDimTags(), "{}")) {
+            rspu.setSixDimTags(toJson(labels.getSixDimTags()));
+        }
+        if (!StringUtils.hasText(rspu.getColorPrimaryName())) {
+            rspu.setColorPrimaryName(labels.getColorPrimaryName());
+        }
+        if (isEmptyJson(rspu.getColorPrimaryHsv(), "[]")) {
+            rspu.setColorPrimaryHsv(toJson(labels.getColorPrimaryHsv()));
+        }
+        if (isEmptyJson(rspu.getMaterialTags(), "[]")) {
+            rspu.setMaterialTags(toJson(materialCodes));
+        }
+        if (isEmptyJson(rspu.getSceneTags(), "[]")) {
+            rspu.setSceneTags(toJson(sceneCodes));
+        }
+        // 向量与置信度是 AI 识别产物（无人工来源），始终更新
         if (embedding != null) {
             rspu.setStyleVector(toJson(embedding));
         }
@@ -122,6 +138,20 @@ public class AiRecognitionPersistenceService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+    }
+
+    /**
+     * 定位标签是否为空缺（null/空串/「待识别」占位），空缺时允许 AI 填充。
+     */
+    private boolean isBlankOrUnidentified(String value) {
+        return !StringUtils.hasText(value) || "待识别".equals(value.trim());
+    }
+
+    /**
+     * JSON 字段是否为空缺（null/空串/空数组/空对象），空缺时允许 AI 填充。
+     */
+    private boolean isEmptyJson(String value, String emptyForm) {
+        return !StringUtils.hasText(value) || emptyForm.equals(value.trim());
     }
 
     private void markRspuAsDoubtful(String rspuId, String modelName) {
@@ -141,7 +171,11 @@ public class AiRecognitionPersistenceService {
     }
 
     private void refreshStyleAssociations(String rspuId, String styleCode, List<String> secondaryStyleCodes) {
-        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        // 人工/Excel 已明确提供风格关联时不覆盖，AI 只补空缺
+        Long existing = rspuStyleMapper.selectCount(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        if (existing != null && existing > 0) {
+            return;
+        }
         if (styleCode == null || styleCode.isBlank()) {
             return;
         }
@@ -173,7 +207,11 @@ public class AiRecognitionPersistenceService {
     }
 
     private void refreshSceneAssociations(String rspuId, List<String> sceneCodes) {
-        rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
+        // 人工/Excel 已明确提供场景关联时不覆盖，AI 只补空缺
+        Long existing = rspuSceneMapper.selectCount(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
+        if (existing != null && existing > 0) {
+            return;
+        }
         if (sceneCodes == null || sceneCodes.isEmpty()) {
             return;
         }
