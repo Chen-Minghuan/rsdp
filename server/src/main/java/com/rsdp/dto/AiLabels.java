@@ -8,6 +8,10 @@ import java.util.Map;
 @Data
 public class AiLabels {
     private String style;
+    /**
+     * 备选风格（模型判断产品也可能适用的其他风格，不含主风格）。
+     */
+    private List<String> secondaryStyles;
     private Map<String, String> sixDimTags;
     private String colorPrimaryName;
     private List<Double> colorPrimaryHsv;

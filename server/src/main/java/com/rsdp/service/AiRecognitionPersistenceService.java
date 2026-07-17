@@ -69,11 +69,12 @@ public class AiRecognitionPersistenceService {
                             String recognitionId, String modelName,
                             AiLabels labels, int processingTime, float[] embedding) {
         String styleCode = dictResolverService.resolveCodeByName("style", labels.getStyle());
+        List<String> secondaryStyleCodes = dictResolverService.resolveCodesByNames("style", labels.getSecondaryStyles());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
         List<String> materialCodes = dictResolverService.resolveCodesByNames("material", labels.getMaterialTags());
 
         updateRspu(rspuId, labels, styleCode, materialCodes, sceneCodes, embedding, modelName);
-        refreshStyleAssociations(rspuId, styleCode);
+        refreshStyleAssociations(rspuId, styleCode, secondaryStyleCodes);
         refreshSceneAssociations(rspuId, sceneCodes);
         markImageProcessed(imageId);
         insertRecognitionRecord(taskId, rspuId, imageId, recognitionId, modelName, labels, processingTime, "success", null);
@@ -139,7 +140,7 @@ public class AiRecognitionPersistenceService {
         auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
     }
 
-    private void refreshStyleAssociations(String rspuId, String styleCode) {
+    private void refreshStyleAssociations(String rspuId, String styleCode, List<String> secondaryStyleCodes) {
         rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
         if (styleCode == null || styleCode.isBlank()) {
             return;
@@ -151,6 +152,24 @@ public class AiRecognitionPersistenceService {
         style.setIsPrimary(true);
         style.setCreatedAt(LocalDateTime.now());
         rspuStyleMapper.insert(style);
+        // 备选风格（AI 识别输出，去重且不与主风格重复）
+        if (secondaryStyleCodes == null) {
+            return;
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        seen.add(styleCode);
+        for (String secondaryCode : secondaryStyleCodes) {
+            if (secondaryCode == null || secondaryCode.isBlank() || !seen.add(secondaryCode)) {
+                continue;
+            }
+            RspuStyle secondary = new RspuStyle();
+            secondary.setRspuId(rspuId);
+            secondary.setDictType("style");
+            secondary.setStyleCode(secondaryCode);
+            secondary.setIsPrimary(false);
+            secondary.setCreatedAt(LocalDateTime.now());
+            rspuStyleMapper.insert(secondary);
+        }
     }
 
     private void refreshSceneAssociations(String rspuId, List<String> sceneCodes) {
