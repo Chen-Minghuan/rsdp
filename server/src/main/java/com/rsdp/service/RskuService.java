@@ -176,7 +176,15 @@ public class RskuService {
         try {
             rskuSupplyMapper.insert(rsku);
         } catch (DataIntegrityViolationException e) {
-            throw new BusinessException("该工厂对该变体已有报价");
+            // 细化约束冲突类型，给出可操作的错误信息
+            String detail = e.getMessage() != null ? e.getMessage() : "";
+            if (detail.contains("unique") || detail.contains("duplicate")) {
+                throw new BusinessException("该工厂对该变体已有报价");
+            }
+            if (detail.contains("foreign key")) {
+                throw new BusinessException("关联数据不存在（产品/变体/工厂），请刷新后重试");
+            }
+            throw new BusinessException("数据约束冲突，请检查输入");
         }
 
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());

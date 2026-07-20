@@ -41,10 +41,11 @@ public class AdminController {
     /**
      * 触发存量图片向量回填。
      *
+     * <p>授权：URL 级规则 {@code /api/v1/admin/**} 要求 ADMIN 角色（见 SecurityConfig）。</p>
+     *
      * @param batchSize 单次处理数量，默认 100
      * @return 处理统计
      */
-    // TODO: 接入认证授权后，应限制为管理员角色才可调用该运维接口。
     @PostMapping("/vectors/backfill")
     @Operation(summary = "向量回填", description = "为存量已识别图片生成 embedding 并写入向量库")
     public Result<BackfillResult> backfillVectors(@RequestParam(defaultValue = "100")

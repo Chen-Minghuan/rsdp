@@ -123,7 +123,7 @@ onMounted(() => {
             style="width: 180px;"
             :loading="loadingDicts"
           />
-          <n-input-number v-model:value="budgetLimit" :min="1" placeholder="预算上限" style="width: 180px;">
+          <n-input-number v-model:value="budgetLimit" :min="0" :max="99999999" placeholder="预算上限" style="width: 180px;">
             <template #prefix>
               ¥
             </template>

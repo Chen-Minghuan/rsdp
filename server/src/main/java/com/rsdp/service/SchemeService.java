@@ -426,6 +426,8 @@ public class SchemeService {
         if (affected == 0) {
             throw new ResourceNotFoundException("方案不存在或已被删除: " + schemeId);
         }
+        // 级联软删除方案明细（@TableLogic → UPDATE deleted_at），避免残留孤儿记录
+        schemeItemMapper.delete(new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId));
     }
 
     /**

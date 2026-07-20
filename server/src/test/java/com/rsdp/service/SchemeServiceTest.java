@@ -49,6 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -250,6 +251,9 @@ class SchemeServiceTest {
         schemeService.deleteScheme("SCHEME-001");
 
         verify(schemeMapper).deleteById("SCHEME-001");
+        // 级联软删除方案明细，避免残留孤儿记录
+        verify(schemeItemMapper).delete(argThat((QueryWrapper<SchemeItem> w) ->
+            w != null && String.valueOf(w.getSqlSegment()).contains("scheme_id")));
     }
 
     @Test

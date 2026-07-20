@@ -8,9 +8,9 @@ export interface RoomSchemeRequest {
 }
 
 /**
- * 搭配方案单项。
+ * 搭配方案单项（AI 搭配结果项，与 scheme.ts 的方案明细项 SchemeItem 区分）。
  */
-export interface SchemeItem {
+export interface AiSchemeItem {
   rspuId: string
   rspuName: string
   primaryImageUrl?: string
@@ -33,7 +33,7 @@ export interface RoomSchemeResponse {
   totalPrice: number
   itemCount: number
   reasoning: string
-  items: SchemeItem[]
+  items: AiSchemeItem[]
 }
 
 /**
@@ -51,5 +51,5 @@ export interface AnchorMatchingResponse {
   existingRspuId: string
   targetCategoryCode: string
   reasoning: string
-  items: SchemeItem[]
+  items: AiSchemeItem[]
 }

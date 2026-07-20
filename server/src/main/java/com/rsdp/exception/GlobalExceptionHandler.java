@@ -2,6 +2,8 @@ package com.rsdp.exception;
 
 import com.rsdp.common.Result;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -58,9 +60,11 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(ExternalServiceException.class)
-    public Result<Void> handleExternalServiceException(ExternalServiceException e) {
+    public ResponseEntity<Result<Void>> handleExternalServiceException(ExternalServiceException e) {
         log.error("外部服务调用失败: {}", e.getMessage(), e);
-        return Result.error(e.getCode(), e.getMessage());
+        // 外部依赖（AI/向量库/存储）故障返回真实 503，便于前端与监控区分业务错误与系统故障
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+            .body(Result.error(e.getCode(), e.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)

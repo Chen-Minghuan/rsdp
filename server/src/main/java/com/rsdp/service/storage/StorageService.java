@@ -49,8 +49,9 @@ public interface StorageService {
      *
      * @param objectKey 对象键
      * @return true 表示存在
+     * @throws IOException 查询失败（存储不可用等，区别于文件不存在）
      */
-    boolean exists(String objectKey);
+    boolean exists(String objectKey) throws IOException;
 
     /**
      * 删除文件。

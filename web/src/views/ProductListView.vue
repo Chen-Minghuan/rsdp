@@ -24,7 +24,7 @@ import { addFavorite, removeFavorite, checkFavorites } from '@/api/favorite'
 import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { PERMISSIONS, ROLES, IMAGE_FALLBACK_SRC } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSummary } from '@/types/product'
 import { useMessage } from 'naive-ui'
@@ -208,6 +208,7 @@ const columns: DataTableColumns<ProductSummary> = [
       return row.primaryImageUrl
         ? h(NImage, {
             src: row.primaryImageUrl,
+            fallbackSrc: IMAGE_FALLBACK_SRC,
             width: 80,
             height: 80,
             objectFit: 'cover',

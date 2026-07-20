@@ -14,7 +14,7 @@ import {
   NTag
 } from 'naive-ui'
 import { recommendByAnchor } from '@/api/matching'
-import type { AnchorMatchingResponse, SchemeItem } from '@/types/matching'
+import type { AnchorMatchingResponse, AiSchemeItem } from '@/types/matching'
 
 const router = useRouter()
 
@@ -46,7 +46,7 @@ async function handleRecommend() {
   }
 }
 
-function navigateToDetail(item: SchemeItem) {
+function navigateToDetail(item: AiSchemeItem) {
   router.push(`/products/${item.rspuId}`)
 }
 </script>
