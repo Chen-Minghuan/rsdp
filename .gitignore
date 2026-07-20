@@ -55,3 +55,6 @@ coverage/
 tmp/
 temp/
 *.tmp
+
+# 本地 Agent 协作笔记
+.agent-notes.md

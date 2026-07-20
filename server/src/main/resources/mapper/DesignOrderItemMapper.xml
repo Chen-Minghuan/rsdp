@@ -29,10 +29,10 @@
                 #{item.model},
                 #{item.imageId},
                 #{item.quantity},
-                #{item.originalPrice},
-                #{item.finalPrice},
+                #{item.originalPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
+                #{item.finalPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
                 #{item.factoryCode},
-                #{item.snapshotJson},
+                #{item.snapshotJson, typeHandler=com.rsdp.config.typehandler.JsonbTypeHandler},
                 #{item.createdAt}
             )
         </foreach>

@@ -125,10 +125,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAuthority(Permissions.RSKU_DELETE)
                 .requestMatchers("/api/v1/rsku/import").hasAuthority(Permissions.RSKU_IMPORT)
 
-                // 产品关系与变体
+                // 产品关系、变体与工厂关联
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/relations").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/relations/*").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/*/relations/*").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/factories").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/products/*/factories/*").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/variants").hasAuthority(Permissions.PRODUCT_UPDATE)
 
                 // 产品复核
@@ -142,6 +144,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/factories").hasAuthority(Permissions.FACTORY_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_DELETE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/factories/*/lead-time-rules").hasAuthority(Permissions.FACTORY_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/*/lead-time-rules/*").hasAuthority(Permissions.FACTORY_UPDATE)
 
                 // 报价单
                 .requestMatchers(HttpMethod.POST, "/api/v1/quotes/generate").hasAuthority(Permissions.QUOTE_GENERATE)

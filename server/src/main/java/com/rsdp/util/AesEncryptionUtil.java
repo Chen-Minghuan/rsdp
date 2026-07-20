@@ -80,15 +80,29 @@ public class AesEncryptionUtil {
 
     /**
      * 明文价格兜底：当密文解析失败时，若原始值为合法数字则按明文处理。
+     *
+     * <p>日志中不输出原始价格明文，仅记录长度与 SHA-256 哈希，避免敏感信息泄露。</p>
      */
     private static BigDecimal fallbackPlainPrice(String raw, Exception cause) {
         try {
             BigDecimal price = new BigDecimal(raw.trim());
-            log.warn("价格字段疑似仍为明文，已兜底返回原始值: {}", raw);
+            log.warn("价格字段疑似仍为明文，已兜底返回。长度={}，哈希={}",
+                raw.length(), hashRawValue(raw));
             return price;
         } catch (NumberFormatException nfe) {
-            log.error("AES 解密失败且无法作为明文价格解析: {}", raw, cause);
+            log.error("AES 解密失败且无法作为明文价格解析。长度={}，哈希={}",
+                raw.length(), hashRawValue(raw), cause);
             throw new IllegalStateException("AES 解密失败: 密文格式错误", cause);
+        }
+    }
+
+    private static String hashRawValue(String raw) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(raw.getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(hash);
+        } catch (Exception e) {
+            return "HASH_ERROR";
         }
     }
 
