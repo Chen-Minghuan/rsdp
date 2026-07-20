@@ -34,10 +34,27 @@ public class ConfigService {
         if (config == null || !StringUtils.hasText(config.getConfigValue())) {
             return BigDecimal.ONE;
         }
+        BigDecimal rate;
         try {
-            return new BigDecimal(config.getConfigValue().trim());
+            rate = new BigDecimal(config.getConfigValue().trim());
         } catch (NumberFormatException e) {
             throw new BusinessException("订单折扣率配置格式错误: " + config.getConfigValue());
+        }
+        validateOrderPriceRate(rate);
+        return rate;
+    }
+
+    /**
+     * 校验订单全局折扣率是否在合法范围 [0, 1] 内。
+     *
+     * @param rate 折扣率
+     */
+    public static void validateOrderPriceRate(BigDecimal rate) {
+        if (rate == null) {
+            throw new BusinessException("订单折扣率不能为空");
+        }
+        if (rate.compareTo(BigDecimal.ZERO) < 0 || rate.compareTo(BigDecimal.ONE) > 0) {
+            throw new BusinessException("订单折扣率必须在 0 到 1 之间（含），当前值: " + rate);
         }
     }
 
@@ -64,6 +81,15 @@ public class ConfigService {
      */
     @Transactional
     public SysConfig set(String key, String value) {
+        if (ORDER_PRICE_RATE_KEY.equals(key)) {
+            BigDecimal rate;
+            try {
+                rate = new BigDecimal(value.trim());
+            } catch (NumberFormatException | NullPointerException e) {
+                throw new BusinessException("订单折扣率配置格式错误: " + value);
+            }
+            validateOrderPriceRate(rate);
+        }
         SysConfig config = sysConfigMapper.selectById(key);
         if (config == null) {
             config = new SysConfig();

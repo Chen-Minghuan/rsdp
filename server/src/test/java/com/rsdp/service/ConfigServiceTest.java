@@ -55,4 +55,23 @@ class ConfigServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("格式错误");
     }
+
+    @Test
+    void getOrderPriceRateShouldRejectOutOfRangeValue() {
+        SysConfig config = new SysConfig();
+        config.setConfigKey(ConfigService.ORDER_PRICE_RATE_KEY);
+        config.setConfigValue("1.5");
+        when(sysConfigMapper.selectById(ConfigService.ORDER_PRICE_RATE_KEY)).thenReturn(config);
+
+        assertThatThrownBy(() -> configService.getOrderPriceRate())
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("0 到 1");
+    }
+
+    @Test
+    void setOrderPriceRateShouldRejectOutOfRangeValue() {
+        assertThatThrownBy(() -> configService.set(ConfigService.ORDER_PRICE_RATE_KEY, "-0.1"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("0 到 1");
+    }
 }

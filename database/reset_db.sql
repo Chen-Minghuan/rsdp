@@ -993,7 +993,7 @@ CREATE TABLE IF NOT EXISTS design_order (
     receiver_area VARCHAR(128),
     receiver_address VARCHAR(256),
     original_total_price TEXT,
-    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1,
+    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1 CHECK (price_rate >= 0 AND price_rate <= 1),
     final_total_price TEXT,
     item_count INT NOT NULL DEFAULT 0,
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
