@@ -18,11 +18,11 @@ init-db: ## 初始化 PostgreSQL 数据库（需先启动 postgres）
 	@echo "数据库初始化完成"
 
 seed: ## 导入 PostgreSQL 字典种子数据
-	@PGPASSWORD=$(POSTGRES_PASSWORD) psql -h localhost -U $(POSTGRES_USER) -d rsdp -f database/seed_data.sql
+	@PGPASSWORD=$(POSTGRES_PASSWORD) psql -h localhost -p 5433 -U $(POSTGRES_USER) -d rsdp -f database/V1__seed_data.sql
 	@echo "字典种子数据导入完成"
 
 seed-style: ## 导入风格数据库案例/元素/公式种子数据
-	@PGPASSWORD=$(POSTGRES_PASSWORD) psql -h localhost -U $(POSTGRES_USER) -d rsdp -f database/seed_style_knowledge.sql
+	@PGPASSWORD=$(POSTGRES_PASSWORD) psql -h localhost -p 5433 -U $(POSTGRES_USER) -d rsdp -f database/seed_style_knowledge.sql
 	@echo "风格数据库种子数据导入完成"
 
 dev: ## 本地开发：启动基础设施 + 数据库（默认不含 Ollama）

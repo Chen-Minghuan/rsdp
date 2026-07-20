@@ -2,6 +2,14 @@
 -- 用途：清空当前 rsdp 数据库并重新初始化表结构 + 种子数据
 -- 执行方式：在 IDEA 数据库插件的 rsdp@localhost Console 中全选执行
 
+-- 环境守卫：防止误在其他数据库执行
+DO $$
+BEGIN
+    IF current_database() != 'rsdp' THEN
+        RAISE EXCEPTION '此脚本只能在 rsdp 数据库中执行，当前数据库: %', current_database();
+    END IF;
+END $$;
+
 -- =================== 1. 清理旧表 ===================
 DROP TABLE IF EXISTS matching_feedback CASCADE;
 DROP TABLE IF EXISTS product_style_match CASCADE;
