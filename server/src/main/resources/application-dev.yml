@@ -33,6 +33,10 @@ rsdp:
     cookie-secure: false
     cookie-same-site: Lax
 
+  order:
+    # 开发环境仅用于本地联调，生产环境必须通过 RSDP_ORDER_INVITE_SECRET 覆盖
+    invite-secret: ${RSDP_ORDER_INVITE_SECRET:change-me-in-production-rsdp-order-invite-secret}
+
   import:
     # 开发/测试环境可放开本地图片地址；生产环境应留空，仅允许公网地址
     allowed-image-hosts: 127.0.0.1,localhost

@@ -43,7 +43,8 @@ class OrderInviteServiceTest {
     @BeforeEach
     void setUp() {
         inviteService = new OrderInviteService(
-            designOrderMapper, designOrderItemMapper, orderService, "test-secret", 7);
+            designOrderMapper, designOrderItemMapper, orderService,
+            "test-secret-must-be-at-least-32-characters-long", 7);
     }
 
     private DesignOrder buildOrder() {
@@ -116,7 +117,8 @@ class OrderInviteServiceTest {
     @Test
     void getInviteView_expiredToken_shouldReject() {
         OrderInviteService shortLivedService = new OrderInviteService(
-            designOrderMapper, designOrderItemMapper, orderService, "test-secret", -1);
+            designOrderMapper, designOrderItemMapper, orderService,
+            "test-secret-must-be-at-least-32-characters-long", -1);
         DesignOrder order = buildOrder();
         when(orderService.getAccessibleOrder("ORD-test0001")).thenReturn(order);
         InviteTokenResponse invite = shortLivedService.createInvite("ORD-test0001");

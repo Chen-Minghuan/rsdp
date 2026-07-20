@@ -1,6 +1,16 @@
 spring:
   application:
     name: rsdp-server
+  datasource:
+    hikari:
+      # 连接池大小：本地部署推荐 (CPU 核数 * 2) + 有效磁盘数，典型值 10~20
+      maximum-pool-size: ${RSDP_HIKARI_MAX_POOL_SIZE:20}
+      minimum-idle: ${RSDP_HIKARI_MIN_IDLE:5}
+      connection-timeout: ${RSDP_HIKARI_CONNECTION_TIMEOUT:20000}
+      idle-timeout: ${RSDP_HIKARI_IDLE_TIMEOUT:300000}
+      max-lifetime: ${RSDP_HIKARI_MAX_LIFETIME:1200000}
+      leak-detection-threshold: ${RSDP_HIKARI_LEAK_DETECTION_THRESHOLD:60000}
+      pool-name: RSDP-HikariCP
   servlet:
     multipart:
       max-file-size: 200MB
@@ -88,6 +98,11 @@ rsdp:
       lock-duration-minutes: ${RSDP_LOGIN_LOCK_DURATION_MINUTES:15}
       # 失败计数窗口（分钟）
       attempt-window-minutes: ${RSDP_LOGIN_ATTEMPT_WINDOW_MINUTES:30}
+  order:
+    # 订单客户邀请链接 HMAC 密钥，长度 >= 32 位；生产环境必须通过 RSDP_ORDER_INVITE_SECRET 注入
+    invite-secret: ${RSDP_ORDER_INVITE_SECRET:}
+    # 邀请链接有效期（天）
+    invite-expire-days: ${RSDP_ORDER_INVITE_EXPIRE_DAYS:7}
   import:
     # 产品批量导入时允许下载图片的 host 白名单，逗号分隔；留空表示仅允许公网地址
     allowed-image-hosts: ${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:}
