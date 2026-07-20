@@ -103,13 +103,18 @@ public class StatisticsService {
         return result;
     }
 
+    private static final int FACTORY_STAT_MONTHS = 12;
+
     /**
      * 工厂维度方案金额 TOP10（按方案项出厂价 × 数量聚合）。
+     * 仅统计最近 12 个月内的活跃方案，避免数据量无限增长。
      *
      * @return 工厂统计列表
      */
     public List<FactoryStatResponse> factories() {
-        List<Scheme> schemes = schemeMapper.selectList(schemeScope());
+        LocalDate startDate = LocalDate.now().minusMonths(FACTORY_STAT_MONTHS).withDayOfMonth(1);
+        List<Scheme> schemes = schemeMapper.selectList(schemeScope()
+            .ge("created_at", startDate.atStartOfDay()));
         if (schemes.isEmpty()) {
             return List.of();
         }

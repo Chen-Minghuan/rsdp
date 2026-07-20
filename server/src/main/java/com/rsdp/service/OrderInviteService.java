@@ -116,10 +116,22 @@ public class OrderInviteService {
         if (!OrderService.STATUS_PENDING.equals(order.getStatus())) {
             throw new BusinessException("订单当前状态不可确认");
         }
+
+        DesignOrder update = new DesignOrder();
+        update.setStatus(OrderService.STATUS_CONFIRMED);
+        update.setInviteConfirmedAt(LocalDateTime.now());
+        update.setUpdatedAt(LocalDateTime.now());
+        int affected = designOrderMapper.update(update, new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<DesignOrder>()
+            .eq("order_id", order.getOrderId())
+            .eq("status", OrderService.STATUS_PENDING)
+            .isNull("invite_confirmed_at"));
+        if (affected == 0) {
+            throw new BusinessException("订单状态已被其他操作修改，请刷新后重试");
+        }
+
         order.setStatus(OrderService.STATUS_CONFIRMED);
-        order.setInviteConfirmedAt(LocalDateTime.now());
-        order.setUpdatedAt(LocalDateTime.now());
-        designOrderMapper.updateById(order);
+        order.setInviteConfirmedAt(update.getInviteConfirmedAt());
+        order.setUpdatedAt(update.getUpdatedAt());
         return buildView(order);
     }
 

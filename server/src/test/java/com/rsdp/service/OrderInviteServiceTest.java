@@ -135,6 +135,7 @@ class OrderInviteServiceTest {
         mockItems();
         InviteTokenResponse invite = inviteService.createInvite("ORD-test0001");
         when(designOrderMapper.selectById("ORD-test0001")).thenReturn(order);
+        when(designOrderMapper.update(any(DesignOrder.class), any(QueryWrapper.class))).thenReturn(1);
 
         OrderInviteViewResponse view = inviteService.confirmInvite(invite.getToken());
 
@@ -145,6 +146,19 @@ class OrderInviteServiceTest {
         assertThatThrownBy(() -> inviteService.confirmInvite(invite.getToken()))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("不可重复");
+    }
+
+    @Test
+    void confirmInvite_shouldFailWhenConcurrentlyModified() {
+        DesignOrder order = buildOrder();
+        when(orderService.getAccessibleOrder("ORD-test0001")).thenReturn(order);
+        InviteTokenResponse invite = inviteService.createInvite("ORD-test0001");
+        when(designOrderMapper.selectById("ORD-test0001")).thenReturn(order);
+        when(designOrderMapper.update(any(DesignOrder.class), any(QueryWrapper.class))).thenReturn(0);
+
+        assertThatThrownBy(() -> inviteService.confirmInvite(invite.getToken()))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("已被其他操作修改");
     }
 
     @Test

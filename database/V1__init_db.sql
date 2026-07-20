@@ -813,6 +813,13 @@ CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE delete
 CREATE INDEX IF NOT EXISTS idx_design_order_project ON design_order(project_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_design_order_scheme ON design_order(scheme_id) WHERE deleted_at IS NULL;
 
+-- 订单号每日序号计数器（解决 COUNT+1 在软删除下与唯一索引冲突的问题）
+CREATE TABLE IF NOT EXISTS order_no_counter (
+    date_part VARCHAR(16) PRIMARY KEY,
+    sequence_value BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 订单明细（V5 并入）
 CREATE TABLE IF NOT EXISTS design_order_item (
     id BIGSERIAL PRIMARY KEY,
