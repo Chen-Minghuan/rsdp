@@ -9,6 +9,7 @@ import com.rsdp.dto.response.UserResponse;
 import com.rsdp.security.Permissions;
 import com.rsdp.service.UserService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
@@ -41,7 +42,7 @@ public class UserController {
     @PreAuthorize("hasAuthority('" + Permissions.USER_READ + "')")
     public Result<PageResult<UserResponse>> listUsers(
         @RequestParam(defaultValue = "1") int page,
-        @RequestParam(defaultValue = "20") int size,
+        @RequestParam(defaultValue = "20") @Max(500) int size,
         @RequestParam(required = false) String keyword
     ) {
         return Result.ok(PageResult.from(userService.listUsers(page, size, keyword)));

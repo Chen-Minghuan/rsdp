@@ -14,6 +14,7 @@ import com.rsdp.service.OrderService;
 import com.rsdp.service.OrderStatisticsService;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -69,7 +70,7 @@ public class OrderController {
     public Result<OrderListResponse> list(
         @RequestParam(required = false) String status,
         @RequestParam(defaultValue = "1") long page,
-        @RequestParam(defaultValue = "10") long size) {
+        @RequestParam(defaultValue = "10") @Max(500) long size) {
         return Result.ok(orderService.list(status, page, size));
     }
 

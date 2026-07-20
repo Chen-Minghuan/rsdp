@@ -7,6 +7,7 @@ import com.rsdp.dto.response.ProjectDetailResponse;
 import com.rsdp.dto.response.ProjectResponse;
 import com.rsdp.service.ProjectService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
@@ -45,7 +46,7 @@ public class ProjectController {
         @RequestParam(required = false) String keyword,
         @RequestParam(required = false) String scope,
         @RequestParam(defaultValue = "1") long page,
-        @RequestParam(defaultValue = "10") long size) {
+        @RequestParam(defaultValue = "10") @Max(500) long size) {
         return Result.ok(projectService.list(keyword, scope, page, size));
     }
 
