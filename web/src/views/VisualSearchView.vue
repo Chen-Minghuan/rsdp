@@ -64,6 +64,10 @@ function handleFileChange(options: { file: UploadFileInfo, fileList: UploadFileI
   const file = options.file.file
   fileList.value = options.fileList
   if (file) {
+    // 释放旧 ObjectURL，避免连续选择图片时内存泄漏
+    if (previewUrl.value) {
+      URL.revokeObjectURL(previewUrl.value)
+    }
     selectedFile.value = file
     previewUrl.value = URL.createObjectURL(file)
     queryText.value = ''
