@@ -21,6 +21,8 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import com.rsdp.security.datascope.DataScopeHelper;
 import org.springframework.security.core.userdetails.User;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -49,6 +51,7 @@ class RskuImportServiceTest {
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
         lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+        lenient().when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
     }
 
     @AfterEach
@@ -82,6 +85,9 @@ class RskuImportServiceTest {
 
     @Mock
     private PriceHistoryMapper priceHistoryMapper;
+
+    @Mock
+    private PlatformTransactionManager transactionManager;
 
     @InjectMocks
     private RskuImportService rskuImportService;

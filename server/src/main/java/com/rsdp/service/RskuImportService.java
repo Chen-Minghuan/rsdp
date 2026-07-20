@@ -26,7 +26,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -64,6 +65,7 @@ public class RskuImportService {
     private final AuditLogService auditLogService;
     private final PriceHistoryMapper priceHistoryMapper;
     private final DataScopeHelper dataScopeHelper;
+    private final PlatformTransactionManager transactionManager;
 
     /**
      * 批量导入 RSKU 报价。
@@ -103,6 +105,7 @@ public class RskuImportService {
         }
 
         Set<String> processedKeys = new HashSet<>();
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
 
         int rowIndex = 1; // Excel 行号，第 1 行为表头，数据从第 2 行开始
         for (RskuImportRow row : rows) {
@@ -130,13 +133,19 @@ public class RskuImportService {
             try {
                 if (existing != null) {
                     if (updateIfExists) {
-                        updateSingleRsku(existing, row, productLevel);
+                        transactionTemplate.execute(status -> {
+                            updateSingleRsku(existing, row, productLevel);
+                            return null;
+                        });
                         result.setSuccessCount(result.getSuccessCount() + 1);
                     } else {
                         result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "该工厂对该变体已有报价，已跳过"));
                     }
                 } else {
-                    insertSingleRsku(buildRskuSupply(row, productLevel));
+                    transactionTemplate.execute(status -> {
+                        insertSingleRsku(buildRskuSupply(row, productLevel));
+                        return null;
+                    });
                     result.setSuccessCount(result.getSuccessCount() + 1);
                 }
             } catch (DataIntegrityViolationException e) {
@@ -158,24 +167,22 @@ public class RskuImportService {
     }
 
     /**
-     * 在独立事务中插入单条 RSKU 报价。
+     * 插入单条 RSKU 报价。调用方必须通过 {@link TransactionTemplate} 开启独立事务。
      *
      * @param rsku 待插入的 RSKU
      */
-    @Transactional
     protected void insertSingleRsku(RskuSupply rsku) {
         rskuSupplyMapper.insert(rsku);
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
     }
 
     /**
-     * 在独立事务中更新单条 RSKU 报价，并记录价格历史。
+     * 更新单条 RSKU 报价，并记录价格历史。调用方必须通过 {@link TransactionTemplate} 开启独立事务。
      *
      * @param existing     现有报价
      * @param row          导入行
      * @param productLevel 解析后的产品等级
      */
-    @Transactional
     protected void updateSingleRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
         RskuSupply oldSnapshot = snapshot(existing);
         BigDecimal oldPrice = updateExistingRsku(existing, row, productLevel);
