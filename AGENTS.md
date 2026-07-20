@@ -17,6 +17,7 @@
 ### 后端
 - **语言**：Java 21 LTS
 - **框架**：Spring Boot 3.4+
+- **安全**：Spring Security + JWT（jjwt），接口级权限 + 数据归属隔离
 - **ORM**：MyBatis-Plus 3.5+
 - **数据库**：PostgreSQL 16
 - **向量数据库**：ChromaDB 0.5+（REST API）
@@ -25,7 +26,8 @@
 - **AI 推理**：当前 MVP 通过 DashScope `qwen3-vl-plus`（OpenAI 兼容接口）完成视觉识别；后续目标切换为本地 Ollama 托管 Qwen 2.5-VL 7B + nomic-embed-text
 - **HTTP 客户端**：Spring RestClient（虚拟线程）
 - **Excel**：EasyExcel 3.3+
-- **PPT**：Apache POI 5.3+
+- **Office 文档**：Apache POI 5.3+（Excel 浮动图片锚点解析、采购合同 docx 生成）
+- **PDF**：Apache PDFBox（PDF 导入渲染）
 - **API 文档**：SpringDoc OpenAPI + Knife4j 4.5+
 - **构建**：Maven 3.9+
 
@@ -38,6 +40,8 @@
 - **路由**：Vue Router 4.5+
 - **HTTP**：Axios 1.7+
 - **大表格**：VxeTable 4.9+
+- **图表**：ECharts 6.x
+- **工具库**：@vueuse/core、dayjs
 - **测试**：Vitest 2.x + Playwright 1.49+（规划中）
 - **包管理**：pnpm 9.x
 
@@ -56,35 +60,45 @@
 .
 ├── AGENTS.md                      # 本文件（项目级指令）
 ├── README.md                      # 项目入口
-├── Makefile                       # 统一命令入口
+├── Makefile                       # 统一命令入口（make help 查看全部命令）
 ├── .gitignore                     # Git 忽略规则
 ├── .ai-rules                      # AI 协作补充规则（可选但推荐）
 ├── KimiCode-大型项目协作指南.md   # Kimi Code 大型项目协作指南
 ├── docs/                          # 文档（按主题分类）
 │   ├── 01-requirements/           # 需求文档
 │   ├── 02-architecture/           # 架构设计
-│   │   ├── 整体架构.md
-│   │   ├── 数据库设计.md
-│   │   ├── 数据库实现说明.md
-│   │   └── API设计.md
-│   ├── 03-guides/                 # 开发指南
-│   │   ├── 本地开发环境搭建.md
-│   │   ├── 编码规范.md
-│   │   └── 测试指南.md
-│   ├── 04-decisions/              # 决策记录（ADR）
+│   │   ├── 01-整体架构.md
+│   │   ├── 02-数据库设计.md
+│   │   ├── 03-数据库实现说明.md
+│   │   ├── 04-API设计.md
+│   │   └── 05-RSDP-数据库完善方案-工厂与导入模块.md
+│   ├── 03-guides/                 # 开发指南（环境搭建/编码规范/测试/风格库导入格式）
+│   ├── 04-decisions/              # 决策记录（ADR 001-006）
 │   ├── 05-status/                 # 项目状态
 │   │   ├── 当前进度.md
 │   │   └── 待办事项.md
-│   ├── 06-reference/              # 参考资料（编码体系、业务规则等）
-│   └── 07-issues/                 # 问题记录与排障日志
+│   ├── 06-reference/              # 参考资料（编码体系、业务规则、权限矩阵、项目文件地图）
+│   ├── 07-issues/                 # 问题记录与排障日志
+│   ├── 08-roadmap/                # 后续开发计划、RSDP × rooom 整合方案
+│   └── FAQ.md
 ├── server/                        # SpringBoot 业务主后端
-│   ├── src/main/java/com/rsdp/   # Java 源码
+│   ├── src/main/java/com/rsdp/   # Java 源码（包结构见 3.1）
 │   ├── src/main/resources/        # 配置、Mapper XML
 │   ├── src/test/java/com/rsdp/   # 测试
 │   ├── pom.xml                    # Maven 配置
 │   └── Dockerfile                 # 后端镜像
 ├── web/                           # Vue 3 前端
-│   ├── src/                       # 源码
+│   ├── src/
+│   │   ├── api/                   # Axios 接口封装（实例在 client.ts）
+│   │   ├── views/                 # 页面（产品/工厂/项目/方案/报价/订单/统计等）
+│   │   ├── components/            # 通用组件（PageContainer 等）
+│   │   ├── composables/           # 组合式函数（useEcharts、useRequestAbort）
+│   │   ├── stores/                # Pinia 状态（user、excelImport）
+│   │   ├── router/                # 路由
+│   │   ├── config/                # 导航分组配置 navigation.ts
+│   │   ├── styles/                # 设计 token（tokens.css）
+│   │   ├── types/                 # TypeScript 类型定义
+│   │   └── utils/                 # 常量/工具
 │   ├── public/                    # 静态资源
 │   ├── index.html
 │   ├── vite.config.ts
@@ -95,17 +109,44 @@
 │   ├── docker-compose.yml         # 全服务编排
 │   ├── .env.example               # 环境变量模板
 │   └── nginx/nginx.conf           # 反向代理配置
-├── database/                      # 数据库脚本
+├── database/                      # 数据库脚本（Vx__ 按版本号顺序执行）
 │   ├── V1__init_db.sql            # PostgreSQL 建表 DDL（V1）
-│   ├── V1__seed_data.sql          # PostgreSQL 种子数据（V1）
+│   ├── V1__seed_data.sql          # PostgreSQL 字典/权限种子数据（V1）
 │   ├── V2__factory_module.sql     # 工厂模块 + 导入增强（V2）
+│   ├── V3__align_sequences.sql    # 序列对齐（V3）
+│   ├── V4__project_module.sql     # 项目模块 + 收藏夹 + 方案模板化（V4）
+│   ├── V5__order_module.sql       # 订单模块 + 系统配置（V5）
+│   ├── V6__team_module.sql        # 企业团队：sys_user 扩展（V6）
+│   ├── seed_style_knowledge.sql   # 风格知识库种子数据
 │   └── reset_db.sql               # 数据库重置脚本
+├── data/                          # 运行数据（uploads 上传文件、style-knowledge 风格素材）
 ├── ops/                           # 运维脚本
 │   └── anchor_encode.sh           # 锚点图批量编码
 └── scripts/                       # 常用脚本
     ├── setup.sh                   # 开发环境一键搭建
     ├── test.sh                    # 运行全部测试
-    └── backup_db.sh               # 数据库备份
+    ├── backup_db.sh               # 数据库备份
+    ├── start-local / stop-local / restart-backend（.sh/.bat）  # 本地启停
+    ├── seed-demo-data.sh/.sql     # 演示数据导入
+    ├── check_entity_db_fields.js  # 实体-数据库字段对账
+    └── generate_style_knowledge_seed.js  # 风格知识种子生成
+```
+
+### 3.1 后端包结构（`server/src/main/java/com/rsdp/`）
+
+```
+├── controller/   # REST 接口层（薄层，30+ Controller）
+├── service/      # 业务逻辑层（含 chroma/ 向量检索、storage/ 文件存储子包）
+├── mapper/       # MyBatis-Plus Mapper
+├── entity/       # 数据库实体
+├── dto/          # 请求/响应 DTO（按 request/ response 分包）
+├── config/       # 配置类（AI、缓存、MinIO、MyBatis、TypeHandler、properties/）
+├── security/     # Spring Security + JWT + 数据权限（datascope/）
+├── event/        # 领域事件（如 RSPU 删除联动清理）
+├── migration/    # 启动期数据迁移（如历史价格加密迁移）
+├── common/       # Result / PageResult / 通用枚举
+├── exception/    # 全局异常处理
+└── util/         # 工具（AES、JWT、Excel/PDF 解析、图片处理）
 ```
 
 ---
@@ -174,6 +215,8 @@ RSKU（供应单元）：[RSPU ID]-[工厂代码3位]-[材质版本2位]
 
 ## 六、构建命令
 
+> 所有 `make` 命令见 `Makefile`，`make help` 可查看完整列表。
+
 ### 后端
 ```bash
 cd server && mvn clean package
@@ -212,6 +255,7 @@ make clean
 - 涉及外部 HTTP 调用（AI / ChromaDB）的测试使用 WireMock 模拟。
 - 提交前必须跑通 `make test`。
 - 新增接口必须补充集成测试或至少 Controller 层测试。
+- 涉及实体/表结构改动时，运行 `scripts/check_entity_db_fields.js` 做实体-数据库字段对账。
 
 ---
 
@@ -219,8 +263,15 @@ make clean
 
 - **建表脚本**：`database/V1__init_db.sql`
 - **种子数据**：`database/V1__seed_data.sql`
-- **工厂模块迁移**：`database/V2__factory_module.sql`
+- **增量迁移**（按版本号顺序执行）：
+  - `V2__factory_module.sql`：工厂模块 + 导入增强
+  - `V3__align_sequences.sql`：序列对齐
+  - `V4__project_module.sql`：项目模块 + 收藏夹 + 方案模板化
+  - `V5__order_module.sql`：订单模块 + 系统配置（sys_config）
+  - `V6__team_module.sql`：企业团队（sys_user 扩展 company_name/group_name）
+- **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
+- **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。
 - **开发数据库连接**：`server/src/main/resources/application-dev.yml`
 
 ---
@@ -264,4 +315,4 @@ make clean
 
 ## 十一、一句话总结
 
-> RSDP 是一个以"双层编码 + AI 看图识别 + 三层检索 + 空间校验"为核心的家具产品数字化平台。后端用 SpringBoot + Java 21 编排确定性业务与 AI 调用，前端用 Vue 3 + TypeScript 提供录入/检索/搭配/校验界面，数据落 PostgreSQL + ChromaDB + MinIO，AI 推理当前使用 DashScope 快速验证、后续目标为本地 Ollama，Docker Compose 一键部署。
+> RSDP 是一个以"双层编码 + AI 看图识别 + 三层检索 + 空间校验"为核心的家具产品数字化平台。后端用 SpringBoot + Java 21 编排确定性业务与 AI 调用，前端用 Vue 3 + TypeScript 提供录入/检索/搭配/报价/项目/订单界面，数据落 PostgreSQL + ChromaDB + MinIO，AI 推理当前使用 DashScope 快速验证、后续目标为本地 Ollama，Docker Compose 一键部署。
