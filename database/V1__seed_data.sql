@@ -300,16 +300,18 @@ ON CONFLICT (factory_code) DO NOTHING;
 
 -- 测试用户（密码统一为 admin123）
 -- 按 username 冲突更新，确保开发环境重置后密码与快速登录按钮一致
-INSERT INTO sys_user (user_id, username, password_hash, nickname, status, view_full_catalog) VALUES
-('USER-ADMIN-00000001', 'admin', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '系统管理员', 'active', true),
-('USER-EDITOR-00000001', 'editor', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '编辑员', 'active', true),
-('USER-VIEWER-00000001', 'viewer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '浏览者', 'active', false),
-('USER-DESIGNER-00000001', 'designer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '设计师', 'active', false),
-('USER-FACTORY-00000001', 'factory', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '工厂管理员', 'active', false),
-('USER-USER-00000001', 'user', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '普通用户', 'active', false)
+INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, group_name, status, view_full_catalog) VALUES
+('USER-ADMIN-00000001', 'admin', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '系统管理员', 'RSDP 平台', '平台运营组', 'active', true),
+('USER-EDITOR-00000001', 'editor', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '编辑员', 'RSDP 平台', '内容编辑组', 'active', true),
+('USER-VIEWER-00000001', 'viewer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '浏览者', 'RSDP 平台', '平台运营组', 'active', false),
+('USER-DESIGNER-00000001', 'designer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '设计师', '示例设计工作室', '方案一组', 'active', false),
+('USER-FACTORY-00000001', 'factory', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '工厂管理员', '测试家具工厂', '销售部', 'active', false),
+('USER-USER-00000001', 'user', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '普通用户', '示例设计工作室', '方案二组', 'active', false)
 ON CONFLICT (username) DO UPDATE SET
   password_hash = EXCLUDED.password_hash,
   nickname = EXCLUDED.nickname,
+  company_name = EXCLUDED.company_name,
+  group_name = EXCLUDED.group_name,
   status = EXCLUDED.status,
   view_full_catalog = EXCLUDED.view_full_catalog;
 
@@ -334,3 +336,71 @@ SELECT u.user_id, 'TEST'
 FROM sys_user u
 WHERE u.username = 'factory'
 ON CONFLICT (user_id, factory_code) DO NOTHING;
+
+-- 项目类型字典（V4 并入）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('project_type', 'whole_house', '全屋', 1),
+('project_type', 'space', '单空间', 2),
+('project_type', 'custom', '定制', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 项目权限（V4 并入；ADMIN 全量与 EDITOR 排除式映射自动覆盖）
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('project:read', '查看设计项目'),
+('project:create', '创建设计项目'),
+('project:update', '编辑设计项目'),
+('project:delete', '删除设计项目')
+ON CONFLICT (permission_code) DO NOTHING;
+
+-- DESIGNER：项目全量权限
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'DESIGNER'
+  AND p.permission_code LIKE 'project:%'
+ON CONFLICT DO NOTHING;
+
+-- ADMIN / EDITOR：项目全量权限（通用映射先于本权限插入执行，需显式补插）
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('ADMIN', 'EDITOR')
+  AND p.permission_code LIKE 'project:%'
+ON CONFLICT DO NOTHING;
+
+-- VIEWER / USER：项目只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('VIEWER', 'USER')
+  AND p.permission_code = 'project:read'
+ON CONFLICT DO NOTHING;
+
+-- 订单全局折扣率（V5 并入）
+INSERT INTO sys_config (config_key, config_value, remark) VALUES
+('order.price_rate', '1', '订单全局折扣率')
+ON CONFLICT (config_key) DO NOTHING;
+
+-- 订单状态字典（V5 并入）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('design_order_status', 'PENDING', '待确认', 1),
+('design_order_status', 'CONFIRMED', '已确认', 2),
+('design_order_status', 'PRODUCING', '生产中', 3),
+('design_order_status', 'COMPLETED', '已完成', 4),
+('design_order_status', 'CANCELLED', '已取消', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 订单权限（V5 并入；方案约定 ADMIN + DESIGNER 授予，显式补插）
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('order:read', '查看订单'),
+('order:create', '创建订单'),
+('order:update', '编辑订单'),
+('order:delete', '删除订单')
+ON CONFLICT (permission_code) DO NOTHING;
+
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('ADMIN', 'DESIGNER')
+  AND p.permission_code LIKE 'order:%'
+ON CONFLICT DO NOTHING;

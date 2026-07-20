@@ -53,14 +53,15 @@ public class UserService {
      *
      * @param page     页码
      * @param size     每页大小
-     * @param keyword  关键词（用户名/昵称）
+     * @param keyword  关键词（用户名/昵称/企业/分组）
      * @return 用户分页结果
      */
     @Transactional(readOnly = true)
     public Page<UserResponse> listUsers(int page, int size, String keyword) {
         QueryWrapper<SysUser> wrapper = new QueryWrapper<>();
         if (keyword != null && !keyword.isBlank()) {
-            wrapper.and(w -> w.like("username", keyword).or().like("nickname", keyword));
+            wrapper.and(w -> w.like("username", keyword).or().like("nickname", keyword)
+                .or().like("company_name", keyword).or().like("group_name", keyword));
         }
         wrapper.orderByDesc("created_at");
         Page<SysUser> userPage = sysUserMapper.selectPage(new Page<>(page, size), wrapper);
@@ -106,6 +107,8 @@ public class UserService {
         user.setUsername(request.getUsername());
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setNickname(request.getNickname());
+        user.setCompanyName(request.getCompanyName());
+        user.setGroupName(request.getGroupName());
         user.setStatus("active");
         user.setViewFullCatalog(request.getViewFullCatalog() != null ? request.getViewFullCatalog() : false);
         user.setCreatedAt(LocalDateTime.now());
@@ -154,6 +157,12 @@ public class UserService {
 
         if (request.getNickname() != null) {
             user.setNickname(request.getNickname());
+        }
+        if (request.getCompanyName() != null) {
+            user.setCompanyName(request.getCompanyName());
+        }
+        if (request.getGroupName() != null) {
+            user.setGroupName(request.getGroupName());
         }
         if (request.getViewFullCatalog() != null) {
             user.setViewFullCatalog(request.getViewFullCatalog());
@@ -338,6 +347,8 @@ public class UserService {
         response.setUserId(user.getUserId());
         response.setUsername(user.getUsername());
         response.setNickname(user.getNickname());
+        response.setCompanyName(user.getCompanyName());
+        response.setGroupName(user.getGroupName());
         response.setStatus(user.getStatus());
         response.setViewFullCatalog(user.getViewFullCatalog());
         response.setLastLoginAt(user.getLastLoginAt());

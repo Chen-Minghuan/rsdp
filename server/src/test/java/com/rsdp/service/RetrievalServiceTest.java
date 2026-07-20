@@ -54,6 +54,12 @@ class RetrievalServiceTest {
     @Mock
     private VisionService visionService;
 
+    @Mock
+    private com.rsdp.mapper.RspuStyleMapper rspuStyleMapper;
+
+    @Mock
+    private DictService dictService;
+
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -230,6 +236,52 @@ class RetrievalServiceTest {
 
         // Then
         assertThrows(IllegalArgumentException.class, () -> retrievalService.searchSimilar(request));
+    }
+
+    @Test
+    void searchSimilar_byText_shouldBoostBySecondaryStyle() {
+        // RSPU-001 主风格 MC，辅风格 CR（rspu_style 关联表）；
+        // 请求风格 CR 与主风格单值不匹配，但命中辅风格 → 应获得风格加分
+        SimilarProductRequest request = new SimilarProductRequest();
+        request.setText("奶油风沙发");
+        request.setPositioningLabel("CR");
+        request.setTopK(5);
+
+        when(embeddingService.embedText("奶油风沙发")).thenReturn(new float[]{0.1f, 0.2f});
+
+        Map<String, Object> response = Map.of(
+            "ids", List.of(List.of("IMG-001")),
+            "distances", List.of(List.of(0.1)),
+            "metadatas", List.of(List.of(
+                Map.of("rspu_id", "RSPU-001", "category_code", "FS", "positioning_label", "MC")
+            ))
+        );
+        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+
+        ImageAssets img1 = new ImageAssets();
+        img1.setImageId("IMG-001");
+        img1.setStorageUrl("http://localhost/images/IMG-001.jpg");
+        when(imageAssetsMapper.selectBatchIds(any())).thenReturn(List.of(img1));
+
+        RspuMaster rspu1 = buildRspu("RSPU-001", "FS", "MC", "焦糖棕", "[\"实木\"]", "[\"客厅\"]", null);
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu1));
+
+        com.rsdp.entity.RspuStyle primary = new com.rsdp.entity.RspuStyle();
+        primary.setRspuId("RSPU-001");
+        primary.setStyleCode("MC");
+        primary.setIsPrimary(true);
+        com.rsdp.entity.RspuStyle secondary = new com.rsdp.entity.RspuStyle();
+        secondary.setRspuId("RSPU-001");
+        secondary.setStyleCode("CR");
+        secondary.setIsPrimary(false);
+        when(rspuStyleMapper.selectList(any())).thenReturn(List.of(primary, secondary));
+
+        // When
+        List<SimilarProductResponse> results = retrievalService.searchSimilar(request);
+
+        // Then：辅风格 CR 命中，产生「风格/定位一致」加分理由
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getMatchReasons()).contains("风格/定位一致");
     }
 
     private RspuMaster buildRspu(String rspuId, String categoryCode, String positioningLabel,

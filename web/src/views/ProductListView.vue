@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, h, onMounted, watch, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -13,10 +13,14 @@ import {
   NTag,
   NImage,
   NAlert,
+  NLayout,
+  NLayoutSider,
+  NLayoutContent,
   useDialog,
   type DataTableColumns
 } from 'naive-ui'
 import { listProducts, deleteProduct } from '@/api/product'
+import { addFavorite, removeFavorite, checkFavorites } from '@/api/favorite'
 import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
@@ -26,6 +30,7 @@ import type { ProductSummary } from '@/types/product'
 import { useMessage } from 'naive-ui'
 
 const router = useRouter()
+const route = useRoute()
 const dialog = useDialog()
 const message = useMessage()
 const userStore = useUserStore()
@@ -73,6 +78,96 @@ const factoryOptions = computed(() => [
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
 // 全库视图对工厂管理员只读；平台运营人员（ADMIN/EDITOR）在全库视图下仍可编辑
 const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value)
+
+/** 左侧筛选面板分组（单选，映射现有筛选参数）。 */
+type FilterKey = 'reviewStatus' | 'style' | 'scene' | 'material' | 'level'
+
+const filterGroups: { key: FilterKey; title: string }[] = [
+  { key: 'reviewStatus', title: '复核状态' },
+  { key: 'style', title: '风格' },
+  { key: 'scene', title: '场景' },
+  { key: 'material', title: '材质' },
+  { key: 'level', title: '产品等级' }
+]
+
+const filterModels: Record<FilterKey, typeof reviewStatus> = {
+  reviewStatus,
+  style: styleFilter,
+  scene: sceneFilter,
+  material: materialFilter,
+  level: productLevelFilter
+}
+
+const filterOptionsMap: Record<FilterKey, typeof reviewStatusOptions> = {
+  reviewStatus: reviewStatusOptions,
+  style: styleOptions,
+  scene: sceneOptions,
+  material: materialOptions,
+  level: productLevelOptions
+}
+
+const hasActiveFilter = computed(() =>
+  (Object.keys(filterModels) as FilterKey[]).some(k => filterModels[k].value)
+)
+
+function filterValue(key: FilterKey) {
+  return filterModels[key].value
+}
+
+function groupOptionsFor(key: FilterKey) {
+  return filterOptionsMap[key].value.filter(o => o.value !== '')
+}
+
+function toggleFilter(key: FilterKey, value: string) {
+  filterModels[key].value = filterModels[key].value === value ? null : value
+}
+
+function clearFilter(key: FilterKey) {
+  filterModels[key].value = null
+}
+
+function resetFilters() {
+  ;(Object.keys(filterModels) as FilterKey[]).forEach(k => (filterModels[k].value = null))
+}
+
+/** 当前页产品的收藏状态（rspuId 集合）。 */
+const favoritedIds = ref<Set<string>>(new Set())
+const favoriteToggling = ref<string | null>(null)
+
+async function refreshFavoritedStatus() {
+  if (products.value.length === 0) {
+    favoritedIds.value = new Set()
+    return
+  }
+  try {
+    const ids = await checkFavorites(products.value.map(p => p.rspuId))
+    favoritedIds.value = new Set(ids)
+  } catch (e) {
+    console.error('加载收藏状态失败', e)
+  }
+}
+
+async function toggleFavorite(row: ProductSummary) {
+  if (favoriteToggling.value) return
+  favoriteToggling.value = row.rspuId
+  try {
+    if (favoritedIds.value.has(row.rspuId)) {
+      await removeFavorite(row.rspuId)
+      favoritedIds.value.delete(row.rspuId)
+      message.success('已取消收藏')
+    } else {
+      await addFavorite({ rspuId: row.rspuId })
+      favoritedIds.value.add(row.rspuId)
+      message.success('已收藏')
+    }
+    // 触发响应式更新
+    favoritedIds.value = new Set(favoritedIds.value)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '收藏操作失败')
+  } finally {
+    favoriteToggling.value = null
+  }
+}
 
 async function toggleFullCatalog(value: boolean) {
   if (savingPreference.value) return
@@ -167,6 +262,25 @@ const columns: DataTableColumns<ProductSummary> = [
           ? 'error'
           : 'warning'
       return h(NTag, { type, size: 'small' }, { default: () => row.reviewStatus || '-' })
+    }
+  },
+  {
+    title: '收藏',
+    key: 'favorite',
+    width: 70,
+    render(row: ProductSummary) {
+      const favorited = favoritedIds.value.has(row.rspuId)
+      return h(
+        NButton,
+        {
+          size: 'small',
+          quaternary: true,
+          type: favorited ? 'error' : 'default',
+          loading: favoriteToggling.value === row.rspuId,
+          onClick: () => toggleFavorite(row)
+        },
+        { default: () => (favorited ? '♥' : '♡') }
+      )
     }
   },
   {
@@ -277,6 +391,7 @@ async function loadProducts() {
     const result = await listProducts(params, { signal })
     products.value = result.rows
     total.value = result.total
+    refreshFavoritedStatus()
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载产品列表失败'
   } finally {
@@ -324,6 +439,12 @@ onMounted(async () => {
   }
   selectedRowKeys.value = []
   viewMode.value = isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
+  // 支持从首页分级导航等入口带筛选参数进入
+  const query = route.query
+  if (typeof query.keyword === 'string') keyword.value = query.keyword
+  if (typeof query.positioningLabel === 'string') styleFilter.value = query.positioningLabel
+  if (typeof query.sceneCode === 'string') sceneFilter.value = query.sceneCode
+  if (typeof query.materialTag === 'string') materialFilter.value = query.materialTag
   loadDicts()
   loadProducts()
 })
@@ -343,43 +464,8 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
             v-model:value="keyword"
             placeholder="搜索品类或风格"
             clearable
-            style="width: 240px;"
+            style="width: 260px;"
             @keydown.enter="handleSearch"
-          />
-          <n-select
-            v-model:value="reviewStatus"
-            :options="reviewStatusOptions"
-            clearable
-            style="width: 160px;"
-            placeholder="复核状态"
-          />
-          <n-select
-            v-model:value="styleFilter"
-            :options="styleOptions"
-            clearable
-            style="width: 160px;"
-            placeholder="风格"
-          />
-          <n-select
-            v-model:value="sceneFilter"
-            :options="sceneOptions"
-            clearable
-            style="width: 160px;"
-            placeholder="场景"
-          />
-          <n-select
-            v-model:value="materialFilter"
-            :options="materialOptions"
-            clearable
-            style="width: 160px;"
-            placeholder="材质"
-          />
-          <n-select
-            v-model:value="productLevelFilter"
-            :options="productLevelOptions"
-            clearable
-            style="width: 160px;"
-            placeholder="产品等级"
           />
           <n-button type="primary" @click="handleSearch">搜索</n-button>
           <n-button v-if="canImportProduct" @click="router.push('/products/import')">
@@ -414,30 +500,144 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
           当前为全库去重只读视图，仅支持查看详情与生成报价单；编辑、删除等维护操作需切换到自己的产品视图或由平台运营人员执行。
         </n-alert>
 
-        <n-space v-if="hasSelection && canGenerateQuote" align="center">
-          <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
-          <n-button type="primary" @click="handleBuildQuote">生成报价单</n-button>
-        </n-space>
+        <n-layout has-sider class="filter-layout">
+          <n-layout-sider :width="240" bordered class="filter-sider">
+            <div class="filter-panel">
+              <div class="filter-header">
+                <span class="filter-title">筛选</span>
+                <n-button v-if="hasActiveFilter" size="tiny" quaternary type="primary" @click="resetFilters">
+                  重置全部
+                </n-button>
+              </div>
+              <div v-for="group in filterGroups" :key="group.key" class="filter-group">
+                <div class="filter-group-title">{{ group.title }}</div>
+                <div
+                  class="filter-option"
+                  :class="{ active: !filterValue(group.key) }"
+                  @click="clearFilter(group.key)"
+                >
+                  不限
+                </div>
+                <div
+                  v-for="opt in groupOptionsFor(group.key)"
+                  :key="opt.value"
+                  class="filter-option"
+                  :class="{ active: filterValue(group.key) === opt.value }"
+                  @click="toggleFilter(group.key, opt.value)"
+                >
+                  {{ opt.label }}
+                </div>
+              </div>
+            </div>
+          </n-layout-sider>
 
-        <n-data-table
-          v-model:checked-row-keys="selectedRowKeys"
-          :row-key="rowKey"
-          :columns="columns"
-          :data="products"
-          :loading="loading"
-          :bordered="true"
-          :single-line="false"
-        />
+          <n-layout-content class="filter-content">
+            <n-space v-if="hasSelection && canGenerateQuote" align="center" style="margin-bottom: 12px;">
+              <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
+              <n-button type="primary" @click="handleBuildQuote">生成报价单</n-button>
+            </n-space>
 
-        <n-space justify="end" style="margin-top: 12px;">
-          <n-pagination
-            v-model:page="page"
-            :page-size="size"
-            :item-count="total"
-            @update:page="handlePageChange"
-          />
-        </n-space>
+            <n-data-table
+              v-model:checked-row-keys="selectedRowKeys"
+              :row-key="rowKey"
+              :columns="columns"
+              :data="products"
+              :loading="loading"
+              :bordered="true"
+              :single-line="false"
+              :scroll-x="1150"
+            />
+
+            <n-space justify="end" style="margin-top: 12px;">
+              <n-pagination
+                v-model:page="page"
+                :page-size="size"
+                :item-count="total"
+                @update:page="handlePageChange"
+              />
+            </n-space>
+          </n-layout-content>
+        </n-layout>
       </n-space>
     </n-card>
   </n-space>
 </template>
+
+<style scoped>
+.filter-layout {
+  background: transparent;
+}
+
+.filter-sider {
+  background: transparent;
+  padding: 4px 0 4px 0;
+  /* 宽表格挤压 flex 行时，筛选面板宽度必须保持 240 不被压缩 */
+  flex-shrink: 0;
+}
+
+/* 面板独立滚动：风格/材质选项较多时不高度过载，底部留出呼吸空间 */
+.filter-panel {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 0 16px 24px 4px;
+}
+
+.filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.filter-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+}
+
+/* 分组之间用分隔线拉开层级，标题突出 */
+.filter-group {
+  padding: 12px 0;
+  border-top: 1px solid var(--rsdp-border);
+}
+
+.filter-group:first-of-type {
+  border-top: none;
+  padding-top: 4px;
+}
+
+.filter-group-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rsdp-text);
+}
+
+.filter-option {
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--rsdp-text);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.filter-option:hover {
+  background: var(--rsdp-serve-bg);
+}
+
+.filter-option.active {
+  background: var(--rsdp-primary-suppl);
+  color: var(--rsdp-primary);
+  font-weight: 600;
+}
+
+.filter-content {
+  padding-left: 16px;
+  background: transparent;
+  /* flex 子项默认 min-width:auto，宽表格会撑破布局压到左侧筛选面板，必须允许收缩 */
+  min-width: 0;
+}
+</style>

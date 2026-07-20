@@ -185,6 +185,7 @@ POST   /api/v1/products/excel-ai-import/preview
        #   - 支持单行/多行表头：先清洗表头（去掉英文备注、括号单位），再合并父子表头
        #   - AI 根据清洗后的表头和样例数据推荐字段映射；value 为标准字段名
        #   - 复合表头「型号品名」会映射为 "externalCode,productName"，导入时按空格/斜杠拆分
+       #   - 交期列（交期/货期/生产周期/LEAD TIME 等）映射为标准字段 leadTimeDays
        #   - 多材质价格列（如「价格-A级布」「价格-AA级布」）映射为特殊字段 "__PRICE__:材质名"，
        #     并在 priceColumns 中独立列出，供前端勾选
        #   - 返回的 mapping key 为合并后的原始表头，对应后续确认导入接口的字段名
@@ -203,7 +204,7 @@ POST   /api/v1/products/excel-ai-import/import
        #     defaultFactoryCode: string,    // 默认工厂编码，用于生成 RSKU 与 RSPU-工厂映射
        #     shippingWarehouseId: string,   // 默认发货仓库 ID（关联 factory_warehouse）
        #     defaultShippingFrom: string,   // 默认发货地（冗余显示字段）
-       #     defaultLeadTimeDays: number,   // 默认基础交期天数；未配置时按工厂交期规则动态计算
+       #     defaultLeadTimeDays: number,   // 默认基础交期天数；优先级：Excel 行级交期列 > 工厂交期规则 > 本默认值
        #     defaultMoq: number             // 默认最小起订量
        #   }
        # Response: {
@@ -217,13 +218,20 @@ POST   /api/v1/products/excel-ai-import/import
        # }
        # 说明：
        #   - 按 mapping 读取 Excel 每一行，逐行独立事务写入 RSPU / 变体 / 图片 / RSKU
-       #   - 每行先创建 1 个 RSPU；每个选中的价格列创建 1 个变体 + 1 条 RSKU（工厂报价）
-       #   - 支持内嵌图片（按 sheet+行分组）和 URL 图片（http/https）
+       #   - 产品归组：型号/品名列按纵向合并单元格语义向下填充后，同型号连续行归入同一 RSPU
+       #     （共享主图与 AI 识别任务），每个规格模块行 + 每个选中的价格列创建 1 个变体 + 1 条 RSKU
+       #   - 内嵌图片按「物理行号 + 物理列索引」精确关联（重解析原始文件重建布局，不受 jsonb 键序影响）：
+       #     产品图样列的图 = 主图候选；其他数据列（如规格/模块列）的图 = 模块样式图，
+       #     挂本行变体（image_assets.variant_id）且永不当主图；数据区域外的图（logo/二维码）忽略；
+       #     严格主图模式：表格有图片列时，行内无产品图样图则该产品无主图，模块图不兜底升主图
+       #   - 容错：空价格列跳过不报错；文件中间重复的表头行自动识别跳过；
+       #     「更新日期/产品下单说明/注意事项」等说明尾注行自动跳过
+       #   - 交期：Excel 行级交期列（映射 leadTimeDays，容忍「30天」「25-30天」写法）优先，
+       #     其次按 factory_lead_time_rule 动态计算，最后回退 defaultLeadTimeDays
        #   - 主数据创建成功后为每个 RSPU 触发异步 AI 识别任务，前端通过 taskIds 轮询
        #   - 失败行不影响其他行，失败原因写入返回结果
        #   - 当指定 defaultFactoryCode 时，会为每个 RSPU 创建 RSPU-工厂关联（rspu_factory_mapping），
        #     并标记为主供工厂；同时每个价格列生成的 RSKU 会写入工厂报价、发货地、MOQ、动态交期
-       #   - 动态交期优先按 factory_lead_time_rule 精确匹配，无规则时使用 defaultLeadTimeDays
        #   - 每行 Excel 数据会写入 excel_import_row，记录原始值、处理阶段、生成实体 ID 与失败原因
 
 GET    /api/v1/products/excel-ai-import/{batchId}
@@ -498,17 +506,19 @@ POST   /api/v1/schemes
 
 GET    /api/v1/schemes
        # 查询搭配方案列表（已实现）
-       # Response: [SchemeSummary...]
+       # Query: isTemplate? (true 仅查模板), tag? (模板标签筛选)
+       # Response: [SchemeSummary...]（含 isTemplate / templateTags）
 
 GET    /api/v1/schemes/{schemeId}
        # 查询搭配方案详情（已实现）
-       # Response: SchemeResponse
+       # Response: SchemeResponse（含 projectId / isTemplate / templateTags）
 
 PUT    /api/v1/schemes/{schemeId}
        # 更新搭配方案（已实现）
        # Request: {
        #   schemeName (max 128 字符),
        #   roomType?,
+       #   projectId?（非空时校验项目归属并更新关联）,
        #   budgetLimit?,
        #   items: [{ rspuId, rskuId, quantity?, sortOrder? }] (1..50 项)
        # }
@@ -525,6 +535,135 @@ POST   /api/v1/schemes/{schemeId}/quote
        #      重新生成报价单时，报价单按 RSKU 最新价格计算；若与快照不一致，
        #      会在 response.priceChanges 中列出变动项：
        #      [{ rspuId, rspuName, rskuId, oldPrice, newPrice }]
+
+PUT    /api/v1/schemes/{schemeId}/template
+       # 设为/取消方案模板（已实现，需 scheme:update + 方案归属）
+       # Request: { isTemplate, templateTags?: string[] }
+       # Response: SchemeResponse
+       # 说明：取消模板时自动清空 templateTags
+
+POST   /api/v1/schemes/{schemeId}/copy-from-template
+       # 套用模板创建新方案（已实现，需 scheme:create）
+       # Request: { projectId, schemeName? }
+       # Response: { scheme: SchemeResponse, priceChanges: [...], skippedRskuIds: [...] }
+       # 说明：复制模板方案项，价格取 RSKU 当前最新价；与模板保存价的差异列入
+       #      priceChanges；已失效 RSKU 跳过并列入 skippedRskuIds；模板自身不修改
+```
+
+### 设计项目
+
+```
+GET    /api/v1/projects
+       # 分页查询项目列表（需 project:read；非 ADMIN 仅可见自己的项目）
+       # Query: keyword?, scope? (all=全部，仅 ADMIN 生效；mine=仅自己的), page=1, size=10
+       # Response: PageResult<ProjectResponse>
+       #   { projectId, projectName, projectType, companyName, ownerId, status,
+       #     remark, schemeCount, totalPrice, createdAt, updatedAt }
+
+POST   /api/v1/projects
+       # 创建设计项目（需 project:create）
+       # 说明：companyName 留空时默认取当前登录用户的企业名称（sys_user.company_name）
+       # Request: { projectName, projectType?, companyName?, remark? }
+       # Response: ProjectResponse
+
+GET    /api/v1/projects/{projectId}
+       # 查询项目详情（需 project:read + 归属或 ADMIN）
+       # Response: ProjectDetailResponse（含 schemes: [SchemeSummary...]）
+
+PUT    /api/v1/projects/{projectId}
+       # 更新设计项目（需 project:update + 归属或 ADMIN）
+       # Request: { projectName, projectType?, companyName?, remark? }
+       # Response: ProjectResponse
+
+DELETE /api/v1/projects/{projectId}
+       # 软删除设计项目（需 project:delete + 归属或 ADMIN）
+       # 说明：项目下方案保留，project_id 置空
+```
+
+### 运营统计
+
+```
+GET    /api/v1/statistics/overview
+       # 统计总览（需 scheme:read；非 ADMIN 仅统计自己的方案/项目）
+       # Response: { schemeCount, totalAmount, projectCount, avgSchemeAmount, monthNewSchemes }
+
+GET    /api/v1/statistics/trends
+       # 按月趋势（需 scheme:read；缺失月份补零）
+       # Query: months=6 (1~24)
+       # Response: [{ month, schemeCount, totalAmount }]
+
+GET    /api/v1/statistics/factories
+       # 工厂维度方案金额 TOP10（需 scheme:read；按方案项出厂价×数量聚合）
+       # Response: [{ factoryCode, factoryName, totalAmount, itemCount }]
+```
+
+### 设计订单
+
+```
+GET    /api/v1/orders
+       # 分页查询订单列表（需 order:read；非 ADMIN 仅可见自己创建的订单）
+       # Query: status? (PENDING/CONFIRMED/PRODUCING/COMPLETED/CANCELLED), page=1, size=10
+       # Response: { total, page, rows: [OrderResponse...], statusCounts: { 状态: 数量 } }
+
+POST   /api/v1/orders
+       # 由方案生成订单（需 order:create + 方案归属或 ADMIN）
+       # 说明：价格快照 = RSKU 当前出厂价 × 全局折扣率 price_rate（保留两位），生成后价格不可变
+       # Request: { schemeId, projectId?, receiverName?, receiverPhone?, receiverArea?,
+       #            receiverAddress?, remark? }
+       # Response: OrderDetailResponse
+
+GET    /api/v1/orders/{orderId}
+       # 查询订单详情（需 order:read + 归属或 ADMIN）
+       # Response: OrderDetailResponse（含 items: [{ id, rspuId, rskuId, productName, model,
+       #   imageId, quantity, originalPrice, finalPrice, factoryCode, subtotal }]）
+
+PUT    /api/v1/orders/{orderId}
+       # 更新收件信息与备注（需 order:update + 归属；仅 PENDING 可改）
+       # Request: { receiverName?, receiverPhone?, receiverArea?, receiverAddress?, remark? }
+
+PUT    /api/v1/orders/{orderId}/status
+       # 状态机迁移（需 order:update + 归属）
+       # PENDING→CONFIRMED/CANCELLED，CONFIRMED→PRODUCING/CANCELLED，PRODUCING→COMPLETED
+       # Request: { status }
+
+POST   /api/v1/orders/{orderId}/invite
+       # 生成客户邀请链接 token（需 order:update + 归属；重新生成后旧链接立即失效）
+       # Response: { token, expireAt }（默认 7 天有效，库里只存 token 的 SHA-256 哈希）
+
+GET    /api/v1/orders/contract-template
+       # 下载采购合同 docx 模板（需 order:read）
+
+GET    /api/v1/orders/statistics
+       # 订单统计（需 order:read；排除 CANCELLED；非 ADMIN 仅统计自己创建的订单）
+       # 说明：到手价为 AES 加密列，实体级解密后内存聚合；商品名/图取订单明细快照
+       # Query: dim=product|factory（必填）, from?, to?（yyyy-MM-dd，含当日，可空）
+       # Response(dim=product):  [{ rspuId, productName, imageId, totalQuantity, totalAmount }]
+       # Response(dim=factory):  [{ factoryCode, factoryName, orderCount, totalQuantity, totalAmount }]
+       # 均按 totalAmount 降序
+```
+
+### 订单邀请公开接口（免登录）
+
+```
+GET    /api/v1/public/orders/invite/{token}
+       # 查看邀请页订单视图（HMAC-SHA256 签名 + 过期 + 库存哈希三重校验）
+       # Response: { orderNo, status, receiverArea, finalTotalPrice, itemCount,
+       #   expectedLeadTime, expireAt, confirmed, confirmedAt,
+       #   items: [{ productName, model, imageId, quantity, finalPrice, subtotal }] }
+       # 安全约束：绝不返回 originalPrice/factoryCode/rskuId 等敏感字段
+
+POST   /api/v1/public/orders/invite/{token}/confirm
+       # 客户确认订单（PENDING→CONFIRMED，一次性，确认后链接不可再次确认）
+```
+
+### 系统配置
+
+```
+GET    /api/v1/configs/{key}
+       # 读取配置（price_rate 需 order:read）
+
+PUT    /api/v1/configs/{key}
+       # 更新配置（仅 ADMIN），如 price_rate 全局折扣率
 ```
 
 ### 视觉/语义检索
@@ -599,19 +738,22 @@ POST   /api/v1/style-knowledge/feedback
 ```
 GET    /api/v1/admin/users
        # 用户列表（分页+关键字搜索）
-       # Query: page, size, keyword（搜 username/nickname）
+       # Query: page, size, keyword（搜 username/nickname/company_name/group_name）
        # Response: { total, page, size, rows: [UserAdminResponse...] }
-       # UserAdminResponse: { userId, username, nickname, roleCode, roleName, status,
+       # UserAdminResponse: { userId, username, nickname, companyName?, groupName?,
+       #                      roleCode, roleName, status, viewFullCatalog,
        #                      factoryCodes: string[], lastLoginAt, createdAt, updatedAt }
 
 POST   /api/v1/admin/users
        # 创建用户
-       # Request: { username, nickname?, password, roleCode, factoryCodes?: string[] }
+       # Request: { username, nickname?, companyName?, groupName?, password, roleCode,
+       #            factoryCodes?: string[], viewFullCatalog? }
        # Response: UserAdminResponse
 
 PUT    /api/v1/admin/users/{userId}
-       # 编辑用户
-       # Request: { nickname?, roleCode, factoryCodes?: string[] }
+       # 编辑用户（字段缺省/null 时不覆盖原值）
+       # Request: { nickname?, companyName?, groupName?, roleCode, factoryCodes?: string[],
+       #            viewFullCatalog? }
        # Response: UserAdminResponse
 
 PUT    /api/v1/admin/users/{userId}/reset-password
@@ -692,6 +834,30 @@ PUT    /api/v1/collections/{collectionId}
 DELETE /api/v1/collections/{collectionId}
        # 删除产品集（需 collection:delete）
        # Response: void
+```
+
+### 收藏夹
+
+```
+GET    /api/v1/favorites
+       # 查询当前用户的收藏列表（需登录，数据按用户隔离）
+       # Query: group? 分组筛选
+       # Response: [FavoriteResponse...]
+       #   { favoriteId, rspuId, groupName?, productName?, primaryImageUrl?, createdAt }
+
+POST   /api/v1/favorites
+       # 收藏产品（需登录；产品不存在 404，重复收藏报错）
+       # Request: { rspuId, groupName? (max 64) }
+       # Response: FavoriteResponse
+
+DELETE /api/v1/favorites/{rspuId}
+       # 取消收藏（需登录；未收藏返回 404）
+       # Response: void
+
+GET    /api/v1/favorites/check
+       # 批量检查收藏状态（需登录）
+       # Query: rspuIds（可重复传参）
+       # Response: string[]（其中已收藏的 rspuId 列表）
 ```
 
 ### 设计师画像

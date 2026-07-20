@@ -25,6 +25,7 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { getProductDetail, listProducts, reviewProduct, updateProduct, deleteProduct } from '@/api/product'
+import { addFavorite, removeFavorite, checkFavorites } from '@/api/favorite'
 import { listRskuByRspu, createRsku, deleteRsku, batchCreateRskus } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
@@ -57,6 +58,41 @@ const canCreateDict = computed(() => userStore.hasPermission(PERMISSIONS.DICT_CR
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
 const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
+
+/** 当前产品的收藏状态。 */
+const isFavorited = ref(false)
+const favoriteLoading = ref(false)
+
+async function refreshFavoriteStatus() {
+  try {
+    const ids = await checkFavorites([rspuId.value])
+    isFavorited.value = ids.includes(rspuId.value)
+  } catch (e) {
+    console.error('加载收藏状态失败', e)
+  }
+}
+
+async function toggleFavorite() {
+  if (favoriteLoading.value) return
+  favoriteLoading.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    if (isFavorited.value) {
+      await removeFavorite(rspuId.value)
+      isFavorited.value = false
+      successMessage.value = '已取消收藏'
+    } else {
+      await addFavorite({ rspuId: rspuId.value })
+      isFavorited.value = true
+      successMessage.value = '已收藏'
+    }
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '收藏操作失败'
+  } finally {
+    favoriteLoading.value = false
+  }
+}
 
 // 平台运营人员（ADMIN/EDITOR）即使开启全库视图也不应只读
 const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true && !isPlatformStaff.value)
@@ -646,6 +682,9 @@ function openEditModal() {
   const r = detail.value.rspu
   editForm.value = {
     positioningLabel: r.positioningLabel,
+    styleCodes: detail.value.styleCodes?.length
+      ? [...detail.value.styleCodes]
+      : (r.positioningLabel ? [r.positioningLabel] : []),
     colorPrimaryName: r.colorPrimaryName,
     colorPrimaryHsv: Array.isArray(r.colorPrimaryHsv) ? [...r.colorPrimaryHsv] : [],
     materialTags: Array.isArray(r.materialTags) ? [...r.materialTags] : [],
@@ -660,7 +699,7 @@ function openEditModal() {
 }
 
 async function handleUpdateProduct() {
-  if (!editForm.value.positioningLabel) {
+  if (!editForm.value.styleCodes || editForm.value.styleCodes.length === 0) {
     errorMessage.value = '请选择风格/定位标签'
     return
   }
@@ -681,7 +720,8 @@ async function handleUpdateProduct() {
   }
 
   const request: ProductUpdateRequest = {
-    positioningLabel: editForm.value.positioningLabel,
+    positioningLabel: editForm.value.styleCodes[0],
+    styleCodes: editForm.value.styleCodes,
     colorPrimaryName: editForm.value.colorPrimaryName,
     colorPrimaryHsv: editForm.value.colorPrimaryHsv,
     materialTags: editForm.value.materialTags,
@@ -1014,6 +1054,7 @@ onMounted(() => {
   loadVariants()
   loadFactories()
   loadDicts()
+  refreshFavoriteStatus()
 })
 
 onBeforeRouteUpdate((to, from) => {
@@ -1029,6 +1070,7 @@ onBeforeRouteUpdate((to, from) => {
     loadVariants()
     loadFactories()
     loadDicts()
+    refreshFavoriteStatus()
   }
 })
 </script>
@@ -1039,6 +1081,14 @@ onBeforeRouteUpdate((to, from) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回列表</n-button>
+          <n-button
+            size="small"
+            :type="isFavorited ? 'error' : 'default'"
+            :loading="favoriteLoading"
+            @click="toggleFavorite"
+          >
+            {{ isFavorited ? '♥ 已收藏' : '♡ 收藏' }}
+          </n-button>
           <n-button v-if="canDeleteProduct && canManageProduct" size="small" type="error" @click="handleDeleteProduct">
             删除产品
           </n-button>
@@ -1668,9 +1718,10 @@ onBeforeRouteUpdate((to, from) => {
       <n-form label-placement="left" label-width="100">
         <n-form-item label="风格/定位" required>
           <n-select
-            v-model:value="editForm.positioningLabel"
+            v-model:value="editForm.styleCodes"
             :options="styleOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="选择风格"
+            placeholder="选择风格（可多选，第一个为主风格）"
+            multiple
           />
         </n-form-item>
         <n-form-item label="主色名">

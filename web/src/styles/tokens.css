@@ -1,0 +1,65 @@
+/**
+ * RSDP 设计系统 token。
+ *
+ * 参考 rooom 用户端视觉（docs/08-roadmap/RSDP-rooom整合实现方案.md 第 1.4 节），
+ * 以 CSS 变量形式落地品牌色、中性色、字体与尺寸规范。
+ * Naive UI 组件主题通过 App.vue 的 themeOverrides 消费同名色值，两边需保持一致。
+ */
+
+:root {
+  /* ========== 品牌色 ========== */
+  --rsdp-primary: #2453fc;
+  --rsdp-primary-hover: #4a73fd;
+  --rsdp-primary-pressed: #1b3fc4;
+  --rsdp-primary-suppl: #e8edff;
+
+  /* ========== 中性色 ========== */
+  --rsdp-bg: #fafafa;
+  --rsdp-card-bg: #ffffff;
+  --rsdp-serve-bg: #f6f7f9;
+  --rsdp-menu-bg: #eaeaea;
+  --rsdp-text: #243443;
+  --rsdp-text-secondary: #999999;
+  --rsdp-border: #d9d9d9;
+
+  /* ========== 语义色 ========== */
+  --rsdp-price: #ff0000;
+  --rsdp-success: #18a058;
+  --rsdp-warning: #f0a020;
+  --rsdp-error: #d03050;
+  --rsdp-mask: rgba(0, 0, 0, 0.6);
+
+  /* ========== 字体 ========== */
+  /* 展示字体用于首页 Hero 等大标题；Gloock 未授权时回退 Georgia 衬线 */
+  --rsdp-font-display: 'Gloock', 'Georgia', 'Times New Roman', serif;
+  --rsdp-font-body: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', Arial, sans-serif;
+
+  /* ========== 圆角 ========== */
+  --rsdp-radius: 8px;
+  --rsdp-radius-lg: 12px;
+
+  /* ========== 间距与布局 ========== */
+  --rsdp-page-padding: 24px;
+  --rsdp-page-max-width: 1440px;
+  --rsdp-header-height: 56px;
+
+  /* ========== 阴影 ========== */
+  --rsdp-shadow-card: 0 1px 3px rgba(36, 52, 67, 0.08);
+  --rsdp-shadow-popup: 0 4px 16px rgba(36, 52, 67, 0.12);
+}
+
+/* ========== 暗色模式（预留，本期不启用切换器） ========== */
+html.dark {
+  --rsdp-bg: #14181c;
+  --rsdp-card-bg: #1e242b;
+  --rsdp-serve-bg: #1a1f26;
+  --rsdp-menu-bg: #262d36;
+  --rsdp-text: #efefef;
+  --rsdp-text-secondary: #8b929a;
+  --rsdp-border: #595d64;
+  --rsdp-primary-suppl: #1c2a52;
+  --rsdp-mask: rgba(0, 0, 0, 0.72);
+  --rsdp-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --rsdp-shadow-popup: 0 4px 16px rgba(0, 0, 0, 0.5);
+}

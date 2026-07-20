@@ -17,6 +17,10 @@ public class UserResponse {
 
     private String nickname;
 
+    private String companyName;
+
+    private String groupName;
+
     private String roleCode;
 
     private String roleName;

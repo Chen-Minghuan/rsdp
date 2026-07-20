@@ -16,6 +16,9 @@ public class ProductUpdateRequest {
     /** 定位标签/风格字典码，如 MC。 */
     private String positioningLabel;
 
+    /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel。 */
+    private List<String> styleCodes;
+
     /** 主色名。 */
     private String colorPrimaryName;
 

@@ -40,6 +40,8 @@ const signal = useRequestAbort()
 
 const editSchemeId = computed(() => (route.query.editSchemeId as string) || '')
 const isEditMode = computed(() => Boolean(editSchemeId.value))
+/** 从项目画布进入时携带的项目 ID，保存方案后归属该项目并跳回。 */
+const contextProjectId = computed(() => (route.query.projectId as string) || '')
 
 const canExportQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_EXPORT))
 const canCreateScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_CREATE))
@@ -333,10 +335,11 @@ async function handleSaveAsScheme() {
     } else {
       await createScheme({
         schemeName: schemeName.value.trim(),
+        projectId: contextProjectId.value || undefined,
         items
       }, { signal })
       showSaveModal.value = false
-      router.push('/schemes')
+      router.push(contextProjectId.value ? `/projects/${contextProjectId.value}` : '/schemes')
     }
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '保存方案失败'

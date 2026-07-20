@@ -10,6 +10,12 @@ const routes = [
     meta: { public: true }
   },
   {
+    path: '/invite/order/:token',
+    name: 'OrderInvite',
+    component: () => import('@/views/OrderInviteView.vue'),
+    meta: { public: true }
+  },
+  {
     path: '/',
     name: 'Home',
     component: () => import('@/views/HomeView.vue'),
@@ -56,6 +62,49 @@ const routes = [
     name: 'ProductDetail',
     component: () => import('@/views/ProductDetailView.vue'),
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
+    path: '/favorites',
+    name: 'Favorites',
+    component: () => import('@/views/FavoritesView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
+    path: '/projects',
+    name: 'ProjectList',
+    component: () => import('@/views/ProjectListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PROJECT_READ] }
+  },
+  {
+    path: '/projects/:projectId',
+    name: 'ProjectDetail',
+    component: () => import('@/views/ProjectDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PROJECT_READ] }
+  },
+  {
+    path: '/orders',
+    name: 'OrderList',
+    component: () => import('@/views/OrderListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
+  },
+  {
+    // 静态路径优先于 /orders/:orderId 匹配，声明顺序保持在详情之前
+    path: '/orders/statistics',
+    name: 'OrderStatistics',
+    component: () => import('@/views/OrderStatisticsView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
+  },
+  {
+    path: '/orders/:orderId',
+    name: 'OrderDetail',
+    component: () => import('@/views/OrderDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
+  },
+  {
+    path: '/statistics',
+    name: 'Statistics',
+    component: () => import('@/views/StatisticsView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
   },
   {
     path: '/factories',

@@ -41,6 +41,11 @@ DROP TABLE IF EXISTS recommendation_score_config CASCADE;
 DROP TABLE IF EXISTS designer_profile CASCADE;
 DROP TABLE IF EXISTS product_collection_item CASCADE;
 DROP TABLE IF EXISTS product_collection CASCADE;
+DROP TABLE IF EXISTS user_favorite CASCADE;
+DROP TABLE IF EXISTS project CASCADE;
+DROP TABLE IF EXISTS design_order_item CASCADE;
+DROP TABLE IF EXISTS design_order CASCADE;
+DROP TABLE IF EXISTS sys_config CASCADE;
 DROP TABLE IF EXISTS factory_product_capability CASCADE;
 DROP TABLE IF EXISTS sys_user_factory CASCADE;
 DROP TABLE IF EXISTS sys_user_role CASCADE;
@@ -451,12 +456,17 @@ CREATE TABLE IF NOT EXISTS scheme (
     max_lead_time_days INTEGER,
     item_count INTEGER,
     status VARCHAR(16) DEFAULT 'active',
+    project_id VARCHAR(40),
+    is_template BOOLEAN NOT NULL DEFAULT false,
+    template_tags TEXT,
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_scheme_created_by ON scheme(created_by, status);
+CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_scheme_template ON scheme(is_template) WHERE is_template = true AND deleted_at IS NULL;
 
 -- 搭配方案项表
 CREATE TABLE IF NOT EXISTS scheme_item (
@@ -765,6 +775,8 @@ CREATE TABLE IF NOT EXISTS sys_user (
     username VARCHAR(64) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     nickname VARCHAR(64),
+    company_name VARCHAR(128),
+    group_name VARCHAR(64),
     status VARCHAR(16) DEFAULT 'active',
     token_version INT DEFAULT 0,
     view_full_catalog BOOLEAN NOT NULL DEFAULT false,
@@ -943,6 +955,89 @@ CREATE TABLE IF NOT EXISTS scheme_candidate (
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_request ON scheme_candidate(recommend_request_id, status);
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_rspu ON scheme_candidate(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(created_by, status);
+
+-- 收藏夹（V4 并入）：用户级产品收藏，支持分组
+CREATE TABLE IF NOT EXISTS user_favorite (
+    favorite_id VARCHAR(40) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    rspu_id VARCHAR(40) NOT NULL REFERENCES rspu_master(rspu_id),
+    group_name VARCHAR(64),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
+
+-- 设计项目（V4 并入）
+CREATE TABLE IF NOT EXISTS project (
+    project_id VARCHAR(40) PRIMARY KEY,
+    project_name VARCHAR(128) NOT NULL,
+    project_type VARCHAR(32),
+    company_name VARCHAR(128),
+    owner_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    remark VARCHAR(512),
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
+
+-- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
+CREATE TABLE IF NOT EXISTS design_order (
+    order_id VARCHAR(40) PRIMARY KEY,
+    order_no VARCHAR(32) NOT NULL UNIQUE,
+    project_id VARCHAR(40) REFERENCES project(project_id),
+    scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
+    receiver_name VARCHAR(64),
+    receiver_phone VARCHAR(32),
+    receiver_area VARCHAR(128),
+    receiver_address VARCHAR(256),
+    original_total_price TEXT,
+    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1,
+    final_total_price TEXT,
+    item_count INT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    expected_lead_time INT,
+    remark VARCHAR(512),
+    invite_token_hash VARCHAR(128),
+    invite_expire_at TIMESTAMP,
+    invite_confirmed_at TIMESTAMP,
+    created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
+
+-- 订单明细（V5 并入）
+CREATE TABLE IF NOT EXISTS design_order_item (
+    id BIGSERIAL PRIMARY KEY,
+    order_id VARCHAR(40) NOT NULL REFERENCES design_order(order_id),
+    rspu_id VARCHAR(40) NOT NULL,
+    rsku_id VARCHAR(40),
+    variant_id VARCHAR(40),
+    product_name VARCHAR(256),
+    model VARCHAR(128),
+    image_id VARCHAR(40),
+    quantity INT NOT NULL DEFAULT 1,
+    original_price TEXT,
+    final_price TEXT,
+    factory_code VARCHAR(16),
+    snapshot_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_item_order ON design_order_item(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_rspu ON design_order_item(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_factory ON design_order_item(factory_code);
+
+-- 轻量配置表（V5 并入）
+CREATE TABLE IF NOT EXISTS sys_config (
+    config_key VARCHAR(64) PRIMARY KEY,
+    config_value TEXT,
+    remark VARCHAR(256),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 
 -- =================== 5. 插入种子数据 ===================
 
@@ -1180,6 +1275,230 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('import_row_type', 'HEADER', '表头行', 3),
 ('import_row_type', 'UNKNOWN', '未知', 4)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- ============================================================
+-- RBAC 与开发测试账号种子（同步自 database/V1__seed_data.sql）
+-- 注意：缺少本段会导致重置后所有角色零权限，登录后全部接口 403。
+-- ============================================================
+
+-- 角色
+INSERT INTO sys_role (role_code, role_name) VALUES
+('ADMIN', '系统管理员'),
+('EDITOR', '编辑员'),
+('VIEWER', '浏览者'),
+('FACTORY_ADMIN', '工厂管理员'),
+('DESIGNER', '设计师'),
+('USER', '普通用户')
+ON CONFLICT (role_code) DO NOTHING;
+
+-- 权限
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('product:read', '查看产品'),
+('product:create', '新品录入'),
+('product:update', '编辑产品元数据'),
+('product:delete', '删除产品'),
+('product:review', '复核产品'),
+('product:import', '批量导入产品'),
+('factory:read', '查看工厂'),
+('factory:create', '创建工厂'),
+('factory:update', '编辑工厂'),
+('factory:delete', '删除工厂'),
+('rsku:read', '查看报价'),
+('rsku:create', '新增报价'),
+('rsku:update', '编辑报价'),
+('rsku:delete', '删除报价'),
+('rsku:import', '批量导入报价'),
+('quote:read', '查看报价单'),
+('quote:generate', '生成报价单'),
+('quote:export', '导出报价单'),
+('scheme:read', '查看搭配方案'),
+('scheme:create', '创建搭配方案'),
+('scheme:update', '编辑搭配方案'),
+('scheme:delete', '删除搭配方案'),
+('dict:create', '创建字典项'),
+('user:read', '查看用户'),
+('user:create', '创建用户'),
+('user:update', '编辑用户'),
+('user:delete', '删除用户'),
+('user:reset-password', '重置密码'),
+('admin:async-metrics', '查看异步线程池指标'),
+('admin:vector-backfill', '向量回填'),
+('collection:read', '查看产品集'),
+('collection:create', '创建产品集'),
+('collection:update', '编辑产品集'),
+('collection:delete', '删除产品集'),
+('capability:read', '查看工厂产品能力'),
+('capability:create', '创建工厂产品能力'),
+('capability:update', '编辑工厂产品能力'),
+('capability:delete', '删除工厂产品能力'),
+('designer:profile:read', '查看设计师画像'),
+('designer:profile:update', '编辑设计师画像'),
+('recommendation:score:config:read', '查看推荐打分配置'),
+('recommendation:score:config:update', '编辑推荐打分配置'),
+('scheme:candidate:read', '查看 AI 推荐候选'),
+('scheme:candidate:create', '创建 AI 推荐候选'),
+('scheme:candidate:update', '编辑 AI 推荐候选'),
+('scheme:candidate:delete', '删除 AI 推荐候选')
+ON CONFLICT (permission_code) DO NOTHING;
+
+-- ADMIN 拥有所有权限
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'ADMIN'
+ON CONFLICT DO NOTHING;
+
+-- EDITOR：除用户管理和高级 admin 外的全部权限
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'EDITOR'
+  AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill', 'recommendation:score:config:read', 'recommendation:score:config:update')
+ON CONFLICT DO NOTHING;
+
+-- VIEWER：只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'VIEWER'
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
+ON CONFLICT DO NOTHING;
+
+-- FACTORY_ADMIN：自己工厂产品 + 工厂资料维护 + 报价相关 + 只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'FACTORY_ADMIN'
+  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
+ON CONFLICT DO NOTHING;
+
+-- DESIGNER：方案/报价 + 只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'DESIGNER'
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'quote:generate', 'quote:export', 'scheme:read', 'scheme:create', 'scheme:update', 'scheme:delete', 'collection:read', 'capability:read', 'designer:profile:read', 'designer:profile:update', 'scheme:candidate:read', 'scheme:candidate:create', 'scheme:candidate:update', 'scheme:candidate:delete')
+ON CONFLICT DO NOTHING;
+
+-- USER：只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'USER'
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
+ON CONFLICT DO NOTHING;
+
+-- 项目类型字典（V4 并入）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('project_type', 'whole_house', '全屋', 1),
+('project_type', 'space', '单空间', 2),
+('project_type', 'custom', '定制', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 项目权限（V4 并入；ADMIN 全量与 EDITOR 排除式映射自动覆盖）
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('project:read', '查看设计项目'),
+('project:create', '创建设计项目'),
+('project:update', '编辑设计项目'),
+('project:delete', '删除设计项目')
+ON CONFLICT (permission_code) DO NOTHING;
+
+-- DESIGNER：项目全量权限
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code = 'DESIGNER'
+  AND p.permission_code LIKE 'project:%'
+ON CONFLICT DO NOTHING;
+
+-- ADMIN / EDITOR：项目全量权限（通用映射先于本权限插入执行，需显式补插）
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('ADMIN', 'EDITOR')
+  AND p.permission_code LIKE 'project:%'
+ON CONFLICT DO NOTHING;
+
+-- VIEWER / USER：项目只读
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('VIEWER', 'USER')
+  AND p.permission_code = 'project:read'
+ON CONFLICT DO NOTHING;
+
+-- 订单全局折扣率（V5 并入）
+INSERT INTO sys_config (config_key, config_value, remark) VALUES
+('order.price_rate', '1', '订单全局折扣率')
+ON CONFLICT (config_key) DO NOTHING;
+
+-- 订单状态字典（V5 并入）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('design_order_status', 'PENDING', '待确认', 1),
+('design_order_status', 'CONFIRMED', '已确认', 2),
+('design_order_status', 'PRODUCING', '生产中', 3),
+('design_order_status', 'COMPLETED', '已完成', 4),
+('design_order_status', 'CANCELLED', '已取消', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 订单权限（V5 并入；方案约定 ADMIN + DESIGNER 授予，显式补插）
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('order:read', '查看订单'),
+('order:create', '创建订单'),
+('order:update', '编辑订单'),
+('order:delete', '删除订单')
+ON CONFLICT (permission_code) DO NOTHING;
+
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE r.role_code IN ('ADMIN', 'DESIGNER')
+  AND p.permission_code LIKE 'order:%'
+ON CONFLICT DO NOTHING;
+
+-- =================== 开发测试账号（仅在开发/演示环境使用） ===================
+
+-- 测试工厂
+INSERT INTO factory_master (factory_code, factory_name, factory_level, region, status) VALUES
+('TEST', '测试工厂', 'A', '广东', 'active')
+ON CONFLICT (factory_code) DO NOTHING;
+
+-- 测试用户（密码统一为 admin123）
+-- 按 username 冲突更新，确保开发环境重置后密码与快速登录按钮一致
+INSERT INTO sys_user (user_id, username, password_hash, nickname, status, view_full_catalog) VALUES
+('USER-ADMIN-00000001', 'admin', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '系统管理员', 'active', true),
+('USER-EDITOR-00000001', 'editor', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '编辑员', 'active', true),
+('USER-VIEWER-00000001', 'viewer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '浏览者', 'active', false),
+('USER-DESIGNER-00000001', 'designer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '设计师', 'active', false),
+('USER-FACTORY-00000001', 'factory', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '工厂管理员', 'active', false),
+('USER-USER-00000001', 'user', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '普通用户', 'active', false)
+ON CONFLICT (username) DO UPDATE SET
+  password_hash = EXCLUDED.password_hash,
+  nickname = EXCLUDED.nickname,
+  status = EXCLUDED.status,
+  view_full_catalog = EXCLUDED.view_full_catalog;
+
+-- 测试用户角色关联
+INSERT INTO sys_user_role (user_id, role_id)
+SELECT u.user_id, r.role_id
+FROM sys_user u, sys_role r
+WHERE u.username IN ('admin', 'editor', 'viewer', 'designer', 'factory', 'user')
+  AND r.role_code = CASE u.username
+    WHEN 'admin' THEN 'ADMIN'
+    WHEN 'editor' THEN 'EDITOR'
+    WHEN 'viewer' THEN 'VIEWER'
+    WHEN 'designer' THEN 'DESIGNER'
+    WHEN 'factory' THEN 'FACTORY_ADMIN'
+    WHEN 'user' THEN 'USER'
+  END
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- 工厂管理员绑定测试工厂
+INSERT INTO sys_user_factory (user_id, factory_code)
+SELECT u.user_id, 'TEST'
+FROM sys_user u
+WHERE u.username = 'factory'
+ON CONFLICT (user_id, factory_code) DO NOTHING;
 
 
 -- ============================================================

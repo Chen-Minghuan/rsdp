@@ -22,6 +22,12 @@ public class SysUser {
 
     private String nickname;
 
+    /** 企业名称（企业团队轻量版，项目创建默认取此值） */
+    private String companyName;
+
+    /** 团队分组名称（企业团队轻量版） */
+    private String groupName;
+
     private String status;
 
     private Integer tokenVersion;

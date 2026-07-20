@@ -2,6 +2,8 @@ package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.rsdp.dto.request.UserCreateRequest;
+import com.rsdp.dto.request.UserUpdateRequest;
 import com.rsdp.dto.response.UserResponse;
 import com.rsdp.entity.SysRole;
 import com.rsdp.entity.SysUser;
@@ -13,6 +15,7 @@ import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.mapper.SysUserRoleMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -23,7 +26,9 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -53,6 +58,9 @@ class UserServiceTest {
 
     @Mock
     private UserFactoryService userFactoryService;
+
+    @Mock
+    private PermissionService permissionService;
 
     @InjectMocks
     private UserService userService;
@@ -118,6 +126,79 @@ class UserServiceTest {
         assertThat(response.getRoleCode()).isNull();
         assertThat(response.getRoleName()).isNull();
         assertThat(response.getFactoryCodes()).isEmpty();
+    }
+
+    @Test
+    void createUser_shouldPersistCompanyAndGroup() {
+        UserCreateRequest request = new UserCreateRequest();
+        request.setUsername("newbie");
+        request.setPassword("secret123");
+        request.setRoleCode("DESIGNER");
+        request.setCompanyName("示例设计工作室");
+        request.setGroupName("方案一组");
+
+        when(sysUserMapper.selectByUsername("newbie")).thenReturn(null);
+        when(sysRoleMapper.selectByRoleCode("DESIGNER")).thenReturn(buildRole(3L, "DESIGNER", "设计师"));
+        when(passwordEncoder.encode("secret123")).thenReturn("hash");
+        when(userRoleService.getRoleCodesByUserId(anyString())).thenReturn(List.of("DESIGNER"));
+        when(userFactoryService.getFactoryCodesByUserId(anyString())).thenReturn(List.of());
+
+        UserResponse response = userService.createUser(request);
+
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper).insert(captor.capture());
+        assertThat(captor.getValue().getCompanyName()).isEqualTo("示例设计工作室");
+        assertThat(captor.getValue().getGroupName()).isEqualTo("方案一组");
+        assertThat(response.getCompanyName()).isEqualTo("示例设计工作室");
+        assertThat(response.getGroupName()).isEqualTo("方案一组");
+    }
+
+    @Test
+    void updateUser_shouldUpdateCompanyAndGroupWhenProvided() {
+        SysUser existing = buildUser("USER-009", "designer", "设计师");
+        existing.setCompanyName("旧企业");
+        existing.setGroupName("旧组");
+        when(sysUserMapper.selectById("USER-009")).thenReturn(existing);
+        when(sysRoleMapper.selectByRoleCode("DESIGNER")).thenReturn(buildRole(3L, "DESIGNER", "设计师"));
+        when(userRoleService.getRoleCodesByUserId("USER-009")).thenReturn(List.of("DESIGNER"));
+        when(userFactoryService.getFactoryCodesByUserId("USER-009")).thenReturn(List.of());
+
+        UserUpdateRequest request = new UserUpdateRequest();
+        request.setRoleCode("DESIGNER");
+        request.setCompanyName("新企业");
+        request.setGroupName("新组");
+
+        UserResponse response = userService.updateUser("USER-009", request);
+
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getValue().getCompanyName()).isEqualTo("新企业");
+        assertThat(captor.getValue().getGroupName()).isEqualTo("新组");
+        assertThat(response.getCompanyName()).isEqualTo("新企业");
+        assertThat(response.getGroupName()).isEqualTo("新组");
+    }
+
+    @Test
+    void updateUser_shouldKeepCompanyAndGroupWhenNotProvided() {
+        SysUser existing = buildUser("USER-010", "designer", "设计师");
+        existing.setCompanyName("旧企业");
+        existing.setGroupName("旧组");
+        when(sysUserMapper.selectById("USER-010")).thenReturn(existing);
+        when(sysRoleMapper.selectByRoleCode("DESIGNER")).thenReturn(buildRole(3L, "DESIGNER", "设计师"));
+        when(userRoleService.getRoleCodesByUserId("USER-010")).thenReturn(List.of("DESIGNER"));
+        when(userFactoryService.getFactoryCodesByUserId("USER-010")).thenReturn(List.of());
+
+        UserUpdateRequest request = new UserUpdateRequest();
+        request.setRoleCode("DESIGNER");
+
+        UserResponse response = userService.updateUser("USER-010", request);
+
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getValue().getCompanyName()).isEqualTo("旧企业");
+        assertThat(captor.getValue().getGroupName()).isEqualTo("旧组");
+        assertThat(response.getCompanyName()).isEqualTo("旧企业");
+        assertThat(response.getGroupName()).isEqualTo("旧组");
     }
 
     private SysUser buildUser(String userId, String username, String nickname) {

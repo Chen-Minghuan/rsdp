@@ -1,6 +1,8 @@
 /**
  * 搭配方案项请求。
  */
+import type { PriceChange } from './quote'
+
 export interface SchemeItemRequest {
   rspuId: string
   rskuId: string
@@ -15,6 +17,8 @@ export interface SchemeCreateRequest {
   schemeName: string
   roomType?: string
   budgetLimit?: number
+  /** 所属设计项目 ID（可选） */
+  projectId?: string
   items: SchemeItemRequest[]
 }
 
@@ -55,6 +59,9 @@ export interface Scheme {
   maxLeadTimeDays: number
   itemCount: number
   status: string
+  projectId?: string
+  isTemplate?: boolean
+  templateTags?: string[]
   createdBy: string
   createdAt: string
   items: SchemeItem[]
@@ -70,4 +77,23 @@ export interface SchemeSummary {
   totalPrice: number
   createdBy: string
   createdAt: string
+  isTemplate?: boolean
+  templateTags?: string[]
+}
+
+/**
+ * 套用模板创建方案请求。
+ */
+export interface CopyFromTemplateRequest {
+  projectId: string
+  schemeName?: string
+}
+
+/**
+ * 套用模板创建方案响应。
+ */
+export interface CopyFromTemplateResponse {
+  scheme: Scheme
+  priceChanges: PriceChange[]
+  skippedRskuIds: string[]
 }

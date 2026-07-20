@@ -323,12 +323,17 @@ CREATE TABLE IF NOT EXISTS scheme (
     max_lead_time_days INTEGER,                      -- 最长交期
     item_count INTEGER,                              -- 方案项数
     status VARCHAR(16) DEFAULT 'active',
+    project_id VARCHAR(40),                          -- 所属设计项目（V4 并入）
+    is_template BOOLEAN NOT NULL DEFAULT false,      -- 是否为方案模板（V4 并入）
+    template_tags TEXT,                              -- 模板标签 JSON 数组（V4 并入）
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_scheme_created_by ON scheme(created_by, status);
+CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_scheme_template ON scheme(is_template) WHERE is_template = true AND deleted_at IS NULL;
 
 -- 搭配方案项表
 CREATE TABLE IF NOT EXISTS scheme_item (
@@ -567,6 +572,8 @@ CREATE TABLE IF NOT EXISTS sys_user (
     username VARCHAR(64) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     nickname VARCHAR(64),
+    company_name VARCHAR(128),
+    group_name VARCHAR(64),
     status VARCHAR(16) DEFAULT 'active',
     token_version INT DEFAULT 0,
     view_full_catalog BOOLEAN NOT NULL DEFAULT false,
@@ -745,3 +752,87 @@ CREATE TABLE IF NOT EXISTS scheme_candidate (
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_request ON scheme_candidate(recommend_request_id, status);
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_rspu ON scheme_candidate(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(created_by, status);
+
+-- 收藏夹（V4 并入）：用户级产品收藏，支持分组
+CREATE TABLE IF NOT EXISTS user_favorite (
+    favorite_id VARCHAR(40) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    rspu_id VARCHAR(40) NOT NULL REFERENCES rspu_master(rspu_id),
+    group_name VARCHAR(64),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
+
+-- 设计项目（V4 并入）
+CREATE TABLE IF NOT EXISTS project (
+    project_id VARCHAR(40) PRIMARY KEY,
+    project_name VARCHAR(128) NOT NULL,
+    project_type VARCHAR(32),
+    company_name VARCHAR(128),
+    owner_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    remark VARCHAR(512),
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
+
+
+-- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
+CREATE TABLE IF NOT EXISTS design_order (
+    order_id VARCHAR(40) PRIMARY KEY,
+    order_no VARCHAR(32) NOT NULL UNIQUE,
+    project_id VARCHAR(40) REFERENCES project(project_id),
+    scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
+    receiver_name VARCHAR(64),
+    receiver_phone VARCHAR(32),
+    receiver_area VARCHAR(128),
+    receiver_address VARCHAR(256),
+    original_total_price TEXT,
+    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1,
+    final_total_price TEXT,
+    item_count INT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    expected_lead_time INT,
+    remark VARCHAR(512),
+    invite_token_hash VARCHAR(128),
+    invite_expire_at TIMESTAMP,
+    invite_confirmed_at TIMESTAMP,
+    created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
+
+-- 订单明细（V5 并入）
+CREATE TABLE IF NOT EXISTS design_order_item (
+    id BIGSERIAL PRIMARY KEY,
+    order_id VARCHAR(40) NOT NULL REFERENCES design_order(order_id),
+    rspu_id VARCHAR(40) NOT NULL,
+    rsku_id VARCHAR(40),
+    variant_id VARCHAR(40),
+    product_name VARCHAR(256),
+    model VARCHAR(128),
+    image_id VARCHAR(40),
+    quantity INT NOT NULL DEFAULT 1,
+    original_price TEXT,
+    final_price TEXT,
+    factory_code VARCHAR(16),
+    snapshot_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_item_order ON design_order_item(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_rspu ON design_order_item(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_factory ON design_order_item(factory_code);
+
+-- 轻量配置表（V5 并入）
+CREATE TABLE IF NOT EXISTS sys_config (
+    config_key VARCHAR(64) PRIMARY KEY,
+    config_value TEXT,
+    remark VARCHAR(256),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);

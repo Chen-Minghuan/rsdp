@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.rsdp.mapper.DesignOrderItemMapper">
+
+    <insert id="insertBatch">
+        INSERT INTO design_order_item (
+            order_id,
+            rspu_id,
+            rsku_id,
+            variant_id,
+            product_name,
+            model,
+            image_id,
+            quantity,
+            original_price,
+            final_price,
+            factory_code,
+            snapshot_json,
+            created_at
+        ) VALUES
+        <foreach collection="items" item="item" separator=",">
+            (
+                #{item.orderId},
+                #{item.rspuId},
+                #{item.rskuId},
+                #{item.variantId},
+                #{item.productName},
+                #{item.model},
+                #{item.imageId},
+                #{item.quantity},
+                #{item.originalPrice},
+                #{item.finalPrice},
+                #{item.factoryCode},
+                #{item.snapshotJson},
+                #{item.createdAt}
+            )
+        </foreach>
+    </insert>
+</mapper>

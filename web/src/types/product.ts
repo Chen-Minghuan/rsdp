@@ -177,6 +177,8 @@ export interface ProductDetail {
   }>
   recognitions: RecognitionHistoryItem[]
   styleMatches: ProductStyleMatch[]
+  /** 风格字典码列表（主风格在前），供编辑表单回填 */
+  styleCodes?: string[]
   officialMatches?: RelatedProduct[]
   matchedBy?: RelatedProduct[]
 }
@@ -216,6 +218,8 @@ export interface ProductReviewRequest {
  */
 export interface ProductUpdateRequest {
   positioningLabel?: string
+  /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel */
+  styleCodes?: string[]
   colorPrimaryName?: string
   colorPrimaryHsv?: number[]
   materialTags?: string[]

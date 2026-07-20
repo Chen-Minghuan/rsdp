@@ -21,6 +21,9 @@ public class SchemeResponse {
     private Integer maxLeadTimeDays;
     private Integer itemCount;
     private String status;
+    private String projectId;
+    private Boolean isTemplate;
+    private List<String> templateTags;
     private String createdBy;
     private LocalDateTime createdAt;
     private List<SchemeItemResponse> items;

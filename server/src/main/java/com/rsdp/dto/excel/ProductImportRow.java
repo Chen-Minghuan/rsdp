@@ -72,4 +72,7 @@ public class ProductImportRow {
 
     @ExcelProperty("变体产品等级")
     private String variantProductLevel;
+
+    @ExcelProperty("交期天数")
+    private Integer leadTimeDays;
 }

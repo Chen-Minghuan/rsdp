@@ -50,6 +50,8 @@ public class SecurityConfig {
                 // 公开接口
                 .requestMatchers("/api/v1/auth/login").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/images/**").permitAll()
+                // 订单邀请公开页（免登录，token 自校验）
+                .requestMatchers("/api/v1/public/**").permitAll()
 
                 // 用户管理（管理员）
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_READ)
@@ -94,6 +96,19 @@ public class SecurityConfig {
                 // 方案读接口
                 .requestMatchers(HttpMethod.GET, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_READ)
 
+                // 设计项目接口
+                .requestMatchers(HttpMethod.GET, "/api/v1/projects", "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/projects").hasAuthority(Permissions.PROJECT_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_DELETE)
+
+                // 设计订单接口
+                .requestMatchers(HttpMethod.GET, "/api/v1/orders", "/api/v1/orders/**").hasAuthority(Permissions.ORDER_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/orders").hasAuthority(Permissions.ORDER_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/orders/*/invite").hasAuthority(Permissions.ORDER_UPDATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_DELETE)
+
                 // 检索/推荐接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/matching/**").hasAuthority(Permissions.PRODUCT_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/retrieval/**").hasAuthority(Permissions.PRODUCT_READ)
@@ -132,7 +147,14 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/quotes/generate").hasAuthority(Permissions.QUOTE_GENERATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/quotes/export").hasAuthority(Permissions.QUOTE_EXPORT)
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/quote").hasAuthority(Permissions.QUOTE_GENERATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/schemes/*/copy-from-template").hasAuthority(Permissions.SCHEME_CREATE)
 
+                // 运营统计接口（复用方案读权限）
+                .requestMatchers(HttpMethod.GET, "/api/v1/statistics/**").hasAuthority(Permissions.SCHEME_READ)
+
+                // 系统配置：读取需订单读权限，修改仅 ADMIN
+                .requestMatchers(HttpMethod.GET, "/api/v1/configs/**").hasAuthority(Permissions.ORDER_READ)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/configs/**").hasRole("ADMIN")
                 // 搭配方案写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_UPDATE)

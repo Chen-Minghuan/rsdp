@@ -65,7 +65,15 @@ export const PERMISSIONS = {
   SCHEME_CANDIDATE_CREATE: 'scheme:candidate:create',
   SCHEME_CANDIDATE_UPDATE: 'scheme:candidate:update',
   SCHEME_CANDIDATE_DELETE: 'scheme:candidate:delete',
+  PROJECT_READ: 'project:read',
+  PROJECT_CREATE: 'project:create',
+  PROJECT_UPDATE: 'project:update',
+  PROJECT_DELETE: 'project:delete',
 
+  ORDER_READ: 'order:read',
+  ORDER_CREATE: 'order:create',
+  ORDER_UPDATE: 'order:update',
+  ORDER_DELETE: 'order:delete',
   ADMIN_ASYNC_METRICS: 'admin:async-metrics',
   ADMIN_VECTOR_BACKFILL: 'admin:vector-backfill'
 } as const
