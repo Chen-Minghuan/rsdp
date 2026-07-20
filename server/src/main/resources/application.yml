@@ -80,6 +80,14 @@ rsdp:
   security:
     # 允许跨域来源，逗号分隔；生产环境必须通过 RSDP_ALLOWED_ORIGINS 配置为具体域名白名单
     allowed-origins: ${RSDP_ALLOWED_ORIGINS:http://localhost:5173}
+    # 登录防爆破保护
+    login:
+      # 允许的最大失败次数，超过则锁定
+      max-attempts: ${RSDP_LOGIN_MAX_ATTEMPTS:5}
+      # 锁定时长（分钟）
+      lock-duration-minutes: ${RSDP_LOGIN_LOCK_DURATION_MINUTES:15}
+      # 失败计数窗口（分钟）
+      attempt-window-minutes: ${RSDP_LOGIN_ATTEMPT_WINDOW_MINUTES:30}
   import:
     # 产品批量导入时允许下载图片的 host 白名单，逗号分隔；留空表示仅允许公网地址
     allowed-image-hosts: ${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:}

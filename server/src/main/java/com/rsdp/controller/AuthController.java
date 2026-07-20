@@ -10,6 +10,7 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.SecurityUser;
 import com.rsdp.service.AuthService;
 import com.rsdp.service.UserService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -59,8 +60,11 @@ public class AuthController {
      * @return 用户信息（不含 token）
      */
     @PostMapping("/login")
-    public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request, HttpServletResponse response) {
-        LoginResponse loginResponse = authService.login(request);
+    public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request,
+                                       HttpServletRequest httpRequest,
+                                       HttpServletResponse response) {
+        String ip = extractClientIp(httpRequest);
+        LoginResponse loginResponse = authService.login(request, ip);
 
         ResponseCookie cookie = ResponseCookie.from(cookieName, loginResponse.getToken())
             .httpOnly(true)
@@ -137,5 +141,17 @@ public class AuthController {
             throw new BusinessException("用户未登录");
         }
         return Result.ok(userService.updateMyPreferences(userId, request));
+    }
+
+    private String extractClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (StringUtils.hasText(xff)) {
+            return xff.split(",")[0].trim();
+        }
+        String xri = request.getHeader("X-Real-IP");
+        if (StringUtils.hasText(xri)) {
+            return xri.trim();
+        }
+        return request.getRemoteAddr();
     }
 }
