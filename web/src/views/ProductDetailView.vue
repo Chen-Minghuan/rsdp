@@ -371,7 +371,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
   }
 ]
 
-const variantColumns = [
+const variantColumns: DataTableColumns<RspuVariant> = [
   { title: '变体 ID', key: 'variantId', width: 180 },
   { title: '显示名称', key: 'displayName' },
   { title: '变体编码', key: 'variantCode', width: 120 },

@@ -117,6 +117,7 @@
 │   ├── V4__project_module.sql     # 项目模块 + 收藏夹 + 方案模板化（V4）
 │   ├── V5__order_module.sql       # 订单模块 + 系统配置（V5）
 │   ├── V6__team_module.sql        # 企业团队：sys_user 扩展（V6）
+│   ├── V7__variant_unique_index.sql  # 变体属性组合唯一索引（V7）
 │   ├── seed_style_knowledge.sql   # 风格知识库种子数据
 │   └── reset_db.sql               # 数据库重置脚本
 ├── data/                          # 运行数据（uploads 上传文件、style-knowledge 风格素材）
@@ -269,6 +270,7 @@ make clean
   - `V4__project_module.sql`：项目模块 + 收藏夹 + 方案模板化
   - `V5__order_module.sql`：订单模块 + 系统配置（sys_config）
   - `V6__team_module.sql`：企业团队（sys_user 扩展 company_name/group_name）
+  - `V7__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

@@ -20,7 +20,8 @@ import {
   NSelect,
   NTag,
   useDialog,
-  useMessage
+  useMessage,
+  type DataTableColumns
 } from 'naive-ui'
 import { getSchemeDetail, generateQuoteFromScheme, setSchemeTemplate, copyFromTemplate } from '@/api/scheme'
 import { exportQuote } from '@/api/quote'
@@ -212,7 +213,7 @@ function formatPrice(value: number | undefined): string {
   return `¥${value.toFixed(2)}`
 }
 
-const itemColumns = [
+const itemColumns: DataTableColumns<SchemeItem> = [
   {
     title: '图片',
     key: 'image',
@@ -253,7 +254,7 @@ const itemColumns = [
   { title: 'MOQ', key: 'moq', width: 100 }
 ]
 
-const quoteColumns = [
+const quoteColumns: DataTableColumns<QuoteItem> = [
   { title: 'RSPU', key: 'rspuName' },
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
@@ -278,7 +279,7 @@ const quoteColumns = [
   { title: 'MOQ', key: 'moq', width: 100 }
 ]
 
-const priceChangeColumns = [
+const priceChangeColumns: DataTableColumns<PriceChange> = [
   { title: 'RSPU', key: 'rspuName' },
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   {

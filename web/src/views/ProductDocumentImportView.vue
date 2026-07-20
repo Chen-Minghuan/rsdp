@@ -15,7 +15,8 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NDataTable,
-  type UploadFileInfo
+  type UploadFileInfo,
+  type DataTableColumns
 } from 'naive-ui'
 import { importProductsFromDocument } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
@@ -246,7 +247,7 @@ function goToProduct(rspuId: string) {
   router.push(`/products/${rspuId}`)
 }
 
-const failureColumns = [
+const failureColumns: DataTableColumns<DocumentImportFailure> = [
   {
     title: '页码',
     key: 'pageIndex',

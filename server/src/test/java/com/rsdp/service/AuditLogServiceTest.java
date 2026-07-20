@@ -1,12 +1,13 @@
 package com.rsdp.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AuditLog;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AuditLogMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -23,8 +24,13 @@ class AuditLogServiceTest {
     @Mock
     private AuditLogMapper auditLogMapper;
 
-    @InjectMocks
     private AuditLogService auditLogService;
+
+    @BeforeEach
+    void setUp() {
+        // 构造函数注入真实 ObjectMapper，确保快照脱敏/序列化走真实逻辑
+        auditLogService = new AuditLogService(auditLogMapper, new ObjectMapper());
+    }
 
     @Test
     void logCreate_shouldInsertAuditLog() {

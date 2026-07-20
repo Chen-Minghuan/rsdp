@@ -16,7 +16,8 @@ import {
   NInputNumber,
   NInput,
   NDataTable,
-  useDialog
+  useDialog,
+  type DataTableColumns
 } from 'naive-ui'
 import { getRsku, listPriceHistory, updateRskuPrice, deleteRsku } from '@/api/rsku'
 import { useUserStore } from '@/stores/user'
@@ -56,7 +57,7 @@ const submittingPrice = ref(false)
 const newPrice = ref<number | null>(null)
 const changeReason = ref('')
 
-const historyColumns = [
+const historyColumns: DataTableColumns<PriceHistory> = [
   { title: '历史 ID', key: 'historyId', width: 100 },
   { title: '旧价格', key: 'oldPrice' },
   { title: '新价格', key: 'newPrice' },

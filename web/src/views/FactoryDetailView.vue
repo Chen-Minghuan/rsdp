@@ -20,7 +20,8 @@ import {
   NGrid,
   NGridItem,
   NDivider,
-  NImage
+  NImage,
+  type DataTableColumns
 } from 'naive-ui'
 import {
   getFactory,
@@ -115,7 +116,7 @@ const qcItemSelectOptions = computed(() =>
   qcItemOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
 )
 
-const rskuColumns = [
+const rskuColumns: DataTableColumns<Rsku> = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '产品 RSPU', key: 'rspuId', width: 160 },
   { title: '变体 ID', key: 'variantId', width: 160 },
@@ -140,7 +141,7 @@ const rskuColumns = [
   }
 ]
 
-const capabilityColumns = [
+const capabilityColumns: DataTableColumns<FactoryProductCapability> = [
   { title: 'ID', key: 'id', width: 80 },
   { title: '品类', key: 'categoryCode' },
   { title: '风格', key: 'styleCode' },

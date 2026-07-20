@@ -434,6 +434,16 @@ CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);
 CREATE INDEX IF NOT EXISTS idx_variant_material ON rspu_variant(material_code);
 CREATE INDEX IF NOT EXISTS idx_variant_size ON rspu_variant(size_code);
 
+-- 变体属性组合唯一约束（防并发导入产生重复变体；NULL 归一为空串；仅约束未软删除记录）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_variant_attrs
+    ON rspu_variant (
+        rspu_id,
+        COALESCE(size_code, ''),
+        COALESCE(color_code, ''),
+        COALESCE(material_code, '')
+    )
+    WHERE deleted_at IS NULL;
+
 -- 工厂仓库索引
 CREATE INDEX IF NOT EXISTS idx_factory_warehouse_factory ON factory_warehouse(factory_code, status);
 

@@ -10,6 +10,7 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.chroma.ChromaDbClient;
+import com.rsdp.service.chroma.ChromaMetadataBuilder;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.OcrPostProcessor;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +23,6 @@ import org.springframework.util.StringUtils;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -214,15 +214,7 @@ public class AsyncTaskProcessor {
                 return false;
             }
 
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("rspu_id", rspuId);
-            metadata.put("category_code", rspu.getCategoryCode());
-            metadata.put("positioning_label", rspu.getPositioningLabel());
-            metadata.put("color_primary_name", rspu.getColorPrimaryName());
-            metadata.put("material_tags", rspu.getMaterialTags());
-            metadata.put("scene_tags", rspu.getSceneTags());
-            metadata.put("status", rspu.getStatus());
-            metadata.put("image_size", imageSize);
+            Map<String, Object> metadata = ChromaMetadataBuilder.buildProductMetadata(rspu, imageSize);
 
             chromaDbClient.upsert(
                 List.of(imageId),

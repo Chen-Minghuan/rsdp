@@ -11,9 +11,9 @@ import {
   NSwitch,
   NSpin
 } from 'naive-ui'
-import type { UploadFileInfo } from 'naive-ui'
+import type { UploadFileInfo, DataTableColumns } from 'naive-ui'
 import { importProducts, downloadProductImportTemplate } from '@/api/product'
-import type { ProductImportResult } from '@/types/product'
+import type { ProductImportResult, ProductImportFailure } from '@/types/product'
 
 const router = useRouter()
 
@@ -24,7 +24,7 @@ const importing = ref(false)
 const errorMessage = ref('')
 const result = ref<ProductImportResult | null>(null)
 
-const failureColumns = [
+const failureColumns: DataTableColumns<ProductImportFailure> = [
   { title: '行号', key: 'rowIndex', width: 80 },
   { title: '外部编码', key: 'externalCode', width: 140 },
   { title: 'RSPU ID', key: 'rspuId', width: 140 },

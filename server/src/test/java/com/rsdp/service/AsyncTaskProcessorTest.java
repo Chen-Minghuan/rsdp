@@ -142,6 +142,14 @@ class AsyncTaskProcessorTest {
         assertThat(embeddingsCaptor.getValue()).hasSize(1);
         assertThat(embeddingsCaptor.getValue().get(0)).containsExactly(0.1f, 0.2f, 0.3f);
         assertThat(metadataCaptor.getValue().get(0)).containsEntry("rspu_id", rspuId);
+        Map<String, Object> metadata = metadataCaptor.getValue().get(0);
+        assertThat(metadata).containsEntry("category_code", "FS");
+        assertThat(metadata).containsEntry("positioning_label", "MC");
+        assertThat(metadata).containsEntry("material_tags", "[\"WO\",\"LI\"]");
+        assertThat(metadata).containsEntry("scene_tags", "[\"LIVING\",\"STUDY\"]");
+        assertThat(metadata).containsEntry("status", "active");
+        assertThat(metadata).containsEntry("image_size", 10L);
+        assertThat(metadata).containsKey("color_primary_name");
 
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());

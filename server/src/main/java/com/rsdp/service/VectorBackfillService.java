@@ -8,13 +8,13 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.chroma.ChromaDbClient;
+import com.rsdp.service.chroma.ChromaMetadataBuilder;
 import com.rsdp.service.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -105,7 +105,8 @@ public class VectorBackfillService {
         }
 
         // 先写 ChromaDB，成功后再更新 PG，避免 PG 已改但向量库缺失导致不一致
-        Map<String, Object> metadata = buildMetadata(rspu, image);
+        Map<String, Object> metadata = ChromaMetadataBuilder.buildProductMetadata(rspu,
+            image.getFileSize() != null ? image.getFileSize() : 0);
         chromaDbClient.upsert(
             List.of(image.getImageId()),
             List.of(embedding),
@@ -119,19 +120,6 @@ public class VectorBackfillService {
 
         log.info("存量向量回填完成，imageId={}", image.getImageId());
         return true;
-    }
-
-    private Map<String, Object> buildMetadata(RspuMaster rspu, ImageAssets image) {
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("rspu_id", rspu.getRspuId());
-        metadata.put("category_code", rspu.getCategoryCode());
-        metadata.put("positioning_label", rspu.getPositioningLabel());
-        metadata.put("color_primary_name", rspu.getColorPrimaryName());
-        metadata.put("material_tags", rspu.getMaterialTags());
-        metadata.put("scene_tags", rspu.getSceneTags());
-        metadata.put("status", rspu.getStatus());
-        metadata.put("image_size", image.getFileSize() != null ? image.getFileSize() : 0);
-        return metadata;
     }
 
     /**

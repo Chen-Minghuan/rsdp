@@ -14,7 +14,8 @@ import {
   NAlert,
   NSelect,
   NTag,
-  NPagination
+  NPagination,
+  type DataTableColumns
 } from 'naive-ui'
 import { listFactories, createFactory } from '@/api/factory'
 import { listDicts } from '@/api/dict'
@@ -79,7 +80,7 @@ const levelSelectOptions = computed(() =>
   levelOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
 )
 
-const columns = [
+const columns: DataTableColumns<Factory> = [
   { title: '工厂代码', key: 'factoryCode', width: 120 },
   { title: '工厂名称', key: 'factoryName' },
   {

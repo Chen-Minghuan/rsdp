@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -28,7 +29,7 @@ public class ImageAssets {
     private Boolean primary;
 
     private Boolean aiProcessed;
-    private Double qualityScore;
+    private BigDecimal qualityScore;
     private String uploadedBy;
     private LocalDateTime createdAt;
 
