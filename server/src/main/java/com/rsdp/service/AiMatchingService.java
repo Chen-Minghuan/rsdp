@@ -11,13 +11,11 @@ import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
-import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,7 +38,6 @@ import java.util.stream.Collectors;
 public class AiMatchingService {
 
     private final RspuMapper rspuMapper;
-    private final RspuStyleMapper rspuStyleMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
     private final FactoryMasterMapper factoryMasterMapper;
     private final ImageAssetsMapper imageAssetsMapper;
@@ -141,35 +138,19 @@ public class AiMatchingService {
     }
 
     private List<RspuMaster> fetchCandidates(String stylePreference) {
-        if (stylePreference == null || stylePreference.isBlank()) {
-            return rspuMapper.selectList(
-                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuMaster>()
-                    .eq("status", "active")
-                    .orderByDesc("created_at")
-                    .last("LIMIT " + MAX_CANDIDATES)
-            );
-        }
-
-        List<RspuStyle> styleRelations = rspuStyleMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuStyle>()
-                .eq("style_code", stylePreference)
-        );
-        if (styleRelations.isEmpty()) {
-            return List.of();
-        }
-
-        List<String> rspuIds = styleRelations.stream()
-            .map(RspuStyle::getRspuId)
-            .distinct()
-            .toList();
-
-        return rspuMapper.selectList(
+        // 风格条件下推为 EXISTS 子查询，避免先全量加载 rspu_style 再 IN 过滤的两步查询
+        com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuMaster> wrapper =
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuMaster>()
-                .in("rspu_id", rspuIds)
                 .eq("status", "active")
                 .orderByDesc("created_at")
-                .last("LIMIT " + MAX_CANDIDATES)
-        );
+                .last("LIMIT " + MAX_CANDIDATES);
+        if (stylePreference != null && !stylePreference.isBlank()) {
+            wrapper.exists(
+                "SELECT 1 FROM rspu_style s WHERE s.rspu_id = rspu_master.rspu_id AND s.style_code = {0}",
+                stylePreference
+            );
+        }
+        return rspuMapper.selectList(wrapper);
     }
 
     private List<RspuMaster> fetchCandidatesByCategory(String categoryCode, String excludeRspuId) {

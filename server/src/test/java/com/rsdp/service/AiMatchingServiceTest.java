@@ -10,13 +10,11 @@ import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
-import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,9 +49,6 @@ class AiMatchingServiceTest {
 
     @Mock
     private ImageAssetsMapper imageAssetsMapper;
-
-    @Mock
-    private RspuStyleMapper rspuStyleMapper;
 
     @Mock
     private DictService dictService;
@@ -102,7 +97,6 @@ class AiMatchingServiceTest {
         image.setRspuId("RSPU-001");
 
         when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
-        when(rspuStyleMapper.selectList(any())).thenReturn(List.of(createRspuStyle("RSPU-001", "MC")));
         when(rskuSupplyMapper.selectCapableByRspuIds(any())).thenReturn(List.of(rsku));
         when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
@@ -133,7 +127,6 @@ class AiMatchingServiceTest {
         rspu.setPositioningLabel("中古风");
 
         when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
-        when(rspuStyleMapper.selectList(any())).thenReturn(List.of(createRspuStyle("RSPU-001", "MC")));
         when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING_ROOM", "客厅")));
         when(dictService.listByType("style")).thenReturn(List.of(createDict("MC", "中古风")));
         when(visionService.chatText(any(), any())).thenReturn("invalid json");
@@ -223,7 +216,6 @@ class AiMatchingServiceTest {
         factory.setFactoryName("测试工厂");
 
         when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
-        when(rspuStyleMapper.selectList(any())).thenReturn(List.of(createRspuStyle("RSPU-001", "MC")));
         when(rskuSupplyMapper.selectCapableByRspuIds(any())).thenReturn(List.of());
         when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING_ROOM", "客厅")));
         when(dictService.listByType("style")).thenReturn(List.of(createDict("MC", "中古风")));
@@ -287,12 +279,5 @@ class AiMatchingServiceTest {
         dict.setDictCode(code);
         dict.setDictName(name);
         return dict;
-    }
-
-    private RspuStyle createRspuStyle(String rspuId, String styleCode) {
-        RspuStyle style = new RspuStyle();
-        style.setRspuId(rspuId);
-        style.setStyleCode(styleCode);
-        return style;
     }
 }
