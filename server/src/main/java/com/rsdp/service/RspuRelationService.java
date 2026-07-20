@@ -47,6 +47,8 @@ public class RspuRelationService {
     private final ObjectMapper objectMapper;
     private final DataScopeHelper dataScopeHelper;
 
+    private static final int MAX_LIST_SIZE = 1000;
+
     /**
      * 查询某产品作为锚点的有效搭配关系。
      *
@@ -60,6 +62,7 @@ public class RspuRelationService {
                 .eq("anchor_rspu_id", anchorRspuId)
                 .eq("status", "active")
                 .orderByAsc("sort_order", "created_at")
+                .last("LIMIT " + MAX_LIST_SIZE)
         );
         return toResponses(relations, RspuRelation::getRelatedRspuId);
     }
@@ -77,6 +80,7 @@ public class RspuRelationService {
                 .eq("related_rspu_id", relatedRspuId)
                 .eq("status", "active")
                 .orderByAsc("sort_order", "created_at")
+                .last("LIMIT " + MAX_LIST_SIZE)
         );
         return toResponses(relations, RspuRelation::getAnchorRspuId);
     }

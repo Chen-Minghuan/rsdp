@@ -11,6 +11,6 @@ import java.util.List;
 @Mapper
 public interface ExcelImportRowMapper extends BaseMapper<ExcelImportRow> {
 
-    @Select("SELECT * FROM excel_import_row WHERE batch_id = #{batchId} ORDER BY excel_row_number")
+    @Select("SELECT * FROM excel_import_row WHERE batch_id = #{batchId} ORDER BY excel_row_number LIMIT 1000")
     List<ExcelImportRow> selectByBatchId(@Param("batchId") String batchId);
 }

@@ -306,6 +306,8 @@ public class SchemeService {
         }
     }
 
+    private static final int MAX_LIST_SIZE = 1000;
+
     /**
      * 查询方案列表。
      *
@@ -329,7 +331,7 @@ public class SchemeService {
         if (isTemplate != null) {
             wrapper.eq("is_template", isTemplate);
         }
-        List<Scheme> schemes = schemeMapper.selectList(wrapper);
+        List<Scheme> schemes = schemeMapper.selectList(wrapper.last("LIMIT " + MAX_LIST_SIZE));
 
         return schemes.stream()
             .map(this::toSummary)

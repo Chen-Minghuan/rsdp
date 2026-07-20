@@ -98,6 +98,8 @@ rsdp:
       lock-duration-minutes: ${RSDP_LOGIN_LOCK_DURATION_MINUTES:15}
       # 失败计数窗口（分钟）
       attempt-window-minutes: ${RSDP_LOGIN_ATTEMPT_WINDOW_MINUTES:30}
+      # 可信反向代理层数；默认 0 表示不信任 X-Forwarded-For，直接使用 remoteAddr
+      trusted-proxy-count: ${RSDP_LOGIN_TRUSTED_PROXY_COUNT:0}
   order:
     # 订单客户邀请链接 HMAC 密钥，长度 >= 32 位；生产环境必须通过 RSDP_ORDER_INVITE_SECRET 注入
     invite-secret: ${RSDP_ORDER_INVITE_SECRET:}

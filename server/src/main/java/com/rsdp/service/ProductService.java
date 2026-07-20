@@ -107,6 +107,7 @@ public class ProductService {
 
         List<String> imageIds = new ArrayList<>();
         List<String> storedObjectKeys = new ArrayList<>();
+        List<ImageAssets> imageAssets = new ArrayList<>();
         String primaryImageId = null;
         String primaryObjectKey = null;
 
@@ -129,7 +130,7 @@ public class ProductService {
             imageAsset.setFormat(getExtension(image.getOriginalFilename()));
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
-            imageAssetsMapper.insert(imageAsset);
+            imageAssets.add(imageAsset);
             auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
 
             imageIds.add(imageId);
@@ -137,6 +138,10 @@ public class ProductService {
                 primaryImageId = imageId;
                 primaryObjectKey = storagePath;
             }
+        }
+
+        if (!imageAssets.isEmpty()) {
+            imageAssetsMapper.insertBatch(imageAssets);
         }
 
         registerStorageRollbackCleanup(storedObjectKeys);

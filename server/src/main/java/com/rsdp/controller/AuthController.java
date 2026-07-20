@@ -38,6 +38,9 @@ public class AuthController {
     private final AuthService authService;
     private final UserService userService;
 
+    @Value("${rsdp.security.login.trusted-proxy-count:0}")
+    private int trustedProxyCount;
+
     @Value("${rsdp.jwt.cookie-name:rsdp_token}")
     private String cookieName;
 
@@ -144,13 +147,15 @@ public class AuthController {
     }
 
     private String extractClientIp(HttpServletRequest request) {
+        // 默认不信任任何代理，防止客户端伪造 X-Forwarded-For。
+        // 若部署在可信反向代理后，可通过 rsdp.security.login.trusted-proxy-count 配置代理层数。
         String xff = request.getHeader("X-Forwarded-For");
-        if (StringUtils.hasText(xff)) {
-            return xff.split(",")[0].trim();
-        }
-        String xri = request.getHeader("X-Real-IP");
-        if (StringUtils.hasText(xri)) {
-            return xri.trim();
+        if (trustedProxyCount > 0 && StringUtils.hasText(xff)) {
+            String[] parts = xff.split(",");
+            int index = parts.length - trustedProxyCount;
+            if (index >= 0) {
+                return parts[index].trim();
+            }
         }
         return request.getRemoteAddr();
     }

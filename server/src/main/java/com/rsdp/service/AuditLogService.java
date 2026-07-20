@@ -27,9 +27,11 @@ import java.util.Set;
 public class AuditLogService {
 
     private final AuditLogMapper auditLogMapper;
+    private final AuditLogWriter auditLogWriter;
     private final ObjectMapper objectMapper;
 
     private static final Set<String> PRICE_FIELDS = Set.of("factoryPrice", "oldPrice", "newPrice");
+    private static final int MAX_SNAPSHOT_LENGTH = 32768;
 
     /**
      * 记录创建操作。
@@ -87,14 +89,26 @@ public class AuditLogService {
         logEntry.setTableName(tableName);
         logEntry.setRecordId(recordId);
         logEntry.setAction(action);
-        logEntry.setOldValue(sanitizeValue(oldValue));
-        logEntry.setNewValue(sanitizeValue(newValue));
+        logEntry.setOldValue(truncateSnapshot(sanitizeValue(oldValue)));
+        logEntry.setNewValue(truncateSnapshot(sanitizeValue(newValue)));
         logEntry.setOperator(StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername());
         logEntry.setCreatedAt(LocalDateTime.now());
+        auditLogWriter.write(logEntry);
+    }
+
+    private Object truncateSnapshot(Object value) {
+        if (value == null) {
+            return null;
+        }
         try {
-            auditLogMapper.insert(logEntry);
+            String json = objectMapper.writeValueAsString(value);
+            if (json.length() > MAX_SNAPSHOT_LENGTH) {
+                return objectMapper.readTree(json.substring(0, MAX_SNAPSHOT_LENGTH) + "... [截断，原始长度=" + json.length() + "]");
+            }
+            return value;
         } catch (Exception e) {
-            log.error("审计日志写入失败: {} {} {}", tableName, recordId, action, e);
+            log.warn("审计日志快照截断失败: {}", e.getMessage());
+            return value;
         }
     }
 
