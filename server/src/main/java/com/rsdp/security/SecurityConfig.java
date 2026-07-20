@@ -53,6 +53,9 @@ public class SecurityConfig {
                 // 订单邀请公开页（免登录，token 自校验）
                 .requestMatchers("/api/v1/public/**").permitAll()
 
+                // 收藏夹：用户自服务数据，按当前用户隔离，登录即可访问
+                .requestMatchers("/api/v1/favorites/**").authenticated()
+
                 // 用户管理（管理员）
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/users").hasAuthority(Permissions.USER_CREATE)

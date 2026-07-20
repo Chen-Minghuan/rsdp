@@ -1468,15 +1468,15 @@ INSERT INTO factory_master (factory_code, factory_name, factory_level, region, s
 ('TEST', '测试工厂', 'A', '广东', 'active')
 ON CONFLICT (factory_code) DO NOTHING;
 
--- 测试用户（密码统一为 admin123）
--- 按 username 冲突更新，确保开发环境重置后密码与快速登录按钮一致
+-- 测试用户（仅用于开发/演示环境，密码：rsdp-dev-2026!）
+-- 生产环境部署后应立即通过管理后台修改或删除这些账号。
 INSERT INTO sys_user (user_id, username, password_hash, nickname, status, view_full_catalog) VALUES
-('USER-ADMIN-00000001', 'admin', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '系统管理员', 'active', true),
-('USER-EDITOR-00000001', 'editor', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '编辑员', 'active', true),
-('USER-VIEWER-00000001', 'viewer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '浏览者', 'active', false),
-('USER-DESIGNER-00000001', 'designer', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '设计师', 'active', false),
-('USER-FACTORY-00000001', 'factory', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '工厂管理员', 'active', false),
-('USER-USER-00000001', 'user', '$2a$10$YQtLexRaBqyq/izJKShvFOCfdZb3qZkF9.npxvreC.Z843SuVE8z.', '普通用户', 'active', false)
+('USER-ADMIN-00000001', 'admin', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '系统管理员', 'active', true),
+('USER-EDITOR-00000001', 'editor', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '编辑员', 'active', true),
+('USER-VIEWER-00000001', 'viewer', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '浏览者', 'active', false),
+('USER-DESIGNER-00000001', 'designer', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '设计师', 'active', false),
+('USER-FACTORY-00000001', 'factory', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '工厂管理员', 'active', false),
+('USER-USER-00000001', 'user', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '普通用户', 'active', false)
 ON CONFLICT (username) DO UPDATE SET
   password_hash = EXCLUDED.password_hash,
   nickname = EXCLUDED.nickname,

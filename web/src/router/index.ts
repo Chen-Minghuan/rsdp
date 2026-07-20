@@ -7,13 +7,13 @@ const routes = [
     path: '/login',
     name: 'Login',
     component: () => import('@/views/LoginView.vue'),
-    meta: { public: true }
+    meta: { public: true, hideHeader: true }
   },
   {
     path: '/invite/order/:token',
     name: 'OrderInvite',
     component: () => import('@/views/OrderInviteView.vue'),
-    meta: { public: true }
+    meta: { public: true, hideHeader: true }
   },
   {
     path: '/',
