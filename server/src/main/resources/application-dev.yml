@@ -27,7 +27,7 @@ rsdp:
     mock:
       enabled: false
 
-@  jwt:
+  jwt:
     # 本地开发使用 HTTP，必须关闭 Secure 属性，否则浏览器拒绝存储 Cookie
     # SameSite=Lax 允许跨端口（5173 → 8081）携带 Cookie
     cookie-secure: false
