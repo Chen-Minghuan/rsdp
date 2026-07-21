@@ -143,10 +143,17 @@ public class VisionService {
                     OpenAiChatMessage.vision("user", userPrompt, base64)
                 ))
                 .temperature(0.3)
+                .maxTokens(4096)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
                 .build();
 
             String json = executeChat(request, "AI 识别");
-            return objectMapper.readValue(json, AiLabels.class);
+            try {
+                return objectMapper.readValue(json, AiLabels.class);
+            } catch (IOException e) {
+                log.error("解析 AI 识别结果失败，json={}", json, e);
+                throw new ExternalServiceException("解析 AI 识别结果失败", e);
+            }
 
         } catch (IOException e) {
             log.error("读取图片流失败", e);
@@ -304,7 +311,10 @@ public class VisionService {
         try {
             List<String> base64Images = new java.util.ArrayList<>();
             for (InputStream stream : pageImages) {
-                byte[] bytes = stream.readAllBytes();
+                byte[] bytes;
+                try (stream) {
+                    bytes = stream.readAllBytes();
+                }
                 if (bytes.length == 0) {
                     throw new ExternalServiceException("页面图片流为空");
                 }
@@ -322,6 +332,7 @@ public class VisionService {
                     OpenAiChatMessage.multiVision("user", userPrompt, base64Images)
                 ))
                 .temperature(0.2)
+                .maxTokens(8192)
                 .build();
 
             String json = executeChat(request, "PDF 页面区域检测");
@@ -475,6 +486,7 @@ public class VisionService {
                 OpenAiChatMessage.text("user", userPrompt)
             ))
             .temperature(0.5)
+            .maxTokens(4096)
             .build();
 
         return executeChat(request, "AI 文本对话");
