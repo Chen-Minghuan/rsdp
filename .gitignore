@@ -58,3 +58,8 @@ temp/
 
 # 本地 Agent 协作笔记
 .agent-notes.md
+
+# 本地调试残留（含会话凭证，禁止入库）
+cookies*.txt
+query
+test_image.png

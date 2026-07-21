@@ -74,6 +74,10 @@ export const PERMISSIONS = {
   ORDER_CREATE: 'order:create',
   ORDER_UPDATE: 'order:update',
   ORDER_DELETE: 'order:delete',
+
+  FAVORITE_READ: 'favorite:read',
+  FAVORITE_WRITE: 'favorite:write',
+
   ADMIN_ASYNC_METRICS: 'admin:async-metrics',
   ADMIN_VECTOR_BACKFILL: 'admin:vector-backfill'
 } as const

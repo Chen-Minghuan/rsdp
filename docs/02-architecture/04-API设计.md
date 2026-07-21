@@ -593,7 +593,8 @@ GET    /api/v1/statistics/trends
        # Response: [{ month, schemeCount, totalAmount }]
 
 GET    /api/v1/statistics/factories
-       # 工厂维度方案金额 TOP10（需 scheme:read；按方案项出厂价×数量聚合）
+       # 工厂维度方案金额 TOP20（需 scheme:read；按方案项出厂价×数量聚合）
+       # Query: months=12 (1~24，默认 12；统计最近 N 个月的活跃方案)
        # Response: [{ factoryCode, factoryName, totalAmount, itemCount }]
 ```
 
@@ -637,6 +638,7 @@ GET    /api/v1/orders/statistics
        # 订单统计（需 order:read；排除 CANCELLED；非 ADMIN 仅统计自己创建的订单）
        # 说明：到手价为 AES 加密列，实体级解密后内存聚合；商品名/图取订单明细快照
        # Query: dim=product|factory（必填）, from?, to?（yyyy-MM-dd，含当日，可空）
+       #       时间窗默认为最近 90 天，最大不得超过 365 天；结果按 totalAmount 降序取前 50 条
        # Response(dim=product):  [{ rspuId, productName, imageId, totalQuantity, totalAmount }]
        # Response(dim=factory):  [{ factoryCode, factoryName, orderCount, totalQuantity, totalAmount }]
        # 均按 totalAmount 降序
