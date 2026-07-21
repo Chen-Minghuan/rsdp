@@ -590,12 +590,19 @@ CREATE TABLE IF NOT EXISTS sys_user (
     status VARCHAR(16) DEFAULT 'active',
     token_version INT DEFAULT 0,
     view_full_catalog BOOLEAN NOT NULL DEFAULT false,
+    company_id VARCHAR(64),
+    group_id VARCHAR(64),
+    invite_code VARCHAR(16),
+    invited_by VARCHAR(64),
+    certified_designer BOOLEAN NOT NULL DEFAULT false,
     last_login_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_sys_user_username ON sys_user(username);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sys_user_invite_code ON sys_user(invite_code);
+CREATE INDEX IF NOT EXISTS idx_sys_user_company ON sys_user(company_id);
 
 -- 补齐 excel_import_batch 外键（该表在 sys_user 之前创建）
 ALTER TABLE excel_import_batch
@@ -603,6 +610,56 @@ ALTER TABLE excel_import_batch
 ALTER TABLE excel_import_batch
     ADD CONSTRAINT fk_excel_import_batch_created_by
         FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
+
+-- 企业表（V13 并入）
+CREATE TABLE IF NOT EXISTS company (
+    company_id    VARCHAR(64) PRIMARY KEY,
+    company_name  VARCHAR(128) NOT NULL,
+    logo_image_id VARCHAR(64),
+    price_ratio   NUMERIC(5,4) NOT NULL DEFAULT 1,
+    owner_id      VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    status        VARCHAR(16) NOT NULL DEFAULT 'active',
+    deleted_at    TIMESTAMP,
+    created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_company_price_ratio CHECK (price_ratio >= 0 AND price_ratio <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_company_owner ON company(owner_id);
+CREATE INDEX IF NOT EXISTS idx_company_name ON company(company_name) WHERE deleted_at IS NULL;
+
+-- 企业内分组/部门表（V13 并入）
+CREATE TABLE IF NOT EXISTS member_group (
+    group_id    VARCHAR(64) PRIMARY KEY,
+    company_id  VARCHAR(64) NOT NULL REFERENCES company(company_id),
+    group_name  VARCHAR(64) NOT NULL,
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    deleted_at  TIMESTAMP,
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_member_group_company ON member_group(company_id) WHERE deleted_at IS NULL;
+
+-- 邀请记录表（V13 并入）
+CREATE TABLE IF NOT EXISTS invite_record (
+    id          BIGSERIAL PRIMARY KEY,
+    inviter_id  VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    invitee_id  VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    invite_code VARCHAR(16) NOT NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_invite_record_inviter ON invite_record(inviter_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_invite_record_invitee ON invite_record(invitee_id);
+
+-- 补齐 sys_user 企业/邀请外键（company/member_group 在 sys_user 之后创建，循环引用需后置）
+ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_company;
+ALTER TABLE sys_user
+    ADD CONSTRAINT fk_sys_user_company FOREIGN KEY (company_id) REFERENCES company(company_id);
+ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_group;
+ALTER TABLE sys_user
+    ADD CONSTRAINT fk_sys_user_group FOREIGN KEY (group_id) REFERENCES member_group(group_id);
+ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_invited_by;
+ALTER TABLE sys_user
+    ADD CONSTRAINT fk_sys_user_invited_by FOREIGN KEY (invited_by) REFERENCES sys_user(user_id);
 
 -- 角色表
 CREATE TABLE IF NOT EXISTS sys_role (

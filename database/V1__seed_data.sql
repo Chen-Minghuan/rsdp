@@ -424,3 +424,35 @@ SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE p.permission_code IN ('favorite:read', 'favorite:write')
 ON CONFLICT DO NOTHING;
+
+-- 企业实体迁移（V13 并入，幂等）：company_name/group_name 文本 → 实体（同名企业合并）
+INSERT INTO company (company_id, company_name, owner_id)
+SELECT 'COM-' || gen_random_uuid()::text,
+       dc.company_name,
+       (SELECT u.user_id FROM sys_user u
+        WHERE u.company_name = dc.company_name
+        ORDER BY u.created_at ASC NULLS LAST, u.user_id ASC
+        LIMIT 1)
+FROM (SELECT DISTINCT company_name FROM sys_user
+      WHERE company_name IS NOT NULL AND btrim(company_name) <> '') dc
+WHERE NOT EXISTS (SELECT 1 FROM company c WHERE c.company_name = dc.company_name);
+
+UPDATE sys_user u SET company_id = c.company_id
+FROM company c
+WHERE u.company_id IS NULL AND u.company_name = c.company_name;
+
+INSERT INTO member_group (group_id, company_id, group_name)
+SELECT 'GRP-' || gen_random_uuid()::text, c.company_id, dg.group_name
+FROM (SELECT DISTINCT company_name, group_name FROM sys_user
+      WHERE company_name IS NOT NULL AND btrim(company_name) <> ''
+        AND group_name IS NOT NULL AND btrim(group_name) <> '') dg
+JOIN company c ON c.company_name = dg.company_name
+WHERE NOT EXISTS (SELECT 1 FROM member_group g
+                  WHERE g.company_id = c.company_id AND g.group_name = dg.group_name);
+
+UPDATE sys_user u SET group_id = g.group_id
+FROM company c
+JOIN member_group g ON g.company_id = c.company_id
+WHERE u.group_id IS NULL
+  AND u.company_name = c.company_name
+  AND u.group_name = g.group_name;

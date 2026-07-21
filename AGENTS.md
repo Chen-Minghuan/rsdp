@@ -271,6 +271,7 @@ make clean
   - `V5__order_module.sql`：订单模块 + 系统配置（sys_config）
   - `V6__team_module.sql`：企业团队（sys_user 扩展 company_name/group_name）
   - `V7__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体）
+  - `V13__member_module.sql`：用户中心企业团队完整版（company/member_group/invite_record + sys_user 企业归属/邀请码/认证设计师）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。
