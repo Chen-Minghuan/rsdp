@@ -59,6 +59,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/favorites").hasAuthority(Permissions.FAVORITE_WRITE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/favorites/*").hasAuthority(Permissions.FAVORITE_WRITE)
 
+                // 用户中心-企业团队：登录用户自服务（写操作由 Service 层按企业管理员/平台 ADMIN 校验）
+                .requestMatchers("/api/v1/member/**").authenticated()
+
                 // 用户管理（管理员）
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/users").hasAuthority(Permissions.USER_CREATE)

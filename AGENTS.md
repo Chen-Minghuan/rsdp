@@ -270,8 +270,12 @@ make clean
   - `V4__project_module.sql`：项目模块 + 收藏夹 + 方案模板化
   - `V5__order_module.sql`：订单模块 + 系统配置（sys_config）
   - `V6__team_module.sql`：企业团队（sys_user 扩展 company_name/group_name）
+  - `V7__order_price_rate_constraint.sql`：订单折扣率 CHECK 约束 [0,1]
+  - `V8__missing_indexes.sql`：补齐缺失索引
+  - `V9__favorite_permissions.sql`：收藏夹权限种子
+  - `V10__widen_id_columns.sql`：业务主键列宽拓宽至 VARCHAR(64)（完整 UUID）
+  - `V11__quote_confidence_dict.sql`：报价置信度字典种子
   - `V12__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体，原 V7 改号）
-  - `V7__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体）
   - `V13__member_module.sql`：用户中心企业团队完整版（company/member_group/invite_record + sys_user 企业归属/邀请码/认证设计师）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`

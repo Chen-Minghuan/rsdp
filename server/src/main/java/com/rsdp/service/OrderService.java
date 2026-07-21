@@ -77,12 +77,13 @@ public class OrderService {
     private final ImageAssetsMapper imageAssetsMapper;
     private final ProjectService projectService;
     private final ConfigService configService;
+    private final CompanyService companyService;
     private final OrderNoGenerator orderNoGenerator;
     private final DataScopeHelper dataScopeHelper;
     private final ObjectMapper objectMapper;
 
     /**
-     * 由方案生成订单：价格取 RSKU 当前出厂价快照 × 全局折扣率，订单生成后价格不可变。
+     * 由方案生成订单：价格取 RSKU 当前出厂价快照 × 折扣率（企业 price_ratio 优先于全局 price_rate），订单生成后价格不可变。
      *
      * @param request 创建请求
      * @return 订单详情
@@ -117,7 +118,7 @@ public class OrderService {
             throw new BusinessException("方案项均不在您的数据范围内，无法生成订单");
         }
 
-        BigDecimal priceRate = configService.getOrderPriceRate();
+        BigDecimal priceRate = resolveEffectivePriceRate();
 
         String orderId = IdGenerator.orderId();
 
@@ -197,6 +198,16 @@ public class OrderService {
         designOrderItemMapper.insertBatchSafe(items);
 
         return detail(orderId);
+    }
+
+    /**
+     * 解析生效的订单折扣率：当前用户归属企业时企业 price_ratio 优先，否则回退全局 price_rate。
+     *
+     * @return 生效折扣率
+     */
+    private BigDecimal resolveEffectivePriceRate() {
+        BigDecimal companyRate = companyService.resolveOrderPriceRate(SecurityOperatorContext.currentUserId());
+        return companyRate != null ? companyRate : configService.getOrderPriceRate();
     }
 
     /**
