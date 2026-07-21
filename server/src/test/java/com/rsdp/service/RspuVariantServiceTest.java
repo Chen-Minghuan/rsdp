@@ -5,7 +5,9 @@ import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
+import org.springframework.dao.DataIntegrityViolationException;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
@@ -87,6 +89,8 @@ class RspuVariantServiceTest {
     void setUp() {
         rspuId = "RSPU-TEST01";
         lenient().when(dataScopeHelper.canAccessRspu(any())).thenReturn(true);
+        // 默认无重复维度组合；重复场景在单个用例中覆盖
+        lenient().when(variantMapper.selectCount(any())).thenReturn(0L);
     }
 
     @Test
@@ -204,5 +208,45 @@ class RspuVariantServiceTest {
         RspuVariantResponse response = variantService.createVariant(rspuId, request);
 
         assertEquals("RSPU-TEST01-V002", response.getVariantId());
+    }
+
+    @Test
+    void createVariant_shouldThrow_whenDuplicateDimensions() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+        when(variantMapper.selectCount(any())).thenReturn(1L);
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("重复维度变体");
+        request.setMaterialCode("LI");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+            () -> variantService.createVariant(rspuId, request));
+        assertEquals("相同尺寸/颜色/材质的变体已存在", ex.getMessage());
+        verify(variantMapper, org.mockito.Mockito.never()).insert(any(RspuVariant.class));
+    }
+
+    @Test
+    void createVariant_shouldThrow_whenDimsUniqueIndexConflict() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(variantCodeMapper.allocateSequence(rspuId)).thenReturn(1L);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+        when(variantMapper.insert(any(RspuVariant.class)))
+            .thenThrow(new DataIntegrityViolationException(
+                "duplicate key value violates unique constraint \"idx_variant_unique_dims\""));
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("并发重复维度");
+        request.setMaterialCode("LI");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+            () -> variantService.createVariant(rspuId, request));
+        assertEquals("相同尺寸/颜色/材质的变体已存在", ex.getMessage());
     }
 }

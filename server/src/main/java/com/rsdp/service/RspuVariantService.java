@@ -62,6 +62,8 @@ public class RspuVariantService {
             validateDictCode("factory_level", request.getProductLevel(), "产品等级");
         }
 
+        assertNoDuplicateDimensions(rspuId, request);
+
         String variantId = generateVariantId(rspuId);
 
         RspuVariant variant = new RspuVariant();
@@ -83,12 +85,42 @@ public class RspuVariantService {
         try {
             variantMapper.insert(variant);
         } catch (DataIntegrityViolationException e) {
+            if (e.getMessage() != null && e.getMessage().contains("idx_variant_unique_dims")) {
+                // 并发下兜底：数据库部分唯一索引拦截的重复维度组合
+                throw new BusinessException("相同尺寸/颜色/材质的变体已存在");
+            }
             // variant_id 为主键，冲突说明并发生成了重复编码，提示重试
             throw new BusinessException("变体编码冲突，请重试: " + variantId);
         }
         auditLogService.logCreate("rspu_variant", variantId, variant, SecurityOperatorContext.currentUsername());
 
         return toResponse(variant);
+    }
+
+    /**
+     * 校验同一 RSPU 下不存在相同尺寸/颜色/材质组合的启用中变体。
+     *
+     * @param rspuId  RSPU ID
+     * @param request 变体创建请求
+     */
+    private void assertNoDuplicateDimensions(String rspuId, RspuVariantCreateRequest request) {
+        QueryWrapper<RspuVariant> wrapper = new QueryWrapper<RspuVariant>()
+            .eq("rspu_id", rspuId);
+        applyNullableEq(wrapper, "size_code", request.getSizeCode());
+        applyNullableEq(wrapper, "color_code", request.getColorCode());
+        applyNullableEq(wrapper, "material_code", request.getMaterialCode());
+        Long count = variantMapper.selectCount(wrapper);
+        if (count != null && count > 0) {
+            throw new BusinessException("相同尺寸/颜色/材质的变体已存在");
+        }
+    }
+
+    private void applyNullableEq(QueryWrapper<RspuVariant> wrapper, String column, String value) {
+        if (value == null) {
+            wrapper.isNull(column);
+        } else {
+            wrapper.eq(column, value);
+        }
     }
 
     /**

@@ -744,6 +744,7 @@ CREATE INDEX IF NOT EXISTS idx_rspu_style_rspu ON rspu_style(rspu_id, style_code
 CREATE INDEX IF NOT EXISTS idx_variant_rspu ON rspu_variant(rspu_id, status);
 CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);
 CREATE INDEX IF NOT EXISTS idx_variant_material ON rspu_variant(material_code);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_variant_unique_dims ON rspu_variant(rspu_id, size_code, color_code, material_code) NULLS NOT DISTINCT WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_variant_size ON rspu_variant(size_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
