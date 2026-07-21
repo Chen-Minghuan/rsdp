@@ -141,4 +141,40 @@ class PriceEncryptionMigrationTest {
 
         assertThat(AesEncryptionUtil.decrypt(priceCaptor.getValue())).isEqualByComparingTo("888.88");
     }
+
+    @Test
+    void run_shouldEncryptDesignOrderItemPrices() {
+        when(properties.isEnabled()).thenReturn(true);
+        when(properties.getBatchSize()).thenReturn(100);
+
+        when(jdbcTemplate.queryForList(anyString()))
+            .thenReturn(List.of())  // rsku_supply
+            .thenReturn(List.of())  // scheme_item
+            .thenReturn(List.of(
+                Map.of("id", 5L, "original_price", "666.66")
+            ))
+            .thenReturn(List.of())  // design_order_item.original_price 下一页
+            .thenReturn(List.of(
+                Map.of("id", 5L, "final_price", "599.99")
+            ))
+            .thenReturn(List.of()); // design_order_item.final_price 下一页
+
+        migration.run();
+
+        ArgumentCaptor<String> originalCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(
+            eq("UPDATE design_order_item SET original_price = ? WHERE id = ?"),
+            originalCaptor.capture(),
+            eq(5L)
+        );
+        assertThat(AesEncryptionUtil.decrypt(originalCaptor.getValue())).isEqualByComparingTo("666.66");
+
+        ArgumentCaptor<String> finalCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(
+            eq("UPDATE design_order_item SET final_price = ? WHERE id = ?"),
+            finalCaptor.capture(),
+            eq(5L)
+        );
+        assertThat(AesEncryptionUtil.decrypt(finalCaptor.getValue())).isEqualByComparingTo("599.99");
+    }
 }

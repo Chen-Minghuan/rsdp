@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -159,6 +160,9 @@ class VectorBackfillServiceTest {
         rspu.setStyleVector("[0.9,0.8,0.7]");
         doReturn(List.of(rspu)).when(rspuMapper).selectBatchIds(anyCollection());
 
+        // ChromaDB 中向量真实存在，才跳过
+        when(chromaDbClient.getExistingIds(List.of("IMG-001"))).thenReturn(Set.of("IMG-001"));
+
         // When
         VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
 
@@ -168,5 +172,69 @@ class VectorBackfillServiceTest {
         verify(embeddingService, never()).embedImage(any());
         verify(chromaDbClient, never()).upsert(any(), any(), any(), any());
         verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+    }
+
+    @Test
+    void backfill_shouldRepairWhenPgHasVectorButChromaMissing() throws Exception {
+        // Given：PG 有向量但 ChromaDB 缺失（死区记录），应复用存量向量补偿回填
+        ImageAssets image = new ImageAssets();
+        image.setImageId("IMG-001");
+        image.setRspuId("RSPU-001");
+        image.setStoragePath("images/IMG-001.jpg");
+        image.setAiProcessed(true);
+
+        Page<ImageAssets> page = new Page<>(1, 100);
+        page.setRecords(List.of(image));
+        when(imageAssetsMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setStyleVector("[0.9,0.8,0.7]");
+        doReturn(List.of(rspu)).when(rspuMapper).selectBatchIds(anyCollection());
+
+        when(chromaDbClient.getExistingIds(List.of("IMG-001"))).thenReturn(Set.of());
+
+        // When
+        VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
+
+        // Then：补偿 upsert 成功，不重新调用 embedding API，也不重复写 PG
+        assertThat(result.successCount()).isEqualTo(1);
+        assertThat(result.failedCount()).isEqualTo(0);
+        verify(embeddingService, never()).embedImage(any());
+        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+
+        ArgumentCaptor<List<float[]>> embeddingCaptor = ArgumentCaptor.forClass(List.class);
+        verify(chromaDbClient).upsert(eq(List.of("IMG-001")), embeddingCaptor.capture(), any(), eq(null));
+        assertThat(embeddingCaptor.getValue().get(0)).containsExactly(0.9f, 0.8f, 0.7f);
+    }
+
+    @Test
+    void backfill_shouldCompensateDeleteChromaWhenPgUpdateFails() throws Exception {
+        // Given：ChromaDB 写入成功但 PG 更新失败，应补偿删除 ChromaDB 向量
+        ImageAssets image = new ImageAssets();
+        image.setImageId("IMG-001");
+        image.setRspuId("RSPU-001");
+        image.setStoragePath("images/IMG-001.jpg");
+        image.setAiProcessed(true);
+
+        Page<ImageAssets> page = new Page<>(1, 100);
+        page.setRecords(List.of(image));
+        when(imageAssetsMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        doReturn(List.of(rspu)).when(rspuMapper).selectBatchIds(anyCollection());
+
+        when(storageService.get("images/IMG-001.jpg")).thenReturn(new ByteArrayInputStream("fake".getBytes()));
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f, 0.3f});
+        doThrow(new RuntimeException("PG 异常")).when(rspuMapper).updateById(any(RspuMaster.class));
+
+        // When
+        VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
+
+        // Then
+        assertThat(result.successCount()).isEqualTo(0);
+        assertThat(result.failedCount()).isEqualTo(1);
+        verify(chromaDbClient).delete(List.of("IMG-001"));
     }
 }

@@ -174,7 +174,7 @@ async function toggleFullCatalog(value: boolean) {
   savingPreference.value = true
   try {
     await updateMyPreferences({ viewFullCatalog: value })
-    await userStore.fetchUserInfo()
+    await userStore.fetchUserInfo(true)
     viewMode.value = value ? 'full' : 'own'
     page.value = 1
     loadProducts()

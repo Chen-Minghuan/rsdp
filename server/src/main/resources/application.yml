@@ -57,6 +57,8 @@ rsdp:
   chromadb:
     base-url: ${CHROMADB_URL:http://localhost:8000}
     collection: rsdp_products
+    # 向量维度，需与 embedding 模型输出一致（multimodal-embedding-v1 为 1024）
+    dimension: 1024
     timeout-seconds: 10
     max-retries: 2
     # ChromaDB Token 认证凭证；留空表示不启用认证

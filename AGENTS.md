@@ -117,7 +117,7 @@
 │   ├── V4__project_module.sql     # 项目模块 + 收藏夹 + 方案模板化（V4）
 │   ├── V5__order_module.sql       # 订单模块 + 系统配置（V5）
 │   ├── V6__team_module.sql        # 企业团队：sys_user 扩展（V6）
-│   ├── V7__variant_unique_index.sql  # 变体属性组合唯一索引（V7）
+│   ├── V12__variant_unique_index.sql  # 变体属性组合唯一索引（V12，原 V7 改号）
 │   ├── seed_style_knowledge.sql   # 风格知识库种子数据
 │   └── reset_db.sql               # 数据库重置脚本
 ├── data/                          # 运行数据（uploads 上传文件、style-knowledge 风格素材）
@@ -270,6 +270,7 @@ make clean
   - `V4__project_module.sql`：项目模块 + 收藏夹 + 方案模板化
   - `V5__order_module.sql`：订单模块 + 系统配置（sys_config）
   - `V6__team_module.sql`：企业团队（sys_user 扩展 company_name/group_name）
+  - `V12__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体，原 V7 改号）
   - `V7__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体）
   - `V13__member_module.sql`：用户中心企业团队完整版（company/member_group/invite_record + sys_user 企业归属/邀请码/认证设计师）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
@@ -283,8 +284,9 @@ make clean
 
 ### 写代码前
 1. 先读 `AGENTS.md` 和 `docs/05-status/当前进度.md`。
-2. 涉及数据库改动时先读 `docs/02-architecture/02-数据库设计.md`。
-3. 不确定时提问，不要猜测。
+2. 若仓库根目录存在 `.agent-notes.md`（本机个人规范，已 gitignore、不入库），一并阅读并遵守其中的本机约定；该文件不存在时忽略本条。
+3. 涉及数据库改动时先读 `docs/02-architecture/02-数据库设计.md`。
+4. 不确定时提问，不要猜测。
 
 ### 写代码时
 1. 遵循项目中已有的代码风格。

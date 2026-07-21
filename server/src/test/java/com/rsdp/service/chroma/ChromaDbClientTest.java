@@ -22,6 +22,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.verify;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -47,6 +48,8 @@ class ChromaDbClientTest {
 
         ChromaDbProperties properties = new ChromaDbProperties();
         properties.setCollection("rsdp_products");
+        // 测试使用 2 维假向量
+        properties.setDimension(2);
         chromaDbClient = new ChromaDbClient(restClient, properties);
     }
 
@@ -201,5 +204,39 @@ class ChromaDbClientTest {
 
         // 5xx 不触发创建集合
         verify(exactly(0), postRequestedFor(urlEqualTo(COLLECTIONS)));
+    }
+
+    @Test
+    void getExistingIds_shouldReturnExistingSubset() {
+        stubGetCollection("col-1");
+        stubFor(post(urlEqualTo(COLLECTIONS + "/col-1/get"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"ids\":[\"IMG-001\"]}")));
+
+        assertThat(chromaDbClient.getExistingIds(List.of("IMG-001", "IMG-002")))
+            .containsExactly("IMG-001");
+    }
+
+    @Test
+    void getExistingIds_shouldReturnEmptyWhenInputEmpty() {
+        assertThat(chromaDbClient.getExistingIds(List.of())).isEmpty();
+
+        verify(exactly(0), postRequestedFor(urlEqualTo(COLLECTIONS + "/col-1/get")));
+    }
+
+    @Test
+    void upsert_shouldRejectMismatchedDimension() {
+        assertThatThrownBy(() -> chromaDbClient.upsert(
+            List.of("IMG-001"),
+            List.of(new float[]{0.1f, 0.2f, 0.3f}),
+            List.of(Map.of("rspu_id", "RSPU-001")),
+            null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("向量维度不匹配");
+
+        // 维度校验在发起 HTTP 请求之前拦截
+        verify(exactly(0), postRequestedFor(urlEqualTo(COLLECTIONS + "/col-1/upsert")));
     }
 }

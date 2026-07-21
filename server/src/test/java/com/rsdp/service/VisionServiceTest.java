@@ -128,6 +128,62 @@ class VisionServiceTest {
     }
 
     @Test
+    void recognizeImage_shouldSendJsonObjectFormatAndMaxTokens() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"style\":\"中古风\"}"))));
+
+        visionService.recognizeImage(new ByteArrayInputStream("fake-image".getBytes()));
+
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.response_format.type", equalTo("json_object")))
+            .withRequestBody(matchingJsonPath("$.max_tokens", equalTo("4096"))));
+    }
+
+    @Test
+    void recognizeImage_shouldThrowParseErrorWhenAiReturnsInvalidJson() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("这不是 JSON"))));
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+
+        // 解析失败应报「解析 AI 识别结果失败」，而不是误报为「读取图片流失败」
+        assertThatThrownBy(() -> visionService.recognizeImage(imageStream))
+            .isInstanceOf(RuntimeException.class)
+            .hasMessageContaining("解析 AI 识别结果失败");
+    }
+
+    @Test
+    void detectPageRegions_shouldClosePageStreams() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("[{\"pageType\":\"blank\",\"products\":[]}]"))));
+
+        class CloseTrackingStream extends ByteArrayInputStream {
+            boolean closed;
+            CloseTrackingStream(byte[] buf) {
+                super(buf);
+            }
+            @Override
+            public void close() {
+                closed = true;
+            }
+        }
+        CloseTrackingStream stream = new CloseTrackingStream("fake-page".getBytes());
+
+        visionService.detectPageRegions(List.of(stream), null);
+
+        assertThat(stream.closed).isTrue();
+    }
+
+    @Test
     void detectPageRegions_shouldParseCompleteJson() throws Exception {
         String aiJson = """
             [
