@@ -33,7 +33,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class StatisticsService {
 
-    private static final int FACTORY_TOP_LIMIT = 10;
+    private static final int FACTORY_TOP_LIMIT = 20;
 
     private final SchemeMapper schemeMapper;
     private final SchemeItemMapper schemeItemMapper;
@@ -103,16 +103,16 @@ public class StatisticsService {
         return result;
     }
 
-    private static final int FACTORY_STAT_MONTHS = 12;
-
     /**
-     * 工厂维度方案金额 TOP10（按方案项出厂价 × 数量聚合）。
-     * 仅统计最近 12 个月内的活跃方案，避免数据量无限增长。
+     * 工厂维度方案金额 TOP20（按方案项出厂价 × 数量聚合）。
+     * 仅统计最近 N 个月内的活跃方案，避免数据量无限增长。
      *
+     * @param months 统计月数（1~24）
      * @return 工厂统计列表
      */
-    public List<FactoryStatResponse> factories() {
-        LocalDate startDate = LocalDate.now().minusMonths(FACTORY_STAT_MONTHS).withDayOfMonth(1);
+    public List<FactoryStatResponse> factories(int months) {
+        int clampedMonths = Math.max(1, Math.min(months, 24));
+        LocalDate startDate = LocalDate.now().minusMonths(clampedMonths).withDayOfMonth(1);
         List<Scheme> schemes = schemeMapper.selectList(schemeScope()
             .ge("created_at", startDate.atStartOfDay()));
         if (schemes.isEmpty()) {

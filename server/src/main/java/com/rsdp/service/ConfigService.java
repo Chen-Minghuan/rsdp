@@ -4,6 +4,7 @@ import com.rsdp.entity.SysConfig;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.SysConfigMapper;
+import com.rsdp.security.SecurityOperatorContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +24,7 @@ public class ConfigService {
     public static final String ORDER_PRICE_RATE_KEY = "order.price_rate";
 
     private final SysConfigMapper sysConfigMapper;
+    private final AuditLogService auditLogService;
 
     /**
      * 读取订单全局折扣率（缺省为 1）。
@@ -91,17 +93,34 @@ public class ConfigService {
             validateOrderPriceRate(rate);
         }
         SysConfig config = sysConfigMapper.selectById(key);
+        SysConfig oldSnapshot = config != null ? snapshot(config) : null;
         if (config == null) {
             config = new SysConfig();
             config.setConfigKey(key);
             config.setConfigValue(value);
             config.setUpdatedAt(LocalDateTime.now());
             sysConfigMapper.insert(config);
+            auditLogService.logCreate("sys_config", key, config, currentUsername());
         } else {
             config.setConfigValue(value);
             config.setUpdatedAt(LocalDateTime.now());
             sysConfigMapper.updateById(config);
+            auditLogService.logUpdate("sys_config", key, oldSnapshot, config, currentUsername());
         }
         return config;
+    }
+
+    private String currentUsername() {
+        String username = SecurityOperatorContext.currentUsername();
+        return StringUtils.hasText(username) ? username : "unknown";
+    }
+
+    private SysConfig snapshot(SysConfig source) {
+        SysConfig copy = new SysConfig();
+        copy.setConfigKey(source.getConfigKey());
+        copy.setConfigValue(source.getConfigValue());
+        copy.setRemark(source.getRemark());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        return copy;
     }
 }

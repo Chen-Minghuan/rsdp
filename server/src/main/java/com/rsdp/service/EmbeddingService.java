@@ -36,7 +36,7 @@ public class EmbeddingService {
      * @return 浮点向量
      */
     public float[] embedImage(InputStream imageStream) {
-        try {
+        try (imageStream) {
             byte[] bytes = imageStream.readAllBytes();
             if (bytes.length == 0) {
                 throw new ExternalServiceException("图片流为空");

@@ -47,6 +47,7 @@ public class OrderStatisticsService {
 
     private static final int DEFAULT_STAT_DAYS = 90;
     private static final int MAX_STAT_DAYS = 365;
+    private static final int RESULT_TOP_LIMIT = 50;
 
     /**
      * 订单统计入口：按维度分发。
@@ -115,6 +116,7 @@ public class OrderStatisticsService {
         }
         return byRspu.values().stream()
             .sorted(Comparator.comparing(OrderProductStatResponse::getTotalAmount).reversed())
+            .limit(RESULT_TOP_LIMIT)
             .peek(s -> s.setTotalAmount(scale(s.getTotalAmount())))
             .toList();
     }
@@ -150,6 +152,7 @@ public class OrderStatisticsService {
 
         return amountByFactory.entrySet().stream()
             .sorted(Map.Entry.<String, BigDecimal>comparingByValue().reversed())
+            .limit(RESULT_TOP_LIMIT)
             .map(entry -> {
                 OrderFactoryStatResponse stat = new OrderFactoryStatResponse();
                 stat.setFactoryCode(entry.getKey());

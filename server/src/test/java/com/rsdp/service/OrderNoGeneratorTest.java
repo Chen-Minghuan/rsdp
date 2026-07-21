@@ -27,11 +27,12 @@ class OrderNoGeneratorTest {
 
     @Test
     void generateShouldFormatSequenceWithThreeDigits() {
-        when(orderNoCounterMapper.allocateSequence("20260720")).thenReturn(1L);
+        String datePart = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        when(orderNoCounterMapper.allocateSequence(datePart)).thenReturn(1L);
 
         String orderNo = orderNoGenerator.generate();
 
-        assertThat(orderNo).isEqualTo("DO-20260720-001");
+        assertThat(orderNo).isEqualTo("DO-" + datePart + "-001");
     }
 
     @Test

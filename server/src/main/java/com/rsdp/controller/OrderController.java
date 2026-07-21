@@ -12,6 +12,7 @@ import com.rsdp.service.ContractTemplateService;
 import com.rsdp.service.OrderInviteService;
 import com.rsdp.service.OrderService;
 import com.rsdp.service.OrderStatisticsService;
+import com.rsdp.exception.BusinessException;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -88,6 +89,9 @@ public class OrderController {
         @RequestParam @NotBlank(message = "统计维度不能为空") String dim,
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        if (!OrderStatisticsService.DIM_PRODUCT.equals(dim) && !OrderStatisticsService.DIM_FACTORY.equals(dim)) {
+            throw new BusinessException("统计维度仅支持 product / factory");
+        }
         return Result.ok(orderStatisticsService.statistics(dim, from, to));
     }
 

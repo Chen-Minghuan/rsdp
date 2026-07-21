@@ -24,6 +24,9 @@ class ConfigServiceTest {
     @Mock
     private SysConfigMapper sysConfigMapper;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private ConfigService configService;
 

@@ -399,7 +399,7 @@ class RskuServiceTest {
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
 
         assertThatThrownBy(() -> rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", new BigDecimal("1500"), "原材料涨价"))
-            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class)
+            .isInstanceOf(BusinessException.class)
             .hasMessageContaining("RSKU 不属于该产品");
     }
 

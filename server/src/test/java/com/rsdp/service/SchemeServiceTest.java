@@ -91,6 +91,9 @@ class SchemeServiceTest {
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private SchemeService schemeService;
 

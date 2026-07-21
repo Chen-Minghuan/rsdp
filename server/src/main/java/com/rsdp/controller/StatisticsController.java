@@ -5,7 +5,9 @@ import com.rsdp.dto.response.FactoryStatResponse;
 import com.rsdp.dto.response.StatisticsOverviewResponse;
 import com.rsdp.dto.response.TrendItemResponse;
 import com.rsdp.service.StatisticsService;
+import jakarta.validation.constraints.Max;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -19,6 +21,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/statistics")
 @RequiredArgsConstructor
+@Validated
 public class StatisticsController {
 
     private final StatisticsService statisticsService;
@@ -45,12 +48,14 @@ public class StatisticsController {
     }
 
     /**
-     * 工厂维度方案金额 TOP10。
+     * 工厂维度方案金额 TOP20。
      *
+     * @param months 统计月数（1~24，默认 12）
      * @return 工厂统计列表
      */
     @GetMapping("/factories")
-    public Result<List<FactoryStatResponse>> factories() {
-        return Result.ok(statisticsService.factories());
+    public Result<List<FactoryStatResponse>> factories(
+        @RequestParam(defaultValue = "12") @Max(24) int months) {
+        return Result.ok(statisticsService.factories(months));
     }
 }
