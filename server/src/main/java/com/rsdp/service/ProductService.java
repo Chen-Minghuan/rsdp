@@ -30,10 +30,8 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
+import com.rsdp.util.IdGenerator;
 
 /**
  * 产品录入服务，负责接收图片、创建 RSPU 草稿和异步任务，并触发后台 AI 识别。
@@ -86,8 +84,8 @@ public class ProductService {
             imageUploadValidator.validate(image, maxSize);
         }
 
-        String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String rspuId = IdGenerator.rspuId();
+        String taskId = IdGenerator.taskId();
 
         String effectiveCategoryCode = (categoryCode == null || categoryCode.isBlank()) ? "FS" : categoryCode.trim().toUpperCase();
         validateCategoryCode(effectiveCategoryCode);
@@ -113,7 +111,7 @@ public class ProductService {
 
         for (int i = 0; i < images.size(); i++) {
             MultipartFile image = images.get(i);
-            String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+            String imageId = IdGenerator.imageId();
             String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
             String storagePath = storageService.store(image, objectKey);
             storedObjectKeys.add(storagePath);
@@ -193,7 +191,7 @@ public class ProductService {
         validateFactoryEntryOwnership(request.getFactoryCode());
         validateCategoryCode(request.getCategoryCode());
 
-        String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String rspuId = IdGenerator.rspuId();
 
         // 1. 创建 RSPU
         RspuMaster rspu = new RspuMaster();
@@ -234,7 +232,7 @@ public class ProductService {
             for (int i = 0; i < images.size(); i++) {
                 MultipartFile image = images.get(i);
                 imageUploadValidator.validate(image, maxSize);
-                String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+                String imageId = IdGenerator.imageId();
                 String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
                 String storagePath = storageService.store(image, objectKey);
                 storedObjectKeys.add(storagePath);
@@ -309,9 +307,9 @@ public class ProductService {
             throw new BusinessException("图片流不能为空");
         }
 
-        String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String rspuId = IdGenerator.rspuId();
+        String taskId = IdGenerator.taskId();
+        String imageId = IdGenerator.imageId();
 
         String effectiveCategoryCode = (categoryCode == null || categoryCode.isBlank()) ? "FS" : categoryCode.trim().toUpperCase();
         validateCategoryCode(effectiveCategoryCode);

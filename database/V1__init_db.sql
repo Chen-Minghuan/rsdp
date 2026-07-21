@@ -323,7 +323,7 @@ CREATE TABLE IF NOT EXISTS scheme (
     max_lead_time_days INTEGER,                      -- 最长交期
     item_count INTEGER,                              -- 方案项数
     status VARCHAR(16) DEFAULT 'active',
-    project_id VARCHAR(40),                          -- 所属设计项目（V4 并入）
+    project_id VARCHAR(64),                          -- 所属设计项目（V4 并入）
     is_template BOOLEAN NOT NULL DEFAULT false,      -- 是否为方案模板（V4 并入）
     template_tags TEXT,                              -- 模板标签 JSON 数组（V4 并入）
     created_by VARCHAR(64),
@@ -373,7 +373,7 @@ CREATE TABLE IF NOT EXISTS async_task (
 
 -- Excel AI 辅助导入批次表
 CREATE TABLE IF NOT EXISTS excel_import_batch (
-    batch_id VARCHAR(32) PRIMARY KEY,
+    batch_id VARCHAR(64) PRIMARY KEY,
     file_name VARCHAR(255) NOT NULL,
     storage_path VARCHAR(512),                      -- 原始 Excel 文件存储路径
     status VARCHAR(20) DEFAULT 'pending',
@@ -758,9 +758,9 @@ CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(c
 
 -- 收藏夹（V4 并入）：用户级产品收藏，支持分组
 CREATE TABLE IF NOT EXISTS user_favorite (
-    favorite_id VARCHAR(40) PRIMARY KEY,
+    favorite_id VARCHAR(64) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    rspu_id VARCHAR(40) NOT NULL REFERENCES rspu_master(rspu_id),
+    rspu_id VARCHAR(64) NOT NULL REFERENCES rspu_master(rspu_id),
     group_name VARCHAR(64),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, rspu_id)
@@ -769,7 +769,7 @@ CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_a
 
 -- 设计项目（V4 并入）
 CREATE TABLE IF NOT EXISTS project (
-    project_id VARCHAR(40) PRIMARY KEY,
+    project_id VARCHAR(64) PRIMARY KEY,
     project_name VARCHAR(128) NOT NULL,
     project_type VARCHAR(32),
     company_name VARCHAR(128),
@@ -785,9 +785,9 @@ CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_
 
 -- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
 CREATE TABLE IF NOT EXISTS design_order (
-    order_id VARCHAR(40) PRIMARY KEY,
+    order_id VARCHAR(64) PRIMARY KEY,
     order_no VARCHAR(32) NOT NULL UNIQUE,
-    project_id VARCHAR(40) REFERENCES project(project_id),
+    project_id VARCHAR(64) REFERENCES project(project_id),
     scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
     receiver_name VARCHAR(64),
     receiver_phone VARCHAR(32),
@@ -823,13 +823,13 @@ CREATE TABLE IF NOT EXISTS order_no_counter (
 -- 订单明细（V5 并入）
 CREATE TABLE IF NOT EXISTS design_order_item (
     id BIGSERIAL PRIMARY KEY,
-    order_id VARCHAR(40) NOT NULL REFERENCES design_order(order_id),
-    rspu_id VARCHAR(40) NOT NULL,
-    rsku_id VARCHAR(40),
-    variant_id VARCHAR(40),
+    order_id VARCHAR(64) NOT NULL REFERENCES design_order(order_id),
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64),
+    variant_id VARCHAR(64),
     product_name VARCHAR(256),
     model VARCHAR(128),
-    image_id VARCHAR(40),
+    image_id VARCHAR(64),
     quantity INT NOT NULL DEFAULT 1,
     original_price TEXT,
     final_price TEXT,

@@ -28,7 +28,7 @@ import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -111,7 +111,7 @@ public class RspuRelationService {
         }
 
         RspuRelation relation = new RspuRelation();
-        relation.setRelationId("REL-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        relation.setRelationId(IdGenerator.relationId());
         relation.setAnchorRspuId(anchorRspuId);
         relation.setRelatedRspuId(request.getRelatedRspuId());
         relation.setRelationType(StringUtils.hasText(request.getRelationType())

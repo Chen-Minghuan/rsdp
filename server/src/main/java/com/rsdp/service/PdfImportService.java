@@ -24,7 +24,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 
 /**
  * PDF 产品目录批量导入服务。
@@ -67,7 +67,7 @@ public class PdfImportService {
         long maxSizeBytes = (long) maxFileSizeMb * 1024 * 1024;
         PdfFileValidator.validate(file, maxSizeBytes, maxPages);
 
-        String batchId = "BATCH-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String batchId = IdGenerator.batchId();
         DocumentImportResult result = new DocumentImportResult();
         result.setBatchId(batchId);
 

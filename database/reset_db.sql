@@ -464,7 +464,7 @@ CREATE TABLE IF NOT EXISTS scheme (
     max_lead_time_days INTEGER,
     item_count INTEGER,
     status VARCHAR(16) DEFAULT 'active',
-    project_id VARCHAR(40),
+    project_id VARCHAR(64),
     is_template BOOLEAN NOT NULL DEFAULT false,
     template_tags TEXT,
     created_by VARCHAR(64),
@@ -514,7 +514,7 @@ CREATE TABLE IF NOT EXISTS async_task (
 
 -- Excel AI 辅助导入批次表
 CREATE TABLE IF NOT EXISTS excel_import_batch (
-    batch_id VARCHAR(32) PRIMARY KEY,
+    batch_id VARCHAR(64) PRIMARY KEY,
     file_name VARCHAR(255) NOT NULL,
     storage_path VARCHAR(512),                      -- 原始 Excel 文件存储路径
     status VARCHAR(20) DEFAULT 'pending',
@@ -548,7 +548,7 @@ CREATE INDEX IF NOT EXISTS idx_excel_import_batch_factory ON excel_import_batch(
 -- Excel 行级导入记录表（V2 新增）
 CREATE TABLE IF NOT EXISTS excel_import_row (
     row_id BIGSERIAL PRIMARY KEY,
-    batch_id VARCHAR(32) NOT NULL,
+    batch_id VARCHAR(64) NOT NULL,
     excel_row_number INTEGER NOT NULL,
     row_type VARCHAR(16) NOT NULL,
     parent_row_id BIGINT,
@@ -582,7 +582,7 @@ CREATE INDEX IF NOT EXISTS idx_import_row_parent ON excel_import_row(parent_row_
 CREATE TABLE IF NOT EXISTS rspu_price_column_mapping (
     mapping_id BIGSERIAL PRIMARY KEY,
     rspu_id VARCHAR(64) NOT NULL,
-    batch_id VARCHAR(32) NOT NULL,
+    batch_id VARCHAR(64) NOT NULL,
     price_column_name VARCHAR(64) NOT NULL,
     material_grade_code VARCHAR(32),
     material_code VARCHAR(32),
@@ -601,7 +601,7 @@ CREATE INDEX IF NOT EXISTS idx_price_col_mapping_batch ON rspu_price_column_mapp
 -- 批次价格列识别表（V2 新增）
 CREATE TABLE IF NOT EXISTS excel_import_price_column (
     column_id BIGSERIAL PRIMARY KEY,
-    batch_id VARCHAR(32) NOT NULL,
+    batch_id VARCHAR(64) NOT NULL,
     excel_column_letter VARCHAR(8) NOT NULL,
     column_header_name VARCHAR(128) NOT NULL,
     raw_header_name VARCHAR(256),
@@ -969,9 +969,9 @@ CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(c
 
 -- 收藏夹（V4 并入）：用户级产品收藏，支持分组
 CREATE TABLE IF NOT EXISTS user_favorite (
-    favorite_id VARCHAR(40) PRIMARY KEY,
+    favorite_id VARCHAR(64) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    rspu_id VARCHAR(40) NOT NULL REFERENCES rspu_master(rspu_id),
+    rspu_id VARCHAR(64) NOT NULL REFERENCES rspu_master(rspu_id),
     group_name VARCHAR(64),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, rspu_id)
@@ -980,7 +980,7 @@ CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_a
 
 -- 设计项目（V4 并入）
 CREATE TABLE IF NOT EXISTS project (
-    project_id VARCHAR(40) PRIMARY KEY,
+    project_id VARCHAR(64) PRIMARY KEY,
     project_name VARCHAR(128) NOT NULL,
     project_type VARCHAR(32),
     company_name VARCHAR(128),
@@ -995,9 +995,9 @@ CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_
 
 -- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
 CREATE TABLE IF NOT EXISTS design_order (
-    order_id VARCHAR(40) PRIMARY KEY,
+    order_id VARCHAR(64) PRIMARY KEY,
     order_no VARCHAR(32) NOT NULL UNIQUE,
-    project_id VARCHAR(40) REFERENCES project(project_id),
+    project_id VARCHAR(64) REFERENCES project(project_id),
     scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
     receiver_name VARCHAR(64),
     receiver_phone VARCHAR(32),
@@ -1033,13 +1033,13 @@ CREATE TABLE IF NOT EXISTS order_no_counter (
 -- 订单明细（V5 并入）
 CREATE TABLE IF NOT EXISTS design_order_item (
     id BIGSERIAL PRIMARY KEY,
-    order_id VARCHAR(40) NOT NULL REFERENCES design_order(order_id),
-    rspu_id VARCHAR(40) NOT NULL,
-    rsku_id VARCHAR(40),
-    variant_id VARCHAR(40),
+    order_id VARCHAR(64) NOT NULL REFERENCES design_order(order_id),
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64),
+    variant_id VARCHAR(64),
     product_name VARCHAR(256),
     model VARCHAR(128),
-    image_id VARCHAR(40),
+    image_id VARCHAR(64),
     quantity INT NOT NULL DEFAULT 1,
     original_price TEXT,
     final_price TEXT,
@@ -1476,6 +1476,18 @@ WHERE r.role_code IN ('ADMIN', 'DESIGNER')
   AND p.permission_code LIKE 'order:%'
 ON CONFLICT DO NOTHING;
 
+-- 收藏夹权限（V9 并入）：所有登录角色均可管理自己的收藏
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('favorite:read', '查看我的收藏'),
+('favorite:write', '管理我的收藏')
+ON CONFLICT (permission_code) DO NOTHING;
+
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE p.permission_code IN ('favorite:read', 'favorite:write')
+ON CONFLICT DO NOTHING;
+
 -- =================== 开发测试账号（仅在开发/演示环境使用） ===================
 
 -- 测试工厂
@@ -1483,8 +1495,9 @@ INSERT INTO factory_master (factory_code, factory_name, factory_level, region, s
 ('TEST', '测试工厂', 'A', '广东', 'active')
 ON CONFLICT (factory_code) DO NOTHING;
 
--- 测试用户（仅用于开发/演示环境，密码：rsdp-dev-2026!）
+-- 开发/演示环境测试账号（密码均为：rsdp-dev-2026!）
 -- 生产环境部署后应立即通过管理后台修改或删除这些账号。
+-- DefaultAdminInitializer 仅在新库且无用户时生成随机密码；种子数据会覆盖为统一的开发测试密码。
 INSERT INTO sys_user (user_id, username, password_hash, nickname, status, view_full_catalog) VALUES
 ('USER-ADMIN-00000001', 'admin', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '系统管理员', 'active', true),
 ('USER-EDITOR-00000001', 'editor', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '编辑员', 'active', true),

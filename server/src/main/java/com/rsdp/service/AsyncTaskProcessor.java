@@ -25,7 +25,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 
 /**
  * 异步任务处理器，负责在后台执行 AI 识别等耗时操作。
@@ -68,7 +68,7 @@ public class AsyncTaskProcessor {
         log.info("开始异步处理产品录入任务，taskId={}", taskId);
         updateTaskStatus(taskId, "processing", 10, null, null);
 
-        String recognitionId = "REC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String recognitionId = IdGenerator.recognitionId();
         String modelName = aiModel;
         int processingTime = 0;
 

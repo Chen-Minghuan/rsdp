@@ -32,7 +32,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 import java.util.stream.Collectors;
 
 import org.springframework.transaction.PlatformTransactionManager;
@@ -151,7 +151,7 @@ public class RskuService {
         }
 
         RskuSupply rsku = new RskuSupply();
-        rsku.setRskuId("RSKU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        rsku.setRskuId(IdGenerator.rskuId());
         rsku.setRspuId(request.getRspuId());
         rsku.setVariantId(request.getVariantId());
         rsku.setFactoryCode(request.getFactoryCode());
@@ -298,8 +298,8 @@ public class RskuService {
      * @param rskuId      RSKU ID
      * @param newPrice    新价格
      * @param changeReason 变更原因
-     * @throws ResourceNotFoundException 当 RSKU 不存在或不属于该 RSPU 时
-     * @throws BusinessException         当价格非法时
+     * @throws ResourceNotFoundException 当 RSKU 不存在时
+     * @throws BusinessException         当 RSKU 不属于该 RSPU 或价格非法时
      */
     @Transactional
     public void updateRskuPrice(String rspuId, String rskuId, BigDecimal newPrice, String changeReason) {
@@ -308,7 +308,7 @@ public class RskuService {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
         if (!rspuId.equals(rsku.getRspuId())) {
-            throw new ResourceNotFoundException("RSKU 不属于该产品: " + rskuId);
+            throw new BusinessException("RSKU 不属于该产品: " + rskuId);
         }
         if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);

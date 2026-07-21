@@ -42,7 +42,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 import java.util.stream.Collectors;
 
 /**
@@ -452,7 +452,7 @@ public class RskuImportService {
 
     private RskuSupply buildRskuSupply(RskuImportRow row, String productLevel) {
         RskuSupply rsku = new RskuSupply();
-        rsku.setRskuId("RSKU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        rsku.setRskuId(IdGenerator.rskuId());
         rsku.setRspuId(row.getRspuId().trim());
         rsku.setVariantId(row.getVariantId().trim());
         rsku.setFactoryCode(row.getFactoryCode().trim());

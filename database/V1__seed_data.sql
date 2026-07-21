@@ -298,9 +298,9 @@ INSERT INTO factory_master (factory_code, factory_name, factory_level, region, s
 ('TEST', '测试工厂', 'A', '广东', 'active')
 ON CONFLICT (factory_code) DO NOTHING;
 
--- 测试用户（仅用于开发/演示环境，密码：rsdp-dev-2026!）
+-- 开发/演示环境测试账号（密码均为：rsdp-dev-2026!）
 -- 生产环境部署后应立即通过管理后台修改或删除这些账号。
--- 默认管理员账号已改为随机密码（见 DefaultAdminInitializer），此处测试账号仅保留以便开发联调。
+-- DefaultAdminInitializer 仅在新库且无用户时生成随机密码；种子数据会覆盖为统一的开发测试密码。
 INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, group_name, status, view_full_catalog) VALUES
 ('USER-ADMIN-00000001', 'admin', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '系统管理员', 'RSDP 平台', '平台运营组', 'active', true),
 ('USER-EDITOR-00000001', 'editor', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '编辑员', 'RSDP 平台', '内容编辑组', 'active', true),
@@ -404,4 +404,16 @@ SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code IN ('ADMIN', 'DESIGNER')
   AND p.permission_code LIKE 'order:%'
+ON CONFLICT DO NOTHING;
+
+-- 收藏夹权限（V9 并入）：所有登录角色均可管理自己的收藏
+INSERT INTO sys_permission (permission_code, permission_name) VALUES
+('favorite:read', '查看我的收藏'),
+('favorite:write', '管理我的收藏')
+ON CONFLICT (permission_code) DO NOTHING;
+
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r, sys_permission p
+WHERE p.permission_code IN ('favorite:read', 'favorite:write')
 ON CONFLICT DO NOTHING;

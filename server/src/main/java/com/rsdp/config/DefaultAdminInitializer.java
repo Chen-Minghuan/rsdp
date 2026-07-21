@@ -14,7 +14,7 @@ import org.springframework.util.StringUtils;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 
 /**
  * 默认管理员初始化。
@@ -56,7 +56,7 @@ public class DefaultAdminInitializer implements CommandLineRunner {
 
             String rawPassword = resolveInitialPassword();
             SysUser admin = new SysUser();
-            admin.setUserId("USER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+            admin.setUserId(IdGenerator.userId());
             admin.setUsername("admin");
             admin.setPasswordHash(passwordEncoder.encode(rawPassword));
             admin.setNickname("系统管理员");

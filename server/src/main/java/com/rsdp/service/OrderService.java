@@ -41,7 +41,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 
 /**
  * 设计订单服务：由方案生成订单（价格快照 × 全局折扣率）、状态机迁移、归属校验。
@@ -119,7 +119,7 @@ public class OrderService {
 
         BigDecimal priceRate = configService.getOrderPriceRate();
 
-        String orderId = "ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String orderId = IdGenerator.orderId();
 
         // 批量预加载 RSKU / RSPU / 主图，消除循环内 N+1
         List<String> rskuIds = filteredItems.stream().map(SchemeItem::getRskuId).distinct().toList();

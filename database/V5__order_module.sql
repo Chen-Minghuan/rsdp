@@ -9,9 +9,9 @@
 
 -- 订单主表（价格字段与 factory_price 同策略，AES 加密 TypeHandler 读写）
 CREATE TABLE IF NOT EXISTS design_order (
-    order_id              VARCHAR(40) PRIMARY KEY,        -- ORD-XXXXXXXX
+    order_id              VARCHAR(64) PRIMARY KEY,        -- ORD-XXXXXXXX
     order_no              VARCHAR(32) NOT NULL UNIQUE,    -- DO-20260713-001
-    project_id            VARCHAR(40) REFERENCES project (project_id),
+    project_id            VARCHAR(64) REFERENCES project (project_id),
     scheme_id             VARCHAR(64) REFERENCES scheme (scheme_id),
     receiver_name         VARCHAR(64),
     receiver_phone        VARCHAR(32),
@@ -38,13 +38,13 @@ CREATE INDEX IF NOT EXISTS idx_order_status ON design_order (status) WHERE delet
 -- 订单明细（商品快照）
 CREATE TABLE IF NOT EXISTS design_order_item (
     id              BIGSERIAL PRIMARY KEY,
-    order_id        VARCHAR(40) NOT NULL REFERENCES design_order (order_id),
-    rspu_id         VARCHAR(40) NOT NULL,
-    rsku_id         VARCHAR(40),
-    variant_id      VARCHAR(40),
+    order_id        VARCHAR(64) NOT NULL REFERENCES design_order (order_id),
+    rspu_id         VARCHAR(64) NOT NULL,
+    rsku_id         VARCHAR(64),
+    variant_id      VARCHAR(64),
     product_name    VARCHAR(256),
     model           VARCHAR(128),
-    image_id        VARCHAR(40),
+    image_id        VARCHAR(64),
     quantity        INT NOT NULL DEFAULT 1,
     original_price  TEXT,                    -- AES 加密单价快照
     final_price     TEXT,                    -- AES 加密到手单价快照
