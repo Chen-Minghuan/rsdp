@@ -39,7 +39,7 @@ async function handleToggle(value: boolean) {
   errorMessage.value = ''
   try {
     await updateMyPreferences({ viewFullCatalog: value })
-    await userStore.fetchUserInfo()
+    await userStore.fetchUserInfo(true)
     viewFullCatalog.value = userStore.userInfo?.viewFullCatalog || false
     message.success('偏好设置已保存')
   } catch (err: unknown) {

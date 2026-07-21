@@ -38,7 +38,8 @@ public class VectorBackfillService {
     /**
      * 回填指定数量的存量图片向量。
      *
-     * <p>只处理对应 RSPU 尚未写入 style_vector 的图片，避免重复调用 embedding API。</p>
+     * <p>对应 RSPU 已写入 style_vector 且 ChromaDB 中向量存在的图片会跳过，避免重复调用
+     * embedding API；PG 有向量但 ChromaDB 缺失的记录会直接复用存量向量补偿回填。</p>
      *
      * @param batchSize 本次处理数量
      * @return 处理结果统计
@@ -64,12 +65,15 @@ public class VectorBackfillService {
             rspuMapper.selectBatchIds(rspuIds).stream()
                 .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
 
+        // 批量检查「PG 已有向量」的图片在 ChromaDB 中是否真实存在，修复 PG 有/Chroma 缺的死区
+        Set<String> chromaExistingIds = queryChromaExistingIds(images, rspuMap);
+
         int success = 0;
         int failed = 0;
         for (ImageAssets image : images) {
             try {
                 RspuMaster rspu = rspuMap.get(image.getRspuId());
-                if (processImage(image, rspu)) {
+                if (processImage(image, rspu, chromaExistingIds)) {
                     success++;
                 }
             } catch (Exception e) {
@@ -81,16 +85,54 @@ public class VectorBackfillService {
         return new BackfillResult(success, failed);
     }
 
-    private boolean processImage(ImageAssets image, RspuMaster rspu) throws Exception {
+    /**
+     * 批量查询 PG 已有向量的图片在 ChromaDB 中的现存 ID；查询失败时按「全部缺失」处理，
+     * 走存量向量补偿 upsert（幂等且无需重新调用 embedding API），保证自愈。
+     */
+    private Set<String> queryChromaExistingIds(List<ImageAssets> images, Map<String, RspuMaster> rspuMap) {
+        List<String> candidateIds = images.stream()
+            .filter(image -> {
+                RspuMaster rspu = rspuMap.get(image.getRspuId());
+                return rspu != null && rspu.getStyleVector() != null && !rspu.getStyleVector().isBlank();
+            })
+            .map(ImageAssets::getImageId)
+            .toList();
+        if (candidateIds.isEmpty()) {
+            return Set.of();
+        }
+        try {
+            return chromaDbClient.getExistingIds(candidateIds);
+        } catch (Exception e) {
+            log.warn("批量检查 ChromaDB 现存向量失败，按缺失处理并走补偿回填: {}", e.getMessage());
+            return Set.of();
+        }
+    }
+
+    private boolean processImage(ImageAssets image, RspuMaster rspu, Set<String> chromaExistingIds) throws Exception {
         if (rspu == null) {
             log.warn("RSPU 不存在或已删除，跳过 imageId={}", image.getImageId());
             return false;
         }
 
-        // 已存在向量则跳过，避免重复调用 API
-        if (rspu.getStyleVector() != null && !rspu.getStyleVector().isBlank()) {
-            log.debug("RSPU 已存在向量，跳过 imageId={}", image.getImageId());
-            return false;
+        String existingVector = rspu.getStyleVector();
+        if (existingVector != null && !existingVector.isBlank()) {
+            // ChromaDB 中向量真实存在才跳过，避免重复调用 API
+            if (chromaExistingIds.contains(image.getImageId())) {
+                log.debug("RSPU 已存在向量，跳过 imageId={}", image.getImageId());
+                return false;
+            }
+            // PG 有向量但 ChromaDB 缺失：直接复用存量向量补偿回填，无需重新调用 embedding API
+            float[] embedding = objectMapper.readValue(existingVector, float[].class);
+            Map<String, Object> metadata = ChromaMetadataBuilder.buildProductMetadata(rspu,
+                image.getFileSize() != null ? image.getFileSize() : 0);
+            chromaDbClient.upsert(
+                List.of(image.getImageId()),
+                List.of(embedding),
+                List.of(metadata),
+                null
+            );
+            log.info("ChromaDB 缺失向量补偿回填完成，imageId={}", image.getImageId());
+            return true;
         }
 
         String objectKey = image.getStoragePath();
@@ -116,7 +158,17 @@ public class VectorBackfillService {
 
         // ChromaDB 写入成功后，再更新 RSPU style_vector
         rspu.setStyleVector(objectMapper.writeValueAsString(embedding));
-        rspuMapper.updateById(rspu);
+        try {
+            rspuMapper.updateById(rspu);
+        } catch (Exception e) {
+            // PG 写入失败时补偿删除 ChromaDB 中刚写入的向量，避免孤儿记录
+            try {
+                chromaDbClient.delete(List.of(image.getImageId()));
+            } catch (Exception compensateEx) {
+                log.error("补偿删除 ChromaDB 向量失败，imageId={}", image.getImageId(), compensateEx);
+            }
+            throw e;
+        }
 
         log.info("存量向量回填完成，imageId={}", image.getImageId());
         return true;

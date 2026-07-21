@@ -55,8 +55,8 @@ async function handleLogin() {
       username: form.value.username.trim(),
       password: form.value.password
     })
-    // 登录接口仅设置 HttpOnly Cookie，用户信息统一通过 /auth/me 拉取
-    const info = await userStore.fetchUserInfo()
+    // 登录接口仅设置 HttpOnly Cookie，用户信息统一通过 /auth/me 拉取（强制刷新，忽略缓存）
+    const info = await userStore.fetchUserInfo(true)
     if (!info) {
       errorMessage.value = '登录成功但获取用户信息失败，请重试'
       return

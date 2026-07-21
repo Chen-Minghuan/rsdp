@@ -8,8 +8,10 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -63,7 +65,9 @@ public class ChromaDbClient {
     private String createCollection(String collectionName) {
         Map<String, Object> body = new HashMap<>();
         body.put("name", collectionName);
-        body.put("metadata", Map.of("hnsw:space", "cosine"));
+        body.put("metadata", Map.of(
+            "hnsw:space", "cosine",
+            "dimension", properties.getDimension()));
 
         try {
             Map<String, Object> collection = chromaRestClient.post()
@@ -122,8 +126,18 @@ public class ChromaDbClient {
 
     /**
      * 批量写入或更新向量记录。
+     *
+     * @throws IllegalArgumentException 向量维度与配置的 {@code rsdp.chromadb.dimension} 不一致时抛出
      */
     public void upsert(List<String> ids, List<float[]> embeddings, List<Map<String, Object>> metadatas, List<String> documents) {
+        for (float[] embedding : embeddings) {
+            if (embedding == null || embedding.length != properties.getDimension()) {
+                throw new IllegalArgumentException(
+                    "向量维度不匹配，期望 " + properties.getDimension()
+                        + "，实际 " + (embedding == null ? 0 : embedding.length)
+                        + "（检查 rsdp.chromadb.dimension 与 embedding 模型配置）");
+            }
+        }
         Map<String, Object> body = new HashMap<>();
         body.put("ids", ids);
         body.put("embeddings", embeddings);
@@ -173,6 +187,37 @@ public class ChromaDbClient {
             throw e;
         } catch (Exception e) {
             throw new ExternalServiceException("ChromaDB 查询失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 查询给定 ID 中已存在于集合内的 ID 集合。
+     *
+     * @param ids 待检查的 ID 列表
+     * @return 集合内已存在的 ID 子集；入参为空时返回空集合
+     */
+    @SuppressWarnings("unchecked")
+    public Set<String> getExistingIds(List<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Set.of();
+        }
+        Map<String, Object> body = new HashMap<>();
+        body.put("ids", ids);
+        body.put("include", List.of());
+
+        try {
+            Map<String, Object> response = executeWithCollectionRetry(collectionId ->
+                chromaRestClient.post()
+                    .uri(baseCollectionPath() + "/{id}/get", collectionId)
+                    .body(body)
+                    .retrieve()
+                    .body(Map.class));
+            List<String> existing = response != null ? (List<String>) response.get("ids") : null;
+            return existing != null ? new HashSet<>(existing) : Set.of();
+        } catch (ExternalServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ExternalServiceException("ChromaDB 查询记录失败: " + e.getMessage(), e);
         }
     }
 
