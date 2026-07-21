@@ -193,7 +193,7 @@ public class FactoryLeadTimeRuleService {
 
     private void validateRequest(FactoryLeadTimeRuleRequest request) {
         FactoryMaster factory = factoryMasterMapper.selectById(request.getFactoryCode());
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             throw new BusinessException("工厂不存在: " + request.getFactoryCode());
         }
         if (request.getBaseDays() == null || request.getBaseDays() <= 0) {

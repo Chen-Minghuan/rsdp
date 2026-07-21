@@ -52,7 +52,7 @@ public class RspuVariantService {
     @Transactional
     public RspuVariantResponse createVariant(String rspuId, RspuVariantCreateRequest request) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
         dataScopeHelper.assertCanAccessRspu(rspuId);
@@ -125,7 +125,7 @@ public class RspuVariantService {
         }
 
         RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             log.warn("初始化默认变体时 RSPU 不存在，rspuId={}", rspuId);
             return null;
         }
@@ -176,7 +176,7 @@ public class RspuVariantService {
      */
     public RspuVariantResponse getVariant(String variantId) {
         RspuVariant variant = variantMapper.selectById(variantId);
-        if (variant == null || variant.getDeletedAt() != null) {
+        if (variant == null) {
             throw new ResourceNotFoundException("变体不存在: " + variantId);
         }
         return toResponse(variant);
@@ -190,7 +190,7 @@ public class RspuVariantService {
      */
     public RspuVariant findById(String variantId) {
         RspuVariant variant = variantMapper.selectById(variantId);
-        if (variant == null || variant.getDeletedAt() != null) {
+        if (variant == null) {
             throw new ResourceNotFoundException("变体不存在: " + variantId);
         }
         return variant;

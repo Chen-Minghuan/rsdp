@@ -80,7 +80,7 @@ public class RskuService {
      */
     public RskuResponse getRsku(String rspuId, String rskuId) {
         RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
-        if (rsku == null || rsku.getDeletedAt() != null) {
+        if (rsku == null) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
         if (!rspuId.equals(rsku.getRspuId())) {
@@ -119,12 +119,12 @@ public class RskuService {
     @Transactional
     public String createRsku(RskuCreateRequest request) {
         RspuMaster rspu = rspuMapper.selectById(request.getRspuId());
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + request.getRspuId());
         }
 
         FactoryMaster factory = factoryMasterMapper.selectById(request.getFactoryCode());
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             throw new ResourceNotFoundException("工厂不存在: " + request.getFactoryCode());
         }
         if (!dataScopeHelper.canAccessRskuFactory(request.getFactoryCode())) {
@@ -283,7 +283,7 @@ public class RskuService {
     @Transactional
     public void deleteRsku(String rskuId) {
         RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
-        if (rsku == null || rsku.getDeletedAt() != null) {
+        if (rsku == null) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
         if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
@@ -312,7 +312,7 @@ public class RskuService {
     @Transactional
     public void updateRskuPrice(String rspuId, String rskuId, BigDecimal newPrice, String changeReason) {
         RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
-        if (rsku == null || rsku.getDeletedAt() != null) {
+        if (rsku == null) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
         if (!rspuId.equals(rsku.getRspuId())) {

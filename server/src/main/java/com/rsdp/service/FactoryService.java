@@ -71,7 +71,7 @@ public class FactoryService {
      */
     public FactoryResponse getFactory(String factoryCode) {
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
         return toResponse(factory);
@@ -141,7 +141,7 @@ public class FactoryService {
     @Transactional
     public void updateFactoryLevel(String factoryCode, String newLevel) {
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
         assertCanUpdateFactory(factoryCode);
@@ -169,7 +169,7 @@ public class FactoryService {
     @Transactional
     public void updateFactory(String factoryCode, FactoryUpdateRequest request) {
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
         assertCanUpdateFactory(factoryCode);
@@ -293,7 +293,7 @@ public class FactoryService {
     @Transactional
     public void updateCapableLevels(String factoryCode, FactoryLevelCapabilityUpdateRequest request) {
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
         assertCanUpdateFactory(factoryCode);
@@ -499,7 +499,7 @@ public class FactoryService {
             return List.of();
         }
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             return List.of();
         }
 
@@ -524,7 +524,7 @@ public class FactoryService {
     @Transactional(propagation = Propagation.REQUIRED)
     public void extendCapability(String factoryCode, String level) {
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             throw new ResourceNotFoundException("工厂不存在: " + factoryCode);
         }
         assertCanUpdateFactory(factoryCode);

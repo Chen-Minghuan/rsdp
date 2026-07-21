@@ -35,6 +35,7 @@ const canDeleteScheme = (row: SchemeSummary) =>
 const loading = ref(false)
 const errorMessage = ref('')
 const schemes = ref<SchemeSummary[]>([])
+const total = ref(0)
 
 /** 模板筛选：仅看模板 + 标签筛选。 */
 const templateOnly = ref(false)
@@ -47,10 +48,6 @@ const tagOptions = computed(() => {
 
 const page = ref(1)
 const pageSize = ref(10)
-const pagedSchemes = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return schemes.value.slice(start, start + pageSize.value)
-})
 
 const rowKey = (row: SchemeSummary) => row.schemeId
 
@@ -150,11 +147,14 @@ async function loadSchemes() {
   loading.value = true
   errorMessage.value = ''
   try {
-    schemes.value = await listSchemes({
+    const result = await listSchemes({
       isTemplate: templateOnly.value || undefined,
-      tag: tagFilter.value || undefined
+      tag: tagFilter.value || undefined,
+      page: page.value,
+      size: pageSize.value
     })
-    page.value = 1
+    schemes.value = result.rows
+    total.value = result.total
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载方案列表失败'
   } finally {
@@ -163,8 +163,20 @@ async function loadSchemes() {
 }
 
 watch([templateOnly, tagFilter], () => {
+  page.value = 1
   loadSchemes()
 })
+
+function handlePageChange(newPage: number) {
+  page.value = newPage
+  loadSchemes()
+}
+
+function handlePageSizeChange(newSize: number) {
+  pageSize.value = newSize
+  page.value = 1
+  loadSchemes()
+}
 
 async function handleDelete(schemeId: string) {
   try {
@@ -212,7 +224,7 @@ onMounted(() => {
         <n-data-table
           v-if="!loading"
           :columns="columns"
-          :data="pagedSchemes"
+          :data="schemes"
           :row-key="rowKey"
           :bordered="true"
           :single-line="false"
@@ -223,12 +235,14 @@ onMounted(() => {
         </n-data-table>
 
         <n-pagination
-          v-if="!loading && schemes.length > pageSize"
-          v-model:page="page"
-          v-model:page-size="pageSize"
-          :item-count="schemes.length"
+          v-if="!loading && total > 0"
+          :page="page"
+          :page-size="pageSize"
+          :item-count="total"
           :page-sizes="[10, 20, 50]"
           show-size-picker
+          @update:page="handlePageChange"
+          @update:page-size="handlePageSizeChange"
         />
       </n-space>
     </n-card>

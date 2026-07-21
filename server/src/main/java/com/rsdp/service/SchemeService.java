@@ -4,9 +4,11 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
@@ -111,7 +113,7 @@ public class SchemeService {
         for (int i = 0; i < distinctItems.size(); i++) {
             SchemeItemRequest itemRequest = distinctItems.get(i);
             RskuSupply rsku = rskuSupplyMapper.selectById(itemRequest.getRskuId());
-            if (rsku == null || rsku.getDeletedAt() != null) {
+            if (rsku == null) {
                 throw new ResourceNotFoundException("RSKU 不存在: " + itemRequest.getRskuId());
             }
             if (!rsku.getRspuId().equals(itemRequest.getRspuId())) {
@@ -190,7 +192,7 @@ public class SchemeService {
         }
 
         Scheme scheme = schemeMapper.selectById(schemeId);
-        if (scheme == null || scheme.getDeletedAt() != null) {
+        if (scheme == null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
         assertSchemeOwnerOrAdmin(scheme);
@@ -221,7 +223,7 @@ public class SchemeService {
         for (int i = 0; i < distinctItems.size(); i++) {
             SchemeItemRequest itemRequest = distinctItems.get(i);
             RskuSupply rsku = rskuSupplyMapper.selectById(itemRequest.getRskuId());
-            if (rsku == null || rsku.getDeletedAt() != null) {
+            if (rsku == null) {
                 throw new ResourceNotFoundException("RSKU 不存在: " + itemRequest.getRskuId());
             }
             if (!rsku.getRspuId().equals(itemRequest.getRspuId())) {
@@ -307,35 +309,30 @@ public class SchemeService {
     }
 
     /**
-     * 查询方案列表。
-     *
-     * @return 方案摘要列表
-     */
-    public List<SchemeSummaryResponse> listSchemes() {
-        return listSchemes(null, null);
-    }
-
-    /**
-     * 查询方案列表（支持模板筛选与标签筛选）。
+     * 分页查询方案列表（支持模板筛选与标签筛选）。
      *
      * @param isTemplate 是否仅查模板（可选）
      * @param tag        模板标签筛选（可选）
-     * @return 方案摘要列表
+     * @param page       页码（从 1 开始）
+     * @param size       每页条数
+     * @return 方案摘要分页结果
      */
-    public List<SchemeSummaryResponse> listSchemes(Boolean isTemplate, String tag) {
+    public PageResult<SchemeSummaryResponse> listSchemes(Boolean isTemplate, String tag, long page, long size) {
         QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
             .eq("status", "active")
             .orderByDesc("created_at");
         if (isTemplate != null) {
             wrapper.eq("is_template", isTemplate);
         }
-        List<Scheme> schemes = schemeMapper.selectList(wrapper);
-
-        return schemes.stream()
+        if (StringUtils.hasText(tag)) {
+            // template_tags 为 JSON 数组字符串，按带引号的标签精确片段匹配
+            wrapper.like("template_tags", "\"" + tag + "\"");
+        }
+        Page<Scheme> result = schemeMapper.selectPage(Page.of(page, size), wrapper);
+        List<SchemeSummaryResponse> rows = result.getRecords().stream()
             .map(this::toSummary)
-            .filter(s -> !StringUtils.hasText(tag)
-                || (s.getTemplateTags() != null && s.getTemplateTags().contains(tag)))
             .collect(Collectors.toList());
+        return PageResult.of(result.getTotal(), page, size, rows);
     }
 
     private SchemeSummaryResponse toSummary(Scheme s) {
@@ -359,7 +356,7 @@ public class SchemeService {
      */
     public SchemeResponse getSchemeDetail(String schemeId) {
         Scheme scheme = schemeMapper.selectById(schemeId);
-        if (scheme == null || scheme.getDeletedAt() != null) {
+        if (scheme == null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
 
@@ -418,7 +415,7 @@ public class SchemeService {
     @Transactional
     public void deleteScheme(String schemeId) {
         Scheme scheme = schemeMapper.selectById(schemeId);
-        if (scheme == null || scheme.getDeletedAt() != null) {
+        if (scheme == null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
         assertSchemeOwnerOrAdmin(scheme);
@@ -440,7 +437,7 @@ public class SchemeService {
     @Transactional
     public SchemeResponse setTemplate(String schemeId, SchemeTemplateRequest request) {
         Scheme scheme = schemeMapper.selectById(schemeId);
-        if (scheme == null || scheme.getDeletedAt() != null) {
+        if (scheme == null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
         assertSchemeOwnerOrAdmin(scheme);
@@ -464,7 +461,7 @@ public class SchemeService {
     @Transactional
     public CopyFromTemplateResponse copyFromTemplate(String schemeId, CopyFromTemplateRequest request) {
         Scheme template = schemeMapper.selectById(schemeId);
-        if (template == null || template.getDeletedAt() != null) {
+        if (template == null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
         if (!Boolean.TRUE.equals(template.getIsTemplate())) {
@@ -492,7 +489,7 @@ public class SchemeService {
         int sortOrder = 0;
         for (SchemeItem templateItem : templateItems) {
             RskuSupply rsku = rskuSupplyMapper.selectById(templateItem.getRskuId());
-            if (rsku == null || rsku.getDeletedAt() != null) {
+            if (rsku == null) {
                 skippedRskuIds.add(templateItem.getRskuId());
                 continue;
             }
@@ -616,7 +613,7 @@ public class SchemeService {
      */
     public QuoteResponse generateQuote(String schemeId) {
         Scheme scheme = schemeMapper.selectById(schemeId);
-        if (scheme == null || scheme.getDeletedAt() != null) {
+        if (scheme == null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
 

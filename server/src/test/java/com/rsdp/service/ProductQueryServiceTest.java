@@ -554,18 +554,6 @@ class ProductQueryServiceTest {
     }
 
     @Test
-    void deleteProduct_shouldThrowWhenAlreadyDeleted() {
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-TEST01");
-        rspu.setDeletedAt(java.time.LocalDateTime.now());
-
-        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
-
-        assertThatThrownBy(() -> productQueryService.deleteProduct("RSPU-TEST01"))
-            .isInstanceOf(ResourceNotFoundException.class);
-    }
-
-    @Test
     void deleteProduct_shouldThrowWhenNotFound() {
         when(rspuMapper.selectById(eq("RSPU-NOTEXIST"))).thenReturn(null);
 

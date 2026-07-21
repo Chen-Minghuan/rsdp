@@ -15,12 +15,18 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 审计日志服务。
@@ -34,6 +40,8 @@ public class AuditLogService {
     private final ObjectMapper objectMapper;
 
     private static final Set<String> PRICE_FIELDS = Set.of("factoryPrice", "oldPrice", "newPrice");
+
+    private final AtomicLong insertFailureCount = new AtomicLong();
 
     /**
      * 记录创建操作。
@@ -114,12 +122,44 @@ public class AuditLogService {
         logEntry.setOldValue(sanitizeValue(oldValue));
         logEntry.setNewValue(sanitizeValue(newValue));
         logEntry.setOperator(StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername());
+        logEntry.setIpAddress(resolveClientIp());
         logEntry.setCreatedAt(LocalDateTime.now());
         try {
             auditLogMapper.insert(logEntry);
         } catch (Exception e) {
-            log.error("审计日志写入失败: {} {} {}", tableName, recordId, action, e);
+            insertFailureCount.incrementAndGet();
+            // 告警通道：ERROR 日志（可被日志监控采集）+ insertFailureCount 计数器（可通过指标接口暴露）
+            log.error("审计日志写入失败（累计 {} 次）: {} {} {}", insertFailureCount.get(), tableName, recordId, action, e);
         }
+    }
+
+    /**
+     * 获取审计写入失败累计次数（监控用）。
+     *
+     * @return 启动至今的失败次数
+     */
+    public long getInsertFailureCount() {
+        return insertFailureCount.get();
+    }
+
+    /**
+     * 从当前请求上下文解析客户端 IP（优先 X-Forwarded-For 首个地址）。
+     *
+     * <p>异步线程等非请求上下文返回 null。</p>
+     *
+     * @return 客户端 IP，无请求上下文时为 null
+     */
+    private String resolveClientIp() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        if (attributes instanceof ServletRequestAttributes servletAttributes) {
+            HttpServletRequest request = servletAttributes.getRequest();
+            String forwarded = request.getHeader("X-Forwarded-For");
+            if (StringUtils.hasText(forwarded)) {
+                return forwarded.split(",")[0].trim();
+            }
+            return request.getRemoteAddr();
+        }
+        return null;
     }
 
     private Map<String, Object> sanitizeValue(Object value) {

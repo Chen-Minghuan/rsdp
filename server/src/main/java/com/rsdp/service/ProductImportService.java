@@ -103,6 +103,8 @@ public class ProductImportService {
 
         // 预加载字典，避免每行重复查询
         Map<String, List<CategoryDict>> dictCache = preloadDicts();
+        // 预加载 Excel 内「外部编码 → RSPU ID」映射，使同一产品无论用哪种编码引用都能识别为重复
+        Map<String, String> externalCodeToRspuId = preloadExternalCodeMapping(rows);
         Set<String> processedExternalCodes = new HashSet<>();
         Set<String> processedRspuIds = new HashSet<>();
 
@@ -116,9 +118,15 @@ public class ProductImportService {
                 continue;
             }
 
-            // Excel 内重复检测
-            String duplicateKey = buildDuplicateKey(row);
-            if (duplicateKey != null && !processedExternalCodes.add(duplicateKey)) {
+            // Excel 内重复检测：同一产品分别用 rspuId 和 externalCode 引用时也识别为重复
+            String rowRspuId = StringUtils.hasText(row.getRspuId()) ? row.getRspuId().trim() : null;
+            String rowExternalCode = StringUtils.hasText(row.getExternalCode()) ? row.getExternalCode().trim() : null;
+            String effectiveRspuId = rowRspuId != null
+                ? rowRspuId
+                : (rowExternalCode != null ? externalCodeToRspuId.get(rowExternalCode) : null);
+            boolean duplicated = (effectiveRspuId != null && !processedRspuIds.add(effectiveRspuId))
+                || (rowExternalCode != null && !processedExternalCodes.add(rowExternalCode));
+            if (duplicated) {
                 result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
                     "Excel 中存在重复产品行（同一 RSPU ID 或外部编码）"));
                 continue;
@@ -195,14 +203,36 @@ public class ProductImportService {
         return list == null ? List.of() : list;
     }
 
-    private String buildDuplicateKey(ProductImportRow row) {
-        if (StringUtils.hasText(row.getRspuId())) {
-            return row.getRspuId().trim();
+    /**
+     * 预加载 Excel 中出现的「外部编码 → RSPU ID」映射。
+     *
+     * <p>同一产品可能在不同行分别用 rspuId 和 externalCode 引用，提前解析映射
+     * 才能在行级重复检测中识别为同一产品。已软删除的产品由 @TableLogic 自动排除。</p>
+     *
+     * @param rows 导入行
+     * @return 外部编码 → RSPU ID 映射
+     */
+    private Map<String, String> preloadExternalCodeMapping(List<ProductImportRow> rows) {
+        List<String> codes = rows.stream()
+            .map(ProductImportRow::getExternalCode)
+            .filter(StringUtils::hasText)
+            .map(String::trim)
+            .distinct()
+            .toList();
+        if (codes.isEmpty()) {
+            return Map.of();
         }
-        if (StringUtils.hasText(row.getExternalCode())) {
-            return "EXTERNAL:" + row.getExternalCode().trim();
-        }
-        return null;
+        return rspuMapper.selectList(
+                new QueryWrapper<RspuMaster>()
+                    .select("rspu_id", "external_code")
+                    .in("external_code", codes)
+            ).stream()
+            .filter(r -> StringUtils.hasText(r.getExternalCode()))
+            .collect(Collectors.toMap(
+                r -> r.getExternalCode().trim(),
+                RspuMaster::getRspuId,
+                (a, b) -> a
+            ));
     }
 
     /**
@@ -344,7 +374,7 @@ public class ProductImportService {
     private RspuMaster resolveExistingRspu(String rspuId, String externalCode) {
         if (StringUtils.hasText(rspuId)) {
             RspuMaster rspu = rspuMapper.selectById(rspuId.trim());
-            if (rspu != null && rspu.getDeletedAt() == null) {
+            if (rspu != null) {
                 return rspu;
             }
         }
@@ -352,10 +382,8 @@ public class ProductImportService {
             List<RspuMaster> list = rspuMapper.selectList(
                 new QueryWrapper<RspuMaster>().eq("external_code", externalCode.trim())
             );
-            for (RspuMaster rspu : list) {
-                if (rspu.getDeletedAt() == null) {
-                    return rspu;
-                }
+            if (!list.isEmpty()) {
+                return list.get(0);
             }
         }
         return null;

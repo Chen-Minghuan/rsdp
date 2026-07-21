@@ -7,6 +7,7 @@ import type {
   CopyFromTemplateRequest,
   CopyFromTemplateResponse
 } from '@/types/scheme'
+import type { PageResult } from '@/types/product'
 import type { QuoteResponse } from '@/types/quote'
 import type { ApiOptions } from './product'
 
@@ -27,13 +28,13 @@ export async function updateScheme(schemeId: string, request: SchemeUpdateReques
 }
 
 /**
- * 查询搭配方案列表。
+ * 分页查询搭配方案列表。
  */
 export async function listSchemes(
-  params?: { isTemplate?: boolean; tag?: string },
+  params?: { isTemplate?: boolean; tag?: string; page?: number; size?: number },
   options?: ApiOptions
-): Promise<SchemeSummary[]> {
-  const { data: result } = await apiClient.get<ApiResult<SchemeSummary[]>>('/v1/schemes', {
+): Promise<PageResult<SchemeSummary>> {
+  const { data: result } = await apiClient.get<ApiResult<PageResult<SchemeSummary>>>('/v1/schemes', {
     params,
     signal: options?.signal
   })
