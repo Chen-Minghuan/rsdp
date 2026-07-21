@@ -19,7 +19,8 @@ import {
   NModal,
   NForm,
   NFormItem,
-  NInput
+  NInput,
+  type DataTableColumns
 } from 'naive-ui'
 import { getProductDetail } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
@@ -353,7 +354,7 @@ function formatPrice(value: number | undefined): string {
   return `¥${value.toFixed(2)}`
 }
 
-const quoteColumns = [
+const quoteColumns: DataTableColumns<QuoteItem> = [
   { title: 'RSPU', key: 'rspuName' },
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },

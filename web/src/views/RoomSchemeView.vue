@@ -12,14 +12,15 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NDataTable,
-  NEmpty
+  NEmpty,
+  type DataTableColumns
 } from 'naive-ui'
 import { generateRoomScheme } from '@/api/matching'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import { PERMISSIONS } from '@/utils/constants'
-import type { RoomSchemeResponse } from '@/types/matching'
+import type { RoomSchemeResponse, AiSchemeItem } from '@/types/matching'
 import type { DictItem } from '@/types/dict'
 
 const router = useRouter()
@@ -43,7 +44,7 @@ const canGenerate = computed(() =>
 )
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 
-const schemeColumns = [
+const schemeColumns: DataTableColumns<AiSchemeItem> = [
   { title: 'RSPU', key: 'rspuName' },
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
@@ -123,7 +124,7 @@ onMounted(() => {
             style="width: 180px;"
             :loading="loadingDicts"
           />
-          <n-input-number v-model:value="budgetLimit" :min="1" placeholder="预算上限" style="width: 180px;">
+          <n-input-number v-model:value="budgetLimit" :min="0" :max="99999999" placeholder="预算上限" style="width: 180px;">
             <template #prefix>
               ¥
             </template>

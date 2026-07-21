@@ -97,7 +97,17 @@ class VectorBackfillServiceTest {
         verify(rspuMapper).updateById(rspuCaptor.capture());
         assertThat(rspuCaptor.getValue().getStyleVector()).isEqualTo("[0.1,0.2,0.3]");
 
-        verify(chromaDbClient).upsert(eq(List.of("IMG-001")), any(), any(), eq(null));
+        ArgumentCaptor<List<Map<String, Object>>> metadataCaptor = ArgumentCaptor.forClass(List.class);
+        verify(chromaDbClient).upsert(eq(List.of("IMG-001")), any(), metadataCaptor.capture(), eq(null));
+        Map<String, Object> metadata = metadataCaptor.getValue().get(0);
+        assertThat(metadata).containsEntry("rspu_id", "RSPU-001");
+        assertThat(metadata).containsEntry("status", "active");
+        assertThat(metadata).containsKey("category_code");
+        assertThat(metadata).containsKey("positioning_label");
+        assertThat(metadata).containsKey("color_primary_name");
+        assertThat(metadata).containsKey("material_tags");
+        assertThat(metadata).containsKey("scene_tags");
+        assertThat(metadata).containsEntry("image_size", 0L);
     }
 
     @Test

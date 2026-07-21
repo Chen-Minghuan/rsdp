@@ -1,3 +1,7 @@
+/** 图片加载失败时的统一占位图（灰色块 SVG data URI）。 */
+export const IMAGE_FALLBACK_SRC =
+  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='80' height='80'><rect width='100%25' height='100%25' fill='%23f0f0f0'/></svg>"
+
 // 角色常量
 export const ROLES = {
   ADMIN: 'ADMIN',

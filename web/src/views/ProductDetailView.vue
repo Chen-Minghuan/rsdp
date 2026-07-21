@@ -32,7 +32,7 @@ import { listFactories } from '@/api/factory'
 import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { PERMISSIONS, ROLES, IMAGE_FALLBACK_SRC } from '@/utils/constants'
 import type { ProductDetail, ProductSummary, ProductUpdateRequest, RelatedProduct, RecognitionHistoryItem } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuBatchCreateRequest, RskuBatchCreateResult, RskuBatchFactoryQuote, RskuCreateRequest } from '@/types/rsku'
@@ -374,7 +374,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
   }
 ]
 
-const variantColumns = [
+const variantColumns: DataTableColumns<RspuVariant> = [
   { title: '变体 ID', key: 'variantId', width: 180 },
   { title: '显示名称', key: 'displayName' },
   { title: '变体编码', key: 'variantCode', width: 120 },
@@ -1242,6 +1242,7 @@ onBeforeRouteUpdate((to, from) => {
                 v-for="img in detail.images"
                 :key="img.imageId"
                 :src="`/api/v1/images/${img.imageId}`"
+                :fallback-src="IMAGE_FALLBACK_SRC"
                 width="160"
                 height="160"
                 object-fit="cover"

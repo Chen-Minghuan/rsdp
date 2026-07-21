@@ -8,6 +8,7 @@ import com.rsdp.config.typehandler.JsonbTypeHandler;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * 审计日志实体。
@@ -35,16 +36,16 @@ public class AuditLog {
     private String action;
 
     /**
-     * 变更前快照（JSON）。
+     * 变更前快照（JSON 对象，敏感价格字段已加密）。
      */
     @TableField(typeHandler = JsonbTypeHandler.class)
-    private Object oldValue;
+    private Map<String, Object> oldValue;
 
     /**
-     * 变更后快照（JSON）。
+     * 变更后快照（JSON 对象，敏感价格字段已加密）。
      */
     @TableField(typeHandler = JsonbTypeHandler.class)
-    private Object newValue;
+    private Map<String, Object> newValue;
 
     /**
      * 操作人。

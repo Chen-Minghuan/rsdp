@@ -3,6 +3,7 @@ package com.rsdp.service;
 import com.rsdp.dto.DashScopeEmbeddingRequest;
 import com.rsdp.dto.DashScopeEmbeddingResponse;
 import com.rsdp.exception.ExternalServiceException;
+import com.rsdp.util.ImageResizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,6 +33,9 @@ public class EmbeddingService {
     /**
      * 根据图片流生成 embedding 向量。
      *
+     * <p>送 Embedding API 前会将长边超过 1024px 的图片等比缩放为 JPEG，
+     * 减少传输体积；缩放失败时降级使用原图，不阻断流程。</p>
+     *
      * @param imageStream 图片输入流
      * @return 浮点向量
      */
@@ -41,11 +45,20 @@ public class EmbeddingService {
             if (bytes.length == 0) {
                 throw new ExternalServiceException("图片流为空");
             }
-            String base64 = Base64.getEncoder().encodeToString(bytes);
+            String base64 = Base64.getEncoder().encodeToString(resizeIfNecessary(bytes));
             return embedImageBase64(base64);
         } catch (IOException e) {
             log.error("读取图片流失败", e);
             throw new ExternalServiceException("读取图片流失败", e);
+        }
+    }
+
+    private byte[] resizeIfNecessary(byte[] bytes) {
+        try {
+            return ImageResizer.resizeToJpeg(bytes, ImageResizer.DEFAULT_MAX_DIMENSION, ImageResizer.DEFAULT_JPEG_QUALITY);
+        } catch (Exception e) {
+            log.warn("图片缩放失败，降级使用原图生成 embedding: {}", e.getMessage());
+            return bytes;
         }
     }
 

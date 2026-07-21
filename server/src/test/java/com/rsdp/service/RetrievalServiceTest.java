@@ -14,7 +14,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
@@ -60,15 +59,14 @@ class RetrievalServiceTest {
     @Mock
     private DictService dictService;
 
-    private ObjectMapper objectMapper = new ObjectMapper();
-
-    @InjectMocks
     private RetrievalService retrievalService;
 
     @BeforeEach
     void setUp() {
-        injectField("objectMapper", objectMapper);
-        injectField("visionService", visionService);
+        // 构造函数注入真实 ObjectMapper，避免反射设值
+        retrievalService = new RetrievalService(
+            embeddingService, chromaDbClient, rspuMapper, imageAssetsMapper,
+            new ObjectMapper(), visionService, rspuStyleMapper, dictService);
         var user = User.withUsername("admin").password("").roles("ADMIN").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
@@ -77,16 +75,6 @@ class RetrievalServiceTest {
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
-    }
-
-    private void injectField(String fieldName, Object value) {
-        try {
-            java.lang.reflect.Field field = RetrievalService.class.getDeclaredField(fieldName);
-            field.setAccessible(true);
-            field.set(retrievalService, value);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
     }
 
     @Test

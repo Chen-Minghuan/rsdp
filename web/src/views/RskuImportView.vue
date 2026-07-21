@@ -11,9 +11,9 @@ import {
   NSwitch,
   NSpin
 } from 'naive-ui'
-import type { UploadFileInfo } from 'naive-ui'
+import type { UploadFileInfo, DataTableColumns } from 'naive-ui'
 import { importRskus, downloadRskuImportTemplate } from '@/api/rsku'
-import type { RskuImportResult } from '@/types/rsku'
+import type { RskuImportResult, RskuImportFailure } from '@/types/rsku'
 
 const router = useRouter()
 
@@ -24,7 +24,7 @@ const importing = ref(false)
 const errorMessage = ref('')
 const result = ref<RskuImportResult | null>(null)
 
-const failureColumns = [
+const failureColumns: DataTableColumns<RskuImportFailure> = [
   { title: '行号', key: 'rowIndex', width: 80 },
   { title: 'RSPU', key: 'rspuId', width: 140 },
   { title: '工厂', key: 'factoryCode', width: 120 },

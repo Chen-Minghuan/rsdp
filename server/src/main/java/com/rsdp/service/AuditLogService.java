@@ -2,6 +2,7 @@ package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rsdp.entity.AuditLog;
@@ -16,6 +17,7 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -36,6 +38,8 @@ public class AuditLogService {
     /**
      * 记录创建操作。
      *
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
+     *
      * @param tableName 表名
      * @param recordId  记录 ID
      * @param newValue  创建后对象
@@ -47,6 +51,8 @@ public class AuditLogService {
 
     /**
      * 记录更新操作。
+     *
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
      *
      * @param tableName 表名
      * @param recordId  记录 ID
@@ -61,6 +67,8 @@ public class AuditLogService {
     /**
      * 记录复核/状态变更操作。
      *
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
+     *
      * @param tableName 表名
      * @param recordId  记录 ID
      * @param oldValue  变更前对象
@@ -74,6 +82,8 @@ public class AuditLogService {
     /**
      * 记录删除操作。
      *
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
+     *
      * @param tableName 表名
      * @param recordId  记录 ID
      * @param oldValue  删除前对象
@@ -83,6 +93,13 @@ public class AuditLogService {
         insert(tableName, recordId, "DELETE", oldValue, null, operator);
     }
 
+    /**
+     * 审计写入。
+     *
+     * <p>事务策略：实际写入经 {@link AuditLogWriter} 异步线程执行，与业务事务完全解耦。
+     * 审计写入失败仅记录 ERROR 日志，不影响业务提交；代价是异步线程未执行前应用崩溃
+     * 可能丢失审计记录，视为可接受（审计为留痕而非业务强一致数据）。</p>
+     */
     private void insert(String tableName, String recordId, String action,
                         Object oldValue, Object newValue, String operator) {
         AuditLog logEntry = new AuditLog();
@@ -96,14 +113,15 @@ public class AuditLogService {
         auditLogWriter.write(logEntry);
     }
 
-    private Object truncateSnapshot(Object value) {
+    private Map<String, Object> truncateSnapshot(Map<String, Object> value) {
         if (value == null) {
             return null;
         }
         try {
             String json = objectMapper.writeValueAsString(value);
             if (json.length() > MAX_SNAPSHOT_LENGTH) {
-                return objectMapper.readTree(json.substring(0, MAX_SNAPSHOT_LENGTH) + "... [截断，原始长度=" + json.length() + "]");
+                return Map.of("truncated",
+                    json.substring(0, MAX_SNAPSHOT_LENGTH) + "... [截断，原始长度=" + json.length() + "]");
             }
             return value;
         } catch (Exception e) {
@@ -112,17 +130,24 @@ public class AuditLogService {
         }
     }
 
-    private Object sanitizeValue(Object value) {
+    private Map<String, Object> sanitizeValue(Object value) {
         if (value == null) {
             return null;
         }
         try {
             JsonNode tree = objectMapper.valueToTree(value);
             sanitizePriceFields(tree);
-            return tree;
+            return objectMapper.convertValue(tree, new TypeReference<Map<String, Object>>() {
+            });
         } catch (Exception e) {
             log.warn("审计日志快照价格字段加密失败，将原值写入: {}", e.getMessage());
-            return value;
+            try {
+                return objectMapper.convertValue(value, new TypeReference<Map<String, Object>>() {
+                });
+            } catch (Exception ex) {
+                log.warn("审计日志快照序列化失败，快照置空: {}", ex.getMessage());
+                return null;
+            }
         }
     }
 

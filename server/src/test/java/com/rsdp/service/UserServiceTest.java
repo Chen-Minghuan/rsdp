@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -199,6 +200,76 @@ class UserServiceTest {
         assertThat(captor.getValue().getGroupName()).isEqualTo("旧组");
         assertThat(response.getCompanyName()).isEqualTo("旧企业");
         assertThat(response.getGroupName()).isEqualTo("旧组");
+    }
+
+    @Test
+    void updateUser_shouldIncrementTokenVersionWhenRoleChanged() {
+        SysUser existing = buildUser("USER-011", "designer", "设计师");
+        when(sysUserMapper.selectById("USER-011")).thenReturn(existing);
+        when(sysRoleMapper.selectByRoleCode("EDITOR")).thenReturn(buildRole(4L, "EDITOR", "编辑"));
+        when(userRoleService.getRoleCodesByUserId("USER-011")).thenReturn(List.of("DESIGNER"));
+        when(userFactoryService.getFactoryCodesByUserId("USER-011")).thenReturn(List.of());
+
+        UserUpdateRequest request = new UserUpdateRequest();
+        request.setRoleCode("EDITOR");
+
+        userService.updateUser("USER-011", request);
+
+        // updateUser 自身写一次，incrementTokenVersion 再写一次，最终 tokenVersion 应从 null 递增为 1
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper, times(2)).updateById(captor.capture());
+        assertThat(captor.getValue().getTokenVersion()).isEqualTo(1);
+    }
+
+    @Test
+    void updateUser_shouldNotIncrementTokenVersionWhenRoleUnchanged() {
+        SysUser existing = buildUser("USER-012", "designer", "设计师");
+        existing.setTokenVersion(2);
+        when(sysUserMapper.selectById("USER-012")).thenReturn(existing);
+        when(sysRoleMapper.selectByRoleCode("DESIGNER")).thenReturn(buildRole(3L, "DESIGNER", "设计师"));
+        when(userRoleService.getRoleCodesByUserId("USER-012")).thenReturn(List.of("DESIGNER"));
+        when(userFactoryService.getFactoryCodesByUserId("USER-012")).thenReturn(List.of());
+
+        UserUpdateRequest request = new UserUpdateRequest();
+        request.setRoleCode("DESIGNER");
+
+        userService.updateUser("USER-012", request);
+
+        // 角色未变更：只写一次，tokenVersion 保持 2
+        verify(sysUserMapper, times(1)).updateById(any(SysUser.class));
+        assertThat(existing.getTokenVersion()).isEqualTo(2);
+    }
+
+    @Test
+    void resetPassword_shouldIncrementTokenVersion() {
+        SysUser existing = buildUser("USER-013", "designer", "设计师");
+        existing.setTokenVersion(0);
+        when(sysUserMapper.selectById("USER-013")).thenReturn(existing);
+        when(passwordEncoder.encode("newPass123")).thenReturn("encoded-hash");
+
+        userService.resetPassword("USER-013", "newPass123");
+
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper, times(2)).updateById(captor.capture());
+        SysUser saved = captor.getValue();
+        assertThat(saved.getPasswordHash()).isEqualTo("encoded-hash");
+        assertThat(saved.getTokenVersion()).isEqualTo(1);
+    }
+
+    @Test
+    void updateStatus_disabled_shouldIncrementTokenVersion() {
+        SysUser existing = buildUser("USER-014", "designer", "设计师");
+        existing.setTokenVersion(5);
+        when(sysUserMapper.selectById("USER-014")).thenReturn(existing);
+        when(userRoleService.getRoleCodesByUserId("USER-014")).thenReturn(List.of("DESIGNER"));
+        when(userFactoryService.getFactoryCodesByUserId("USER-014")).thenReturn(List.of());
+
+        UserResponse response = userService.updateStatus("USER-014", "disabled");
+
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper, times(2)).updateById(captor.capture());
+        assertThat(captor.getValue().getTokenVersion()).isEqualTo(6);
+        assertThat(response.getStatus()).isEqualTo("disabled");
     }
 
     private SysUser buildUser(String userId, String username, String nickname) {

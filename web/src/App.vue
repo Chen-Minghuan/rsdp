@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, type GlobalThemeOverrides, type DropdownOption } from 'naive-ui'
 import { computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, isNavigationFailure } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ROLES } from '@/utils/constants'
 import { navGroups, type NavGroup, type NavItem } from '@/config/navigation'
@@ -32,7 +32,11 @@ const themeOverrides: GlobalThemeOverrides = {
 }
 
 function navigate(path: string) {
-  router.push(path)
+  router.push(path).catch((failure) => {
+    // 重复点击同一路由产生的 NavigationFailure 直接忽略
+    if (isNavigationFailure(failure)) return
+    console.error('[navigate] 路由跳转失败', failure)
+  })
 }
 
 onMounted(async () => {

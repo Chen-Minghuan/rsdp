@@ -29,12 +29,15 @@ public class StorageProperties {
 
     /**
      * MinIO 配置子属性。
+     *
+     * <p>accessKey/secretKey 默认留空，启用 minio 存储时必须显式配置
+     * （生产经环境变量注入），启动时由 {@code MinioConfig} 校验。</p>
      */
     @Data
     public static class Minio {
         private String endpoint = "http://localhost:9000";
-        private String accessKey = "minioadmin";
-        private String secretKey = "minioadmin";
+        private String accessKey = "";
+        private String secretKey = "";
         private String bucketName = "rsdp";
     }
 }

@@ -12,7 +12,8 @@ import {
   NSelect,
   NSwitch,
   NPagination,
-  useMessage
+  useMessage,
+  type DataTableColumns
 } from 'naive-ui'
 import { h } from 'vue'
 import { listFactories } from '@/api/factory'
@@ -93,7 +94,7 @@ const roleOptions = [
   { label: '普通用户', value: 'USER' }
 ]
 
-const columns = [
+const columns: DataTableColumns<User> = [
   { title: '用户名', key: 'username' },
   { title: '昵称', key: 'nickname' },
   {

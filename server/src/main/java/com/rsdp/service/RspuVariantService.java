@@ -85,7 +85,8 @@ public class RspuVariantService {
         try {
             variantMapper.insert(variant);
         } catch (DataIntegrityViolationException e) {
-            if (e.getMessage() != null && e.getMessage().contains("idx_variant_unique_dims")) {
+            if (e.getMessage() != null
+                && (e.getMessage().contains("uk_variant_attrs") || e.getMessage().contains("idx_variant_unique_dims"))) {
                 // 并发下兜底：数据库部分唯一索引拦截的重复维度组合
                 throw new BusinessException("相同尺寸/颜色/材质的变体已存在");
             }

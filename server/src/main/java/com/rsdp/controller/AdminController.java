@@ -41,6 +41,8 @@ public class AdminController {
     /**
      * 触发存量图片向量回填。
      *
+     * <p>授权：URL 级规则 {@code /api/v1/admin/**} 要求 ADMIN 角色（见 SecurityConfig）。</p>
+     *
      * @param batchSize 单次处理数量，默认 100
      * @return 处理统计
      */

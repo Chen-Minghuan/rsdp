@@ -16,6 +16,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
  * 报价单接口。
  */
@@ -48,7 +50,9 @@ public class QuoteController {
     @PostMapping("/export")
     public ResponseEntity<byte[]> export(@Valid @RequestBody QuoteGenerateRequest request) {
         byte[] content = quoteExportService.exportQuote(request.getItems());
-        String filename = "quote_" + System.currentTimeMillis() + ".xlsx";
+        // 时间戳 + 8 位随机后缀，避免并发导出文件名重复
+        String filename = "quote_" + System.currentTimeMillis() + "_"
+            + UUID.randomUUID().toString().substring(0, 8) + ".xlsx";
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
             .contentType(MediaType.APPLICATION_OCTET_STREAM)
