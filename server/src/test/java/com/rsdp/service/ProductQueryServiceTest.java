@@ -336,6 +336,14 @@ class ProductQueryServiceTest {
     }
 
     @Test
+    void reviewProduct_shouldRejectInvalidReviewStatus() {
+        assertThatThrownBy(() -> productQueryService.reviewProduct("RSPU-TEST01", "随便填", null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无效的复核状态");
+        verify(rspuMapper, org.mockito.Mockito.never()).selectById(any(String.class));
+    }
+
+    @Test
     void updateProduct_shouldUpdateFieldsAndRelations() {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");

@@ -166,6 +166,46 @@ class RskuImportServiceTest {
     }
 
     @Test
+    void importRskus_shouldRejectInvalidQuoteConfidence() throws Exception {
+        // Given
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001,1500,FS-001,实木,30,10,3,广东,无差异,极高,S"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then
+        assertThat(result.getSuccessCount()).isEqualTo(0);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("报价置信度不存在");
+        verify(rskuSupplyMapper, org.mockito.Mockito.never()).insert(any(RskuSupply.class));
+    }
+
+    @Test
     void importRskus_shouldSkipExistingRowsWhenUpdateIfExistsFalse() throws Exception {
         // Given
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());

@@ -115,7 +115,7 @@ public class RskuImportService {
                 continue;
             }
             normalizeRow(row, productLevels, quoteConfidenceLevels);
-            String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels);
+            String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels, quoteConfidenceLevels);
             if (error != null) {
                 result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), error));
                 continue;
@@ -302,7 +302,8 @@ public class RskuImportService {
                                Map<String, RspuMaster> rspuMap,
                                Map<String, RspuVariant> variantMap,
                                Map<String, List<String>> capableLevelsMap,
-                               List<CategoryDict> productLevels) {
+                               List<CategoryDict> productLevels,
+                               List<CategoryDict> quoteConfidenceLevels) {
         if (!StringUtils.hasText(row.getRspuId())) {
             return "RSPU编码 不能为空";
         }
@@ -372,6 +373,11 @@ public class RskuImportService {
 
         if (StringUtils.hasText(row.getProductLevel()) && !isValidProductLevel(row.getProductLevel(), productLevels)) {
             return "产品等级不存在: " + row.getProductLevel();
+        }
+
+        if (StringUtils.hasText(row.getQuoteConfidence())
+            && quoteConfidenceLevels.stream().noneMatch(d -> row.getQuoteConfidence().equals(d.getDictCode()))) {
+            return "报价置信度不存在: " + row.getQuoteConfidence();
         }
 
         String productLevel = resolveProductLevel(row, variant, rspu);

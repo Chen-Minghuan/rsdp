@@ -94,6 +94,13 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('review_status', '存疑', '存疑', 3)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
+-- 报价置信度
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('quote_confidence', 'high', '高', 1),
+('quote_confidence', 'mid', '中', 2),
+('quote_confidence', 'low', '低', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
 -- 尺寸码
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('size', 'S', '小号', 1),

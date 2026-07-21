@@ -512,6 +512,9 @@ public class ProductQueryService {
      */
     @Transactional
     public void reviewProduct(String rspuId, String reviewStatus, String reviewComment) {
+        if (ReviewStatus.fromDbValue(reviewStatus) == null) {
+            throw new BusinessException("无效的复核状态: " + reviewStatus + "，仅支持 待复核/已确认/存疑");
+        }
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null || rspu.getDeletedAt() != null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
