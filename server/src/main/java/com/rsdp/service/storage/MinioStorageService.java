@@ -82,7 +82,7 @@ public class MinioStorageService implements StorageService {
     }
 
     @Override
-    public boolean exists(String objectKey) {
+    public boolean exists(String objectKey) throws IOException {
         String bucketName = storageProperties.getMinio().getBucketName();
         try {
             minioClient.statObject(
@@ -92,8 +92,15 @@ public class MinioStorageService implements StorageService {
                     .build()
             );
             return true;
-        } catch (Exception e) {
-            return false;
+        } catch (ErrorResponseException e) {
+            // 仅「对象不存在」返回 false；权限不足、桶不存在等其他错误按异常抛出，
+            // 避免调用方把存储故障误判为文件不存在
+            if (e.errorResponse() != null && "NoSuchKey".equals(e.errorResponse().code())) {
+                return false;
+            }
+            throw new IOException("MinIO 状态检查失败: " + objectKey, e);
+        } catch (MinioException | InvalidKeyException | NoSuchAlgorithmException e) {
+            throw new IOException("MinIO 状态检查失败: " + objectKey, e);
         }
     }
 

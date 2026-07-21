@@ -221,10 +221,10 @@ public class RskuImportService {
             }).sheet().doRead();
         } catch (IOException e) {
             log.error("读取 Excel 文件失败", e);
-            throw new BusinessException("读取 Excel 文件失败");
+            throw new BusinessException("读取 Excel 文件失败", e);
         } catch (Exception e) {
             log.error("解析 Excel 文件失败，请检查文件格式是否与模板一致", e);
-            throw new BusinessException("解析 Excel 文件失败，请检查文件格式是否与模板一致");
+            throw new BusinessException("解析 Excel 文件失败，请检查文件格式是否与模板一致", e);
         }
         return rows;
     }
