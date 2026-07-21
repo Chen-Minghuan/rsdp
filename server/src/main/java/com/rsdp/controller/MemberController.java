@@ -8,9 +8,11 @@ import com.rsdp.dto.request.MemberGroupAssignRequest;
 import com.rsdp.dto.request.MemberGroupRequest;
 import com.rsdp.dto.response.CompanyMemberResponse;
 import com.rsdp.dto.response.CompanyResponse;
+import com.rsdp.dto.response.InviteRecordResponse;
 import com.rsdp.dto.response.MemberGroupResponse;
 import com.rsdp.dto.response.MemberSearchResponse;
 import com.rsdp.service.CompanyService;
+import com.rsdp.service.InviteService;
 import com.rsdp.service.MemberGroupService;
 import com.rsdp.service.MemberService;
 import jakarta.validation.Valid;
@@ -43,6 +45,17 @@ public class MemberController {
     private final CompanyService companyService;
     private final MemberGroupService memberGroupService;
     private final MemberService memberService;
+    private final InviteService inviteService;
+
+    /**
+     * 查询当前用户的邀请记录（邀请裂变）。
+     *
+     * @return 邀请记录列表
+     */
+    @GetMapping("/invites")
+    public Result<List<InviteRecordResponse>> listMyInvites() {
+        return Result.ok(inviteService.listMyInvites());
+    }
 
     /**
      * 认证设计师：当前用户一键升级（挂标记，VIEWER/USER 补 DESIGNER 角色）。

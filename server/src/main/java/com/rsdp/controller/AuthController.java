@@ -2,8 +2,10 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.LoginRequest;
+import com.rsdp.dto.request.RegisterRequest;
 import com.rsdp.dto.request.UserPreferenceUpdateRequest;
 import com.rsdp.dto.response.LoginResponse;
+import com.rsdp.dto.response.RegisterResponse;
 import com.rsdp.dto.response.UserResponse;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.security.SecurityOperatorContext;
@@ -89,9 +91,23 @@ public class AuthController {
             loginResponse.getRoles(),
             loginResponse.getPermissions(),
             loginResponse.getViewFullCatalog(),
-            loginResponse.getFactoryCodes()
+            loginResponse.getFactoryCodes(),
+            loginResponse.getInviteCode(),
+            loginResponse.getCertifiedDesigner(),
+            loginResponse.getCompanyId()
         );
         return Result.ok(responseBody);
+    }
+
+    /**
+     * 公开注册（可携带邀请码归因）。
+     *
+     * @param request 注册请求
+     * @return 注册响应
+     */
+    @PostMapping("/register")
+    public Result<RegisterResponse> register(@Valid @RequestBody RegisterRequest request) {
+        return Result.ok(authService.register(request));
     }
 
     /**

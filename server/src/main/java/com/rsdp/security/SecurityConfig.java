@@ -49,6 +49,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // 公开接口
                 .requestMatchers("/api/v1/auth/login").permitAll()
+                .requestMatchers("/api/v1/auth/register").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/images/**").permitAll()
                 // 订单邀请公开页（免登录，token 自校验）
                 .requestMatchers("/api/v1/public/**").permitAll()

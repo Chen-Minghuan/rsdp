@@ -55,7 +55,8 @@ class AuthControllerTest {
     void login_shouldReturnUserInfoAndSetHttpOnlyCookie() throws Exception {
         LoginResponse response = new LoginResponse(
             "token-xxx", "Bearer", "USER-001", "admin", "管理员", "ADMIN",
-            List.of("ADMIN"), List.of("admin:user:manage"), false, List.of()
+            List.of("ADMIN"), List.of("admin:user:manage"), false, List.of(),
+            "ABCD2345", false, null
         );
         when(authService.login(any(), anyString())).thenReturn(response);
 

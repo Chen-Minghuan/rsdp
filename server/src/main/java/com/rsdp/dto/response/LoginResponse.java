@@ -24,4 +24,10 @@ public class LoginResponse {
     private List<String> permissions;
     private Boolean viewFullCatalog;
     private List<String> factoryCodes;
+    /** 永久邀请码（邀请链接 ?inviteCode= 使用） */
+    private String inviteCode;
+    /** 认证设计师标记 */
+    private Boolean certifiedDesigner;
+    /** 所属企业 ID（非空即企业账号） */
+    private String companyId;
 }

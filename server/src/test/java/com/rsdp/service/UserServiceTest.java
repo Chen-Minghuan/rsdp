@@ -63,6 +63,9 @@ class UserServiceTest {
     @Mock
     private PermissionService permissionService;
 
+    @Mock
+    private InviteService inviteService;
+
     @InjectMocks
     private UserService userService;
 
@@ -141,6 +144,7 @@ class UserServiceTest {
         when(sysUserMapper.selectByUsername("newbie")).thenReturn(null);
         when(sysRoleMapper.selectByRoleCode("DESIGNER")).thenReturn(buildRole(3L, "DESIGNER", "设计师"));
         when(passwordEncoder.encode("secret123")).thenReturn("hash");
+        when(inviteService.generateUniqueInviteCode()).thenReturn("WXYZ2345");
         when(userRoleService.getRoleCodesByUserId(anyString())).thenReturn(List.of("DESIGNER"));
         when(userFactoryService.getFactoryCodesByUserId(anyString())).thenReturn(List.of());
 
@@ -150,6 +154,7 @@ class UserServiceTest {
         verify(sysUserMapper).insert(captor.capture());
         assertThat(captor.getValue().getCompanyName()).isEqualTo("示例设计工作室");
         assertThat(captor.getValue().getGroupName()).isEqualTo("方案一组");
+        assertThat(captor.getValue().getInviteCode()).isEqualTo("WXYZ2345");
         assertThat(response.getCompanyName()).isEqualTo("示例设计工作室");
         assertThat(response.getGroupName()).isEqualTo("方案一组");
     }

@@ -1,13 +1,16 @@
 package com.rsdp.service;
 
 import com.rsdp.dto.request.LoginRequest;
+import com.rsdp.dto.request.RegisterRequest;
 import com.rsdp.dto.response.LoginResponse;
+import com.rsdp.dto.response.RegisterResponse;
 import com.rsdp.entity.SysUser;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.util.JwtUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -15,6 +18,7 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.List;
 import java.util.Set;
@@ -55,6 +59,15 @@ class AuthServiceTest {
 
     @Mock
     private LoginAttemptService loginAttemptService;
+
+    @Mock
+    private PasswordEncoder passwordEncoder;
+
+    @Mock
+    private InviteService inviteService;
+
+    @Mock
+    private AuditLogService auditLogService;
 
     @InjectMocks
     private AuthService authService;
@@ -146,5 +159,58 @@ class AuthServiceTest {
             .hasMessageContaining("登录尝试次数过多");
 
         verify(authenticationManager, never()).authenticate(any());
+    }
+
+    @Test
+    void register_success_shouldCreateViewerWithInviteCode() {
+        when(sysUserMapper.selectByUsername("newbie")).thenReturn(null);
+        when(passwordEncoder.encode("secret123")).thenReturn("hash");
+        when(inviteService.generateUniqueInviteCode()).thenReturn("ABCD2345");
+
+        RegisterRequest request = new RegisterRequest();
+        request.setUsername("newbie");
+        request.setPassword("secret123");
+
+        RegisterResponse response = authService.register(request);
+
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper).insert(captor.capture());
+        assertThat(captor.getValue().getInviteCode()).isEqualTo("ABCD2345");
+        assertThat(captor.getValue().getCertifiedDesigner()).isFalse();
+        assertThat(captor.getValue().getNickname()).isEqualTo("newbie");
+        verify(userRoleService).assignRoleByCode(any(), eq("VIEWER"));
+        verify(inviteService, never()).bindInviter(any(), any());
+        verify(auditLogService).logCreate(eq("sys_user"), any(), any(SysUser.class), eq("newbie"));
+        assertThat(response.getInviteCode()).isEqualTo("ABCD2345");
+    }
+
+    @Test
+    void register_withInviteCode_shouldBindInviter() {
+        when(sysUserMapper.selectByUsername("newbie")).thenReturn(null);
+        when(passwordEncoder.encode("secret123")).thenReturn("hash");
+        when(inviteService.generateUniqueInviteCode()).thenReturn("ABCD2345");
+
+        RegisterRequest request = new RegisterRequest();
+        request.setUsername("newbie");
+        request.setPassword("secret123");
+        request.setInviteCode("INV99999");
+
+        authService.register(request);
+
+        verify(inviteService).bindInviter(any(SysUser.class), eq("INV99999"));
+    }
+
+    @Test
+    void register_duplicateUsername_shouldThrow() {
+        when(sysUserMapper.selectByUsername("admin")).thenReturn(new SysUser());
+
+        RegisterRequest request = new RegisterRequest();
+        request.setUsername("admin");
+        request.setPassword("secret123");
+
+        assertThatThrownBy(() -> authService.register(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("用户名已存在");
+        verify(sysUserMapper, never()).insert(any(SysUser.class));
     }
 }

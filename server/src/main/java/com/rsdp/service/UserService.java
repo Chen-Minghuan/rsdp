@@ -47,6 +47,7 @@ public class UserService {
     private final UserRoleService userRoleService;
     private final UserFactoryService userFactoryService;
     private final PermissionService permissionService;
+    private final InviteService inviteService;
 
     /**
      * 分页查询用户列表。
@@ -111,6 +112,7 @@ public class UserService {
         user.setGroupName(request.getGroupName());
         user.setStatus("active");
         user.setViewFullCatalog(request.getViewFullCatalog() != null ? request.getViewFullCatalog() : false);
+        user.setInviteCode(inviteService.generateUniqueInviteCode());
         user.setCreatedAt(LocalDateTime.now());
         user.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.insert(user);
