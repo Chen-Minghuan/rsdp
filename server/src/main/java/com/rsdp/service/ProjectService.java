@@ -27,7 +27,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 import java.util.stream.Collectors;
 
 /**
@@ -40,6 +40,7 @@ public class ProjectService {
     private final ProjectMapper projectMapper;
     private final SchemeMapper schemeMapper;
     private final SysUserMapper sysUserMapper;
+    private final AuditLogService auditLogService;
 
     /**
      * 分页查询项目列表。
@@ -83,7 +84,7 @@ public class ProjectService {
     public ProjectResponse create(ProjectRequest request) {
         String userId = currentUserIdRequired();
         Project project = new Project();
-        project.setProjectId("PROJ-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        project.setProjectId(IdGenerator.projectId());
         project.setProjectName(request.getProjectName().trim());
         project.setProjectType(StringUtils.hasText(request.getProjectType()) ? request.getProjectType() : null);
         project.setCompanyName(resolveCompanyName(request, userId));
@@ -93,6 +94,7 @@ public class ProjectService {
         project.setCreatedAt(LocalDateTime.now());
         project.setUpdatedAt(LocalDateTime.now());
         projectMapper.insert(project);
+        auditLogService.logCreate("project", project.getProjectId(), project, currentUsername());
         return toResponse(project, null);
     }
 
@@ -146,6 +148,7 @@ public class ProjectService {
     @Transactional
     public ProjectResponse update(String projectId, ProjectRequest request) {
         Project project = getAccessibleProject(projectId);
+        Project oldSnapshot = snapshot(project);
         if (StringUtils.hasText(request.getProjectName())) {
             project.setProjectName(request.getProjectName().trim());
         }
@@ -160,6 +163,7 @@ public class ProjectService {
         }
         project.setUpdatedAt(LocalDateTime.now());
         projectMapper.updateById(project);
+        auditLogService.logUpdate("project", projectId, oldSnapshot, project, currentUsername());
         Map<String, SchemeStats> statsMap = batchSchemeStats(List.of(projectId));
         return toResponse(project, statsMap.get(projectId));
     }
@@ -171,11 +175,13 @@ public class ProjectService {
      */
     @Transactional
     public void delete(String projectId) {
-        getAccessibleProject(projectId);
+        Project project = getAccessibleProject(projectId);
+        Project oldSnapshot = snapshot(project);
         projectMapper.deleteById(projectId);
         schemeMapper.update(null, new UpdateWrapper<Scheme>()
             .eq("project_id", projectId)
             .set("project_id", null));
+        auditLogService.logDelete("project", projectId, oldSnapshot, currentUsername());
     }
 
     /**
@@ -202,6 +208,25 @@ public class ProjectService {
             throw new BusinessException("无法获取当前用户 ID");
         }
         return userId;
+    }
+
+    private String currentUsername() {
+        String username = SecurityOperatorContext.currentUsername();
+        return StringUtils.hasText(username) ? username : "unknown";
+    }
+
+    private Project snapshot(Project source) {
+        Project copy = new Project();
+        copy.setProjectId(source.getProjectId());
+        copy.setProjectName(source.getProjectName());
+        copy.setProjectType(source.getProjectType());
+        copy.setCompanyName(source.getCompanyName());
+        copy.setOwnerId(source.getOwnerId());
+        copy.setRemark(source.getRemark());
+        copy.setStatus(source.getStatus());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        return copy;
     }
 
     private ProjectResponse toResponse(Project project, SchemeStats stats) {

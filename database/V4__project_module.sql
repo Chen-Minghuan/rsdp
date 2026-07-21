@@ -6,9 +6,9 @@
 
 -- 收藏夹：用户级产品收藏，支持分组
 CREATE TABLE IF NOT EXISTS user_favorite (
-    favorite_id VARCHAR(40) PRIMARY KEY,
+    favorite_id VARCHAR(64) PRIMARY KEY,
     user_id     VARCHAR(64) NOT NULL REFERENCES sys_user (user_id),
-    rspu_id     VARCHAR(40) NOT NULL REFERENCES rspu_master (rspu_id),
+    rspu_id     VARCHAR(64) NOT NULL REFERENCES rspu_master (rspu_id),
     group_name  VARCHAR(64),
     created_at  TIMESTAMP   NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, rspu_id)
@@ -23,7 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite (user_id, created_
 
 -- 设计项目表（owner_id 与 sys_user.user_id 类型一致，使用 VARCHAR(64)）
 CREATE TABLE IF NOT EXISTS project (
-    project_id    VARCHAR(40) PRIMARY KEY,
+    project_id    VARCHAR(64) PRIMARY KEY,
     project_name  VARCHAR(128) NOT NULL,
     project_type  VARCHAR(32),
     company_name  VARCHAR(128),
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS project (
 CREATE INDEX IF NOT EXISTS idx_project_owner ON project (owner_id) WHERE deleted_at IS NULL;
 
 -- 方案表扩展：项目归属 + 模板化（template_tags 存 JSON 字符串，与项目 TEXT 约定一致）
-ALTER TABLE scheme ADD COLUMN IF NOT EXISTS project_id VARCHAR(40) REFERENCES project (project_id);
+ALTER TABLE scheme ADD COLUMN IF NOT EXISTS project_id VARCHAR(64) REFERENCES project (project_id);
 ALTER TABLE scheme ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE scheme ADD COLUMN IF NOT EXISTS template_tags TEXT;
 CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme (project_id) WHERE deleted_at IS NULL;

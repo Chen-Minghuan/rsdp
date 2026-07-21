@@ -26,7 +26,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -41,7 +42,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 import java.util.stream.Collectors;
 
 /**
@@ -64,6 +65,7 @@ public class RskuImportService {
     private final AuditLogService auditLogService;
     private final PriceHistoryMapper priceHistoryMapper;
     private final DataScopeHelper dataScopeHelper;
+    private final PlatformTransactionManager transactionManager;
 
     /**
      * 批量导入 RSKU 报价。
@@ -103,6 +105,7 @@ public class RskuImportService {
         }
 
         Set<String> processedKeys = new HashSet<>();
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
 
         int rowIndex = 1; // Excel 行号，第 1 行为表头，数据从第 2 行开始
         for (RskuImportRow row : rows) {
@@ -112,7 +115,7 @@ public class RskuImportService {
                 continue;
             }
             normalizeRow(row, productLevels, quoteConfidenceLevels);
-            String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels);
+            String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels, quoteConfidenceLevels);
             if (error != null) {
                 result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), error));
                 continue;
@@ -130,13 +133,19 @@ public class RskuImportService {
             try {
                 if (existing != null) {
                     if (updateIfExists) {
-                        updateSingleRsku(existing, row, productLevel);
+                        transactionTemplate.execute(status -> {
+                            updateSingleRsku(existing, row, productLevel);
+                            return null;
+                        });
                         result.setSuccessCount(result.getSuccessCount() + 1);
                     } else {
                         result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "该工厂对该变体已有报价，已跳过"));
                     }
                 } else {
-                    insertSingleRsku(buildRskuSupply(row, productLevel));
+                    transactionTemplate.execute(status -> {
+                        insertSingleRsku(buildRskuSupply(row, productLevel));
+                        return null;
+                    });
                     result.setSuccessCount(result.getSuccessCount() + 1);
                 }
             } catch (DataIntegrityViolationException e) {
@@ -158,24 +167,22 @@ public class RskuImportService {
     }
 
     /**
-     * 在独立事务中插入单条 RSKU 报价。
+     * 插入单条 RSKU 报价。调用方必须通过 {@link TransactionTemplate} 开启独立事务。
      *
      * @param rsku 待插入的 RSKU
      */
-    @Transactional
     protected void insertSingleRsku(RskuSupply rsku) {
         rskuSupplyMapper.insert(rsku);
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
     }
 
     /**
-     * 在独立事务中更新单条 RSKU 报价，并记录价格历史。
+     * 更新单条 RSKU 报价，并记录价格历史。调用方必须通过 {@link TransactionTemplate} 开启独立事务。
      *
      * @param existing     现有报价
      * @param row          导入行
      * @param productLevel 解析后的产品等级
      */
-    @Transactional
     protected void updateSingleRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
         RskuSupply oldSnapshot = snapshot(existing);
         BigDecimal oldPrice = updateExistingRsku(existing, row, productLevel);
@@ -214,10 +221,10 @@ public class RskuImportService {
             }).sheet().doRead();
         } catch (IOException e) {
             log.error("读取 Excel 文件失败", e);
-            throw new BusinessException("读取 Excel 文件失败");
+            throw new BusinessException("读取 Excel 文件失败", e);
         } catch (Exception e) {
             log.error("解析 Excel 文件失败，请检查文件格式是否与模板一致", e);
-            throw new BusinessException("解析 Excel 文件失败，请检查文件格式是否与模板一致");
+            throw new BusinessException("解析 Excel 文件失败，请检查文件格式是否与模板一致", e);
         }
         return rows;
     }
@@ -295,7 +302,8 @@ public class RskuImportService {
                                Map<String, RspuMaster> rspuMap,
                                Map<String, RspuVariant> variantMap,
                                Map<String, List<String>> capableLevelsMap,
-                               List<CategoryDict> productLevels) {
+                               List<CategoryDict> productLevels,
+                               List<CategoryDict> quoteConfidenceLevels) {
         if (!StringUtils.hasText(row.getRspuId())) {
             return "RSPU编码 不能为空";
         }
@@ -365,6 +373,11 @@ public class RskuImportService {
 
         if (StringUtils.hasText(row.getProductLevel()) && !isValidProductLevel(row.getProductLevel(), productLevels)) {
             return "产品等级不存在: " + row.getProductLevel();
+        }
+
+        if (StringUtils.hasText(row.getQuoteConfidence())
+            && quoteConfidenceLevels.stream().noneMatch(d -> row.getQuoteConfidence().equals(d.getDictCode()))) {
+            return "报价置信度不存在: " + row.getQuoteConfidence();
         }
 
         String productLevel = resolveProductLevel(row, variant, rspu);
@@ -445,7 +458,7 @@ public class RskuImportService {
 
     private RskuSupply buildRskuSupply(RskuImportRow row, String productLevel) {
         RskuSupply rsku = new RskuSupply();
-        rsku.setRskuId("RSKU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        rsku.setRskuId(IdGenerator.rskuId());
         rsku.setRspuId(row.getRspuId().trim());
         rsku.setVariantId(row.getVariantId().trim());
         rsku.setFactoryCode(row.getFactoryCode().trim());

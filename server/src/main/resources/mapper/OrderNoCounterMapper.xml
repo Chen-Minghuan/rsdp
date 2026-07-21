@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.rsdp.mapper.OrderNoCounterMapper">
+
+    <select id="allocateSequence" resultType="java.lang.Long">
+        INSERT INTO order_no_counter (date_part, sequence_value, updated_at)
+        VALUES (#{datePart}, 1, CURRENT_TIMESTAMP)
+        ON CONFLICT (date_part)
+        DO UPDATE SET sequence_value = order_no_counter.sequence_value + 1,
+                      updated_at = CURRENT_TIMESTAMP
+        RETURNING sequence_value
+    </select>
+
+</mapper>

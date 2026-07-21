@@ -10,6 +10,7 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.SecurityUser;
 import com.rsdp.service.AuthService;
 import com.rsdp.service.UserService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,9 @@ public class AuthController {
     private final AuthService authService;
     private final UserService userService;
 
+    @Value("${rsdp.security.login.trusted-proxy-count:0}")
+    private int trustedProxyCount;
+
     @Value("${rsdp.jwt.cookie-name:rsdp_token}")
     private String cookieName;
 
@@ -59,8 +63,11 @@ public class AuthController {
      * @return 用户信息（不含 token）
      */
     @PostMapping("/login")
-    public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request, HttpServletResponse response) {
-        LoginResponse loginResponse = authService.login(request);
+    public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request,
+                                       HttpServletRequest httpRequest,
+                                       HttpServletResponse response) {
+        String ip = extractClientIp(httpRequest);
+        LoginResponse loginResponse = authService.login(request, ip);
 
         ResponseCookie cookie = ResponseCookie.from(cookieName, loginResponse.getToken())
             .httpOnly(true)
@@ -137,5 +144,19 @@ public class AuthController {
             throw new BusinessException("用户未登录");
         }
         return Result.ok(userService.updateMyPreferences(userId, request));
+    }
+
+    private String extractClientIp(HttpServletRequest request) {
+        // 默认不信任任何代理，防止客户端伪造 X-Forwarded-For。
+        // 若部署在可信反向代理后，可通过 rsdp.security.login.trusted-proxy-count 配置代理层数。
+        String xff = request.getHeader("X-Forwarded-For");
+        if (trustedProxyCount > 0 && StringUtils.hasText(xff)) {
+            String[] parts = xff.split(",");
+            int index = parts.length - trustedProxyCount;
+            if (index >= 0) {
+                return parts[index].trim();
+            }
+        }
+        return request.getRemoteAddr();
     }
 }

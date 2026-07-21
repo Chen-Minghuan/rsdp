@@ -49,6 +49,9 @@ class ProjectServiceTest {
     @Mock
     private SysUserMapper sysUserMapper;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private ProjectService projectService;
 

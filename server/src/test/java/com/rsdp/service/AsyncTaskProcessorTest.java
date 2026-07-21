@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -90,7 +91,26 @@ class AsyncTaskProcessorTest {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
         rspu.setCategoryCode("FS");
-        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        lenient().when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        // 默认任务可被认领（pending → processing）；认领失败场景在单个用例中覆盖为 0
+        lenient().when(asyncTaskMapper.claimPendingTask(anyString())).thenReturn(1);
+    }
+
+    @Test
+    void processProductEntry_shouldSkipWhenTaskAlreadyClaimed() {
+        // Given：任务已被其他执行器认领或不处于 pending 状态
+        when(asyncTaskMapper.claimPendingTask(taskId)).thenReturn(0);
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then：不再读取图片、不调用 AI、不更新任务状态
+        verify(asyncTaskMapper, times(0)).updateById(any(AsyncTask.class));
+        verify(persistenceService, times(0)).saveSuccess(anyString(), anyString(), anyString(),
+            anyString(), anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), any());
+        verify(persistenceService, times(0)).saveFailure(anyString(), anyString(), anyString(),
+            anyString(), anyString(), any());
+        verify(visionService, times(0)).recognizeImage(any(), any());
     }
 
     @Test
@@ -152,7 +172,7 @@ class AsyncTaskProcessorTest {
         assertThat(metadata).containsKey("color_primary_name");
 
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
-        verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());
+        verify(asyncTaskMapper, times(2)).updateById(taskCaptor.capture());
         AsyncTask finalTask = taskCaptor.getValue();
         assertThat(finalTask.getStatus()).isEqualTo("done");
         assertThat(finalTask.getProgress()).isEqualTo(100);
@@ -189,7 +209,7 @@ class AsyncTaskProcessorTest {
 
         // Then
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
-        verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());
+        verify(asyncTaskMapper, times(2)).updateById(taskCaptor.capture());
         AsyncTask finalTask = taskCaptor.getValue();
         assertThat(finalTask.getStatus()).isEqualTo("partial_success");
         assertThat(finalTask.getProgress()).isEqualTo(100);
@@ -218,7 +238,7 @@ class AsyncTaskProcessorTest {
         verify(rspuVariantService).initializeDefaultVariant(eq(rspuId), any(AiLabels.class));
         verify(chromaDbClient, times(0)).upsert(any(), any(), any(), any());
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
-        verify(asyncTaskMapper, times(3)).updateById(taskCaptor.capture());
+        verify(asyncTaskMapper, times(2)).updateById(taskCaptor.capture());
         AsyncTask finalTask = taskCaptor.getValue();
         assertThat(finalTask.getStatus()).isEqualTo("partial_success");
         assertThat(finalTask.getProgress()).isEqualTo(100);

@@ -10,6 +10,7 @@ import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryLeadTimeRuleMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +34,7 @@ public class FactoryLeadTimeRuleService {
     private final FactoryMasterMapper factoryMasterMapper;
     private final DictService dictService;
     private final AuditLogService auditLogService;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 创建或更新交期规则。
@@ -42,6 +44,9 @@ public class FactoryLeadTimeRuleService {
      */
     @Transactional
     public Long saveRule(FactoryLeadTimeRuleRequest request) {
+        if (!dataScopeHelper.canAccessFactory(request.getFactoryCode())) {
+            throw new BusinessException("无权限维护该工厂的交期规则: " + request.getFactoryCode());
+        }
         validateRequest(request);
 
         FactoryLeadTimeRule rule;
@@ -104,6 +109,9 @@ public class FactoryLeadTimeRuleService {
         FactoryLeadTimeRule rule = ruleMapper.selectById(ruleId);
         if (rule == null) {
             throw new ResourceNotFoundException("交期规则不存在: " + ruleId);
+        }
+        if (!dataScopeHelper.canAccessFactory(rule.getFactoryCode())) {
+            throw new BusinessException("无权限维护该工厂的交期规则: " + rule.getFactoryCode());
         }
         ruleMapper.deleteById(ruleId);
         auditLogService.logDelete("factory_lead_time_rule", String.valueOf(ruleId), rule,

@@ -42,6 +42,8 @@ public class FactoryService {
     private final AuditLogService auditLogService;
     private final DataScopeHelper dataScopeHelper;
 
+    private static final int MAX_LIST_SIZE = 1000;
+
     /**
      * 查询所有有效工厂。
      *
@@ -52,6 +54,7 @@ public class FactoryService {
             new QueryWrapper<FactoryMaster>()
                 .eq("status", "active")
                 .orderByDesc("created_at")
+                .last("LIMIT " + MAX_LIST_SIZE)
         );
         List<String> factoryCodes = factories.stream()
             .map(FactoryMaster::getFactoryCode)

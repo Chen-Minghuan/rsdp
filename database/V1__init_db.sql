@@ -323,7 +323,7 @@ CREATE TABLE IF NOT EXISTS scheme (
     max_lead_time_days INTEGER,                      -- 最长交期
     item_count INTEGER,                              -- 方案项数
     status VARCHAR(16) DEFAULT 'active',
-    project_id VARCHAR(40),                          -- 所属设计项目（V4 并入）
+    project_id VARCHAR(64),                          -- 所属设计项目（V4 并入）
     is_template BOOLEAN NOT NULL DEFAULT false,      -- 是否为方案模板（V4 并入）
     template_tags TEXT,                              -- 模板标签 JSON 数组（V4 并入）
     created_by VARCHAR(64),
@@ -373,7 +373,7 @@ CREATE TABLE IF NOT EXISTS async_task (
 
 -- Excel AI 辅助导入批次表
 CREATE TABLE IF NOT EXISTS excel_import_batch (
-    batch_id VARCHAR(32) PRIMARY KEY,
+    batch_id VARCHAR(64) PRIMARY KEY,
     file_name VARCHAR(255) NOT NULL,
     storage_path VARCHAR(512),                      -- 原始 Excel 文件存储路径
     status VARCHAR(20) DEFAULT 'pending',
@@ -423,10 +423,12 @@ CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, statu
 CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
 
 -- 多值标签索引
 CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_scene ON rspu_scene(scene_code);
+CREATE INDEX IF NOT EXISTS idx_rspu_style_rspu ON rspu_style(rspu_id, style_code);
 
 -- 变体表索引
 CREATE INDEX IF NOT EXISTS idx_variant_rspu ON rspu_variant(rspu_id, status);
@@ -465,6 +467,7 @@ CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_a
 CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_variant ON image_assets(variant_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_primary ON image_assets(rspu_id, is_primary);
+CREATE INDEX IF NOT EXISTS idx_image_rsku ON image_assets(rsku_id);
 
 -- AI 识别索引
 CREATE INDEX IF NOT EXISTS idx_ai_image ON ai_recognition(image_id, recognition_type);
@@ -765,9 +768,9 @@ CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(c
 
 -- 收藏夹（V4 并入）：用户级产品收藏，支持分组
 CREATE TABLE IF NOT EXISTS user_favorite (
-    favorite_id VARCHAR(40) PRIMARY KEY,
+    favorite_id VARCHAR(64) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    rspu_id VARCHAR(40) NOT NULL REFERENCES rspu_master(rspu_id),
+    rspu_id VARCHAR(64) NOT NULL REFERENCES rspu_master(rspu_id),
     group_name VARCHAR(64),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, rspu_id)
@@ -776,7 +779,7 @@ CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_a
 
 -- 设计项目（V4 并入）
 CREATE TABLE IF NOT EXISTS project (
-    project_id VARCHAR(40) PRIMARY KEY,
+    project_id VARCHAR(64) PRIMARY KEY,
     project_name VARCHAR(128) NOT NULL,
     project_type VARCHAR(32),
     company_name VARCHAR(128),
@@ -792,16 +795,16 @@ CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_
 
 -- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
 CREATE TABLE IF NOT EXISTS design_order (
-    order_id VARCHAR(40) PRIMARY KEY,
+    order_id VARCHAR(64) PRIMARY KEY,
     order_no VARCHAR(32) NOT NULL UNIQUE,
-    project_id VARCHAR(40) REFERENCES project(project_id),
+    project_id VARCHAR(64) REFERENCES project(project_id),
     scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
     receiver_name VARCHAR(64),
     receiver_phone VARCHAR(32),
     receiver_area VARCHAR(128),
     receiver_address VARCHAR(256),
     original_total_price TEXT,
-    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1,
+    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1 CHECK (price_rate >= 0 AND price_rate <= 1),
     final_total_price TEXT,
     item_count INT NOT NULL DEFAULT 0,
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
@@ -817,17 +820,26 @@ CREATE TABLE IF NOT EXISTS design_order (
 );
 CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_design_order_project ON design_order(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_design_order_scheme ON design_order(scheme_id) WHERE deleted_at IS NULL;
+
+-- 订单号每日序号计数器（解决 COUNT+1 在软删除下与唯一索引冲突的问题）
+CREATE TABLE IF NOT EXISTS order_no_counter (
+    date_part VARCHAR(16) PRIMARY KEY,
+    sequence_value BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- 订单明细（V5 并入）
 CREATE TABLE IF NOT EXISTS design_order_item (
     id BIGSERIAL PRIMARY KEY,
-    order_id VARCHAR(40) NOT NULL REFERENCES design_order(order_id),
-    rspu_id VARCHAR(40) NOT NULL,
-    rsku_id VARCHAR(40),
-    variant_id VARCHAR(40),
+    order_id VARCHAR(64) NOT NULL REFERENCES design_order(order_id),
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64),
+    variant_id VARCHAR(64),
     product_name VARCHAR(256),
     model VARCHAR(128),
-    image_id VARCHAR(40),
+    image_id VARCHAR(64),
     quantity INT NOT NULL DEFAULT 1,
     original_price TEXT,
     final_price TEXT,

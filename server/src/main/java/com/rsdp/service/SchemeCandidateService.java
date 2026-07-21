@@ -54,6 +54,8 @@ public class SchemeCandidateService {
         return enrichSingle(candidate);
     }
 
+    private static final int MAX_LIST_SIZE = 1000;
+
     /**
      * 根据推荐请求 ID 查询候选清单。
      *
@@ -63,7 +65,8 @@ public class SchemeCandidateService {
     public List<SchemeCandidateResponse> listByRequestId(String recommendRequestId) {
         QueryWrapper<SchemeCandidate> wrapper = new QueryWrapper<SchemeCandidate>()
             .eq("recommend_request_id", recommendRequestId)
-            .orderByDesc("score");
+            .orderByDesc("score")
+            .last("LIMIT " + MAX_LIST_SIZE);
         if (!SecurityOperatorContext.isPlatformStaff()) {
             wrapper.eq("created_by", SecurityOperatorContext.currentUsername());
         }
@@ -80,6 +83,7 @@ public class SchemeCandidateService {
             new QueryWrapper<SchemeCandidate>()
                 .eq("created_by", SecurityOperatorContext.currentUsername())
                 .orderByDesc("score")
+                .last("LIMIT " + MAX_LIST_SIZE)
         );
         return enrich(candidates);
     }

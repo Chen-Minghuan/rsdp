@@ -20,8 +20,10 @@ import com.rsdp.mapper.FactoryProductCapabilityMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
@@ -89,6 +91,12 @@ class ProductQueryServiceTest {
 
     @Mock
     private RspuSceneMapper rspuSceneMapper;
+
+    @Mock
+    private RspuVariantMapper rspuVariantMapper;
+
+    @Mock
+    private RspuRelationMapper rspuRelationMapper;
 
     @Mock
     private ProductStyleMatchMapper productStyleMatchMapper;
@@ -336,6 +344,14 @@ class ProductQueryServiceTest {
     }
 
     @Test
+    void reviewProduct_shouldRejectInvalidReviewStatus() {
+        assertThatThrownBy(() -> productQueryService.reviewProduct("RSPU-TEST01", "随便填", null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无效的复核状态");
+        verify(rspuMapper, org.mockito.Mockito.never()).selectById(any(String.class));
+    }
+
+    @Test
     void updateProduct_shouldUpdateFieldsAndRelations() {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
@@ -522,6 +538,13 @@ class ProductQueryServiceTest {
         productQueryService.deleteProduct("RSPU-TEST01");
 
         verify(rspuMapper).deleteById("RSPU-TEST01");
+        // 级联：变体/报价/图片/搭配关系软删，风格/场景关联行物理删除
+        verify(rspuVariantMapper).delete(any());
+        verify(rskuSupplyMapper).delete(any());
+        verify(imageAssetsMapper).delete(any());
+        verify(rspuRelationMapper).delete(any());
+        verify(rspuStyleMapper).delete(any());
+        verify(rspuSceneMapper).delete(any());
         verify(auditLogService).logDelete(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq("admin"));
 
         ArgumentCaptor<RspuDeletedEvent> eventCaptor = ArgumentCaptor.forClass(RspuDeletedEvent.class);

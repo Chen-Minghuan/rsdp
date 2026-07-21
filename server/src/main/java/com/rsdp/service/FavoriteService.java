@@ -20,7 +20,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 import java.util.stream.Collectors;
 
 /**
@@ -57,7 +57,7 @@ public class FavoriteService {
         }
 
         UserFavorite favorite = new UserFavorite();
-        favorite.setFavoriteId("FAV-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        favorite.setFavoriteId(IdGenerator.favoriteId());
         favorite.setUserId(userId);
         favorite.setRspuId(request.getRspuId());
         favorite.setGroupName(StringUtils.hasText(request.getGroupName()) ? request.getGroupName().trim() : null);

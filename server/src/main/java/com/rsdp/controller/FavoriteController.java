@@ -7,6 +7,8 @@ import com.rsdp.service.FavoriteService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import com.rsdp.security.Permissions;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -37,6 +39,7 @@ public class FavoriteController {
      * @return 收藏记录
      */
     @PostMapping
+    @PreAuthorize("hasAuthority('" + Permissions.FAVORITE_WRITE + "')")
     public Result<FavoriteResponse> add(@RequestBody @Valid FavoriteRequest request) {
         return Result.ok(favoriteService.add(request));
     }
@@ -48,6 +51,7 @@ public class FavoriteController {
      * @return 空结果
      */
     @DeleteMapping("/{rspuId}")
+    @PreAuthorize("hasAuthority('" + Permissions.FAVORITE_WRITE + "')")
     public Result<Void> remove(@PathVariable @NotBlank(message = "产品 ID 不能为空") String rspuId) {
         favoriteService.remove(rspuId);
         return Result.ok();
@@ -60,6 +64,7 @@ public class FavoriteController {
      * @return 收藏列表
      */
     @GetMapping
+    @PreAuthorize("hasAuthority('" + Permissions.FAVORITE_READ + "')")
     public Result<List<FavoriteResponse>> list(@RequestParam(required = false) String group) {
         return Result.ok(favoriteService.list(group));
     }
@@ -71,6 +76,7 @@ public class FavoriteController {
      * @return 已收藏的产品 ID 列表
      */
     @GetMapping("/check")
+    @PreAuthorize("hasAuthority('" + Permissions.FAVORITE_READ + "')")
     public Result<List<String>> check(@RequestParam List<String> rspuIds) {
         return Result.ok(favoriteService.check(rspuIds));
     }

@@ -48,8 +48,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
+
+import com.rsdp.util.IdGenerator;
 
 /**
  * 搭配方案服务。
@@ -68,6 +69,7 @@ public class SchemeService {
     private final DataScopeHelper dataScopeHelper;
     private final ProjectService projectService;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
     /**
      * 创建搭配方案。
@@ -84,7 +86,7 @@ public class SchemeService {
             throw new BusinessException("方案名称不能为空");
         }
 
-        String schemeId = "SCHEME-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String schemeId = IdGenerator.schemeId();
 
         // 按 rskuId 去重并聚合数量，保留第一次出现的顺序
         Map<String, SchemeItemRequest> uniqueItemMap = new java.util.LinkedHashMap<>();
@@ -165,12 +167,13 @@ public class SchemeService {
         scheme.setMaxLeadTimeDays(maxLeadTimeDays);
         scheme.setItemCount(distinctItems.size());
         scheme.setStatus("active");
-        scheme.setCreatedBy(SecurityOperatorContext.currentUsername());
+        scheme.setCreatedBy(currentUsername());
         scheme.setCreatedAt(LocalDateTime.now());
         schemeMapper.insert(scheme);
 
         schemeItemMapper.insertBatchSafe(schemeItems);
 
+        auditLogService.logCreate("scheme", schemeId, scheme, scheme.getCreatedBy());
         return getSchemeDetail(schemeId);
     }
 
@@ -196,6 +199,7 @@ public class SchemeService {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
         assertSchemeOwnerOrAdmin(scheme);
+        Scheme oldSnapshot = snapshot(scheme);
 
         // 按 rskuId 去重并聚合数量，保留第一次出现的顺序
         Map<String, SchemeItemRequest> uniqueItemMap = new java.util.LinkedHashMap<>();
@@ -278,6 +282,7 @@ public class SchemeService {
         scheme.setItemCount(distinctItems.size());
         scheme.setUpdatedAt(LocalDateTime.now());
         schemeMapper.updateById(scheme);
+        auditLogService.logUpdate("scheme", schemeId, oldSnapshot, scheme, currentUsername());
 
         schemeItemMapper.insertBatchSafe(schemeItems);
 
@@ -302,10 +307,35 @@ public class SchemeService {
         if (SecurityOperatorContext.isCurrentUserAdmin()) {
             return;
         }
-        String currentUser = SecurityOperatorContext.currentUsername();
+        String currentUser = currentUsername();
         if (scheme.getCreatedBy() == null || !scheme.getCreatedBy().equals(currentUser)) {
             throw new BusinessException("无权操作该方案");
         }
+    }
+
+    private String currentUsername() {
+        String username = SecurityOperatorContext.currentUsername();
+        return StringUtils.hasText(username) ? username : "unknown";
+    }
+
+    private Scheme snapshot(Scheme source) {
+        Scheme copy = new Scheme();
+        copy.setSchemeId(source.getSchemeId());
+        copy.setSchemeName(source.getSchemeName());
+        copy.setRoomType(source.getRoomType());
+        copy.setProjectId(source.getProjectId());
+        copy.setBudgetLimit(source.getBudgetLimit());
+        copy.setTotalPrice(source.getTotalPrice());
+        copy.setFactoryCount(source.getFactoryCount());
+        copy.setMaxLeadTimeDays(source.getMaxLeadTimeDays());
+        copy.setItemCount(source.getItemCount());
+        copy.setStatus(source.getStatus());
+        copy.setIsTemplate(source.getIsTemplate());
+        copy.setTemplateTags(source.getTemplateTags());
+        copy.setCreatedBy(source.getCreatedBy());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setUpdatedAt(source.getUpdatedAt());
+        return copy;
     }
 
     /**
@@ -419,12 +449,14 @@ public class SchemeService {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
         assertSchemeOwnerOrAdmin(scheme);
+        Scheme oldSnapshot = snapshot(scheme);
         int affected = schemeMapper.deleteById(schemeId);
         if (affected == 0) {
             throw new ResourceNotFoundException("方案不存在或已被删除: " + schemeId);
         }
         // 级联软删除方案明细（@TableLogic → UPDATE deleted_at），避免残留孤儿记录
         schemeItemMapper.delete(new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId));
+        auditLogService.logDelete("scheme", schemeId, oldSnapshot, currentUsername());
     }
 
     /**
@@ -441,6 +473,7 @@ public class SchemeService {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
         }
         assertSchemeOwnerOrAdmin(scheme);
+        Scheme oldSnapshot = snapshot(scheme);
 
         scheme.setIsTemplate(request.getIsTemplate());
         scheme.setTemplateTags(Boolean.TRUE.equals(request.getIsTemplate())
@@ -448,6 +481,7 @@ public class SchemeService {
             : null);
         scheme.setUpdatedAt(LocalDateTime.now());
         schemeMapper.updateById(scheme);
+        auditLogService.logUpdate("scheme", schemeId, oldSnapshot, scheme, currentUsername());
         return getSchemeDetail(schemeId);
     }
 
@@ -478,7 +512,7 @@ public class SchemeService {
             throw new BusinessException("模板方案没有可套用的方案项");
         }
 
-        String newSchemeId = "SCHEME-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String newSchemeId = IdGenerator.schemeId();
         BigDecimal totalPrice = BigDecimal.ZERO;
         int maxLeadTimeDays = 0;
         Set<String> factoryCodes = new HashSet<>();
@@ -554,11 +588,12 @@ public class SchemeService {
         scheme.setStatus("active");
         scheme.setProjectId(project.getProjectId());
         scheme.setIsTemplate(false);
-        scheme.setCreatedBy(SecurityOperatorContext.currentUsername());
+        scheme.setCreatedBy(currentUsername());
         scheme.setCreatedAt(LocalDateTime.now());
         schemeMapper.insert(scheme);
 
         schemeItemMapper.insertBatchSafe(newItems);
+        auditLogService.logCreate("scheme", newSchemeId, scheme, scheme.getCreatedBy());
 
         CopyFromTemplateResponse response = new CopyFromTemplateResponse();
         response.setScheme(getSchemeDetail(newSchemeId));

@@ -169,4 +169,37 @@ class ChromaDbClientTest {
         verify(exactly(2), getRequestedFor(urlEqualTo(COLLECTIONS + "/rsdp_products")));
         verify(exactly(2), postRequestedFor(urlEqualTo(COLLECTIONS + "/col-1/delete")));
     }
+
+    @Test
+    void upsert_shouldCreateCollectionWhenGetReturns404() {
+        // 集合查询返回 404 → 判定为集合不存在 → 创建集合 → 执行 upsert
+        stubFor(get(urlEqualTo(COLLECTIONS + "/rsdp_products"))
+            .willReturn(aResponse().withStatus(404)));
+        stubFor(post(urlEqualTo(COLLECTIONS))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"id\":\"col-new\"}")));
+        stubFor(post(urlEqualTo(COLLECTIONS + "/col-new/upsert"))
+            .willReturn(aResponse().withStatus(200)));
+
+        upsertOne();
+
+        verify(exactly(1), postRequestedFor(urlEqualTo(COLLECTIONS)));
+        verify(exactly(1), postRequestedFor(urlEqualTo(COLLECTIONS + "/col-new/upsert")));
+    }
+
+    @Test
+    void upsert_shouldThrowWhenGetCollectionFailsWithServerError() {
+        // 集合查询返回 5xx：不是「不存在」，应抛出外部服务异常而不是尝试创建
+        stubFor(get(urlEqualTo(COLLECTIONS + "/rsdp_products"))
+            .willReturn(aResponse().withStatus(500).withBody("internal error")));
+
+        assertThatThrownBy(this::upsertOne)
+            .isInstanceOf(ExternalServiceException.class)
+            .hasMessageContaining("查询集合失败");
+
+        // 5xx 不触发创建集合
+        verify(exactly(0), postRequestedFor(urlEqualTo(COLLECTIONS)));
+    }
 }

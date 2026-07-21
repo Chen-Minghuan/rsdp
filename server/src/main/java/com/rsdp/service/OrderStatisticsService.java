@@ -45,22 +45,47 @@ public class OrderStatisticsService {
     private final DesignOrderItemMapper designOrderItemMapper;
     private final FactoryMasterMapper factoryMasterMapper;
 
+    private static final int DEFAULT_STAT_DAYS = 90;
+    private static final int MAX_STAT_DAYS = 365;
+    private static final int RESULT_TOP_LIMIT = 50;
+
     /**
      * 订单统计入口：按维度分发。
      *
      * @param dim  统计维度（product / factory）
-     * @param from 起始日期（含，可空）
-     * @param to   截止日期（含，可空）
+     * @param from 起始日期（含，可空；空时默认最近 90 天）
+     * @param to   截止日期（含，可空；空时默认今天）
      * @return 对应维度的统计列表（按总金额降序）
      */
     public List<?> statistics(String dim, LocalDate from, LocalDate to) {
+        LocalDate[] range = resolveDateRange(from, to);
         if (DIM_PRODUCT.equals(dim)) {
-            return statByProduct(from, to);
+            return statByProduct(range[0], range[1]);
         }
         if (DIM_FACTORY.equals(dim)) {
-            return statByFactory(from, to);
+            return statByFactory(range[0], range[1]);
         }
         throw new BusinessException("不支持的统计维度: " + dim + "（仅支持 product / factory）");
+    }
+
+    /**
+     * 解析并校验统计时间窗。
+     *
+     * @param from 起始日期（可空）
+     * @param to   截止日期（可空）
+     * @return [from, to]
+     */
+    private LocalDate[] resolveDateRange(LocalDate from, LocalDate to) {
+        LocalDate now = LocalDate.now();
+        LocalDate effectiveTo = to != null ? to : now;
+        LocalDate effectiveFrom = from != null ? from : effectiveTo.minusDays(DEFAULT_STAT_DAYS - 1L);
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            throw new BusinessException("起始日期不能晚于截止日期");
+        }
+        if (effectiveFrom.plusDays(MAX_STAT_DAYS).isBefore(effectiveTo.plusDays(1))) {
+            throw new BusinessException("统计时间窗不能超过 " + MAX_STAT_DAYS + " 天");
+        }
+        return new LocalDate[] { effectiveFrom, effectiveTo };
     }
 
     /**
@@ -91,6 +116,7 @@ public class OrderStatisticsService {
         }
         return byRspu.values().stream()
             .sorted(Comparator.comparing(OrderProductStatResponse::getTotalAmount).reversed())
+            .limit(RESULT_TOP_LIMIT)
             .peek(s -> s.setTotalAmount(scale(s.getTotalAmount())))
             .toList();
     }
@@ -126,6 +152,7 @@ public class OrderStatisticsService {
 
         return amountByFactory.entrySet().stream()
             .sorted(Map.Entry.<String, BigDecimal>comparingByValue().reversed())
+            .limit(RESULT_TOP_LIMIT)
             .map(entry -> {
                 OrderFactoryStatResponse stat = new OrderFactoryStatResponse();
                 stat.setFactoryCode(entry.getKey());

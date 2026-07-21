@@ -155,7 +155,9 @@ const rskuForm = ref<RskuCreateRequest>({
   warrantyYears: undefined,
   shippingFrom: '',
   diffNotes: '',
-  quoteConfidence: ''
+  quoteConfidence: '',
+  productLevel: undefined,
+  autoExtendCapability: false
 })
 
 const showBatchRskuModal = ref(false)
@@ -275,7 +277,8 @@ const variantForm = ref<RspuVariantCreateRequest>({
   colorCode: '',
   materialCode: '',
   materialMix: [],
-  referencePriceBand: ''
+  referencePriceBand: '',
+  productLevel: undefined
 })
 
 const sizeOptions = ref<DictItem[]>([])

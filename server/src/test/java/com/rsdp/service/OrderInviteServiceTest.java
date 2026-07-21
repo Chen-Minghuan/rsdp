@@ -43,7 +43,8 @@ class OrderInviteServiceTest {
     @BeforeEach
     void setUp() {
         inviteService = new OrderInviteService(
-            designOrderMapper, designOrderItemMapper, orderService, "test-secret", 7);
+            designOrderMapper, designOrderItemMapper, orderService,
+            "test-secret-must-be-at-least-32-characters-long", 7);
     }
 
     private DesignOrder buildOrder() {
@@ -116,7 +117,8 @@ class OrderInviteServiceTest {
     @Test
     void getInviteView_expiredToken_shouldReject() {
         OrderInviteService shortLivedService = new OrderInviteService(
-            designOrderMapper, designOrderItemMapper, orderService, "test-secret", -1);
+            designOrderMapper, designOrderItemMapper, orderService,
+            "test-secret-must-be-at-least-32-characters-long", -1);
         DesignOrder order = buildOrder();
         when(orderService.getAccessibleOrder("ORD-test0001")).thenReturn(order);
         InviteTokenResponse invite = shortLivedService.createInvite("ORD-test0001");
@@ -133,6 +135,7 @@ class OrderInviteServiceTest {
         mockItems();
         InviteTokenResponse invite = inviteService.createInvite("ORD-test0001");
         when(designOrderMapper.selectById("ORD-test0001")).thenReturn(order);
+        when(designOrderMapper.update(any(DesignOrder.class), any(QueryWrapper.class))).thenReturn(1);
 
         OrderInviteViewResponse view = inviteService.confirmInvite(invite.getToken());
 
@@ -143,6 +146,19 @@ class OrderInviteServiceTest {
         assertThatThrownBy(() -> inviteService.confirmInvite(invite.getToken()))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("不可重复");
+    }
+
+    @Test
+    void confirmInvite_shouldFailWhenConcurrentlyModified() {
+        DesignOrder order = buildOrder();
+        when(orderService.getAccessibleOrder("ORD-test0001")).thenReturn(order);
+        InviteTokenResponse invite = inviteService.createInvite("ORD-test0001");
+        when(designOrderMapper.selectById("ORD-test0001")).thenReturn(order);
+        when(designOrderMapper.update(any(DesignOrder.class), any(QueryWrapper.class))).thenReturn(0);
+
+        assertThatThrownBy(() -> inviteService.confirmInvite(invite.getToken()))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("已被其他操作修改");
     }
 
     @Test

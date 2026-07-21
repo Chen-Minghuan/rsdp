@@ -2,7 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.dto.request.RskuPriceUpdateRequest;
 import com.rsdp.exception.GlobalExceptionHandler;
-import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.RskuService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -61,18 +61,18 @@ class RskuControllerTest {
     }
 
     @Test
-    void updatePrice_shouldReturnNotFoundWhenRspuIdMismatch() throws Exception {
+    void updatePrice_shouldReturnBadRequestWhenRspuIdMismatch() throws Exception {
         RskuPriceUpdateRequest request = new RskuPriceUpdateRequest();
         request.setFactoryPrice(new BigDecimal("1500"));
 
-        doThrow(new ResourceNotFoundException("RSKU 不属于该产品"))
+        doThrow(new BusinessException("RSKU 不属于该产品"))
             .when(rskuService).updateRskuPrice(any(), any(), any(), any());
 
         mockMvc.perform(put("/api/v1/products/RSPU-001/rsku/RSKU-001/price")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(404))
+            .andExpect(jsonPath("$.code").value(400))
             .andExpect(jsonPath("$.message").value("RSKU 不属于该产品"));
     }
 
