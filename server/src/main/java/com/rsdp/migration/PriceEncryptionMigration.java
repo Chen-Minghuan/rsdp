@@ -16,8 +16,9 @@ import java.util.Map;
 /**
  * 历史价格字段加密迁移。
  *
- * <p>将 {@code rsku_supply.factory_price} 与 {@code scheme_item.factory_price}
- * 中的明文价格批量加密为 AES-256-GCM Base64 密文。已加密记录会自动跳过，支持幂等执行。</p>
+ * <p>将 {@code rsku_supply.factory_price}、{@code scheme_item.factory_price} 与
+ * {@code design_order_item.original_price/final_price} 中的明文价格批量加密为
+ * AES-256-GCM Base64 密文。已加密记录会自动跳过，支持幂等执行。</p>
  *
  * <p>通过 {@code rsdp.migration.encrypt-prices.enabled=true} 开启，默认关闭。</p>
  */
@@ -39,22 +40,32 @@ public class PriceEncryptionMigration implements CommandLineRunner {
         log.info("开始历史价格加密迁移，每批 {} 条", properties.getBatchSize());
         migrateRskuSupply();
         migrateSchemeItem();
+        migrateDesignOrderItem();
         log.info("历史价格加密迁移完成");
     }
 
     private void migrateRskuSupply() {
         String selectSql = "SELECT rsku_id, factory_price FROM rsku_supply "
             + "WHERE factory_price IS NOT NULL AND deleted_at IS NULL";
-        migrateTable("rsku_supply", "rsku_id", selectSql);
+        migrateTable("rsku_supply", "rsku_id", "factory_price", selectSql);
     }
 
     private void migrateSchemeItem() {
         String selectSql = "SELECT scheme_item_id, factory_price FROM scheme_item "
             + "WHERE factory_price IS NOT NULL";
-        migrateTable("scheme_item", "scheme_item_id", selectSql);
+        migrateTable("scheme_item", "scheme_item_id", "factory_price", selectSql);
     }
 
-    private void migrateTable(String tableName, String idColumn, String selectSql) {
+    private void migrateDesignOrderItem() {
+        String selectOriginal = "SELECT id, original_price FROM design_order_item "
+            + "WHERE original_price IS NOT NULL";
+        migrateTable("design_order_item", "id", "original_price", selectOriginal);
+        String selectFinal = "SELECT id, final_price FROM design_order_item "
+            + "WHERE final_price IS NOT NULL";
+        migrateTable("design_order_item", "id", "final_price", selectFinal);
+    }
+
+    private void migrateTable(String tableName, String idColumn, String priceColumn, String selectSql) {
         int offset = 0;
         int totalProcessed = 0;
         int totalAlreadyEncrypted = 0;
@@ -75,7 +86,7 @@ public class PriceEncryptionMigration implements CommandLineRunner {
 
             for (Map<String, Object> row : rows) {
                 Object idValue = row.get(idColumn);
-                String rawPrice = (String) row.get("factory_price");
+                String rawPrice = (String) row.get(priceColumn);
 
                 if (rawPrice == null || rawPrice.isBlank()) {
                     continue;
@@ -97,7 +108,7 @@ public class PriceEncryptionMigration implements CommandLineRunner {
                 }
 
                 String encrypted = AesEncryptionUtil.encrypt(plainPrice);
-                String updateSql = String.format("UPDATE %s SET factory_price = ? WHERE %s = ?", tableName, idColumn);
+                String updateSql = String.format("UPDATE %s SET %s = ? WHERE %s = ?", tableName, priceColumn, idColumn);
                 try {
                     jdbcTemplate.update(updateSql, encrypted, idValue);
                     batchMigrated++;
