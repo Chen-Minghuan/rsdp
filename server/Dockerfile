@@ -2,7 +2,7 @@ FROM eclipse-temurin:21-jre-alpine
 
 WORKDIR /app
 
-COPY target/rsdp-backend-*.jar app.jar
+COPY target/rsdp-server-*.jar app.jar
 
 EXPOSE 8081
 

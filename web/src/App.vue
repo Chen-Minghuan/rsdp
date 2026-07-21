@@ -108,7 +108,7 @@ async function handleUserAction(key: string) {
 <template>
   <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme-overrides="themeOverrides">
     <n-layout style="height: 100vh;">
-      <n-layout-header v-if="route.path !== '/login'" bordered class="app-header">
+      <n-layout-header v-if="!route.meta.hideHeader" bordered class="app-header">
         <n-space align="center" justify="space-between" style="height: 100%;">
           <div class="brand" @click="navigate('/')">
             <span class="brand-name">RSDP</span>

@@ -11,19 +11,26 @@ import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.FactoryWarehouseMapper;
 import com.rsdp.mapper.RspuFactoryMappingMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -34,6 +41,7 @@ import static org.mockito.Mockito.when;
  * {@link RspuFactoryMappingService} 单元测试。
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class RspuFactoryMappingServiceTest {
 
     @Mock
@@ -48,8 +56,16 @@ class RspuFactoryMappingServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private RspuFactoryMappingService mappingService;
+
+    @BeforeEach
+    void setUp() {
+        doNothing().when(dataScopeHelper).assertCanAccessRspu(anyString());
+    }
 
     @Test
     void saveMapping_shouldCreateWhenFactoryExistsAndNoDuplicate() {
@@ -88,6 +104,20 @@ class RspuFactoryMappingServiceTest {
         assertThat(saved.getFactoryCode()).isEqualTo("F001");
         assertThat(saved.getIsPrimary()).isTrue();
         assertThat(saved.getMoq()).isEqualTo(10);
+    }
+
+    @Test
+    void saveMapping_shouldThrowWhenNoDataScopePermission() {
+        RspuFactoryMappingRequest request = new RspuFactoryMappingRequest();
+        request.setRspuId("RSPU-001");
+        request.setFactoryCode("F001");
+
+        doThrow(new BusinessException("只能维护本厂已报价的产品"))
+            .when(dataScopeHelper).assertCanAccessRspu("RSPU-001");
+
+        assertThatThrownBy(() -> mappingService.saveMapping(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("只能维护本厂已报价的产品");
     }
 
     @Test

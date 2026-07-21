@@ -3,6 +3,8 @@ package com.rsdp.util;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * 图片 URL 安全校验工具。
@@ -11,6 +13,12 @@ import java.net.URISyntaxException;
  */
 public final class ImageUrlValidator {
 
+    /** 允许的 URL scheme（统一小写后比较）。 */
+    private static final Set<String> ALLOWED_SCHEMES = Set.of("http", "https");
+
+    /** 允许的显式端口；未显式指定端口（-1）时使用协议默认端口，视为允许。 */
+    private static final Set<Integer> ALLOWED_PORTS = Set.of(80, 443);
+
     private ImageUrlValidator() {
         // utility class
     }
@@ -18,23 +26,29 @@ public final class ImageUrlValidator {
     /**
      * 校验图片 URL 是否允许访问。
      *
+     * <p>白名单中的 host 由运维显式配置（如开发环境的 127.0.0.1），视为可信，
+     * 跳过端口与 DNS 内网检查；其余校验（scheme、userinfo、host 非空）仍然生效。</p>
+     *
      * @param url          图片 URL
      * @param allowedHosts 额外允许的 host 白名单（如测试环境可加入 127.0.0.1）
      * @return true 表示允许访问
      */
-    public static boolean isAllowed(String url, java.util.Set<String> allowedHosts) {
+    public static boolean isAllowed(String url, Set<String> allowedHosts) {
         if (url == null || url.isBlank()) {
             return false;
         }
         String trimmed = url.trim();
-        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
-            return false;
-        }
 
         URI uri;
         try {
             uri = new URI(trimmed);
         } catch (URISyntaxException e) {
+            return false;
+        }
+
+        // scheme 统一小写后校验，仅允许 http/https
+        String scheme = uri.getScheme();
+        if (scheme == null || !ALLOWED_SCHEMES.contains(scheme.toLowerCase(Locale.ROOT))) {
             return false;
         }
 
@@ -48,18 +62,49 @@ public final class ImageUrlValidator {
             return false;
         }
 
-        String lowerHost = host.toLowerCase();
+        String lowerHost = host.toLowerCase(Locale.ROOT);
         if (allowedHosts != null && allowedHosts.stream().anyMatch(h -> h.equalsIgnoreCase(lowerHost))) {
             return true;
+        }
+
+        // 限制显式端口：仅允许常见图片 CDN 端口，未指定端口（协议默认）视为允许
+        int port = uri.getPort();
+        if (port != -1 && !ALLOWED_PORTS.contains(port)) {
+            return false;
         }
 
         if (lowerHost.equals("localhost") || lowerHost.endsWith(".local")) {
             return false;
         }
 
+        // DNS rebinding 防护：校验解析出的所有 IP，而非仅第一个 A 记录
+        return areAllResolvedAddressesPublic(host);
+    }
+
+    /**
+     * DNS rebinding 防护：对 host 解析出的所有 IP 复检，任一结果为内网/保留地址即视为不安全。
+     *
+     * <p>供下载方在建立连接前调用，防止校验通过到实际连接之间 DNS 记录被篡改（rebinding）。
+     * 无法解析的域名按不安全处理。</p>
+     *
+     * @param host 主机名或 IP 字面量
+     * @return true 表示所有解析结果均为公网地址
+     */
+    public static boolean areAllResolvedAddressesPublic(String host) {
+        if (host == null || host.isBlank()) {
+            return false;
+        }
         try {
-            InetAddress address = InetAddress.getByName(host);
-            return !isPrivateOrReserved(address);
+            InetAddress[] addresses = InetAddress.getAllByName(host);
+            if (addresses.length == 0) {
+                return false;
+            }
+            for (InetAddress address : addresses) {
+                if (isPrivateOrReserved(address)) {
+                    return false;
+                }
+            }
+            return true;
         } catch (Exception e) {
             // 无法解析的域名默认拒绝，防止通过 DNS 绕过内网限制
             return false;
@@ -67,6 +112,13 @@ public final class ImageUrlValidator {
     }
 
     private static boolean isPrivateOrReserved(InetAddress address) {
+        // 先走 JDK 内建判定：0.0.0.0/::、环回、链路本地、站点本地、组播
+        if (address.isAnyLocalAddress() || address.isLoopbackAddress()
+                || address.isLinkLocalAddress() || address.isSiteLocalAddress()
+                || address.isMulticastAddress()) {
+            return true;
+        }
+
         byte[] bytes = address.getAddress();
 
         if (bytes.length == 4) {

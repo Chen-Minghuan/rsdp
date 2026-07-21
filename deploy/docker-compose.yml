@@ -18,7 +18,7 @@ services:
       - ../database/V2__factory_module.sql:/docker-entrypoint-initdb.d/03-factory-module.sql
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.5.11
     container_name: rsdp-ollama
     volumes:
       - ollama-models:/root/.ollama
@@ -32,7 +32,7 @@ services:
     # Windows 无 GPU 时删除 deploy.resources 部分
 
   chromadb:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:0.6.3
     container_name: rsdp-chromadb
     # 生产环境建议移除宿主机端口映射；本地开发后端通过 localhost:8000 访问
     ports:
@@ -53,7 +53,7 @@ services:
       - redis-data:/data
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
     container_name: rsdp-minio
     # 仅通过内部网络暴露，不映射宿主机端口
     expose:

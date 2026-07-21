@@ -117,13 +117,15 @@ class ProductServiceTest {
         assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("processing");
         assertThat(rspuCaptor.getValue().getCategoryCode()).isEqualTo("FS");
 
-        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
-        verify(imageAssetsMapper, times(1)).insert(imageCaptor.capture());
-        assertThat(imageCaptor.getValue().getFormat()).isEqualTo("jpg");
-        assertThat(imageCaptor.getValue().getAiProcessed()).isFalse();
-        assertThat(imageCaptor.getValue().getStoragePath()).startsWith("images/");
-        assertThat(imageCaptor.getValue().getPrimary()).isTrue();
-        assertThat(imageCaptor.getValue().getImageType()).isEqualTo("white_bg");
+        ArgumentCaptor<List<ImageAssets>> imageCaptor = ArgumentCaptor.forClass(List.class);
+        verify(imageAssetsMapper, times(1)).insertBatch(imageCaptor.capture());
+        assertThat(imageCaptor.getValue()).hasSize(1);
+        ImageAssets capturedImage = imageCaptor.getValue().get(0);
+        assertThat(capturedImage.getFormat()).isEqualTo("jpg");
+        assertThat(capturedImage.getAiProcessed()).isFalse();
+        assertThat(capturedImage.getStoragePath()).startsWith("images/");
+        assertThat(capturedImage.getPrimary()).isTrue();
+        assertThat(capturedImage.getImageType()).isEqualTo("white_bg");
 
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper, times(1)).insert(taskCaptor.capture());
@@ -154,7 +156,9 @@ class ProductServiceTest {
         verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
         assertThat(rspuCaptor.getValue().getCategoryCode()).isEqualTo("DT");
         assertThat(rspuCaptor.getValue().getCategoryPath()).contains("桌子");
-        verify(imageAssetsMapper, times(2)).insert(any(ImageAssets.class));
+        ArgumentCaptor<List<ImageAssets>> imageListCaptor = ArgumentCaptor.forClass(List.class);
+        verify(imageAssetsMapper, times(1)).insertBatch(imageListCaptor.capture());
+        assertThat(imageListCaptor.getValue()).hasSize(2);
         verify(asyncTaskMapper, times(1)).insert(any(AsyncTask.class));
         verify(asyncTaskProcessor, times(1))
             .processProductEntry(anyString(), anyString(), anyString(), anyString());

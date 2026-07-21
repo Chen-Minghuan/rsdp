@@ -33,7 +33,7 @@
                 #{item.variantId},
                 #{item.factoryCode},
                 #{item.factorySku},
-                #{item.factoryPrice},
+                #{item.factoryPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
                 #{item.priceBand},
                 #{item.productLevel},
                 #{item.materialCode},

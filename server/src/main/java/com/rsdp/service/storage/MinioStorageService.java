@@ -93,14 +93,14 @@ public class MinioStorageService implements StorageService {
             );
             return true;
         } catch (ErrorResponseException e) {
-            // 仅「对象不存在」返回 false，其余错误（网络、权限、服务不可用）按异常上抛，
+            // 仅「对象不存在」返回 false；权限不足、桶不存在等其他错误按异常抛出，
             // 避免调用方把存储故障误判为文件不存在
-            if ("NoSuchKey".equals(e.errorResponse().code())) {
+            if (e.errorResponse() != null && "NoSuchKey".equals(e.errorResponse().code())) {
                 return false;
             }
-            throw new IOException("MinIO 查询对象失败: " + objectKey, e);
+            throw new IOException("MinIO 状态检查失败: " + objectKey, e);
         } catch (MinioException | InvalidKeyException | NoSuchAlgorithmException e) {
-            throw new IOException("MinIO 查询对象失败: " + objectKey, e);
+            throw new IOException("MinIO 状态检查失败: " + objectKey, e);
         }
     }
 

@@ -10,10 +10,10 @@ export default defineConfig({
     }
   },
   server: {
-    port: 5173,
+    port: Number(process.env.RSDP_FRONTEND_PORT) || 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8081',
+        target: `http://localhost:${process.env.RSDP_BACKEND_PORT || '8081'}`,
         changeOrigin: true
       }
     }

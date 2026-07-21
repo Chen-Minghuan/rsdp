@@ -49,8 +49,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
+
+import com.rsdp.util.IdGenerator;
 
 /**
  * 产品（RSPU）Excel 批量导入服务。
@@ -179,10 +180,10 @@ public class ProductImportService {
             }).sheet().doRead();
         } catch (IOException e) {
             log.error("读取 Excel 文件失败", e);
-            throw new BusinessException("读取 Excel 文件失败");
+            throw new BusinessException("读取 Excel 文件失败", e);
         } catch (Exception e) {
             log.error("解析 Excel 文件失败，请检查文件格式是否与模板一致", e);
-            throw new BusinessException("解析 Excel 文件失败，请检查文件格式是否与模板一致");
+            throw new BusinessException("解析 Excel 文件失败，请检查文件格式是否与模板一致", e);
         }
         return rows;
     }
@@ -390,7 +391,7 @@ public class ProductImportService {
     }
 
     private RspuMaster createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
-        String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String rspuId = IdGenerator.rspuId();
         RspuMaster rspu = buildRspuFromRow(new RspuMaster(), row, dictCache);
         rspu.setRspuId(rspuId);
         rspu.setExternalCode(trim(row.getExternalCode()));
@@ -571,7 +572,7 @@ public class ProductImportService {
         boolean hasPrimary = images.stream().anyMatch(DownloadedImage::primary);
         for (int i = 0; i < images.size(); i++) {
             DownloadedImage downloaded = images.get(i);
-            String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+            String imageId = IdGenerator.imageId();
             String extension = resolveExtension(downloaded.contentType);
             String objectKey = "images/" + imageId + "." + extension;
 

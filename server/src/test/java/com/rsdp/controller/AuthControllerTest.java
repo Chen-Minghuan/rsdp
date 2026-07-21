@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
@@ -56,7 +57,7 @@ class AuthControllerTest {
             "token-xxx", "Bearer", "USER-001", "admin", "管理员", "ADMIN",
             List.of("ADMIN"), List.of("admin:user:manage"), false, List.of()
         );
-        when(authService.login(any())).thenReturn(response);
+        when(authService.login(any(), anyString())).thenReturn(response);
 
         LoginRequest request = new LoginRequest();
         request.setUsername("admin");
@@ -79,7 +80,7 @@ class AuthControllerTest {
 
     @Test
     void login_invalidCredentials_shouldReturnBusinessError() throws Exception {
-        when(authService.login(any())).thenThrow(new BusinessException("用户名或密码错误"));
+        when(authService.login(any(), anyString())).thenThrow(new BusinessException("用户名或密码错误"));
 
         LoginRequest request = new LoginRequest();
         request.setUsername("admin");

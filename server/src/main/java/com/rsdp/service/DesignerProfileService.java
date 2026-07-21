@@ -21,7 +21,10 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 设计师画像服务。
@@ -63,21 +66,32 @@ public class DesignerProfileService {
         return toResponse(profile, user != null ? user.getUsername() : null);
     }
 
+    private static final int MAX_LIST_SIZE = 1000;
+
     /**
      * 查询公开的的设计师画像列表。
      *
      * @return 设计师画像响应列表
      */
     public List<DesignerProfileResponse> listPublicProfiles() {
-        return designerProfileMapper.selectList(
+        List<DesignerProfile> profiles = designerProfileMapper.selectList(
             new QueryWrapper<DesignerProfile>()
                 .eq("is_public", true)
                 .eq("status", "active")
                 .orderByDesc("updated_at")
-        ).stream().map(p -> {
-            SysUser user = sysUserMapper.selectById(p.getUserId());
-            return toResponse(p, user != null ? user.getUsername() : null);
-        }).toList();
+                .last("LIMIT " + MAX_LIST_SIZE)
+        );
+        List<String> userIds = profiles.stream()
+            .map(DesignerProfile::getUserId)
+            .distinct()
+            .toList();
+        Map<String, SysUser> userMap = userIds.isEmpty()
+            ? Map.of()
+            : sysUserMapper.selectBatchIds(userIds).stream()
+                .collect(Collectors.toMap(SysUser::getUserId, u -> u, (a, b) -> a));
+        return profiles.stream()
+            .map(p -> toResponse(p, Optional.ofNullable(userMap.get(p.getUserId())).map(SysUser::getUsername).orElse(null)))
+            .toList();
     }
 
     /**

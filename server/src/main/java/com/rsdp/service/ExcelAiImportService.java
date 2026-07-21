@@ -65,8 +65,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
+
+import com.rsdp.util.IdGenerator;
 
 /**
  * Excel AI 辅助导入服务。
@@ -716,7 +717,7 @@ public class ExcelAiImportService {
     }
 
     private String storeOriginalFile(byte[] fileBytes, String originalFilename) {
-        String batchId = "EXCEL-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String batchId = IdGenerator.excelBatchId();
         String extension = resolveFileExtension(originalFilename);
         String objectKey = "excel-imports/" + batchId + "." + extension;
         try {
@@ -739,7 +740,7 @@ public class ExcelAiImportService {
     private ExcelImportBatch saveBatch(String fileName, String storagePath, AiMappingResult mappingResult,
                                        Map<Integer, String> headerMap, List<Map<Integer, String>> dataRows) {
         ExcelImportBatch batch = new ExcelImportBatch();
-        batch.setBatchId("BATCH-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        batch.setBatchId(IdGenerator.batchId());
         batch.setFileName(fileName);
         batch.setStoragePath(storagePath);
         batch.setStatus("pending");
@@ -1330,7 +1331,7 @@ public class ExcelAiImportService {
     }
 
     private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
-        String rspuId = "RSPU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
@@ -1670,7 +1671,7 @@ public class ExcelAiImportService {
         boolean hasPrimary = images.stream().anyMatch(DownloadedImage::primary);
         for (int i = 0; i < images.size(); i++) {
             DownloadedImage downloaded = images.get(i);
-            String imageId = "IMG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+            String imageId = IdGenerator.imageId();
             String extension = resolveExtension(downloaded.contentType);
             String objectKey = "images/" + imageId + "." + extension;
 
@@ -1707,7 +1708,7 @@ public class ExcelAiImportService {
     }
 
     private String createAsyncTask(String rspuId, String primaryObjectKey) {
-        String taskId = "TASK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String taskId = IdGenerator.taskId();
         String imageId = primaryObjectKey.substring(primaryObjectKey.lastIndexOf('/') + 1, primaryObjectKey.lastIndexOf('.'));
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);

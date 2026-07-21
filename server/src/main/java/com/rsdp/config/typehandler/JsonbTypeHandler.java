@@ -10,6 +10,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Types;
 
 /**
  * PostgreSQL jsonb 字段通用类型处理器。
@@ -30,6 +31,19 @@ public class JsonbTypeHandler extends JacksonTypeHandler {
 
     public JsonbTypeHandler(Class<?> type, Field field) {
         super(type, field);
+    }
+
+    /**
+     * 显式处理 null 参数：jsonb 列写入 null 时必须声明 {@link Types#OTHER}，
+     * 避免 PostgreSQL 无法推断 null 值类型而报错。
+     */
+    @Override
+    public void setParameter(PreparedStatement ps, int i, Object parameter, JdbcType jdbcType) throws SQLException {
+        if (parameter == null) {
+            ps.setNull(i, Types.OTHER);
+            return;
+        }
+        setNonNullParameter(ps, i, parameter, jdbcType);
     }
 
     @Override
@@ -54,6 +68,6 @@ public class JsonbTypeHandler extends JacksonTypeHandler {
 
     private boolean isStringType() {
         Type fieldType = getFieldType();
-        return fieldType == String.class;
+        return fieldType instanceof Class<?> clazz && clazz == String.class;
     }
 }

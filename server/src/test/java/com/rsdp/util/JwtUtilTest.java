@@ -1,9 +1,12 @@
 package com.rsdp.util;
 
 import io.jsonwebtoken.Claims;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -13,10 +16,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class JwtUtilTest {
 
-    private final JwtUtil jwtUtil = new JwtUtil();
+    private JwtUtil jwtUtil;
 
-    JwtUtilTest() {
-        ReflectionTestUtils.setField(jwtUtil, "secret", "g3g6Ryj6ty4Dsw0jm1ImR59dbRAOI98q3qKVf7gz0jU=");
+    @BeforeEach
+    void setUp() {
+        jwtUtil = new JwtUtil();
+        byte[] keyBytes = new byte[32];
+        new SecureRandom().nextBytes(keyBytes);
+        ReflectionTestUtils.setField(jwtUtil, "secret", Base64.getEncoder().encodeToString(keyBytes));
         ReflectionTestUtils.setField(jwtUtil, "expirationHours", 24L);
     }
 

@@ -53,6 +53,12 @@ public class SecurityConfig {
                 // 订单邀请公开页（免登录，token 自校验）
                 .requestMatchers("/api/v1/public/**").permitAll()
 
+                // 收藏夹：用户自服务数据，按当前用户隔离
+                .requestMatchers(HttpMethod.GET, "/api/v1/favorites").hasAuthority(Permissions.FAVORITE_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/favorites/check").hasAuthority(Permissions.FAVORITE_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/favorites").hasAuthority(Permissions.FAVORITE_WRITE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/favorites/*").hasAuthority(Permissions.FAVORITE_WRITE)
+
                 // 用户管理（管理员）
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/users/**").hasAuthority(Permissions.USER_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/users").hasAuthority(Permissions.USER_CREATE)
@@ -125,10 +131,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAuthority(Permissions.RSKU_DELETE)
                 .requestMatchers("/api/v1/rsku/import").hasAuthority(Permissions.RSKU_IMPORT)
 
-                // 产品关系与变体
+                // 产品关系、变体与工厂关联
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/relations").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/relations/*").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/*/relations/*").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/factories").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/products/*/factories/*").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/variants").hasAuthority(Permissions.PRODUCT_UPDATE)
 
                 // 产品复核
@@ -142,6 +150,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/factories").hasAuthority(Permissions.FACTORY_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_DELETE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/factories/*/lead-time-rules").hasAuthority(Permissions.FACTORY_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/*/lead-time-rules/*").hasAuthority(Permissions.FACTORY_UPDATE)
 
                 // 报价单
                 .requestMatchers(HttpMethod.POST, "/api/v1/quotes/generate").hasAuthority(Permissions.QUOTE_GENERATE)

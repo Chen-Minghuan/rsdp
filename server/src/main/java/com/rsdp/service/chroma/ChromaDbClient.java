@@ -52,9 +52,11 @@ public class ChromaDbClient {
             collectionIdCache.set(id);
             log.debug("ChromaDB 集合已存在: {} -> {}", collectionName, id);
             return id;
-        } catch (Exception e) {
-            log.info("ChromaDB 集合不存在或查询失败，正在创建: {}", collectionName);
+        } catch (HttpClientErrorException.NotFound e) {
+            log.info("ChromaDB 集合不存在，正在创建: {}", collectionName);
             return createCollection(collectionName);
+        } catch (Exception e) {
+            throw new ExternalServiceException("ChromaDB 查询集合失败: " + e.getMessage(), e);
         }
     }
 

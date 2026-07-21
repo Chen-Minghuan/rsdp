@@ -30,6 +30,10 @@ import java.util.Map;
 @Slf4j
 public final class ExcelImageExtractor {
 
+    private static final int MAX_SHEETS = 50;
+    private static final int MAX_PICTURES = 1000;
+    private static final long MAX_TOTAL_IMAGE_BYTES = 200 * 1024 * 1024L; // 200 MB
+
     private ExcelImageExtractor() {
     }
 
@@ -49,8 +53,14 @@ public final class ExcelImageExtractor {
         }
 
         Map<String, List<EmbeddedImage>> result = new HashMap<>();
+        long totalImageBytes = 0;
+        int pictureCount = 0;
         try (InputStream in = file.getInputStream();
              Workbook workbook = WorkbookFactory.create(in)) {
+
+            if (workbook.getNumberOfSheets() > MAX_SHEETS) {
+                throw new IOException("Excel 文件 Sheet 数量超过上限 " + MAX_SHEETS);
+            }
 
             for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
                 Sheet sheet = workbook.getSheetAt(sheetIndex);
@@ -71,6 +81,14 @@ public final class ExcelImageExtractor {
                     PictureData pictureData = picture.getPictureData();
                     if (pictureData == null || pictureData.getData() == null || pictureData.getData().length == 0) {
                         continue;
+                    }
+
+                    if (++pictureCount > MAX_PICTURES) {
+                        throw new IOException("Excel 内嵌图片数量超过上限 " + MAX_PICTURES);
+                    }
+                    totalImageBytes += pictureData.getData().length;
+                    if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) {
+                        throw new IOException("Excel 内嵌图片总大小超过上限 " + MAX_TOTAL_IMAGE_BYTES + " 字节");
                     }
 
                     int rowIndex = Math.max(0, anchor.getRow1());

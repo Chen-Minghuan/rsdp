@@ -3,7 +3,6 @@ package com.rsdp.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AuditLog;
 import com.rsdp.entity.RspuMaster;
-import com.rsdp.mapper.AuditLogMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,14 +21,13 @@ import static org.mockito.Mockito.verify;
 class AuditLogServiceTest {
 
     @Mock
-    private AuditLogMapper auditLogMapper;
+    private AuditLogWriter auditLogWriter;
 
     private AuditLogService auditLogService;
 
     @BeforeEach
     void setUp() {
-        // 构造函数注入真实 ObjectMapper，确保快照脱敏/序列化走真实逻辑
-        auditLogService = new AuditLogService(auditLogMapper, new ObjectMapper());
+        auditLogService = new AuditLogService(null, auditLogWriter, new ObjectMapper());
     }
 
     @Test
@@ -41,7 +39,7 @@ class AuditLogServiceTest {
         auditLogService.logCreate("rspu_master", "RSPU-TEST01", rspu, "admin");
 
         ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
-        verify(auditLogMapper, times(1)).insert(captor.capture());
+        verify(auditLogWriter, times(1)).write(captor.capture());
 
         AuditLog log = captor.getValue();
         assertThat(log.getTableName()).isEqualTo("rspu_master");
@@ -65,7 +63,7 @@ class AuditLogServiceTest {
         auditLogService.logReview("rspu_master", "RSPU-TEST01", oldRspu, newRspu, "admin");
 
         ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
-        verify(auditLogMapper, times(1)).insert(captor.capture());
+        verify(auditLogWriter, times(1)).write(captor.capture());
 
         AuditLog log = captor.getValue();
         assertThat(log.getAction()).isEqualTo("REVIEW");
@@ -81,7 +79,7 @@ class AuditLogServiceTest {
         auditLogService.logDelete("rspu_master", "RSPU-TEST01", rspu, "admin");
 
         ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
-        verify(auditLogMapper, times(1)).insert(captor.capture());
+        verify(auditLogWriter, times(1)).write(captor.capture());
 
         AuditLog log = captor.getValue();
         assertThat(log.getAction()).isEqualTo("DELETE");

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import {
   NCard,
@@ -108,8 +108,8 @@ const schemeName = ref('')
 
 const products = ref<ProductDetail[]>([])
 const rskuMap = ref<Record<string, Rsku[]>>({})
-const selectedRskuMap = ref<Record<string, string>>({})
-const quantityMap = ref<Record<string, number>>({})
+const selectedRskuMap = reactive<Record<string, string>>({})
+const quantityMap = reactive<Record<string, number>>({})
 const originalScheme = ref<Scheme | null>(null)
 
 const MAX_ITEMS = 50
@@ -119,11 +119,11 @@ const totalPriceCents = computed(() => {
   let total = 0
   for (const product of products.value) {
     const rspuId = product.rspu.rspuId
-    const rskuId = selectedRskuMap.value[rspuId]
+    const rskuId = selectedRskuMap[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
     if (rsku && rsku.factoryPrice != null) {
-      const quantity = quantityMap.value[rspuId] ?? 1
+      const quantity = quantityMap[rspuId] ?? 1
       total += Math.round(rsku.factoryPrice * 100 * quantity)
     }
   }
@@ -136,7 +136,7 @@ const maxLeadTimeDays = computed(() => {
   let max = 0
   for (const product of products.value) {
     const rspuId = product.rspu.rspuId
-    const rskuId = selectedRskuMap.value[rspuId]
+    const rskuId = selectedRskuMap[rspuId]
     if (!rskuId) continue
     const rsku = rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
     if (rsku && rsku.leadTimeDays && rsku.leadTimeDays > max) {
@@ -160,8 +160,8 @@ async function loadData() {
       ids = scheme.items.map(item => item.rspuId)
       // 预先回填用户上次选择的 RSKU 和数量
       scheme.items.forEach(item => {
-        selectedRskuMap.value[item.rspuId] = item.rskuId
-        quantityMap.value[item.rspuId] = item.quantity ?? 1
+        selectedRskuMap[item.rspuId] = item.rskuId
+        quantityMap[item.rspuId] = item.quantity ?? 1
       })
     } else {
       ids = rspuIds.value
@@ -172,11 +172,11 @@ async function loadData() {
       rawRspuIds.value.forEach((id, index) => {
         const rskuId = rawSelectedRskuIds.value[index]
         if (rskuId) {
-          selectedRskuMap.value[id] = rskuId
+          selectedRskuMap[id] = rskuId
         }
         const quantity = rawQuantities.value[index]
         if (quantity != null) {
-          quantityMap.value[id] = quantity
+          quantityMap[id] = quantity
         }
       })
     }
@@ -194,8 +194,8 @@ async function loadData() {
     const detailResults = await Promise.all(ids.map(id => getProductDetail(id, { signal })))
     products.value = detailResults
     products.value.forEach(p => {
-      if (quantityMap.value[p.rspu.rspuId] == null) {
-        quantityMap.value[p.rspu.rspuId] = 1
+      if (quantityMap[p.rspu.rspuId] == null) {
+        quantityMap[p.rspu.rspuId] = 1
       }
     })
 
@@ -205,19 +205,19 @@ async function loadData() {
       const list = rskuResults[index]
       map[id] = list
       // 非编辑模式下默认选中有价格且最低的 RSKU
-      if (!isEditMode.value && list.length > 0 && !selectedRskuMap.value[id]) {
+      if (!isEditMode.value && list.length > 0 && !selectedRskuMap[id]) {
         const selectable = list.filter(r => r.factoryPrice != null)
         if (selectable.length > 0) {
           const cheapest = selectable.reduce((min, r) => (r.factoryPrice! < min.factoryPrice! ? r : min), selectable[0])
-          selectedRskuMap.value[id] = cheapest.rskuId
+          selectedRskuMap[id] = cheapest.rskuId
         }
       }
       // 编辑模式下如果上次选中的 RSKU 已不在列表中，则 fallback 到最低价
-      if (isEditMode.value && list.length > 0 && !list.some(r => r.rskuId === selectedRskuMap.value[id])) {
+      if (isEditMode.value && list.length > 0 && !list.some(r => r.rskuId === selectedRskuMap[id])) {
         const selectable = list.filter(r => r.factoryPrice != null)
         if (selectable.length > 0) {
           const cheapest = selectable.reduce((min, r) => (r.factoryPrice! < min.factoryPrice! ? r : min), selectable[0])
-          selectedRskuMap.value[id] = cheapest.rskuId
+          selectedRskuMap[id] = cheapest.rskuId
         }
       }
     })
@@ -230,11 +230,11 @@ async function loadData() {
 }
 
 async function handleGenerateQuote() {
-  const items = Object.entries(selectedRskuMap.value)
+  const items = Object.entries(selectedRskuMap)
     .filter(([, rskuId]) => rskuId)
     .map(([rspuId, rskuId]) => ({
       rskuId: rskuId!,
-      quantity: quantityMap.value[rspuId] ?? 1
+      quantity: quantityMap[rspuId] ?? 1
     }))
   if (items.length === 0) {
     errorMessage.value = '请至少选择一个 RSKU'
@@ -259,11 +259,11 @@ async function handleGenerateQuote() {
 }
 
 async function handleExportQuote() {
-  const items = Object.entries(selectedRskuMap.value)
+  const items = Object.entries(selectedRskuMap)
     .filter(([, rskuId]) => rskuId)
     .map(([rspuId, rskuId]) => ({
       rskuId: rskuId!,
-      quantity: quantityMap.value[rspuId] ?? 1
+      quantity: quantityMap[rspuId] ?? 1
     }))
   if (items.length === 0) {
     errorMessage.value = '请至少选择一个 RSKU'
@@ -289,7 +289,7 @@ async function handleExportQuote() {
 }
 
 function openSaveModal() {
-  const rskuIds = Object.values(selectedRskuMap.value).filter(Boolean)
+  const rskuIds = Object.values(selectedRskuMap).filter(Boolean)
   if (rskuIds.length === 0) {
     errorMessage.value = '请至少选择一个 RSKU'
     return
@@ -312,12 +312,12 @@ async function handleSaveAsScheme() {
     return
   }
 
-  const items = Object.entries(selectedRskuMap.value)
+  const items = Object.entries(selectedRskuMap)
     .filter(([, rskuId]) => rskuId)
     .map(([rspuId, rskuId], index) => ({
       rspuId,
       rskuId: rskuId!,
-      quantity: quantityMap.value[rspuId] ?? 1,
+      quantity: quantityMap[rspuId] ?? 1,
       sortOrder: index
     }))
 
@@ -385,7 +385,7 @@ function isFactoryCapable(rsku: Rsku | undefined): boolean {
 }
 
 function selectedRsku(rspuId: string): Rsku | undefined {
-  const rskuId = selectedRskuMap.value[rspuId]
+  const rskuId = selectedRskuMap[rspuId]
   if (!rskuId) return undefined
   return rskuMap.value[rspuId]?.find(r => r.rskuId === rskuId)
 }
@@ -397,7 +397,7 @@ function roundPrice(value: number): number {
 function selectedSubtotal(rspuId: string): number {
   const rsku = selectedRsku(rspuId)
   if (!rsku || rsku.factoryPrice == null) return 0
-  const quantity = quantityMap.value[rspuId] ?? 1
+  const quantity = quantityMap[rspuId] ?? 1
   return roundPrice(rsku.factoryPrice * quantity)
 }
 
@@ -407,10 +407,10 @@ function resolveMoq(rspuId: string): number {
 }
 
 function validateMoq(): string | null {
-  for (const [rspuId, rskuId] of Object.entries(selectedRskuMap.value)) {
+  for (const [rspuId, rskuId] of Object.entries(selectedRskuMap)) {
     if (!rskuId) continue
     const moq = resolveMoq(rspuId)
-    const quantity = quantityMap.value[rspuId] ?? 1
+    const quantity = quantityMap[rspuId] ?? 1
     if (quantity < moq) {
       const rsku = selectedRsku(rspuId)
       return `${rsku?.factoryName || rsku?.factoryCode || rskuId} 的 MOQ 为 ${moq}，当前数量 ${quantity} 不足`
@@ -428,8 +428,12 @@ onBeforeRouteUpdate((to) => {
   if (to.query.editSchemeId !== route.query.editSchemeId) {
     originalScheme.value = null
     schemeName.value = ''
-    selectedRskuMap.value = {}
-    quantityMap.value = {}
+    for (const key of Object.keys(selectedRskuMap)) {
+      delete selectedRskuMap[key]
+    }
+    for (const key of Object.keys(quantityMap)) {
+      delete quantityMap[key]
+    }
     products.value = []
     loadData()
   }

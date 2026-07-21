@@ -66,4 +66,24 @@ public class AsyncConfig {
             default -> new ThreadPoolExecutor.AbortPolicy();
         };
     }
+
+    /**
+     * 审计日志异步写入专用线程池。
+     *
+     * <p>与后台任务线程池隔离，避免 AI 识别等重任务挤占审计日志写入。</p>
+     *
+     * @return 审计日志线程池执行器
+     */
+    @Bean(name = "auditLogExecutor")
+    public ThreadPoolTaskExecutor auditLogExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(500);
+        executor.setThreadNamePrefix("rsdp-audit-");
+        executor.setRejectedExecutionHandler(new LoggingRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy()));
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.initialize();
+        return executor;
+    }
 }

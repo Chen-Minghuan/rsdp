@@ -90,6 +90,10 @@ public final class Permissions {
     public static final String ORDER_UPDATE = "order:update";
     public static final String ORDER_DELETE = "order:delete";
 
+    // 收藏夹（用户自服务数据）
+    public static final String FAVORITE_READ = "favorite:read";
+    public static final String FAVORITE_WRITE = "favorite:write";
+
     // 管理后台
     public static final String ADMIN_ASYNC_METRICS = "admin:async-metrics";
     public static final String ADMIN_VECTOR_BACKFILL = "admin:vector-backfill";

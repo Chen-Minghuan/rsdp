@@ -307,7 +307,8 @@ class ProductImportServiceTest {
     @Test
     void importProducts_shouldSucceedEvenWhenImageDownloadFails() {
         ProductImportRow row = createValidRow();
-        row.setPrimaryImageUrl("http://192.0.2.1:1/test.jpg");
+        // 使用白名单内的本地地址 + 未监听端口，连接即刻被拒绝，快速触发下载失败分支
+        row.setPrimaryImageUrl("http://127.0.0.1:1/test.jpg");
         MockMultipartFile file = createExcelFile(List.of(row));
 
         when(rspuMapper.selectList(any())).thenReturn(List.of());
