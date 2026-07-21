@@ -27,6 +27,9 @@ interface AuthMeResponse {
 export const useUserStore = defineStore('user', () => {
   const userInfo = ref<UserInfo | null>(null)
   const loading = ref(false)
+  /** 上次成功拉取 /auth/me 的时间戳，用于路由守卫高频调用时的会话级缓存 */
+  const fetchedAt = ref(0)
+  const FETCH_CACHE_TTL_MS = 60_000
 
   const isLoggedIn = computed(() => !!userInfo.value)
   const displayName = computed(() => userInfo.value?.nickname || userInfo.value?.username || '')
@@ -55,17 +58,24 @@ export const useUserStore = defineStore('user', () => {
 
   function setUserInfo(info: UserInfo) {
     userInfo.value = info
+    fetchedAt.value = Date.now()
   }
 
   function clearUserInfo() {
     userInfo.value = null
+    fetchedAt.value = 0
   }
 
   /**
    * 从后端 /auth/me 拉取当前登录用户信息（含角色/权限）。
-   * 结果仅保存在内存中。
+   * 结果仅保存在内存中；60 秒内的重复调用直接返回缓存，避免路由守卫每次导航都阻塞请求。
+   *
+   * @param force 为 true 时跳过缓存强制刷新（登录后、偏好变更后使用）
    */
-  async function fetchUserInfo(): Promise<UserInfo | null> {
+  async function fetchUserInfo(force = false): Promise<UserInfo | null> {
+    if (!force && userInfo.value && Date.now() - fetchedAt.value < FETCH_CACHE_TTL_MS) {
+      return userInfo.value
+    }
     if (loading.value) {
       return new Promise((resolve) => {
         const stop = watch(loading, (v) => {
@@ -90,9 +100,11 @@ export const useUserStore = defineStore('user', () => {
         factoryCodes: data.factoryCodes || []
       }
       userInfo.value = info
+      fetchedAt.value = Date.now()
       return info
     } catch {
       userInfo.value = null
+      fetchedAt.value = 0
       return null
     } finally {
       loading.value = false
@@ -109,6 +121,7 @@ export const useUserStore = defineStore('user', () => {
       // 即使后端登出失败，也清空前端状态
     } finally {
       userInfo.value = null
+      fetchedAt.value = 0
     }
   }
 
