@@ -66,7 +66,11 @@ public class AsyncTaskProcessor {
     @Async("taskExecutor")
     public void processProductEntry(String taskId, String rspuId, String imageId, String objectKey) {
         log.info("开始异步处理产品录入任务，taskId={}", taskId);
-        updateTaskStatus(taskId, "processing", 10, null, null);
+        // 原子认领任务：仅 pending 状态可置为 processing，防止多执行器并发重复处理同一任务
+        if (asyncTaskMapper.claimPendingTask(taskId) == 0) {
+            log.warn("任务已被认领或不处于 pending 状态，跳过处理，taskId={}", taskId);
+            return;
+        }
 
         String recognitionId = IdGenerator.recognitionId();
         String modelName = aiModel;
