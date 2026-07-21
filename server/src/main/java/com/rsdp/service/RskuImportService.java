@@ -354,17 +354,17 @@ public class RskuImportService {
         }
 
         RspuMaster rspu = rspuMap.get(row.getRspuId());
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             return "产品不存在或已删除";
         }
 
         FactoryMaster factory = factoryMap.get(row.getFactoryCode());
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             return "工厂不存在或已删除";
         }
 
         RspuVariant variant = variantMap.get(row.getVariantId());
-        if (variant == null || variant.getDeletedAt() != null) {
+        if (variant == null) {
             return "变体不存在或已删除";
         }
         if (!row.getRspuId().equals(variant.getRspuId())) {

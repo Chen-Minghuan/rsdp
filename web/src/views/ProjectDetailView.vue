@@ -138,7 +138,7 @@ async function openTemplateModal() {
   copySchemeName.value = ''
   templatesLoading.value = true
   try {
-    templates.value = await listSchemes({ isTemplate: true })
+    templates.value = (await listSchemes({ isTemplate: true, size: 100 })).rows
   } catch (e) {
     message.error(e instanceof Error ? e.message : '加载模板列表失败')
   } finally {

@@ -1,5 +1,6 @@
 package com.rsdp.controller;
 
+import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
@@ -11,6 +12,8 @@ import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
 import com.rsdp.service.SchemeService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
@@ -23,8 +26,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
 
 /**
  * 搭配方案接口。
@@ -49,17 +50,22 @@ public class SchemeController {
     }
 
     /**
-     * 查询方案列表（支持模板与标签筛选）。
+     * 分页查询方案列表（支持模板与标签筛选）。
      *
      * @param isTemplate 是否仅查模板（可选）
      * @param tag        模板标签筛选（可选）
-     * @return 方案列表
+     * @param page       页码（从 1 开始）
+     * @param size       每页条数（上限 100）
+     * @return 方案摘要分页结果
      */
     @GetMapping
-    public Result<List<SchemeSummaryResponse>> list(
+    public Result<PageResult<SchemeSummaryResponse>> list(
         @RequestParam(required = false) Boolean isTemplate,
-        @RequestParam(required = false) String tag) {
-        return Result.ok(schemeService.listSchemes(isTemplate, tag));
+        @RequestParam(required = false) String tag,
+        @RequestParam(defaultValue = "1") long page,
+        @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页数量不能小于 1")
+        @Max(value = 100, message = "每页数量不能超过 100") long size) {
+        return Result.ok(schemeService.listSchemes(isTemplate, tag, page, size));
     }
 
     /**

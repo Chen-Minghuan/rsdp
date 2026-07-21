@@ -13,12 +13,18 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 审计日志服务。
@@ -34,6 +40,8 @@ public class AuditLogService {
 
     private static final Set<String> PRICE_FIELDS = Set.of("factoryPrice", "oldPrice", "newPrice");
     private static final int MAX_SNAPSHOT_LENGTH = 32768;
+
+    private final AtomicLong insertFailureCount = new AtomicLong();
 
     /**
      * 记录创建操作。
@@ -109,6 +117,7 @@ public class AuditLogService {
         logEntry.setOldValue(truncateSnapshot(sanitizeValue(oldValue)));
         logEntry.setNewValue(truncateSnapshot(sanitizeValue(newValue)));
         logEntry.setOperator(StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername());
+        logEntry.setIpAddress(resolveClientIp());
         logEntry.setCreatedAt(LocalDateTime.now());
         auditLogWriter.write(logEntry);
     }
@@ -125,9 +134,40 @@ public class AuditLogService {
             }
             return value;
         } catch (Exception e) {
-            log.warn("审计日志快照截断失败: {}", e.getMessage());
+            insertFailureCount.incrementAndGet();
+            // 快照序列化失败计入写入失败计数，保留原值尽量留痕
+            log.error("审计日志快照截断失败（累计 {} 次）: {}", insertFailureCount.get(), e.getMessage(), e);
             return value;
         }
+    }
+
+    /**
+     * 获取审计写入失败累计次数（监控用）。
+     *
+     * @return 启动至今的失败次数
+     */
+    public long getInsertFailureCount() {
+        return insertFailureCount.get();
+    }
+
+    /**
+     * 从当前请求上下文解析客户端 IP（优先 X-Forwarded-For 首个地址）。
+     *
+     * <p>异步线程等非请求上下文返回 null。</p>
+     *
+     * @return 客户端 IP，无请求上下文时为 null
+     */
+    private String resolveClientIp() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        if (attributes instanceof ServletRequestAttributes servletAttributes) {
+            HttpServletRequest request = servletAttributes.getRequest();
+            String forwarded = request.getHeader("X-Forwarded-For");
+            if (StringUtils.hasText(forwarded)) {
+                return forwarded.split(",")[0].trim();
+            }
+            return request.getRemoteAddr();
+        }
+        return null;
     }
 
     private Map<String, Object> sanitizeValue(Object value) {

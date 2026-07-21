@@ -116,10 +116,8 @@ class QuoteServiceTest {
 
     @Test
     void generateQuote_shouldCollectAllInvalidRskuIds() {
-        RskuSupply deletedRsku = new RskuSupply();
-        deletedRsku.setRskuId("RSKU-B");
-        deletedRsku.setDeletedAt(java.time.LocalDateTime.now());
-        when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-A", "RSKU-B"))).thenReturn(List.of(deletedRsku));
+        // @TableLogic 下 selectBatchIds 不会返回已软删记录，失效 RSKU 表现为查询结果缺失
+        when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-A", "RSKU-B"))).thenReturn(List.of());
 
         assertThatThrownBy(() -> quoteService.generateQuote(List.of(req("RSKU-A", 1), req("RSKU-B", 1))))
             .isInstanceOf(BusinessException.class)

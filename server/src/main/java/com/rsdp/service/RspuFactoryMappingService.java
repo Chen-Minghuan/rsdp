@@ -144,7 +144,7 @@ public class RspuFactoryMappingService {
 
     private void validateRequest(RspuFactoryMappingRequest request) {
         FactoryMaster factory = factoryMasterMapper.selectById(request.getFactoryCode());
-        if (factory == null || factory.getDeletedAt() != null) {
+        if (factory == null) {
             throw new BusinessException("工厂不存在: " + request.getFactoryCode());
         }
         if (StringUtils.hasText(request.getShippingWarehouseId())) {

@@ -87,7 +87,7 @@ public class QuoteService {
         List<String> invalidRskuIds = distinctRskuIds.stream()
             .filter(id -> {
                 RskuSupply rsku = rskuMap.get(id);
-                return rsku == null || rsku.getDeletedAt() != null;
+                return rsku == null;
             })
             .toList();
         if (!invalidRskuIds.isEmpty()) {
@@ -194,7 +194,7 @@ public class QuoteService {
                                         Map<String, FactoryMaster> factoryMap,
                                         Map<String, String> primaryImageUrlMap) {
         RspuMaster rspu = rspuMap.get(rsku.getRspuId());
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             throw new ResourceNotFoundException("RSPU 不存在: " + rsku.getRspuId());
         }
 

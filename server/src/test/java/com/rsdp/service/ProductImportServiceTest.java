@@ -269,6 +269,29 @@ class ProductImportServiceTest {
     }
 
     @Test
+    void importProducts_shouldDetectDuplicateWhenSameProductReferencedByRspuIdAndExternalCode() {
+        // 同一产品在 Excel 中分别用 rspuId（第 1 行）和 externalCode（第 2 行）引用
+        ProductImportRow row1 = createValidRow();
+        row1.setExternalCode(null);
+        ProductImportRow row2 = createValidRow();
+        row2.setRspuId(null);
+        MockMultipartFile file = createExcelFile(List.of(row1, row2));
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-OLD001");
+        existing.setExternalCode("EXT-001");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        // 第 1 行按「产品已存在」跳过，第 2 行识别为重复行
+        assertThat(result.getSuccessCount()).isEqualTo(0);
+        assertThat(result.getFailedCount()).isEqualTo(2);
+        assertThat(result.getFailures().get(1).getReason()).contains("重复");
+    }
+
+    @Test
     void importProducts_shouldFailWhenCategoryCodeInvalid() {
         ProductImportRow row = createValidRow();
         row.setCategoryCode("XX");

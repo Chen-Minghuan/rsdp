@@ -505,9 +505,11 @@ POST   /api/v1/schemes
        # Response: SchemeResponse
 
 GET    /api/v1/schemes
-       # 查询搭配方案列表（已实现）
-       # Query: isTemplate? (true 仅查模板), tag? (模板标签筛选)
-       # Response: [SchemeSummary...]（含 isTemplate / templateTags）
+       # 分页查询搭配方案列表（已实现）
+       # Query: isTemplate? (true 仅查模板), tag? (模板标签筛选),
+       #        page? (默认 1), size? (默认 10，上限 100)
+       # Response: PageResult<SchemeSummary> { total, page, size, rows }（行含 isTemplate / templateTags）
+       # 说明：模板选择弹窗等需要全量小列表的场景传 size=100
 
 GET    /api/v1/schemes/{schemeId}
        # 查询搭配方案详情（已实现）

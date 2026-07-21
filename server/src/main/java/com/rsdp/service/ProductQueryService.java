@@ -466,7 +466,7 @@ public class ProductQueryService {
      */
     public ProductDetailResponse getProductDetail(String rspuId) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
         if (!canViewProduct(rspu)) {
@@ -522,7 +522,7 @@ public class ProductQueryService {
             throw new BusinessException("无效的复核状态: " + reviewStatus + "，仅支持 待复核/已确认/存疑");
         }
         RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
         dataScopeHelper.assertCanAccessRspu(rspuId);
@@ -547,7 +547,7 @@ public class ProductQueryService {
     @Transactional
     public void deleteProduct(String rspuId) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
         dataScopeHelper.assertCanAccessRspu(rspuId);
@@ -603,7 +603,7 @@ public class ProductQueryService {
     @Transactional
     public void updateProduct(String rspuId, ProductUpdateRequest request) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 

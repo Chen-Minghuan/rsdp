@@ -138,7 +138,7 @@ public class RspuRelationService {
     @Transactional
     public void updateRelation(String anchorRspuId, String relationId, RspuRelationUpdateRequest request) {
         RspuRelation relation = relationMapper.selectById(relationId);
-        if (relation == null || relation.getDeletedAt() != null
+        if (relation == null
             || !anchorRspuId.equals(relation.getAnchorRspuId())) {
             throw new ResourceNotFoundException("搭配关系不存在: " + relationId);
         }
@@ -173,7 +173,7 @@ public class RspuRelationService {
     @Transactional
     public void deleteRelation(String anchorRspuId, String relationId) {
         RspuRelation relation = relationMapper.selectById(relationId);
-        if (relation == null || relation.getDeletedAt() != null
+        if (relation == null
             || !anchorRspuId.equals(relation.getAnchorRspuId())) {
             throw new ResourceNotFoundException("搭配关系不存在: " + relationId);
         }
@@ -189,7 +189,7 @@ public class RspuRelationService {
 
     private void validateRspuExists(String rspuId) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
     }
@@ -277,7 +277,7 @@ public class RspuRelationService {
                                             Map<String, BigDecimal> minPriceMap) {
         RspuMaster target = rspuMap.get(targetRspuId);
         // 目标产品已软删除时，不在搭配列表中展示
-        if (target == null || target.getDeletedAt() != null) {
+        if (target == null) {
             return null;
         }
 

@@ -1,7 +1,9 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
@@ -12,6 +14,7 @@ import com.rsdp.dto.response.CopyFromTemplateResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.SchemeItemResponse;
 import com.rsdp.dto.response.SchemeResponse;
+import com.rsdp.dto.response.SchemeSummaryResponse;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.Project;
@@ -541,25 +544,67 @@ class SchemeServiceTest {
     }
 
     @Test
-    void listSchemes_shouldFilterByTagInMemory() {
-        Scheme template = new Scheme();
-        template.setSchemeId("SCHEME-T1");
-        template.setSchemeName("现代客厅模板");
-        template.setIsTemplate(true);
-        template.setTemplateTags("[\"客厅\"]");
-        template.setStatus("active");
+    void listSchemes_shouldReturnPagedResultWithCorrectTotal() {
+        Scheme s1 = new Scheme();
+        s1.setSchemeId("SCHEME-1");
+        s1.setSchemeName("方案一");
+        s1.setStatus("active");
 
-        Scheme normal = new Scheme();
-        normal.setSchemeId("SCHEME-N1");
-        normal.setSchemeName("普通方案");
-        normal.setIsTemplate(false);
-        normal.setStatus("active");
+        Scheme s2 = new Scheme();
+        s2.setSchemeId("SCHEME-2");
+        s2.setSchemeName("方案二");
+        s2.setStatus("active");
 
-        when(schemeMapper.selectList(any())).thenReturn(List.of(template, normal));
+        Page<Scheme> page = Page.of(1, 2);
+        page.setRecords(List.of(s1, s2));
+        page.setTotal(5);
+        when(schemeMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
 
-        assertThat(schemeService.listSchemes()).hasSize(2);
-        assertThat(schemeService.listSchemes(null, "客厅"))
+        PageResult<SchemeSummaryResponse> result = schemeService.listSchemes(null, null, 1, 2);
+
+        assertThat(result.getTotal()).isEqualTo(5L);
+        assertThat(result.getPage()).isEqualTo(1L);
+        assertThat(result.getSize()).isEqualTo(2L);
+        assertThat(result.getRows())
             .extracting("schemeId")
-            .containsExactly("SCHEME-T1");
+            .containsExactly("SCHEME-1", "SCHEME-2");
+    }
+
+    @Test
+    void listSchemes_shouldApplyFiltersBeforePaging() {
+        Page<Scheme> page = Page.of(2, 10);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(schemeMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+
+        schemeService.listSchemes(true, "客厅", 2, 10);
+
+        ArgumentCaptor<Page<Scheme>> pageCaptor = ArgumentCaptor.forClass(Page.class);
+        ArgumentCaptor<QueryWrapper<Scheme>> wrapperCaptor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(schemeMapper).selectPage(pageCaptor.capture(), wrapperCaptor.capture());
+        // 筛选条件必须在分页查询的 wrapper 中（先过滤后分页），不能在内存中过滤
+        assertThat(wrapperCaptor.getValue().getSqlSegment())
+            .contains("status")
+            .contains("is_template")
+            .contains("template_tags");
+        assertThat(pageCaptor.getValue().getCurrent()).isEqualTo(2);
+        assertThat(pageCaptor.getValue().getSize()).isEqualTo(10);
+    }
+
+    @Test
+    void listSchemes_shouldKeepActiveStatusConditionWhenPaged() {
+        Page<Scheme> page = Page.of(1, 10);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(schemeMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+
+        schemeService.listSchemes(null, null, 1, 10);
+
+        ArgumentCaptor<QueryWrapper<Scheme>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(schemeMapper).selectPage(any(Page.class), captor.capture());
+        // 分页不能破坏既有的可见性语义：仅返回 active 方案，已删除方案不出现在任何一页
+        assertThat(captor.getValue().getSqlSegment()).contains("status");
+        // 分页查询不应走全量 selectList
+        verify(schemeMapper, never()).selectList(any(QueryWrapper.class));
     }
 }

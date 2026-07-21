@@ -90,7 +90,7 @@ public class OrderService {
     @Transactional
     public OrderDetailResponse create(OrderCreateRequest request) {
         Scheme scheme = schemeMapper.selectById(request.getSchemeId());
-        if (scheme == null || scheme.getDeletedAt() != null) {
+        if (scheme == null) {
             throw new ResourceNotFoundException("方案不存在: " + request.getSchemeId());
         }
         assertSchemeOwnerOrAdmin(scheme);
@@ -141,7 +141,7 @@ public class OrderService {
 
         for (SchemeItem schemeItem : filteredItems) {
             RskuSupply rsku = rskuMap.get(schemeItem.getRskuId());
-            if (rsku == null || rsku.getDeletedAt() != null) {
+            if (rsku == null) {
                 throw new BusinessException("方案项 RSKU 已失效: " + schemeItem.getRskuId());
             }
             RspuMaster rspu = rspuMap.get(schemeItem.getRspuId());

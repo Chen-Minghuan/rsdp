@@ -107,7 +107,7 @@ public class AiMatchingService {
      */
     public AnchorMatchingResponse recommendByAnchor(AnchorMatchingRequest request) {
         RspuMaster anchor = rspuMapper.selectById(request.getExistingRspuId());
-        if (anchor == null || anchor.getDeletedAt() != null) {
+        if (anchor == null) {
             throw new ResourceNotFoundException("产品不存在: " + request.getExistingRspuId());
         }
 

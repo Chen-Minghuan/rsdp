@@ -82,7 +82,7 @@ public class VectorBackfillService {
     }
 
     private boolean processImage(ImageAssets image, RspuMaster rspu) throws Exception {
-        if (rspu == null || rspu.getDeletedAt() != null) {
+        if (rspu == null) {
             log.warn("RSPU 不存在或已删除，跳过 imageId={}", image.getImageId());
             return false;
         }

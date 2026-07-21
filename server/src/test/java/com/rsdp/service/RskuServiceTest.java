@@ -420,18 +420,6 @@ class RskuServiceTest {
     }
 
     @Test
-    void deleteRsku_shouldThrowWhenAlreadyDeleted() {
-        RskuSupply rsku = new RskuSupply();
-        rsku.setRskuId("RSKU-TEST01");
-        rsku.setDeletedAt(java.time.LocalDateTime.now());
-
-        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
-
-        assertThatThrownBy(() -> rskuService.deleteRsku("RSKU-TEST01"))
-            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class);
-    }
-
-    @Test
     void deleteRsku_shouldThrowWhenNotFound() {
         when(rskuSupplyMapper.selectById("RSKU-NOTEXIST")).thenReturn(null);
 
