@@ -18,8 +18,10 @@ import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryProductCapability;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuRelation;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
+import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.SysUser;
 import com.rsdp.event.RspuDeletedEvent;
@@ -30,8 +32,10 @@ import com.rsdp.mapper.FactoryProductCapabilityMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SysUserMapper;
 import lombok.RequiredArgsConstructor;
@@ -62,6 +66,8 @@ public class ProductQueryService {
     private final AiRecognitionMapper aiRecognitionMapper;
     private final RspuStyleMapper rspuStyleMapper;
     private final RspuSceneMapper rspuSceneMapper;
+    private final RspuVariantMapper rspuVariantMapper;
+    private final RspuRelationMapper rspuRelationMapper;
     private final ProductStyleMatchMapper productStyleMatchMapper;
     private final AuditLogService auditLogService;
     private final DictService dictService;
@@ -512,6 +518,9 @@ public class ProductQueryService {
      */
     @Transactional
     public void reviewProduct(String rspuId, String reviewStatus, String reviewComment) {
+        if (ReviewStatus.fromDbValue(reviewStatus) == null) {
+            throw new BusinessException("无效的复核状态: " + reviewStatus + "，仅支持 待复核/已确认/存疑");
+        }
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
@@ -547,24 +556,39 @@ public class ProductQueryService {
         }
 
         RspuMaster oldSnapshot = snapshot(rspu);
+        // 先收集图片 ID 用于 ChromaDB 向量清理（级联软删后图片将查询不可见）
+        List<String> imageIds = imageAssetsMapper.selectList(
+            new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId)
+        ).stream().map(ImageAssets::getImageId).toList();
+
         int affected = rspuMapper.deleteById(rspuId);
         if (affected == 0) {
             throw new ResourceNotFoundException("产品不存在或已被删除: " + rspuId);
         }
 
+        cascadeDeleteAssociations(rspuId);
+
         auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, SecurityOperatorContext.currentUsername());
 
-        publishRspuDeletedEvent(rspuId);
+        eventPublisher.publishEvent(new RspuDeletedEvent(rspuId, imageIds));
     }
 
-    private void publishRspuDeletedEvent(String rspuId) {
-        List<ImageAssets> images = imageAssetsMapper.selectList(
-            new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId)
-        );
-        List<String> imageIds = images.stream()
-            .map(ImageAssets::getImageId)
-            .toList();
-        eventPublisher.publishEvent(new RspuDeletedEvent(rspuId, imageIds));
+    /**
+     * 级联删除 RSPU 关联数据。
+     *
+     * <p>变体、报价、图片、搭配关系（双向）随产品一并软删除；
+     * 风格、场景为无软删除语义的纯关联行，直接物理删除。</p>
+     *
+     * @param rspuId RSPU ID
+     */
+    private void cascadeDeleteAssociations(String rspuId) {
+        rspuVariantMapper.delete(new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId));
+        rskuSupplyMapper.delete(new QueryWrapper<RskuSupply>().eq("rspu_id", rspuId));
+        imageAssetsMapper.delete(new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId));
+        rspuRelationMapper.delete(new QueryWrapper<RspuRelation>()
+            .and(w -> w.eq("anchor_rspu_id", rspuId).or().eq("related_rspu_id", rspuId)));
+        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
     }
 
     /**

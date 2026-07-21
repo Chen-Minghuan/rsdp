@@ -43,7 +43,7 @@ export async function listFavorites(group?: string): Promise<FavoriteItem[]> {
 export async function checkFavorites(rspuIds: string[]): Promise<string[]> {
   if (rspuIds.length === 0) return []
   const { data: result } = await apiClient.get<ApiResult<string[]>>('/v1/favorites/check', {
-    params: { rspuIds }
+    params: { rspuIds: rspuIds.join(',') }
   })
   return result.data
 }

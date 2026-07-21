@@ -29,24 +29,34 @@ public class AuthService {
     private final UserRoleService userRoleService;
     private final PermissionService permissionService;
     private final UserFactoryService userFactoryService;
+    private final LoginAttemptService loginAttemptService;
 
     /**
      * 用户登录。
      *
      * @param request 登录请求
+     * @param ip      客户端 IP
      * @return 登录响应，包含 JWT
      */
-    public LoginResponse login(LoginRequest request) {
+    public LoginResponse login(LoginRequest request, String ip) {
+        if (loginAttemptService.isBlocked(ip, request.getUsername())) {
+            throw new BusinessException("登录尝试次数过多，请稍后再试");
+        }
+
         try {
             Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword())
             );
             if (!authentication.isAuthenticated()) {
+                loginAttemptService.recordFailure(ip, request.getUsername());
                 throw new BusinessException("登录失败");
             }
         } catch (BadCredentialsException e) {
+            loginAttemptService.recordFailure(ip, request.getUsername());
             throw new BusinessException("用户名或密码错误");
         }
+
+        loginAttemptService.recordSuccess(ip, request.getUsername());
 
         SysUser user = sysUserMapper.selectByUsername(request.getUsername());
         if (user == null) {

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.rsdp.mapper.ImageAssetsMapper">
+
+    <insert id="insertBatch">
+        INSERT INTO image_assets (
+            image_id, rspu_id, variant_id, rsku_id, image_type,
+            storage_path, storage_url, file_size, width, height,
+            format, is_primary, ai_processed, quality_score,
+            uploaded_by, created_at, deleted_at
+        ) VALUES
+        <foreach collection="list" item="item" separator=",">
+            (
+                #{item.imageId}, #{item.rspuId}, #{item.variantId}, #{item.rskuId}, #{item.imageType},
+                #{item.storagePath}, #{item.storageUrl}, #{item.fileSize}, #{item.width}, #{item.height},
+                #{item.format}, #{item.primary}, #{item.aiProcessed}, #{item.qualityScore},
+                #{item.uploadedBy}, #{item.createdAt}, #{item.deletedAt}
+            )
+        </foreach>
+    </insert>
+</mapper>

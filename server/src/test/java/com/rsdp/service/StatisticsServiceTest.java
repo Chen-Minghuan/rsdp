@@ -146,7 +146,7 @@ class StatisticsServiceTest {
         try (var ignored = mockStatic(SecurityOperatorContext.class)) {
             when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(true);
 
-            List<FactoryStatResponse> stats = statisticsService.factories();
+            List<FactoryStatResponse> stats = statisticsService.factories(12);
 
             assertThat(stats).hasSize(2);
             assertThat(stats.get(0).getFactoryCode()).isEqualTo("F001");

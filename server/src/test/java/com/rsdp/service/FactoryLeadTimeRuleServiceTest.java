@@ -9,18 +9,23 @@ import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryLeadTimeRuleMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
@@ -31,6 +36,7 @@ import static org.mockito.Mockito.when;
  * {@link FactoryLeadTimeRuleService} 单元测试。
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class FactoryLeadTimeRuleServiceTest {
 
     @Mock
@@ -45,8 +51,16 @@ class FactoryLeadTimeRuleServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private FactoryLeadTimeRuleService ruleService;
+
+    @BeforeEach
+    void setUp() {
+        when(dataScopeHelper.canAccessFactory(anyString())).thenReturn(true);
+    }
 
     @Test
     void saveRule_shouldCreateWhenFactoryExists() {
@@ -87,6 +101,19 @@ class FactoryLeadTimeRuleServiceTest {
         assertThat(saved.getCategoryCode()).isEqualTo("FS");
         assertThat(saved.getBaseDays()).isEqualTo(30);
         assertThat(saved.getPriority()).isEqualTo(10);
+    }
+
+    @Test
+    void saveRule_shouldThrowWhenNoDataScopePermission() {
+        FactoryLeadTimeRuleRequest request = new FactoryLeadTimeRuleRequest();
+        request.setFactoryCode("F001");
+        request.setBaseDays(30);
+
+        when(dataScopeHelper.canAccessFactory("F001")).thenReturn(false);
+
+        assertThatThrownBy(() -> ruleService.saveRule(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无权限维护该工厂的交期规则");
     }
 
     @Test

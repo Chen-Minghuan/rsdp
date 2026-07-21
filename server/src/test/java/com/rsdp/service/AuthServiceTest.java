@@ -53,6 +53,9 @@ class AuthServiceTest {
     @Mock
     private UserFactoryService userFactoryService;
 
+    @Mock
+    private LoginAttemptService loginAttemptService;
+
     @InjectMocks
     private AuthService authService;
 
@@ -77,7 +80,7 @@ class AuthServiceTest {
         request.setUsername("admin");
         request.setPassword("admin123");
 
-        LoginResponse response = authService.login(request);
+        LoginResponse response = authService.login(request, "127.0.0.1");
 
         assertThat(response.getToken()).isEqualTo("jwt-token");
         assertThat(response.getRole()).isEqualTo("ADMIN");
@@ -109,7 +112,7 @@ class AuthServiceTest {
         request.setUsername("factory");
         request.setPassword("factory123");
 
-        LoginResponse response = authService.login(request);
+        LoginResponse response = authService.login(request, "127.0.0.1");
 
         assertThat(response.getViewFullCatalog()).isTrue();
     }
@@ -123,10 +126,25 @@ class AuthServiceTest {
         request.setUsername("admin");
         request.setPassword("wrong");
 
-        assertThatThrownBy(() -> authService.login(request))
+        assertThatThrownBy(() -> authService.login(request, "127.0.0.1"))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("用户名或密码错误");
 
         verify(sysUserMapper, never()).selectByUsername(any());
+    }
+
+    @Test
+    void login_blocked_shouldThrowBusinessException() {
+        when(loginAttemptService.isBlocked("127.0.0.1", "admin")).thenReturn(true);
+
+        LoginRequest request = new LoginRequest();
+        request.setUsername("admin");
+        request.setPassword("admin123");
+
+        assertThatThrownBy(() -> authService.login(request, "127.0.0.1"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("登录尝试次数过多");
+
+        verify(authenticationManager, never()).authenticate(any());
     }
 }

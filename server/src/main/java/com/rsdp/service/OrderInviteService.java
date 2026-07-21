@@ -36,7 +36,7 @@ import java.util.UUID;
 public class OrderInviteService {
 
     private static final String HMAC_ALGORITHM = "HmacSHA256";
-    private static final String DEV_FALLBACK_SECRET = "rsdp-dev-invite-secret-do-not-use-in-prod";
+    private static final int MIN_SECRET_LENGTH = 32;
 
     private final DesignOrderMapper designOrderMapper;
     private final DesignOrderItemMapper designOrderItemMapper;
@@ -53,11 +53,15 @@ public class OrderInviteService {
         this.designOrderItemMapper = designOrderItemMapper;
         this.orderService = orderService;
         if (configuredSecret == null || configuredSecret.isBlank()) {
-            log.warn("rsdp.order.invite-secret 未配置，使用开发默认密钥，生产环境必须通过 RSDP_ORDER_INVITE_SECRET 注入");
-            this.secretKey = DEV_FALLBACK_SECRET.getBytes(StandardCharsets.UTF_8);
-        } else {
-            this.secretKey = configuredSecret.getBytes(StandardCharsets.UTF_8);
+            throw new IllegalArgumentException(
+                "rsdp.order.invite-secret 未配置，必须通过 RSDP_ORDER_INVITE_SECRET 环境变量设置长度 >= "
+                    + MIN_SECRET_LENGTH + " 的密钥");
         }
+        if (configuredSecret.length() < MIN_SECRET_LENGTH) {
+            throw new IllegalArgumentException(
+                "rsdp.order.invite-secret 长度必须 >= " + MIN_SECRET_LENGTH + " 位");
+        }
+        this.secretKey = configuredSecret.getBytes(StandardCharsets.UTF_8);
         this.inviteExpireDays = inviteExpireDays;
     }
 
@@ -112,11 +116,71 @@ public class OrderInviteService {
         if (!OrderService.STATUS_PENDING.equals(order.getStatus())) {
             throw new BusinessException("订单当前状态不可确认");
         }
+
+        DesignOrder update = new DesignOrder();
+        update.setStatus(OrderService.STATUS_CONFIRMED);
+        update.setInviteConfirmedAt(LocalDateTime.now());
+        update.setUpdatedAt(LocalDateTime.now());
+        int affected = designOrderMapper.update(update, new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<DesignOrder>()
+            .eq("order_id", order.getOrderId())
+            .eq("status", OrderService.STATUS_PENDING)
+            .isNull("invite_confirmed_at"));
+        if (affected == 0) {
+            throw new BusinessException("订单状态已被其他操作修改，请刷新后重试");
+        }
+
         order.setStatus(OrderService.STATUS_CONFIRMED);
-        order.setInviteConfirmedAt(LocalDateTime.now());
-        order.setUpdatedAt(LocalDateTime.now());
-        designOrderMapper.updateById(order);
+        order.setInviteConfirmedAt(update.getInviteConfirmedAt());
+        order.setUpdatedAt(update.getUpdatedAt());
         return buildView(order);
+    }
+
+    /**
+     * 仅校验 token 签名与过期时间，返回订单 ID。
+     *
+     * <p>用于公开资源访问前的快速授权判断，不校验数据库中的 token 哈希状态。</p>
+     *
+     * @param token 邀请 token
+     * @return 订单 ID
+     */
+    public String resolveOrderIdFromToken(String token) {
+        if (token == null || token.isBlank()) {
+            throw new BusinessException("邀请链接无效");
+        }
+        String[] parts = token.split("\\.");
+        if (parts.length != 2) {
+            throw new BusinessException("邀请链接无效");
+        }
+        String payload;
+        try {
+            payload = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException("邀请链接无效");
+        }
+        String[] seg = payload.split("\\.");
+        if (seg.length != 3) {
+            throw new BusinessException("邀请链接无效");
+        }
+        byte[] expected = hmac(payload);
+        byte[] actual;
+        try {
+            actual = Base64.getUrlDecoder().decode(parts[1]);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException("邀请链接无效");
+        }
+        if (!MessageDigest.isEqual(expected, actual)) {
+            throw new BusinessException("邀请链接签名无效");
+        }
+        long expireAtEpoch;
+        try {
+            expireAtEpoch = Long.parseLong(seg[1]);
+        } catch (NumberFormatException e) {
+            throw new BusinessException("邀请链接无效");
+        }
+        if (Instant.now().getEpochSecond() > expireAtEpoch) {
+            throw new BusinessException("邀请链接已过期");
+        }
+        return seg[0];
     }
 
     /**

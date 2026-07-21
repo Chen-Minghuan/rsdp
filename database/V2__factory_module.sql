@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS idx_lead_time_rule_match ON factory_lead_time_rule(fa
 -- 2.3 Excel 行级导入记录表（P0）
 CREATE TABLE IF NOT EXISTS excel_import_row (
     row_id BIGSERIAL PRIMARY KEY,
-    batch_id VARCHAR(32) NOT NULL,
+    batch_id VARCHAR(64) NOT NULL,
     excel_row_number INTEGER NOT NULL,             -- Excel中的原始行号
     row_type VARCHAR(16) NOT NULL,                 -- product/module/header/unknown
     parent_row_id BIGINT,                          -- 模块行关联到产品型号行
@@ -164,7 +164,7 @@ CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(
 CREATE TABLE IF NOT EXISTS rspu_price_column_mapping (
     mapping_id BIGSERIAL PRIMARY KEY,
     rspu_id VARCHAR(64) NOT NULL,
-    batch_id VARCHAR(32) NOT NULL,
+    batch_id VARCHAR(64) NOT NULL,
     price_column_name VARCHAR(64) NOT NULL,        -- 如 "A级布"
     material_grade_code VARCHAR(32),               -- 映射到的材质等级码
     material_code VARCHAR(32),                     -- 映射到的主材质码
@@ -184,7 +184,7 @@ CREATE INDEX IF NOT EXISTS idx_price_col_mapping_batch ON rspu_price_column_mapp
 -- 3.3 批次价格列识别表
 CREATE TABLE IF NOT EXISTS excel_import_price_column (
     column_id BIGSERIAL PRIMARY KEY,
-    batch_id VARCHAR(32) NOT NULL,
+    batch_id VARCHAR(64) NOT NULL,
     excel_column_letter VARCHAR(8) NOT NULL,       -- 如 "G"
     column_header_name VARCHAR(128) NOT NULL,      -- 清洗后的列名
     raw_header_name VARCHAR(256),                  -- 原始列名

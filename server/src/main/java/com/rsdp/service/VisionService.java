@@ -122,7 +122,7 @@ public class VisionService {
      * @return AI 识别标签
      */
     public AiLabels recognizeImage(InputStream imageStream, String categoryCode) {
-        try {
+        try (imageStream) {
             byte[] imageBytes = imageStream.readAllBytes();
             if (imageBytes.length == 0) {
                 throw new ExternalServiceException("图片流为空");

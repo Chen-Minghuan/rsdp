@@ -15,6 +15,7 @@ import com.rsdp.mapper.SysRoleMapper;
 import com.rsdp.mapper.SysUserFactoryMapper;
 import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.mapper.SysUserRoleMapper;
+import com.rsdp.util.IdGenerator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.security.core.Authentication;
@@ -28,7 +29,6 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -103,7 +103,7 @@ public class UserService {
         }
 
         SysUser user = new SysUser();
-        user.setUserId("USER-" + UUID.randomUUID().toString().toUpperCase().replace("-", ""));
+        user.setUserId(IdGenerator.userId());
         user.setUsername(request.getUsername());
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setNickname(request.getNickname());

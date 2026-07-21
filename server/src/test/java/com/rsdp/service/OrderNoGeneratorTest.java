@@ -1,7 +1,6 @@
 package com.rsdp.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.rsdp.mapper.DesignOrderMapper;
+import com.rsdp.mapper.OrderNoCounterMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -12,7 +11,6 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 /**
@@ -22,28 +20,28 @@ import static org.mockito.Mockito.when;
 class OrderNoGeneratorTest {
 
     @Mock
-    private DesignOrderMapper designOrderMapper;
+    private OrderNoCounterMapper orderNoCounterMapper;
 
     @InjectMocks
     private OrderNoGenerator orderNoGenerator;
 
     @Test
-    void generateShouldStartFrom001WhenNoOrdersToday() {
-        when(designOrderMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+    void generateShouldFormatSequenceWithThreeDigits() {
+        String datePart = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        when(orderNoCounterMapper.allocateSequence(datePart)).thenReturn(1L);
 
         String orderNo = orderNoGenerator.generate();
 
-        String datePart = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         assertThat(orderNo).isEqualTo("DO-" + datePart + "-001");
     }
 
     @Test
-    void generateShouldIncrementSequenceBasedOnTodayCount() {
-        when(designOrderMapper.selectCount(any(QueryWrapper.class))).thenReturn(9L);
+    void generateShouldIncrementSequenceBasedOnCounter() {
+        String datePart = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        when(orderNoCounterMapper.allocateSequence(datePart)).thenReturn(10L);
 
         String orderNo = orderNoGenerator.generate();
 
-        String datePart = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         assertThat(orderNo).isEqualTo("DO-" + datePart + "-010");
     }
 }

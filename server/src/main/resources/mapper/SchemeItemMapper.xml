@@ -22,7 +22,7 @@
                 #{item.rspuId},
                 #{item.rskuId},
                 #{item.factoryCode},
-                #{item.factoryPrice},
+                #{item.factoryPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
                 #{item.leadTimeDays},
                 #{item.moq},
                 #{item.quantity},

@@ -31,7 +31,6 @@ import com.rsdp.mapper.SchemeMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -42,7 +41,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.rsdp.util.IdGenerator;
 
 /**
  * 设计订单服务：由方案生成订单（价格快照 × 全局折扣率）、状态机迁移、归属校验。
@@ -68,8 +67,6 @@ public class OrderService {
         STATUS_CONFIRMED, List.of(STATUS_PRODUCING, STATUS_CANCELLED),
         STATUS_PRODUCING, List.of(STATUS_COMPLETED)
     );
-
-    private static final int ORDER_NO_MAX_RETRY = 3;
 
     private final DesignOrderMapper designOrderMapper;
     private final DesignOrderItemMapper designOrderItemMapper;
@@ -122,18 +119,32 @@ public class OrderService {
 
         BigDecimal priceRate = configService.getOrderPriceRate();
 
-        String orderId = "ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String orderId = IdGenerator.orderId();
+
+        // 批量预加载 RSKU / RSPU / 主图，消除循环内 N+1
+        List<String> rskuIds = filteredItems.stream().map(SchemeItem::getRskuId).distinct().toList();
+        List<String> rspuIds = filteredItems.stream().map(SchemeItem::getRspuId).distinct().toList();
+        Map<String, RskuSupply> rskuMap = rskuIds.isEmpty()
+            ? Map.of()
+            : rskuSupplyMapper.selectBatchIds(rskuIds).stream()
+                .collect(java.util.stream.Collectors.toMap(RskuSupply::getRskuId, r -> r, (a, b) -> a));
+        Map<String, RspuMaster> rspuMap = rspuIds.isEmpty()
+            ? Map.of()
+            : rspuMapper.selectBatchIds(rspuIds).stream()
+                .collect(java.util.stream.Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+        Map<String, String> primaryImageMap = batchPrimaryImageIds(rspuIds);
+
         BigDecimal originalTotal = BigDecimal.ZERO;
         BigDecimal finalTotal = BigDecimal.ZERO;
         int maxLeadTime = 0;
         List<DesignOrderItem> items = new java.util.ArrayList<>();
 
         for (SchemeItem schemeItem : filteredItems) {
-            RskuSupply rsku = rskuSupplyMapper.selectById(schemeItem.getRskuId());
+            RskuSupply rsku = rskuMap.get(schemeItem.getRskuId());
             if (rsku == null) {
                 throw new BusinessException("方案项 RSKU 已失效: " + schemeItem.getRskuId());
             }
-            RspuMaster rspu = rspuMapper.selectById(schemeItem.getRspuId());
+            RspuMaster rspu = rspuMap.get(schemeItem.getRspuId());
             int quantity = schemeItem.getQuantity() != null && schemeItem.getQuantity() > 0
                 ? schemeItem.getQuantity()
                 : 1;
@@ -152,7 +163,7 @@ public class OrderService {
             item.setRskuId(schemeItem.getRskuId());
             item.setProductName(rspu != null ? rspu.getPositioningLabel() : null);
             item.setModel(rsku.getFactorySku());
-            item.setImageId(primaryImageId(schemeItem.getRspuId()));
+            item.setImageId(primaryImageMap.get(schemeItem.getRspuId()));
             item.setQuantity(quantity);
             item.setOriginalPrice(originalPrice);
             item.setFinalPrice(finalPrice);
@@ -180,7 +191,8 @@ public class OrderService {
         order.setCreatedBy(SecurityOperatorContext.currentUserId());
         order.setCreatedAt(LocalDateTime.now());
         order.setUpdatedAt(LocalDateTime.now());
-        insertWithOrderNoRetry(order);
+        order.setOrderNo(orderNoGenerator.generate());
+        designOrderMapper.insert(order);
 
         designOrderItemMapper.insertBatchSafe(items);
 
@@ -277,14 +289,25 @@ public class OrderService {
     @Transactional
     public OrderResponse updateStatus(String orderId, String targetStatus) {
         DesignOrder order = getAccessibleOrder(orderId);
-        List<String> allowed = STATUS_TRANSITIONS.getOrDefault(order.getStatus(), List.of());
+        String currentStatus = order.getStatus();
+        List<String> allowed = STATUS_TRANSITIONS.getOrDefault(currentStatus, List.of());
         if (!allowed.contains(targetStatus)) {
             throw new BusinessException(
-                "订单状态不允许从「" + order.getStatus() + "」变更为「" + targetStatus + "」");
+                "订单状态不允许从「" + currentStatus + "」变更为「" + targetStatus + "」");
         }
+
+        DesignOrder update = new DesignOrder();
+        update.setStatus(targetStatus);
+        update.setUpdatedAt(LocalDateTime.now());
+        int affected = designOrderMapper.update(update, new QueryWrapper<DesignOrder>()
+            .eq("order_id", orderId)
+            .eq("status", currentStatus));
+        if (affected == 0) {
+            throw new BusinessException("订单状态已被其他操作修改，请刷新后重试");
+        }
+
         order.setStatus(targetStatus);
-        order.setUpdatedAt(LocalDateTime.now());
-        designOrderMapper.updateById(order);
+        order.setUpdatedAt(update.getUpdatedAt());
         return toResponse(order);
     }
 
@@ -322,28 +345,24 @@ public class OrderService {
     }
 
     /**
-     * 写入订单并处理订单号并发冲突（唯一索引兜底，最多重试 3 次）。
+     * 批量查询指定 RSPU 的主图 ID。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return RSPU ID → 主图 ID 映射
      */
-    private void insertWithOrderNoRetry(DesignOrder order) {
-        for (int attempt = 1; attempt <= ORDER_NO_MAX_RETRY; attempt++) {
-            try {
-                order.setOrderNo(orderNoGenerator.generate());
-                designOrderMapper.insert(order);
-                return;
-            } catch (DuplicateKeyException e) {
-                if (attempt == ORDER_NO_MAX_RETRY) {
-                    throw new BusinessException("订单号生成冲突，请重试");
-                }
-            }
+    private Map<String, String> batchPrimaryImageIds(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
         }
-    }
-
-    private String primaryImageId(String rspuId) {
         List<ImageAssets> images = imageAssetsMapper.selectList(new QueryWrapper<ImageAssets>()
-            .eq("rspu_id", rspuId)
-            .eq("is_primary", true)
-            .last("LIMIT 1"));
-        return images.isEmpty() ? null : images.get(0).getImageId();
+            .in("rspu_id", rspuIds)
+            .eq("is_primary", true));
+        Map<String, String> result = new HashMap<>();
+        for (ImageAssets image : images) {
+            // 同一 RSPU 可能有多张主图（异常数据），取第一条即可
+            result.putIfAbsent(image.getRspuId(), image.getImageId());
+        }
+        return result;
     }
 
     private String buildSnapshotJson(RspuMaster rspu, RskuSupply rsku) {

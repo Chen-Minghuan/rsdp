@@ -12,6 +12,7 @@ import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.FactoryWarehouseMapper;
 import com.rsdp.mapper.RspuFactoryMappingMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +35,7 @@ public class RspuFactoryMappingService {
     private final FactoryMasterMapper factoryMasterMapper;
     private final FactoryWarehouseMapper warehouseMapper;
     private final AuditLogService auditLogService;
+    private final DataScopeHelper dataScopeHelper;
 
     /**
      * 创建或更新 RSPU-工厂关联。
@@ -43,6 +45,7 @@ public class RspuFactoryMappingService {
      */
     @Transactional
     public Long saveMapping(RspuFactoryMappingRequest request) {
+        dataScopeHelper.assertCanAccessRspu(request.getRspuId());
         validateRequest(request);
 
         RspuFactoryMapping mapping;
@@ -133,6 +136,7 @@ public class RspuFactoryMappingService {
         if (mapping == null) {
             throw new ResourceNotFoundException("关联记录不存在: " + mappingId);
         }
+        dataScopeHelper.assertCanAccessRspu(mapping.getRspuId());
         mappingMapper.deleteById(mappingId);
         auditLogService.logDelete("rspu_factory_mapping", String.valueOf(mappingId), mapping,
             SecurityOperatorContext.currentUsername());

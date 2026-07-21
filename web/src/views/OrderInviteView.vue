@@ -84,7 +84,12 @@ const itemColumns: DataTableColumns<OrderInviteItem> = [
     width: 80,
     render: row =>
       row.imageId
-        ? h(NImage, { src: `/api/v1/images/${row.imageId}`, width: 56, height: 56, objectFit: 'cover' })
+        ? h(NImage, {
+            src: `/api/v1/images/${row.imageId}?inviteToken=${encodeURIComponent(token.value)}`,
+            width: 56,
+            height: 56,
+            objectFit: 'cover'
+          })
         : '-'
   },
   { title: '产品名称', key: 'productName', render: row => row.productName || '-' },

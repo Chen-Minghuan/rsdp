@@ -135,12 +135,12 @@ class OrderServiceTest {
         rsku.setFactorySku("FS-100");
         rsku.setFactoryPrice(new BigDecimal("1000.00"));
         rsku.setLeadTimeDays(25);
-        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectBatchIds(anyList())).thenReturn(List.of(rsku));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
         rspu.setPositioningLabel("布艺沙发");
-        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
+        when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(rspu));
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
         when(configService.getOrderPriceRate()).thenReturn(new BigDecimal("0.8"));
         when(orderNoGenerator.generate()).thenReturn("DO-20260715-001");
@@ -238,6 +238,7 @@ class OrderServiceTest {
     @Test
     void updateStatusShouldAllowLegalTransition() {
         when(designOrderMapper.selectById("ORD-1")).thenReturn(pendingOrder());
+        when(designOrderMapper.update(any(DesignOrder.class), any(QueryWrapper.class))).thenReturn(1);
 
         try (var ignored = mockStatic(SecurityOperatorContext.class)) {
             when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
@@ -247,7 +248,22 @@ class OrderServiceTest {
 
             assertThat(response.getStatus()).isEqualTo(OrderService.STATUS_CONFIRMED);
         }
-        verify(designOrderMapper).updateById(any(DesignOrder.class));
+        verify(designOrderMapper).update(any(DesignOrder.class), any(QueryWrapper.class));
+    }
+
+    @Test
+    void updateStatusShouldFailWhenConcurrentlyModified() {
+        when(designOrderMapper.selectById("ORD-1")).thenReturn(pendingOrder());
+        when(designOrderMapper.update(any(DesignOrder.class), any(QueryWrapper.class))).thenReturn(0);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            assertThatThrownBy(() -> orderService.updateStatus("ORD-1", OrderService.STATUS_CONFIRMED))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已被其他操作修改");
+        }
     }
 
     @Test

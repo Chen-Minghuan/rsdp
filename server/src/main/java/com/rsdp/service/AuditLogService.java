@@ -12,8 +12,6 @@ import com.rsdp.util.AesEncryptionUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -37,23 +35,24 @@ import java.util.concurrent.atomic.AtomicLong;
 public class AuditLogService {
 
     private final AuditLogMapper auditLogMapper;
+    private final AuditLogWriter auditLogWriter;
     private final ObjectMapper objectMapper;
 
     private static final Set<String> PRICE_FIELDS = Set.of("factoryPrice", "oldPrice", "newPrice");
+    private static final int MAX_SNAPSHOT_LENGTH = 32768;
 
     private final AtomicLong insertFailureCount = new AtomicLong();
 
     /**
      * 记录创建操作。
      *
-     * <p>事务策略明确为 {@code REQUIRES_NEW}（见 {@link #insert} JavaDoc）。</p>
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
      *
      * @param tableName 表名
      * @param recordId  记录 ID
      * @param newValue  创建后对象
      * @param operator  操作人
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void logCreate(String tableName, String recordId, Object newValue, String operator) {
         insert(tableName, recordId, "CREATE", null, newValue, operator);
     }
@@ -61,7 +60,7 @@ public class AuditLogService {
     /**
      * 记录更新操作。
      *
-     * <p>事务策略明确为 {@code REQUIRES_NEW}（见 {@link #insert} JavaDoc）。</p>
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
      *
      * @param tableName 表名
      * @param recordId  记录 ID
@@ -69,7 +68,6 @@ public class AuditLogService {
      * @param newValue  更新后对象
      * @param operator  操作人
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void logUpdate(String tableName, String recordId, Object oldValue, Object newValue, String operator) {
         insert(tableName, recordId, "UPDATE", oldValue, newValue, operator);
     }
@@ -77,7 +75,7 @@ public class AuditLogService {
     /**
      * 记录复核/状态变更操作。
      *
-     * <p>事务策略明确为 {@code REQUIRES_NEW}（见 {@link #insert} JavaDoc）。</p>
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
      *
      * @param tableName 表名
      * @param recordId  记录 ID
@@ -85,7 +83,6 @@ public class AuditLogService {
      * @param newValue  变更后对象
      * @param operator  操作人
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void logReview(String tableName, String recordId, Object oldValue, Object newValue, String operator) {
         insert(tableName, recordId, "REVIEW", oldValue, newValue, operator);
     }
@@ -93,14 +90,13 @@ public class AuditLogService {
     /**
      * 记录删除操作。
      *
-     * <p>事务策略明确为 {@code REQUIRES_NEW}（见 {@link #insert} JavaDoc）。</p>
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
      *
      * @param tableName 表名
      * @param recordId  记录 ID
      * @param oldValue  删除前对象
      * @param operator  操作人
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void logDelete(String tableName, String recordId, Object oldValue, String operator) {
         insert(tableName, recordId, "DELETE", oldValue, null, operator);
     }
@@ -108,10 +104,9 @@ public class AuditLogService {
     /**
      * 审计写入。
      *
-     * <p>事务策略：四个 public 入口方法标注 {@code REQUIRES_NEW} 独立事务。
-     * 原因：PostgreSQL 中事务内任一语句失败会导致整个事务中止，若审计与业务同事务，
-     * 审计写入失败会连带业务提交失败；独立事务下审计失败仅记日志。
-     * 代价是业务后续回滚时可能残留审计记录，视为「操作尝试留痕」，可接受。</p>
+     * <p>事务策略：实际写入经 {@link AuditLogWriter} 异步线程执行，与业务事务完全解耦。
+     * 审计写入失败仅记录 ERROR 日志，不影响业务提交；代价是异步线程未执行前应用崩溃
+     * 可能丢失审计记录，视为可接受（审计为留痕而非业务强一致数据）。</p>
      */
     private void insert(String tableName, String recordId, String action,
                         Object oldValue, Object newValue, String operator) {
@@ -119,17 +114,30 @@ public class AuditLogService {
         logEntry.setTableName(tableName);
         logEntry.setRecordId(recordId);
         logEntry.setAction(action);
-        logEntry.setOldValue(sanitizeValue(oldValue));
-        logEntry.setNewValue(sanitizeValue(newValue));
+        logEntry.setOldValue(truncateSnapshot(sanitizeValue(oldValue)));
+        logEntry.setNewValue(truncateSnapshot(sanitizeValue(newValue)));
         logEntry.setOperator(StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername());
         logEntry.setIpAddress(resolveClientIp());
         logEntry.setCreatedAt(LocalDateTime.now());
+        auditLogWriter.write(logEntry);
+    }
+
+    private Map<String, Object> truncateSnapshot(Map<String, Object> value) {
+        if (value == null) {
+            return null;
+        }
         try {
-            auditLogMapper.insert(logEntry);
+            String json = objectMapper.writeValueAsString(value);
+            if (json.length() > MAX_SNAPSHOT_LENGTH) {
+                return Map.of("truncated",
+                    json.substring(0, MAX_SNAPSHOT_LENGTH) + "... [截断，原始长度=" + json.length() + "]");
+            }
+            return value;
         } catch (Exception e) {
             insertFailureCount.incrementAndGet();
-            // 告警通道：ERROR 日志（可被日志监控采集）+ insertFailureCount 计数器（可通过指标接口暴露）
-            log.error("审计日志写入失败（累计 {} 次）: {} {} {}", insertFailureCount.get(), tableName, recordId, action, e);
+            // 快照序列化失败计入写入失败计数，保留原值尽量留痕
+            log.error("审计日志快照截断失败（累计 {} 次）: {}", insertFailureCount.get(), e.getMessage(), e);
+            return value;
         }
     }
 
