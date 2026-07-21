@@ -145,6 +145,12 @@ public class AuthService {
         if (user == null) {
             throw new BusinessException("用户不存在");
         }
+        // 历史账号无邀请码时懒生成（V13 之前的存量用户）
+        if (!StringUtils.hasText(user.getInviteCode())) {
+            user.setInviteCode(inviteService.generateUniqueInviteCode());
+            user.setUpdatedAt(LocalDateTime.now());
+            sysUserMapper.updateById(user);
+        }
         List<String> roles = userRoleService.getRoleCodesByUserId(user.getUserId());
         List<String> permissions = permissionService.getPermissionsByUserId(user.getUserId()).stream().toList();
         List<String> factoryCodes = userFactoryService.getFactoryCodesByUserId(user.getUserId());

@@ -190,6 +190,24 @@ const routes = [
         name: 'UserInfo',
         component: () => import('@/views/user/UserInfoView.vue'),
         meta: { requiresAuth: true }
+      },
+      {
+        path: 'company',
+        name: 'UserCompany',
+        component: () => import('@/views/user/UserCompanyView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: 'member',
+        name: 'UserMember',
+        component: () => import('@/views/user/UserMemberView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: 'invitation',
+        name: 'UserInvitation',
+        component: () => import('@/views/user/UserInvitationView.vue'),
+        meta: { requiresAuth: true }
       }
     ]
   },

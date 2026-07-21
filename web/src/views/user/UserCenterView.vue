@@ -2,19 +2,28 @@
 /**
  * 用户中心布局页（rooom 复现阶段 5）。
  *
- * 左侧菜单 + 右侧子页内容。菜单项随子页落地逐步增加：
- * 个人中心（本步）→ 企业信息/成员管理/邀请用户（下一步）。
+ * 左侧菜单 + 右侧子页内容：个人中心 / 企业信息 / 成员管理（仅企业账号）/ 邀请用户。
  */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NMenu, type MenuOption } from 'naive-ui'
+import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 
-const menuOptions = computed<MenuOption[]>(() => [
-  { label: '个人中心', key: '/user/info' }
-])
+const menuOptions = computed<MenuOption[]>(() => {
+  const options: MenuOption[] = [
+    { label: '个人中心', key: '/user/info' },
+    { label: '企业信息', key: '/user/company' }
+  ]
+  if (userStore.companyId) {
+    options.push({ label: '成员管理', key: '/user/member' })
+  }
+  options.push({ label: '邀请用户', key: '/user/invitation' })
+  return options
+})
 
 const activeKey = computed(() => route.path)
 

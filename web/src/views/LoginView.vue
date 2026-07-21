@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert, NDivider } from 'naive-ui'
-import { login } from '@/api/auth'
+import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert, NDivider, NTabs, NTabPane } from 'naive-ui'
+import { login, register } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
@@ -16,13 +16,30 @@ const redirectPath = computed(() => {
   return redirect.startsWith('/') && !redirect.includes('://') ? redirect : '/'
 })
 
+/** 邀请链接带的邀请码（?inviteCode=），命中时默认打开注册 Tab */
+const inviteCodeFromQuery = computed(() => {
+  const code = route.query.inviteCode
+  return typeof code === 'string' ? code : ''
+})
+
+const activeTab = ref<'login' | 'register'>(inviteCodeFromQuery.value ? 'register' : 'login')
+
 const form = ref({
   username: '',
   password: ''
 })
 
+const registerForm = ref({
+  username: '',
+  nickname: '',
+  password: '',
+  confirmPassword: '',
+  inviteCode: inviteCodeFromQuery.value
+})
+
 const loading = ref(false)
 const errorMessage = ref('')
+const successMessage = ref('')
 
 const isDev = import.meta.env.DEV
 
@@ -49,6 +66,7 @@ async function handleLogin() {
 
   loading.value = true
   errorMessage.value = ''
+  successMessage.value = ''
 
   try {
     await login({
@@ -68,50 +86,140 @@ async function handleLogin() {
     loading.value = false
   }
 }
+
+async function handleRegister() {
+  const { username, password, confirmPassword, nickname, inviteCode } = registerForm.value
+  if (!username.trim() || !password) {
+    errorMessage.value = '请输入用户名和密码'
+    return
+  }
+  if (username.trim().length < 2) {
+    errorMessage.value = '用户名长度至少 2 位'
+    return
+  }
+  if (password.length < 6) {
+    errorMessage.value = '密码长度至少 6 位'
+    return
+  }
+  if (password !== confirmPassword) {
+    errorMessage.value = '两次输入的密码不一致'
+    return
+  }
+
+  loading.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await register({
+      username: username.trim(),
+      password,
+      nickname: nickname.trim() || undefined,
+      inviteCode: inviteCode.trim() || undefined
+    })
+    // 注册成功：回填用户名并引导登录
+    form.value.username = username.trim()
+    form.value.password = ''
+    activeTab.value = 'login'
+    successMessage.value = '注册成功，请登录'
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '注册失败'
+  } finally {
+    loading.value = false
+  }
+}
 </script>
 
 <template>
   <div class="login-page">
-    <n-card title="RSDP 登录" style="width: 360px;">
-      <n-form label-placement="left" label-width="60">
-        <n-form-item label="用户名">
-          <n-input v-model:value="form.username" placeholder="请输入用户名" @keydown.enter="handleLogin" />
-        </n-form-item>
-        <n-form-item label="密码">
-          <n-input
-            v-model:value="form.password"
-            type="password"
-            placeholder="请输入密码"
-            show-password-on="click"
-            @keydown.enter="handleLogin"
-          />
-        </n-form-item>
-      </n-form>
+    <n-card style="width: 380px;">
+      <n-tabs v-model:value="activeTab" type="line" animated>
+        <n-tab-pane name="login" tab="登录">
+          <n-form label-placement="left" label-width="60">
+            <n-form-item label="用户名">
+              <n-input v-model:value="form.username" placeholder="请输入用户名" @keydown.enter="handleLogin" />
+            </n-form-item>
+            <n-form-item label="密码">
+              <n-input
+                v-model:value="form.password"
+                type="password"
+                placeholder="请输入密码"
+                show-password-on="click"
+                @keydown.enter="handleLogin"
+              />
+            </n-form-item>
+          </n-form>
 
-      <n-alert v-if="errorMessage" type="error" :show-icon="false" style="margin-bottom: 16px;">
-        {{ errorMessage }}
-      </n-alert>
+          <n-alert v-if="successMessage" type="success" :show-icon="false" style="margin-bottom: 12px;">
+            {{ successMessage }}
+          </n-alert>
+          <n-alert v-if="errorMessage" type="error" :show-icon="false" style="margin-bottom: 12px;">
+            {{ errorMessage }}
+          </n-alert>
 
-      <n-space justify="end">
-        <n-button type="primary" :loading="loading" @click="handleLogin">
-          登录
-        </n-button>
-      </n-space>
+          <n-space justify="end">
+            <n-button type="primary" :loading="loading" @click="handleLogin">
+              登录
+            </n-button>
+          </n-space>
 
-      <template v-if="isDev">
-        <n-divider>快速登录（开发环境）</n-divider>
-        <n-space wrap>
-          <n-button
-            v-for="account in quickAccounts"
-            :key="account.username"
-            size="small"
-            :loading="loading"
-            @click="quickLogin(account.username, account.password)"
-          >
-            {{ account.label }}
-          </n-button>
-        </n-space>
-      </template>
+          <template v-if="isDev">
+            <n-divider>快速登录（开发环境）</n-divider>
+            <n-space wrap>
+              <n-button
+                v-for="account in quickAccounts"
+                :key="account.username"
+                size="small"
+                :loading="loading"
+                @click="quickLogin(account.username, account.password)"
+              >
+                {{ account.label }}
+              </n-button>
+            </n-space>
+          </template>
+        </n-tab-pane>
+
+        <n-tab-pane name="register" tab="注册">
+          <n-form label-placement="left" label-width="70">
+            <n-form-item label="用户名">
+              <n-input v-model:value="registerForm.username" placeholder="2-32 位用户名" />
+            </n-form-item>
+            <n-form-item label="昵称">
+              <n-input v-model:value="registerForm.nickname" placeholder="选填，默认同用户名" />
+            </n-form-item>
+            <n-form-item label="密码">
+              <n-input
+                v-model:value="registerForm.password"
+                type="password"
+                placeholder="6-64 位密码"
+                show-password-on="click"
+              />
+            </n-form-item>
+            <n-form-item label="确认密码">
+              <n-input
+                v-model:value="registerForm.confirmPassword"
+                type="password"
+                placeholder="再次输入密码"
+                show-password-on="click"
+                @keydown.enter="handleRegister"
+              />
+            </n-form-item>
+            <n-form-item label="邀请码">
+              <n-input v-model:value="registerForm.inviteCode" placeholder="选填" />
+            </n-form-item>
+          </n-form>
+
+          <n-alert v-if="errorMessage" type="error" :show-icon="false" style="margin-bottom: 12px;">
+            {{ errorMessage }}
+          </n-alert>
+
+          <n-space justify="end">
+            <n-button type="primary" :loading="loading" @click="handleRegister">
+              注册
+            </n-button>
+          </n-space>
+        </n-tab-pane>
+      </n-tabs>
     </n-card>
   </div>
 </template>

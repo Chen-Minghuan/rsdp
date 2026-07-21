@@ -16,10 +16,30 @@ POST   /api/v1/auth/login
        # 说明：登录成功后，前端应将 token 存入 localStorage，
        #      并在后续请求头中携带 Authorization: Bearer <token>
 
+POST   /api/v1/auth/register
+       # 公开注册（免登录，可携带邀请码归因）
+       # Request:  { username, password, nickname?, inviteCode? }
+       # Response: { userId, username, nickname, inviteCode }
+       # 说明：默认 VIEWER 角色（rooom TOURIST 映射）；inviteCode 有效时绑定
+       #      invited_by 并写 invite_record，无效码/自邀请返回业务错误
+
 GET    /api/v1/auth/me
        # 获取当前登录用户信息（需认证）
-       # Response: { tokenType, userId, username, nickname, role, roles, permissions, viewFullCatalog, factoryCodes }
-       # 说明：token 为空；roles/permissions 用于前端权限控制
+       # Response: { tokenType, userId, username, nickname, role, roles, permissions,
+       #            viewFullCatalog, factoryCodes, inviteCode, certifiedDesigner, companyId }
+       # 说明：token 为空；roles/permissions 用于前端权限控制；
+       #      历史账号无邀请码时本接口懒生成 inviteCode
+
+PUT    /api/v1/auth/me/profile
+       # 更新当前登录用户资料（需认证）
+       # Request: { nickname }
+       # Response: UserResponse
+
+PUT    /api/v1/auth/me/password
+       # 修改当前登录用户密码（需认证）
+       # Request: { oldPassword, newPassword }（新密码 6-64 位）
+       # Response: void
+       # 说明：校验原密码，成功后递增 token_version，旧 token 失效需重新登录
 
 PUT    /api/v1/auth/me/preferences
        # 更新当前登录用户偏好设置（需认证）
@@ -770,6 +790,83 @@ PUT    /api/v1/admin/users/{userId}/status
        # Query: status (active|disabled)
        # Response: void
 ```
+
+### 用户中心-企业团队（登录用户自服务）
+
+> 所有端点仅需登录；写操作由 Service 层按「企业管理员（owner）或平台 ADMIN」校验。
+> 企业 ≠ 角色：`sys_user.company_id` 非空即企业账号。
+
+```
+PUT    /api/v1/member/certified-designer
+       # 认证设计师（当前用户一键升级）
+       # Response: void
+       # 说明：挂 certified_designer 标记；VIEWER/USER 角色补 DESIGNER 角色并
+       #      递增 token_version（需重新登录）；已是 DESIGNER/ADMIN/EDITOR 只挂标记
+
+GET    /api/v1/member/company
+       # 查询当前用户的企业（无企业时 data 为 null）
+       # Response: { companyId, companyName, logoImageId?, priceRatio, ownerId,
+       #            ownerNickname, status, memberCount, createdAt, updatedAt }
+
+POST   /api/v1/member/company
+       # 创建企业（当前用户成为管理员；已归属企业则拒绝）
+       # Request: { companyName, logoImageId?, priceRatio? }（priceRatio ∈ [0,1]，默认 1）
+
+PUT    /api/v1/member/company
+       # 更新企业（名称/Logo/折扣率，仅管理员/ADMIN）
+       # Request: { companyName?, logoImageId?, priceRatio? }
+
+PUT    /api/v1/member/company/owner
+       # 变更企业管理员（新管理员必须是本企业成员）
+       # Request: { newOwnerId }
+
+DELETE /api/v1/member/company
+       # 软删除企业（成员归属清空，分组级联软删）
+
+GET    /api/v1/member/groups
+       # 企业分组列表（含成员数）
+       # Response: [{ groupId, companyId, groupName, enabled, memberCount, createdAt }]
+
+POST   /api/v1/member/groups
+       # 创建分组（同企业重名拒绝）
+       # Request: { groupName, enabled? }
+
+PUT    /api/v1/member/groups/{groupId}
+       # 更新分组（改名/启停）
+       # Request: { groupName?, enabled? }
+
+DELETE /api/v1/member/groups/{groupId}
+       # 软删除分组（成员 group_id 置空）
+
+GET    /api/v1/member/members
+       # 企业成员列表（企业成员均可查看）
+       # Query: groupId?（按分组过滤）
+       # Response: [{ userId, username, nickname, groupId?, groupName?, status,
+       #             roleCode?, certifiedDesigner, owner, createdAt }]
+
+GET    /api/v1/member/members/search
+       # 搜索可邀请用户（仅管理员/ADMIN；按用户名/昵称，仅未归属企业的启用账号，上限 20）
+       # Query: keyword
+       # Response: [{ userId, username, nickname, status }]
+
+POST   /api/v1/member/members
+       # 邀请用户加入企业
+       # Request: { userId, groupId? }
+
+DELETE /api/v1/member/members/{userId}
+       # 移出成员（企业管理员需先变更管理员才能被移出）
+
+PUT    /api/v1/member/members/{userId}/group
+       # 调整成员分组（groupId 为空表示移出分组）
+       # Request: { groupId? }
+
+GET    /api/v1/member/invites
+       # 我的邀请记录（邀请裂变）
+       # Response: [{ id, inviteeId, inviteeUsername, inviteeNickname, createdAt }]
+```
+
+**订单计价折扣率优先级**：当前用户归属企业时使用企业 `price_ratio`，否则回退全局
+`order.price_rate`（详见「设计订单」与「系统配置」）。
 
 ### 系统
 
