@@ -179,6 +179,21 @@ const routes = [
     meta: { requiresAuth: true, roles: [ROLES.FACTORY_ADMIN] }
   },
   {
+    path: '/user',
+    name: 'UserCenter',
+    component: () => import('@/views/user/UserCenterView.vue'),
+    redirect: '/user/info',
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: 'info',
+        name: 'UserInfo',
+        component: () => import('@/views/user/UserInfoView.vue'),
+        meta: { requiresAuth: true }
+      }
+    ]
+  },
+  {
     path: '/403',
     name: 'Forbidden',
     component: () => import('@/views/ForbiddenView.vue'),

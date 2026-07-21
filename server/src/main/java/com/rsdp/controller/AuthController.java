@@ -2,8 +2,10 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.LoginRequest;
+import com.rsdp.dto.request.PasswordUpdateRequest;
 import com.rsdp.dto.request.RegisterRequest;
 import com.rsdp.dto.request.UserPreferenceUpdateRequest;
+import com.rsdp.dto.request.UserProfileUpdateRequest;
 import com.rsdp.dto.response.LoginResponse;
 import com.rsdp.dto.response.RegisterResponse;
 import com.rsdp.dto.response.UserResponse;
@@ -143,6 +145,37 @@ public class AuthController {
             throw new BusinessException("用户未登录");
         }
         return Result.ok(authService.getCurrentUser(securityUser.getUsername()));
+    }
+
+    /**
+     * 更新当前登录用户资料（昵称）。
+     *
+     * @param request 资料更新请求
+     * @return 更新后的用户信息
+     */
+    @PutMapping("/me/profile")
+    public Result<UserResponse> updateMyProfile(@Valid @RequestBody UserProfileUpdateRequest request) {
+        String userId = SecurityOperatorContext.currentUserId();
+        if (!StringUtils.hasText(userId)) {
+            throw new BusinessException("用户未登录");
+        }
+        return Result.ok(userService.updateMyProfile(userId, request));
+    }
+
+    /**
+     * 修改当前登录用户密码（成功后旧 token 失效，需重新登录）。
+     *
+     * @param request 密码更新请求
+     * @return 空结果
+     */
+    @PutMapping("/me/password")
+    public Result<Void> updateMyPassword(@Valid @RequestBody PasswordUpdateRequest request) {
+        String userId = SecurityOperatorContext.currentUserId();
+        if (!StringUtils.hasText(userId)) {
+            throw new BusinessException("用户未登录");
+        }
+        userService.updateMyPassword(userId, request);
+        return Result.ok();
     }
 
     /**

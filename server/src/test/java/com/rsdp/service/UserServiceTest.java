@@ -9,6 +9,7 @@ import com.rsdp.entity.SysRole;
 import com.rsdp.entity.SysUser;
 import com.rsdp.entity.SysUserFactory;
 import com.rsdp.entity.SysUserRole;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.SysRoleMapper;
 import com.rsdp.mapper.SysUserFactoryMapper;
 import com.rsdp.mapper.SysUserMapper;
@@ -25,10 +26,13 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -65,6 +69,9 @@ class UserServiceTest {
 
     @Mock
     private InviteService inviteService;
+
+    @Mock
+    private AuditLogService auditLogService;
 
     @InjectMocks
     private UserService userService;
@@ -275,6 +282,61 @@ class UserServiceTest {
         verify(sysUserMapper, times(2)).updateById(captor.capture());
         assertThat(captor.getValue().getTokenVersion()).isEqualTo(6);
         assertThat(response.getStatus()).isEqualTo("disabled");
+    }
+
+    @Test
+    void updateMyProfile_shouldUpdateNicknameAndAudit() {
+        SysUser existing = buildUser("USER-015", "designer", "旧昵称");
+        when(sysUserMapper.selectById("USER-015")).thenReturn(existing);
+        when(userRoleService.getRoleCodesByUserId("USER-015")).thenReturn(List.of("DESIGNER"));
+        when(userFactoryService.getFactoryCodesByUserId("USER-015")).thenReturn(List.of());
+
+        com.rsdp.dto.request.UserProfileUpdateRequest request = new com.rsdp.dto.request.UserProfileUpdateRequest();
+        request.setNickname("新昵称");
+
+        UserResponse response = userService.updateMyProfile("USER-015", request);
+
+        assertThat(response.getNickname()).isEqualTo("新昵称");
+        verify(sysUserMapper).updateById(any(SysUser.class));
+        verify(auditLogService).logUpdate(eq("sys_user"), eq("USER-015"), any(), any(), eq("designer"));
+    }
+
+    @Test
+    void updateMyPassword_shouldRejectWrongOldPassword() {
+        SysUser existing = buildUser("USER-016", "designer", "设计师");
+        existing.setPasswordHash("old-hash");
+        when(sysUserMapper.selectById("USER-016")).thenReturn(existing);
+        when(passwordEncoder.matches("wrong", "old-hash")).thenReturn(false);
+
+        com.rsdp.dto.request.PasswordUpdateRequest request = new com.rsdp.dto.request.PasswordUpdateRequest();
+        request.setOldPassword("wrong");
+        request.setNewPassword("newPass123");
+
+        assertThatThrownBy(() -> userService.updateMyPassword("USER-016", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("原密码错误");
+        verify(sysUserMapper, never()).updateById(any(SysUser.class));
+    }
+
+    @Test
+    void updateMyPassword_shouldEncodeAndIncrementTokenVersion() {
+        SysUser existing = buildUser("USER-017", "designer", "设计师");
+        existing.setPasswordHash("old-hash");
+        existing.setTokenVersion(0);
+        when(sysUserMapper.selectById("USER-017")).thenReturn(existing);
+        when(passwordEncoder.matches("oldPass123", "old-hash")).thenReturn(true);
+        when(passwordEncoder.encode("newPass123")).thenReturn("new-hash");
+
+        com.rsdp.dto.request.PasswordUpdateRequest request = new com.rsdp.dto.request.PasswordUpdateRequest();
+        request.setOldPassword("oldPass123");
+        request.setNewPassword("newPass123");
+
+        userService.updateMyPassword("USER-017", request);
+
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper, times(2)).updateById(captor.capture());
+        assertThat(captor.getValue().getTokenVersion()).isEqualTo(1);
+        verify(auditLogService).logUpdate(eq("sys_user"), eq("USER-017"), any(), any(), eq("designer"));
     }
 
     private SysUser buildUser(String userId, String username, String nickname) {

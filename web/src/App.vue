@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, type GlobalThemeOverrides, type DropdownOption } from 'naive-ui'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, NTag, type GlobalThemeOverrides, type DropdownOption } from 'naive-ui'
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter, isNavigationFailure } from 'vue-router'
 import { useUserStore } from '@/stores/user'
@@ -86,7 +86,9 @@ function groupDropdownOptions(group: NavGroup): DropdownOption[] {
 
 const userDropdownOptions = computed(() => {
   const options: { label: string; key: string; disabled?: boolean }[] = [
-    { label: `角色：${userStore.roles.join(', ') || '-'}`, key: 'role', disabled: true }
+    { label: `账号类型：${userStore.accountTypeLabel}`, key: 'account-type', disabled: true },
+    { label: `角色：${userStore.roles.join(', ') || '-'}`, key: 'role', disabled: true },
+    { label: '个人中心', key: 'user-center' }
   ]
   if (isFactoryAdmin.value) {
     options.push({ label: '账号设置', key: 'settings' })
@@ -101,6 +103,8 @@ async function handleUserAction(key: string) {
     await router.replace('/login')
   } else if (key === 'settings') {
     await router.push('/settings')
+  } else if (key === 'user-center') {
+    await router.push('/user/info')
   }
 }
 </script>
@@ -140,7 +144,18 @@ async function handleUserAction(key: string) {
               :options="userDropdownOptions"
               @select="handleUserAction"
             >
-              <n-button quaternary class="user-button">{{ userStore.displayName }}</n-button>
+              <n-button quaternary class="user-button">
+                {{ userStore.displayName }}
+                <n-tag
+                  v-if="userStore.accountType !== 'tourist'"
+                  :type="userStore.accountType === 'company' ? 'success' : 'info'"
+                  size="tiny"
+                  :bordered="false"
+                  style="margin-left: 6px;"
+                >
+                  {{ userStore.accountTypeLabel }}
+                </n-tag>
+              </n-button>
             </n-dropdown>
             <n-button v-else quaternary @click="navigate('/login')">
               登录

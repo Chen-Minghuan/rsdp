@@ -3,7 +3,9 @@ package com.rsdp.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.rsdp.dto.request.UserCreateRequest;
+import com.rsdp.dto.request.PasswordUpdateRequest;
 import com.rsdp.dto.request.UserPreferenceUpdateRequest;
+import com.rsdp.dto.request.UserProfileUpdateRequest;
 import com.rsdp.dto.request.UserUpdateRequest;
 import com.rsdp.dto.response.UserResponse;
 import com.rsdp.entity.SysRole;
@@ -48,6 +50,7 @@ public class UserService {
     private final UserFactoryService userFactoryService;
     private final PermissionService permissionService;
     private final InviteService inviteService;
+    private final AuditLogService auditLogService;
 
     /**
      * 分页查询用户列表。
@@ -204,6 +207,53 @@ public class UserService {
         user.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.updateById(user);
         return toResponse(user);
+    }
+
+    /**
+     * 更新当前登录用户的资料（昵称）。
+     *
+     * @param userId  当前登录用户 ID
+     * @param request 资料更新请求
+     * @return 更新后的用户信息
+     */
+    @Transactional
+    public UserResponse updateMyProfile(String userId, UserProfileUpdateRequest request) {
+        SysUser user = sysUserMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+        String oldNickname = user.getNickname() == null ? "" : user.getNickname();
+        user.setNickname(request.getNickname().trim());
+        user.setUpdatedAt(LocalDateTime.now());
+        sysUserMapper.updateById(user);
+        auditLogService.logUpdate("sys_user", userId,
+            Map.of("nickname", oldNickname),
+            Map.of("nickname", user.getNickname()),
+            user.getUsername());
+        return toResponse(user);
+    }
+
+    /**
+     * 修改当前登录用户密码：校验原密码，成功后递增 token_version 使旧 token 失效（需重新登录）。
+     *
+     * @param userId  当前登录用户 ID
+     * @param request 密码更新请求
+     */
+    @Transactional
+    public void updateMyPassword(String userId, PasswordUpdateRequest request) {
+        SysUser user = sysUserMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+        if (!passwordEncoder.matches(request.getOldPassword(), user.getPasswordHash())) {
+            throw new BusinessException("原密码错误");
+        }
+        user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
+        user.setUpdatedAt(LocalDateTime.now());
+        sysUserMapper.updateById(user);
+        incrementTokenVersion(userId);
+        auditLogService.logUpdate("sys_user", userId,
+            Map.of("password", "***"), Map.of("password", "***"), user.getUsername());
     }
 
     /**

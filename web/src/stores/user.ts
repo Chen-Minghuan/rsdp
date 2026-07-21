@@ -11,6 +11,9 @@ export interface UserInfo {
   permissions: string[]
   viewFullCatalog?: boolean
   factoryCodes?: string[]
+  inviteCode?: string | null
+  certifiedDesigner?: boolean
+  companyId?: string | null
 }
 
 interface AuthMeResponse {
@@ -22,6 +25,9 @@ interface AuthMeResponse {
   permissions: string[]
   viewFullCatalog?: boolean
   factoryCodes?: string[]
+  inviteCode?: string | null
+  certifiedDesigner?: boolean
+  companyId?: string | null
 }
 
 export const useUserStore = defineStore('user', () => {
@@ -39,6 +45,28 @@ export const useUserStore = defineStore('user', () => {
   const isAdmin = computed(() => roles.value.includes('ADMIN'))
   const isEditor = computed(() => roles.value.includes('EDITOR'))
   const isPlatformStaff = computed(() => isAdmin.value || isEditor.value)
+
+  /** 所属企业 ID（非空即企业账号） */
+  const companyId = computed(() => userInfo.value?.companyId || null)
+  /** 永久邀请码 */
+  const inviteCode = computed(() => userInfo.value?.inviteCode || null)
+  /** 认证设计师标记 */
+  const certifiedDesigner = computed(() => userInfo.value?.certifiedDesigner === true)
+
+  /**
+   * 账号类型（rooom 三级账号映射）：COMPANY=企业账号（companyId 非空）、
+   * DESIGNER=设计师（认证标记或 DESIGNER 角色）、TOURIST=游客。
+   */
+  const accountType = computed<'company' | 'designer' | 'tourist'>(() => {
+    if (companyId.value) return 'company'
+    if (certifiedDesigner.value || roles.value.includes('DESIGNER')) return 'designer'
+    return 'tourist'
+  })
+  const accountTypeLabel = computed(() => {
+    if (accountType.value === 'company') return '企业账号'
+    if (accountType.value === 'designer') return '设计师'
+    return '游客'
+  })
 
   function hasRole(role: string): boolean {
     return roles.value.includes(role)
@@ -97,7 +125,10 @@ export const useUserStore = defineStore('user', () => {
         roles: normalizeRoles(data.roles, data.role),
         permissions: data.permissions || [],
         viewFullCatalog: data.viewFullCatalog,
-        factoryCodes: data.factoryCodes || []
+        factoryCodes: data.factoryCodes || [],
+        inviteCode: data.inviteCode,
+        certifiedDesigner: data.certifiedDesigner,
+        companyId: data.companyId
       }
       userInfo.value = info
       fetchedAt.value = Date.now()
@@ -136,6 +167,11 @@ export const useUserStore = defineStore('user', () => {
     isAdmin,
     isEditor,
     isPlatformStaff,
+    companyId,
+    inviteCode,
+    certifiedDesigner,
+    accountType,
+    accountTypeLabel,
     hasRole,
     hasAnyRole,
     hasPermission,
