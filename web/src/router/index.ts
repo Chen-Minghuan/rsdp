@@ -179,6 +179,12 @@ const routes = [
     meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
   },
   {
+    path: '/admin/platform',
+    name: 'PlatformCms',
+    component: () => import('@/views/admin/platform/PlatformCmsView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
+  },
+  {
     path: '/admin/users',
     name: 'UserManagement',
     component: () => import('@/views/UserManagementView.vue'),

@@ -210,6 +210,12 @@ export const navGroups: NavGroup[] = [
         label: '模板标签',
         path: '/admin/template-tags',
         roles: [ROLES.ADMIN, ROLES.EDITOR]
+      },
+      {
+        key: 'admin-platform',
+        label: '官网内容',
+        path: '/admin/platform',
+        roles: [ROLES.ADMIN, ROLES.EDITOR]
       }
     ]
   }
