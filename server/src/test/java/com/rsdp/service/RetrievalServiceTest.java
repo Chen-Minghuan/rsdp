@@ -272,6 +272,42 @@ class RetrievalServiceTest {
         assertThat(results.get(0).getMatchReasons()).contains("风格/定位一致");
     }
 
+    @Test
+    void searchSimilar_shouldNotDeduplicateWhenFingerprintSegmentsAllEmpty() {
+        // Given：RSPU-B 在库中缺失（rspu 为 null），RSPU-A/RSPU-C 指纹各段全空，
+        // 三者指纹无法区分时应回退 rspuId，不应被折叠为一条
+        SimilarProductRequest request = new SimilarProductRequest();
+        request.setText("未知产品");
+        request.setTopK(5);
+
+        when(embeddingService.embedText("未知产品")).thenReturn(new float[]{0.1f, 0.2f});
+
+        Map<String, Object> response = Map.of(
+            "ids", List.of(List.of("IMG-001", "IMG-002", "IMG-003")),
+            "distances", List.of(List.of(0.1, 0.2, 0.3)),
+            "metadatas", List.of(List.of(
+                Map.of("rspu_id", "RSPU-A"),
+                Map.of("rspu_id", "RSPU-B"),
+                Map.of("rspu_id", "RSPU-C")
+            ))
+        );
+        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+
+        when(imageAssetsMapper.selectBatchIds(any())).thenReturn(List.of());
+
+        RspuMaster rspuA = buildRspu("RSPU-A", null, null, null, null, null, null);
+        RspuMaster rspuC = buildRspu("RSPU-C", null, null, null, null, null, null);
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspuA, rspuC));
+
+        // When
+        List<SimilarProductResponse> results = retrievalService.searchSimilar(request);
+
+        // Then：rspu 缺失或指纹各段全空时不去重，三条候选全部保留
+        assertThat(results).hasSize(3);
+        assertThat(results).extracting(SimilarProductResponse::getRspuId)
+            .containsExactlyInAnyOrder("RSPU-A", "RSPU-B", "RSPU-C");
+    }
+
     private RspuMaster buildRspu(String rspuId, String categoryCode, String positioningLabel,
                                  String colorPrimaryName, String materialTags, String sceneTags,
                                  String sixDimTags) {

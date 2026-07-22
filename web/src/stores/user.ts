@@ -1,6 +1,6 @@
 import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { apiClient } from '@/api/client'
+import { apiClient, ApiError, HttpError } from '@/api/client'
 import type { ApiResult } from '@/api/client'
 
 export interface UserInfo {
@@ -105,14 +105,20 @@ export const useUserStore = defineStore('user', () => {
       return userInfo.value
     }
     if (loading.value) {
-      return new Promise((resolve) => {
+      // 有在途请求：先等待其完成
+      const callStart = Date.now()
+      await new Promise<void>((resolve) => {
         const stop = watch(loading, (v) => {
           if (!v) {
             stop()
-            resolve(userInfo.value)
+            resolve()
           }
         })
       })
+      // force 调用：若在途请求早于本次调用起点（其结果可能已过期，如登录前的 /auth/me），重新发起请求
+      if (!force || fetchedAt.value >= callStart) {
+        return userInfo.value
+      }
     }
     loading.value = true
     try {
@@ -133,9 +139,14 @@ export const useUserStore = defineStore('user', () => {
       userInfo.value = info
       fetchedAt.value = Date.now()
       return info
-    } catch {
-      userInfo.value = null
-      fetchedAt.value = 0
+    } catch (err: unknown) {
+      // 仅会话失效（401/403）时清空登录态；网络抖动/超时等保留旧状态，避免路由守卫误踢用户
+      const status =
+        err instanceof ApiError ? err.code : err instanceof HttpError ? err.status : 0
+      if (status === 401 || status === 403) {
+        userInfo.value = null
+        fetchedAt.value = 0
+      }
       return null
     } finally {
       loading.value = false

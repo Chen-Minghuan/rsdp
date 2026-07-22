@@ -13,12 +13,23 @@ import {
 } from 'naive-ui'
 import { updateMyProfile, updateMyPassword } from '@/api/auth'
 import { certifiedDesigner } from '@/api/member'
+import { ApiError } from '@/api/client'
 import { useUserStore } from '@/stores/user'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 
 const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
 const userStore = useUserStore()
+const signal = useRequestAbort()
+
+/**
+ * 统一错误提示：业务 403 已由响应拦截器全局提示，此处不再重复。
+ */
+function showError(err: unknown, fallback: string) {
+  if (err instanceof ApiError && err.code === 403) return
+  message.error(err instanceof Error ? err.message : fallback)
+}
 
 const userInfo = computed(() => userStore.userInfo)
 const accountTypeLabel = computed(() => userStore.accountTypeLabel)
@@ -46,11 +57,11 @@ async function saveProfile() {
   }
   profileSaving.value = true
   try {
-    await updateMyProfile({ nickname: value })
+    await updateMyProfile({ nickname: value }, { signal })
     await userStore.fetchUserInfo(true)
     message.success('资料已保存')
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '保存失败')
+    showError(err, '保存失败')
   } finally {
     profileSaving.value = false
   }
@@ -67,8 +78,8 @@ async function savePassword() {
     message.warning('请输入原密码')
     return
   }
-  if (newPassword.value.length < 6) {
-    message.warning('新密码长度至少 6 位')
+  if (newPassword.value.length < 6 || newPassword.value.length > 64) {
+    message.warning('新密码长度须为 6-64 位')
     return
   }
   if (newPassword.value !== confirmPassword.value) {
@@ -77,11 +88,11 @@ async function savePassword() {
   }
   passwordSaving.value = true
   try {
-    await updateMyPassword({ oldPassword: oldPassword.value, newPassword: newPassword.value })
+    await updateMyPassword({ oldPassword: oldPassword.value, newPassword: newPassword.value }, { signal })
     message.success('密码已修改，请重新登录')
     await relogin()
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '修改失败')
+    showError(err, '修改失败')
   } finally {
     passwordSaving.value = false
   }
@@ -99,11 +110,11 @@ function handleCertify() {
     onPositiveClick: async () => {
       certifying.value = true
       try {
-        await certifiedDesigner()
+        await certifiedDesigner({ signal })
         message.success('认证成功，请重新登录')
         await relogin()
       } catch (err: unknown) {
-        message.error(err instanceof Error ? err.message : '认证失败')
+        showError(err, '认证失败')
       } finally {
         certifying.value = false
       }
@@ -157,13 +168,13 @@ async function relogin() {
     <n-card title="修改密码">
       <n-form label-placement="left" label-width="80" style="max-width: 420px;">
         <n-form-item label="原密码">
-          <n-input v-model:value="oldPassword" type="password" show-password-on="click" placeholder="请输入原密码" />
+          <n-input v-model:value="oldPassword" type="password" show-password-on="click" placeholder="请输入原密码" maxlength="64" />
         </n-form-item>
         <n-form-item label="新密码">
-          <n-input v-model:value="newPassword" type="password" show-password-on="click" placeholder="6-64 位新密码" />
+          <n-input v-model:value="newPassword" type="password" show-password-on="click" placeholder="6-64 位新密码" maxlength="64" />
         </n-form-item>
         <n-form-item label="确认密码">
-          <n-input v-model:value="confirmPassword" type="password" show-password-on="click" placeholder="再次输入新密码" />
+          <n-input v-model:value="confirmPassword" type="password" show-password-on="click" placeholder="再次输入新密码" maxlength="64" />
         </n-form-item>
         <n-form-item label=" ">
           <n-button type="primary" :loading="passwordSaving" @click="savePassword">修改密码</n-button>

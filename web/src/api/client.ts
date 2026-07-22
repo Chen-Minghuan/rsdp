@@ -15,6 +15,19 @@ export class ApiError extends Error {
 }
 
 /**
+ * HTTP 错误。后端返回非 2xx HTTP 状态码时由 errorInterceptor 抛出，保留 status 便于调用方区分。
+ */
+export class HttpError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'HttpError'
+    this.status = status
+  }
+}
+
+/**
  * 轻量级全局消息提示（用于模块顶层等非 setup 场景）。
  */
 const discreteApi =
@@ -80,10 +93,12 @@ async function errorInterceptor(error: AxiosError | ApiError) {
   }
 
   if (response.status === 401) {
-    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    // 登出接口本身容忍 401（如改密后旧 token 已失效），不做硬跳转，由调用方自行导航
+    const isLogout = error.config?.url?.endsWith('/auth/logout')
+    if (!isLogout && typeof window !== 'undefined' && window.location.pathname !== '/login') {
       window.location.href = '/login'
     }
-    return Promise.reject(new Error('登录已过期，请重新登录'))
+    return Promise.reject(new HttpError(401, '登录已过期，请重新登录'))
   }
 
   if (response.status === 403) {
@@ -92,12 +107,12 @@ async function errorInterceptor(error: AxiosError | ApiError) {
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
-      return Promise.reject(new Error('登录已过期，请重新登录'))
+      return Promise.reject(new HttpError(403, '登录已过期，请重新登录'))
     }
     if (discreteApi) {
       discreteApi.message.error('权限不足，无法执行该操作')
     }
-    return Promise.reject(new Error('权限不足，无法执行该操作'))
+    return Promise.reject(new HttpError(403, '权限不足，无法执行该操作'))
   }
 
   let message: string | undefined
@@ -114,7 +129,7 @@ async function errorInterceptor(error: AxiosError | ApiError) {
     message = (response.data as { message?: string } | undefined)?.message
   }
 
-  return Promise.reject(new Error(message || error.message || '请求失败'))
+  return Promise.reject(new HttpError(response.status, message || error.message || '请求失败'))
 }
 
 apiClient.interceptors.response.use(undefined, errorInterceptor)

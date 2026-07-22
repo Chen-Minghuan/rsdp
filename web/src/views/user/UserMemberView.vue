@@ -14,12 +14,23 @@ import {
   getMyCompany, listMyGroups, createGroup, updateGroup, deleteGroup,
   listMembers, searchUsers, joinCompany, removeMember, updateMemberGroup
 } from '@/api/member'
+import { ApiError } from '@/api/client'
 import type { Company, CompanyMember, MemberGroup, MemberSearchResult } from '@/types/member'
 import { useUserStore } from '@/stores/user'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 
 const message = useMessage()
 const dialog = useDialog()
 const userStore = useUserStore()
+const signal = useRequestAbort()
+
+/**
+ * 统一错误提示：业务 403 已由响应拦截器全局提示，此处不再重复。
+ */
+function showError(err: unknown, fallback: string) {
+  if (err instanceof ApiError && err.code === 403) return
+  message.error(err instanceof Error ? err.message : fallback)
+}
 
 const loading = ref(true)
 const company = ref<Company | null>(null)
@@ -43,9 +54,17 @@ const canManage = computed(() =>
   !!company.value && (company.value.ownerId === userStore.userInfo?.userId || userStore.isAdmin)
 )
 
-const groupOptions = computed(() =>
-  groups.value.filter((g) => g.enabled).map((g) => ({ label: g.groupName, value: g.groupId }))
-)
+const groupOptions = computed(() => {
+  const enabled = groups.value
+    .filter((g) => g.enabled)
+    .map((g) => ({ label: g.groupName, value: g.groupId }))
+  const enabledIds = new Set(enabled.map((o) => o.value))
+  // 成员当前所在但已停用的分组补入选项，避免下拉回显裸 groupId
+  const usedDisabled = groups.value
+    .filter((g) => !g.enabled && !enabledIds.has(g.groupId) && members.value.some((m) => m.groupId === g.groupId))
+    .map((g) => ({ label: `${g.groupName}(已停用)`, value: g.groupId }))
+  return [...enabled, ...usedDisabled]
+})
 
 const filteredMembers = computed(() =>
   filterGroupId.value ? members.value.filter((m) => m.groupId === filterGroupId.value) : members.value
@@ -54,23 +73,23 @@ const filteredMembers = computed(() =>
 onMounted(async () => {
   loading.value = true
   try {
-    company.value = await getMyCompany()
+    company.value = await getMyCompany({ signal })
     if (company.value) {
       await Promise.all([loadGroups(), loadMembers()])
     }
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '加载失败')
+    showError(err, '加载失败')
   } finally {
     loading.value = false
   }
 })
 
 async function loadGroups() {
-  groups.value = await listMyGroups()
+  groups.value = await listMyGroups({ signal })
 }
 
 async function loadMembers() {
-  members.value = await listMembers()
+  members.value = await listMembers(undefined, { signal })
 }
 
 // ---------- 部门管理 ----------
@@ -82,12 +101,12 @@ async function handleCreateGroup() {
   }
   groupSaving.value = true
   try {
-    await createGroup({ groupName: name })
+    await createGroup({ groupName: name }, { signal })
     newGroupName.value = ''
     message.success('分组已创建')
     await loadGroups()
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '创建失败')
+    showError(err, '创建失败')
   } finally {
     groupSaving.value = false
   }
@@ -95,23 +114,41 @@ async function handleCreateGroup() {
 
 async function handleToggleGroup(group: MemberGroup, enabled: boolean) {
   try {
-    await updateGroup(group.groupId, { groupName: group.groupName, enabled })
+    await updateGroup(group.groupId, { groupName: group.groupName, enabled }, { signal })
     await loadGroups()
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '操作失败')
+    showError(err, '操作失败')
     await loadGroups()
   }
 }
 
 function handleRenameGroup(group: MemberGroup) {
-  const name = window.prompt('请输入新的分组名称', group.groupName)?.trim()
-  if (!name || name === group.groupName) return
-  updateGroup(group.groupId, { groupName: name })
-    .then(async () => {
-      message.success('分组已改名')
-      await Promise.all([loadGroups(), loadMembers()])
-    })
-    .catch((err: unknown) => message.error(err instanceof Error ? err.message : '改名失败'))
+  const newName = ref(group.groupName)
+  dialog.warning({
+    title: '分组改名',
+    content: () =>
+      h(NInput, {
+        value: newName.value,
+        placeholder: '请输入新的分组名称',
+        maxlength: 64,
+        'onUpdate:value': (v: string) => {
+          newName.value = v
+        }
+      }),
+    positiveText: '确定',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      const name = newName.value.trim()
+      if (!name || name === group.groupName) return
+      try {
+        await updateGroup(group.groupId, { groupName: name }, { signal })
+        message.success('分组已改名')
+        await Promise.all([loadGroups(), loadMembers()])
+      } catch (err: unknown) {
+        showError(err, '改名失败')
+      }
+    }
+  })
 }
 
 function handleDeleteGroup(group: MemberGroup) {
@@ -122,66 +159,75 @@ function handleDeleteGroup(group: MemberGroup) {
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        await deleteGroup(group.groupId)
+        await deleteGroup(group.groupId, { signal })
         message.success('分组已删除')
         await Promise.all([loadGroups(), loadMembers()])
       } catch (err: unknown) {
-        message.error(err instanceof Error ? err.message : '删除失败')
+        showError(err, '删除失败')
       }
     }
   })
 }
 
 // ---------- 邀请成员 ----------
+/** 搜索请求序号：仅接受最后一次搜索的响应，避免竞态覆盖 */
+let searchSeq = 0
+
 async function handleSearch() {
   const keyword = searchKeyword.value.trim()
   if (!keyword) {
     message.warning('请输入搜索关键词')
     return
   }
+  const seq = ++searchSeq
   searching.value = true
   try {
-    searchResults.value = await searchUsers(keyword)
-    if (searchResults.value.length === 0) {
+    const results = await searchUsers(keyword, { signal })
+    if (seq !== searchSeq) return
+    searchResults.value = results
+    if (results.length === 0) {
       message.info('未找到可邀请的用户（用户须已注册且未归属企业）')
     }
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '搜索失败')
+    if (seq !== searchSeq) return
+    showError(err, '搜索失败')
   } finally {
-    searching.value = false
+    if (seq === searchSeq) {
+      searching.value = false
+    }
   }
 }
 
 async function handleJoin(user: MemberSearchResult) {
   try {
-    await joinCompany(user.userId, inviteGroupId.value)
+    await joinCompany(user.userId, inviteGroupId.value, { signal })
     message.success(`已邀请「${user.nickname || user.username}」加入企业`)
     searchResults.value = searchResults.value.filter((u) => u.userId !== user.userId)
     await loadMembers()
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '邀请失败')
+    showError(err, '邀请失败')
   }
 }
 
 // ---------- 成员操作 ----------
 async function handleChangeMemberGroup(member: CompanyMember, groupId: string | null) {
   try {
-    await updateMemberGroup(member.userId, groupId)
+    await updateMemberGroup(member.userId, groupId, { signal })
     message.success('分组已调整')
     await loadMembers()
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '调整失败')
+    showError(err, '调整失败')
     await loadMembers()
   }
 }
 
 async function doRemoveMember(member: CompanyMember) {
   try {
-    await removeMember(member.userId)
+    await removeMember(member.userId, { signal })
     message.success('成员已移出')
     await loadMembers()
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '移出失败')
+    showError(err, '移出失败')
   }
 }
 

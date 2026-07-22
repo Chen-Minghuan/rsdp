@@ -114,7 +114,7 @@ public class MemberGroupService {
     }
 
     /**
-     * 软删除分组：分组成员的 group_id 置空。仅企业管理员或平台 ADMIN。
+     * 软删除分组：分组成员的 group_id/group_name 置空。仅企业管理员或平台 ADMIN。
      *
      * @param groupId 分组 ID
      */
@@ -129,6 +129,7 @@ public class MemberGroupService {
         sysUserMapper.update(null, new UpdateWrapper<SysUser>()
             .eq("group_id", groupId)
             .set("group_id", null)
+            .set("group_name", null)
             .set("updated_at", LocalDateTime.now()));
         auditLogService.logDelete("member_group", groupId, oldSnapshot, currentUsername());
     }

@@ -345,6 +345,61 @@ FROM sys_user u
 WHERE u.username = 'factory'
 ON CONFLICT (user_id, factory_code) DO NOTHING;
 
+-- =================== V2 新增字典（工厂模块 + 导入增强，并入） ===================
+
+-- 材质等级字典（对应Excel中的价格列名）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('material_grade', 'FABRIC_A', 'A级布', 1),
+('material_grade', 'FABRIC_AA', 'AA级布', 2),
+('material_grade', 'FABRIC_S', 'S级布', 3),
+('material_grade', 'FABRIC_SS', 'SS级进口布', 4),
+('material_grade', 'LEATHER_HALF', '半皮', 10),
+('material_grade', 'LEATHER_A', 'A级全皮', 11),
+('material_grade', 'LEATHER_AA', 'AA级全皮', 12),
+('material_grade', 'LEATHER_S', 'S级全皮', 13),
+('material_grade', 'LEATHER_SS', 'SS级全皮', 14)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 工艺类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('process_type', 'STANDARD', '标准工艺', 1),
+('process_type', 'MODULAR', '模块化组合', 2),
+('process_type', 'CUSTOM', '非标定制', 3),
+('process_type', 'IRREGULAR', '异形/特殊', 4),
+('process_type', 'QUICK', '快单/现货', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 导入行状态字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('import_row_status', 'PENDING', '待处理', 1),
+('import_row_status', 'PROCESSING', '处理中', 2),
+('import_row_status', 'SUCCESS', '成功', 3),
+('import_row_status', 'FAILED', '失败', 4),
+('import_row_status', 'SKIPPED', '已跳过', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 映射状态字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('mapping_status', 'ACTIVE', '生效中', 1),
+('mapping_status', 'PAUSED', '暂停', 2),
+('mapping_status', 'DISCONTINUED', '已终止', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 工厂来源类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('factory_source_type', 'MANUAL', '手动录入', 1),
+('factory_source_type', 'EXCEL_IMPORT', 'Excel导入', 2),
+('factory_source_type', 'API_SYNC', '接口同步', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 导入行类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('import_row_type', 'PRODUCT', '产品型号行', 1),
+('import_row_type', 'MODULE', '模块行', 2),
+('import_row_type', 'HEADER', '表头行', 3),
+('import_row_type', 'UNKNOWN', '未知', 4)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
 -- 项目类型字典（V4 并入）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('project_type', 'whole_house', '全屋', 1),

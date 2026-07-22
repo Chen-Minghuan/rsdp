@@ -1,4 +1,5 @@
 import { apiClient, type ApiResult } from './client'
+import type { ApiOptions } from './product'
 
 export interface LoginRequest {
   username: string
@@ -88,16 +89,16 @@ export async function getCurrentUser(): Promise<LoginResponse> {
 /**
  * 更新当前登录用户资料（昵称）。
  */
-export async function updateMyProfile(request: UserProfileUpdateRequest): Promise<UserResponse> {
-  const { data: result } = await apiClient.put<ApiResult<UserResponse>>('/v1/auth/me/profile', request)
+export async function updateMyProfile(request: UserProfileUpdateRequest, options?: ApiOptions): Promise<UserResponse> {
+  const { data: result } = await apiClient.put<ApiResult<UserResponse>>('/v1/auth/me/profile', request, { signal: options?.signal })
   return result.data
 }
 
 /**
  * 修改当前登录用户密码（成功后需重新登录）。
  */
-export async function updateMyPassword(request: PasswordUpdateRequest): Promise<void> {
-  await apiClient.put<ApiResult<void>>('/v1/auth/me/password', request)
+export async function updateMyPassword(request: PasswordUpdateRequest, options?: ApiOptions): Promise<void> {
+  await apiClient.put<ApiResult<void>>('/v1/auth/me/password', request, { signal: options?.signal })
 }
 
 /**

@@ -14,6 +14,7 @@ import com.rsdp.mapper.SysUserMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -159,7 +160,11 @@ class MemberGroupServiceTest {
         memberGroupService.deleteGroup("GRP-1");
 
         verify(memberGroupMapper).deleteById("GRP-1");
-        verify(sysUserMapper).update(any(), any(UpdateWrapper.class));
+        ArgumentCaptor<UpdateWrapper> wrapperCaptor = ArgumentCaptor.forClass(UpdateWrapper.class);
+        verify(sysUserMapper).update(any(), wrapperCaptor.capture());
+        // 删除分组后成员的 group_id 与冗余 group_name 一并清空
+        assertThat(wrapperCaptor.getValue().getSqlSet())
+            .contains("group_id").contains("group_name");
         verify(auditLogService).logDelete(eq("member_group"), eq("GRP-1"), any(), any());
     }
 }

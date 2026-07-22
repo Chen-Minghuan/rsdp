@@ -11,6 +11,7 @@ import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ImageUploadValidator;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
@@ -94,7 +95,7 @@ public class ProductService {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
         rspu.setCategoryCode(effectiveCategoryCode);
-        rspu.setCategoryPath(resolveCategoryPath(effectiveCategoryCode));
+        rspu.setCategoryPath(CategoryPaths.resolve(effectiveCategoryCode));
         rspu.setPositioningLabel("待识别");
         rspu.setStatus("processing");
         rspu.setReviewStatus("待复核");
@@ -197,7 +198,7 @@ public class ProductService {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
         rspu.setCategoryCode(request.getCategoryCode().trim().toUpperCase());
-        rspu.setCategoryPath(resolveCategoryPath(rspu.getCategoryCode()));
+        rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
         rspu.setPositioningLabel(request.getPositioningLabel().trim().toUpperCase());
         rspu.setColorPrimaryName(request.getColorPrimaryName());
         rspu.setMaterialTags(toJson(request.getMaterialTags()));
@@ -318,7 +319,7 @@ public class ProductService {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
         rspu.setCategoryCode(effectiveCategoryCode);
-        rspu.setCategoryPath(resolveCategoryPath(effectiveCategoryCode));
+        rspu.setCategoryPath(CategoryPaths.resolve(effectiveCategoryCode));
         rspu.setPositioningLabel("待识别");
         rspu.setStatus("processing");
         rspu.setReviewStatus("待复核");
@@ -440,20 +441,6 @@ public class ProductService {
         if (!exists) {
             throw new BusinessException("品类不存在: " + categoryCode);
         }
-    }
-
-    private String resolveCategoryPath(String categoryCode) {
-        return switch (categoryCode) {
-            case "SF" -> "[\"家具\",\"沙发\"]";
-            case "TB" -> "[\"家具\",\"茶几\"]";
-            case "FC" -> "[\"家具\",\"柜类\"]";
-            case "BS" -> "[\"家具\",\"吧椅\"]";
-            case "DT" -> "[\"家具\",\"桌子\"]";
-            case "CB" -> "[\"家具\",\"柜子\"]";
-            case "BD" -> "[\"家具\",\"床\"]";
-            case "OF" -> "[\"办公家具\"]";
-            default -> "[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]";
-        };
     }
 
     private String getExtension(String filename) {

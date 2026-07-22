@@ -15,6 +15,7 @@ import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -197,6 +198,7 @@ class CompanyServiceTest {
         SysUser member = userWithoutCompany();
         member.setUserId("user-9");
         member.setCompanyId("COM-1");
+        member.setStatus("active");
         when(sysUserMapper.selectById("owner-1")).thenReturn(owner);
         when(sysUserMapper.selectById("user-9")).thenReturn(member);
         when(companyMapper.selectById("COM-1")).thenReturn(companyOf("owner-1"));
@@ -234,8 +236,40 @@ class CompanyServiceTest {
 
             verify(companyMapper).deleteById("COM-1");
             verify(memberGroupMapper).delete(any(QueryWrapper.class));
-            verify(sysUserMapper).update(any(), any(UpdateWrapper.class));
+            ArgumentCaptor<UpdateWrapper> wrapperCaptor = ArgumentCaptor.forClass(UpdateWrapper.class);
+            verify(sysUserMapper).update(any(), wrapperCaptor.capture());
+            // 删除企业后成员的企业/分组归属与冗余文本字段一并清空
+            assertThat(wrapperCaptor.getValue().getSqlSet())
+                .contains("company_id").contains("company_name")
+                .contains("group_id").contains("group_name");
             verify(auditLogService).logDelete(eq("company"), eq("COM-1"), any(), eq("owner"));
+        }
+    }
+
+    @Test
+    void transferOwnerShouldRejectDisabledMember() {
+        SysUser owner = userWithoutCompany();
+        owner.setUserId("owner-1");
+        owner.setCompanyId("COM-1");
+        SysUser member = userWithoutCompany();
+        member.setUserId("user-9");
+        member.setCompanyId("COM-1");
+        member.setStatus("disabled");
+        when(sysUserMapper.selectById("owner-1")).thenReturn(owner);
+        when(sysUserMapper.selectById("user-9")).thenReturn(member);
+        when(companyMapper.selectById("COM-1")).thenReturn(companyOf("owner-1"));
+
+        CompanyOwnerRequest request = new CompanyOwnerRequest();
+        request.setNewOwnerId("user-9");
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("owner-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            assertThatThrownBy(() -> companyService.transferOwner(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已停用");
+            verify(companyMapper, never()).updateById(any(Company.class));
         }
     }
 

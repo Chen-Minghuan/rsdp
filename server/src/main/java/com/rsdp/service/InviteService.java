@@ -46,6 +46,10 @@ public class InviteService {
     /**
      * 生成全局唯一的 8 位永久邀请码（冲突时重试）。
      *
+     * <p>「先 selectCount 再 insert」存在并发窗口，调用方写入 invite_code 时
+     * 必须捕获 {@link org.springframework.dao.DataIntegrityViolationException}
+     * 并用本方法重新生成新码重试（见 AuthService 注册/懒生成邀请码处）。</p>
+     *
      * @return 邀请码
      */
     public String generateUniqueInviteCode() {

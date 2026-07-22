@@ -21,6 +21,7 @@ import com.rsdp.security.SecurityOperatorContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -148,6 +149,7 @@ class MemberServiceTest {
         SysUser target = new SysUser();
         target.setUserId("user-9");
         target.setUsername("zhangsan");
+        target.setPasswordHash("$2a$10$bcryptHashValue");
         target.setStatus("active");
         when(sysUserMapper.selectById("user-9")).thenReturn(target);
         when(memberGroupMapper.selectById("GRP-1")).thenReturn(group("GRP-1", true));
@@ -165,7 +167,10 @@ class MemberServiceTest {
             assertThat(response.getGroupId()).isEqualTo("GRP-1");
             assertThat(response.getGroupName()).isEqualTo("方案一组");
             verify(sysUserMapper).updateById(any(SysUser.class));
-            verify(auditLogService).logUpdate(eq("sys_user"), eq("user-9"), any(), any(SysUser.class), eq("owner"));
+            ArgumentCaptor<Object> newValueCaptor = ArgumentCaptor.forClass(Object.class);
+            verify(auditLogService).logUpdate(eq("sys_user"), eq("user-9"), any(), newValueCaptor.capture(), eq("owner"));
+            // 审计 newValue 为脱敏快照，不含密码哈希
+            assertThat(((SysUser) newValueCaptor.getValue()).getPasswordHash()).isNull();
         }
     }
 
@@ -214,7 +219,11 @@ class MemberServiceTest {
 
     @Test
     void removeMemberShouldClearCompanyBinding() {
-        when(sysUserMapper.selectById("user-2")).thenReturn(member("user-2"));
+        SysUser target = member("user-2");
+        target.setPasswordHash("$2a$10$bcryptHashValue");
+        target.setGroupId("GRP-1");
+        target.setGroupName("方案一组");
+        when(sysUserMapper.selectById("user-2")).thenReturn(target);
 
         try (var ignored = mockStatic(SecurityOperatorContext.class)) {
             when(SecurityOperatorContext.currentUsername()).thenReturn("owner");
@@ -222,7 +231,21 @@ class MemberServiceTest {
             memberService.removeMember("user-2");
 
             verify(sysUserMapper).update(any(), any(UpdateWrapper.class));
-            verify(auditLogService).logUpdate(eq("sys_user"), eq("user-2"), any(), any(SysUser.class), eq("owner"));
+            ArgumentCaptor<Object> oldValueCaptor = ArgumentCaptor.forClass(Object.class);
+            ArgumentCaptor<Object> newValueCaptor = ArgumentCaptor.forClass(Object.class);
+            verify(auditLogService).logUpdate(
+                eq("sys_user"), eq("user-2"), oldValueCaptor.capture(), newValueCaptor.capture(), eq("owner"));
+            SysUser oldValue = (SysUser) oldValueCaptor.getValue();
+            SysUser newValue = (SysUser) newValueCaptor.getValue();
+            // oldValue 保留移出前归属
+            assertThat(oldValue.getCompanyId()).isEqualTo("COM-1");
+            assertThat(oldValue.getGroupId()).isEqualTo("GRP-1");
+            // newValue 归属字段已清空，且不含密码哈希
+            assertThat(newValue.getCompanyId()).isNull();
+            assertThat(newValue.getCompanyName()).isNull();
+            assertThat(newValue.getGroupId()).isNull();
+            assertThat(newValue.getGroupName()).isNull();
+            assertThat(newValue.getPasswordHash()).isNull();
         }
     }
 
@@ -257,6 +280,7 @@ class MemberServiceTest {
         SysUser user = new SysUser();
         user.setUserId("user-1");
         user.setCertifiedDesigner(false);
+        user.setPasswordHash("$2a$10$bcryptHashValue");
         user.setTokenVersion(0);
         when(sysUserMapper.selectById("user-1")).thenReturn(user);
         when(userRoleService.getRoleCodesByUserId("user-1")).thenReturn(List.of("VIEWER"));
@@ -271,7 +295,10 @@ class MemberServiceTest {
             verify(userRoleService).assignRoleByCode("user-1", "DESIGNER");
             // 角色升级后递增 token_version（selectById 两次 + updateById 两次）
             verify(sysUserMapper, org.mockito.Mockito.times(2)).updateById(any(SysUser.class));
-            verify(auditLogService).logUpdate(eq("sys_user"), eq("user-1"), any(), any(SysUser.class), eq("viewer"));
+            ArgumentCaptor<Object> newValueCaptor = ArgumentCaptor.forClass(Object.class);
+            verify(auditLogService).logUpdate(eq("sys_user"), eq("user-1"), any(), newValueCaptor.capture(), eq("viewer"));
+            // 审计 newValue 为脱敏快照，不含密码哈希
+            assertThat(((SysUser) newValueCaptor.getValue()).getPasswordHash()).isNull();
         }
     }
 
