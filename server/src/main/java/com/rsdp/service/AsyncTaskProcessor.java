@@ -117,7 +117,7 @@ public class AsyncTaskProcessor {
 
             float[] embedding = embedImageSafely(rspuId, imageBytes);
 
-            persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
+            String productName = persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
                 labels, processingTime, embedding);
 
             // AI 识别成功后，若该 RSPU 尚无变体，自动创建默认变体，便于后续批量绑定工厂报价
@@ -135,7 +135,10 @@ public class AsyncTaskProcessor {
             }
 
             String finalStatus = vectorPersisted ? "done" : "partial_success";
-            updateTaskStatus(taskId, finalStatus, 100, objectMapper.writeValueAsString(labels), vectorError);
+            // resultData 供录入中心展示：AI 原始标签 + 最终生效的产品名称（OCR 品名或品类回退名）
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.valueToTree(labels);
+            resultNode.put("productName", productName);
+            updateTaskStatus(taskId, finalStatus, 100, objectMapper.writeValueAsString(resultNode), vectorError);
             log.info("产品录入异步任务完成，taskId={}，status={}", taskId, finalStatus);
         } catch (Exception e) {
             log.error("AI 识别失败，taskId={}", taskId, e);

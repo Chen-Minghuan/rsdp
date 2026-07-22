@@ -493,7 +493,14 @@ function formatPrice(ocr?: OcrResult): string {
             >
               <n-descriptions bordered :column="2" size="small">
                 <n-descriptions-item label="产品名称">
-                  {{ getOcr(task)?.productName || '-' }}
+                  <template v-if="getOcr(task)?.productName">
+                    {{ getOcr(task)?.productName }}
+                  </template>
+                  <template v-else-if="task.result?.productName">
+                    {{ task.result.productName }}
+                    <n-tag size="tiny" type="info" style="margin-left: 4px;">按品类</n-tag>
+                  </template>
+                  <template v-else>-</template>
                 </n-descriptions-item>
                 <n-descriptions-item label="型号">
                   {{ getOcr(task)?.modelNumber || '-' }}
