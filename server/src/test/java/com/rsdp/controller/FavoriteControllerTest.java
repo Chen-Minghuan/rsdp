@@ -52,6 +52,9 @@ class FavoriteControllerTest {
     private FavoriteFolderService favoriteFolderService;
 
     @MockBean
+    private com.rsdp.service.FavoriteExportService favoriteExportService;
+
+    @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Test

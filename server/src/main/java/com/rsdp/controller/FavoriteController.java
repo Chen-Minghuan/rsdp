@@ -6,12 +6,16 @@ import com.rsdp.dto.request.FavoriteMoveRequest;
 import com.rsdp.dto.request.FavoriteRequest;
 import com.rsdp.dto.response.FavoriteFolderResponse;
 import com.rsdp.dto.response.FavoriteResponse;
+import com.rsdp.service.FavoriteExportService;
 import com.rsdp.service.FavoriteFolderService;
 import com.rsdp.service.FavoriteService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import com.rsdp.security.Permissions;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -24,6 +28,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -37,6 +43,27 @@ public class FavoriteController {
 
     private final FavoriteService favoriteService;
     private final FavoriteFolderService favoriteFolderService;
+    private final FavoriteExportService favoriteExportService;
+
+    /**
+     * 导出收藏夹 Excel（明细 + 按文件夹汇总）。
+     *
+     * @param folderId 按文件夹导出（可选，空为全部）
+     * @param isSup    是否显示供应商（工厂/出厂价），需 factory:read 权限
+     * @return Excel 文件
+     */
+    @GetMapping("/export")
+    @PreAuthorize("hasAuthority('" + Permissions.FAVORITE_READ + "')")
+    public ResponseEntity<byte[]> export(
+        @RequestParam(required = false) String folderId,
+        @RequestParam(defaultValue = "false") boolean isSup) {
+        FavoriteExportService.FavoriteExportFile file = favoriteExportService.export(folderId, isSup);
+        String encodedFileName = URLEncoder.encode(file.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFileName)
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .body(file.content());
+    }
 
     /**
      * 收藏产品（可指定目标文件夹）。

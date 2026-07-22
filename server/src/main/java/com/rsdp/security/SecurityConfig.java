@@ -57,6 +57,7 @@ public class SecurityConfig {
                 // 收藏夹：用户自服务数据，按当前用户隔离
                 .requestMatchers(HttpMethod.GET, "/api/v1/favorites").hasAuthority(Permissions.FAVORITE_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/favorites/check").hasAuthority(Permissions.FAVORITE_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/favorites/export").hasAuthority(Permissions.FAVORITE_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/favorites/folders").hasAuthority(Permissions.FAVORITE_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/favorites").hasAuthority(Permissions.FAVORITE_WRITE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/favorites/folders").hasAuthority(Permissions.FAVORITE_WRITE)
