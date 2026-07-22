@@ -7,11 +7,14 @@
 import { ref, computed, onMounted } from 'vue'
 import { NCard, NButton, NSpace, NInput, NDataTable, NSpin, NEmpty, useMessage, type DataTableColumns } from 'naive-ui'
 import { listMyInvites } from '@/api/member'
+import { ApiError } from '@/api/client'
 import type { InviteRecord } from '@/types/member'
 import { useUserStore } from '@/stores/user'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 
 const message = useMessage()
 const userStore = useUserStore()
+const signal = useRequestAbort()
 
 const loading = ref(true)
 const invites = ref<InviteRecord[]>([])
@@ -27,9 +30,12 @@ onMounted(async () => {
   try {
     // 确保用户信息（含邀请码）已加载
     await userStore.fetchUserInfo()
-    invites.value = await listMyInvites()
+    invites.value = await listMyInvites({ signal })
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '加载邀请记录失败')
+    // 业务 403 已由响应拦截器全局提示，此处不再重复
+    if (!(err instanceof ApiError && err.code === 403)) {
+      message.error(err instanceof Error ? err.message : '加载邀请记录失败')
+    }
   } finally {
     loading.value = false
   }

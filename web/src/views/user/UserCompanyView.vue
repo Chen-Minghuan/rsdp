@@ -13,12 +13,23 @@ import {
 import {
   getMyCompany, createMyCompany, updateMyCompany, transferCompanyOwner, listMembers
 } from '@/api/member'
+import { ApiError } from '@/api/client'
 import type { Company, CompanyMember } from '@/types/member'
 import { useUserStore } from '@/stores/user'
+import { useRequestAbort } from '@/composables/useRequestAbort'
 
 const message = useMessage()
 const dialog = useDialog()
 const userStore = useUserStore()
+const signal = useRequestAbort()
+
+/**
+ * 统一错误提示：业务 403 已由响应拦截器全局提示，此处不再重复。
+ */
+function showError(err: unknown, fallback: string) {
+  if (err instanceof ApiError && err.code === 403) return
+  message.error(err instanceof Error ? err.message : fallback)
+}
 
 const loading = ref(true)
 const saving = ref(false)
@@ -51,14 +62,14 @@ onMounted(async () => {
 async function loadCompany() {
   loading.value = true
   try {
-    company.value = await getMyCompany()
+    company.value = await getMyCompany({ signal })
     if (company.value) {
       companyName.value = company.value.companyName
       priceRatio.value = company.value.priceRatio
-      members.value = await listMembers()
+      members.value = await listMembers(undefined, { signal })
     }
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '加载企业信息失败')
+    showError(err, '加载企业信息失败')
   } finally {
     loading.value = false
   }
@@ -71,13 +82,13 @@ async function handleCreate() {
   }
   saving.value = true
   try {
-    await createMyCompany({ companyName: companyName.value.trim(), priceRatio: priceRatio.value })
+    await createMyCompany({ companyName: companyName.value.trim(), priceRatio: priceRatio.value }, { signal })
     // 创建成功后当前用户归属企业，刷新用户信息（companyId）
     await userStore.fetchUserInfo(true)
     message.success('企业创建成功')
     await loadCompany()
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '创建失败')
+    showError(err, '创建失败')
   } finally {
     saving.value = false
   }
@@ -93,10 +104,10 @@ async function handleUpdate() {
     company.value = await updateMyCompany({
       companyName: companyName.value.trim(),
       priceRatio: priceRatio.value
-    })
+    }, { signal })
     message.success('企业信息已保存')
   } catch (err: unknown) {
-    message.error(err instanceof Error ? err.message : '保存失败')
+    showError(err, '保存失败')
   } finally {
     saving.value = false
   }
@@ -116,11 +127,11 @@ function handleTransferOwner() {
     onPositiveClick: async () => {
       transferring.value = true
       try {
-        company.value = await transferCompanyOwner(newOwnerId.value!)
+        company.value = await transferCompanyOwner(newOwnerId.value!, { signal })
         newOwnerId.value = null
         message.success('管理员已变更')
       } catch (err: unknown) {
-        message.error(err instanceof Error ? err.message : '变更失败')
+        showError(err, '变更失败')
       } finally {
         transferring.value = false
       }

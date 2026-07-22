@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert, NDivider, NTabs, NTabPane } from 'naive-ui'
 import { login, register } from '@/api/auth'
@@ -12,8 +12,8 @@ const userStore = useUserStore()
 const redirectPath = computed(() => {
   const redirect = route.query.redirect
   if (typeof redirect !== 'string') return '/'
-  // 仅允许站内路径，防止开放重定向
-  return redirect.startsWith('/') && !redirect.includes('://') ? redirect : '/'
+  // 仅允许站内路径，防止开放重定向（含协议相对路径 //evil.com）
+  return redirect.startsWith('/') && !redirect.startsWith('//') && !redirect.includes('://') ? redirect : '/'
 })
 
 /** 邀请链接带的邀请码（?inviteCode=），命中时默认打开注册 Tab */
@@ -37,9 +37,23 @@ const registerForm = ref({
   inviteCode: inviteCodeFromQuery.value
 })
 
+// 组件已挂载时再点邀请链接：同步回填邀请码并切到注册 Tab
+watch(inviteCodeFromQuery, (code) => {
+  if (code) {
+    registerForm.value.inviteCode = code
+    activeTab.value = 'register'
+  }
+})
+
 const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
+
+/** 用户手动切换 Tab 时清空提示，避免登录/注册共享错误信息串扰 */
+function handleTabChange() {
+  errorMessage.value = ''
+  successMessage.value = ''
+}
 
 const isDev = import.meta.env.DEV
 
@@ -93,12 +107,16 @@ async function handleRegister() {
     errorMessage.value = '请输入用户名和密码'
     return
   }
-  if (username.trim().length < 2) {
-    errorMessage.value = '用户名长度至少 2 位'
+  if (username.trim().length < 2 || username.trim().length > 32) {
+    errorMessage.value = '用户名长度须为 2-32 位'
     return
   }
-  if (password.length < 6) {
-    errorMessage.value = '密码长度至少 6 位'
+  if (password.length < 6 || password.length > 64) {
+    errorMessage.value = '密码长度须为 6-64 位'
+    return
+  }
+  if (inviteCode.trim().length > 16) {
+    errorMessage.value = '邀请码长度不能超过 16 位'
     return
   }
   if (password !== confirmPassword) {
@@ -133,7 +151,7 @@ async function handleRegister() {
 <template>
   <div class="login-page">
     <n-card style="width: 380px;">
-      <n-tabs v-model:value="activeTab" type="line" animated>
+      <n-tabs v-model:value="activeTab" type="line" animated @update:value="handleTabChange">
         <n-tab-pane name="login" tab="登录">
           <n-form label-placement="left" label-width="60">
             <n-form-item label="用户名">
@@ -182,10 +200,10 @@ async function handleRegister() {
         <n-tab-pane name="register" tab="注册">
           <n-form label-placement="left" label-width="70">
             <n-form-item label="用户名">
-              <n-input v-model:value="registerForm.username" placeholder="2-32 位用户名" />
+              <n-input v-model:value="registerForm.username" placeholder="2-32 位用户名" maxlength="32" />
             </n-form-item>
             <n-form-item label="昵称">
-              <n-input v-model:value="registerForm.nickname" placeholder="选填，默认同用户名" />
+              <n-input v-model:value="registerForm.nickname" placeholder="选填，默认同用户名" maxlength="64" />
             </n-form-item>
             <n-form-item label="密码">
               <n-input
@@ -193,6 +211,7 @@ async function handleRegister() {
                 type="password"
                 placeholder="6-64 位密码"
                 show-password-on="click"
+                maxlength="64"
               />
             </n-form-item>
             <n-form-item label="确认密码">
@@ -201,11 +220,12 @@ async function handleRegister() {
                 type="password"
                 placeholder="再次输入密码"
                 show-password-on="click"
+                maxlength="64"
                 @keydown.enter="handleRegister"
               />
             </n-form-item>
             <n-form-item label="邀请码">
-              <n-input v-model:value="registerForm.inviteCode" placeholder="选填" />
+              <n-input v-model:value="registerForm.inviteCode" placeholder="选填" maxlength="16" />
             </n-form-item>
           </n-form>
 
