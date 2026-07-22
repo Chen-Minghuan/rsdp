@@ -937,29 +937,84 @@ DELETE /api/v1/collections/{collectionId}
        # Response: void
 ```
 
-### 收藏夹
+### 收藏夹（V14 两级模型：文件夹 + 收藏条目）
 
 ```
 GET    /api/v1/favorites
        # 查询当前用户的收藏列表（需登录，数据按用户隔离）
-       # Query: group? 分组筛选
+       # Query: folderId? 按文件夹筛选；unfiled?=true 仅未归档
        # Response: [FavoriteResponse...]
-       #   { favoriteId, rspuId, groupName?, productName?, primaryImageUrl?, createdAt }
+       #   { favoriteId, rspuId, groupName?, folderId?, productName?, primaryImageUrl?, createdAt }
 
 POST   /api/v1/favorites
        # 收藏产品（需登录；产品不存在 404，重复收藏报错）
-       # Request: { rspuId, groupName? (max 64) }
+       # Request: { rspuId, folderId? (优先), groupName? (max 64) }
+       # 说明：指定 folderId 时校验文件夹归属当前用户，并同步 group_name 轻量文本
        # Response: FavoriteResponse
 
 DELETE /api/v1/favorites/{rspuId}
        # 取消收藏（需登录；未收藏返回 404）
        # Response: void
 
+PUT    /api/v1/favorites/{rspuId}/folder
+       # 移动收藏条目到文件夹（folderId 为空表示未归档）
+       # Request: { folderId? }
+       # Response: FavoriteResponse
+
 GET    /api/v1/favorites/check
        # 批量检查收藏状态（需登录）
        # Query: rspuIds（可重复传参）
        # Response: string[]（其中已收藏的 rspuId 列表）
+
+GET    /api/v1/favorites/folders
+       # 我的收藏夹文件夹列表（含收藏数）
+       # Response: [{ folderId, folderName, sortOrder, favoriteCount, createdAt }]
+
+POST   /api/v1/favorites/folders
+       # 创建文件夹（同用户重名拒绝）
+       # Request: { folderName (max 64) }
+
+PUT    /api/v1/favorites/folders/{folderId}
+       # 重命名文件夹（同步收藏条目 group_name 轻量文本）
+       # Request: { folderName }
+
+DELETE /api/v1/favorites/folders/{folderId}
+       # 软删除文件夹（夹内收藏变为未归档）
+       # Response: void
+
+GET    /api/v1/favorites/export
+       # 导出收藏夹 Excel（明细 + 按文件夹汇总双 sheet）
+       # Query: folderId? 按文件夹导出；isSup?=true 显示供应商（工厂/出厂价）
+       # 说明：isSup=true 需 factory:read 权限（保护货源，默认仅产品维度）；
+       #      文件名按文件夹名或「我的收藏夹」，Content-Disposition RFC 5987 编码
+       # Response: xlsx 文件流
 ```
+
+### 模板标签（受控字典）
+
+```
+GET    /api/v1/template-tags/simple-list
+       # 启用的模板标签（登录即可读；模板库页/设模板选择器）
+       # Response: [{ tagId, tagName, sortOrder, enabled, createdAt }]
+
+GET    /api/v1/template-tags
+       # 全部模板标签（含停用，限 ADMIN/EDITOR）
+
+POST   /api/v1/template-tags
+       # 创建标签（名称全局唯一，限 ADMIN/EDITOR）
+       # Request: { tagName (max 64), sortOrder?, enabled? }
+
+PUT    /api/v1/template-tags/{tagId}
+       # 更新标签（重命名/排序/启停；重命名同步替换存量模板方案中的标签名）
+       # Request: { tagName, sortOrder?, enabled? }
+
+DELETE /api/v1/template-tags/{tagId}
+       # 删除标签（仍被模板使用时拒绝并报使用数）
+       # Response: void
+```
+
+> 设模板联动：`PUT /api/v1/schemes/{id}/template` 设为模板时校验标签必须存在于
+> 受控标签字典；`scheme.template_tags` 仍以名称 JSON 存储（标签以名称为业务键）。
 
 ### 设计师画像
 
