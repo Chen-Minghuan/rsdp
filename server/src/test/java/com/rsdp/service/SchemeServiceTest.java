@@ -92,6 +92,9 @@ class SchemeServiceTest {
     @Mock
     private ProjectService projectService;
 
+    @Mock
+    private TemplateTagService templateTagService;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -540,6 +543,25 @@ class SchemeServiceTest {
         assertThatThrownBy(() -> schemeService.setTemplate("SCHEME-1", request))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("无权操作");
+        verify(schemeMapper, never()).updateById(any(Scheme.class));
+    }
+
+    @Test
+    void setTemplate_shouldRejectInvalidTags() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-1");
+        scheme.setCreatedBy("testuser");
+        when(schemeMapper.selectById("SCHEME-1")).thenReturn(scheme);
+        org.mockito.Mockito.doThrow(new BusinessException("以下模板标签不存在，请先在标签管理中创建: 不存在标签"))
+            .when(templateTagService).validateTagNames(any());
+
+        SchemeTemplateRequest request = new SchemeTemplateRequest();
+        request.setIsTemplate(true);
+        request.setTemplateTags(List.of("不存在标签"));
+
+        assertThatThrownBy(() -> schemeService.setTemplate("SCHEME-1", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("模板标签不存在");
         verify(schemeMapper, never()).updateById(any(Scheme.class));
     }
 

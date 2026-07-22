@@ -68,6 +68,7 @@ public class SchemeService {
     private final QuoteService quoteService;
     private final DataScopeHelper dataScopeHelper;
     private final ProjectService projectService;
+    private final TemplateTagService templateTagService;
     private final ObjectMapper objectMapper;
     private final AuditLogService auditLogService;
 
@@ -474,6 +475,11 @@ public class SchemeService {
         }
         assertSchemeOwnerOrAdmin(scheme);
         Scheme oldSnapshot = snapshot(scheme);
+
+        // 设为模板时校验标签必须存在于受控标签字典（阶段 6）
+        if (Boolean.TRUE.equals(request.getIsTemplate())) {
+            templateTagService.validateTagNames(request.getTemplateTags());
+        }
 
         scheme.setIsTemplate(request.getIsTemplate());
         scheme.setTemplateTags(Boolean.TRUE.equals(request.getIsTemplate())

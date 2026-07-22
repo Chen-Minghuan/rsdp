@@ -214,6 +214,10 @@ public class SecurityConfig {
                 // 字典写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAuthority(Permissions.DICT_CREATE)
 
+                // 模板标签：simple-list 登录可读；管理端 CRUD 限 ADMIN/EDITOR
+                .requestMatchers(HttpMethod.GET, "/api/v1/template-tags/simple-list").authenticated()
+                .requestMatchers("/api/v1/template-tags/**").hasAnyRole("ADMIN", "EDITOR")
+
                 .requestMatchers("/api/v1/**").authenticated()
                 .anyRequest().permitAll()
             )
