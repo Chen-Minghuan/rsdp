@@ -54,6 +54,7 @@ const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
 /** 导航项可见性：按配置中的权限/角色要求判定。 */
 function isItemVisible(item: NavItem): boolean {
   if (item.permission && !userStore.hasPermission(item.permission)) return false
+  if (item.roles && item.roles.length > 0 && !userStore.hasAnyRole(item.roles)) return false
   if (item.role && !userStore.hasRole(item.role)) return false
   return true
 }

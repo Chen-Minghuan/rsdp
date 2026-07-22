@@ -18,6 +18,8 @@ export interface NavItem {
   permission?: string
   /** 需要具备的角色（userStore.hasRole） */
   role?: string
+  /** 需要具备的角色之一（userStore.hasAnyRole，优先于 role） */
+  roles?: string[]
   /** 高亮匹配方式，默认 exact */
   activeMatch?: NavActiveMatch
   /** prefix 匹配时需要排除的子路径（精确匹配） */
@@ -155,6 +157,12 @@ export const navGroups: NavGroup[] = [
         activeMatch: 'prefix'
       },
       {
+        key: 'templates',
+        label: '模板库',
+        path: '/templates',
+        permission: PERMISSIONS.SCHEME_READ
+      },
+      {
         key: 'room-scheme',
         label: 'AI 搭配方案',
         path: '/matching/room-scheme',
@@ -196,6 +204,12 @@ export const navGroups: NavGroup[] = [
         label: '用户管理',
         path: '/admin/users',
         role: ROLES.ADMIN
+      },
+      {
+        key: 'admin-template-tags',
+        label: '模板标签',
+        path: '/admin/template-tags',
+        roles: [ROLES.ADMIN, ROLES.EDITOR]
       }
     ]
   }

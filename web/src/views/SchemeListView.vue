@@ -17,6 +17,7 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { listSchemes, deleteScheme } from '@/api/scheme'
+import { listSimpleTemplateTags } from '@/api/templateTag'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import type { SchemeSummary } from '@/types/scheme'
@@ -40,19 +41,17 @@ const total = ref(0)
 /** 模板筛选：仅看模板 + 标签筛选。 */
 const templateOnly = ref(false)
 const tagFilter = ref<string | null>(null)
-/** 全量模板标签（独立加载一次，避免后端分页后标签下拉只覆盖当前页） */
+/** 模板标签选项：来自受控标签字典 simple-list（阶段 6，替代拉全量模板提取的 hack）。 */
 const allTemplateTags = ref<string[]>([])
 const tagOptions = computed(() =>
   allTemplateTags.value.map(t => ({ label: t, value: t }))
 )
 
-/** 拉取全部模板（上限 100）提取标签选项，仅在挂载时执行一次。 */
+/** 加载启用标签选项，仅在挂载时执行一次。 */
 async function loadTemplateTagOptions() {
   try {
-    const result = await listSchemes({ isTemplate: true, page: 1, size: 100 })
-    const tags = new Set<string>()
-    result.rows.forEach(s => s.templateTags?.forEach(t => tags.add(t)))
-    allTemplateTags.value = [...tags]
+    const tags = await listSimpleTemplateTags()
+    allTemplateTags.value = tags.map(t => t.tagName)
   } catch {
     // 标签选项加载失败不阻断列表展示
   }

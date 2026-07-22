@@ -167,6 +167,18 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.RSKU_IMPORT] }
   },
   {
+    path: '/templates',
+    name: 'TemplateLibrary',
+    component: () => import('@/views/TemplateLibraryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
+  },
+  {
+    path: '/admin/template-tags',
+    name: 'TemplateTagAdmin',
+    component: () => import('@/views/TemplateTagAdminView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
+  },
+  {
     path: '/admin/users',
     name: 'UserManagement',
     component: () => import('@/views/UserManagementView.vue'),
