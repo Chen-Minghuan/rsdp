@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
+import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SceneImportResult } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -153,6 +153,29 @@ export async function importProductsFromDocument(file: File, categoryHint?: stri
 
   const { data: result } = await uploadClient.post<ApiResult<DocumentImportResult>>(
     '/v1/products/document-import',
+    formData,
+    { signal }
+  )
+  return result.data
+}
+
+/**
+ * 场景图拆分录入：上传一张室内场景照片，AI 检测家具单品并逐件建档。
+ *
+ * @param file 场景照片
+ * @param categoryHint 品类提示，可为空（AI 检测品类优先，其次提示，兜底 FS）
+ * @param signal 可选的 AbortSignal，用于取消请求
+ * @returns 批次结果（含逐件明细）
+ */
+export async function importSceneProducts(file: File, categoryHint?: string, signal?: AbortSignal): Promise<SceneImportResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (categoryHint) {
+    formData.append('categoryHint', categoryHint)
+  }
+
+  const { data: result } = await uploadClient.post<ApiResult<SceneImportResult>>(
+    '/v1/products/scene-import',
     formData,
     { signal }
   )

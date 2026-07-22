@@ -52,6 +52,12 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
   },
   {
+    path: '/products/scene-import',
+    name: 'SceneImport',
+    component: () => import('@/views/SceneImportView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+  },
+  {
     path: '/products/excel-ai-import',
     name: 'ProductExcelAiImport',
     component: () => import('@/views/ProductExcelAiImportView.vue'),

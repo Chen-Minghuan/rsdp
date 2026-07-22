@@ -168,6 +168,14 @@ POST   /api/v1/products/import
        #   - 按 RSPU ID → 外部编码顺序匹配已有产品
        #   - 图片 URL 仅支持 http/https，下载失败只记录失败明细，不影响产品数据写入
 
+POST   /api/v1/products/scene-import
+       # 场景图拆分录入（2026-07-22 已实现）：一张室内场景照片 → AI 检测家具单品 → 逐件裁剪建档
+       # FormData: file（场景照片，≤10MB）、categoryHint?（品类提示；AI 检测品类优先，其次提示，兜底 FS）
+       # 权限：product:create；检测上限 12 件（rsdp.scene-import.max-products）
+       # 每件独立创建 RSPU + 异步 AI 识别任务；单件失败不阻断其他件
+       # Response: { batchId, totalProducts, successCount, failedCount,
+       #             products: [{ bbox, categoryCode, label, status, rspuId, taskId, imageId, error }] }
+
 POST   /api/v1/products/document-import
        # PDF 产品目录批量导入（已实现）
        # Request: multipart/form-data

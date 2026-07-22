@@ -110,6 +110,12 @@ export const navGroups: NavGroup[] = [
         permission: PERMISSIONS.PRODUCT_IMPORT
       },
       {
+        key: 'scene-import',
+        label: '场景图录入',
+        path: '/products/scene-import',
+        permission: PERMISSIONS.PRODUCT_CREATE
+      },
+      {
         key: 'excel-ai-import',
         label: 'Excel AI 导入',
         path: '/products/excel-ai-import',
@@ -127,7 +133,7 @@ export const navGroups: NavGroup[] = [
         path: '/products',
         permission: PERMISSIONS.PRODUCT_READ,
         activeMatch: 'prefix',
-        activeExcludes: ['/products/document-import', '/products/excel-ai-import']
+        activeExcludes: ['/products/document-import', '/products/excel-ai-import', '/products/scene-import']
       },
       {
         key: 'visual-search',

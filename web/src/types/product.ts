@@ -279,6 +279,31 @@ export interface DocumentImportResult {
 }
 
 /**
+ * 场景图拆分录入的单件产品明细。
+ */
+export interface SceneImportProduct {
+  bbox: { x: number; y: number; width: number; height: number }
+  categoryCode: string
+  label?: string
+  status: 'success' | 'failed'
+  rspuId?: string
+  taskId?: string
+  imageId?: string
+  error?: string
+}
+
+/**
+ * 场景图拆分录入批次结果。
+ */
+export interface SceneImportResult {
+  batchId: string
+  totalProducts: number
+  successCount: number
+  failedCount: number
+  products: SceneImportProduct[]
+}
+
+/**
  * Excel AI 导入中识别出的价格列。
  */
 export interface PriceColumnInfo {
