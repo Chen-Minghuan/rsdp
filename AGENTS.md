@@ -278,6 +278,7 @@ make clean
   - `V12__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体，原 V7 改号）
   - `V13__member_module.sql`：用户中心企业团队完整版（company/member_group/invite_record + sys_user 企业归属/邀请码/认证设计师）
   - `V14__favorite_template.sql`：收藏夹两级模型（favorite_folder + user_favorite.folder_id）+ 模板标签实体（template_tag）
+  - `V15__platform_cms.sql`：官网 CMS 五表（platform_banner/case/content/custom_dict/customized）+ 协议/客服内容种子
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

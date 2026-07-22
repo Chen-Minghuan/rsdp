@@ -536,3 +536,11 @@ FROM (
 ) t
 WHERE btrim(t.tag_name) <> ''
 ON CONFLICT (tag_name) DO NOTHING;
+
+-- 官网内容种子（V15 并入）：服务协议 + 客服咨询（占位文案，运营可在管理端修改）
+INSERT INTO platform_content (content_id, code, title, content_type, content) VALUES
+('CONT-USER-AGREEMENT', 'platform_user_agreement', '服务协议', 'rich_text',
+ '<h3>RSDP 家居全案平台服务协议</h3><p>欢迎使用 RSDP 家居全案平台。请您在使用本平台前仔细阅读本协议。</p><p>1. 本平台提供的产品信息、价格信息仅供参考，实际以双方确认的订单为准。</p><p>2. 您应当妥善保管账号信息，因账号保管不善造成的损失由您自行承担。</p><p>3. 未经许可，不得将平台数据用于任何商业用途。</p><p>（本内容为占位文案，请在管理端「官网内容-内容管理」中替换为正式协议。）</p>'),
+('CONT-CONSULTING-SERVICE', 'platform_consulting_service', '客服咨询', 'rich_text',
+ '<h3>联系客服</h3><p>如需产品咨询、报价或售后服务，请通过以下方式联系我们：</p><p>工作时间：周一至周五 9:00 - 18:00</p><p>（本内容为占位文案，请在管理端「官网内容-内容管理」中配置真实联系方式。）</p>')
+ON CONFLICT (code) DO NOTHING;

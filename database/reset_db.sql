@@ -52,6 +52,11 @@ DROP TABLE IF EXISTS product_collection CASCADE;
 DROP TABLE IF EXISTS user_favorite CASCADE;
 DROP TABLE IF EXISTS favorite_folder CASCADE;
 DROP TABLE IF EXISTS template_tag CASCADE;
+DROP TABLE IF EXISTS platform_banner CASCADE;
+DROP TABLE IF EXISTS platform_case CASCADE;
+DROP TABLE IF EXISTS platform_content CASCADE;
+DROP TABLE IF EXISTS platform_custom_dict CASCADE;
+DROP TABLE IF EXISTS platform_customized CASCADE;
 DROP TABLE IF EXISTS project CASCADE;
 DROP TABLE IF EXISTS design_order_item CASCADE;
 DROP TABLE IF EXISTS design_order CASCADE;
@@ -1717,3 +1722,74 @@ FROM (
 ) t
 WHERE btrim(t.tag_name) <> ''
 ON CONFLICT (tag_name) DO NOTHING;
+
+-- ============================================================
+-- 官网 CMS（V15 并入）：Banner / 落地案例 / 内容配置 / 自定义字典 / 产品定制
+-- ============================================================
+CREATE TABLE IF NOT EXISTS platform_banner (
+    banner_id   VARCHAR(64) PRIMARY KEY,
+    position    VARCHAR(32) NOT NULL DEFAULT 'home_top',
+    title       VARCHAR(128),
+    image_id    VARCHAR(64) NOT NULL,
+    link_type   VARCHAR(16) NOT NULL DEFAULT 'none',
+    link_value  VARCHAR(512),
+    sort_order  INT NOT NULL DEFAULT 0,
+    status      VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_banner_position ON platform_banner(position, status, sort_order);
+
+CREATE TABLE IF NOT EXISTS platform_case (
+    case_id        VARCHAR(64) PRIMARY KEY,
+    title          VARCHAR(128) NOT NULL,
+    cover_image_id VARCHAR(64),
+    content        TEXT,
+    sort_order     INT NOT NULL DEFAULT 0,
+    status         VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_case_status ON platform_case(status, sort_order);
+
+CREATE TABLE IF NOT EXISTS platform_content (
+    content_id   VARCHAR(64) PRIMARY KEY,
+    code         VARCHAR(64) NOT NULL UNIQUE,
+    title        VARCHAR(128),
+    content_type VARCHAR(16) NOT NULL DEFAULT 'rich_text',
+    content      TEXT,
+    status       VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_custom_dict (
+    dict_id    VARCHAR(64) PRIMARY KEY,
+    dict_name  VARCHAR(64) NOT NULL,
+    dict_type  VARCHAR(32) NOT NULL,
+    status     VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (dict_type, dict_name)
+);
+
+CREATE TABLE IF NOT EXISTS platform_customized (
+    customized_id  VARCHAR(64) PRIMARY KEY,
+    title          VARCHAR(128) NOT NULL,
+    cover_image_id VARCHAR(64),
+    description    VARCHAR(512),
+    link_value     VARCHAR(512),
+    sort_order     INT NOT NULL DEFAULT 0,
+    status         VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_customized_status ON platform_customized(status, sort_order);
+
+-- 官网内容种子（V15 并入）：服务协议 + 客服咨询（占位文案，运营可在管理端修改）
+INSERT INTO platform_content (content_id, code, title, content_type, content) VALUES
+('CONT-USER-AGREEMENT', 'platform_user_agreement', '服务协议', 'rich_text',
+ '<h3>RSDP 家居全案平台服务协议</h3><p>欢迎使用 RSDP 家居全案平台。请您在使用本平台前仔细阅读本协议。</p><p>1. 本平台提供的产品信息、价格信息仅供参考，实际以双方确认的订单为准。</p><p>2. 您应当妥善保管账号信息，因账号保管不善造成的损失由您自行承担。</p><p>3. 未经许可，不得将平台数据用于任何商业用途。</p><p>（本内容为占位文案，请在管理端「官网内容-内容管理」中替换为正式协议。）</p>'),
+('CONT-CONSULTING-SERVICE', 'platform_consulting_service', '客服咨询', 'rich_text',
+ '<h3>联系客服</h3><p>如需产品咨询、报价或售后服务，请通过以下方式联系我们：</p><p>工作时间：周一至周五 9:00 - 18:00</p><p>（本内容为占位文案，请在管理端「官网内容-内容管理」中配置真实联系方式。）</p>')
+ON CONFLICT (code) DO NOTHING;
