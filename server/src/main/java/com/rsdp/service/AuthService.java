@@ -125,10 +125,13 @@ public class AuthService {
         user.setInviteCode(inviteService.generateUniqueInviteCode());
         user.setCreatedAt(LocalDateTime.now());
         user.setUpdatedAt(LocalDateTime.now());
-        if (StringUtils.hasText(request.getInviteCode())) {
-            inviteService.bindInviter(user, request.getInviteCode());
-        }
         sysUserMapper.insert(user);
+        if (StringUtils.hasText(request.getInviteCode())) {
+            // 先插入用户再写邀请记录（invite_record.invitee_id 外键要求用户已存在）；
+            // bindInviter 仅修改内存中的 invited_by，需显式 update 持久化
+            inviteService.bindInviter(user, request.getInviteCode());
+            sysUserMapper.updateById(user);
+        }
         userRoleService.assignRoleByCode(user.getUserId(), DEFAULT_REGISTER_ROLE);
         auditLogService.logCreate("sys_user", user.getUserId(), user, username);
         return new RegisterResponse(user.getUserId(), user.getUsername(), user.getNickname(), user.getInviteCode());

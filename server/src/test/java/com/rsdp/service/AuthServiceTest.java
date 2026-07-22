@@ -198,6 +198,12 @@ class AuthServiceTest {
         authService.register(request);
 
         verify(inviteService).bindInviter(any(SysUser.class), eq("INV99999"));
+        // invite_record.invitee_id 外键要求用户先入库：insert 必须先于 bindInviter
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(sysUserMapper, inviteService);
+        inOrder.verify(sysUserMapper).insert(any(SysUser.class));
+        inOrder.verify(inviteService).bindInviter(any(SysUser.class), eq("INV99999"));
+        // bindInviter 只改内存中的 invited_by，需 update 持久化
+        inOrder.verify(sysUserMapper).updateById(any(SysUser.class));
     }
 
     @Test
