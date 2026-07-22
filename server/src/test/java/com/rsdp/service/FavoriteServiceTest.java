@@ -44,6 +44,9 @@ class FavoriteServiceTest {
     @Mock
     private ImageAssetsMapper imageAssetsMapper;
 
+    @Mock
+    private FavoriteFolderService favoriteFolderService;
+
     @InjectMocks
     private FavoriteService favoriteService;
 
@@ -162,11 +165,106 @@ class FavoriteServiceTest {
         try (var ignored = mockStatic(SecurityOperatorContext.class)) {
             when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
 
-            List<FavoriteResponse> responses = favoriteService.list(null);
+            List<FavoriteResponse> responses = favoriteService.list(null, false);
 
             assertThat(responses).hasSize(1);
             assertThat(responses.get(0).getProductName()).isEqualTo("极简茶几");
             assertThat(responses.get(0).getPrimaryImageUrl()).isEqualTo("/api/v1/images/IMG-1");
+        }
+    }
+
+    @Test
+    void addShouldUseFolderWhenFolderIdProvided() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-1");
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
+        when(favoriteMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        com.rsdp.entity.FavoriteFolder folder = new com.rsdp.entity.FavoriteFolder();
+        folder.setFolderId("FAVD-1");
+        folder.setUserId("user-1");
+        folder.setFolderName("客厅灵感");
+        when(favoriteFolderService.getFolderInUser("FAVD-1", "user-1")).thenReturn(folder);
+
+        FavoriteRequest request = new FavoriteRequest();
+        request.setRspuId("RSPU-1");
+        request.setFolderId("FAVD-1");
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            FavoriteResponse response = favoriteService.add(request);
+
+            assertThat(response.getFolderId()).isEqualTo("FAVD-1");
+            // 同步轻量文本字段保持向后兼容
+            assertThat(response.getGroupName()).isEqualTo("客厅灵感");
+        }
+
+        ArgumentCaptor<UserFavorite> captor = ArgumentCaptor.forClass(UserFavorite.class);
+        verify(favoriteMapper).insert(captor.capture());
+        assertThat(captor.getValue().getFolderId()).isEqualTo("FAVD-1");
+    }
+
+    @Test
+    void moveShouldUpdateFolderAndSyncGroupName() {
+        UserFavorite favorite = new UserFavorite();
+        favorite.setFavoriteId("FAV-1");
+        favorite.setUserId("user-1");
+        favorite.setRspuId("RSPU-1");
+        when(favoriteMapper.selectOne(any(QueryWrapper.class))).thenReturn(favorite);
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(new RspuMaster());
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        com.rsdp.entity.FavoriteFolder folder = new com.rsdp.entity.FavoriteFolder();
+        folder.setFolderId("FAVD-1");
+        folder.setUserId("user-1");
+        folder.setFolderName("卧室灵感");
+        when(favoriteFolderService.getFolderInUser("FAVD-1", "user-1")).thenReturn(folder);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            FavoriteResponse response = favoriteService.move("RSPU-1", "FAVD-1");
+
+            assertThat(response.getFolderId()).isEqualTo("FAVD-1");
+            assertThat(response.getGroupName()).isEqualTo("卧室灵感");
+            verify(favoriteMapper).update(any(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class));
+        }
+    }
+
+    @Test
+    void moveShouldClearFolderWhenFolderIdNull() {
+        UserFavorite favorite = new UserFavorite();
+        favorite.setFavoriteId("FAV-1");
+        favorite.setUserId("user-1");
+        favorite.setRspuId("RSPU-1");
+        favorite.setFolderId("FAVD-1");
+        favorite.setGroupName("客厅灵感");
+        when(favoriteMapper.selectOne(any(QueryWrapper.class))).thenReturn(favorite);
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(new RspuMaster());
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            FavoriteResponse response = favoriteService.move("RSPU-1", null);
+
+            assertThat(response.getFolderId()).isNull();
+            assertThat(response.getGroupName()).isNull();
+        }
+    }
+
+    @Test
+    void moveShouldRejectNotFavoritedProduct() {
+        when(favoriteMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            assertThatThrownBy(() -> favoriteService.move("RSPU-X", "FAVD-1"))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("未收藏");
         }
     }
 

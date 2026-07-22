@@ -2,9 +2,11 @@ package com.rsdp.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.request.FavoriteRequest;
+import com.rsdp.dto.response.FavoriteFolderResponse;
 import com.rsdp.dto.response.FavoriteResponse;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.security.JwtAuthenticationFilter;
+import com.rsdp.service.FavoriteFolderService;
 import com.rsdp.service.FavoriteService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +49,9 @@ class FavoriteControllerTest {
     private FavoriteService favoriteService;
 
     @MockBean
+    private FavoriteFolderService favoriteFolderService;
+
+    @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Test
@@ -54,17 +59,34 @@ class FavoriteControllerTest {
         FavoriteResponse response = new FavoriteResponse();
         response.setFavoriteId("FAV-00000001");
         response.setRspuId("RSPU-00000001");
+        response.setFolderId("FAVD-00000001");
         response.setGroupName("默认分组");
         response.setProductName("测试产品");
         response.setCreatedAt(LocalDateTime.now());
 
-        when(favoriteService.list(anyString())).thenReturn(List.of(response));
+        when(favoriteService.list(anyString(), eq(false))).thenReturn(List.of(response));
 
-        mockMvc.perform(get("/api/v1/favorites").param("group", "默认分组"))
+        mockMvc.perform(get("/api/v1/favorites").param("folderId", "FAVD-00000001"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data[0].favoriteId").value("FAV-00000001"))
-            .andExpect(jsonPath("$.data[0].rspuId").value("RSPU-00000001"));
+            .andExpect(jsonPath("$.data[0].rspuId").value("RSPU-00000001"))
+            .andExpect(jsonPath("$.data[0].folderId").value("FAVD-00000001"));
+    }
+
+    @Test
+    void listFolders_shouldReturnFolders() throws Exception {
+        FavoriteFolderResponse folder = new FavoriteFolderResponse();
+        folder.setFolderId("FAVD-00000001");
+        folder.setFolderName("客厅灵感");
+        folder.setFavoriteCount(2);
+        when(favoriteFolderService.listMyFolders()).thenReturn(List.of(folder));
+
+        mockMvc.perform(get("/api/v1/favorites/folders"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data[0].folderId").value("FAVD-00000001"))
+            .andExpect(jsonPath("$.data[0].favoriteCount").value(2));
     }
 
     @Test
