@@ -6,12 +6,14 @@ import com.rsdp.dto.request.PlatformCaseRequest;
 import com.rsdp.dto.request.PlatformContentRequest;
 import com.rsdp.dto.request.PlatformCustomDictRequest;
 import com.rsdp.dto.request.PlatformCustomizedRequest;
+import com.rsdp.dto.response.CmsImageUploadResponse;
 import com.rsdp.dto.response.PlatformBannerResponse;
 import com.rsdp.dto.response.PlatformCaseResponse;
 import com.rsdp.dto.response.PlatformContentResponse;
 import com.rsdp.dto.response.PlatformCustomDictResponse;
 import com.rsdp.dto.response.PlatformCustomizedResponse;
 import com.rsdp.service.PlatformCmsService;
+import com.rsdp.service.PlatformImageService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
@@ -23,8 +25,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -39,6 +44,19 @@ import java.util.List;
 public class PlatformCmsController {
 
     private final PlatformCmsService platformCmsService;
+    private final PlatformImageService platformImageService;
+
+    /**
+     * 上传 CMS 图片素材（Banner/案例/定制封面等）。
+     *
+     * @param file 图片文件（≤10MB，jpg/png/webp/gif/bmp）
+     * @return 图片 ID 与访问地址
+     * @throws IOException 存储失败时抛出
+     */
+    @PostMapping("/images")
+    public Result<CmsImageUploadResponse> uploadImage(@RequestParam("file") MultipartFile file) throws IOException {
+        return Result.ok(platformImageService.upload(file));
+    }
 
     // ==================== Banner ====================
 
