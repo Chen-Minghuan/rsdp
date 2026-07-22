@@ -50,6 +50,8 @@ DROP TABLE IF EXISTS designer_profile CASCADE;
 DROP TABLE IF EXISTS product_collection_item CASCADE;
 DROP TABLE IF EXISTS product_collection CASCADE;
 DROP TABLE IF EXISTS user_favorite CASCADE;
+DROP TABLE IF EXISTS favorite_folder CASCADE;
+DROP TABLE IF EXISTS template_tag CASCADE;
 DROP TABLE IF EXISTS project CASCADE;
 DROP TABLE IF EXISTS design_order_item CASCADE;
 DROP TABLE IF EXISTS design_order CASCADE;
@@ -1043,10 +1045,39 @@ CREATE TABLE IF NOT EXISTS user_favorite (
     user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     rspu_id VARCHAR(64) NOT NULL REFERENCES rspu_master(rspu_id),
     group_name VARCHAR(64),
+    folder_id VARCHAR(64),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, rspu_id)
 );
 CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_favorite_folder ON user_favorite(folder_id);
+
+-- 收藏夹文件夹（V14 并入）
+CREATE TABLE IF NOT EXISTS favorite_folder (
+    folder_id   VARCHAR(64) PRIMARY KEY,
+    user_id     VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    folder_name VARCHAR(64) NOT NULL,
+    sort_order  INT NOT NULL DEFAULT 0,
+    deleted_at  TIMESTAMP,
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_folder_user ON favorite_folder(user_id) WHERE deleted_at IS NULL;
+
+-- 补齐 user_favorite 文件夹外键（favorite_folder 在 user_favorite 之后创建）
+ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_folder;
+ALTER TABLE user_favorite
+    ADD CONSTRAINT fk_user_favorite_folder FOREIGN KEY (folder_id) REFERENCES favorite_folder(folder_id);
+
+-- 模板标签（V14 并入）：受控字典，scheme.template_tags 存名称 JSON，以名称为业务键
+CREATE TABLE IF NOT EXISTS template_tag (
+    tag_id     VARCHAR(64) PRIMARY KEY,
+    tag_name   VARCHAR(64) NOT NULL UNIQUE,
+    sort_order INT NOT NULL DEFAULT 0,
+    enabled    BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 
 -- 设计项目（V4 并入）
 CREATE TABLE IF NOT EXISTS project (
@@ -1659,3 +1690,29 @@ SELECT setval('sys_user_factory_id_seq',              COALESCE((SELECT MAX(id) F
 SELECT setval('rspu_factory_mapping_mapping_id_seq',  COALESCE((SELECT MAX(mapping_id) FROM rspu_factory_mapping), 1),  (SELECT MAX(mapping_id) IS NOT NULL FROM rspu_factory_mapping));
 SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_id) FROM factory_lead_time_rule), 1),   (SELECT MAX(rule_id) IS NOT NULL FROM factory_lead_time_rule));
 SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));
+
+-- ============================================================
+-- 收藏夹文件夹/模板标签迁移（V14 并入，幂等；重置后一般为空库，迁移为 no-op）
+-- ============================================================
+INSERT INTO favorite_folder (folder_id, user_id, folder_name)
+SELECT 'FAVD-' || gen_random_uuid()::text, d.user_id, d.group_name
+FROM (SELECT DISTINCT user_id, group_name FROM user_favorite
+      WHERE group_name IS NOT NULL AND btrim(group_name) <> '') d
+WHERE NOT EXISTS (SELECT 1 FROM favorite_folder f
+                  WHERE f.user_id = d.user_id AND f.folder_name = d.group_name);
+
+UPDATE user_favorite uf SET folder_id = f.folder_id
+FROM favorite_folder f
+WHERE uf.folder_id IS NULL
+  AND uf.user_id = f.user_id
+  AND uf.group_name = f.folder_name;
+
+INSERT INTO template_tag (tag_id, tag_name)
+SELECT 'TAG-' || gen_random_uuid()::text, t.tag_name
+FROM (
+    SELECT DISTINCT jsonb_array_elements_text(s.template_tags::jsonb) AS tag_name
+    FROM scheme s
+    WHERE s.template_tags IS NOT NULL AND s.template_tags ~ '^\s*\['
+) t
+WHERE btrim(t.tag_name) <> ''
+ON CONFLICT (tag_name) DO NOTHING;

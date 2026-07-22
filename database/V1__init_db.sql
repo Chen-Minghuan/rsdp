@@ -829,10 +829,39 @@ CREATE TABLE IF NOT EXISTS user_favorite (
     user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     rspu_id VARCHAR(64) NOT NULL REFERENCES rspu_master(rspu_id),
     group_name VARCHAR(64),
+    folder_id VARCHAR(64),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, rspu_id)
 );
 CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_favorite_folder ON user_favorite(folder_id);
+
+-- 收藏夹文件夹（V14 并入）
+CREATE TABLE IF NOT EXISTS favorite_folder (
+    folder_id   VARCHAR(64) PRIMARY KEY,
+    user_id     VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    folder_name VARCHAR(64) NOT NULL,
+    sort_order  INT NOT NULL DEFAULT 0,
+    deleted_at  TIMESTAMP,
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_folder_user ON favorite_folder(user_id) WHERE deleted_at IS NULL;
+
+-- 补齐 user_favorite 文件夹外键（favorite_folder 在 user_favorite 之后创建）
+ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_folder;
+ALTER TABLE user_favorite
+    ADD CONSTRAINT fk_user_favorite_folder FOREIGN KEY (folder_id) REFERENCES favorite_folder(folder_id);
+
+-- 模板标签（V14 并入）：受控字典，scheme.template_tags 存名称 JSON，以名称为业务键
+CREATE TABLE IF NOT EXISTS template_tag (
+    tag_id     VARCHAR(64) PRIMARY KEY,
+    tag_name   VARCHAR(64) NOT NULL UNIQUE,
+    sort_order INT NOT NULL DEFAULT 0,
+    enabled    BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 
 -- 设计项目（V4 并入）
 CREATE TABLE IF NOT EXISTS project (

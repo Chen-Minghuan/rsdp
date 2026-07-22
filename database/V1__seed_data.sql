@@ -456,3 +456,28 @@ JOIN member_group g ON g.company_id = c.company_id
 WHERE u.group_id IS NULL
   AND u.company_name = c.company_name
   AND u.group_name = g.group_name;
+
+-- 收藏夹文件夹迁移（V14 并入，幂等）：group_name 文本 → 文件夹实体（按用户+名称合并）
+INSERT INTO favorite_folder (folder_id, user_id, folder_name)
+SELECT 'FAVD-' || gen_random_uuid()::text, d.user_id, d.group_name
+FROM (SELECT DISTINCT user_id, group_name FROM user_favorite
+      WHERE group_name IS NOT NULL AND btrim(group_name) <> '') d
+WHERE NOT EXISTS (SELECT 1 FROM favorite_folder f
+                  WHERE f.user_id = d.user_id AND f.folder_name = d.group_name);
+
+UPDATE user_favorite uf SET folder_id = f.folder_id
+FROM favorite_folder f
+WHERE uf.folder_id IS NULL
+  AND uf.user_id = f.user_id
+  AND uf.group_name = f.folder_name;
+
+-- 模板标签迁移（V14 并入，幂等）：scheme.template_tags JSON → 标签实体
+INSERT INTO template_tag (tag_id, tag_name)
+SELECT 'TAG-' || gen_random_uuid()::text, t.tag_name
+FROM (
+    SELECT DISTINCT jsonb_array_elements_text(s.template_tags::jsonb) AS tag_name
+    FROM scheme s
+    WHERE s.template_tags IS NOT NULL AND s.template_tags ~ '^\s*\['
+) t
+WHERE btrim(t.tag_name) <> ''
+ON CONFLICT (tag_name) DO NOTHING;

@@ -18,5 +18,9 @@ public class UserFavorite {
     private String userId;
     private String rspuId;
     private String groupName;
+
+    /** 所属收藏夹文件夹（favorite_folder.folder_id），null=未归档 */
+    private String folderId;
+
     private LocalDateTime createdAt;
 }
