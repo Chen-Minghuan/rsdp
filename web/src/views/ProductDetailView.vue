@@ -685,6 +685,7 @@ function openEditModal() {
   const r = detail.value.rspu
   editForm.value = {
     positioningLabel: r.positioningLabel,
+    productName: r.productName,
     styleCodes: detail.value.styleCodes?.length
       ? [...detail.value.styleCodes]
       : (r.positioningLabel ? [r.positioningLabel] : []),
@@ -725,6 +726,7 @@ async function handleUpdateProduct() {
   const request: ProductUpdateRequest = {
     positioningLabel: editForm.value.styleCodes[0],
     styleCodes: editForm.value.styleCodes,
+    productName: editForm.value.productName,
     colorPrimaryName: editForm.value.colorPrimaryName,
     colorPrimaryHsv: editForm.value.colorPrimaryHsv,
     materialTags: editForm.value.materialTags,
@@ -1111,6 +1113,9 @@ onBeforeRouteUpdate((to, from) => {
           <n-descriptions bordered :column="2" label-placement="left">
             <n-descriptions-item label="RSPU ID">
               {{ detail.rspu.rspuId }}
+            </n-descriptions-item>
+            <n-descriptions-item label="产品名称">
+              {{ detail.rspu.productName || '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="品类">
               {{ detail.rspu.categoryPath }}
@@ -1720,6 +1725,9 @@ onBeforeRouteUpdate((to, from) => {
       style="width: 640px;"
     >
       <n-form label-placement="left" label-width="100">
+        <n-form-item label="产品名称">
+          <n-input v-model:value="editForm.productName" placeholder="产品名称（可留空）" maxlength="256" />
+        </n-form-item>
         <n-form-item label="风格/定位" required>
           <n-select
             v-model:value="editForm.styleCodes"

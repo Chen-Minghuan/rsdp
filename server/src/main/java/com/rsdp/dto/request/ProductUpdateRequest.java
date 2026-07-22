@@ -2,6 +2,8 @@ package com.rsdp.dto.request;
 
 import lombok.Data;
 
+import jakarta.validation.constraints.Size;
+
 import java.util.List;
 import java.util.Map;
 
@@ -15,6 +17,10 @@ public class ProductUpdateRequest {
 
     /** 定位标签/风格字典码，如 MC。 */
     private String positioningLabel;
+
+    /** 产品名称。 */
+    @Size(max = 256)
+    private String productName;
 
     /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel。 */
     private List<String> styleCodes;

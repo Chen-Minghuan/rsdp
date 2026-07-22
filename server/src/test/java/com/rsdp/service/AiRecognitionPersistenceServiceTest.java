@@ -180,6 +180,85 @@ class AiRecognitionPersistenceServiceTest {
     }
 
     @Test
+    void saveSuccess_shouldFillProductNameFromOcr() {
+        // RSPU 无产品名称时，AI OCR 提取的 productName 应补入
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        com.rsdp.dto.OcrResult ocr = new com.rsdp.dto.OcrResult();
+        ocr.setProductName("云朵沙发");
+        labels.setOcr(ocr);
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        assertThat(rspu.getProductName()).isEqualTo("云朵沙发");
+    }
+
+    @Test
+    void saveSuccess_shouldNotOverwriteExistingProductName() {
+        // 人工/Excel 已填产品名称时，AI OCR 结果不得覆盖
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setProductName("人工命名沙发");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        com.rsdp.dto.OcrResult ocr = new com.rsdp.dto.OcrResult();
+        ocr.setProductName("云朵沙发");
+        labels.setOcr(ocr);
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        assertThat(rspu.getProductName()).isEqualTo("人工命名沙发");
+    }
+
+    @Test
+    void saveSuccess_shouldFallbackProductNameToCategoryNameWhenOcrEmpty() {
+        // 图上无品名文字（OCR 无 productName）时，产品名称回退为品类名（如「座椅」）
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveNameByCode("category", "FS")).thenReturn("座椅");
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setOcr(new com.rsdp.dto.OcrResult());
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        assertThat(rspu.getProductName()).isEqualTo("座椅");
+    }
+
+    @Test
     void saveSuccess_shouldFillUnidentifiedPositioningLabel() {
         // 「待识别」占位视为空缺，AI 识别结果应填充并写入风格关联
         RspuMaster rspu = new RspuMaster();

@@ -629,6 +629,11 @@ public class ProductQueryService {
         if (request.getColorPrimaryName() != null) {
             rspu.setColorPrimaryName(request.getColorPrimaryName().trim());
         }
+        if (request.getProductName() != null) {
+            rspu.setProductName(StringUtils.hasText(request.getProductName())
+                ? request.getProductName().trim()
+                : null);
+        }
         if (request.getColorPrimaryHsv() != null) {
             rspu.setColorPrimaryHsv(writeJson(request.getColorPrimaryHsv()));
         }
@@ -855,6 +860,7 @@ public class ProductQueryService {
                                              Map<String, List<String>> factoryCodeMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
+        summary.setProductName(rspu.getProductName());
         summary.setCategoryCode(rspu.getCategoryCode());
         summary.setCategoryPath(rspu.getCategoryPath());
         summary.setPositioningLabel(rspu.getPositioningLabel());

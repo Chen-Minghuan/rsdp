@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
     external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
+    product_name VARCHAR(256),
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,

@@ -1337,6 +1337,8 @@ public class ExcelAiImportService {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
         rspu.setExternalCode(trim(row.getExternalCode()));
+        // 品名落 RSPU 产品名称（变体 displayName 保持不变，互不影响）
+        rspu.setProductName(trim(row.getVariantDisplayName()));
         rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
         rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
         // 多风格时主字段存第一个风格（主风格），其余进 rspu_style 辅风格

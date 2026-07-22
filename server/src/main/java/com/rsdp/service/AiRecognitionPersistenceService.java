@@ -64,21 +64,23 @@ public class AiRecognitionPersistenceService {
      * @param labels         AI 识别标签
      * @param processingTime 处理耗时（毫秒）
      * @param embedding      图片 embedding（可为空）
+     * @return 最终生效的产品名称（OCR 品名或品类回退名；无则 null）
      */
     @Transactional
-    public void saveSuccess(String taskId, String rspuId, String imageId,
-                            String recognitionId, String modelName,
-                            AiLabels labels, int processingTime, float[] embedding) {
+    public String saveSuccess(String taskId, String rspuId, String imageId,
+                              String recognitionId, String modelName,
+                              AiLabels labels, int processingTime, float[] embedding) {
         String styleCode = dictResolverService.resolveCodeByName("style", labels.getStyle());
         List<String> secondaryStyleCodes = dictResolverService.resolveCodesByNames("style", labels.getSecondaryStyles());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
         List<String> materialCodes = dictResolverService.resolveCodesByNames("material", labels.getMaterialTags());
 
-        updateRspu(rspuId, labels, styleCode, materialCodes, sceneCodes, embedding, modelName);
+        String productName = updateRspu(rspuId, labels, styleCode, materialCodes, sceneCodes, embedding, modelName);
         refreshStyleAssociations(rspuId, styleCode, secondaryStyleCodes);
         refreshSceneAssociations(rspuId, sceneCodes);
         markImageProcessed(imageId);
         insertRecognitionRecord(taskId, rspuId, imageId, recognitionId, modelName, labels, processingTime, "success", null);
+        return productName;
     }
 
     /**
@@ -98,13 +100,13 @@ public class AiRecognitionPersistenceService {
         markRspuAsDoubtful(rspuId, modelName);
     }
 
-    private void updateRspu(String rspuId, AiLabels labels, String styleCode,
+    private String updateRspu(String rspuId, AiLabels labels, String styleCode,
                             List<String> materialCodes, List<String> sceneCodes,
                             float[] embedding, String modelName) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
             log.warn("保存识别结果时 RSPU 不存在，rspuId={}", rspuId);
-            return;
+            return null;
         }
 
         RspuMaster oldSnapshot = snapshot(rspu);
@@ -118,6 +120,19 @@ public class AiRecognitionPersistenceService {
         }
         if (!StringUtils.hasText(rspu.getColorPrimaryName())) {
             rspu.setColorPrimaryName(labels.getColorPrimaryName());
+        }
+        // 产品名称：优先 AI OCR 提取；图上无文字时回退品类名（如「座椅」）；人工/Excel 已填不覆盖
+        if (!StringUtils.hasText(rspu.getProductName())) {
+            String ocrName = labels.getOcr() != null ? labels.getOcr().getProductName() : null;
+            if (StringUtils.hasText(ocrName)) {
+                rspu.setProductName(ocrName);
+            } else {
+                String categoryName = dictResolverService.resolveNameByCode("category", rspu.getCategoryCode());
+                // resolveNameByCode 找不到时返回原码，原码不作为名称使用
+                if (StringUtils.hasText(categoryName) && !categoryName.equals(rspu.getCategoryCode())) {
+                    rspu.setProductName(categoryName);
+                }
+            }
         }
         if (isEmptyJson(rspu.getColorPrimaryHsv(), "[]")) {
             rspu.setColorPrimaryHsv(toJson(labels.getColorPrimaryHsv()));
@@ -138,6 +153,7 @@ public class AiRecognitionPersistenceService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+        return rspu.getProductName();
     }
 
     /**

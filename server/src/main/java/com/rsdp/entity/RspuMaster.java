@@ -16,6 +16,8 @@ public class RspuMaster {
     @TableId
     private String rspuId;
     private String externalCode;
+    /** 产品名称（AI OCR 提取 / Excel 导入品名；纯图无文字时为空） */
+    private String productName;
     private String categoryCode;
     private String categoryPath;
     private String positioningLabel;

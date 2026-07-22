@@ -60,6 +60,7 @@ export interface ProductListParams {
  */
 export interface ProductSummary {
   rspuId: string
+  productName?: string
   categoryCode: string
   categoryPath: string
   positioningLabel: string
@@ -150,6 +151,7 @@ export interface ProductStyleMatch {
 export interface ProductDetail {
   rspu: {
     rspuId: string
+    productName?: string
     categoryCode: string
     categoryPath: string
     positioningLabel: string
@@ -218,6 +220,8 @@ export interface ProductReviewRequest {
  */
 export interface ProductUpdateRequest {
   positioningLabel?: string
+  /** 产品名称 */
+  productName?: string
   /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel */
   styleCodes?: string[]
   colorPrimaryName?: string

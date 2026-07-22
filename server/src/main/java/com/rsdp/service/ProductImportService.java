@@ -436,6 +436,10 @@ public class ProductImportService {
             : null);
         rspu.setWarrantyYears(row.getWarrantyYears());
         rspu.setKeySpecs(trim(row.getKeySpecs()));
+        // 品名：显式提供时更新（空单元格不覆盖已有值）
+        if (StringUtils.hasText(row.getVariantDisplayName())) {
+            rspu.setProductName(row.getVariantDisplayName().trim());
+        }
         return rspu;
     }
 

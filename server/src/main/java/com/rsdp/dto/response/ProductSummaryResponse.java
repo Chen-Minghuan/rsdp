@@ -12,6 +12,7 @@ import java.util.List;
 public class ProductSummaryResponse {
 
     private String rspuId;
+    private String productName;
     private String categoryCode;
     private String categoryPath;
     private String positioningLabel;
