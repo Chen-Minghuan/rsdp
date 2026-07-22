@@ -3,6 +3,7 @@ package com.rsdp.service;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.excel.ProductImportRow;
@@ -14,6 +15,7 @@ import com.rsdp.dto.response.ExcelAiImportFailure;
 import com.rsdp.dto.response.ExcelAiImportResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
+import com.rsdp.dto.response.CategoryMappingItem;
 import com.rsdp.dto.response.PriceColumnInfo;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.CategoryDict;
@@ -22,14 +24,17 @@ import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
+import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ExternalServiceException;
+import com.rsdp.exception.ForbiddenException;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ExcelImportBatchMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.storage.StorageService;
@@ -63,6 +68,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -85,6 +91,7 @@ public class ExcelAiImportService {
     private static final long MAX_FILE_SIZE = 200 * 1024 * 1024; // 200 MB
     private static final int MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
     private static final int PREVIEW_ROW_COUNT = 5;
+    private static final int MAX_CATEGORY_SUGGESTIONS = 50;
 
     private static final String MAPPING_SYSTEM_PROMPT = """
         你是家具产品目录结构化专家。用户上传的是工厂报价单 Excel，表头可能包含中英双语、括号单位、多行父子表头。
@@ -143,6 +150,7 @@ public class ExcelAiImportService {
     private final RspuMapper rspuMapper;
     private final RspuStyleMapper rspuStyleMapper;
     private final RspuSceneMapper rspuSceneMapper;
+    private final RspuVariantMapper rspuVariantMapper;
     private final RspuVariantService rspuVariantService;
     private final RskuService rskuService;
     private final ImageAssetsMapper imageAssetsMapper;
@@ -157,6 +165,8 @@ public class ExcelAiImportService {
     private final RspuFactoryMappingService rspuFactoryMappingService;
     private final FactoryLeadTimeRuleService factoryLeadTimeRuleService;
     private final ExcelImportRowService excelImportRowService;
+    private final DictResolverService dictResolverService;
+    private final DictAliasService dictAliasService;
 
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
@@ -164,10 +174,12 @@ public class ExcelAiImportService {
     /**
      * 上传 Excel 并请求 AI 生成字段映射预览。
      *
+     * <p>不使用方法级事务：AI 调用与文件存储耗时较长，长事务会占用数据库连接；
+     * 仅批次记录的 DB 写入（{@link #saveBatch}）使用编程式事务。</p>
+     *
      * @param file Excel 文件
      * @return 映射预览响应
      */
-    @org.springframework.transaction.annotation.Transactional
     public ExcelAiMappingResponse previewMapping(MultipartFile file) {
         validateFile(file);
 
@@ -208,7 +220,10 @@ public class ExcelAiImportService {
         ExcelImportBatch batch = saveBatch(file.getOriginalFilename(), storagePath, mappingResult,
             mergedHeaders, dataRows);
 
-        return buildMappingResponse(batch, mergedHeaders, mappingResult);
+        ExcelAiMappingResponse response = buildMappingResponse(batch, mergedHeaders, mappingResult);
+        // 品类中文名映射建议：字典/别名命中 + AI 批量归一（用户确认后写回别名库自学习）
+        response.setCategoryMappings(suggestCategoryMappings(mappingResult.mapping, mergedHeaders, dataRows));
+        return response;
     }
 
     /**
@@ -222,9 +237,11 @@ public class ExcelAiImportService {
         if (batch == null) {
             throw new BusinessException("导入批次不存在: " + request.getBatchId());
         }
-        if (!"pending".equals(batch.getStatus())) {
-            throw new BusinessException("批次状态不允许重复导入: " + batch.getStatus());
+        // 原子抢占导入权，防止并发重复导入（替代先查状态再判断的 check-then-act 竞态）
+        if (batchMapper.claimForImport(batch.getBatchId()) == 0) {
+            throw new BusinessException("批次正在导入或已完成，请勿重复导入: " + batch.getStatus());
         }
+        batch.setStatus("importing");
 
         Map<String, String> mapping = sanitizeMapping(request.getMapping());
         if (mapping == null || mapping.isEmpty()) {
@@ -254,6 +271,9 @@ public class ExcelAiImportService {
         List<ExcelAiImportFailure> failures = new ArrayList<>();
         List<String> rspuIds = new ArrayList<>();
         List<String> taskIds = new ArrayList<>();
+        List<ExcelAiImportResult.TaskLink> tasks = new ArrayList<>();
+        int skippedCount = 0;
+        int failedRowCount = 0;
 
         // 保存批次级工厂/发货地信息
         applyBatchFactoryInfo(batch, request);
@@ -269,6 +289,8 @@ public class ExcelAiImportService {
                     ? physicalLayout.dataRowPhysicalIndexes().get(dataRowOrdinal)
                     : null;
             dataRowOrdinal++;
+            // 失败明细使用 Excel 物理行号（0-based +1），缺失时回退旧的序号换算
+            int displayRowIndex = physicalRowIndex != null ? physicalRowIndex + 1 : rowIndex;
             Long importRowId = null;
             try {
                 importRowId = excelImportRowService.initRow(batch.getBatchId(), rowIndex, "product", dataRow, null);
@@ -279,6 +301,10 @@ public class ExcelAiImportService {
                     rspuIds.add(rowResult.rspuId);
                     excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
                         rowResult.rskuIds, rowResult.imageCount, rowResult.imageAssetIds, rowResult.taskId);
+                    // 行内部分失败（如某价格列 RSKU 创建失败）不吞掉：记入批次失败明细，用户可见
+                    for (String issue : rowResult.issues) {
+                        failures.add(new ExcelAiImportFailure(displayRowIndex, issue));
+                    }
                     // 行提交成功后更新产品组状态（回滚行不影响组）
                     if (rowResult.createdNewRspu) {
                         currentGroup = new ProductGroup();
@@ -291,19 +317,25 @@ public class ExcelAiImportService {
                         currentGroup.hasAiTask |= rowResult.taskId != null;
                     }
                 } else if (rowResult.skipped) {
+                    skippedCount++;
                     excelImportRowService.markSkipped(importRowId, rowResult.skipReason);
                 }
                 if (rowResult.taskId != null) {
                     taskIds.add(rowResult.taskId);
+                    if (rowResult.rspuId != null) {
+                        tasks.add(new ExcelAiImportResult.TaskLink(rowResult.taskId, rowResult.rspuId));
+                    }
                 }
             } catch (BusinessException e) {
-                failures.add(new ExcelAiImportFailure(rowIndex, e.getMessage()));
+                failedRowCount++;
+                failures.add(new ExcelAiImportFailure(displayRowIndex, e.getMessage()));
                 if (importRowId != null) {
                     excelImportRowService.markFailed(importRowId, "validate_or_create", e.getMessage());
                 }
             } catch (Exception e) {
+                failedRowCount++;
                 log.error("Excel AI 导入行处理异常，rowIndex={}", rowIndex, e);
-                failures.add(new ExcelAiImportFailure(rowIndex, "系统异常: " + e.getMessage()));
+                failures.add(new ExcelAiImportFailure(displayRowIndex, "系统异常: " + e.getMessage()));
                 if (importRowId != null) {
                     excelImportRowService.markFailed(importRowId, "system", e.getMessage());
                 }
@@ -311,12 +343,16 @@ public class ExcelAiImportService {
         }
 
         result.setSuccessCount(rspuIds.size());
-        result.setFailedCount(failures.size());
+        result.setFailedCount(failedRowCount);
+        result.setSkippedCount(skippedCount);
         result.setRspuIds(rspuIds);
         result.setTaskIds(taskIds);
+        result.setTasks(tasks);
         result.setFailures(failures);
 
         updateBatchResult(batch, request, result);
+        // 别名自学习：用户确认的品类映射写回别名库，后续导入直接命中，不再调 AI
+        learnCategoryAliases(request);
         return result;
     }
 
@@ -350,6 +386,27 @@ public class ExcelAiImportService {
         return response;
     }
 
+    /**
+     * 查询导入批次并校验归属：仅批次创建者本人或平台 ADMIN 可访问。
+     *
+     * @param batchId 批次 ID
+     * @return 批次实体
+     * @throws BusinessException  批次不存在
+     * @throws ForbiddenException 无权访问该批次
+     */
+    public ExcelImportBatch getAccessibleBatch(String batchId) {
+        ExcelImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        if (!SecurityOperatorContext.isCurrentUserAdmin()
+            && batch.getCreatedBy() != null
+            && !batch.getCreatedBy().equals(SecurityOperatorContext.currentUserId())) {
+            throw new ForbiddenException("无权访问该导入批次: " + batchId);
+        }
+        return batch;
+    }
+
     // ==================== 私有方法 ====================
 
     private void validateFile(MultipartFile file) {
@@ -357,7 +414,7 @@ public class ExcelAiImportService {
             throw new BusinessException("上传文件不能为空");
         }
         if (file.getSize() > MAX_FILE_SIZE) {
-            throw new BusinessException("文件大小不能超过 10MB");
+            throw new BusinessException("文件大小不能超过 " + (MAX_FILE_SIZE / 1024 / 1024) + "MB");
         }
         if (!ExcelFileValidator.isExcelOrCsv(file)) {
             throw new BusinessException("仅支持 Excel (.xlsx/.xls) 或 CSV 文件");
@@ -551,7 +608,8 @@ public class ExcelAiImportService {
         }
         String h = header.toLowerCase();
         return h.contains("图样") || h.contains("picture") || h.contains("image")
-            || h.contains("photo") || h.contains("产品图");
+            || h.contains("photo") || h.contains("产品图")
+            || h.contains("图片") || h.contains("照片") || h.contains("效果图");
     }
 
     /**
@@ -765,7 +823,16 @@ public class ExcelAiImportService {
             throw new BusinessException("保存导入批次失败");
         }
 
-        batchMapper.insert(batch);
+        // 仅 DB 写入使用编程式事务（previewMapping 不再持有方法级事务，避免长事务）
+        DefaultTransactionDefinition def = new DefaultTransactionDefinition();
+        TransactionStatus status = transactionManager.getTransaction(def);
+        try {
+            batchMapper.insert(batch);
+            transactionManager.commit(status);
+        } catch (Exception e) {
+            transactionManager.rollback(status);
+            throw e;
+        }
         return batch;
     }
 
@@ -962,15 +1029,23 @@ public class ExcelAiImportService {
 
         excelImportRowService.updateStage(importRowId, "build_product_row");
         ProductImportRow row = buildProductImportRow(dataRow, mapping, categoryHint, dictCache);
+        // 品类分层解析：中文品名/方言 → 字典码（用户确认映射 > 字典码 > 字典名 > 别名库），未命中保留原值
+        String normalizedCategory = normalizeCategoryCode(row.getCategoryCode(), request.getCategoryMapping(),
+            dictCache);
+        if (normalizedCategory != null) {
+            row.setCategoryCode(normalizedCategory);
+        }
         String error = validateRow(row, dictCache);
         if (error != null) {
             throw new BusinessException(error);
         }
 
         excelImportRowService.updateStage(importRowId, "download_images");
+        List<String> rowIssues = new ArrayList<>();
         List<DownloadedImage> images = new ArrayList<>();
         images.addAll(downloadUrlImages(row, rowIndex));
-        images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex, physicalLayout));
+        images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex, physicalLayout,
+            rowIssues));
 
         // 同型号连续行归入上一产品的 RSPU（规格模块共享产品主图，不再创建独立产品）
         String groupKey = trim(row.getExternalCode());
@@ -985,14 +1060,29 @@ public class ExcelAiImportService {
             createdNewRspu = false;
             log.debug("第 {} 行与上一产品同型号（{}），归入已有 RSPU {}", rowIndex, groupKey, rspuId);
         } else {
-            rspuId = createRspu(row, dictCache);
-            saveStylesAndScenes(rspuId, row, dictCache);
-            createdNewRspu = true;
+            // updateIfExists 开关：externalCode 已存在（未软删）时，true 复用并更新已有 RSPU，false 跳过该行
+            RspuMaster existing = findRspuByExternalCode(groupKey);
+            if (existing != null && !request.isUpdateIfExists()) {
+                log.debug("第 {} 行外部编码 {} 已存在，按配置跳过", rowIndex, groupKey);
+                return RowResult.skipped("已存在，跳过: " + groupKey);
+            }
+            if (existing != null) {
+                rspuId = existing.getRspuId();
+                updateExistingRspu(existing, row, dictCache);
+                saveStylesAndScenes(rspuId, row, dictCache);
+                createdNewRspu = false;
+                log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
+            } else {
+                rspuId = createRspu(row, dictCache);
+                saveStylesAndScenes(rspuId, row, dictCache);
+                createdNewRspu = true;
+            }
         }
         // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）
         excelImportRowService.updateStage(importRowId, "create_factory_mapping");
-        String variantId = createRspuFactoryMappingAndVariants(rspuId, dataRow, row, priceColumns, request,
-            dictCache, importRowId);
+        VariantRskuOutcome variantRskuOutcome = createRspuFactoryMappingAndVariants(rspuId, dataRow, row,
+            priceColumns, request, dictCache, importRowId, rowIssues);
+        String variantId = variantRskuOutcome.firstVariantId();
 
         // 模块行图片：组内已有主图时全部作为详情图；组内尚无主图时允许本行首图升为主图
         boolean allowPrimary = !sameProduct || !currentGroup.hasPrimaryImage;
@@ -1017,8 +1107,8 @@ public class ExcelAiImportService {
 
         int imageCount = images.size();
         List<String> imageAssetIds = List.of(); // 目前 saveImages 未返回 ID 列表，后续可扩展
-        return RowResult.success(rspuId, variantId, List.of(), imageCount, imageAssetIds, taskId,
-            groupKey, createdNewRspu, primaryObjectKey != null);
+        return RowResult.success(rspuId, variantId, variantRskuOutcome.rskuIds(), imageCount, imageAssetIds, taskId,
+            groupKey, createdNewRspu, primaryObjectKey != null, rowIssues);
     }
 
     private ProductImportRow buildProductImportRow(Map<String, String> dataRow, Map<String, String> mapping,
@@ -1042,10 +1132,14 @@ public class ExcelAiImportService {
         }
 
         row.setExternalCode(getValue(standardValues, "externalCode"));
-        row.setVariantDisplayName(getValue(standardValues, "productName"));
+        // 「规格/模块」列由 prompt 引导映射为标准字段 variantDisplayName，优先读取；
+        // 缺失时回退 productName（复合「型号品名」列场景）
+        String productName = getValue(standardValues, "productName");
+        String variantDisplayName = getValue(standardValues, "variantDisplayName");
+        row.setVariantDisplayName(StringUtils.hasText(variantDisplayName) ? variantDisplayName : productName);
 
         // 复合表头"型号品名"的值同时包含型号和品名时，尝试拆分
-        splitExternalCodeAndProductName(row);
+        splitExternalCodeAndProductName(row, productName);
         row.setPositioningLabel(getValue(standardValues, "positioningLabel"));
         row.setColorPrimaryName(getValue(standardValues, "colorPrimaryName"));
         row.setMaterialTags(getValue(standardValues, "materialTags"));
@@ -1080,9 +1174,8 @@ public class ExcelAiImportService {
         return row;
     }
 
-    private void splitExternalCodeAndProductName(ProductImportRow row) {
+    private void splitExternalCodeAndProductName(ProductImportRow row, String productName) {
         String externalCode = row.getExternalCode();
-        String productName = row.getVariantDisplayName();
         if (!StringUtils.hasText(externalCode) || !externalCode.equals(productName)) {
             return;
         }
@@ -1091,7 +1184,11 @@ public class ExcelAiImportService {
         int idx = findSplitIndex(combined);
         if (idx > 0) {
             row.setExternalCode(combined.substring(0, idx).trim());
-            row.setVariantDisplayName(combined.substring(idx + 1).trim());
+            // 仅当变体名同样来自该复合值（无独立「规格/模块」列）时才回填品名部分，
+            // 避免覆盖 variantDisplayName 标准字段读到的模块名
+            if (combined.equals(row.getVariantDisplayName())) {
+                row.setVariantDisplayName(combined.substring(idx + 1).trim());
+            }
         }
     }
 
@@ -1139,6 +1236,248 @@ public class ExcelAiImportService {
             return Integer.parseInt(matcher.group());
         } catch (NumberFormatException e) {
             return null;
+        }
+    }
+
+    /**
+     * 品类值分层解析：①用户确认映射（最高优先）②字典码 ③字典中文名精确匹配 ④别名库。
+     *
+     * <p>工厂 Excel 品类列常是中文品名（茶桌/主椅/方凳），逐层归一为字典码；
+     * 都无法解析时返回原值（{@code validateRow} 仍会报「品类码不存在」，行为兼容）。</p>
+     *
+     * @param value       Excel 原始品类值（或 categoryHint 兜底值）
+     * @param userMapping 用户在确认页编辑的品类映射（rawValue → dictCode），可为 null
+     * @param dictCache   字典缓存
+     * @return 归一后的字典码；输入为空返回 null；无法解析返回原值
+     */
+    private String normalizeCategoryCode(String value, Map<String, String> userMapping,
+                                         Map<String, List<CategoryDict>> dictCache) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String trimmed = value.trim();
+        List<CategoryDict> categories = dictCache.get("category");
+        // ① 用户确认映射（最高优先）
+        if (userMapping != null) {
+            String mapped = userMapping.get(trimmed);
+            if (StringUtils.hasText(mapped) && isValidDictCode(mapped.trim().toUpperCase(), categories)) {
+                return mapped.trim().toUpperCase();
+            }
+        }
+        // ② 本身就是字典码
+        if (isValidDictCode(trimmed.toUpperCase(), categories)) {
+            return trimmed.toUpperCase();
+        }
+        // ③ 字典中文名精确匹配
+        String byName = dictResolverService.resolveCodeByName("category", trimmed);
+        if (StringUtils.hasText(byName)) {
+            return byName.trim().toUpperCase();
+        }
+        // ④ 别名库
+        String byAlias = dictAliasService.resolveAlias("category", trimmed);
+        if (StringUtils.hasText(byAlias) && isValidDictCode(byAlias.trim().toUpperCase(), categories)) {
+            return byAlias.trim().toUpperCase();
+        }
+        // ⑤ 无法解析：返回原值，由 validateRow 报错（行为兼容）
+        return trimmed;
+    }
+
+    /**
+     * 生成品类映射建议（预览用）：收集映射到 categoryCode 的列的 distinct 非空值（截断 50 个），
+     * 字典码/字典名/别名库可直接解析的标记 dict/alias；其余批量一次 AI 归一标记 ai，
+     * AI 失败降级为 none，不阻断预览。
+     *
+     * @param mapping       AI 后处理的字段映射（表头 → 标准字段）
+     * @param mergedHeaders 合并表头（列索引 → 表头）
+     * @param dataRows      数据行（列索引 → 值）
+     * @return 品类映射建议列表
+     */
+    private List<CategoryMappingItem> suggestCategoryMappings(Map<String, String> mapping,
+                                                              Map<Integer, String> mergedHeaders,
+                                                              List<Map<Integer, String>> dataRows) {
+        try {
+            // 找到映射到 categoryCode 的列（兼容复合映射）
+            Set<Integer> categoryColumns = new HashSet<>();
+            for (Map.Entry<Integer, String> entry : mergedHeaders.entrySet()) {
+                String field = mapping.get(entry.getValue());
+                if (field == null) {
+                    continue;
+                }
+                for (String f : field.split(",")) {
+                    if ("categoryCode".equals(f.trim())) {
+                        categoryColumns.add(entry.getKey());
+                    }
+                }
+            }
+            if (categoryColumns.isEmpty()) {
+                return List.of();
+            }
+
+            // distinct 非空值（保持出现顺序），截断到 50 个
+            Set<String> seen = new LinkedHashSet<>();
+            for (Map<Integer, String> row : dataRows) {
+                for (Integer col : categoryColumns) {
+                    String value = row.get(col);
+                    if (StringUtils.hasText(value)) {
+                        seen.add(value.trim());
+                    }
+                }
+            }
+            List<String> rawValues = new ArrayList<>(seen);
+            if (rawValues.size() > MAX_CATEGORY_SUGGESTIONS) {
+                rawValues = rawValues.subList(0, MAX_CATEGORY_SUGGESTIONS);
+            }
+            if (rawValues.isEmpty()) {
+                return List.of();
+            }
+
+            List<CategoryDict> categories = safeList(dictService.listByType("category"));
+            Map<String, String> aliasMap = dictAliasService.resolveAliases("category", rawValues);
+
+            List<CategoryMappingItem> items = new ArrayList<>();
+            List<String> unresolved = new ArrayList<>();
+            for (String raw : rawValues) {
+                if (isValidDictCode(raw.toUpperCase(), categories)) {
+                    items.add(new CategoryMappingItem(raw, raw.toUpperCase(), "dict"));
+                    continue;
+                }
+                String byName = matchDictName(raw, categories);
+                if (byName != null) {
+                    items.add(new CategoryMappingItem(raw, byName, "dict"));
+                    continue;
+                }
+                String byAlias = aliasMap.get(raw);
+                if (StringUtils.hasText(byAlias) && isValidDictCode(byAlias.trim().toUpperCase(), categories)) {
+                    items.add(new CategoryMappingItem(raw, byAlias.trim().toUpperCase(), "alias"));
+                    continue;
+                }
+                unresolved.add(raw);
+            }
+
+            // 未解析词批量一次 AI 归一；AI 失败降级为 none，不阻断预览
+            if (!unresolved.isEmpty()) {
+                Map<String, String> aiResolved = tryResolveCategoriesByAi(unresolved, categories);
+                for (String raw : unresolved) {
+                    String code = aiResolved.get(raw);
+                    items.add(code != null
+                        ? new CategoryMappingItem(raw, code, "ai")
+                        : new CategoryMappingItem(raw, null, "none"));
+                }
+            }
+            return items;
+        } catch (Exception e) {
+            log.warn("生成品类映射建议失败，降级为无建议", e);
+            return List.of();
+        }
+    }
+
+    /**
+     * 字典中文名/英文名精确匹配（与 DictResolverService.resolveCodeByName 同语义，基于给定列表本地匹配）。
+     */
+    private String matchDictName(String name, List<CategoryDict> categories) {
+        for (CategoryDict d : categories) {
+            if (name.equals(d.getDictName()) || (d.getDictNameEn() != null && name.equalsIgnoreCase(d.getDictNameEn()))) {
+                return d.getDictCode();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 批量调用 AI 把无法解析的品类词归一到字典码；任何失败都降级为空结果。
+     *
+     * @param unknownValues 待归一的品类词
+     * @param categories    品类字典
+     * @return rawValue → dictCode（仅含成功归一的词条）
+     */
+    private Map<String, String> tryResolveCategoriesByAi(List<String> unknownValues,
+                                                         List<CategoryDict> categories) {
+        try {
+            String systemPrompt = """
+                你是家具品类归一专家。给定家具产品的中文品类叫法（可能是工厂方言/俗称），把它归一到给定的品类枚举字典码。
+                输出 JSON 数组：[{"rawValue":"原始词","dictCode":"字典码"}]，每个输入词恰好一条；
+                无法可靠判断时 dictCode 填 null。只输出 JSON，不要输出任何其他文字。
+                """;
+            String userPrompt = "可选品类枚举：" + buildCategoryEnumText(categories)
+                + "\n\n待归一品类词：\n"
+                + unknownValues.stream().map(v -> "- " + v).collect(Collectors.joining("\n"));
+            String aiResponse = visionService.chatText(systemPrompt, userPrompt);
+            return parseCategoryAiResponse(aiResponse, categories);
+        } catch (Exception e) {
+            log.warn("AI 品类归一失败，未解析词降级为 none", e);
+            return Map.of();
+        }
+    }
+
+    /**
+     * 解析 AI 品类归一响应（JSON 数组 [{rawValue, dictCode}]），容错截取首个 '['；
+     * 只接受合法字典码，非法/空码忽略。
+     */
+    private Map<String, String> parseCategoryAiResponse(String aiResponse, List<CategoryDict> categories) {
+        if (!StringUtils.hasText(aiResponse)) {
+            return Map.of();
+        }
+        String json = aiResponse.trim();
+        int start = json.indexOf('[');
+        if (start < 0) {
+            return Map.of();
+        }
+        json = json.substring(start);
+        try {
+            List<Map<String, Object>> list = objectMapper.readValue(json, new TypeReference<>() {
+            });
+            Map<String, String> result = new HashMap<>();
+            for (Map<String, Object> item : list) {
+                Object raw = item.get("rawValue");
+                Object code = item.get("dictCode");
+                if (raw == null || code == null) {
+                    continue;
+                }
+                String codeText = code.toString().trim().toUpperCase();
+                if (StringUtils.hasText(raw.toString()) && isValidDictCode(codeText, categories)) {
+                    result.put(raw.toString().trim(), codeText);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("解析 AI 品类归一响应失败，response={}", aiResponse, e);
+            return Map.of();
+        }
+    }
+
+    /**
+     * 品类枚举文本（与 VisionService.buildCategoryEnumText 同格式）：FS(沙发)、TB(茶桌)。
+     */
+    private String buildCategoryEnumText(List<CategoryDict> categories) {
+        return categories.stream()
+            .filter(d -> d.getDictCode() != null && !d.getDictCode().isBlank())
+            .map(d -> d.getDictCode() + "(" + (d.getDictName() != null ? d.getDictName() : "") + ")")
+            .sorted()
+            .collect(Collectors.joining("、"));
+    }
+
+    /**
+     * 别名自学习：把用户在确认页提交/确认过的品类映射写回别名库。
+     * 单个词条失败不影响其他词条与导入结果。
+     *
+     * @param request 确认导入请求（含 categoryMapping）
+     */
+    private void learnCategoryAliases(ExcelAiMappingRequest request) {
+        Map<String, String> categoryMapping = request.getCategoryMapping();
+        if (categoryMapping == null || categoryMapping.isEmpty()) {
+            return;
+        }
+        String operator = SecurityOperatorContext.currentUsername();
+        for (Map.Entry<String, String> entry : categoryMapping.entrySet()) {
+            if (!StringUtils.hasText(entry.getKey()) || !StringUtils.hasText(entry.getValue())) {
+                continue;
+            }
+            try {
+                dictAliasService.saveAlias("category", entry.getKey().trim(),
+                    entry.getValue().trim().toUpperCase(), operator);
+            } catch (Exception e) {
+                log.warn("写回品类别名失败: {} -> {}", entry.getKey(), entry.getValue(), e);
+            }
         }
     }
 
@@ -1294,7 +1633,7 @@ public class ExcelAiImportService {
 
     private List<DownloadedImage> extractEmbeddedImagesForRow(
         Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages, int rowIndex, Integer physicalRowIndex,
-        PhysicalLayout physicalLayout) {
+        PhysicalLayout physicalLayout, List<String> rowIssues) {
         // 物理行号（0-based）：优先取导入时重建的真实行号（双行表头/标题行/空行场景仍精确）；
         // 缺失时回退旧的「rowIndex - 1」换算（表头 1 行假设），保证行为不劣化。
         // ExcelImageExtractor 的 key 格式为 "sheetIndex,physicalRowIndex"，这里只处理第一个 Sheet。
@@ -1306,6 +1645,13 @@ public class ExcelAiImportService {
         }
         List<DownloadedImage> result = new ArrayList<>();
         for (ExcelImageExtractor.EmbeddedImage img : images) {
+            String extension = img.extension() != null ? img.extension().toLowerCase() : "jpg";
+            // 非 web 图片格式（EMF/WMF/TIFF）浏览器无法渲染，跳过不入库并记入行失败明细
+            if (extension.equals("emf") || extension.equals("wmf") || extension.equals("tiff")) {
+                log.warn("第 {} 行内嵌图片格式不支持（{}），已跳过", rowIndex, extension);
+                rowIssues.add("不支持的图片格式: " + extension);
+                continue;
+            }
             boolean primary = false;
             boolean variantLevel = false;
             if (physicalLayout != null && physicalLayout.maxDataColumn() >= 0) {
@@ -1319,7 +1665,7 @@ public class ExcelAiImportService {
                 primary = physicalLayout.imageColumns().contains(img.colIndex());
                 variantLevel = !physicalLayout.imageColumns().isEmpty() && !primary;
             }
-            String contentType = switch (img.extension().toLowerCase()) {
+            String contentType = switch (extension) {
                 case "png" -> "image/png";
                 case "gif" -> "image/gif";
                 case "bmp" -> "image/bmp";
@@ -1407,12 +1753,13 @@ public class ExcelAiImportService {
         return variantResponse.getVariantId();
     }
 
-    private String createRspuFactoryMappingAndVariants(String rspuId, Map<String, String> dataRow,
+    private VariantRskuOutcome createRspuFactoryMappingAndVariants(String rspuId, Map<String, String> dataRow,
                                                         ProductImportRow baseRow,
                                                         List<PriceColumnInfo> priceColumns,
                                                         ExcelAiMappingRequest request,
                                                         Map<String, List<CategoryDict>> dictCache,
-                                                        Long importRowId) {
+                                                        Long importRowId,
+                                                        List<String> rowIssues) {
         String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
             ? request.getDefaultFactoryCode()
             : null;
@@ -1435,6 +1782,7 @@ public class ExcelAiImportService {
         }
 
         String firstVariantId = null;
+        List<String> rskuIds = new ArrayList<>();
         // 为每个选中的价格列创建变体 + RSKU
         if (priceColumns != null && !priceColumns.isEmpty()) {
             for (PriceColumnInfo priceColumn : priceColumns) {
@@ -1460,26 +1808,32 @@ public class ExcelAiImportService {
                     : calculateLeadTime(factoryCode, categoryCode, materialGradeCode,
                         request.getDefaultLeadTimeDays());
 
-                // 创建变体
-                RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
-                variantRequest.setDisplayName(StringUtils.hasText(materialName) ? materialName : "默认变体");
-                variantRequest.setMaterialCode(materialCode);
-                variantRequest.setReferencePriceBand(resolvePriceBand(price));
-                variantRequest.setProductLevel(baseRow.getProductLevel());
-                var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
-                if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
-                    log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
-                    continue;
+                // 创建变体：同 RSPU 下尺寸/颜色/材质组合相同的变体直接复用（如归组的连续模块行），
+                // 避免变体属性组合唯一索引冲突导致整行回滚丢价格
+                String variantId = findExistingVariantId(rspuId, null, null, materialCode);
+                if (variantId == null) {
+                    RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
+                    variantRequest.setDisplayName(StringUtils.hasText(materialName) ? materialName : "默认变体");
+                    variantRequest.setMaterialCode(materialCode);
+                    variantRequest.setReferencePriceBand(resolvePriceBand(price));
+                    variantRequest.setProductLevel(baseRow.getProductLevel());
+                    var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
+                    if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
+                        log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
+                        rowIssues.add("创建变体失败: " + priceColumn.getHeader());
+                        continue;
+                    }
+                    variantId = variantResponse.getVariantId();
                 }
                 if (firstVariantId == null) {
-                    firstVariantId = variantResponse.getVariantId();
+                    firstVariantId = variantId;
                 }
 
                 // 创建 RSKU
                 if (factoryCode != null) {
                     RskuCreateRequest rskuRequest = new RskuCreateRequest();
                     rskuRequest.setRspuId(rspuId);
-                    rskuRequest.setVariantId(variantResponse.getVariantId());
+                    rskuRequest.setVariantId(variantId);
                     rskuRequest.setFactoryCode(factoryCode);
                     rskuRequest.setFactoryPrice(price);
                     rskuRequest.setMaterialCode(materialCode);
@@ -1490,9 +1844,14 @@ public class ExcelAiImportService {
                     rskuRequest.setShippingWarehouseId(shippingWarehouseId);
                     rskuRequest.setProductLevel(baseRow.getProductLevel());
                     try {
-                        rskuService.createRsku(rskuRequest);
+                        String rskuId = rskuService.createRsku(rskuRequest);
+                        if (StringUtils.hasText(rskuId)) {
+                            rskuIds.add(rskuId);
+                        }
                     } catch (Exception e) {
+                        // 不再静默吞掉：记入批次失败明细，让用户感知报价未入库
                         log.warn("为价格列创建 RSKU 失败，header={}", priceColumn.getHeader(), e);
+                        rowIssues.add("工厂报价失败: " + priceColumn.getHeader() + " - " + e.getMessage());
                     }
                 }
             }
@@ -1503,7 +1862,96 @@ public class ExcelAiImportService {
             saveImages(rspuId, variantId, List.of(), true, false);
         }
 
-        return firstVariantId;
+        return new VariantRskuOutcome(firstVariantId, rskuIds);
+    }
+
+    /**
+     * 按 (rspuId, sizeCode, colorCode, materialCode) 查找已有变体（NULL 安全，
+     * 比较语义同 RspuVariantService.assertNoDuplicateDimensions）。
+     *
+     * @param rspuId       RSPU ID
+     * @param sizeCode     尺寸码（null 匹配 IS NULL）
+     * @param colorCode    颜色码（null 匹配 IS NULL）
+     * @param materialCode 材质码（null 匹配 IS NULL）
+     * @return 已有变体 ID，不存在时为 null
+     */
+    private String findExistingVariantId(String rspuId, String sizeCode, String colorCode, String materialCode) {
+        QueryWrapper<RspuVariant> wrapper = new QueryWrapper<RspuVariant>()
+            .eq("rspu_id", rspuId);
+        applyNullableEq(wrapper, "size_code", sizeCode);
+        applyNullableEq(wrapper, "color_code", colorCode);
+        applyNullableEq(wrapper, "material_code", materialCode);
+        List<RspuVariant> existing = rspuVariantMapper.selectList(wrapper);
+        return existing.isEmpty() ? null : existing.get(0).getVariantId();
+    }
+
+    private void applyNullableEq(QueryWrapper<RspuVariant> wrapper, String column, String value) {
+        if (value == null) {
+            wrapper.isNull(column);
+        } else {
+            wrapper.eq(column, value);
+        }
+    }
+
+    /**
+     * 按外部编码查询未软删的 RSPU（@TableLogic 自动过滤已删除记录）。
+     *
+     * @param externalCode 外部编码
+     * @return 已有 RSPU，不存在或编码为空时为 null
+     */
+    private RspuMaster findRspuByExternalCode(String externalCode) {
+        if (!StringUtils.hasText(externalCode)) {
+            return null;
+        }
+        List<RspuMaster> list = rspuMapper.selectList(
+            new QueryWrapper<RspuMaster>().eq("external_code", externalCode.trim()));
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /**
+     * updateIfExists=true 时复用已有 RSPU：以本行数据更新可变字段并记审计日志。
+     *
+     * @param rspu      已有 RSPU 实体
+     * @param row       本行数据
+     * @param dictCache 字典缓存
+     */
+    private void updateExistingRspu(RspuMaster rspu, ProductImportRow row,
+                                    Map<String, List<CategoryDict>> dictCache) {
+        RspuMaster oldSnapshot = snapshotRspu(rspu);
+        if (StringUtils.hasText(row.getVariantDisplayName())) {
+            rspu.setProductName(row.getVariantDisplayName().trim());
+        }
+        rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
+        rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
+        String primaryStyleName = splitCsv(row.getPositioningLabel()).stream().findFirst().orElse(null);
+        if (StringUtils.hasText(primaryStyleName)) {
+            rspu.setPositioningLabel(normalizeDictCode(primaryStyleName, dictCache.get("style")));
+        }
+        rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
+        rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
+        rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
+        rspu.setSixDimTags(trim(row.getSixDimTags()));
+        rspu.setReferencePriceBand(StringUtils.hasText(row.getReferencePriceBand())
+            ? row.getReferencePriceBand().trim().toLowerCase()
+            : null);
+        rspu.setProductLevel(StringUtils.hasText(row.getProductLevel())
+            ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
+            : null);
+        rspu.setWarrantyYears(row.getWarrantyYears());
+        rspu.setKeySpecs(trim(row.getKeySpecs()));
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.updateById(rspu);
+        auditLogService.logUpdate("rspu_master", rspu.getRspuId(), oldSnapshot, rspu,
+            SecurityOperatorContext.currentUsername());
+    }
+
+    private RspuMaster snapshotRspu(RspuMaster source) {
+        try {
+            return objectMapper.readValue(objectMapper.writeValueAsString(source), RspuMaster.class);
+        } catch (Exception e) {
+            log.warn("RSPU 快照失败，rspuId={}", source.getRspuId(), e);
+            return null;
+        }
     }
 
     private void createRspuFactoryMapping(String rspuId, String factoryCode, String shippingWarehouseId,
@@ -1828,18 +2276,26 @@ public class ExcelAiImportService {
     private record RowResult(String rspuId, String variantId, List<String> rskuIds,
                               Integer imageCount, List<String> imageAssetIds,
                               String taskId, boolean skipped, String skipReason,
-                              String groupKey, boolean createdNewRspu, boolean primaryImageSaved) {
+                              String groupKey, boolean createdNewRspu, boolean primaryImageSaved,
+                              List<String> issues) {
 
         static RowResult success(String rspuId, String variantId, List<String> rskuIds,
                                  Integer imageCount, List<String> imageAssetIds, String taskId,
-                                 String groupKey, boolean createdNewRspu, boolean primaryImageSaved) {
+                                 String groupKey, boolean createdNewRspu, boolean primaryImageSaved,
+                                 List<String> issues) {
             return new RowResult(rspuId, variantId, rskuIds, imageCount, imageAssetIds, taskId, false, null,
-                groupKey, createdNewRspu, primaryImageSaved);
+                groupKey, createdNewRspu, primaryImageSaved, issues);
         }
 
         static RowResult skipped(String reason) {
-            return new RowResult(null, null, null, 0, null, null, true, reason, null, false, false);
+            return new RowResult(null, null, null, 0, null, null, true, reason, null, false, false, null);
         }
+    }
+
+    /**
+     * 变体 + RSKU 创建结果：首个变体 ID + 实际创建成功的 RSKU ID 列表。
+     */
+    private record VariantRskuOutcome(String firstVariantId, List<String> rskuIds) {
     }
 
     /**

@@ -42,6 +42,7 @@ DROP TABLE IF EXISTS async_task CASCADE;
 DROP TABLE IF EXISTS audit_log CASCADE;
 DROP TABLE IF EXISTS user_operator CASCADE;
 DROP TABLE IF EXISTS category_dict CASCADE;
+DROP TABLE IF EXISTS dict_alias CASCADE;
 DROP TABLE IF EXISTS scheme_item CASCADE;
 DROP TABLE IF EXISTS scheme CASCADE;
 DROP TABLE IF EXISTS scheme_candidate CASCADE;
@@ -1162,6 +1163,19 @@ CREATE TABLE IF NOT EXISTS sys_config (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- 字典别名表（V16 并入）：工厂方言叫法 → 字典码的持久化映射（导入确认后自学习积累）
+CREATE TABLE IF NOT EXISTS dict_alias (
+    id          BIGSERIAL PRIMARY KEY,
+    dict_type   VARCHAR(32) NOT NULL,
+    alias_name  VARCHAR(64) NOT NULL,
+    dict_code   VARCHAR(16) NOT NULL,
+    source      VARCHAR(16) NOT NULL DEFAULT 'ai_confirmed',
+    created_by  VARCHAR(64),
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT uk_dict_alias UNIQUE (dict_type, alias_name)
+);
+CREATE INDEX IF NOT EXISTS idx_dict_alias_type ON dict_alias(dict_type);
+
 -- =================== 5. 插入种子数据 ===================
 
 -- 产品类别
@@ -1692,6 +1706,7 @@ SELECT setval('sys_user_factory_id_seq',              COALESCE((SELECT MAX(id) F
 SELECT setval('rspu_factory_mapping_mapping_id_seq',  COALESCE((SELECT MAX(mapping_id) FROM rspu_factory_mapping), 1),  (SELECT MAX(mapping_id) IS NOT NULL FROM rspu_factory_mapping));
 SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_id) FROM factory_lead_time_rule), 1),   (SELECT MAX(rule_id) IS NOT NULL FROM factory_lead_time_rule));
 SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));
+SELECT setval('dict_alias_id_seq',                    COALESCE((SELECT MAX(id) FROM dict_alias), 1),                    (SELECT MAX(id) IS NOT NULL FROM dict_alias));
 
 -- ============================================================
 -- 收藏夹文件夹/模板标签迁移（V14 并入，幂等；重置后一般为空库，迁移为 no-op）

@@ -72,4 +72,10 @@ public class ExcelAiMappingRequest {
      * 为空表示全部导入。
      */
     private List<String> selectedPriceColumns = new ArrayList<>();
+
+    /**
+     * 用户确认的品类映射：品类原始值 → 字典码。
+     * 行级品类解析时优先级最高；导入完成后写回别名库自学习。
+     */
+    private Map<String, String> categoryMapping = new HashMap<>();
 }

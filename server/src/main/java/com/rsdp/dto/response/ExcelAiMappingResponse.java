@@ -42,4 +42,9 @@ public class ExcelAiMappingResponse {
      * 识别出的价格列列表（如「价格-A级布」）。
      */
     private List<PriceColumnInfo> priceColumns = new ArrayList<>();
+
+    /**
+     * 品类原始值 → 字典码的映射建议（中文品名归一，供用户在确认页编辑）。
+     */
+    private List<CategoryMappingItem> categoryMappings = new ArrayList<>();
 }
