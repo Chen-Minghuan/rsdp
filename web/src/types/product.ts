@@ -313,6 +313,18 @@ export interface PriceColumnInfo {
 }
 
 /**
+ * Excel AI 辅助导入：品类原始值 → 字典码归一建议。
+ */
+export interface CategoryMappingItem {
+  /** Excel 中的原始品类值，如「茶桌」 */
+  rawValue: string
+  /** 建议的字典码，如 "TB"；无法归一为 null */
+  suggestedCode: string | null
+  /** 建议来源：字典名匹配/别名库/AI 归一/无建议 */
+  source: 'dict' | 'alias' | 'ai' | 'none'
+}
+
+/**
  * Excel AI 辅助导入字段映射预览响应。
  */
 export interface ExcelAiMappingResponse {
@@ -321,6 +333,7 @@ export interface ExcelAiMappingResponse {
   suggestedMapping: Record<string, string | null>
   previewRows: Record<string, string>[]
   priceColumns: PriceColumnInfo[]
+  categoryMappings?: CategoryMappingItem[]
   notes?: string
 }
 
@@ -332,6 +345,8 @@ export interface ExcelAiMappingRequest {
   mapping: Record<string, string>
   updateIfExists?: boolean
   categoryHint?: string
+  /** 用户确认后的品类归一映射（rawValue → dictCode） */
+  categoryMapping?: Record<string, string>
   defaultFactoryCode?: string
   defaultShippingFrom?: string
   defaultMoq?: number
@@ -356,6 +371,8 @@ export interface ExcelAiImportResult {
   failedCount: number
   taskIds: string[]
   rspuIds: string[]
+  /** 异步任务与 RSPU 的配对列表（优先使用；旧 taskIds/rspuIds 数组不保证对齐） */
+  tasks?: { taskId: string; rspuId: string }[]
   failures: ExcelAiImportFailure[]
 }
 

@@ -2,12 +2,12 @@
 import { ref, computed, h, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { NSelect, type DataTableColumns } from 'naive-ui'
+import { NSelect, NTag, type DataTableColumns } from 'naive-ui'
 import { listDicts } from '@/api/dict'
 import { useExcelImportStore } from '@/stores/excelImport'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
-import type { ExcelAiImportFailure } from '@/types/product'
+import type { ExcelAiImportFailure, CategoryMappingItem } from '@/types/product'
 
 const router = useRouter()
 
@@ -21,6 +21,7 @@ const {
   currentStep,
   mappingResponse,
   confirmedMapping,
+  confirmedCategoryMapping,
   categoryHint,
   updateIfExists,
   importResult,
@@ -59,6 +60,9 @@ const STANDARD_FIELDS = [
 ]
 
 const categoryOptions = ref<DictItem[]>([])
+
+/** 批次已执行过导入（可能超时后重试触发）时，提示用户可刷新查看结果 */
+const isDuplicateImportError = computed(() => errorMessage.value.includes('不允许重复导入'))
 
 async function loadCategoryDicts() {
   try {
@@ -156,6 +160,64 @@ const mappingColumns = computed<DataTableColumns<{ header: string; value: string
   }
 ])
 
+/** 品类归一来源标签文案与颜色 */
+function sourceTagText(source: CategoryMappingItem['source']) {
+  switch (source) {
+    case 'dict':
+      return '字典匹配'
+    case 'alias':
+      return '别名库'
+    case 'ai':
+      return 'AI 建议'
+    default:
+      return '未归一'
+  }
+}
+
+function sourceTagType(source: CategoryMappingItem['source']) {
+  switch (source) {
+    case 'dict':
+      return 'success'
+    case 'alias':
+      return 'info'
+    case 'ai':
+      return 'info'
+    default:
+      return 'warning'
+  }
+}
+
+const categoryMappingColumns = computed<DataTableColumns<CategoryMappingItem>>(() => [
+  {
+    title: 'Excel 原始品类值',
+    key: 'rawValue'
+  },
+  {
+    title: '建议来源',
+    key: 'source',
+    render: (row) => {
+      return h(NTag, { size: 'small', type: sourceTagType(row.source) }, () => sourceTagText(row.source))
+    }
+  },
+  {
+    title: '归一到品类码',
+    key: 'code',
+    render: (row) => {
+      return h(NSelect, {
+        value: confirmedCategoryMapping.value[row.rawValue] ?? '',
+        options: [
+          { label: '（不映射）', value: '' },
+          ...categoryOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+        ],
+        style: 'width: 260px;',
+        onUpdateValue: (value: string) => {
+          confirmedCategoryMapping.value[row.rawValue] = value
+        }
+      })
+    }
+  }
+])
+
 const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
   {
     title: '行号',
@@ -178,6 +240,9 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
 
     <n-alert v-if="errorMessage" type="error" closable @close="errorMessage = ''">
       {{ errorMessage }}
+      <template v-if="isDuplicateImportError">
+        <br>该批次可能已在导入中或已完成，可刷新页面后查看导入结果。
+      </template>
     </n-alert>
 
     <!-- 步骤 1：上传 -->
@@ -224,6 +289,9 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
             clearable
             style="max-width: 320px;"
           />
+          <p style="color: #999; font-size: 12px; margin: 0;">
+            品类提示作为兜底：未在下方「品类名归一」中指认的品类值，将统一使用该品类。
+          </p>
 
           <n-checkbox v-model:checked="updateIfExists">
             当外部编码已存在时更新已有产品
@@ -237,6 +305,18 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
             :bordered="true"
             :single-line="false"
           />
+
+          <n-card v-if="mappingResponse?.categoryMappings && mappingResponse.categoryMappings.length > 0" title="品类名归一" size="small">
+            <n-alert type="info" :show-icon="false" style="margin-bottom: 12px;">
+              请确认 Excel 中的品类名称对应的系统品类码，初始值为系统建议；无法归一的词可手动选择，或留空由品类提示兜底。
+            </n-alert>
+            <n-data-table
+              :columns="categoryMappingColumns"
+              :data="mappingResponse.categoryMappings"
+              :bordered="true"
+              :single-line="false"
+            />
+          </n-card>
 
           <n-card v-if="mappingResponse?.priceColumns && mappingResponse.priceColumns.length > 0" title="价格列（每列将创建一个变体 + RSKU）" size="small">
             <n-space vertical :size="12">

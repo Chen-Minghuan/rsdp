@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios from 'axios'
 import type { UploadFileInfo } from 'naive-ui'
-import { previewExcelAiImport, confirmExcelAiImport } from '@/api/product'
+import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import type { TaskItem } from '@/types/task'
 import type { ExcelAiMappingResponse, ExcelAiImportResult } from '@/types/product'
@@ -21,6 +21,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const currentStep = ref(1)
   const mappingResponse = ref<ExcelAiMappingResponse | null>(null)
   const confirmedMapping = ref<Record<string, string | null>>({})
+  /** 品类中文名 → 字典码的用户确认映射（rawValue → dictCode，空字符串表示不映射） */
+  const confirmedCategoryMapping = ref<Record<string, string | null>>({})
   const categoryHint = ref<string | null>(null)
   const updateIfExists = ref(false)
 
@@ -46,6 +48,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   let pollTimeoutId: ReturnType<typeof setTimeout> | null = null
   let pollAbortController: AbortController | null = null
   let uploadAbortController: AbortController | null = null
+  /** 每个任务的连续轮询失败次数：达到阈值才标记 failed，避免瞬时错误中断轮询 */
+  const pollFailureCounts = new Map<string, number>()
+  const MAX_POLL_FAILURES = 5
 
   function stopPolling() {
     if (pollTimeoutId) {
@@ -89,6 +94,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   async function pollTask(taskItem: TaskItem, signal?: AbortSignal) {
     try {
       const status = await getTaskStatus(taskItem.taskId, signal)
+      pollFailureCounts.delete(taskItem.taskId)
       taskItem.status = status.status
       taskItem.progress = status.progress
       taskItem.result = status.result
@@ -99,8 +105,12 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       if (axios.isCancel(e)) {
         return
       }
-      taskItem.status = 'failed'
+      const failures = (pollFailureCounts.get(taskItem.taskId) ?? 0) + 1
+      pollFailureCounts.set(taskItem.taskId, failures)
       taskItem.errorMessage = e instanceof Error ? e.message : '轮询失败'
+      if (failures >= MAX_POLL_FAILURES) {
+        taskItem.status = 'failed'
+      }
     }
   }
 
@@ -134,6 +144,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       const result = await previewExcelAiImport(file, uploadAbortController.signal)
       mappingResponse.value = result
       confirmedMapping.value = { ...result.suggestedMapping }
+      // 品类归一初始值取后端建议码
+      confirmedCategoryMapping.value = Object.fromEntries(
+        (result.categoryMappings || []).map(c => [c.rawValue, c.suggestedCode])
+      )
       // 默认全选所有识别出的价格列
       selectedPriceColumns.value = (result.priceColumns || []).map(p => p.header)
       currentStep.value = 2
@@ -168,9 +182,18 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       return
     }
 
+    // 用户确认后的品类归一映射（过滤掉「不映射」的项）
+    const categoryMapping: Record<string, string> = {}
+    for (const [rawValue, dictCode] of Object.entries(confirmedCategoryMapping.value)) {
+      if (dictCode) {
+        categoryMapping[rawValue] = dictCode
+      }
+    }
+
     errorMessage.value = ''
     uploading.value = true
     stopPolling()
+    uploadAbortController = new AbortController()
 
     try {
       const result = await confirmExcelAiImport({
@@ -178,34 +201,85 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         mapping,
         updateIfExists: updateIfExists.value,
         categoryHint: categoryHint.value ?? undefined,
+        categoryMapping: Object.keys(categoryMapping).length > 0 ? categoryMapping : undefined,
         defaultFactoryCode: defaultFactoryCode.value || undefined,
         defaultShippingFrom: defaultShippingFrom.value || undefined,
         defaultMoq: defaultMoq.value ?? undefined,
         selectedPriceColumns: selectedPriceColumns.value
-      })
+      }, uploadAbortController.signal)
 
       importResult.value = result
       currentStep.value = 3
 
-      for (let i = 0; i < result.taskIds.length; i++) {
-        taskList.value.push({
-          taskId: result.taskIds[i],
-          rspuId: result.rspuIds[i],
-          fileName: `产品 ${i + 1}`,
-          imageIds: [],
-          status: 'pending',
-          progress: 0,
-          result: {},
-          errorMessage: ''
-        })
-      }
+      buildTaskList(result)
 
       await pollAllTasks()
       ensurePolling()
     } catch (e) {
-      errorMessage.value = e instanceof Error ? e.message : '导入失败'
+      if (axios.isCancel(e)) {
+        errorMessage.value = '导入已取消'
+      } else {
+        // 大文件导入可能超时，但批次实际可能已完成：尝试通过批次状态恢复结果页
+        const recovered = await tryRecoverImportResult()
+        if (!recovered) {
+          errorMessage.value = e instanceof Error ? e.message : '导入失败'
+        }
+      }
     } finally {
       uploading.value = false
+      uploadAbortController = null
+    }
+  }
+
+  /**
+   * 根据导入结果构建识别任务列表。
+   * 优先使用后端的 tasks 配对（taskId ↔ rspuId），缺失时回退旧的索引配对逻辑。
+   */
+  function buildTaskList(result: ExcelAiImportResult) {
+    const pairs = result.tasks && result.tasks.length > 0
+      ? result.tasks
+      : result.taskIds.map((taskId, i) => ({ taskId, rspuId: result.rspuIds[i] }))
+    pairs.forEach((pair, i) => {
+      taskList.value.push({
+        taskId: pair.taskId,
+        rspuId: pair.rspuId,
+        fileName: `产品 ${i + 1}`,
+        imageIds: [],
+        status: 'pending',
+        progress: 0,
+        result: {},
+        errorMessage: ''
+      })
+    })
+  }
+
+  /**
+   * 导入请求失败（超时等）后，通过批次状态尝试恢复结果页。
+   * 批次状态不是 pending 说明导入已实际执行，按批次统计恢复正常进入结果步骤。
+   */
+  async function tryRecoverImportResult(): Promise<boolean> {
+    const batchId = mappingResponse.value?.batchId
+    if (!batchId) {
+      return false
+    }
+    try {
+      const status = await getExcelAiImportStatus(batchId)
+      if (status.status === 'pending') {
+        return false
+      }
+      importResult.value = {
+        batchId: status.batchId,
+        totalRows: status.totalRows,
+        successCount: status.successCount,
+        failedCount: status.failedCount,
+        taskIds: [],
+        rspuIds: [],
+        failures: status.failures
+      }
+      currentStep.value = 3
+      return true
+    } catch {
+      return false
     }
   }
 
@@ -213,6 +287,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     fileList.value = []
     mappingResponse.value = null
     confirmedMapping.value = {}
+    confirmedCategoryMapping.value = {}
     selectedPriceColumns.value = []
     defaultFactoryCode.value = ''
     defaultShippingFrom.value = ''
@@ -224,6 +299,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     categoryHint.value = null
     updateIfExists.value = false
     stopPolling()
+    pollFailureCounts.clear()
     uploadAbortController?.abort()
     uploadAbortController = null
   }
@@ -235,6 +311,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     currentStep,
     mappingResponse,
     confirmedMapping,
+    confirmedCategoryMapping,
     categoryHint,
     updateIfExists,
     importResult,

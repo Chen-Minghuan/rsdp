@@ -200,10 +200,11 @@ export async function previewExcelAiImport(file: File, signal?: AbortSignal): Pr
 /**
  * Excel AI 辅助导入：确认映射并执行导入。
  */
-export async function confirmExcelAiImport(request: ExcelAiMappingRequest): Promise<ExcelAiImportResult> {
-  const { data: result } = await apiClient.post<ApiResult<ExcelAiImportResult>>(
+export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signal?: AbortSignal): Promise<ExcelAiImportResult> {
+  const { data: result } = await uploadClient.post<ApiResult<ExcelAiImportResult>>(
     '/v1/products/excel-ai-import/import',
-    request
+    request,
+    { signal }
   )
   return result.data
 }
