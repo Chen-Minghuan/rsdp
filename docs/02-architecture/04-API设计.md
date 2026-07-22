@@ -1016,6 +1016,55 @@ DELETE /api/v1/template-tags/{tagId}
 > 设模板联动：`PUT /api/v1/schemes/{id}/template` 设为模板时校验标签必须存在于
 > 受控标签字典；`scheme.template_tags` 仍以名称 JSON 存储（标签以名称为业务键）。
 
+### 官网 CMS（管理端限 ADMIN/EDITOR）
+
+```
+POST   /api/v1/platform/images
+       # 上传 CMS 图片素材（multipart/form-data，字段 file；≤10MB，jpg/png/webp/gif/bmp）
+       # 说明：落 image_assets（image_type=cms，不关联 RSPU），经 StorageService 存储
+       # Response: { imageId, url }
+
+GET/POST/PUT/DELETE  /api/v1/platform/banners[/{bannerId}]
+       # 首页轮播 Banner CRUD
+       # Request: { position?, title?, imageId (必填), linkType? (none/rspu/url),
+       #            linkValue?, sortOrder?, status? (active/inactive) }
+       # Response: [{ bannerId, position, title, imageId, linkType, linkValue,
+       #             sortOrder, status, createdAt, updatedAt }]
+
+GET/POST/PUT/DELETE  /api/v1/platform/cases[/{caseId}]
+       # 落地案例 CRUD
+       # Request: { title (必填), coverImageId?, content? (富文本 HTML), sortOrder?, status? }
+
+GET/POST/PUT/DELETE  /api/v1/platform/contents[/{contentId}]
+       # 内容配置 CRUD（code 唯一，创建后不可修改）
+       # Request: { code (小写字母/数字/下划线), title?, contentType? (image/rich_text/embed),
+       #            content?, status? }
+       # 说明：contentType=image 时 content 存 imageId；rich_text/embed 存 HTML/嵌入代码
+
+GET/POST/PUT/DELETE  /api/v1/platform/custom-dicts[/{dictId}]
+       # 自定义字典 CRUD（dict_type + dict_name 唯一）
+       # Request: { dictName (必填), dictType (必填), status? }
+
+GET/POST/PUT/DELETE  /api/v1/platform/customizeds[/{customizedId}]
+       # 产品定制卡片 CRUD
+       # Request: { title (必填), coverImageId?, description?, linkValue?, sortOrder?, status? }
+```
+
+### 官网公开读取（免登录，/api/v1/public/**）
+
+```
+GET    /api/v1/public/home
+       # 首页聚合：启用 Banner（home_top，排序）+ 落地案例（≤12）+ 产品定制（≤10）
+       # Response: { banners: [{ bannerId, title, imageUrl, linkType, linkValue }],
+       #            cases: [{ caseId, title, coverImageUrl, content }],
+       #            customizeds: [{ customizedId, title, coverImageUrl, description, linkValue }] }
+
+GET    /api/v1/public/content/{code}
+       # 按编码读取内容配置（仅 active；服务协议 platform_user_agreement /
+       # 客服咨询 platform_consulting_service 等；不存在或停用 404）
+       # Response: { contentId, code, title, contentType, content, status, ... }
+```
+
 ### 设计师画像
 
 ```
