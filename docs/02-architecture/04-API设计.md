@@ -207,6 +207,7 @@ POST   /api/v1/products/excel-ai-import/preview
        #   previewRows: { [header: string]: string }[],
        #   suggestedMapping: { [header: string]: string },
        #   priceColumns: [{ header: string, materialName: string, suggestedField: string }],
+       #   categoryMappings: [{ rawValue: string, suggestedCode: string, source: "dict"|"alias"|"ai"|"none" }],
        #   categoryGuess: string,
        #   notes: string
        # }
@@ -218,6 +219,10 @@ POST   /api/v1/products/excel-ai-import/preview
        #   - 多材质价格列（如「价格-A级布」「价格-AA级布」）映射为特殊字段 "__PRICE__:材质名"，
        #     并在 priceColumns 中独立列出，供前端勾选
        #   - 返回的 mapping key 为合并后的原始表头，对应后续确认导入接口的字段名
+       #   - 品类中文名归一（方案三：分层解析 + 用户确认 + 别名自学习）：品类列 distinct 值（≤50 个）
+       #     逐层解析——字典码 / 字典中文名精确匹配（source=dict）、dict_alias 别名库（source=alias）；
+       #     未命中词批量一次 AI 归一（source=ai，失败降级 source=none，不阻断预览），
+       #     结果经 categoryMappings 返回供用户在确认页编辑
        #   - 原始 Excel 文件会持久化到 storage，用于确认阶段重新读取和内嵌图片提取
        #   - 文件大小上限 200MB；单次导入行数上限 500 行；单张内嵌/URL 图片上限 20MB
        #   - 200MB 大文件内含大量图片时，内嵌图片提取可能占用较多内存，建议优先使用图片 URL
@@ -235,18 +240,30 @@ POST   /api/v1/products/excel-ai-import/import
        #     defaultShippingFrom: string,   // 默认发货地（冗余显示字段）
        #     defaultLeadTimeDays: number,   // 默认基础交期天数；优先级：Excel 行级交期列 > 工厂交期规则 > 本默认值
        #     defaultMoq: number             // 默认最小起订量
+       #     updateIfExists: boolean        // externalCode 已存在时：true 复用并更新已有 RSPU，false（默认）跳过该行
+       #     categoryMapping: { [rawValue: string]: string }  // 用户确认的品类映射（原始值 → 字典码），行级解析最高优先；导入后写回别名库
        #   }
        # Response: {
        #   batchId: string,
        #   totalRows: number,
        #   successCount: number,
        #   failedCount: number,
+       #   skippedCount: number,             // 说明行/重复表头行/已存在跳过 的行数
        #   taskIds: string[],
        #   rspuIds: string[],
-       #   failures: [{ rowIndex, reason }]
+       #   tasks: [{ taskId, rspuId }],      // 任务与 RSPU 成对关联（仅有任务的行，不错位）
+       #   failures: [{ rowIndex, reason }]  // rowIndex 为 Excel 物理行号；含行内部分失败（如某价格列报价失败）
        # }
        # 说明：
        #   - 按 mapping 读取 Excel 每一行，逐行独立事务写入 RSPU / 变体 / 图片 / RSKU
+       #   - 并发防重：导入前原子抢占批次状态（pending → importing），抢占失败抛业务异常
+       #   - 批次归属：confirm/getStatus/listRows 均校验 createdBy == 当前用户（平台 ADMIN 放行）
+       #   - 「规格/模块」列映射为标准字段 variantDisplayName，作为变体显示名称
+       #   - 品类分层解析（normalizeCategoryCode）：用户确认 categoryMapping > 字典码 > 字典中文名 > dict_alias 别名库；
+       #     未命中保留原值由 validateRow 报错；导入完成后 categoryMapping 词条经 saveAlias 写回别名库自学习
+       #   - 同 RSPU 下尺寸/颜色/材质组合相同的变体直接复用（如归组的连续模块行），不重复创建
+       #   - RSKU/变体创建失败不静默：记入 failures（如「工厂报价失败：xxx」），成功 RSKU 回填 excel_import_row
+       #   - EMF/WMF/TIFF 等非 web 内嵌图片格式跳过不入库，记入 failures「不支持的图片格式」
        #   - 产品归组：型号/品名列按纵向合并单元格语义向下填充后，同型号连续行归入同一 RSPU
        #     （共享主图与 AI 识别任务），每个规格模块行 + 每个选中的价格列创建 1 个变体 + 1 条 RSKU
        #   - 内嵌图片按「物理行号 + 物理列索引」精确关联（重解析原始文件重建布局，不受 jsonb 键序影响）：
