@@ -218,6 +218,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/template-tags/simple-list").authenticated()
                 .requestMatchers("/api/v1/template-tags/**").hasAnyRole("ADMIN", "EDITOR")
 
+                // 官网 CMS 管理端：限 ADMIN/EDITOR（公开读取走 /api/v1/public/**）
+                .requestMatchers("/api/v1/platform/**").hasAnyRole("ADMIN", "EDITOR")
+
                 .requestMatchers("/api/v1/**").authenticated()
                 .anyRequest().permitAll()
             )
