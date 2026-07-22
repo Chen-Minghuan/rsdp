@@ -22,6 +22,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,6 +40,10 @@ public class AuditLogService {
     private final ObjectMapper objectMapper;
 
     private static final Set<String> PRICE_FIELDS = Set.of("factoryPrice", "oldPrice", "newPrice");
+    /** 密码类敏感字段（大小写不敏感），审计快照统一替换为 "***"，禁止哈希落库。 */
+    private static final Set<String> PASSWORD_FIELDS = Set.of("passwordhash", "password");
+    /** 密码字段脱敏占位值。 */
+    private static final String MASKED_PASSWORD = "***";
     private static final int MAX_SNAPSHOT_LENGTH = 32768;
 
     private final AtomicLong insertFailureCount = new AtomicLong();
@@ -176,11 +181,11 @@ public class AuditLogService {
         }
         try {
             JsonNode tree = objectMapper.valueToTree(value);
-            sanitizePriceFields(tree);
+            sanitizeSensitiveFields(tree);
             return objectMapper.convertValue(tree, new TypeReference<Map<String, Object>>() {
             });
         } catch (Exception e) {
-            log.warn("审计日志快照价格字段加密失败，将原值写入: {}", e.getMessage());
+            log.warn("审计日志快照敏感字段脱敏失败，将原值写入: {}", e.getMessage());
             try {
                 return objectMapper.convertValue(value, new TypeReference<Map<String, Object>>() {
                 });
@@ -191,7 +196,7 @@ public class AuditLogService {
         }
     }
 
-    private void sanitizePriceFields(JsonNode node) {
+    private void sanitizeSensitiveFields(JsonNode node) {
         if (node == null || node.isNull()) {
             return;
         }
@@ -201,17 +206,19 @@ public class AuditLogService {
             while (fieldNames.hasNext()) {
                 String fieldName = fieldNames.next();
                 JsonNode child = objectNode.get(fieldName);
-                if (PRICE_FIELDS.contains(fieldName) && child.isNumber()) {
+                if (PASSWORD_FIELDS.contains(fieldName.toLowerCase(Locale.ROOT)) && !child.isNull()) {
+                    objectNode.put(fieldName, MASKED_PASSWORD);
+                } else if (PRICE_FIELDS.contains(fieldName) && child.isNumber()) {
                     BigDecimal price = child.decimalValue();
                     objectNode.set(fieldName, objectMapper.valueToTree(AesEncryptionUtil.encrypt(price)));
                 } else {
-                    sanitizePriceFields(child);
+                    sanitizeSensitiveFields(child);
                 }
             }
         } else if (node.isArray()) {
             ArrayNode arrayNode = (ArrayNode) node;
             for (int i = 0; i < arrayNode.size(); i++) {
-                sanitizePriceFields(arrayNode.get(i));
+                sanitizeSensitiveFields(arrayNode.get(i));
             }
         }
     }

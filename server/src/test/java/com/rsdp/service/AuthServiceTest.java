@@ -14,6 +14,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -28,8 +29,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -218,5 +221,86 @@ class AuthServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("用户名已存在");
         verify(sysUserMapper, never()).insert(any(SysUser.class));
+    }
+
+    @Test
+    void register_auditSnapshotShouldExcludePasswordHash() {
+        when(sysUserMapper.selectByUsername("newbie")).thenReturn(null);
+        when(passwordEncoder.encode("secret123")).thenReturn("$2a$10$bcryptHashValue");
+        when(inviteService.generateUniqueInviteCode()).thenReturn("ABCD2345");
+
+        RegisterRequest request = new RegisterRequest();
+        request.setUsername("newbie");
+        request.setPassword("secret123");
+
+        authService.register(request);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(auditLogService).logCreate(eq("sys_user"), any(), captor.capture(), eq("newbie"));
+        SysUser snapshot = (SysUser) captor.getValue();
+        // 审计快照不得携带 BCrypt 密码哈希
+        assertThat(snapshot.getPasswordHash()).isNull();
+        assertThat(snapshot.getUsername()).isEqualTo("newbie");
+    }
+
+    @Test
+    void register_usernameConflictOnInsert_shouldThrowBusinessException() {
+        // 并发兜底：先查通过，插入时用户名被抢注
+        when(sysUserMapper.selectByUsername("newbie")).thenReturn(null, new SysUser());
+        when(passwordEncoder.encode("secret123")).thenReturn("hash");
+        when(inviteService.generateUniqueInviteCode()).thenReturn("ABCD2345");
+        doThrow(new DataIntegrityViolationException("duplicate key: sys_user_username_key"))
+            .when(sysUserMapper).insert(any(SysUser.class));
+
+        RegisterRequest request = new RegisterRequest();
+        request.setUsername("newbie");
+        request.setPassword("secret123");
+
+        assertThatThrownBy(() -> authService.register(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("用户名已存在");
+    }
+
+    @Test
+    void register_inviteCodeConflictOnInsert_shouldRetryWithNewCode() {
+        // 并发兜底：首次插入撞邀请码唯一索引，换新码后成功
+        when(sysUserMapper.selectByUsername("newbie")).thenReturn(null);
+        when(passwordEncoder.encode("secret123")).thenReturn("hash");
+        when(inviteService.generateUniqueInviteCode()).thenReturn("AAAA2222", "BBBB3333");
+        when(sysUserMapper.insert(any(SysUser.class)))
+            .thenThrow(new DataIntegrityViolationException("duplicate key: idx_sys_user_invite_code"))
+            .thenReturn(1);
+
+        RegisterRequest request = new RegisterRequest();
+        request.setUsername("newbie");
+        request.setPassword("secret123");
+
+        RegisterResponse response = authService.register(request);
+
+        ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
+        verify(sysUserMapper, times(2)).insert(captor.capture());
+        assertThat(captor.getValue().getInviteCode()).isEqualTo("BBBB3333");
+        assertThat(response.getInviteCode()).isEqualTo("BBBB3333");
+    }
+
+    @Test
+    void getCurrentUser_lazyInviteCodeConflict_shouldRetryWithNewCode() {
+        SysUser user = new SysUser();
+        user.setUserId("USER-001");
+        user.setUsername("admin");
+        user.setNickname("管理员");
+        when(sysUserMapper.selectByUsername("admin")).thenReturn(user);
+        when(userRoleService.getRoleCodesByUserId("USER-001")).thenReturn(List.of("ADMIN"));
+        when(permissionService.getPermissionsByUserId("USER-001")).thenReturn(Set.of());
+        when(userFactoryService.getFactoryCodesByUserId("USER-001")).thenReturn(List.of());
+        when(inviteService.generateUniqueInviteCode()).thenReturn("AAAA2222", "BBBB3333");
+        when(sysUserMapper.updateById(any(SysUser.class)))
+            .thenThrow(new DataIntegrityViolationException("duplicate key: idx_sys_user_invite_code"))
+            .thenReturn(1);
+
+        LoginResponse response = authService.getCurrentUser("admin");
+
+        verify(sysUserMapper, times(2)).updateById(any(SysUser.class));
+        assertThat(response.getInviteCode()).isEqualTo("BBBB3333");
     }
 }

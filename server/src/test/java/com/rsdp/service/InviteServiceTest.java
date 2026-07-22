@@ -62,6 +62,17 @@ class InviteServiceTest {
     }
 
     @Test
+    void generateUniqueInviteCodeShouldThrowWhenAlwaysConflict() {
+        // 连续冲突达到重试上限后转业务异常，不再无限重试
+        when(sysUserMapper.selectCount(any(QueryWrapper.class))).thenReturn(1L);
+
+        assertThatThrownBy(() -> inviteService.generateUniqueInviteCode())
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("邀请码生成失败");
+        verify(sysUserMapper, org.mockito.Mockito.times(5)).selectCount(any(QueryWrapper.class));
+    }
+
+    @Test
     void bindInviterShouldSetInvitedByAndInsertRecord() {
         SysUser inviter = new SysUser();
         inviter.setUserId("USER-INVITER");

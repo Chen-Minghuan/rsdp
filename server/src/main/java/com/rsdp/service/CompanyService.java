@@ -153,7 +153,7 @@ public class CompanyService {
     }
 
     /**
-     * 变更企业管理员。仅当前管理员或平台 ADMIN；新管理员必须是本企业成员。
+     * 变更企业管理员。仅当前管理员或平台 ADMIN；新管理员必须是本企业的启用成员。
      *
      * @param request 变更请求
      * @return 更新后的企业
@@ -171,6 +171,9 @@ public class CompanyService {
         SysUser newOwner = sysUserMapper.selectById(newOwnerId);
         if (newOwner == null || !company.getCompanyId().equals(newOwner.getCompanyId())) {
             throw new BusinessException("新管理员必须是本企业成员");
+        }
+        if (!"active".equals(newOwner.getStatus())) {
+            throw new BusinessException("新管理员账号已停用");
         }
 
         company.setOwnerId(newOwnerId);
@@ -195,7 +198,9 @@ public class CompanyService {
         sysUserMapper.update(null, new UpdateWrapper<SysUser>()
             .eq("company_id", company.getCompanyId())
             .set("company_id", null)
+            .set("company_name", null)
             .set("group_id", null)
+            .set("group_name", null)
             .set("updated_at", LocalDateTime.now()));
         auditLogService.logDelete("company", company.getCompanyId(), oldSnapshot, currentUsername());
     }

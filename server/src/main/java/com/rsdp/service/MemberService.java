@@ -130,7 +130,7 @@ public class MemberService {
         target.setGroupName(group != null ? group.getGroupName() : null);
         target.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.updateById(target);
-        auditLogService.logUpdate("sys_user", target.getUserId(), oldSnapshot, target, currentUsername());
+        auditLogService.logUpdate("sys_user", target.getUserId(), oldSnapshot, snapshot(target), currentUsername());
 
         String roleCode = userRoleService.getRoleCodesByUserId(target.getUserId()).stream()
             .findFirst().orElse(null);
@@ -153,14 +153,19 @@ public class MemberService {
         }
 
         SysUser oldSnapshot = snapshot(target);
+        target.setCompanyId(null);
+        target.setCompanyName(null);
+        target.setGroupId(null);
+        target.setGroupName(null);
+        target.setUpdatedAt(LocalDateTime.now());
         sysUserMapper.update(null, new UpdateWrapper<SysUser>()
             .eq("user_id", userId)
             .set("company_id", null)
             .set("company_name", null)
             .set("group_id", null)
             .set("group_name", null)
-            .set("updated_at", LocalDateTime.now()));
-        auditLogService.logUpdate("sys_user", userId, oldSnapshot, target, currentUsername());
+            .set("updated_at", target.getUpdatedAt()));
+        auditLogService.logUpdate("sys_user", userId, oldSnapshot, snapshot(target), currentUsername());
     }
 
     /**
@@ -221,7 +226,7 @@ public class MemberService {
             userRoleService.assignRoleByCode(userId, DESIGNER_ROLE);
             incrementTokenVersion(userId);
         }
-        auditLogService.logUpdate("sys_user", userId, oldSnapshot, user, currentUsername());
+        auditLogService.logUpdate("sys_user", userId, oldSnapshot, snapshot(user), currentUsername());
     }
 
     private SysUser getMemberInCompany(String userId, Company company) {
