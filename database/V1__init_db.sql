@@ -144,11 +144,19 @@ CREATE TABLE IF NOT EXISTS factory_master (
     auditor_signature VARCHAR(64),
     -- 工厂图片
     factory_images JSONB,
+    -- 产能评估与来源（V2 并入）
+    capacity_tier_score DECIMAL(5,2),                -- 最新综合评分
+    last_assessment_period VARCHAR(16),              -- 最近评估周期
+    last_assessment_date DATE,                       -- 最近评估日期
+    import_batch_source VARCHAR(32),                 -- 首次来源导入批次
+    source_type VARCHAR(16) DEFAULT 'manual',        -- manual/excel_import/api_sync
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
+
+COMMENT ON COLUMN factory_master.factory_level IS '工厂层级: S级战略厂/A级核心厂/B级合作厂/C级备选厂，由 capacity_tier_score 自动计算或手动指定';
 
 -- 工厂能力等级表（记录工厂可承接的所有等级，其中主评级标记为 is_primary = true）
 CREATE TABLE IF NOT EXISTS factory_level_capability (
@@ -195,6 +203,78 @@ CREATE TABLE IF NOT EXISTS factory_variant_capacity (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
 );
+
+-- RSPU-工厂多对多关联表（V2 并入）
+CREATE TABLE IF NOT EXISTS rspu_factory_mapping (
+    mapping_id BIGSERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+    is_primary BOOLEAN DEFAULT FALSE,              -- 是否主供工厂
+    shipping_warehouse_id VARCHAR(64),             -- 默认发货仓库
+    moq INTEGER,                                    -- 该工厂对此款的MOQ
+    base_lead_time_days INTEGER,                   -- 基础交期（天数）
+    status VARCHAR(16) DEFAULT 'active',           -- active/paused/discontinued
+    notes TEXT,                                     -- 备注：如"专做皮版"、"仅做布艺"
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id),
+    UNIQUE (rspu_id, factory_code)
+);
+CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_rspu ON rspu_factory_mapping(rspu_id, status);
+CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_factory ON rspu_factory_mapping(factory_code, status);
+CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_warehouse ON rspu_factory_mapping(shipping_warehouse_id);
+
+-- 工厂交期规则表（V2 并入）
+CREATE TABLE IF NOT EXISTS factory_lead_time_rule (
+    rule_id BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    category_code VARCHAR(16),                    -- NULL=通配所有品类
+    material_grade_code VARCHAR(32),              -- NULL=通配所有材质等级
+    process_type VARCHAR(32) DEFAULT 'standard',  -- standard/modular/custom/irregular
+    base_days INTEGER NOT NULL DEFAULT 30,        -- 基础交期天数
+    batch_size_threshold INTEGER,                 -- 大批量阈值（超过此数量额外加期）
+    batch_extra_days INTEGER DEFAULT 0,           -- 大批量额外交期
+    material_switch_extra_days INTEGER DEFAULT 0, -- 换材质额外准备期
+    priority INTEGER DEFAULT 100,                 -- 优先级，数字越小越优先
+    status VARCHAR(16) DEFAULT 'active',
+    notes TEXT,
+    created_by VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    UNIQUE (factory_code, category_code, material_grade_code, process_type)
+);
+CREATE INDEX IF NOT EXISTS idx_lead_time_rule_factory ON factory_lead_time_rule(factory_code, status);
+CREATE INDEX IF NOT EXISTS idx_lead_time_rule_match ON factory_lead_time_rule(factory_code, category_code, material_grade_code, process_type);
+
+-- 工厂产能评估历史表（V2 并入）
+CREATE TABLE IF NOT EXISTS factory_capacity_assessment (
+    assessment_id BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL,
+    assessment_period VARCHAR(16) NOT NULL,        -- 评估周期，如 2025Q2
+    score_capacity_scale INTEGER,                  -- 产能规模得分
+    score_on_time_rate INTEGER,                    -- 准时交付得分
+    score_quality INTEGER,                         -- 质量合格率得分
+    score_equipment INTEGER,                       -- 设备水平得分
+    score_staffing INTEGER,                        -- 人员规模/稳定性得分
+    score_flexibility INTEGER,                     -- 柔性生产能力得分
+    tier_score DECIMAL(5,2) NOT NULL,              -- 综合评分
+    calculated_tier VARCHAR(8),                    -- 计算出的层级 S/A/B/C
+    monthly_capacity_avg INTEGER,                  -- 月均产能
+    on_time_rate DECIMAL(5,4),                     -- 准时率
+    quality_return_rate DECIMAL(5,4),              -- 退货率
+    active_rspu_count INTEGER,                     -- 在产款式数
+    active_rsku_count INTEGER,                     -- 在产报价数
+    assessed_by VARCHAR(64),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+CREATE INDEX IF NOT EXISTS idx_assessment_factory ON factory_capacity_assessment(factory_code, assessment_period);
+CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(assessment_period);
 
 -- RSKU 供应单元子表（工厂对某变体的报价）
 CREATE TABLE IF NOT EXISTS rsku_supply (
@@ -384,6 +464,18 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     preview_rows JSONB,
     price_columns JSONB,
     failures JSONB,
+    -- 工厂关联、发货地、交期/MOQ、导入元数据（V2 并入）
+    factory_code VARCHAR(16),
+    factory_name VARCHAR(128),
+    shipping_warehouse_id VARCHAR(64),
+    shipping_from VARCHAR(128),
+    default_lead_time_days INTEGER,
+    default_moq INTEGER,
+    category_hint VARCHAR(16),
+    header_row_count INTEGER DEFAULT 2,
+    data_start_row INTEGER DEFAULT 3,
+    import_note TEXT,
+    processed_at TIMESTAMP,
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP
@@ -391,6 +483,79 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
 );
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_created_by ON excel_import_batch(created_by);
+CREATE INDEX IF NOT EXISTS idx_excel_import_batch_factory ON excel_import_batch(factory_code);
+
+-- Excel 行级导入记录表（V2 并入）
+CREATE TABLE IF NOT EXISTS excel_import_row (
+    row_id BIGSERIAL PRIMARY KEY,
+    batch_id VARCHAR(64) NOT NULL,
+    excel_row_number INTEGER NOT NULL,             -- Excel中的原始行号
+    row_type VARCHAR(16) NOT NULL,                 -- product/module/header/unknown
+    parent_row_id BIGINT,                          -- 模块行关联到产品型号行
+    raw_data JSONB NOT NULL,                       -- 原始数据快照
+    mapped_fields JSONB,                           -- AI映射后的字段
+    selected_price_columns JSONB,                  -- 识别的价格列
+    status VARCHAR(16) DEFAULT 'pending',          -- pending/processing/success/failed/skipped
+    processing_stage VARCHAR(32),                  -- 当前处理阶段
+    generated_rspu_id VARCHAR(64),                 -- 生成的RSPU ID
+    generated_variant_id VARCHAR(64),              -- 生成的变体ID
+    generated_rsku_ids JSONB,                      -- ["RSKU-001", "RSKU-002"]
+    failure_reason TEXT,                           -- 失败原因描述
+    failure_stage VARCHAR(32),                     -- 在哪个阶段失败
+    extracted_image_count INTEGER DEFAULT 0,       -- 提取到的图片数量
+    image_asset_ids JSONB,                         -- ["IMG-001", "IMG-002"]
+    ai_task_id VARCHAR(64),                        -- 关联的异步AI识别任务
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id),
+    FOREIGN KEY (parent_row_id) REFERENCES excel_import_row(row_id),
+    FOREIGN KEY (generated_rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (generated_variant_id) REFERENCES rspu_variant(variant_id),
+    UNIQUE (batch_id, excel_row_number)
+);
+CREATE INDEX IF NOT EXISTS idx_import_row_batch ON excel_import_row(batch_id, status);
+CREATE INDEX IF NOT EXISTS idx_import_row_type ON excel_import_row(batch_id, row_type);
+CREATE INDEX IF NOT EXISTS idx_import_row_rspu ON excel_import_row(generated_rspu_id);
+CREATE INDEX IF NOT EXISTS idx_import_row_parent ON excel_import_row(parent_row_id);
+
+-- RSPU 价格列映射记录表（V2 并入）
+CREATE TABLE IF NOT EXISTS rspu_price_column_mapping (
+    mapping_id BIGSERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,
+    batch_id VARCHAR(64) NOT NULL,
+    price_column_name VARCHAR(64) NOT NULL,        -- 如 "A级布"
+    material_grade_code VARCHAR(32),               -- 映射到的材质等级码
+    material_code VARCHAR(32),                     -- 映射到的主材质码
+    factory_price DECIMAL(18,2),                   -- 导入时的价格
+    factory_code VARCHAR(16),                      -- 所属工厂
+    is_selected BOOLEAN DEFAULT TRUE,              -- 用户是否勾选导入
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+CREATE INDEX IF NOT EXISTS idx_price_col_mapping_rspu ON rspu_price_column_mapping(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_price_col_mapping_batch ON rspu_price_column_mapping(batch_id);
+
+-- 批次价格列识别表（V2 并入）
+CREATE TABLE IF NOT EXISTS excel_import_price_column (
+    column_id BIGSERIAL PRIMARY KEY,
+    batch_id VARCHAR(64) NOT NULL,
+    excel_column_letter VARCHAR(8) NOT NULL,       -- 如 "G"
+    column_header_name VARCHAR(128) NOT NULL,      -- 清洗后的列名
+    raw_header_name VARCHAR(256),                  -- 原始列名
+    suggested_material_grade VARCHAR(32),          -- AI建议的材质等级
+    is_selected BOOLEAN DEFAULT TRUE,              -- 用户是否勾选
+    sample_values JSONB,                           -- 前5个非空样本值
+    data_type VARCHAR(16),                         -- numeric/text/mixed
+    value_count INTEGER,                           -- 该列有值的行数
+    min_value DECIMAL(18,2),                       -- 最小值
+    max_value DECIMAL(18,2),                       -- 最大值
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id)
+);
+CREATE INDEX IF NOT EXISTS idx_import_price_col_batch ON excel_import_price_column(batch_id);
 
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -944,3 +1109,18 @@ CREATE TABLE IF NOT EXISTS sys_config (
     remark VARCHAR(256),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- ============================================================
+-- 自增序列对齐（V3 并入，原随 V2 迁移下发）
+-- 背景：以下 8 张表的主键实体使用 IdType.AUTO，由数据库自增序列生成主键。
+--       本段保证初始化后序列与当前 MAX(id) 一致，避免后续自增值与已有主键冲突。
+--       幂等：可重复执行；空表对齐到 1，非空表对齐到 MAX(id)。
+-- ============================================================
+SELECT setval('sys_role_role_id_seq',                 COALESCE((SELECT MAX(role_id) FROM sys_role), 1),                 (SELECT MAX(role_id) IS NOT NULL FROM sys_role));
+SELECT setval('sys_permission_permission_id_seq',     COALESCE((SELECT MAX(permission_id) FROM sys_permission), 1),     (SELECT MAX(permission_id) IS NOT NULL FROM sys_permission));
+SELECT setval('sys_role_permission_id_seq',           COALESCE((SELECT MAX(id) FROM sys_role_permission), 1),           (SELECT MAX(id) IS NOT NULL FROM sys_role_permission));
+SELECT setval('sys_user_role_id_seq',                 COALESCE((SELECT MAX(id) FROM sys_user_role), 1),                 (SELECT MAX(id) IS NOT NULL FROM sys_user_role));
+SELECT setval('sys_user_factory_id_seq',              COALESCE((SELECT MAX(id) FROM sys_user_factory), 1),              (SELECT MAX(id) IS NOT NULL FROM sys_user_factory));
+SELECT setval('rspu_factory_mapping_mapping_id_seq',  COALESCE((SELECT MAX(mapping_id) FROM rspu_factory_mapping), 1),  (SELECT MAX(mapping_id) IS NOT NULL FROM rspu_factory_mapping));
+SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_id) FROM factory_lead_time_rule), 1),   (SELECT MAX(rule_id) IS NOT NULL FROM factory_lead_time_rule));
+SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));
