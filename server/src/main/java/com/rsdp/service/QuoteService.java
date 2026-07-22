@@ -140,13 +140,23 @@ public class QuoteService {
     }
 
     private void validateFactoryCapabilities(List<RskuSupply> rskus) {
+        List<String> factoryCodes = rskus.stream()
+            .map(RskuSupply::getFactoryCode)
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList();
+        // 按 distinct 工厂编码批量查询能力等级，避免同工厂重复查询（N+1）
+        Map<String, List<String>> capableLevelsMap = factoryCodes.isEmpty()
+            ? Map.of()
+            : factoryService.batchListCapableLevels(factoryCodes);
+
         List<String> mismatched = rskus.stream()
             .filter(rsku -> {
                 String productLevel = rsku.getProductLevel();
                 if (productLevel == null || productLevel.isBlank()) {
                     return false;
                 }
-                List<String> capableLevels = factoryService.getFactoryCapableLevels(rsku.getFactoryCode());
+                List<String> capableLevels = capableLevelsMap.getOrDefault(rsku.getFactoryCode(), List.of());
                 return !capableLevels.contains(productLevel);
             })
             .map(RskuSupply::getRskuId)

@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.rsdp.dto.excel.RskuImportRow;
 import com.rsdp.dto.response.RskuImportResult;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.FactoryMaster;
@@ -584,6 +585,47 @@ class RskuImportServiceTest {
         verify(rskuSupplyMapper).selectList(wrapperCaptor.capture());
         String sqlSegment = wrapperCaptor.getValue().getCustomSqlSegment();
         assertThat(sqlSegment).containsIgnoringCase("deleted_at IS NULL");
+    }
+
+    @Test
+    void updateSingleRsku_emptyCells_shouldNotOverwriteExistingFieldsNorRecordPriceHistory() {
+        // Given：已有报价各字段齐全，导入行仅显式给出材质说明，价格等单元格为空
+        RskuSupply existing = new RskuSupply();
+        existing.setRskuId("RSKU-OLD01");
+        existing.setRspuId("RSPU-001");
+        existing.setVariantId("VAR-001");
+        existing.setFactoryCode("F001");
+        existing.setFactorySku("FS-OLD");
+        existing.setFactoryPrice(new BigDecimal("1000"));
+        existing.setPriceBand("mid");
+        existing.setLeadTimeDays(30);
+        existing.setMoq(10);
+        existing.setWarrantyYears(3);
+
+        RskuImportRow row = new RskuImportRow();
+        row.setRspuId("RSPU-001");
+        row.setVariantId("VAR-001");
+        row.setFactoryCode("F001");
+        row.setFactoryPrice(null);
+        row.setMaterialDescription("橡木");
+
+        // When
+        rskuImportService.updateSingleRsku(existing, row, "S");
+
+        // Then：空单元格不覆盖已有字段，显式有值字段正常更新
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).updateById(captor.capture());
+        RskuSupply saved = captor.getValue();
+        assertThat(saved.getFactoryPrice()).isEqualByComparingTo(new BigDecimal("1000"));
+        assertThat(saved.getPriceBand()).isEqualTo("mid");
+        assertThat(saved.getFactorySku()).isEqualTo("FS-OLD");
+        assertThat(saved.getLeadTimeDays()).isEqualTo(30);
+        assertThat(saved.getMoq()).isEqualTo(10);
+        assertThat(saved.getWarrantyYears()).isEqualTo(3);
+        assertThat(saved.getMaterialDescription()).isEqualTo("橡木");
+        // 价格未被清空，不写 old→null 的价格历史
+        verify(priceHistoryMapper, never()).insert(any(PriceHistory.class));
+        verify(auditLogService).logUpdate(eq("rsku_supply"), eq("RSKU-OLD01"), any(), any(), eq("admin"));
     }
 
     private byte[] buildExcelWithRows(List<String> csvRows) throws Exception {

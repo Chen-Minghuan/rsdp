@@ -33,6 +33,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ExcelFileValidator;
 import com.rsdp.util.ExcelHeaderNormalizer;
 import com.rsdp.util.ExcelImageExtractor;
@@ -1337,7 +1338,7 @@ public class ExcelAiImportService {
         rspu.setRspuId(rspuId);
         rspu.setExternalCode(trim(row.getExternalCode()));
         rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
-        rspu.setCategoryPath(resolveCategoryPath(rspu.getCategoryCode()));
+        rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
         // 多风格时主字段存第一个风格（主风格），其余进 rspu_style 辅风格
         String primaryStyleName = splitCsv(row.getPositioningLabel()).stream().findFirst().orElse(null);
         rspu.setPositioningLabel(StringUtils.hasText(primaryStyleName)
@@ -1768,20 +1769,6 @@ public class ExcelAiImportService {
             log.warn("序列化失败明细失败，batchId={}", batch.getBatchId(), e);
         }
         batchMapper.updateById(batch);
-    }
-
-    private String resolveCategoryPath(String categoryCode) {
-        return switch (categoryCode) {
-            case "SF" -> "[\"家具\",\"沙发\"]";
-            case "TB" -> "[\"家具\",\"茶几\"]";
-            case "FC" -> "[\"家具\",\"柜类\"]";
-            case "BS" -> "[\"家具\",\"吧椅\"]";
-            case "DT" -> "[\"家具\",\"桌子\"]";
-            case "CB" -> "[\"家具\",\"柜子\"]";
-            case "BD" -> "[\"家具\",\"床\"]";
-            case "OF" -> "[\"办公家具\"]";
-            default -> "[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]";
-        };
     }
 
     private String resolveExtension(String contentType) {

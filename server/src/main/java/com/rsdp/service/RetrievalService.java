@@ -311,6 +311,10 @@ public class RetrievalService {
         List<SimilarProductResponse> unique = new ArrayList<>();
         for (SimilarProductResponse candidate : candidates) {
             String fingerprint = buildFingerprint(rspuMap.get(candidate.getRspuId()));
+            if (fingerprint == null) {
+                // RSPU 缺失或指纹各段全空时回退 rspuId，避免不同产品被误折叠
+                fingerprint = "RSPU:" + candidate.getRspuId();
+            }
             if (seen.add(fingerprint)) {
                 unique.add(candidate);
             }
@@ -320,15 +324,16 @@ public class RetrievalService {
 
     private String buildFingerprint(RspuMaster rspu) {
         if (rspu == null) {
-            return "UNKNOWN";
+            return null;
         }
         String materials = parseJsonArray(rspu.getMaterialTags()).stream()
             .sorted()
             .collect(Collectors.joining(","));
-        return Objects.toString(rspu.getCategoryCode(), "") + "|"
+        String fingerprint = Objects.toString(rspu.getCategoryCode(), "") + "|"
             + Objects.toString(rspu.getPositioningLabel(), "") + "|"
             + Objects.toString(rspu.getColorPrimaryName(), "") + "|"
             + materials;
+        return "|||".equals(fingerprint) ? null : fingerprint;
     }
 
     private double computeLabelBoost(AiLabels queryLabels, RspuMaster rspu, List<String> reasons,

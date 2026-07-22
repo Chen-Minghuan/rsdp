@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -82,7 +83,7 @@ class QuoteServiceTest {
         when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-001"))).thenReturn(List.of(rsku));
         when(rspuMapper.selectBatchIds(List.of("RSPU-001"))).thenReturn(List.of(rspu));
         when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of(factory));
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S", "A")));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of(image));
 
         var response = quoteService.generateQuote(List.of(req("RSKU-001", 2)));
@@ -137,7 +138,7 @@ class QuoteServiceTest {
         rsku.setProductLevel("S");
 
         when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-001"))).thenReturn(List.of(rsku));
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("A", "B"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("A", "B")));
 
         assertThatThrownBy(() -> quoteService.generateQuote(List.of(req("RSKU-001", 1))))
             .isInstanceOf(BusinessException.class)
@@ -167,7 +168,7 @@ class QuoteServiceTest {
         when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-001"))).thenReturn(List.of(rsku));
         when(rspuMapper.selectBatchIds(List.of("RSPU-001"))).thenReturn(List.of(rspu));
         when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of(factory));
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S", "A")));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         var response = quoteService.generateQuote(List.of(req("RSKU-001", 2), req("RSKU-001", 3)));
@@ -200,7 +201,7 @@ class QuoteServiceTest {
         when(rskuSupplyMapper.selectBatchIds(List.of("RSKU-001"))).thenReturn(List.of(rsku));
         when(rspuMapper.selectBatchIds(List.of("RSPU-001"))).thenReturn(List.of(rspu));
         when(factoryMasterMapper.selectBatchIds(List.of("F001"))).thenReturn(List.of(factory));
-        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S", "A")));
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
 
         QuoteItemRequest nullQty = new QuoteItemRequest();

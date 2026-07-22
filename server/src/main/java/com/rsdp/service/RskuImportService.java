@@ -483,19 +483,40 @@ public class RskuImportService {
 
     private BigDecimal updateExistingRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
         BigDecimal oldPrice = existing.getFactoryPrice();
-        existing.setFactorySku(trim(row.getFactorySku()));
-        existing.setFactoryPrice(row.getFactoryPrice());
-        existing.setPriceBand(resolvePriceBand(row.getFactoryPrice()));
+        // 更新模式下空单元格不覆盖已有字段：仅更新 Excel 中显式有值的字段
+        if (row.getFactorySku() != null) {
+            existing.setFactorySku(trim(row.getFactorySku()));
+        }
+        if (row.getFactoryPrice() != null) {
+            existing.setFactoryPrice(row.getFactoryPrice());
+            existing.setPriceBand(resolvePriceBand(row.getFactoryPrice()));
+            existing.setPriceUpdated(LocalDate.now());
+        }
         existing.setProductLevel(productLevel);
-        existing.setMaterialCode(trim(row.getMaterialCode()));
-        existing.setMaterialDescription(trim(row.getMaterialDescription()));
-        existing.setLeadTimeDays(row.getLeadTimeDays());
-        existing.setMoq(row.getMoq());
-        existing.setWarrantyYears(row.getWarrantyYears());
-        existing.setShippingFrom(trim(row.getShippingFrom()));
-        existing.setDiffNotes(trim(row.getDiffNotes()));
-        existing.setQuoteConfidence(trim(row.getQuoteConfidence()));
-        existing.setPriceUpdated(LocalDate.now());
+        if (row.getMaterialCode() != null) {
+            existing.setMaterialCode(trim(row.getMaterialCode()));
+        }
+        if (row.getMaterialDescription() != null) {
+            existing.setMaterialDescription(trim(row.getMaterialDescription()));
+        }
+        if (row.getLeadTimeDays() != null) {
+            existing.setLeadTimeDays(row.getLeadTimeDays());
+        }
+        if (row.getMoq() != null) {
+            existing.setMoq(row.getMoq());
+        }
+        if (row.getWarrantyYears() != null) {
+            existing.setWarrantyYears(row.getWarrantyYears());
+        }
+        if (row.getShippingFrom() != null) {
+            existing.setShippingFrom(trim(row.getShippingFrom()));
+        }
+        if (row.getDiffNotes() != null) {
+            existing.setDiffNotes(trim(row.getDiffNotes()));
+        }
+        if (row.getQuoteConfidence() != null) {
+            existing.setQuoteConfidence(trim(row.getQuoteConfidence()));
+        }
         existing.setUpdatedAt(LocalDateTime.now());
         return oldPrice;
     }

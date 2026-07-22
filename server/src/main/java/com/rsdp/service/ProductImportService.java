@@ -18,6 +18,7 @@ import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ExcelFileValidator;
 import com.rsdp.util.ImageUrlValidator;
 import com.rsdp.mapper.RspuMapper;
@@ -419,7 +420,7 @@ public class ProductImportService {
     private RspuMaster buildRspuFromRow(RspuMaster rspu, ProductImportRow row,
                                        Map<String, List<CategoryDict>> dictCache) {
         rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
-        rspu.setCategoryPath(resolveCategoryPath(row.getCategoryCode().trim().toUpperCase()));
+        rspu.setCategoryPath(CategoryPaths.resolve(row.getCategoryCode().trim().toUpperCase()));
         rspu.setPositioningLabel(StringUtils.hasText(row.getPositioningLabel())
             ? normalizeDictCode(row.getPositioningLabel(), dictCache.get("style"))
             : "待识别");
@@ -436,20 +437,6 @@ public class ProductImportService {
         rspu.setWarrantyYears(row.getWarrantyYears());
         rspu.setKeySpecs(trim(row.getKeySpecs()));
         return rspu;
-    }
-
-    private String resolveCategoryPath(String categoryCode) {
-        return switch (categoryCode) {
-            case "SF" -> "[\"家具\",\"沙发\"]";
-            case "TB" -> "[\"家具\",\"茶几\"]";
-            case "FC" -> "[\"家具\",\"柜类\"]";
-            case "BS" -> "[\"家具\",\"吧椅\"]";
-            case "DT" -> "[\"家具\",\"桌子\"]";
-            case "CB" -> "[\"家具\",\"柜子\"]";
-            case "BD" -> "[\"家具\",\"床\"]";
-            case "OF" -> "[\"办公家具\"]";
-            default -> "[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]";
-        };
     }
 
     private void saveStyles(String rspuId, String positioningLabel, List<String> materialTags,
