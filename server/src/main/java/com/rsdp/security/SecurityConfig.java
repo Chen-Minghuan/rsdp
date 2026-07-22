@@ -84,6 +84,8 @@ public class SecurityConfig {
 
                 // 文档导入（必须放在产品读通配规则之前）
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/document-import").hasAuthority(Permissions.PRODUCT_IMPORT)
+                // 场景图拆分录入：本质是录入，复用新品录入权限（必须放在产品读通配规则之前）
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/scene-import").hasAuthority(Permissions.PRODUCT_CREATE)
 
                 // 导入模板：按最小权限显式授权（必须放在对应通配规则之前）
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)

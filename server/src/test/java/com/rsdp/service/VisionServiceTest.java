@@ -237,4 +237,103 @@ class VisionServiceTest {
         assertThat(regions.get(0).getPageType()).isEqualTo("product");
         assertThat(regions.get(1).getPageType()).isEqualTo("unknown");
     }
+
+    @Test
+    void detectSceneProducts_shouldParseProductsAndSendJsonObjectFormat() throws Exception {
+        String aiJson = """
+            {
+              "products": [
+                {"bbox": {"x": 0.05, "y": 0.35, "width": 0.5, "height": 0.55}, "estimatedCategory": "SF", "label": "三人位沙发"},
+                {"bbox": {"x": 0.6, "y": 0.4, "width": 0.3, "height": 0.4}, "estimatedCategory": "TB", "label": "茶几"}
+              ]
+            }
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        var products = visionService.detectSceneProducts(new ByteArrayInputStream("fake-scene".getBytes()), 12);
+
+        assertThat(products).hasSize(2);
+        assertThat(products.get(0).getEstimatedCategory()).isEqualTo("SF");
+        assertThat(products.get(0).getBbox().getWidth()).isEqualTo(0.5);
+        assertThat(products.get(0).getLabel()).isEqualTo("三人位沙发");
+
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.response_format.type", equalTo("json_object")))
+            .withRequestBody(matchingJsonPath("$.max_tokens", equalTo("4096"))));
+    }
+
+    @Test
+    void detectSceneProducts_shouldDropInvalidBboxAndReturnEmptyWhenNoProducts() throws Exception {
+        // 一条 bbox 越界（x+width>1）被丢弃，一条合法保留
+        String aiJson = """
+            {
+              "products": [
+                {"bbox": {"x": 0.8, "y": 0.1, "width": 0.5, "height": 0.3}, "estimatedCategory": "SF"},
+                {"bbox": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.3}, "estimatedCategory": "FS", "label": "休闲椅"}
+              ]
+            }
+            """;
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        var products = visionService.detectSceneProducts(new ByteArrayInputStream("fake-scene".getBytes()), 12);
+
+        assertThat(products).hasSize(1);
+        assertThat(products.get(0).getEstimatedCategory()).isEqualTo("FS");
+
+        // 无家具场景：返回空列表而非报错
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"products\": []}"))));
+
+        var empty = visionService.detectSceneProducts(new ByteArrayInputStream("fake-scene".getBytes()), 12);
+        assertThat(empty).isEmpty();
+    }
+
+    @Test
+    void refineSceneProduct_shouldParseRefinedBbox() throws Exception {
+        String aiJson = """
+            {
+              "isSingleFurniture": true,
+              "bbox": {"x": 0.05, "y": 0.1, "width": 0.85, "height": 0.8},
+              "estimatedCategory": "SF",
+              "label": "三人位沙发"
+            }
+            """;
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        var refined = visionService.refineSceneProduct(new ByteArrayInputStream("fake-crop".getBytes()));
+
+        assertThat(refined).isNotNull();
+        assertThat(refined.getEstimatedCategory()).isEqualTo("SF");
+        assertThat(refined.getLabel()).isEqualTo("三人位沙发");
+        assertThat(refined.getBbox().getWidth()).isEqualTo(0.85);
+    }
+
+    @Test
+    void refineSceneProduct_shouldReturnNullWhenNotSingleFurniture() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"isSingleFurniture\": false}"))));
+
+        var refined = visionService.refineSceneProduct(new ByteArrayInputStream("fake-crop".getBytes()));
+
+        assertThat(refined).isNull();
+    }
 }
