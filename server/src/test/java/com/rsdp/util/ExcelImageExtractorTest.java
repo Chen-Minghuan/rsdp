@@ -84,6 +84,22 @@ class ExcelImageExtractorTest {
         assertEquals("emf", result.get("0,2").get(0).extension().toLowerCase());
     }
 
+    @Test
+    void extract_shouldTruncateAndKeepPartialWhenExceedingLimit() throws IOException {
+        // 上限恰好容纳第一张图：第二张被截断，已提取部分保留，truncated 标记为 true
+        byte[] excelBytes = createExcelWithEmbeddedImages();
+        MultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        boolean[] truncated = new boolean[1];
+        Map<String, List<ExcelImageExtractor.EmbeddedImage>> result =
+            ExcelImageExtractor.extract(file, createPngImageBytes().length, truncated);
+
+        assertTrue(truncated[0], "超过上限应标记截断");
+        int totalImages = result.values().stream().mapToInt(List::size).sum();
+        assertEquals(1, totalImages, "应保留截断前已提取的第一张图");
+    }
+
     private byte[] createExcelWithPngAndEmf() throws IOException {
         byte[] emfBytes = new byte[]{0x01, 0x00, 0x00, 0x00, 0x58, 0x02, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04};
         try (Workbook workbook = new XSSFWorkbook();

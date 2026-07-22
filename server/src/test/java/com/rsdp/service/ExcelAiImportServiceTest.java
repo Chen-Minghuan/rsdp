@@ -2228,4 +2228,53 @@ class ExcelAiImportServiceTest {
         dict.setDictName(dictName);
         return dict;
     }
+
+    @org.junit.jupiter.api.Test
+    void parsePrice_shouldHandleMultiLineCells() throws Exception {
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod("parsePrice", String.class);
+        m.setAccessible(true);
+
+        // 多行单元格「价格\n备注」取首行数字
+        assertEquals(new java.math.BigDecimal("4700"), m.invoke(excelAiImportService, "4700\n特惠价"));
+        assertEquals(new java.math.BigDecimal("3000"), m.invoke(excelAiImportService, "3000\n元/平方"));
+        assertEquals(new java.math.BigDecimal("8000"), m.invoke(excelAiImportService, "8000\n左+右"));
+        // 常规格式兼容
+        assertEquals(new java.math.BigDecimal("3000"), m.invoke(excelAiImportService, "¥3,000"));
+        assertEquals(new java.math.BigDecimal("2450.5"), m.invoke(excelAiImportService, "2450.5"));
+        // 首行无数字（纯备注）返回 null
+        assertNull(m.invoke(excelAiImportService, "元/平方"));
+        assertNull(m.invoke(excelAiImportService, "特惠价"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void fuzzyMatchStandardField_shouldMapPriceHeadersToPriceColumnNotReferencePriceBand() throws Exception {
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod("fuzzyMatchStandardField", String.class);
+        m.setAccessible(true);
+
+        // 价格类表头走价格列通道，不再误映射为参考价格带
+        assertEquals("__PRICE__:出厂价", m.invoke(excelAiImportService, "出厂价"));
+        assertEquals("__PRICE__:销售价", m.invoke(excelAiImportService, "销售价"));
+        assertEquals("__PRICE__:价格", m.invoke(excelAiImportService, "价格"));
+        // 价格带类表头仍映射参考价格带
+        assertEquals("referencePriceBand", m.invoke(excelAiImportService, "价格带"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void forwardFillKeyColumns_shouldAlsoFillCategoryCode() throws Exception {
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
+            "forwardFillKeyColumns", java.util.List.class, java.util.Map.class);
+        m.setAccessible(true);
+
+        java.util.Map<String, String> mapping = java.util.Map.of(
+            "型号", "externalCode", "类别", "categoryCode");
+        java.util.List<java.util.Map<String, String>> rows = new java.util.ArrayList<>();
+        rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "A001", "类别", "茶桌")));
+        rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "", "类别", "")));
+
+        m.invoke(excelAiImportService, rows, mapping);
+
+        // 合并单元格语义的后续空行应继承上一行的型号与品类
+        assertEquals("A001", rows.get(1).get("型号"));
+        assertEquals("茶桌", rows.get(1).get("类别"));
+    }
 }

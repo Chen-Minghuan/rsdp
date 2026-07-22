@@ -171,6 +171,9 @@ public class ExcelAiImportService {
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
 
+    @Value("${rsdp.excel-import.max-total-image-mb:500}")
+    private int maxTotalImageMb = 500;
+
     /**
      * 上传 Excel 并请求 AI 生成字段映射预览。
      *
@@ -260,7 +263,8 @@ public class ExcelAiImportService {
         List<PriceColumnInfo> selectedPriceColumns = filterSelectedPriceColumns(priceColumns, request.getSelectedPriceColumns());
 
         // 从 storage 读取原始 Excel，提取内嵌图片并重建数据行物理布局（图片锚点行/列对齐用）
-        Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages = loadEmbeddedImages(batch);
+        EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(batch);
+        Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages = embeddedImagesResult.images();
         PhysicalLayout physicalLayout = loadPhysicalLayout(batch);
 
         Map<String, List<CategoryDict>> dictCache = preloadDicts();
@@ -269,6 +273,13 @@ public class ExcelAiImportService {
         result.setTotalRows(rawDataRows.size());
 
         List<ExcelAiImportFailure> failures = new ArrayList<>();
+        // 图片提取整体失败/截断对用户可见（不再只写日志）
+        if (embeddedImagesResult.errorMessage() != null) {
+            failures.add(new ExcelAiImportFailure(0, "图片提取失败：" + embeddedImagesResult.errorMessage()));
+        } else if (embeddedImagesResult.truncated()) {
+            failures.add(new ExcelAiImportFailure(0,
+                "部分图片未提取：内嵌图片总量超过上限 " + maxTotalImageMb + "MB，已保留前部分图片"));
+        }
         List<String> rspuIds = new ArrayList<>();
         List<String> taskIds = new ArrayList<>();
         List<ExcelAiImportResult.TaskLink> tasks = new ArrayList<>();
@@ -672,7 +683,8 @@ public class ExcelAiImportService {
      * <p>工厂 Excel 常把「型号品名」做成纵向合并单元格：同一产品的多个模块行
      * 只有首行有型号，后续行该列为空。导入前把映射到 externalCode/productName
      * 的列向下填充，让模块行继承所属产品的型号品名。重复表头行不参与填充，
-     * 避免表头文本污染。</p>
+     * 避免表头文本污染。品类列（categoryCode）同样按合并单元格语义向下填充，
+     * 修复合并「类别」单元格的后续行品类为空导致校验失败的问题。</p>
      *
      * @param dataRows 数据行列表（就地修改）
      * @param mapping  确认后的字段映射（表头 → 标准字段）
@@ -681,7 +693,8 @@ public class ExcelAiImportService {
         List<String> fillHeaders = mapping.entrySet().stream()
             .filter(e -> {
                 String field = e.getValue();
-                return field != null && (field.contains("externalCode") || field.contains("productName"));
+                return field != null && (field.contains("externalCode") || field.contains("productName")
+                    || field.contains("categoryCode"));
             })
             .map(Map.Entry::getKey)
             .toList();
@@ -766,8 +779,13 @@ public class ExcelAiImportService {
             || h.contains("lead time") || h.contains("cycle")) {
             return "leadTimeDays";
         }
-        if (h.contains("价格") || h.contains("price") || h.contains("出厂价")) {
+        if (h.contains("价格带") || h.contains("价格区间") || h.contains("价位")) {
             return "referencePriceBand";
+        }
+        // 价格类表头走价格列通道（由用户在向导中勾选启用），不要误映射为参考价格带
+        if (h.contains("价格") || h.contains("price") || h.contains("出厂价")
+            || h.contains("销售价") || h.contains("单价") || h.contains("批发价")) {
+            return "__PRICE__:" + cleanHeader;
         }
         if (h.contains("图") || h.contains("picture") || h.contains("image") || h.contains("photo")) {
             return null; // 图片列不映射，由内嵌图片提取处理
@@ -910,17 +928,28 @@ public class ExcelAiImportService {
             .toList();
     }
 
-    private Map<String, List<ExcelImageExtractor.EmbeddedImage>> loadEmbeddedImages(ExcelImportBatch batch) {
+    private EmbeddedImagesResult loadEmbeddedImages(ExcelImportBatch batch) {
         if (!StringUtils.hasText(batch.getStoragePath())) {
-            return Collections.emptyMap();
+            return new EmbeddedImagesResult(Collections.emptyMap(), false, null);
         }
+        boolean[] truncated = new boolean[1];
         try (InputStream in = storageService.get(batch.getStoragePath())) {
             byte[] bytes = in.readAllBytes();
-            return ExcelImageExtractor.extract(new MultipartFileAdapter(bytes, batch.getFileName()));
+            long maxBytes = (long) maxTotalImageMb * 1024 * 1024;
+            Map<String, List<ExcelImageExtractor.EmbeddedImage>> images =
+                ExcelImageExtractor.extract(new MultipartFileAdapter(bytes, batch.getFileName()), maxBytes, truncated);
+            return new EmbeddedImagesResult(images, truncated[0], null);
         } catch (Exception e) {
             log.warn("提取 Excel 内嵌图片失败，batchId={}", batch.getBatchId(), e);
-            return Collections.emptyMap();
+            return new EmbeddedImagesResult(Collections.emptyMap(), false, e.getMessage());
         }
+    }
+
+    /**
+     * 内嵌图片提取结果：图片分组 + 是否截断 + 整体失败原因。
+     */
+    private record EmbeddedImagesResult(Map<String, List<ExcelImageExtractor.EmbeddedImage>> images,
+                                        boolean truncated, String errorMessage) {
     }
 
     /**
@@ -1795,6 +1824,10 @@ public class ExcelAiImportService {
                 BigDecimal price = parsePrice(priceText);
                 if (price == null) {
                     log.warn("价格解析失败，header={}, value={}", priceColumn.getHeader(), priceText);
+                    // 行内部分失败对用户可见（多行单元格取首行数字后仍无法解析）
+                    String displayValue = priceText.replaceAll("\\R", " ");
+                    rowIssues.add("价格列「" + priceColumn.getHeader() + "」价格解析失败："
+                        + (displayValue.length() > 30 ? displayValue.substring(0, 30) + "…" : displayValue));
                     continue;
                 }
 
@@ -2002,17 +2035,26 @@ public class ExcelAiImportService {
         };
     }
 
+    /**
+     * 解析价格文本。支持多行单元格（如「4700\n特惠价」「3000\n元/平方」）——
+     * 取首行并提取第一个数字；首行无数字（如纯备注「元/平方」）返回 null。
+     */
     private BigDecimal parsePrice(String text) {
         if (!StringUtils.hasText(text)) {
             return null;
         }
-        String cleaned = text.replace(",", "")
+        String firstLine = text.split("\\R")[0]
+            .replace(",", "")
             .replace("¥", "")
             .replace("$", "")
             .replace("￥", "")
             .trim();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d+(?:\\.\\d+)?").matcher(firstLine);
+        if (!matcher.find()) {
+            return null;
+        }
         try {
-            return new BigDecimal(cleaned);
+            return new BigDecimal(matcher.group());
         } catch (NumberFormatException e) {
             return null;
         }

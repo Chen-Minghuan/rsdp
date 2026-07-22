@@ -47,7 +47,27 @@ public final class ExcelImageExtractor {
      * @return 按 sheetIndex+rowIndex 分组的内嵌图片
      * @throws IOException 读取文件失败
      */
+    /**
+     * 提取 Excel 全部内嵌图片（默认 200MB 总量上限，超限截断保留已提取部分）。
+     */
     public static Map<String, List<EmbeddedImage>> extract(MultipartFile file) throws IOException {
+        return extract(file, MAX_TOTAL_IMAGE_BYTES, null);
+    }
+
+    /**
+     * 提取 Excel 全部内嵌图片，按 sheet+物理行号分组。
+     *
+     * <p>图片总量超过 maxTotalImageBytes 时停止提取剩余图片、保留已提取部分（截断），
+     * 通过 truncated 回传标记（可为 null 表示不关心）；不再整体抛异常导致全量丢图。</p>
+     *
+     * @param file               Excel 文件
+     * @param maxTotalImageBytes 图片总量上限（字节）
+     * @param truncated          可选的输出标记：truncated[0]=true 表示发生了截断
+     * @return key 为 "sheetIndex,rowIndex" 的图片分组
+     * @throws IOException 文件损坏等整体性失败
+     */
+    public static Map<String, List<EmbeddedImage>> extract(MultipartFile file, long maxTotalImageBytes,
+                                                           boolean[] truncated) throws IOException {
         if (file == null || file.isEmpty()) {
             return Collections.emptyMap();
         }
@@ -63,6 +83,9 @@ public final class ExcelImageExtractor {
             }
 
             for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
+                if (truncated != null && truncated.length > 0 && truncated[0]) {
+                    break;
+                }
                 Sheet sheet = workbook.getSheetAt(sheetIndex);
                 Drawing<?> drawing = sheet.getDrawingPatriarch();
                 if (drawing == null) {
@@ -85,11 +108,19 @@ public final class ExcelImageExtractor {
                         }
 
                         if (++pictureCount > MAX_PICTURES) {
-                            throw new IOException("Excel 内嵌图片数量超过上限 " + MAX_PICTURES);
+                            log.warn("内嵌图片数量超过上限 {}，截断剩余图片", MAX_PICTURES);
+                            if (truncated != null && truncated.length > 0) {
+                                truncated[0] = true;
+                            }
+                            break;
                         }
                         totalImageBytes += pictureData.getData().length;
-                        if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) {
-                            throw new IOException("Excel 内嵌图片总大小超过上限 " + MAX_TOTAL_IMAGE_BYTES + " 字节");
+                        if (totalImageBytes > maxTotalImageBytes) {
+                            log.warn("内嵌图片总大小超过上限 {} 字节，截断剩余图片", maxTotalImageBytes);
+                            if (truncated != null && truncated.length > 0) {
+                                truncated[0] = true;
+                            }
+                            break;
                         }
 
                         int rowIndex = Math.max(0, anchor.getRow1());
@@ -105,9 +136,6 @@ public final class ExcelImageExtractor {
                             sheetIndex
                         );
                         result.computeIfAbsent(key, k -> new ArrayList<>()).add(image);
-                    } catch (IOException e) {
-                        // 整体性失败（超上限）向上抛
-                        throw e;
                     } catch (Exception e) {
                         // 单张图片损坏/无法解析时跳过，不影响其余图片提取
                         log.warn("跳过无法解析的内嵌图片，sheetIndex={}", sheetIndex, e);
