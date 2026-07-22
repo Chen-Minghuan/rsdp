@@ -73,44 +73,52 @@ public final class ExcelImageExtractor {
                     if (!(shape instanceof Picture picture)) {
                         continue;
                     }
-                    ClientAnchor anchor = picture.getClientAnchor();
-                    if (anchor == null) {
-                        continue;
-                    }
+                    try {
+                        ClientAnchor anchor = picture.getClientAnchor();
+                        if (anchor == null) {
+                            continue;
+                        }
 
-                    PictureData pictureData = picture.getPictureData();
-                    if (pictureData == null || pictureData.getData() == null || pictureData.getData().length == 0) {
-                        continue;
-                    }
+                        PictureData pictureData = picture.getPictureData();
+                        if (pictureData == null || pictureData.getData() == null || pictureData.getData().length == 0) {
+                            continue;
+                        }
 
-                    if (++pictureCount > MAX_PICTURES) {
-                        throw new IOException("Excel 内嵌图片数量超过上限 " + MAX_PICTURES);
-                    }
-                    totalImageBytes += pictureData.getData().length;
-                    if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) {
-                        throw new IOException("Excel 内嵌图片总大小超过上限 " + MAX_TOTAL_IMAGE_BYTES + " 字节");
-                    }
+                        if (++pictureCount > MAX_PICTURES) {
+                            throw new IOException("Excel 内嵌图片数量超过上限 " + MAX_PICTURES);
+                        }
+                        totalImageBytes += pictureData.getData().length;
+                        if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) {
+                            throw new IOException("Excel 内嵌图片总大小超过上限 " + MAX_TOTAL_IMAGE_BYTES + " 字节");
+                        }
 
-                    int rowIndex = Math.max(0, anchor.getRow1());
-                    int colIndex = Math.max(0, anchor.getCol1());
-                    String key = buildKey(sheetIndex, rowIndex);
+                        int rowIndex = Math.max(0, anchor.getRow1());
+                        int colIndex = Math.max(0, anchor.getCol1());
+                        String key = buildKey(sheetIndex, rowIndex);
 
-                    String extension = resolveExtension(pictureData.suggestFileExtension());
-                    EmbeddedImage image = new EmbeddedImage(
-                        pictureData.getData(),
-                        extension,
-                        colIndex,
-                        rowIndex,
-                        sheetIndex
-                    );
-                    result.computeIfAbsent(key, k -> new ArrayList<>()).add(image);
+                        String extension = resolveExtension(pictureData.suggestFileExtension());
+                        EmbeddedImage image = new EmbeddedImage(
+                            pictureData.getData(),
+                            extension,
+                            colIndex,
+                            rowIndex,
+                            sheetIndex
+                        );
+                        result.computeIfAbsent(key, k -> new ArrayList<>()).add(image);
+                    } catch (IOException e) {
+                        // 整体性失败（超上限）向上抛
+                        throw e;
+                    } catch (Exception e) {
+                        // 单张图片损坏/无法解析时跳过，不影响其余图片提取
+                        log.warn("跳过无法解析的内嵌图片，sheetIndex={}", sheetIndex, e);
+                    }
                 }
             }
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("解析 Excel 内嵌图片失败", e);
-            return Collections.emptyMap();
+            // 整体性失败（文件损坏等）向上抛，由调用方记录告警
+            throw new IOException("解析 Excel 内嵌图片失败: " + e.getMessage(), e);
         }
 
         // 同一行内按列号排序

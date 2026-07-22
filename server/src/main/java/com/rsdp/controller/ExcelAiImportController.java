@@ -53,6 +53,7 @@ public class ExcelAiImportController {
     @PreAuthorize("hasAuthority('product:import')")
     public Result<ExcelAiImportResult> importExcel(
         @RequestBody @Valid ExcelAiMappingRequest request) {
+        excelAiImportService.getAccessibleBatch(request.getBatchId());
         return Result.ok(excelAiImportService.confirmAndImport(request));
     }
 
@@ -63,6 +64,7 @@ public class ExcelAiImportController {
     @PreAuthorize("hasAuthority('product:import')")
     public Result<ExcelAiImportStatusResponse> getStatus(
         @PathVariable @NotBlank String batchId) {
+        excelAiImportService.getAccessibleBatch(batchId);
         return Result.ok(excelAiImportService.getStatus(batchId));
     }
 
@@ -73,6 +75,7 @@ public class ExcelAiImportController {
     @PreAuthorize("hasAuthority('product:import')")
     public Result<List<ExcelImportRow>> listRows(
         @PathVariable @NotBlank String batchId) {
+        excelAiImportService.getAccessibleBatch(batchId);
         return Result.ok(excelImportRowService.listByBatch(batchId));
     }
 }

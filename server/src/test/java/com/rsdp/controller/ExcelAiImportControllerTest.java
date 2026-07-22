@@ -1,6 +1,7 @@
 package com.rsdp.controller;
 
 import com.rsdp.entity.ExcelImportRow;
+import com.rsdp.exception.ForbiddenException;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.ExcelAiImportService;
@@ -15,6 +16,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -57,6 +60,33 @@ class ExcelAiImportControllerTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data[0].status").value("success"));
 
+        verify(excelAiImportService, times(1)).getAccessibleBatch("BATCH-001");
         verify(excelImportRowService, times(1)).listByBatch("BATCH-001");
+    }
+
+    @Test
+    void listRows_shouldReturn403WhenBatchNotOwned() throws Exception {
+        // P1-12：无权访问他人批次 → 403，且不查询行数据
+        when(excelAiImportService.getAccessibleBatch("BATCH-001"))
+            .thenThrow(new ForbiddenException("无权访问该导入批次: BATCH-001"));
+
+        mockMvc.perform(get("/api/v1/products/excel-ai-import/BATCH-001/rows"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(403));
+
+        verify(excelImportRowService, never()).listByBatch(any());
+    }
+
+    @Test
+    void getStatus_shouldReturn403WhenBatchNotOwned() throws Exception {
+        // P1-12：查询批次状态同样先做归属校验
+        when(excelAiImportService.getAccessibleBatch("BATCH-001"))
+            .thenThrow(new ForbiddenException("无权访问该导入批次: BATCH-001"));
+
+        mockMvc.perform(get("/api/v1/products/excel-ai-import/BATCH-001"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(403));
+
+        verify(excelAiImportService, never()).getStatus(any());
     }
 }
