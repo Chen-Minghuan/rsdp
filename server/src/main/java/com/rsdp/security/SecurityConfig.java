@@ -57,8 +57,14 @@ public class SecurityConfig {
                 // 收藏夹：用户自服务数据，按当前用户隔离
                 .requestMatchers(HttpMethod.GET, "/api/v1/favorites").hasAuthority(Permissions.FAVORITE_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/favorites/check").hasAuthority(Permissions.FAVORITE_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/favorites/export").hasAuthority(Permissions.FAVORITE_READ)
+                .requestMatchers(HttpMethod.GET, "/api/v1/favorites/folders").hasAuthority(Permissions.FAVORITE_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/favorites").hasAuthority(Permissions.FAVORITE_WRITE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/favorites/folders").hasAuthority(Permissions.FAVORITE_WRITE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/favorites/folders/*").hasAuthority(Permissions.FAVORITE_WRITE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/favorites/*/folder").hasAuthority(Permissions.FAVORITE_WRITE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/favorites/*").hasAuthority(Permissions.FAVORITE_WRITE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/favorites/folders/*").hasAuthority(Permissions.FAVORITE_WRITE)
 
                 // 用户中心-企业团队：登录用户自服务（写操作由 Service 层按企业管理员/平台 ADMIN 校验）
                 .requestMatchers("/api/v1/member/**").authenticated()
