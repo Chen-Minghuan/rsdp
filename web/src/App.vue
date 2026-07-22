@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, NTag, type GlobalThemeOverrides, type DropdownOption } from 'naive-ui'
-import { computed, onMounted } from 'vue'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, NTag, NModal, NSpin, type GlobalThemeOverrides, type DropdownOption } from 'naive-ui'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter, isNavigationFailure } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ROLES } from '@/utils/constants'
 import { navGroups, type NavGroup, type NavItem } from '@/config/navigation'
+import { getPublicContent } from '@/api/platform'
 
 const router = useRouter()
 const route = useRoute()
@@ -108,6 +109,27 @@ async function handleUserAction(key: string) {
     await router.push('/user/info')
   }
 }
+
+// 顶栏「咨询」弹窗（CMS 内容 platform_consulting_service 驱动，免登录公开接口）
+const showConsult = ref(false)
+const consultLoading = ref(false)
+const consultTitle = ref('客服咨询')
+const consultContent = ref('')
+
+async function openConsult() {
+  showConsult.value = true
+  if (consultContent.value) return
+  consultLoading.value = true
+  try {
+    const content = await getPublicContent('platform_consulting_service')
+    consultTitle.value = content.title || '客服咨询'
+    consultContent.value = content.content || ''
+  } catch {
+    consultContent.value = ''
+  } finally {
+    consultLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -140,6 +162,7 @@ async function handleUserAction(key: string) {
                 </n-button>
               </n-dropdown>
             </template>
+            <n-button quaternary @click="openConsult">咨询</n-button>
             <n-dropdown
               v-if="userStore.isLoggedIn"
               :options="userDropdownOptions"
@@ -175,6 +198,16 @@ async function handleUserAction(key: string) {
         </n-message-provider>
       </n-layout>
     </n-layout>
+
+    <!-- 客服咨询弹窗（CMS 内容驱动） -->
+    <n-modal v-model:show="showConsult" preset="card" :title="consultTitle" style="width: 560px;">
+      <n-spin :show="consultLoading">
+        <!-- 内容仅 ADMIN/EDITOR 可在管理端维护 -->
+        <!-- eslint-disable-next-line vue/no-v-html -->
+        <div v-if="consultContent" class="consult-content" v-html="consultContent" />
+        <p v-else-if="!consultLoading" style="color: var(--rsdp-text-secondary);">暂无咨询内容</p>
+      </n-spin>
+    </n-modal>
   </n-config-provider>
 </template>
 
@@ -230,5 +263,12 @@ async function handleUserAction(key: string) {
 .user-button {
   font-weight: 600;
   color: var(--rsdp-text);
+}
+
+.consult-content {
+  font-size: 14px;
+  line-height: 1.8;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 </style>
