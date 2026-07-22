@@ -109,3 +109,36 @@ export interface CmsImageUploadResult {
   imageId: string
   url: string
 }
+
+/** 首页公开 Banner 项 */
+export interface PublicHomeBanner {
+  bannerId: string
+  title?: string | null
+  imageUrl?: string | null
+  linkType: BannerLinkType
+  linkValue?: string | null
+}
+
+/** 首页公开落地案例项 */
+export interface PublicHomeCase {
+  caseId: string
+  title: string
+  coverImageUrl?: string | null
+  content?: string | null
+}
+
+/** 首页公开产品定制项 */
+export interface PublicHomeCustomized {
+  customizedId: string
+  title: string
+  coverImageUrl?: string | null
+  description?: string | null
+  linkValue?: string | null
+}
+
+/** 首页公开聚合数据（免登录） */
+export interface PublicHomeData {
+  banners: PublicHomeBanner[]
+  cases: PublicHomeCase[]
+  customizeds: PublicHomeCustomized[]
+}

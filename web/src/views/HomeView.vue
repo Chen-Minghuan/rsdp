@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { NButton, NCard, NGrid, NGridItem, NSpace, NTag } from 'naive-ui'
+import { NButton, NCard, NCarousel, NGrid, NGridItem, NImage, NModal, NSpace, NTag } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageContainer from '@/components/PageContainer.vue'
 import { listDicts } from '@/api/dict'
+import { getPublicHome } from '@/api/platform'
+import { listProducts } from '@/api/product'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
 import type { DictItem } from '@/types/dict'
+import type { PublicHomeBanner, PublicHomeCase, PublicHomeCustomized, PublicHomeData } from '@/types/platform'
+import type { ProductSummary } from '@/types/product'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -19,6 +23,19 @@ const styleDicts = ref<DictItem[]>([])
 const sceneDicts = ref<DictItem[]>([])
 const materialDicts = ref<DictItem[]>([])
 const categoryDicts = ref<DictItem[]>([])
+
+// 官网 CMS 营销区数据（免登录公开接口）
+const homeData = ref<PublicHomeData | null>(null)
+const banners = computed(() => homeData.value?.banners ?? [])
+const cases = computed(() => homeData.value?.cases ?? [])
+const customizeds = computed(() => homeData.value?.customizeds ?? [])
+
+// 新品上架（复用产品库接口，按 product:read 显隐）
+const newProducts = ref<ProductSummary[]>([])
+
+// 案例详情弹窗
+const showCaseDetail = ref(false)
+const activeCase = ref<PublicHomeCase | null>(null)
 
 /** 分级导航维度：点击标签携带对应筛选参数跳转产品库。 */
 const dimensions = computed(() => [
@@ -114,6 +131,30 @@ function gotoProducts(queryKey: string, value: string) {
   router.push({ path: '/products', query: { [queryKey]: value } })
 }
 
+/** Banner 点击：rspu 跳产品详情；url 开外链。 */
+function handleBannerClick(banner: PublicHomeBanner) {
+  if (banner.linkType === 'rspu' && banner.linkValue) {
+    router.push(`/products/${banner.linkValue}`)
+  } else if (banner.linkType === 'url' && banner.linkValue) {
+    window.open(banner.linkValue, '_blank', 'noopener')
+  }
+}
+
+function openCaseDetail(item: PublicHomeCase) {
+  activeCase.value = item
+  showCaseDetail.value = true
+}
+
+/** 定制卡片点击：站内路径走路由，外链新开窗口。 */
+function handleCustomizedClick(item: PublicHomeCustomized) {
+  if (!item.linkValue) return
+  if (item.linkValue.startsWith('/')) {
+    router.push(item.linkValue)
+  } else if (item.linkValue.startsWith('http')) {
+    window.open(item.linkValue, '_blank', 'noopener')
+  }
+}
+
 onMounted(async () => {
   try {
     const [scenes, styles, materials, categories] = await Promise.all([
@@ -129,13 +170,42 @@ onMounted(async () => {
   } catch (e) {
     console.error('加载首页字典失败', e)
   }
+
+  try {
+    homeData.value = await getPublicHome()
+  } catch (e) {
+    console.error('加载首页营销区失败', e)
+  }
+
+  if (canReadProduct.value) {
+    try {
+      const result = await listProducts({ page: 1, size: 8 })
+      newProducts.value = result.rows
+    } catch (e) {
+      console.error('加载新品上架失败', e)
+    }
+  }
 })
 </script>
 
 <template>
   <PageContainer>
-    <!-- Hero -->
-    <section class="hero">
+    <!-- 轮播 Banner（CMS 驱动；无 Banner 时回退品牌 Hero） -->
+    <section v-if="banners.length > 0" class="banner-section">
+      <n-carousel autoplay draggable class="banner-carousel">
+        <div
+          v-for="banner in banners"
+          :key="banner.bannerId"
+          class="banner-slide"
+          :class="{ clickable: banner.linkType !== 'none' }"
+          @click="handleBannerClick(banner)"
+        >
+          <img v-if="banner.imageUrl" :src="banner.imageUrl" :alt="banner.title || 'banner'" class="banner-img">
+          <div v-if="banner.title" class="banner-title">{{ banner.title }}</div>
+        </div>
+      </n-carousel>
+    </section>
+    <section v-else class="hero">
       <h1 class="hero-title">家居全案，一站式数字化管理</h1>
       <p class="hero-subtitle">
         多模态 AI 录入 · 双层编码产品库 · 工厂报价 · AI 空间搭配 · 报价单一键生成
@@ -148,6 +218,81 @@ onMounted(async () => {
           浏览产品库
         </n-button>
       </n-space>
+    </section>
+
+    <!-- 新品上架 -->
+    <section v-if="canReadProduct && newProducts.length > 0" class="section">
+      <h2 class="section-title">新品上架</h2>
+      <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen">
+        <n-grid-item v-for="product in newProducts" :key="product.rspuId">
+          <n-card hoverable class="product-card" @click="router.push(`/products/${product.rspuId}`)">
+            <div class="product-image">
+              <n-image
+                v-if="product.primaryImageUrl"
+                :src="product.primaryImageUrl"
+                object-fit="cover"
+                preview-disabled
+                class="product-image-inner"
+              />
+              <div v-else class="product-image-placeholder">暂无图片</div>
+            </div>
+            <div class="product-name" :title="product.positioningLabel || product.rspuId">
+              {{ product.positioningLabel || product.rspuId }}
+            </div>
+            <div class="product-meta">{{ product.categoryPath }}</div>
+          </n-card>
+        </n-grid-item>
+      </n-grid>
+    </section>
+
+    <!-- 落地案例 -->
+    <section v-if="cases.length > 0" class="section">
+      <h2 class="section-title">落地案例</h2>
+      <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen">
+        <n-grid-item v-for="item in cases" :key="item.caseId">
+          <n-card hoverable class="case-card" @click="openCaseDetail(item)">
+            <div class="case-image">
+              <n-image
+                v-if="item.coverImageUrl"
+                :src="item.coverImageUrl"
+                object-fit="cover"
+                preview-disabled
+                class="case-image-inner"
+              />
+              <div v-else class="product-image-placeholder">暂无图片</div>
+            </div>
+            <div class="case-title">{{ item.title }}</div>
+          </n-card>
+        </n-grid-item>
+      </n-grid>
+    </section>
+
+    <!-- 产品定制 -->
+    <section v-if="customizeds.length > 0" class="section">
+      <h2 class="section-title">产品定制</h2>
+      <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen">
+        <n-grid-item v-for="item in customizeds" :key="item.customizedId">
+          <n-card
+            hoverable
+            class="customized-card"
+            :class="{ clickable: !!item.linkValue }"
+            @click="handleCustomizedClick(item)"
+          >
+            <div class="case-image">
+              <n-image
+                v-if="item.coverImageUrl"
+                :src="item.coverImageUrl"
+                object-fit="cover"
+                preview-disabled
+                class="case-image-inner"
+              />
+              <div v-else class="product-image-placeholder">定制服务</div>
+            </div>
+            <div class="case-title">{{ item.title }}</div>
+            <div v-if="item.description" class="customized-desc">{{ item.description }}</div>
+          </n-card>
+        </n-grid-item>
+      </n-grid>
     </section>
 
     <!-- 分级导航 -->
@@ -201,10 +346,61 @@ onMounted(async () => {
         </n-grid-item>
       </n-grid>
     </section>
+
+    <!-- 案例详情弹窗 -->
+    <n-modal v-model:show="showCaseDetail" preset="card" :title="activeCase?.title || '案例详情'" style="width: 720px;">
+      <n-image
+        v-if="activeCase?.coverImageUrl"
+        :src="activeCase.coverImageUrl"
+        object-fit="cover"
+        style="width: 100%; border-radius: 8px; margin-bottom: 12px;"
+      />
+      <!-- 内容仅 ADMIN/EDITOR 可在管理端维护 -->
+      <!-- eslint-disable-next-line vue/no-v-html -->
+      <div v-if="activeCase?.content" class="case-content" v-html="activeCase.content" />
+      <p v-else style="color: var(--rsdp-text-secondary);">暂无详细介绍</p>
+    </n-modal>
   </PageContainer>
 </template>
 
 <style scoped>
+.banner-section {
+  border-radius: var(--rsdp-radius-lg);
+  overflow: hidden;
+}
+
+.banner-carousel {
+  height: 400px;
+}
+
+.banner-slide {
+  position: relative;
+  width: 100%;
+  height: 400px;
+}
+
+.banner-slide.clickable {
+  cursor: pointer;
+}
+
+.banner-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.banner-title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 16px 24px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.55));
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+}
+
 .hero {
   padding: 56px 40px;
   border-radius: var(--rsdp-radius-lg);
@@ -238,6 +434,92 @@ onMounted(async () => {
   margin-bottom: 16px;
   padding-left: 10px;
   border-left: 3px solid var(--rsdp-primary);
+}
+
+.product-card,
+.case-card {
+  cursor: pointer;
+  height: 100%;
+}
+
+.customized-card {
+  height: 100%;
+}
+
+.customized-card.clickable {
+  cursor: pointer;
+}
+
+.product-image,
+.case-image {
+  border-radius: var(--rsdp-radius);
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  background: var(--rsdp-serve-bg);
+  margin-bottom: 10px;
+}
+
+.product-image-inner,
+.case-image-inner {
+  width: 100%;
+  height: 100%;
+}
+
+.product-image-inner :deep(img),
+.case-image-inner :deep(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.product-image-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--rsdp-text-secondary);
+  font-size: 13px;
+}
+
+.product-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+
+.case-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+}
+
+.customized-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.case-content {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--rsdp-text);
+}
+
+.case-content :deep(img) {
+  max-width: 100%;
 }
 
 .dim-card {
@@ -343,6 +625,11 @@ onMounted(async () => {
   .guide-arrow {
     justify-content: center;
     transform: rotate(90deg);
+  }
+
+  .banner-carousel,
+  .banner-slide {
+    height: 240px;
   }
 }
 </style>
