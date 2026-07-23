@@ -42,6 +42,8 @@ public class DesignOrder {
     private String inviteTokenHash;
     private LocalDateTime inviteExpireAt;
     private LocalDateTime inviteConfirmedAt;
+    /** 合同文件（image_assets.image_id，image_type=contract） */
+    private String contractFileId;
     private String createdBy;
 
     @TableLogic(value = "null", delval = "now()")

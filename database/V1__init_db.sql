@@ -1064,6 +1064,7 @@ CREATE TABLE IF NOT EXISTS design_order (
     invite_token_hash VARCHAR(128),
     invite_expire_at TIMESTAMP,
     invite_confirmed_at TIMESTAMP,
+    contract_file_id VARCHAR(64),
     created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     deleted_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -1094,6 +1095,7 @@ CREATE TABLE IF NOT EXISTS design_order_item (
     quantity INT NOT NULL DEFAULT 1,
     original_price TEXT,
     final_price TEXT,
+    adjust_price TEXT,
     factory_code VARCHAR(16),
     snapshot_json TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()

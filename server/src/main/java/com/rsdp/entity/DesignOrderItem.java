@@ -36,6 +36,10 @@ public class DesignOrderItem {
     @TableField(typeHandler = EncryptTypeHandler.class)
     private BigDecimal finalPrice;
 
+    /** 行级改价（AES 加密到手单价；非空时优先于 原价快照×折扣率，仅 PENDING 可编辑） */
+    @TableField(typeHandler = EncryptTypeHandler.class)
+    private BigDecimal adjustPrice;
+
     private String factoryCode;
 
     @JsonRawValue
