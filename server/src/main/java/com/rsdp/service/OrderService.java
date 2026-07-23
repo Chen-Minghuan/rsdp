@@ -503,6 +503,7 @@ public class OrderService {
         response.setRemark(order.getRemark());
         response.setInviteExpireAt(order.getInviteExpireAt());
         response.setInviteConfirmedAt(order.getInviteConfirmedAt());
+        response.setContractFileId(order.getContractFileId());
         response.setCreatedBy(order.getCreatedBy());
         response.setCreatedAt(order.getCreatedAt());
         response.setUpdatedAt(order.getUpdatedAt());
@@ -526,6 +527,7 @@ public class OrderService {
         target.setRemark(source.getRemark());
         target.setInviteExpireAt(source.getInviteExpireAt());
         target.setInviteConfirmedAt(source.getInviteConfirmedAt());
+        target.setContractFileId(source.getContractFileId());
         target.setCreatedBy(source.getCreatedBy());
         target.setCreatedAt(source.getCreatedAt());
         target.setUpdatedAt(source.getUpdatedAt());

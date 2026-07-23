@@ -31,6 +31,8 @@ public class OrderResponse {
     private String remark;
     private LocalDateTime inviteExpireAt;
     private LocalDateTime inviteConfirmedAt;
+    /** 合同文件 ID（image_assets.image_id；null=未上传合同） */
+    private String contractFileId;
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

@@ -10,6 +10,7 @@ import com.rsdp.dto.response.OrderDetailResponse;
 import com.rsdp.dto.response.OrderListResponse;
 import com.rsdp.dto.response.OrderResponse;
 import com.rsdp.service.ContractTemplateService;
+import com.rsdp.service.OrderContractService;
 import com.rsdp.service.OrderExportService;
 import com.rsdp.service.OrderInviteService;
 import com.rsdp.service.OrderService;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -54,6 +56,57 @@ public class OrderController {
     private final ContractTemplateService contractTemplateService;
     private final OrderStatisticsService orderStatisticsService;
     private final OrderExportService orderExportService;
+    private final OrderContractService orderContractService;
+
+    /**
+     * 上传订单合同文件（doc/docx/pdf，≤20MB；覆盖旧合同关联）。
+     *
+     * @param orderId 订单 ID
+     * @param file    合同文件
+     * @return 空结果
+     * @throws IOException 存储失败时抛出
+     */
+    @PostMapping("/{orderId}/contract")
+    public Result<Void> uploadContract(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId,
+        @RequestParam("file") org.springframework.web.multipart.MultipartFile file) throws IOException {
+        orderContractService.uploadContract(orderId, file);
+        return Result.ok();
+    }
+
+    /**
+     * 下载订单合同文件（归属校验）。
+     *
+     * @param orderId 订单 ID
+     * @return 合同文件流
+     * @throws IOException 读取失败时抛出
+     */
+    @GetMapping("/{orderId}/contract")
+    public ResponseEntity<org.springframework.core.io.InputStreamResource> downloadContract(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId) throws IOException {
+        OrderContractService.ContractFile file = orderContractService.downloadContract(orderId);
+        String encodedFileName = URLEncoder.encode(file.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+        ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFileName)
+            .contentType(MediaType.APPLICATION_OCTET_STREAM);
+        if (file.size() >= 0) {
+            builder.contentLength(file.size());
+        }
+        return builder.body(new org.springframework.core.io.InputStreamResource(file.content()));
+    }
+
+    /**
+     * 清除订单合同关联。
+     *
+     * @param orderId 订单 ID
+     * @return 空结果
+     */
+    @DeleteMapping("/{orderId}/contract")
+    public Result<Void> deleteContract(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId) {
+        orderContractService.deleteContract(orderId);
+        return Result.ok();
+    }
 
     /**
      * 导出订单明细 Excel 清单（{orderNo}-订单明细.xlsx）。

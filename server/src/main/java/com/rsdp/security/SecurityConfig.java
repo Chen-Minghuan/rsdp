@@ -122,6 +122,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/orders", "/api/v1/orders/**").hasAuthority(Permissions.ORDER_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/orders").hasAuthority(Permissions.ORDER_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/orders/*/invite").hasAuthority(Permissions.ORDER_UPDATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/orders/*/contract").hasAuthority(Permissions.ORDER_UPDATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_DELETE)
 
