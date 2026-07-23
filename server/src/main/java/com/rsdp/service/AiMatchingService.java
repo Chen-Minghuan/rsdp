@@ -44,6 +44,7 @@ public class AiMatchingService {
     private final DictService dictService;
     private final VisionService visionService;
     private final ObjectMapper objectMapper;
+    private final com.rsdp.security.datascope.DataScopeHelper dataScopeHelper;
 
     private static final int MAX_CANDIDATES = 30;
 
@@ -242,6 +243,8 @@ public class AiMatchingService {
 
         List<SchemeItemResponse> items = new ArrayList<>();
         BigDecimal totalPrice = BigDecimal.ZERO;
+        // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见；任一厂不可见则总价同步隐藏
+        boolean canViewAllPrices = true;
 
         for (String rspuId : selectedIds) {
             RskuSupply cheapest = cheapestRskuMap.get(rspuId);
@@ -252,6 +255,9 @@ public class AiMatchingService {
 
             FactoryMaster factory = factoryMap.get(cheapest.getFactoryCode());
 
+            boolean canViewPrice = dataScopeHelper.canViewFactoryPrice(cheapest.getFactoryCode());
+            canViewAllPrices = canViewAllPrices && canViewPrice;
+
             SchemeItemResponse item = new SchemeItemResponse();
             item.setRspuId(rspuId);
             item.setRspuName(rspu.getPositioningLabel());
@@ -260,9 +266,9 @@ public class AiMatchingService {
             item.setFactoryCode(cheapest.getFactoryCode());
             item.setFactoryName(factory != null ? factory.getFactoryName() : null);
             item.setFactorySku(cheapest.getFactorySku());
-            item.setFactoryPrice(cheapest.getFactoryPrice());
+            item.setFactoryPrice(canViewPrice ? cheapest.getFactoryPrice() : null);
             item.setQuantity(1);
-            item.setSubtotal(cheapest.getFactoryPrice());
+            item.setSubtotal(canViewPrice ? cheapest.getFactoryPrice() : null);
             item.setLeadTimeDays(cheapest.getLeadTimeDays());
             item.setMoq(cheapest.getMoq());
             items.add(item);
@@ -273,7 +279,7 @@ public class AiMatchingService {
         RoomSchemeResponse response = new RoomSchemeResponse();
         response.setRoomType(roomType);
         response.setBudgetLimit(budgetLimit);
-        response.setTotalPrice(totalPrice);
+        response.setTotalPrice(canViewAllPrices ? totalPrice : null);
         response.setItemCount(items.size());
         response.setReasoning(recommendation.getReasoning());
         response.setItems(items);
@@ -347,9 +353,11 @@ public class AiMatchingService {
             item.setFactoryCode(cheapest.getFactoryCode());
             item.setFactoryName(factory != null ? factory.getFactoryName() : null);
             item.setFactorySku(cheapest.getFactorySku());
-            item.setFactoryPrice(cheapest.getFactoryPrice());
+            // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见
+            boolean canViewPrice = dataScopeHelper.canViewFactoryPrice(cheapest.getFactoryCode());
+            item.setFactoryPrice(canViewPrice ? cheapest.getFactoryPrice() : null);
             item.setQuantity(1);
-            item.setSubtotal(cheapest.getFactoryPrice());
+            item.setSubtotal(canViewPrice ? cheapest.getFactoryPrice() : null);
             item.setLeadTimeDays(cheapest.getLeadTimeDays());
             item.setMoq(cheapest.getMoq());
             items.add(item);

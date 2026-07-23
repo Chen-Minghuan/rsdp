@@ -192,6 +192,77 @@ public class RskuService {
     }
 
     /**
+     * 按（产品 + 变体 + 工厂）维度 upsert 工厂报价。
+     *
+     * <p>已存在未软删的报价时更新价格/交期/MOQ/材质等字段（价格变化写 price_history），
+     * 否则走 {@link #createRsku} 新建。用于 Excel AI 导入的重复导入（updateIfExists）
+     * 与同组模块行重复报价场景，避免撞 (rspu_id, variant_id, factory_code) 部分唯一索引
+     * 导致价格永远更新不进去。</p>
+     *
+     * @param request 报价请求
+     * @return 已存在或新建的 RSKU ID
+     */
+    @Transactional
+    public String upsertRsku(RskuCreateRequest request) {
+        RskuSupply existing = rskuSupplyMapper.selectOne(new QueryWrapper<RskuSupply>()
+            .eq("rspu_id", request.getRspuId())
+            .eq("variant_id", request.getVariantId())
+            .eq("factory_code", request.getFactoryCode()));
+        if (existing == null) {
+            return createRsku(request);
+        }
+
+        RskuSupply oldSnapshot = snapshot(existing);
+        BigDecimal oldPrice = existing.getFactoryPrice();
+        // 与 RskuImportService.updateExistingRsku 同语义：仅更新请求中显式有值的字段
+        if (request.getFactoryPrice() != null) {
+            existing.setFactoryPrice(request.getFactoryPrice());
+            existing.setPriceBand(resolvePriceBand(request.getFactoryPrice()));
+            existing.setPriceUpdated(LocalDate.now());
+        }
+        if (StringUtils.hasText(request.getMaterialCode())) {
+            existing.setMaterialCode(request.getMaterialCode());
+        }
+        if (StringUtils.hasText(request.getMaterialDescription())) {
+            existing.setMaterialDescription(request.getMaterialDescription());
+        }
+        if (request.getLeadTimeDays() != null) {
+            existing.setLeadTimeDays(request.getLeadTimeDays());
+        }
+        if (request.getMoq() != null) {
+            existing.setMoq(request.getMoq());
+        }
+        if (StringUtils.hasText(request.getShippingFrom())) {
+            existing.setShippingFrom(request.getShippingFrom());
+        }
+        if (StringUtils.hasText(request.getShippingWarehouseId())) {
+            existing.setShippingWarehouseId(request.getShippingWarehouseId());
+        }
+        if (StringUtils.hasText(request.getProductLevel())) {
+            existing.setProductLevel(request.getProductLevel());
+        }
+        existing.setUpdatedAt(LocalDateTime.now());
+        rskuSupplyMapper.updateById(existing);
+
+        // 价格变化写价格历史（与批量导入更新同语义）
+        if (request.getFactoryPrice() != null
+            && (oldPrice == null || oldPrice.compareTo(request.getFactoryPrice()) != 0)) {
+            PriceHistory history = new PriceHistory();
+            history.setRskuId(existing.getRskuId());
+            history.setOldPrice(oldPrice);
+            history.setNewPrice(request.getFactoryPrice());
+            history.setChangedBy(SecurityOperatorContext.currentUsername());
+            history.setChangeReason("Excel 导入更新");
+            history.setCreatedAt(LocalDateTime.now());
+            priceHistoryMapper.insert(history);
+        }
+
+        auditLogService.logUpdate("rsku_supply", existing.getRskuId(), oldSnapshot, existing,
+            SecurityOperatorContext.currentUsername());
+        return existing.getRskuId();
+    }
+
+    /**
      * 批量为 RSPU 创建多家工厂报价。
      *
      * <p>每个（变体，工厂）组合单独一个事务处理，失败只回滚当前组合，不影响其他组合。
@@ -412,7 +483,9 @@ public class RskuService {
         response.setVariantId(rsku.getVariantId());
         response.setFactoryCode(rsku.getFactoryCode());
         response.setFactorySku(rsku.getFactorySku());
-        response.setFactoryPrice(rsku.getFactoryPrice());
+        // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见，设计师/普通用户返回 null
+        response.setFactoryPrice(dataScopeHelper.canViewFactoryPrice(rsku.getFactoryCode())
+            ? rsku.getFactoryPrice() : null);
         response.setPriceBand(rsku.getPriceBand());
         response.setProductLevel(rsku.getProductLevel());
         response.setMaterialCode(rsku.getMaterialCode());

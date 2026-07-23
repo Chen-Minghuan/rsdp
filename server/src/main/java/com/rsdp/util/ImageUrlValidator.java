@@ -125,6 +125,10 @@ public final class ImageUrlValidator {
             int b1 = bytes[0] & 0xFF;
             int b2 = bytes[1] & 0xFF;
 
+            // 0.0.0.0/8（"本网络"整段，JDK 仅识别 0.0.0.0 单个地址）
+            if (b1 == 0) {
+                return true;
+            }
             // 127.0.0.0/8
             if (b1 == 127) {
                 return true;
@@ -143,6 +147,22 @@ public final class ImageUrlValidator {
             }
             // 169.254.0.0/16 (link-local)
             if (b1 == 169 && b2 == 254) {
+                return true;
+            }
+            // 100.64.0.0/10 (CGNAT 共享地址段, RFC 6598)
+            if (b1 == 100 && b2 >= 64 && b2 <= 127) {
+                return true;
+            }
+            // 192.0.0.0/24 (IETF 协议分配, RFC 6890)
+            if (b1 == 192 && b2 == 0 && (bytes[2] & 0xFF) == 0) {
+                return true;
+            }
+            // 198.18.0.0/15 (网络基准测试, RFC 2544)
+            if (b1 == 198 && (b2 == 18 || b2 == 19)) {
+                return true;
+            }
+            // 240.0.0.0/4 (保留地址段, 含 255.255.255.255 广播)
+            if (b1 >= 240) {
                 return true;
             }
             return false;

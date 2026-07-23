@@ -628,6 +628,291 @@ class RskuImportServiceTest {
         verify(auditLogService).logUpdate(eq("rsku_supply"), eq("RSKU-OLD01"), any(), any(), eq("admin"));
     }
 
+    @Test
+    void importRskus_unexpectedRowException_shouldRecordFailureAndContinue() throws Exception {
+        // Given：第 1 行插入时抛出未预期运行时异常，第 2 行正常
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+
+        RspuVariant variant2 = new RspuVariant();
+        variant2.setVariantId("VAR-002");
+        variant2.setRspuId("RSPU-001");
+        variant2.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant, variant2));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.insert(any(RskuSupply.class)))
+            .thenThrow(new IllegalStateException("boom"))
+            .thenReturn(1);
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001,1500",
+            "RSPU-001,F001,VAR-002,2000"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then：单行未预期异常不中断整批，记失败明细后继续
+        assertThat(result.getTotalRows()).isEqualTo(2);
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("系统异常");
+        verify(rskuSupplyMapper, times(2)).insert(any(RskuSupply.class));
+    }
+
+    @Test
+    void importRskus_shouldTrimCodesWhenPreloading() throws Exception {
+        // Given：Excel 中编码带前后空格，preload 收集与 map 查找都应使用 trim 后的编码
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            " RSPU-001 , F001 , VAR-001 ,1500"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then：导入成功（trim 后能命中预加载 map），且预加载查询使用 trim 后的编码
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> rspuIdsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(rspuMapper).selectBatchIds(rspuIdsCaptor.capture());
+        assertThat(rspuIdsCaptor.getValue()).containsExactly("RSPU-001");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> factoryCodesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(factoryMasterMapper).selectBatchIds(factoryCodesCaptor.capture());
+        assertThat(factoryCodesCaptor.getValue()).containsExactly("F001");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> variantIdsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(rspuVariantMapper).selectBatchIds(variantIdsCaptor.capture());
+        assertThat(variantIdsCaptor.getValue()).containsExactly("VAR-001");
+    }
+
+    @Test
+    void importRskus_updateModeWithEmptyPrice_shouldKeepExistingPrice() throws Exception {
+        // Given：更新模式且已有报价，导入行价格留空（行内只有前 3 列）
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        RskuSupply existing = new RskuSupply();
+        existing.setRskuId("RSKU-OLD01");
+        existing.setFactoryCode("F001");
+        existing.setVariantId("VAR-001");
+        existing.setFactoryPrice(new BigDecimal("1000"));
+        existing.setPriceBand("low");
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(existing));
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, true);
+
+        // Then：更新模式价格留空放行，已有价格与价格带不被覆盖，不记价格历史
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getFactoryPrice()).isEqualByComparingTo(new BigDecimal("1000"));
+        assertThat(captor.getValue().getPriceBand()).isEqualTo("low");
+        verify(priceHistoryMapper, never()).insert(any(PriceHistory.class));
+    }
+
+    @Test
+    void importRskus_insertModeWithEmptyPrice_shouldReject() throws Exception {
+        // Given：即使开启 updateIfExists，无已有报价的行仍按插入处理，价格必填
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, true);
+
+        // Then
+        assertThat(result.getSuccessCount()).isEqualTo(0);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("出厂价");
+        verify(rskuSupplyMapper, never()).insert(any(RskuSupply.class));
+    }
+
+    @Test
+    void importRskus_ambiguousDictNamePrefix_shouldNotNormalize() throws Exception {
+        // Given：两个字典名称共享前缀，前缀输入无法唯一归一时保留原值并校验报错
+        CategoryDict std = new CategoryDict();
+        std.setDictType("quote_confidence");
+        std.setDictCode("std");
+        std.setDictName("标准级");
+        CategoryDict prm = new CategoryDict();
+        prm.setDictType("quote_confidence");
+        prm.setDictCode("prm");
+        prm.setDictName("标准定制级");
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(List.of(std, prm));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001,1500,FS-001,实木,30,10,3,广东,无差异,标准,S"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then：「标准」同时是两个字典名的前缀，不予归一，按无效字典值报错
+        assertThat(result.getSuccessCount()).isEqualTo(0);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("报价置信度不存在");
+        verify(rskuSupplyMapper, never()).insert(any(RskuSupply.class));
+    }
+
+    @Test
+    void importRskus_uniqueDictNamePrefix_shouldNormalize() throws Exception {
+        // Given：前缀只命中唯一字典名时正常归一
+        CategoryDict std = new CategoryDict();
+        std.setDictType("quote_confidence");
+        std.setDictCode("std");
+        std.setDictName("标准级");
+        CategoryDict prm = new CategoryDict();
+        prm.setDictType("quote_confidence");
+        prm.setDictCode("prm");
+        prm.setDictName("标准定制级");
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(List.of(std, prm));
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001,1500,FS-001,实木,30,10,3,广东,无差异,标准定,S"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then：「标准定」唯一前缀命中「标准定制级」→ 归一为 prm
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getQuoteConfidence()).isEqualTo("prm");
+    }
+
     private byte[] buildExcelWithRows(List<String> csvRows) throws Exception {
         // 使用 CSV 格式生成简单测试数据，EasyExcel 也能读取 CSV
         ByteArrayOutputStream out = new ByteArrayOutputStream();

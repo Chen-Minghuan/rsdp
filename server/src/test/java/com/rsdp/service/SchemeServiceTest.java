@@ -104,6 +104,7 @@ class SchemeServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+        lenient().when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
         var user = User.withUsername("testuser").password("").authorities("ROLE_DESIGNER", "scheme:read", "scheme:create", "scheme:update", "scheme:delete").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);

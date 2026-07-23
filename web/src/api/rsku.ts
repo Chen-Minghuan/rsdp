@@ -77,7 +77,8 @@ function triggerDownload(blob: Blob, filename: string): void {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
-  window.URL.revokeObjectURL(url)
+  // 延迟回收：click 后同步 revoke 在 Firefox 下可能取消下载
+  setTimeout(() => window.URL.revokeObjectURL(url), 1000)
 }
 
 /**

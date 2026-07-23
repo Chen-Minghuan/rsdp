@@ -46,6 +46,30 @@ public class DataScopeHelper {
     }
 
     /**
+     * 校验当前用户是否能查看指定工厂的出厂价（factory_price）。
+     *
+     * <p>出厂价是全系统最高敏感字段（落库 AES 加密），可见性与数据范围（DataScope）解耦，
+     * 按角色单独判定：
+     * <ul>
+     *   <li>平台运营人员（ADMIN/EDITOR）可见全部出厂价；</li>
+     *   <li>工厂管理员仅可见本厂的出厂价（自己报的价）；</li>
+     *   <li>设计师、普通用户等其他角色一律不可见（响应中掩码为 null）。</li>
+     * </ul>
+     *
+     * @param factoryCode 工厂编码
+     * @return 是否可见出厂价
+     */
+    public boolean canViewFactoryPrice(String factoryCode) {
+        if (com.rsdp.security.SecurityOperatorContext.isPlatformStaff()) {
+            return true;
+        }
+        if (com.rsdp.security.SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
+            return factoryCode != null && dataScopeContext.currentFactoryCodes().contains(factoryCode);
+        }
+        return false;
+    }
+
+    /**
      * 校验当前用户是否能操作指定工厂的 RSKU/工厂资料。
      *
      * @param factoryCode 工厂编码

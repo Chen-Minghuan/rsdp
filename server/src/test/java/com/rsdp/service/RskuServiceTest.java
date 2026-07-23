@@ -426,4 +426,97 @@ class RskuServiceTest {
         assertThatThrownBy(() -> rskuService.deleteRsku("RSKU-NOTEXIST"))
             .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class);
     }
+
+    @Test
+    void upsertRsku_shouldUpdateExistingAndRecordPriceHistory() {
+        // P1-2：已存在（产品+变体+工厂）报价时更新价格/交期/MOQ，价格变化写 price_history
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2600"));
+        request.setLeadTimeDays(30);
+        request.setMoq(5);
+        request.setMaterialDescription("A级布");
+
+        RskuSupply existing = new RskuSupply();
+        existing.setRskuId("RSKU-EXIST01");
+        existing.setRspuId("RSPU-TEST01");
+        existing.setVariantId("RSPU-TEST01-V001");
+        existing.setFactoryCode("F001");
+        existing.setFactoryPrice(new BigDecimal("2500"));
+
+        when(rskuSupplyMapper.selectOne(any())).thenReturn(existing);
+
+        String rskuId = rskuService.upsertRsku(request);
+
+        assertThat(rskuId).isEqualTo("RSKU-EXIST01");
+        verify(rskuSupplyMapper, never()).insert(any(RskuSupply.class));
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getFactoryPrice()).isEqualByComparingTo("2600");
+        assertThat(captor.getValue().getLeadTimeDays()).isEqualTo(30);
+        assertThat(captor.getValue().getMoq()).isEqualTo(5);
+        assertThat(captor.getValue().getMaterialDescription()).isEqualTo("A级布");
+
+        ArgumentCaptor<PriceHistory> historyCaptor = ArgumentCaptor.forClass(PriceHistory.class);
+        verify(priceHistoryMapper).insert(historyCaptor.capture());
+        assertThat(historyCaptor.getValue().getOldPrice()).isEqualByComparingTo("2500");
+        assertThat(historyCaptor.getValue().getNewPrice()).isEqualByComparingTo("2600");
+        verify(auditLogService).logUpdate(eq("rsku_supply"), eq("RSKU-EXIST01"), any(), any(), any());
+    }
+
+    @Test
+    void upsertRsku_shouldNotRecordPriceHistoryWhenPriceUnchanged() {
+        // P1-2：价格未变化时不写 price_history，仍更新其他字段
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2500"));
+        request.setLeadTimeDays(45);
+
+        RskuSupply existing = new RskuSupply();
+        existing.setRskuId("RSKU-EXIST01");
+        existing.setRspuId("RSPU-TEST01");
+        existing.setVariantId("RSPU-TEST01-V001");
+        existing.setFactoryCode("F001");
+        existing.setFactoryPrice(new BigDecimal("2500"));
+
+        when(rskuSupplyMapper.selectOne(any())).thenReturn(existing);
+
+        rskuService.upsertRsku(request);
+
+        verify(rskuSupplyMapper).updateById(any(RskuSupply.class));
+        verify(priceHistoryMapper, never()).insert(any(PriceHistory.class));
+    }
+
+    @Test
+    void upsertRsku_shouldCreateWhenNotExists() {
+        // P1-2：不存在既有报价时走 createRsku 新建
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2500"));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setProductLevel("S");
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+
+        when(rskuSupplyMapper.selectOne(any())).thenReturn(null);
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        rskuService.upsertRsku(request);
+
+        verify(rskuSupplyMapper).insert(any(RskuSupply.class));
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+    }
 }

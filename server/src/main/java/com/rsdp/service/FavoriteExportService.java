@@ -52,6 +52,7 @@ public class FavoriteExportService {
     private final RskuSupplyMapper rskuSupplyMapper;
     private final FactoryMasterMapper factoryMasterMapper;
     private final FavoriteFolderMapper favoriteFolderMapper;
+    private final com.rsdp.security.datascope.DataScopeHelper dataScopeHelper;
 
     /**
      * 导出文件（内容 + 文件名）。
@@ -189,7 +190,9 @@ public class FavoriteExportService {
         row.setCreatedAt(formatTime(favorite.getCreatedAt()));
         row.setFactoryCode(rsku != null ? rsku.getFactoryCode() : "-");
         row.setFactoryName(rsku != null ? factoryNameByCode.getOrDefault(rsku.getFactoryCode(), "-") : "-");
-        row.setFactoryPrice(rsku != null ? formatPrice(rsku.getFactoryPrice()) : "-");
+        // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见，其他角色导出为 "-"
+        row.setFactoryPrice(rsku != null && dataScopeHelper.canViewFactoryPrice(rsku.getFactoryCode())
+            ? formatPrice(rsku.getFactoryPrice()) : "-");
         row.setLeadTimeDays(rsku != null ? rsku.getLeadTimeDays() : null);
         return row;
     }
@@ -211,6 +214,9 @@ public class FavoriteExportService {
     }
 
     private String formatPrice(BigDecimal price) {
+        if (price == null) {
+            return "-";
+        }
         return "¥" + price.setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 

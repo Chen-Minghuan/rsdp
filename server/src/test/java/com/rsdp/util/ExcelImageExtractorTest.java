@@ -69,8 +69,8 @@ class ExcelImageExtractorTest {
     }
 
     @Test
-    void extract_shouldExtractEmfAlongsidePng() throws IOException {
-        // 一张 PNG + 一张 EMF：特殊格式的单张图片不影响其余图片提取
+    void extract_shouldSkipNonWebImageFormats() throws IOException {
+        // P2-12c：EMF/WMF/TIFF 在提取阶段直接跳过（不占用配额、不进结果），PNG 不受影响
         byte[] excelBytes = createExcelWithPngAndEmf();
         MultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
@@ -79,9 +79,40 @@ class ExcelImageExtractorTest {
 
         assertNotNull(result);
         assertTrue(result.containsKey("0,1"), "PNG 所在行应提取到图片");
-        assertTrue(result.containsKey("0,2"), "EMF 所在行应提取到图片");
         assertEquals("png", result.get("0,1").get(0).extension().toLowerCase());
-        assertEquals("emf", result.get("0,2").get(0).extension().toLowerCase());
+        assertFalse(result.containsKey("0,2"), "EMF 所在行不应提取到图片（提取阶段已跳过）");
+    }
+
+    @Test
+    void extract_shouldProcessAllSheets() throws IOException {
+        // 多 Sheet 导入：提取器遍历全部 Sheet，sheet≥1 的图片以 "sheetIndex,row" key 入结果，
+        // 由消费侧按批次 sheet_index 取本工作表的图
+        byte[] excelBytes = createExcelWithImageOnSecondSheet();
+        MultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        Map<String, List<ExcelImageExtractor.EmbeddedImage>> result = ExcelImageExtractor.extract(file);
+
+        assertNotNull(result);
+        assertTrue(result.containsKey("1,1"), "sheet 1 的图片应以 sheetIndex=1 的 key 提取: " + result.keySet());
+        assertEquals(1, result.get("1,1").get(0).sheetIndex());
+    }
+
+    @Test
+    void extractWithLimit_shouldReportByteTruncationReason() throws IOException {
+        // P2-12d：截断原因区分「总字节超限」
+        byte[] excelBytes = createExcelWithEmbeddedImages();
+        MultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        ExcelImageExtractor.ExtractionResult result =
+            ExcelImageExtractor.extractWithLimit(file, createPngImageBytes().length);
+
+        assertTrue(result.truncated(), "超过上限应标记截断");
+        assertTrue(result.truncationReason() != null && result.truncationReason().contains("总大小"),
+            "截断原因应说明总字节超限: " + result.truncationReason());
+        int totalImages = result.images().values().stream().mapToInt(List::size).sum();
+        assertEquals(1, totalImages, "应保留截断前已提取的第一张图");
     }
 
     @Test
@@ -98,6 +129,59 @@ class ExcelImageExtractorTest {
         assertTrue(truncated[0], "超过上限应标记截断");
         int totalImages = result.values().stream().mapToInt(List::size).sum();
         assertEquals(1, totalImages, "应保留截断前已提取的第一张图");
+    }
+
+    private byte[] createExcelWithImageOnSecondSheet() throws IOException {
+        // sheet 0 无图，sheet 1 有一张 PNG：验证提取侧遍历全部 Sheet
+        try (Workbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet0 = workbook.createSheet("Sheet1");
+            sheet0.createRow(0).createCell(0).setCellValue("产品名称");
+            Sheet sheet1 = workbook.createSheet("Sheet2");
+            sheet1.createRow(0).createCell(0).setCellValue("其他");
+
+            Drawing<?> drawing = sheet1.createDrawingPatriarch();
+            ClientAnchor anchor = workbook.getCreationHelper().createClientAnchor();
+            anchor.setCol1(1);
+            anchor.setRow1(1);
+            drawing.createPicture(anchor,
+                workbook.addPicture(createPngImageBytes(), Workbook.PICTURE_TYPE_PNG));
+
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
+    void extract_shouldSkipNegativeAnchorRow() throws IOException {
+        // P2-16：负锚点行跳过，不归到第 0 行
+        byte[] excelBytes = createExcelWithNegativeAnchorImage();
+        MultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        Map<String, List<ExcelImageExtractor.EmbeddedImage>> result = ExcelImageExtractor.extract(file);
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty(), "负锚点行的图片应被跳过: " + result.keySet());
+    }
+
+    private byte[] createExcelWithNegativeAnchorImage() throws IOException {
+        try (Workbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            sheet.createRow(0).createCell(0).setCellValue("产品名称");
+            sheet.createRow(1).createCell(0).setCellValue("产品A");
+
+            Drawing<?> drawing = sheet.createDrawingPatriarch();
+            ClientAnchor anchor = workbook.getCreationHelper().createClientAnchor();
+            anchor.setCol1(1);
+            anchor.setRow1(-1); // 负锚点行：无法对齐数据行
+            drawing.createPicture(anchor,
+                workbook.addPicture(createPngImageBytes(), Workbook.PICTURE_TYPE_PNG));
+
+            workbook.write(out);
+            return out.toByteArray();
+        }
     }
 
     private byte[] createExcelWithPngAndEmf() throws IOException {

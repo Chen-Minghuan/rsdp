@@ -61,11 +61,20 @@ public class ProductImportRow {
     @ExcelProperty("尺寸码")
     private String sizeCode;
 
+    /** 尺寸/规格原文（工厂方言，码未识别时保留） */
+    private String sizeText;
+
     @ExcelProperty("颜色码")
     private String colorCode;
 
+    /** 颜色原文（工厂方言，码未识别时保留） */
+    private String colorText;
+
     @ExcelProperty("材质码")
     private String materialCode;
+
+    /** 材质原文（工厂方言，码未识别时保留） */
+    private String materialText;
 
     @ExcelProperty("变体参考价格带")
     private String variantReferencePriceBand;
@@ -75,4 +84,10 @@ public class ProductImportRow {
 
     @ExcelProperty("交期天数")
     private Integer leadTimeDays;
+
+    /** 长文本描述原文（材质解析/功能配置/配置说明等列原文） */
+    private String description;
+
+    /** 零售参考价（销售价/含税价/零售价/市场价列或 sales 角色价格列） */
+    private java.math.BigDecimal retailPrice;
 }

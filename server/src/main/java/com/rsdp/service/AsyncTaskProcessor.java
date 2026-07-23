@@ -85,18 +85,21 @@ public class AsyncTaskProcessor {
             if (imageBytes.length > maxImageSize) {
                 String msg = "图片大小超过限制：" + imageBytes.length + " 字节（最大允许 " + maxImageSize + " 字节）";
                 log.error("{}，taskId={}", msg, taskId);
-                persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, msg);
+                safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, msg);
                 safeUpdateTaskStatus(taskId, "failed", 100, null, msg);
                 return;
             }
         } catch (Exception e) {
             log.error("读取图片失败，taskId={}", taskId, e);
-            persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
+            safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
             return;
         }
 
         AiLabels labels;
+        // 识别成功结果是否已提交：已提交后，后续非关键步骤（默认变体/向量/结果序列化）失败
+        // 只能降级为 partial_success，绝不能再走 saveFailure（recognitionId 主键冲突 + 覆盖成功状态）
+        boolean successSaved = false;
         try (InputStream imageStream = new ByteArrayInputStream(imageBytes)) {
             long aiStart = System.currentTimeMillis();
             labels = visionService.recognizeImage(imageStream, categoryCode);
@@ -119,31 +122,65 @@ public class AsyncTaskProcessor {
 
             String productName = persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
                 labels, processingTime, embedding);
+            successSaved = true;
+
+            // 以下为非关键步骤，失败仅降级为 partial_success，不影响已提交的识别结果
+            String degradeError = null;
 
             // AI 识别成功后，若该 RSPU 尚无变体，自动创建默认变体，便于后续批量绑定工厂报价
-            rspuVariantService.initializeDefaultVariant(rspuId, labels);
+            try {
+                rspuVariantService.initializeDefaultVariant(rspuId, labels);
+            } catch (Exception e) {
+                log.error("创建默认变体失败，rspuId={}", rspuId, e);
+                degradeError = "AI 识别完成，但创建默认变体失败";
+            }
 
             boolean vectorPersisted = false;
-            String vectorError = null;
             if (embedding != null) {
                 vectorPersisted = persistVector(imageId, rspuId, embedding, imageBytes.length);
                 if (!vectorPersisted) {
-                    vectorError = "AI 识别完成，但向量写入 ChromaDB 失败，以图搜图功能可能不可用";
+                    degradeError = "AI 识别完成，但向量写入 ChromaDB 失败，以图搜图功能可能不可用";
                 }
             } else {
-                vectorError = "AI 识别完成，但生成图片向量失败，以图搜图功能可能不可用";
+                degradeError = "AI 识别完成，但生成图片向量失败，以图搜图功能可能不可用";
             }
 
-            String finalStatus = vectorPersisted ? "done" : "partial_success";
-            // resultData 供录入中心展示：AI 原始标签 + 最终生效的产品名称（OCR 品名或品类回退名）
-            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.valueToTree(labels);
-            resultNode.put("productName", productName);
-            updateTaskStatus(taskId, finalStatus, 100, objectMapper.writeValueAsString(resultNode), vectorError);
+            String finalStatus = (vectorPersisted && degradeError == null) ? "done" : "partial_success";
+            String resultData = null;
+            try {
+                // resultData 供录入中心展示：AI 原始标签 + 最终生效的产品名称（OCR 品名或品类回退名）
+                com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.valueToTree(labels);
+                resultNode.put("productName", productName);
+                resultData = objectMapper.writeValueAsString(resultNode);
+            } catch (Exception e) {
+                log.error("序列化任务结果失败，taskId={}", taskId, e);
+                finalStatus = "partial_success";
+                degradeError = degradeError != null ? degradeError : "AI 识别完成，但结果序列化失败";
+            }
+            updateTaskStatus(taskId, finalStatus, 100, resultData, degradeError);
             log.info("产品录入异步任务完成，taskId={}，status={}", taskId, finalStatus);
         } catch (Exception e) {
             log.error("AI 识别失败，taskId={}", taskId, e);
-            persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
-            safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+            if (successSaved) {
+                // 识别结果已提交：仅降级任务状态，不重复写 failed 识别记录、不覆盖 RSPU 状态
+                safeUpdateTaskStatus(taskId, "partial_success", 100, null,
+                    "AI 识别完成，但后续步骤失败: " + e.getMessage());
+            } else {
+                safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
+                safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * saveFailure 自身的持久化失败（如主键冲突、DB 故障）不能中断后续任务状态更新。
+     */
+    private void safeSaveFailure(String taskId, String rspuId, String imageId,
+                                 String recognitionId, String modelName, String errorMessage) {
+        try {
+            persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, errorMessage);
+        } catch (Exception ex) {
+            log.error("保存识别失败记录异常，taskId={}", taskId, ex);
         }
     }
 
@@ -197,6 +234,11 @@ public class AsyncTaskProcessor {
         AsyncTask task = asyncTaskMapper.selectById(taskId);
         if (task == null) {
             log.warn("任务不存在，taskId={}", taskId);
+            return;
+        }
+        // 终态保护：已进入终态的任务不允许被非终态（如迟到的进度更新）覆盖，防止状态回退
+        if (isTerminalStatus(task.getStatus()) && !isTerminalStatus(status)) {
+            log.warn("任务已处于终态 {}，忽略非终态更新 {}，taskId={}", task.getStatus(), status, taskId);
             return;
         }
         task.setStatus(status);

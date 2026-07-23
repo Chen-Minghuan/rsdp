@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -88,5 +89,45 @@ class ExcelAiImportControllerTest {
             .andExpect(jsonPath("$.code").value(403));
 
         verify(excelAiImportService, never()).getStatus(any());
+    }
+
+    @Test
+    void preview_shouldPassSheetIndexToService() throws Exception {
+        // V18：preview 支持可选 sheetIndex 表单参数（多 Sheet 逐一导入），默认 0
+        when(excelAiImportService.previewMapping(any(), eq(2)))
+            .thenReturn(new com.rsdp.dto.response.ExcelAiMappingResponse());
+
+        org.springframework.mock.web.MockMultipartFile file = new org.springframework.mock.web.MockMultipartFile(
+            "file", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "x".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .multipart("/api/v1/products/excel-ai-import/preview")
+                .file(file)
+                .param("sheetIndex", "2"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        verify(excelAiImportService, times(1)).previewMapping(any(), eq(2));
+    }
+
+    @Test
+    void preview_shouldDefaultSheetIndexToZero() throws Exception {
+        when(excelAiImportService.previewMapping(any(), eq(0)))
+            .thenReturn(new com.rsdp.dto.response.ExcelAiMappingResponse());
+
+        org.springframework.mock.web.MockMultipartFile file = new org.springframework.mock.web.MockMultipartFile(
+            "file", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "x".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .multipart("/api/v1/products/excel-ai-import/preview")
+                .file(file))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        verify(excelAiImportService, times(1)).previewMapping(any(), eq(0));
     }
 }

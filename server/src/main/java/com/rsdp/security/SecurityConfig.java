@@ -157,6 +157,7 @@ public class SecurityConfig {
                 // 产品更新/删除
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_DELETE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/batch-delete").hasAuthority(Permissions.PRODUCT_DELETE)
 
                 // 工厂写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/factories").hasAuthority(Permissions.FACTORY_CREATE)

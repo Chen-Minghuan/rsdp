@@ -123,4 +123,103 @@ class ExcelHeaderNormalizerTest {
         assertEquals("价格（PRICE）-半皮", merged.get(6));
         assertEquals("交期", merged.get(7));
     }
+
+    @Test
+    void disambiguateDuplicateHeaders_shouldSuffixDuplicates() {
+        // P2-11：两个同名「价格」表头自动消歧，避免以表头为 key 时互相覆盖丢列
+        Map<Integer, String> headers = new LinkedHashMap<>();
+        headers.put(0, "型号");
+        headers.put(1, "价格");
+        headers.put(2, "价格");
+        headers.put(3, "价格");
+        headers.put(4, "");
+
+        Map<Integer, String> result = ExcelHeaderNormalizer.disambiguateDuplicateHeaders(headers);
+
+        assertEquals("型号", result.get(0));
+        assertEquals("价格", result.get(1), "首个同名表头保持原名");
+        assertEquals("价格#2", result.get(2));
+        assertEquals("价格#3", result.get(3));
+        assertEquals("", result.get(4), "空表头原样保留");
+    }
+
+    @Test
+    void disambiguateDuplicateHeaders_shouldKeepUniqueHeadersUnchanged() {
+        Map<Integer, String> headers = new LinkedHashMap<>();
+        headers.put(0, "型号");
+        headers.put(1, "名称");
+        headers.put(2, "价格-A级布");
+
+        Map<Integer, String> result = ExcelHeaderNormalizer.disambiguateDuplicateHeaders(headers);
+
+        assertEquals(headers, result, "无重复表头时内容不变");
+    }
+
+    @Test
+    void looksLikeEnglishMirrorRow_shouldDetectAsciiMirrorHeader() {
+        // 沃高式英文对照副表头：SERIAL/PICTURE/SORT/ITEM NO. 整行 ASCII 且与中文表头列对齐
+        Map<Integer, String> cnHeader = new LinkedHashMap<>();
+        cnHeader.put(0, "序号");
+        cnHeader.put(1, "图片");
+        cnHeader.put(2, "类别");
+        cnHeader.put(3, "型号");
+        Map<Integer, String> enRow = new LinkedHashMap<>();
+        enRow.put(0, "SERIAL");
+        enRow.put(1, "PICTURE");
+        enRow.put(2, "SORT");
+        enRow.put(3, "ITEM NO.");
+
+        org.junit.jupiter.api.Assertions.assertTrue(
+            ExcelHeaderNormalizer.looksLikeEnglishMirrorRow(enRow, cnHeader),
+            "英文对照行应判定为副表头行");
+    }
+
+    @Test
+    void looksLikeEnglishMirrorRow_shouldNotMisjudgeChineseSubHeaderOrDataRow() {
+        Map<Integer, String> cnHeader = new LinkedHashMap<>();
+        cnHeader.put(0, "型号");
+        cnHeader.put(1, "名称");
+        cnHeader.put(2, "价格（PRICE）");
+        cnHeader.put(3, "价格（PRICE）");
+
+        // MUJU 式中文材质子表头：含中文，仍应走父子合并而非英文副表头
+        Map<Integer, String> subHeader = new LinkedHashMap<>();
+        subHeader.put(2, "A级布");
+        subHeader.put(3, "半皮");
+        org.junit.jupiter.api.Assertions.assertFalse(
+            ExcelHeaderNormalizer.looksLikeEnglishMirrorRow(subHeader, cnHeader),
+            "中文材质子表头不应判定为英文副表头");
+
+        // 数据行：含中文品名/数字，不应误判
+        Map<Integer, String> dataRow = new LinkedHashMap<>();
+        dataRow.put(0, "ABC-001");
+        dataRow.put(1, "休闲椅A");
+        org.junit.jupiter.api.Assertions.assertFalse(
+            ExcelHeaderNormalizer.looksLikeEnglishMirrorRow(dataRow, cnHeader),
+            "数据行不应判定为英文副表头");
+
+        // 与表头列不对齐的英文行（如散落的英文备注）不应误判
+        Map<Integer, String> misaligned = new LinkedHashMap<>();
+        misaligned.put(8, "NOTE");
+        misaligned.put(9, "REMARK");
+        org.junit.jupiter.api.Assertions.assertFalse(
+            ExcelHeaderNormalizer.looksLikeEnglishMirrorRow(misaligned, cnHeader),
+            "列位置不对齐的英文行不应判定为英文副表头");
+    }
+
+    @Test
+    void countHeaderKeywordHits_shouldDistinguishHeaderFromTitle() {
+        Map<Integer, String> header = new LinkedHashMap<>();
+        header.put(0, "NO");
+        header.put(1, "图片");
+        header.put(2, "型号");
+        header.put(3, "含税价");
+        org.junit.jupiter.api.Assertions.assertTrue(
+            ExcelHeaderNormalizer.countHeaderKeywordHits(header) >= 2, "真表头行关键词密度应 ≥2");
+
+        Map<Integer, String> title = new LinkedHashMap<>();
+        title.put(0, "曼柯家具有限公司");
+        org.junit.jupiter.api.Assertions.assertTrue(
+            ExcelHeaderNormalizer.countHeaderKeywordHits(title) < 2, "公司标题行关键词密度应 <2");
+    }
 }

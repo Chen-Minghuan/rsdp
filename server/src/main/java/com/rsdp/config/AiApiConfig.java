@@ -47,16 +47,27 @@ public class AiApiConfig {
     @Value("${rsdp.chromadb.max-retries:2}")
     private int chromaMaxRetries;
 
+    @Value("${rsdp.ai.mock.enabled:false}")
+    private boolean mockEnabled;
+
     /**
      * 启动时校验 AI API Key，避免使用默认/空值调用外部接口导致 401。
+     *
+     * <p>显式启用 Mock 模式（rsdp.ai.mock.enabled=true）时跳过校验，
+     * 允许无真实 Key 的本地联调。</p>
      */
     @PostConstruct
     public void validateApiKey() {
+        if (mockEnabled) {
+            return;
+        }
         if (!StringUtils.hasText(apiKey)) {
-            throw new IllegalStateException("AI API Key 未配置：请设置环境变量 DASHSCOPE_API_KEY 或在 deploy/.env 中填写有效 Key");
+            throw new IllegalStateException("AI API Key 未配置：请设置环境变量 DASHSCOPE_API_KEY 或在 deploy/.env 中填写有效 Key"
+                + "（本地联调可设置 rsdp.ai.mock.enabled=true 使用 Mock 模式）");
         }
         if (apiKey.contains("your-api-key") || apiKey.contains("CHANGE_ME")) {
-            throw new IllegalStateException("AI API Key 为占位符：请将 deploy/.env 中的 DASHSCOPE_API_KEY 替换为真实 Key");
+            throw new IllegalStateException("AI API Key 为占位符：请将 deploy/.env 中的 DASHSCOPE_API_KEY 替换为真实 Key"
+                + "（本地联调可设置 rsdp.ai.mock.enabled=true 使用 Mock 模式）");
         }
     }
 

@@ -212,7 +212,9 @@ public class QuoteService {
         int quantity = quoteItem.getQuantity() != null && quoteItem.getQuantity() > 0
             ? quoteItem.getQuantity()
             : 1;
-        BigDecimal subtotal = rsku.getFactoryPrice() != null
+        // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见；掩码时小计同步隐藏，避免经小计/总价泄露
+        boolean canViewPrice = dataScopeHelper.canViewFactoryPrice(rsku.getFactoryCode());
+        BigDecimal subtotal = canViewPrice && rsku.getFactoryPrice() != null
             ? rsku.getFactoryPrice().multiply(BigDecimal.valueOf(quantity))
             : null;
 
@@ -225,7 +227,7 @@ public class QuoteService {
         item.setFactoryCode(rsku.getFactoryCode());
         item.setFactoryName(factory != null ? factory.getFactoryName() : null);
         item.setFactorySku(rsku.getFactorySku());
-        item.setFactoryPrice(rsku.getFactoryPrice());
+        item.setFactoryPrice(canViewPrice ? rsku.getFactoryPrice() : null);
         item.setQuantity(quantity);
         item.setSubtotal(subtotal);
         item.setPriceBand(rsku.getPriceBand());

@@ -110,24 +110,27 @@ public class RskuImportService {
         int rowIndex = 1; // Excel 行号，第 1 行为表头，数据从第 2 行开始
         for (RskuImportRow row : rows) {
             rowIndex++;
+            // 先归一化（trim + 字典码归一），保证数据权限校验与预加载 map 查找使用 trim 后的编码
+            normalizeRow(row, productLevels, quoteConfidenceLevels);
             if (!dataScopeHelper.canAccessRskuFactory(row.getFactoryCode())) {
                 result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "无权为该工厂导入报价"));
                 continue;
             }
-            normalizeRow(row, productLevels, quoteConfidenceLevels);
-            String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels, quoteConfidenceLevels);
+            String key = row.getFactoryCode() + "|" + row.getVariantId();
+            RskuSupply existing = existingMap.get(key);
+            // 更新模式且已存在报价时允许价格留空（留空表示不更新价格）
+            boolean allowEmptyPrice = updateIfExists && existing != null;
+            String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels, quoteConfidenceLevels, allowEmptyPrice);
             if (error != null) {
                 result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), error));
                 continue;
             }
 
-            String key = row.getFactoryCode() + "|" + row.getVariantId();
             if (!processedKeys.add(key)) {
                 result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "Excel 中存在重复报价行（同一工厂+变体）"));
                 continue;
             }
 
-            RskuSupply existing = existingMap.get(key);
             String productLevel = resolveProductLevel(row, variantMap.get(row.getVariantId()), rspuMap.get(row.getRspuId()));
 
             try {
@@ -159,6 +162,11 @@ public class RskuImportService {
                 ));
             } catch (BusinessException e) {
                 result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), e.getMessage()));
+            } catch (Exception e) {
+                // 兜底：单行未预期异常不影响整批，记录失败明细后继续后续行
+                log.error("导入报价行失败，rowIndex={}", rowIndex, e);
+                result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(),
+                    "系统异常: " + e.getMessage()));
             }
         }
 
@@ -233,6 +241,7 @@ public class RskuImportService {
         List<String> codes = rows.stream()
             .map(RskuImportRow::getFactoryCode)
             .filter(StringUtils::hasText)
+            .map(String::trim)
             .distinct()
             .toList();
         if (codes.isEmpty()) {
@@ -246,6 +255,7 @@ public class RskuImportService {
         List<String> ids = rows.stream()
             .map(RskuImportRow::getRspuId)
             .filter(StringUtils::hasText)
+            .map(String::trim)
             .distinct()
             .toList();
         if (ids.isEmpty()) {
@@ -259,6 +269,7 @@ public class RskuImportService {
         List<String> ids = rows.stream()
             .map(RskuImportRow::getVariantId)
             .filter(StringUtils::hasText)
+            .map(String::trim)
             .distinct()
             .toList();
         if (ids.isEmpty()) {
@@ -272,6 +283,7 @@ public class RskuImportService {
         List<String> variantIds = rows.stream()
             .map(RskuImportRow::getVariantId)
             .filter(StringUtils::hasText)
+            .map(String::trim)
             .distinct()
             .toList();
         if (variantIds.isEmpty()) {
@@ -303,7 +315,8 @@ public class RskuImportService {
                                Map<String, RspuVariant> variantMap,
                                Map<String, List<String>> capableLevelsMap,
                                List<CategoryDict> productLevels,
-                               List<CategoryDict> quoteConfidenceLevels) {
+                               List<CategoryDict> quoteConfidenceLevels,
+                               boolean allowEmptyPrice) {
         if (!StringUtils.hasText(row.getRspuId())) {
             return "RSPU编码 不能为空";
         }
@@ -322,11 +335,18 @@ public class RskuImportService {
         if (row.getVariantId().length() > 64) {
             return "变体编码 长度不能超过 64";
         }
-        if (row.getFactoryPrice() == null || row.getFactoryPrice().compareTo(BigDecimal.ZERO) <= 0) {
-            return "出厂价 必须大于 0";
-        }
-        if (row.getFactoryPrice().compareTo(new BigDecimal("99999999.99")) > 0) {
-            return "出厂价 超出最大允许范围（99999999.99）";
+        if (row.getFactoryPrice() == null) {
+            // 更新模式下价格留空表示不更新价格；插入模式必须提供价格
+            if (!allowEmptyPrice) {
+                return "出厂价 不能为空且必须大于 0";
+            }
+        } else {
+            if (row.getFactoryPrice().compareTo(BigDecimal.ZERO) <= 0) {
+                return "出厂价 必须大于 0";
+            }
+            if (row.getFactoryPrice().compareTo(new BigDecimal("99999999.99")) > 0) {
+                return "出厂价 超出最大允许范围（99999999.99）";
+            }
         }
         if (StringUtils.hasText(row.getFactorySku()) && row.getFactorySku().length() > 64) {
             return "工厂SKU 长度不能超过 64";
@@ -426,13 +446,24 @@ public class RskuImportService {
                 return d.getDictCode();
             }
         }
-        // 再按 dictName 模糊匹配（如 "S级" / "S级战略厂" 都能匹配到 S）
+        // 再按 dictName 精确匹配
         for (CategoryDict d : dicts) {
-            if (StringUtils.hasText(d.getDictName()) && (trimmed.equals(d.getDictName()) || d.getDictName().startsWith(trimmed))) {
+            if (StringUtils.hasText(d.getDictName()) && trimmed.equals(d.getDictName())) {
                 return d.getDictCode();
             }
         }
-        return trimmed;
+        // 最后按 dictName 前缀匹配，仅在唯一匹配时采纳；
+        // 多个字典共享前缀时结果依赖返回顺序，视为无法归一，保留原值让后续校验报错
+        String prefixMatched = null;
+        for (CategoryDict d : dicts) {
+            if (StringUtils.hasText(d.getDictName()) && d.getDictName().startsWith(trimmed)) {
+                if (prefixMatched != null && !prefixMatched.equals(d.getDictCode())) {
+                    return trimmed;
+                }
+                prefixMatched = d.getDictCode();
+            }
+        }
+        return prefixMatched != null ? prefixMatched : trimmed;
     }
 
     private boolean isValidProductLevel(String level, List<CategoryDict> productLevels) {

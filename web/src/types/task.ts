@@ -35,6 +35,8 @@ export interface TaskItem {
   progress: number
   result: Record<string, unknown>
   errorMessage: string
+  /** 进度轮询异常信息（网络抖动等），不覆盖任务真实状态 */
+  pollError?: string
   createdAt?: string
   completedAt?: string
 }

@@ -59,6 +59,9 @@ class AiMatchingServiceTest {
     @Mock
     private FactoryService factoryService;
 
+    @Mock
+    private com.rsdp.security.datascope.DataScopeHelper dataScopeHelper;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -69,6 +72,7 @@ class AiMatchingServiceTest {
         Field field = AiMatchingService.class.getDeclaredField("objectMapper");
         field.setAccessible(true);
         field.set(aiMatchingService, objectMapper);
+        org.mockito.Mockito.lenient().when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
     }
 
     @Test

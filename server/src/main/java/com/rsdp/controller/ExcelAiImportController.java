@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -38,12 +39,16 @@ public class ExcelAiImportController {
 
     /**
      * 上传 Excel 并预览 AI 识别的字段映射。
+     *
+     * @param file       Excel 文件
+     * @param sheetIndex 待解析的工作表索引（可选，默认 0；多 Sheet 文件逐一导入用）
      */
     @PostMapping("/preview")
     @PreAuthorize("hasAuthority('product:import')")
     public Result<ExcelAiMappingResponse> preview(
-        @RequestPart("file") MultipartFile file) {
-        return Result.ok(excelAiImportService.previewMapping(file));
+        @RequestPart("file") MultipartFile file,
+        @RequestParam(value = "sheetIndex", required = false, defaultValue = "0") int sheetIndex) {
+        return Result.ok(excelAiImportService.previewMapping(file, sheetIndex));
     }
 
     /**

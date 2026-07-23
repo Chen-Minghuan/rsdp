@@ -723,10 +723,12 @@ public class SchemeService {
         response.setFactoryCode(item.getFactoryCode());
         response.setFactoryName(factory != null ? factory.getFactoryName() : null);
         response.setFactorySku(rsku != null ? rsku.getFactorySku() : null);
-        response.setFactoryPrice(item.getFactoryPrice());
+        // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见；掩码时小计同步隐藏
+        boolean canViewPrice = dataScopeHelper.canViewFactoryPrice(item.getFactoryCode());
+        response.setFactoryPrice(canViewPrice ? item.getFactoryPrice() : null);
         int quantity = item.getQuantity() != null && item.getQuantity() > 0 ? item.getQuantity() : 1;
         response.setQuantity(quantity);
-        if (item.getFactoryPrice() != null) {
+        if (canViewPrice && item.getFactoryPrice() != null) {
             response.setSubtotal(item.getFactoryPrice().multiply(BigDecimal.valueOf(quantity)));
         }
         response.setLeadTimeDays(item.getLeadTimeDays());

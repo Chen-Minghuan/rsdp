@@ -4,7 +4,6 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,9 +68,17 @@ public class ExcelAiMappingRequest {
 
     /**
      * 用户确认要导入的价格列原始表头列表。
-     * 为空表示全部导入。
+     * 契约：字段缺省/null = 未提供 → 默认全部价格列；显式空数组 [] = 用户明确不选任何价格列。
+     * 兼容旧前端：通过该字段选择的价格列全部视为 factory（出厂价）角色。
      */
-    private List<String> selectedPriceColumns = new ArrayList<>();
+    private List<String> selectedPriceColumns;
+
+    /**
+     * 用户确认要导入的价格列及角色（factory/sales）列表。
+     * 契约：与 selectedPriceColumns 同时存在时以本字段为准；本字段为 null 时回退 selectedPriceColumns；
+     * 显式空数组 [] = 用户明确不选任何价格列。
+     */
+    private List<PriceColumnSelection> priceColumnSelections;
 
     /**
      * 用户确认的品类映射：品类原始值 → 字典码。
