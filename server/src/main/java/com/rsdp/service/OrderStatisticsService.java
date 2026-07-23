@@ -2,14 +2,17 @@ package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.response.OrderFactoryStatResponse;
+import com.rsdp.dto.response.OrderInviterStatResponse;
 import com.rsdp.dto.response.OrderProductStatResponse;
 import com.rsdp.entity.DesignOrder;
 import com.rsdp.entity.DesignOrderItem;
 import com.rsdp.entity.FactoryMaster;
+import com.rsdp.entity.SysUser;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.DesignOrderItemMapper;
 import com.rsdp.mapper.DesignOrderMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
+import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -40,10 +43,13 @@ public class OrderStatisticsService {
     public static final String DIM_PRODUCT = "product";
     /** 统计维度：按工厂。 */
     public static final String DIM_FACTORY = "factory";
+    /** 统计维度：按邀请人。 */
+    public static final String DIM_INVITER = "inviter";
 
     private final DesignOrderMapper designOrderMapper;
     private final DesignOrderItemMapper designOrderItemMapper;
     private final FactoryMasterMapper factoryMasterMapper;
+    private final SysUserMapper sysUserMapper;
 
     private static final int DEFAULT_STAT_DAYS = 90;
     private static final int MAX_STAT_DAYS = 365;
@@ -52,7 +58,7 @@ public class OrderStatisticsService {
     /**
      * 订单统计入口：按维度分发。
      *
-     * @param dim  统计维度（product / factory）
+     * @param dim  统计维度（product / factory / inviter）
      * @param from 起始日期（含，可空；空时默认最近 90 天）
      * @param to   截止日期（含，可空；空时默认今天）
      * @return 对应维度的统计列表（按总金额降序）
@@ -65,7 +71,103 @@ public class OrderStatisticsService {
         if (DIM_FACTORY.equals(dim)) {
             return statByFactory(range[0], range[1]);
         }
-        throw new BusinessException("不支持的统计维度: " + dim + "（仅支持 product / factory）");
+        if (DIM_INVITER.equals(dim)) {
+            return statByInviter(range[0], range[1]);
+        }
+        throw new BusinessException("不支持的统计维度: " + dim + "（仅支持 product / factory / inviter）");
+    }
+
+    /**
+     * 邀请维度统计：按邀请人聚合「邀请成功人数（有订单的被邀请人去重）/订单数/支付金额」，
+     * 行展开被邀请人明细。非 ADMIN 仅统计「我邀请的人」产生的订单。
+     *
+     * @param from 起始日期（含）
+     * @param to   截止日期（含）
+     * @return 邀请人统计列表（按支付金额降序）
+     */
+    public List<OrderInviterStatResponse> statByInviter(LocalDate from, LocalDate to) {
+        // 非 ADMIN：先把「我邀请的人」筛出来，订单范围限定到这些创建人
+        QueryWrapper<DesignOrder> wrapper = baseScope(from, to);
+        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+            String currentUserId = SecurityOperatorContext.currentUserId();
+            List<String> inviteeIds = sysUserMapper.selectList(new QueryWrapper<SysUser>()
+                    .eq("invited_by", currentUserId))
+                .stream().map(SysUser::getUserId).toList();
+            if (inviteeIds.isEmpty()) {
+                return List.of();
+            }
+            wrapper.in("created_by", inviteeIds);
+        }
+        List<DesignOrder> orders = designOrderMapper.selectList(wrapper);
+        if (orders.isEmpty()) {
+            return List.of();
+        }
+
+        // 批量加载订单创建人，拿到邀请归因（invited_by）
+        List<String> creatorIds = orders.stream().map(DesignOrder::getCreatedBy).distinct().toList();
+        Map<String, SysUser> creatorMap = sysUserMapper.selectBatchIds(creatorIds).stream()
+            .collect(Collectors.toMap(SysUser::getUserId, u -> u, (a, b) -> a));
+
+        // 按邀请人聚合
+        Map<String, InviterAgg> byInviter = new LinkedHashMap<>();
+        for (DesignOrder order : orders) {
+            SysUser creator = creatorMap.get(order.getCreatedBy());
+            if (creator == null || creator.getInvitedBy() == null) {
+                continue;
+            }
+            InviterAgg agg = byInviter.computeIfAbsent(creator.getInvitedBy(), k -> new InviterAgg());
+            OrderInviterStatResponse.InviteeStat invitee = agg.invitees.computeIfAbsent(
+                creator.getUserId(), userId -> {
+                    OrderInviterStatResponse.InviteeStat stat = new OrderInviterStatResponse.InviteeStat();
+                    stat.setUserId(userId);
+                    stat.setUsername(creator.getUsername());
+                    stat.setNickname(creator.getNickname());
+                    stat.setOrderCount(0L);
+                    stat.setTotalAmount(BigDecimal.ZERO);
+                    return stat;
+                });
+            BigDecimal amount = order.getFinalTotalPrice() != null ? order.getFinalTotalPrice() : BigDecimal.ZERO;
+            invitee.setOrderCount(invitee.getOrderCount() + 1);
+            invitee.setTotalAmount(invitee.getTotalAmount().add(amount));
+            agg.orderCount++;
+            agg.totalAmount = agg.totalAmount.add(amount);
+        }
+        if (byInviter.isEmpty()) {
+            return List.of();
+        }
+
+        // 批量加载邀请人信息
+        Map<String, SysUser> inviterMap = sysUserMapper.selectBatchIds(byInviter.keySet()).stream()
+            .collect(Collectors.toMap(SysUser::getUserId, u -> u, (a, b) -> a));
+
+        return byInviter.entrySet().stream()
+            .sorted(Map.Entry.<String, InviterAgg>comparingByValue(
+                Comparator.comparing(agg -> agg.totalAmount)).reversed())
+            .limit(RESULT_TOP_LIMIT)
+            .map(entry -> {
+                InviterAgg agg = entry.getValue();
+                SysUser inviter = inviterMap.get(entry.getKey());
+                OrderInviterStatResponse response = new OrderInviterStatResponse();
+                response.setInviterId(entry.getKey());
+                response.setInviterUsername(inviter != null ? inviter.getUsername() : null);
+                response.setInviterNickname(inviter != null ? inviter.getNickname() : null);
+                response.setInviteSuccessCount((long) agg.invitees.size());
+                response.setOrderCount(agg.orderCount);
+                response.setTotalAmount(scale(agg.totalAmount));
+                response.setInvitees(agg.invitees.values().stream()
+                    .sorted(Comparator.comparing(OrderInviterStatResponse.InviteeStat::getTotalAmount).reversed())
+                    .peek(stat -> stat.setTotalAmount(scale(stat.getTotalAmount())))
+                    .toList());
+                return response;
+            })
+            .toList();
+    }
+
+    /** 邀请人聚合中间态。 */
+    private static final class InviterAgg {
+        private final Map<String, OrderInviterStatResponse.InviteeStat> invitees = new LinkedHashMap<>();
+        private long orderCount = 0L;
+        private BigDecimal totalAmount = BigDecimal.ZERO;
     }
 
     /**
@@ -191,6 +293,21 @@ public class OrderStatisticsService {
      * @return 订单查询条件
      */
     private QueryWrapper<DesignOrder> orderScope(LocalDate from, LocalDate to) {
+        QueryWrapper<DesignOrder> wrapper = baseScope(from, to);
+        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+            wrapper.eq("created_by", SecurityOperatorContext.currentUserId());
+        }
+        return wrapper;
+    }
+
+    /**
+     * 订单统计基础范围：排除已取消 + 时间窗过滤（不含创建人限制）。
+     *
+     * @param from 起始日期（含，可空）
+     * @param to   截止日期（含，可空）
+     * @return 订单查询条件
+     */
+    private QueryWrapper<DesignOrder> baseScope(LocalDate from, LocalDate to) {
         QueryWrapper<DesignOrder> wrapper = new QueryWrapper<>();
         wrapper.ne("status", OrderService.STATUS_CANCELLED);
         if (from != null) {
@@ -198,9 +315,6 @@ public class OrderStatisticsService {
         }
         if (to != null) {
             wrapper.lt("created_at", to.plusDays(1).atStartOfDay());
-        }
-        if (!SecurityOperatorContext.isCurrentUserAdmin()) {
-            wrapper.eq("created_by", SecurityOperatorContext.currentUserId());
         }
         return wrapper;
     }

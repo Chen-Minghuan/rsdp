@@ -6,10 +6,12 @@ import com.rsdp.dto.response.OrderProductStatResponse;
 import com.rsdp.entity.DesignOrder;
 import com.rsdp.entity.DesignOrderItem;
 import com.rsdp.entity.FactoryMaster;
+import com.rsdp.entity.SysUser;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.DesignOrderItemMapper;
 import com.rsdp.mapper.DesignOrderMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
+import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -44,6 +46,9 @@ class OrderStatisticsServiceTest {
 
     @Mock
     private FactoryMasterMapper factoryMasterMapper;
+
+    @Mock
+    private SysUserMapper sysUserMapper;
 
     @InjectMocks
     private OrderStatisticsService orderStatisticsService;
@@ -173,5 +178,100 @@ class OrderStatisticsServiceTest {
         item.setFinalPrice(new BigDecimal(finalPrice));
         item.setQuantity(quantity);
         return item;
+    }
+
+    private DesignOrder order(String orderId, String createdBy, String finalTotal) {
+        DesignOrder order = new DesignOrder();
+        order.setOrderId(orderId);
+        order.setCreatedBy(createdBy);
+        order.setFinalTotalPrice(new BigDecimal(finalTotal));
+        return order;
+    }
+
+    private SysUser user(String userId, String invitedBy) {
+        SysUser user = new SysUser();
+        user.setUserId(userId);
+        user.setUsername(userId);
+        user.setNickname("昵称" + userId);
+        user.setInvitedBy(invitedBy);
+        return user;
+    }
+
+    @Test
+    void statByInviterShouldAggregateForAdmin() {
+        when(designOrderMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(
+            order("ORD-1", "invitee-1", "1000.00"),
+            order("ORD-2", "invitee-1", "500.00"),
+            order("ORD-3", "invitee-2", "300.00"),
+            // 无邀请归因的订单不计入
+            order("ORD-4", "organic-1", "9999.00")));
+        when(sysUserMapper.selectBatchIds(any())).thenAnswer(inv -> {
+            java.util.Collection<String> ids = inv.getArgument(0);
+            java.util.Map<String, SysUser> all = java.util.Map.of(
+                "invitee-1", user("invitee-1", "inviter-1"),
+                "invitee-2", user("invitee-2", "inviter-1"),
+                "organic-1", user("organic-1", null),
+                "inviter-1", user("inviter-1", null));
+            return ids.stream().filter(all::containsKey).map(all::get).toList();
+        });
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(true);
+
+            List<?> stats = orderStatisticsService.statistics("inviter", null, null);
+
+            assertThat(stats).hasSize(1);
+            com.rsdp.dto.response.OrderInviterStatResponse inviter =
+                (com.rsdp.dto.response.OrderInviterStatResponse) stats.get(0);
+            assertThat(inviter.getInviterId()).isEqualTo("inviter-1");
+            assertThat(inviter.getInviteSuccessCount()).isEqualTo(2);
+            assertThat(inviter.getOrderCount()).isEqualTo(3);
+            assertThat(inviter.getTotalAmount()).isEqualByComparingTo("1800.00");
+            assertThat(inviter.getInvitees()).hasSize(2);
+            // 被邀请人明细按金额降序
+            assertThat(inviter.getInvitees().get(0).getUserId()).isEqualTo("invitee-1");
+            assertThat(inviter.getInvitees().get(0).getTotalAmount()).isEqualByComparingTo("1500.00");
+        }
+    }
+
+    @Test
+    void statByInviterShouldScopeToOwnInviteesForNonAdmin() {
+        when(sysUserMapper.selectList(any(QueryWrapper.class)))
+            .thenReturn(List.of(user("invitee-1", "me-1")));
+        when(designOrderMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(
+            order("ORD-1", "invitee-1", "800.00")));
+        when(sysUserMapper.selectBatchIds(any())).thenAnswer(inv -> {
+            java.util.Collection<String> ids = inv.getArgument(0);
+            java.util.Map<String, SysUser> all = java.util.Map.of(
+                "invitee-1", user("invitee-1", "me-1"),
+                "me-1", user("me-1", null));
+            return ids.stream().filter(all::containsKey).map(all::get).toList();
+        });
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+            when(SecurityOperatorContext.currentUserId()).thenReturn("me-1");
+
+            List<?> stats = orderStatisticsService.statistics("inviter", null, null);
+
+            assertThat(stats).hasSize(1);
+            com.rsdp.dto.response.OrderInviterStatResponse inviter =
+                (com.rsdp.dto.response.OrderInviterStatResponse) stats.get(0);
+            assertThat(inviter.getInviterId()).isEqualTo("me-1");
+            assertThat(inviter.getTotalAmount()).isEqualByComparingTo("800.00");
+        }
+    }
+
+    @Test
+    void statByInviterShouldReturnEmptyWhenNoInvitees() {
+        when(sysUserMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+            when(SecurityOperatorContext.currentUserId()).thenReturn("me-1");
+
+            assertThat(orderStatisticsService.statistics("inviter", null, null)).isEmpty();
+        }
+        verify(designOrderMapper, never()).selectList(any(QueryWrapper.class));
     }
 }

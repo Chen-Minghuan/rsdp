@@ -166,8 +166,10 @@ public class OrderController {
         @RequestParam @NotBlank(message = "统计维度不能为空") String dim,
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        if (!OrderStatisticsService.DIM_PRODUCT.equals(dim) && !OrderStatisticsService.DIM_FACTORY.equals(dim)) {
-            throw new BusinessException("统计维度仅支持 product / factory");
+        if (!OrderStatisticsService.DIM_PRODUCT.equals(dim)
+            && !OrderStatisticsService.DIM_FACTORY.equals(dim)
+            && !OrderStatisticsService.DIM_INVITER.equals(dim)) {
+            throw new BusinessException("统计维度仅支持 product / factory / inviter");
         }
         return Result.ok(orderStatisticsService.statistics(dim, from, to));
     }
