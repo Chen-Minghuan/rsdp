@@ -644,6 +644,30 @@ PUT    /api/v1/orders/{orderId}
        # 更新收件信息与备注（需 order:update + 归属；仅 PENDING 可改）
        # Request: { receiverName?, receiverPhone?, receiverArea?, receiverAddress?, remark? }
 
+PUT    /api/v1/orders/{orderId}/items/{itemId}/price
+       # 订单明细行级改价（需 order:update + 归属；仅 PENDING 可改）
+       # Request: { adjustPrice? }（到手单价 [0, 99999999.99]；为空表示清除改价）
+       # 说明：生效单价 = adjustPrice（非空优先）否则 finalPrice 快照；adjust_price 为 AES
+       #      加密列；订单 final_total_price 按 Σ 生效单价 × 数量联动重算；记审计
+       # Response: OrderDetailResponse（items 含 adjustPrice / effectivePrice / subtotal）
+
+GET    /api/v1/orders/{orderId}/export
+       # 导出订单明细 Excel 清单（需 order:read + 归属）
+       # 说明：双 sheet「订单明细 + 汇总」；文件名 {orderNo}-订单明细.xlsx（RFC 5987）
+       # Response: xlsx 文件流
+
+POST   /api/v1/orders/{orderId}/contract
+       # 上传订单合同文件（需 order:update + 归属；multipart/form-data，字段 file）
+       # 说明：仅 doc/docx/pdf 且 ≤20MB；落 image_assets（image_type=contract）+
+       #      design_order.contract_file_id 关联；重复上传覆盖旧关联
+
+GET    /api/v1/orders/{orderId}/contract
+       # 下载订单合同文件（需 order:read + 归属；专用端点，不走公开图片通道）
+       # Response: 文件流，文件名 {orderNo}-合同.{ext}
+
+DELETE /api/v1/orders/{orderId}/contract
+       # 清除订单合同关联（需 order:delete + 归属；合同文件软删）
+
 PUT    /api/v1/orders/{orderId}/status
        # 状态机迁移（需 order:update + 归属）
        # PENDING→CONFIRMED/CANCELLED，CONFIRMED→PRODUCING/CANCELLED，PRODUCING→COMPLETED
@@ -659,10 +683,15 @@ GET    /api/v1/orders/contract-template
 GET    /api/v1/orders/statistics
        # 订单统计（需 order:read；排除 CANCELLED；非 ADMIN 仅统计自己创建的订单）
        # 说明：到手价为 AES 加密列，实体级解密后内存聚合；商品名/图取订单明细快照
-       # Query: dim=product|factory（必填）, from?, to?（yyyy-MM-dd，含当日，可空）
+       # Query: dim=product|factory|inviter（必填）, from?, to?（yyyy-MM-dd，含当日，可空）
        #       时间窗默认为最近 90 天，最大不得超过 365 天；结果按 totalAmount 降序取前 50 条
        # Response(dim=product):  [{ rspuId, productName, imageId, totalQuantity, totalAmount }]
        # Response(dim=factory):  [{ factoryCode, factoryName, orderCount, totalQuantity, totalAmount }]
+       # Response(dim=inviter):  [{ inviterId, inviterUsername, inviterNickname,
+       #   inviteSuccessCount, orderCount, totalAmount,
+       #   invitees: [{ userId, username, nickname, orderCount, totalAmount }] }]
+       # dim=inviter 说明：按 sys_user.invited_by 归因聚合「邀请成功人数（有订单的被邀请人
+       #   去重）/订单数/支付金额」；非 ADMIN 仅统计「我邀请的人」产生的订单
        # 均按 totalAmount 降序
 ```
 
