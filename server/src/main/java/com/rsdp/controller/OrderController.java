@@ -2,6 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.OrderCreateRequest;
+import com.rsdp.dto.request.OrderItemPriceRequest;
 import com.rsdp.dto.request.OrderStatusRequest;
 import com.rsdp.dto.request.OrderUpdateRequest;
 import com.rsdp.dto.response.InviteTokenResponse;
@@ -17,6 +18,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
@@ -119,6 +121,22 @@ public class OrderController {
         @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId,
         @RequestBody @Valid OrderUpdateRequest request) {
         return Result.ok(orderService.update(orderId, request));
+    }
+
+    /**
+     * 订单明细行级改价（仅 PENDING；adjustPrice 为空表示清除改价）。
+     *
+     * @param orderId 订单 ID
+     * @param itemId  明细 ID
+     * @param request 改价请求
+     * @return 更新后的订单详情
+     */
+    @PutMapping("/{orderId}/items/{itemId}/price")
+    public Result<OrderDetailResponse> adjustItemPrice(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId,
+        @PathVariable @NotNull(message = "明细 ID 不能为空") Long itemId,
+        @RequestBody @Valid OrderItemPriceRequest request) {
+        return Result.ok(orderService.adjustItemPrice(orderId, itemId, request.getAdjustPrice()));
     }
 
     /**

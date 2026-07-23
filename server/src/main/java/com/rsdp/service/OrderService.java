@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -80,6 +81,7 @@ public class OrderService {
     private final CompanyService companyService;
     private final OrderNoGenerator orderNoGenerator;
     private final DataScopeHelper dataScopeHelper;
+    private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -291,6 +293,87 @@ public class OrderService {
     }
 
     /**
+     * 订单明细行级改价（仅 PENDING；adjustPrice 为空表示清除改价）。
+     *
+     * <p>生效到手单价 = adjustPrice（非空优先）否则 finalPrice 快照；
+     * 订单 final_total_price 按全部明细 生效单价 × 数量 联动重算。</p>
+     *
+     * @param orderId     订单 ID
+     * @param itemId      明细 ID
+     * @param adjustPrice 改价（到手单价，可空）
+     * @return 更新后的订单详情
+     */
+    @Transactional
+    public OrderDetailResponse adjustItemPrice(String orderId, Long itemId, BigDecimal adjustPrice) {
+        DesignOrder order = getAccessibleOrder(orderId);
+        if (!STATUS_PENDING.equals(order.getStatus())) {
+            throw new BusinessException("仅待确认状态的订单可以改价");
+        }
+        DesignOrderItem item = designOrderItemMapper.selectById(itemId);
+        if (item == null || !orderId.equals(item.getOrderId())) {
+            throw new ResourceNotFoundException("订单明细不存在: " + itemId);
+        }
+
+        DesignOrderItem oldSnapshot = snapshotItem(item);
+        item.setAdjustPrice(adjustPrice);
+        if (adjustPrice != null) {
+            // updateById 走 EncryptTypeHandler 加密写入
+            designOrderItemMapper.updateById(item);
+        } else {
+            // 清除改价：显式置 null（updateById 忽略 null 字段）
+            designOrderItemMapper.update(null, new UpdateWrapper<DesignOrderItem>()
+                .eq("id", itemId)
+                .set("adjust_price", null));
+        }
+
+        // 联动重算订单到手总价：Σ 生效单价 × 数量
+        List<DesignOrderItem> items = designOrderItemMapper.selectList(
+            new QueryWrapper<DesignOrderItem>().eq("order_id", orderId));
+        BigDecimal finalTotal = BigDecimal.ZERO;
+        for (DesignOrderItem orderItem : items) {
+            BigDecimal effective = effectivePrice(orderItem);
+            if (effective == null) {
+                continue;
+            }
+            int quantity = orderItem.getQuantity() != null && orderItem.getQuantity() > 0
+                ? orderItem.getQuantity() : 1;
+            finalTotal = finalTotal.add(effective.multiply(BigDecimal.valueOf(quantity)));
+        }
+        order.setFinalTotalPrice(finalTotal);
+        order.setUpdatedAt(LocalDateTime.now());
+        designOrderMapper.updateById(order);
+
+        auditLogService.logUpdate("design_order_item", String.valueOf(itemId), oldSnapshot, item,
+            SecurityOperatorContext.currentUsername());
+        return detail(orderId);
+    }
+
+    /**
+     * 计算明细生效到手单价：行级改价优先，其次到手价快照。
+     *
+     * @param item 订单明细
+     * @return 生效单价
+     */
+    private static BigDecimal effectivePrice(DesignOrderItem item) {
+        return item.getAdjustPrice() != null ? item.getAdjustPrice() : item.getFinalPrice();
+    }
+
+    private DesignOrderItem snapshotItem(DesignOrderItem source) {
+        DesignOrderItem copy = new DesignOrderItem();
+        copy.setId(source.getId());
+        copy.setOrderId(source.getOrderId());
+        copy.setRspuId(source.getRspuId());
+        copy.setRskuId(source.getRskuId());
+        copy.setProductName(source.getProductName());
+        copy.setQuantity(source.getQuantity());
+        copy.setOriginalPrice(source.getOriginalPrice());
+        copy.setFinalPrice(source.getFinalPrice());
+        copy.setAdjustPrice(source.getAdjustPrice());
+        copy.setFactoryCode(source.getFactoryCode());
+        return copy;
+    }
+
+    /**
      * 订单状态迁移（状态机校验）。
      *
      * @param orderId     订单 ID
@@ -459,10 +542,13 @@ public class OrderService {
         response.setQuantity(item.getQuantity());
         response.setOriginalPrice(item.getOriginalPrice());
         response.setFinalPrice(item.getFinalPrice());
+        response.setAdjustPrice(item.getAdjustPrice());
+        BigDecimal effective = effectivePrice(item);
+        response.setEffectivePrice(effective);
         response.setFactoryCode(item.getFactoryCode());
         int quantity = item.getQuantity() != null && item.getQuantity() > 0 ? item.getQuantity() : 1;
-        response.setSubtotal(item.getFinalPrice() != null
-            ? item.getFinalPrice().multiply(BigDecimal.valueOf(quantity))
+        response.setSubtotal(effective != null
+            ? effective.multiply(BigDecimal.valueOf(quantity))
             : null);
         return response;
     }
