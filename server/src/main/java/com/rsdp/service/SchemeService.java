@@ -4,6 +4,7 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -12,6 +13,7 @@ import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.QuoteItemRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
+import com.rsdp.dto.request.SchemeItemReorderRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
 import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
@@ -24,7 +26,9 @@ import com.rsdp.dto.response.SchemeSummaryResponse;
 import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.Project;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.Scheme;
 import com.rsdp.entity.SchemeItem;
@@ -32,7 +36,9 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.CategoryDictMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SchemeItemMapper;
 import com.rsdp.mapper.SchemeMapper;
@@ -44,6 +50,7 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +68,8 @@ public class SchemeService {
 
     private final SchemeMapper schemeMapper;
     private final SchemeItemMapper schemeItemMapper;
+    private final RspuSceneMapper rspuSceneMapper;
+    private final CategoryDictMapper categoryDictMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
     private final RspuMapper rspuMapper;
     private final FactoryMasterMapper factoryMasterMapper;
@@ -419,6 +428,10 @@ public class SchemeService {
             .map(item -> buildItemResponse(item, rspuMap, rskuMap, factoryMap, primaryImageUrlMap))
             .collect(Collectors.toList());
 
+        // 空间分区标签：取 RSPU 首个场景标签（阶段 9 画布空间分区）
+        Map<String, String> spaceTagMap = batchSpaceTags(rspuIds);
+        itemResponses.forEach(item -> item.setSpaceTag(spaceTagMap.get(item.getRspuId())));
+
         SchemeResponse response = new SchemeResponse();
         response.setSchemeId(scheme.getSchemeId());
         response.setSchemeName(scheme.getSchemeName());
@@ -458,6 +471,46 @@ public class SchemeService {
         // 级联软删除方案明细（@TableLogic → UPDATE deleted_at），避免残留孤儿记录
         schemeItemMapper.delete(new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId));
         auditLogService.logDelete("scheme", schemeId, oldSnapshot, currentUsername());
+    }
+
+    /**
+     * 方案明细拖拽排序（阶段 9）：按给定顺序重写 sort_order。
+     *
+     * <p>itemIds 必须是该方案全部明细的完整列表，否则报错。</p>
+     *
+     * @param schemeId 方案 ID
+     * @param request  排序请求（itemIds 按新顺序排列）
+     * @return 更新后的方案详情
+     */
+    @Transactional
+    public SchemeResponse reorderItems(String schemeId, SchemeItemReorderRequest request) {
+        Scheme scheme = schemeMapper.selectById(schemeId);
+        if (scheme == null) {
+            throw new ResourceNotFoundException("方案不存在: " + schemeId);
+        }
+        assertSchemeOwnerOrAdmin(scheme);
+
+        List<Long> itemIds = request.getItemIds();
+        List<SchemeItem> items = schemeItemMapper.selectList(
+            new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId));
+        Set<Long> existingIds = items.stream().map(SchemeItem::getSchemeItemId).collect(Collectors.toSet());
+        if (itemIds.size() != existingIds.size()
+            || !existingIds.containsAll(itemIds)
+            || new HashSet<>(itemIds).size() != itemIds.size()) {
+            throw new BusinessException("排序列表必须与方案全部明细一致（完整且不重复）");
+        }
+
+        Scheme oldSnapshot = snapshot(scheme);
+        int order = 1;
+        for (Long itemId : itemIds) {
+            schemeItemMapper.update(null, new UpdateWrapper<SchemeItem>()
+                .eq("scheme_item_id", itemId)
+                .set("sort_order", order++));
+        }
+        scheme.setUpdatedAt(LocalDateTime.now());
+        schemeMapper.updateById(scheme);
+        auditLogService.logUpdate("scheme", schemeId, oldSnapshot, scheme, currentUsername());
+        return getSchemeDetail(schemeId);
     }
 
     /**
@@ -748,6 +801,40 @@ public class SchemeService {
         return rspuMapper.selectList(
             new QueryWrapper<RspuMaster>().in("rspu_id", rspuIds)
         ).stream().collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+    }
+
+    /**
+     * 批量获取 RSPU 的空间分区标签：取每个 RSPU 的首个场景标签名（无标签则不出现）。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return rspuId → 场景标签名
+     */
+    private Map<String, String> batchSpaceTags(List<String> rspuIds) {
+        if (rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<RspuScene> scenes = rspuSceneMapper.selectList(
+            new QueryWrapper<RspuScene>()
+                .in("rspu_id", rspuIds)
+                .orderByAsc("scene_code"));
+        if (scenes.isEmpty()) {
+            return Map.of();
+        }
+        List<String> codes = scenes.stream().map(RspuScene::getSceneCode).distinct().toList();
+        Map<String, String> nameMap = categoryDictMapper.selectList(
+                new QueryWrapper<CategoryDict>()
+                    .eq("dict_type", "scene")
+                    .in("dict_code", codes))
+            .stream().collect(Collectors.toMap(
+                CategoryDict::getDictCode,
+                CategoryDict::getDictName,
+                (a, b) -> a));
+        Map<String, String> result = new HashMap<>();
+        for (RspuScene scene : scenes) {
+            result.putIfAbsent(scene.getRspuId(),
+                nameMap.getOrDefault(scene.getSceneCode(), scene.getSceneCode()));
+        }
+        return result;
     }
 
     private Map<String, RskuSupply> batchRskuMap(List<String> rskuIds) {

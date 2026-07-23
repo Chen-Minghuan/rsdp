@@ -26,7 +26,9 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.CategoryDictMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SchemeItemMapper;
 import com.rsdp.mapper.SchemeMapper;
@@ -56,6 +58,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -94,6 +97,12 @@ class SchemeServiceTest {
 
     @Mock
     private TemplateTagService templateTagService;
+
+    @Mock
+    private RspuSceneMapper rspuSceneMapper;
+
+    @Mock
+    private CategoryDictMapper categoryDictMapper;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -628,5 +637,81 @@ class SchemeServiceTest {
         assertThat(captor.getValue().getSqlSegment()).contains("status");
         // 分页查询不应走全量 selectList
         verify(schemeMapper, never()).selectList(any(QueryWrapper.class));
+    }
+
+    @Test
+    void reorderItemsShouldRewriteSortOrder() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试方案");
+        scheme.setCreatedBy("testuser");
+
+        SchemeItem item1 = new SchemeItem();
+        item1.setSchemeItemId(1L);
+        item1.setSchemeId("SCHEME-001");
+        item1.setRspuId("RSPU-001");
+        item1.setRskuId("RSKU-001");
+        item1.setFactoryCode("F001");
+        SchemeItem item2 = new SchemeItem();
+        item2.setSchemeItemId(2L);
+        item2.setSchemeId("SCHEME-001");
+        item2.setRspuId("RSPU-002");
+        item2.setRskuId("RSKU-002");
+        item2.setFactoryCode("F001");
+
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(item1, item2));
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        com.rsdp.dto.request.SchemeItemReorderRequest request = new com.rsdp.dto.request.SchemeItemReorderRequest();
+        request.setItemIds(List.of(2L, 1L));
+
+        schemeService.reorderItems("SCHEME-001", request);
+
+        // 每个明细按新顺序写入 sort_order（1..N）
+        verify(schemeItemMapper, times(2)).update(any(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class));
+        verify(auditLogService).logUpdate(eq("scheme"), eq("SCHEME-001"), any(), any(Scheme.class), any());
+    }
+
+    @Test
+    void reorderItemsShouldRejectIncompleteList() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("testuser");
+
+        SchemeItem item1 = new SchemeItem();
+        item1.setSchemeItemId(1L);
+        SchemeItem item2 = new SchemeItem();
+        item2.setSchemeItemId(2L);
+
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(item1, item2));
+
+        com.rsdp.dto.request.SchemeItemReorderRequest request = new com.rsdp.dto.request.SchemeItemReorderRequest();
+        request.setItemIds(List.of(1L));
+
+        assertThatThrownBy(() -> schemeService.reorderItems("SCHEME-001", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("完整");
+        verify(schemeItemMapper, never()).update(any(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class));
+    }
+
+    @Test
+    void reorderItemsShouldRejectNonOwner() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("otheruser");
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+
+        com.rsdp.dto.request.SchemeItemReorderRequest request = new com.rsdp.dto.request.SchemeItemReorderRequest();
+        request.setItemIds(List.of(1L));
+
+        assertThatThrownBy(() -> schemeService.reorderItems("SCHEME-001", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无权操作");
+        verify(schemeItemMapper, never()).update(any(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class));
     }
 }

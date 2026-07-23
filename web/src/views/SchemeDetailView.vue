@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, h, computed } from 'vue'
+import { ref, onMounted, h, computed, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 import {
   NCard,
@@ -19,11 +19,13 @@ import {
   NInput,
   NSelect,
   NTag,
+  NRadioGroup,
+  NRadioButton,
   useDialog,
   useMessage,
   type DataTableColumns
 } from 'naive-ui'
-import { getSchemeDetail, generateQuoteFromScheme, setSchemeTemplate, copyFromTemplate } from '@/api/scheme'
+import { getSchemeDetail, generateQuoteFromScheme, setSchemeTemplate, copyFromTemplate, reorderSchemeItems } from '@/api/scheme'
 import { exportQuote } from '@/api/quote'
 import { createOrder } from '@/api/order'
 import { listProjects } from '@/api/project'
@@ -193,6 +195,75 @@ const exporting = ref(false)
 const errorMessage = ref('')
 const scheme = ref<Scheme | null>(null)
 const quoteResult = ref<QuoteResponse | null>(null)
+
+// ---------- 空间分区视图 + 拖拽排序（阶段 9） ----------
+/** 视图模式：zones=空间分区 / table=表格 */
+const viewMode = ref<'zones' | 'table'>('zones')
+/** 画布有序明细（与 scheme.items 同步，拖拽时先本地重排再落库） */
+const orderedItems = ref<SchemeItem[]>([])
+const draggingId = ref<number | null>(null)
+const reordering = ref(false)
+
+watch(scheme, (value) => {
+  orderedItems.value = value ? [...value.items] : []
+}, { immediate: true })
+
+/** 分区键：无空间标签归入「未分区」。 */
+function zoneKey(item: SchemeItem): string {
+  return item.spaceTag || '未分区'
+}
+
+/** 空间分区（按画布顺序分组，保持组内顺序与全局顺序一致）。 */
+const zones = computed(() => {
+  const map = new Map<string, SchemeItem[]>()
+  for (const item of orderedItems.value) {
+    const key = zoneKey(item)
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(item)
+  }
+  return [...map.entries()].map(([name, items]) => ({ name, items }))
+})
+
+function onDragStart(itemId: number) {
+  draggingId.value = itemId
+}
+
+function onDragEnd() {
+  draggingId.value = null
+}
+
+/** 同分区内拖拽落点：重排后整单提交 reorder。 */
+function onDropOnItem(target: SchemeItem) {
+  const draggedId = draggingId.value
+  draggingId.value = null
+  if (draggedId == null || draggedId === target.schemeItemId) return
+  const list = [...orderedItems.value]
+  const from = list.findIndex(i => i.schemeItemId === draggedId)
+  const to = list.findIndex(i => i.schemeItemId === target.schemeItemId)
+  if (from < 0 || to < 0) return
+  // 空间标签是产品属性（RSPU 场景推导），仅允许同分区内排序
+  if (zoneKey(list[from]) !== zoneKey(list[to])) return
+  const [moved] = list.splice(from, 1)
+  list.splice(to, 0, moved)
+  orderedItems.value = list
+  saveOrder()
+}
+
+async function saveOrder() {
+  reordering.value = true
+  try {
+    scheme.value = await reorderSchemeItems(
+      schemeId.value,
+      orderedItems.value.map(i => i.schemeItemId)
+    )
+    message.success('排序已保存')
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '保存排序失败')
+    loadDetail()
+  } finally {
+    reordering.value = false
+  }
+}
 
 const duplicateRspuIds = computed(() => {
   if (!scheme.value) return []
@@ -466,7 +537,62 @@ onBeforeRouteUpdate((to) => {
           </n-alert>
 
           <n-card title="方案产品" size="small">
+            <template #header-extra>
+              <n-radio-group v-model:value="viewMode" size="small">
+                <n-radio-button value="zones">空间分区</n-radio-button>
+                <n-radio-button value="table">表格</n-radio-button>
+              </n-radio-group>
+            </template>
+
+            <!-- 空间分区视图（阶段 9）：按 RSPU 场景标签分区，分区内可拖拽排序 -->
+            <div v-if="viewMode === 'zones'">
+              <n-empty v-if="orderedItems.length === 0" description="方案中暂无产品" />
+              <template v-else>
+                <div v-for="zone in zones" :key="zone.name" class="zone">
+                  <div class="zone-title">{{ zone.name }}（{{ zone.items.length }}）</div>
+                  <div class="zone-items">
+                    <div
+                      v-for="item in zone.items"
+                      :key="item.schemeItemId"
+                      class="zone-item"
+                      :class="{ dragging: draggingId === item.schemeItemId, draggable: canEditScheme }"
+                      :draggable="canEditScheme"
+                      @dragstart="onDragStart(item.schemeItemId)"
+                      @dragend="onDragEnd"
+                      @dragover.prevent
+                      @drop.prevent="onDropOnItem(item)"
+                    >
+                      <n-image
+                        v-if="item.primaryImageUrl"
+                        :src="item.primaryImageUrl"
+                        object-fit="cover"
+                        preview-disabled
+                        class="zone-item-img"
+                      />
+                      <div v-else class="zone-item-img placeholder">无图</div>
+                      <div class="zone-item-body">
+                        <div class="zone-item-name" :title="item.rspuName || item.rspuId">
+                          {{ item.rspuName || item.rspuId }}
+                        </div>
+                        <div class="zone-item-meta">
+                          x{{ item.quantity ?? 1 }}
+                          <span v-if="item.factoryName"> · {{ item.factoryName }}</span>
+                        </div>
+                        <div v-if="item.subtotal != null" class="zone-item-price">
+                          ¥{{ item.subtotal.toFixed(2) }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <p v-if="canEditScheme" class="zone-hint">
+                  {{ reordering ? '正在保存排序…' : '拖拽卡片可调整分区内顺序（空间标签为产品属性，不支持跨区拖动）' }}
+                </p>
+              </template>
+            </div>
+
             <n-data-table
+              v-else
               :columns="itemColumns"
               :data="scheme.items"
               :bordered="true"
@@ -618,3 +744,95 @@ onBeforeRouteUpdate((to) => {
     </n-modal>
   </n-space>
 </template>
+
+<style scoped>
+.zone {
+  margin-bottom: 16px;
+}
+
+.zone-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+  padding-left: 8px;
+  border-left: 3px solid var(--rsdp-primary);
+  margin-bottom: 10px;
+}
+
+.zone-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.zone-item {
+  display: flex;
+  gap: 10px;
+  width: 260px;
+  padding: 8px;
+  border: 1px solid var(--rsdp-border);
+  border-radius: 10px;
+  background: var(--rsdp-card-bg);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.zone-item.draggable {
+  cursor: grab;
+}
+
+.zone-item.dragging {
+  opacity: 0.5;
+  border-color: var(--rsdp-primary);
+  box-shadow: var(--rsdp-shadow-card);
+}
+
+.zone-item-img {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--rsdp-serve-bg);
+}
+
+.zone-item-img.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+
+.zone-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.zone-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zone-item-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+
+.zone-item-price {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rsdp-primary);
+}
+
+.zone-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+</style>

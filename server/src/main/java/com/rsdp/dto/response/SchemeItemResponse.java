@@ -26,4 +26,6 @@ public class SchemeItemResponse {
     private Integer leadTimeDays;
     private Integer moq;
     private Integer sortOrder;
+    /** 空间分区标签（RSPU 首个场景标签名；无标签为 null，前端归入「未分区」） */
+    private String spaceTag;
 }

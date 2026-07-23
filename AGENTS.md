@@ -280,6 +280,7 @@ make clean
   - `V14__favorite_template.sql`：收藏夹两级模型（favorite_folder + user_favorite.folder_id）+ 模板标签实体（template_tag）
   - `V15__platform_cms.sql`：官网 CMS 五表（platform_banner/case/content/custom_dict/customized）+ 协议/客服内容种子
   - `V16__order_enhance.sql`：订单增强（design_order_item.adjust_price 行级改价 AES + design_order.contract_file_id 合同文件）
+  - `V17__scheme_item_sort.sql`：方案明细 sort_order 存量回填（拖拽排序前置，数据迁移）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。
