@@ -24,3 +24,29 @@ export interface OrderFactoryStat {
   /** 总到手金额 */
   totalAmount: number
 }
+
+/**
+ * 订单统计-邀请维度。
+ */
+export interface OrderInviterStat {
+  inviterId: string
+  inviterUsername?: string | null
+  inviterNickname?: string | null
+  /** 邀请成功人数（窗口内有订单的被邀请人去重） */
+  inviteSuccessCount: number
+  orderCount: number
+  /** 支付金额（到手价合计） */
+  totalAmount: number
+  invitees: OrderInviteeStat[]
+}
+
+/**
+ * 被邀请人统计明细。
+ */
+export interface OrderInviteeStat {
+  userId: string
+  username?: string | null
+  nickname?: string | null
+  orderCount: number
+  totalAmount: number
+}

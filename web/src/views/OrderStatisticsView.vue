@@ -19,15 +19,16 @@ import { useEcharts } from '@/composables/useEcharts'
 import {
   getOrderStatisticsByProduct,
   getOrderStatisticsByFactory,
+  getOrderStatisticsByInviter,
   type OrderStatisticsParams
 } from '@/api/orderStatistics'
-import type { OrderFactoryStat, OrderProductStat } from '@/types/orderStatistics'
+import type { OrderFactoryStat, OrderInviterStat, OrderProductStat } from '@/types/orderStatistics'
 
 const BRAND_BLUE = '#2453fc'
 const TEXT_SECONDARY = '#6b7280'
 const TOP_LIMIT = 10
 
-type Dim = 'product' | 'factory'
+type Dim = 'product' | 'factory' | 'inviter'
 
 const dim = ref<Dim>('product')
 const dateRange = ref<[number, number] | null>(null)
@@ -35,6 +36,7 @@ const loading = ref(false)
 const errorMessage = ref('')
 const productStats = ref<OrderProductStat[]>([])
 const factoryStats = ref<OrderFactoryStat[]>([])
+const inviterStats = ref<OrderInviterStat[]>([])
 
 const chartEl = ref<HTMLElement | null>(null)
 
@@ -42,7 +44,12 @@ const chartOption = computed(() => {
   const source =
     dim.value === 'product'
       ? productStats.value.slice(0, TOP_LIMIT).map(s => ({ name: s.productName || s.rspuId, value: s.totalAmount }))
-      : factoryStats.value.slice(0, TOP_LIMIT).map(s => ({ name: s.factoryName, value: s.totalAmount }))
+      : dim.value === 'factory'
+        ? factoryStats.value.slice(0, TOP_LIMIT).map(s => ({ name: s.factoryName, value: s.totalAmount }))
+        : inviterStats.value.slice(0, TOP_LIMIT).map(s => ({
+            name: s.inviterNickname || s.inviterUsername || s.inviterId,
+            value: s.totalAmount
+          }))
   return {
     tooltip: { trigger: 'axis' },
     grid: { left: 140, right: 80, top: 16, bottom: 30 },
@@ -124,10 +131,45 @@ const factoryColumns: DataTableColumns<OrderFactoryStat> = [
   }
 ]
 
-const columns = computed(() => (dim.value === 'product' ? productColumns : factoryColumns))
-const tableData = computed<OrderProductStat[] | OrderFactoryStat[]>(() =>
-  dim.value === 'product' ? productStats.value : factoryStats.value
+const inviterColumns: DataTableColumns<OrderInviterStat> = [
+  {
+    type: 'expand',
+    renderExpand: row =>
+      h('div', { style: 'padding: 8px 24px;' },
+        row.invitees.map(invitee =>
+          h('div', { style: 'display: flex; gap: 24px; padding: 4px 0; font-size: 13px;' }, [
+            h('span', { style: 'width: 200px;' }, invitee.nickname || invitee.username || '-'),
+            h('span', { style: 'width: 160px; color: #999;' }, invitee.username || ''),
+            h('span', { style: 'width: 100px; text-align: right;' }, `${invitee.orderCount} 单`),
+            h('span', { style: 'width: 140px; text-align: right;' }, formatAmount(invitee.totalAmount))
+          ])
+        )
+      )
+  },
+  {
+    title: '邀请人',
+    key: 'inviterNickname',
+    render: row => row.inviterNickname || row.inviterUsername || row.inviterId
+  },
+  { title: '邀请成功人数', key: 'inviteSuccessCount', width: 130, align: 'right' },
+  { title: '订单数', key: 'orderCount', width: 100, align: 'right' },
+  {
+    title: '支付金额',
+    key: 'totalAmount',
+    width: 140,
+    align: 'right',
+    render: row => formatAmount(row.totalAmount)
+  }
+]
+
+const columns = computed(() =>
+  dim.value === 'product' ? productColumns : dim.value === 'factory' ? factoryColumns : inviterColumns
 )
+const tableData = computed<OrderProductStat[] | OrderFactoryStat[] | OrderInviterStat[]>(() =>
+  dim.value === 'product' ? productStats.value : dim.value === 'factory' ? factoryStats.value : inviterStats.value
+)
+const rowKey = (row: OrderProductStat | OrderFactoryStat | OrderInviterStat) =>
+  'rspuId' in row ? row.rspuId : 'factoryCode' in row ? row.factoryCode : row.inviterId
 const isEmpty = computed(() => tableData.value.length === 0)
 
 function formatAmount(value: number): string {
@@ -155,8 +197,10 @@ async function loadStats() {
     const params = buildParams()
     if (dim.value === 'product') {
       productStats.value = await getOrderStatisticsByProduct(params)
-    } else {
+    } else if (dim.value === 'factory') {
       factoryStats.value = await getOrderStatisticsByFactory(params)
+    } else {
+      inviterStats.value = await getOrderStatisticsByInviter(params)
     }
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载订单统计失败'
@@ -173,7 +217,7 @@ onMounted(loadStats)
 </script>
 
 <template>
-  <PageContainer title="订单统计" subtitle="按产品 / 工厂维度分析订单到手金额（不含已取消订单）">
+  <PageContainer title="订单统计" subtitle="按产品 / 工厂 / 邀请维度分析订单到手金额（不含已取消订单）">
     <n-alert v-if="errorMessage" type="error" :show-icon="true" style="margin-bottom: 12px;">
       {{ errorMessage }}
     </n-alert>
@@ -184,6 +228,7 @@ onMounted(loadStats)
         <n-radio-group v-model:value="dim">
           <n-radio-button value="product">按产品</n-radio-button>
           <n-radio-button value="factory">按工厂</n-radio-button>
+          <n-radio-button value="inviter">按邀请</n-radio-button>
         </n-radio-group>
         <n-date-picker
           v-model:value="dateRange"
@@ -198,7 +243,10 @@ onMounted(loadStats)
 
     <n-spin :show="loading">
       <!-- 金额 TOP10 图表 -->
-      <n-card :title="dim === 'product' ? '产品到手金额 TOP10' : '工厂到手金额 TOP10'" style="margin-bottom: 16px;">
+      <n-card
+        :title="dim === 'product' ? '产品到手金额 TOP10' : dim === 'factory' ? '工厂到手金额 TOP10' : '邀请人支付金额 TOP10'"
+        style="margin-bottom: 16px;"
+      >
         <n-empty v-if="!loading && isEmpty" description="暂无订单统计数据" />
         <div v-else ref="chartEl" class="chart" />
       </n-card>
@@ -208,7 +256,7 @@ onMounted(loadStats)
         <n-data-table
           :columns="columns"
           :data="tableData"
-          :row-key="(row: OrderProductStat | OrderFactoryStat) => ('rspuId' in row ? row.rspuId : row.factoryCode)"
+          :row-key="rowKey"
           :pagination="{ pageSize: 10 }"
           size="small"
         />
