@@ -10,6 +10,7 @@ import com.rsdp.dto.response.OrderDetailResponse;
 import com.rsdp.dto.response.OrderListResponse;
 import com.rsdp.dto.response.OrderResponse;
 import com.rsdp.service.ContractTemplateService;
+import com.rsdp.service.OrderExportService;
 import com.rsdp.service.OrderInviteService;
 import com.rsdp.service.OrderService;
 import com.rsdp.service.OrderStatisticsService;
@@ -19,6 +20,9 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
@@ -49,6 +53,24 @@ public class OrderController {
     private final OrderInviteService orderInviteService;
     private final ContractTemplateService contractTemplateService;
     private final OrderStatisticsService orderStatisticsService;
+    private final OrderExportService orderExportService;
+
+    /**
+     * 导出订单明细 Excel 清单（{orderNo}-订单明细.xlsx）。
+     *
+     * @param orderId 订单 ID
+     * @return Excel 文件
+     */
+    @GetMapping("/{orderId}/export")
+    public ResponseEntity<byte[]> export(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId) {
+        OrderExportService.OrderExportFile file = orderExportService.export(orderId);
+        String encodedFileName = URLEncoder.encode(file.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFileName)
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .body(file.content());
+    }
 
     /**
      * 由方案生成订单（价格快照 × 全局折扣率）。
