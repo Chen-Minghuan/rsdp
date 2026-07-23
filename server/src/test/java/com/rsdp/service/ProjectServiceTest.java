@@ -275,4 +275,47 @@ class ProjectServiceTest {
         verify(projectMapper).selectPage(any(Page.class), captor.capture());
         assertThat(captor.getValue().getSqlSegment()).doesNotContain("owner_id");
     }
+
+    @Test
+    void updateShareShouldEnableWithExpireDays() {
+        when(projectMapper.selectById("PROJ-1")).thenReturn(ownedProject());
+
+        com.rsdp.dto.request.ProjectShareRequest request = new com.rsdp.dto.request.ProjectShareRequest();
+        request.setShareEnabled(true);
+        request.setExpireDays(7);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            com.rsdp.dto.response.ProjectResponse response = projectService.updateShare("PROJ-1", request);
+
+            assertThat(response.getShareEnabled()).isTrue();
+            assertThat(response.getShareExpireAt()).isNotNull();
+            assertThat(response.getShareExpireAt()).isAfter(java.time.LocalDateTime.now().plusDays(6));
+            verify(projectMapper).updateById(any(Project.class));
+            verify(auditLogService).logUpdate(eq("project"), eq("PROJ-1"), any(), any(Project.class), any());
+        }
+    }
+
+    @Test
+    void updateShareShouldDisableAndClearExpireAt() {
+        Project project = ownedProject();
+        project.setShareEnabled(true);
+        project.setShareExpireAt(java.time.LocalDateTime.now().plusDays(7));
+        when(projectMapper.selectById("PROJ-1")).thenReturn(project);
+
+        com.rsdp.dto.request.ProjectShareRequest request = new com.rsdp.dto.request.ProjectShareRequest();
+        request.setShareEnabled(false);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            com.rsdp.dto.response.ProjectResponse response = projectService.updateShare("PROJ-1", request);
+
+            assertThat(response.getShareEnabled()).isFalse();
+            assertThat(response.getShareExpireAt()).isNull();
+        }
+    }
 }

@@ -1037,6 +1037,8 @@ CREATE TABLE IF NOT EXISTS project (
     owner_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     status VARCHAR(20) NOT NULL DEFAULT 'active',
     remark VARCHAR(512),
+    share_enabled BOOLEAN NOT NULL DEFAULT false,
+    share_expire_at TIMESTAMP,
     deleted_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()

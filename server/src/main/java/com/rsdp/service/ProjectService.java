@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.ProjectRequest;
+import com.rsdp.dto.request.ProjectShareRequest;
 import com.rsdp.dto.response.ProjectDetailResponse;
 import com.rsdp.dto.response.ProjectResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
@@ -185,6 +186,30 @@ public class ProjectService {
     }
 
     /**
+     * 设置项目画布分享开关（阶段 9）。仅项目负责人或 ADMIN。
+     *
+     * @param projectId 项目 ID
+     * @param request   分享请求（开关 + 有效期天数，空=永久）
+     * @return 更新后的项目
+     */
+    @Transactional
+    public ProjectResponse updateShare(String projectId, ProjectShareRequest request) {
+        Project project = getAccessibleProject(projectId);
+        Project oldSnapshot = snapshot(project);
+
+        project.setShareEnabled(request.getShareEnabled());
+        if (Boolean.TRUE.equals(request.getShareEnabled()) && request.getExpireDays() != null) {
+            project.setShareExpireAt(LocalDateTime.now().plusDays(request.getExpireDays()));
+        } else {
+            project.setShareExpireAt(null);
+        }
+        project.setUpdatedAt(LocalDateTime.now());
+        projectMapper.updateById(project);
+        auditLogService.logUpdate("project", projectId, oldSnapshot, project, currentUsername());
+        return toResponse(project, null);
+    }
+
+    /**
      * 校验项目存在且当前用户可访问（归属人或 ADMIN）。
      *
      * @param projectId 项目 ID
@@ -224,6 +249,8 @@ public class ProjectService {
         copy.setOwnerId(source.getOwnerId());
         copy.setRemark(source.getRemark());
         copy.setStatus(source.getStatus());
+        copy.setShareEnabled(source.getShareEnabled());
+        copy.setShareExpireAt(source.getShareExpireAt());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
         return copy;
@@ -238,6 +265,8 @@ public class ProjectService {
         response.setOwnerId(project.getOwnerId());
         response.setStatus(project.getStatus());
         response.setRemark(project.getRemark());
+        response.setShareEnabled(project.getShareEnabled());
+        response.setShareExpireAt(project.getShareExpireAt());
         response.setSchemeCount(stats != null ? stats.count() : 0);
         response.setTotalPrice(stats != null ? stats.totalPrice() : BigDecimal.ZERO);
         response.setCreatedAt(project.getCreatedAt());

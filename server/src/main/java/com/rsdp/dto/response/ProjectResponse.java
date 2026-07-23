@@ -18,6 +18,10 @@ public class ProjectResponse {
     private String ownerId;
     private String status;
     private String remark;
+    /** 画布分享开关 */
+    private Boolean shareEnabled;
+    /** 分享过期时间（null=永久有效） */
+    private LocalDateTime shareExpireAt;
     /** 项目下方案数量 */
     private Integer schemeCount;
     /** 项目下方案总价合计 */

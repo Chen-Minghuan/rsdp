@@ -10,6 +10,12 @@ const routes = [
     meta: { public: true, hideHeader: true }
   },
   {
+    path: '/s/:projectId',
+    name: 'ProjectShare',
+    component: () => import('@/views/ProjectShareView.vue'),
+    meta: { public: true, hideHeader: true }
+  },
+  {
     path: '/invite/order/:token',
     name: 'OrderInvite',
     component: () => import('@/views/OrderInviteView.vue'),

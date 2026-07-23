@@ -15,13 +15,14 @@ import {
   NSelect,
   NSpace,
   NSpin,
+  NSwitch,
   NTag,
   useDialog,
   useMessage,
   type FormRules
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
-import { getProjectDetail, updateProject } from '@/api/project'
+import { getProjectDetail, updateProject, updateProjectShare } from '@/api/project'
 import { listSchemes, copyFromTemplate } from '@/api/scheme'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
@@ -67,6 +68,61 @@ const templatesLoading = ref(false)
 const selectedTemplateId = ref<string | null>(null)
 const copySchemeName = ref('')
 const copying = ref(false)
+
+// 画布分享弹窗（阶段 9）
+const showShareModal = ref(false)
+const shareEnabled = ref(false)
+const shareExpireDays = ref<number | null>(null)
+const shareSaving = ref(false)
+
+const shareExpireOptions = [
+  { label: '永久有效', value: 0 },
+  { label: '7 天', value: 7 },
+  { label: '30 天', value: 30 },
+  { label: '90 天', value: 90 }
+]
+
+const shareLink = computed(() => `${window.location.origin}/s/${projectId.value}`)
+
+function openShareModal() {
+  if (!project.value) return
+  shareEnabled.value = project.value.shareEnabled === true
+  shareExpireDays.value = null
+  showShareModal.value = true
+}
+
+async function handleSaveShare() {
+  shareSaving.value = true
+  try {
+    const updated = await updateProjectShare(projectId.value, {
+      shareEnabled: shareEnabled.value,
+      expireDays: shareEnabled.value && shareExpireDays.value != null ? shareExpireDays.value : undefined
+    })
+    if (project.value) {
+      project.value.shareEnabled = updated.shareEnabled
+      project.value.shareExpireAt = updated.shareExpireAt
+    }
+    message.success(shareEnabled.value ? '分享已开启' : '分享已关闭')
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    shareSaving.value = false
+  }
+}
+
+async function copyShareLink() {
+  try {
+    await navigator.clipboard.writeText(shareLink.value)
+    message.success('分享链接已复制')
+  } catch {
+    message.warning('复制失败，请手动复制链接')
+  }
+}
+
+function formatShareExpire(value?: string | null): string {
+  if (!value) return '永久有效'
+  return `有效期至 ${value.replace('T', ' ').slice(0, 16)}`
+}
 
 const projectTypeOptions = computed(() =>
   projectTypeDicts.value.map(d => ({ label: d.dictName, value: d.dictCode }))
@@ -207,6 +263,7 @@ onMounted(async () => {
     <template #actions>
       <n-button @click="router.push('/projects')">返回项目列表</n-button>
       <n-button v-if="canUpdateProject && project" @click="openEditModal">编辑项目</n-button>
+      <n-button v-if="canUpdateProject && project" @click="openShareModal">分享画布</n-button>
     </template>
 
     <n-alert v-if="errorMessage" type="error" :show-icon="true" style="margin-bottom: 12px;">
@@ -258,6 +315,36 @@ onMounted(async () => {
         </n-grid>
       </template>
     </n-spin>
+
+    <!-- 分享画布弹窗 -->
+    <n-modal v-model:show="showShareModal" preset="card" title="分享画布" style="width: 480px;">
+      <n-space vertical :size="12">
+        <n-space align="center">
+          <span>开启分享</span>
+          <n-switch v-model:value="shareEnabled" @update:value="handleSaveShare" :loading="shareSaving" />
+        </n-space>
+        <template v-if="shareEnabled">
+          <div>
+            <div style="margin-bottom: 6px;">有效期</div>
+            <n-select
+              :value="shareExpireDays"
+              :options="shareExpireOptions"
+              @update:value="(v: number | null) => { shareExpireDays = v; handleSaveShare() }"
+            />
+          </div>
+          <div>
+            <div style="margin-bottom: 6px;">分享链接（{{ formatShareExpire(project?.shareExpireAt) }}）</div>
+            <n-space align="center">
+              <n-input :value="shareLink" readonly style="width: 300px;" />
+              <n-button type="primary" @click="copyShareLink">复制链接</n-button>
+            </n-space>
+          </div>
+          <p style="font-size: 12px; color: var(--rsdp-text-secondary); margin: 0;">
+            访客通过链接可查看项目画布的只读视图（空间分区/产品/数量，不含价格与工厂信息）。
+          </p>
+        </template>
+      </n-space>
+    </n-modal>
 
     <!-- 编辑项目弹窗 -->
     <n-modal
