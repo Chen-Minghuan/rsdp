@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
     external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
     product_name VARCHAR(256),                       -- 产品名称（AI OCR 提取 / Excel 导入品名；纯图无文字时为空）
+    description TEXT,                                -- 长文本描述原文（Excel 导入材质解析/功能配置等，V18 并入）
+    retail_price NUMERIC(14,2),                      -- 零售参考价（销售价/含税价，不加密，V18 并入）
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
@@ -84,10 +86,13 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     rspu_id VARCHAR(64) NOT NULL,
     display_name VARCHAR(128),                     -- 变体显示名称，如"兰卡沙发 2450mm A级布"
     variant_code VARCHAR(32),                      -- 业务变体编码，如 单人位/S/M/L
-    size_code VARCHAR(32),                         -- 尺寸码
+    size_code VARCHAR(32),                         -- 尺寸码（可空；归一化索引字段，非身份字段）
+    size_text VARCHAR(64),                         -- 尺寸/规格原文（工厂方言，如 "贵妃A位"）
     dimensions JSONB,                              -- 具体尺寸 {"w":560,"d":580,"h":780,"unit":"mm"}
-    color_code VARCHAR(32),                        -- 颜色码
-    material_code VARCHAR(32),                     -- 主材质码
+    color_code VARCHAR(32),                        -- 颜色码（可空；归一化索引字段）
+    color_text VARCHAR(64),                        -- 颜色原文（工厂方言）
+    material_code VARCHAR(32),                     -- 主材质码（可空；归一化索引字段）
+    material_text VARCHAR(128),                    -- 材质原文（工厂方言，如 "A级布" "半皮"）
     material_mix JSONB,                            -- 多种材质组合 ["实木框架","布艺座包"]
     reference_price_band VARCHAR(16),              -- 该变体的参考价格带
     product_level VARCHAR(8),                      -- 产品等级，继承/覆盖 RSPU 等级
@@ -476,6 +481,7 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     header_row_count INTEGER DEFAULT 2,
     data_start_row INTEGER DEFAULT 3,
     import_note TEXT,
+    sheet_index INT NOT NULL DEFAULT 0,                 -- 多 Sheet 文件批次解析的工作表索引（V18 并入）
     processed_at TIMESTAMP,
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -590,6 +596,8 @@ CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label
 CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
+-- 外部编码部分唯一索引（V17 并入）：防并发导入产生重复外部编码，仅约束未软删除且非空记录
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL AND external_code IS NOT NULL;
 
 -- 多值标签索引
 CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);
@@ -603,12 +611,13 @@ CREATE INDEX IF NOT EXISTS idx_variant_material ON rspu_variant(material_code);
 CREATE INDEX IF NOT EXISTS idx_variant_size ON rspu_variant(size_code);
 
 -- 变体属性组合唯一约束（防并发导入产生重复变体；NULL 归一为空串；仅约束未软删除记录）
+-- V19 起改为"码或原文"语义：COALESCE(code, text, '')，有码按码、无码按工厂原文判重
 CREATE UNIQUE INDEX IF NOT EXISTS uk_variant_attrs
     ON rspu_variant (
         rspu_id,
-        COALESCE(size_code, ''),
-        COALESCE(color_code, ''),
-        COALESCE(material_code, '')
+        COALESCE(size_code, size_text, ''),
+        COALESCE(color_code, color_text, ''),
+        COALESCE(material_code, material_text, '')
     )
     WHERE deleted_at IS NULL;
 
@@ -1124,6 +1133,25 @@ CREATE TABLE IF NOT EXISTS dict_alias (
 );
 CREATE INDEX IF NOT EXISTS idx_dict_alias_type ON dict_alias(dict_type);
 
+-- 未归一值采集表（V19 并入）：导入时字典解析未命中的工厂原文自动计数采集，
+-- 供运营在治理页面归并（写 dict_alias 自学习）或忽略
+CREATE TABLE IF NOT EXISTS dict_unresolved_value (
+    id BIGSERIAL PRIMARY KEY,
+    dict_type VARCHAR(32) NOT NULL,                 -- 字典类型：size/color/material（可扩展 style 等）
+    raw_value VARCHAR(128) NOT NULL,                -- 未归一的工厂原文
+    occurrence_count INT NOT NULL DEFAULT 1,        -- 累计出现次数
+    first_seen_at TIMESTAMP NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMP NOT NULL DEFAULT now(),
+    last_batch_id VARCHAR(64),                      -- 最近出现的导入批次
+    last_username VARCHAR(64),                      -- 最近操作人
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending/resolved/ignored
+    resolved_code VARCHAR(16),                      -- 归并后的字典码（resolved 时填写）
+    resolved_by VARCHAR(64),
+    resolved_at TIMESTAMP,
+    CONSTRAINT uk_dict_unresolved UNIQUE (dict_type, raw_value)
+);
+CREATE INDEX IF NOT EXISTS idx_dict_unresolved_status ON dict_unresolved_value(status, dict_type);
+
 -- ============================================================
 -- 自增序列对齐（V3 并入，原随 V2 迁移下发）
 -- 背景：以下 8 张表的主键实体使用 IdType.AUTO，由数据库自增序列生成主键。
@@ -1139,3 +1167,4 @@ SELECT setval('rspu_factory_mapping_mapping_id_seq',  COALESCE((SELECT MAX(mappi
 SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_id) FROM factory_lead_time_rule), 1),   (SELECT MAX(rule_id) IS NOT NULL FROM factory_lead_time_rule));
 SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));
 SELECT setval('dict_alias_id_seq',                    COALESCE((SELECT MAX(id) FROM dict_alias), 1),                    (SELECT MAX(id) IS NOT NULL FROM dict_alias));
+SELECT setval('dict_unresolved_value_id_seq',         COALESCE((SELECT MAX(id) FROM dict_unresolved_value), 1),         (SELECT MAX(id) IS NOT NULL FROM dict_unresolved_value));

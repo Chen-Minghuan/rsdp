@@ -307,7 +307,9 @@ ON CONFLICT (factory_code) DO NOTHING;
 
 -- 开发/演示环境测试账号（密码均为：rsdp-dev-2026!）
 -- 生产环境部署后应立即通过管理后台修改或删除这些账号。
--- DefaultAdminInitializer 仅在新库且无用户时生成随机密码；种子数据会覆盖为统一的开发测试密码。
+-- DefaultAdminInitializer 仅在新库且无用户时生成随机密码。
+-- 注意：ON CONFLICT 必须 DO NOTHING —— 重复执行种子脚本时绝不能覆盖用户已修改的密码
+-- （否则任何一次 make seed 都会把生产账号密码回退为公开的开发弱口令，属认证回退风险）。
 INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, group_name, status, view_full_catalog) VALUES
 ('USER-ADMIN-00000001', 'admin', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '系统管理员', 'RSDP 平台', '平台运营组', 'active', true),
 ('USER-EDITOR-00000001', 'editor', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '编辑员', 'RSDP 平台', '内容编辑组', 'active', true),
@@ -315,13 +317,7 @@ INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, 
 ('USER-DESIGNER-00000001', 'designer', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '设计师', '示例设计工作室', '方案一组', 'active', false),
 ('USER-FACTORY-00000001', 'factory', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '工厂管理员', '测试家具工厂', '销售部', 'active', false),
 ('USER-USER-00000001', 'user', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '普通用户', '示例设计工作室', '方案二组', 'active', false)
-ON CONFLICT (username) DO UPDATE SET
-  password_hash = EXCLUDED.password_hash,
-  nickname = EXCLUDED.nickname,
-  company_name = EXCLUDED.company_name,
-  group_name = EXCLUDED.group_name,
-  status = EXCLUDED.status,
-  view_full_catalog = EXCLUDED.view_full_catalog;
+ON CONFLICT (username) DO NOTHING;
 
 -- 测试用户角色关联
 INSERT INTO sys_user_role (user_id, role_id)
