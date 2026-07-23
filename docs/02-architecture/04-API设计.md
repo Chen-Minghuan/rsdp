@@ -564,6 +564,12 @@ PUT    /api/v1/schemes/{schemeId}/template
        # Response: SchemeResponse
        # 说明：取消模板时自动清空 templateTags
 
+PUT    /api/v1/schemes/{schemeId}/items/reorder
+       # 方案明细拖拽排序（已实现，需 scheme:update + 方案归属）
+       # Request: { itemIds: number[] }（全部明细按新顺序排列的完整不重复列表，否则报错）
+       # Response: SchemeResponse（items 按 sort_order 升序，含 spaceTag 空间分区标签）
+       # 说明：空间标签取 RSPU 首个场景标签名，仅作展示分组，不支持跨区归属修改
+
 POST   /api/v1/schemes/{schemeId}/copy-from-template
        # 套用模板创建新方案（已实现，需 scheme:create）
        # Request: { projectId, schemeName? }
@@ -597,9 +603,25 @@ PUT    /api/v1/projects/{projectId}
        # Request: { projectName, projectType?, companyName?, remark? }
        # Response: ProjectResponse
 
+PUT    /api/v1/projects/{projectId}/share
+       # 设置项目画布分享开关（需 project:update + 归属或 ADMIN）
+       # Request: { shareEnabled, expireDays? }（有效期 1-365 天，空=永久；关闭时清空过期时间）
+       # Response: ProjectResponse（含 shareEnabled / shareExpireAt）
+
 DELETE /api/v1/projects/{projectId}
        # 软删除设计项目（需 project:delete + 归属或 ADMIN）
        # 说明：项目下方案保留，project_id 置空
+```
+
+### 项目画布分享公开接口（免登录）
+
+```
+GET    /api/v1/public/projects/{projectId}
+       # 项目分享公开只读视图（校验 share_enabled + share_expire_at，失效返回 404）
+       # Response: { projectId, projectName, companyName, remark, shareExpireAt,
+       #   schemes: [{ schemeId, schemeName, itemCount,
+       #     items: [{ rspuId, productName, imageId, quantity, spaceTag }] }] }
+       # 安全约束：只含空间分区/产品名/图片/数量，不含工厂/价格/RSKU 等敏感字段
 ```
 
 ### 运营统计
