@@ -77,6 +77,8 @@ public class ProductImportService {
     private final StorageService storageService;
     private final ObjectMapper objectMapper;
     private final PlatformTransactionManager transactionManager;
+    private final DictAliasService dictAliasService;
+    private final DictUnresolvedService dictUnresolvedService;
 
     private java.util.Set<String> allowedImageHosts = java.util.Set.of();
 
@@ -113,7 +115,7 @@ public class ProductImportService {
         int rowIndex = 1; // Excel 行号，第 1 行为表头，数据从第 2 行开始
         for (ProductImportRow row : rows) {
             rowIndex++;
-            normalizeRow(row);
+            normalizeRow(row, dictCache);
             String error = validateRow(row, dictCache);
             if (error != null) {
                 result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(), error));
@@ -307,12 +309,86 @@ public class ProductImportService {
                     log.warn("图片超过最大限制 {}MB: {}", MAX_IMAGE_SIZE / 1024 / 1024, trimmedUrl);
                     return null;
                 }
-                return new DownloadedImage(trimmedUrl, bytes, contentType, primary);
+                // 不只信 Content-Type：按首字节魔数嗅探真实格式，拒绝 SVG 与非图片内容（防存储型 XSS）
+                String format = sniffImageFormat(bytes);
+                if (format == null) {
+                    log.warn("图片内容嗅探失败（非支持的位图格式或 SVG），已拒绝: {}, Content-Type={}", trimmedUrl, contentType);
+                    return null;
+                }
+                if (contentType != null && contentType.toLowerCase().startsWith("image/")
+                    && !isContentTypeConsistent(contentType, format)) {
+                    log.warn("图片 Content-Type 与内容嗅探结果不一致，以嗅探结果为准: {}, Content-Type={}, sniffed={}",
+                        trimmedUrl, contentType, format);
+                }
+                return new DownloadedImage(trimmedUrl, bytes, format, primary);
             }
         } catch (Exception e) {
             log.warn("下载图片失败: {}", trimmedUrl, e);
             return null;
         }
+    }
+
+    /**
+     * 按文件头魔数嗅探真实图片格式，仅支持 PNG/JPEG/GIF/WEBP/BMP 位图格式。
+     *
+     * <p>SVG 等文本型内容（存储型 XSS 风险）与无法识别的内容一律返回 null，由调用方拒绝。</p>
+     *
+     * @param bytes 下载内容
+     * @return 图片格式扩展名（png/jpg/gif/webp/bmp），无法识别时返回 null
+     */
+    private String sniffImageFormat(byte[] bytes) {
+        if (bytes == null || bytes.length < 4) {
+            return null;
+        }
+        // PNG: 89 50 4E 47
+        if ((bytes[0] & 0xFF) == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47) {
+            return "png";
+        }
+        // JPEG: FF D8 FF
+        if ((bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xFF) == 0xD8 && (bytes[2] & 0xFF) == 0xFF) {
+            return "jpg";
+        }
+        // GIF: "GIF8"
+        if (bytes[0] == 'G' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == '8') {
+            return "gif";
+        }
+        // BMP: "BM"
+        if (bytes[0] == 'B' && bytes[1] == 'M') {
+            return "bmp";
+        }
+        // WEBP: "RIFF"...."WEBP"
+        if (bytes.length >= 12 && bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F'
+            && bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P') {
+            return "webp";
+        }
+        return null;
+    }
+
+    /**
+     * 交叉验证 Content-Type 与嗅探格式是否一致（仅用于告警，最终以嗅探结果为准）。
+     *
+     * @param contentType 响应 Content-Type
+     * @param format      嗅探出的格式
+     * @return true 表示一致
+     */
+    private boolean isContentTypeConsistent(String contentType, String format) {
+        return contentType.toLowerCase().startsWith(resolveMimeType(format));
+    }
+
+    /**
+     * 由嗅探格式推导存储用 MIME 类型。
+     *
+     * @param format 嗅探出的格式
+     * @return MIME 类型
+     */
+    private String resolveMimeType(String format) {
+        return switch (format) {
+            case "png" -> "image/png";
+            case "gif" -> "image/gif";
+            case "webp" -> "image/webp";
+            case "bmp" -> "image/bmp";
+            default -> "image/jpeg";
+        };
     }
 
     /**
@@ -374,21 +450,25 @@ public class ProductImportService {
     }
 
     private RspuMaster resolveExistingRspu(String rspuId, String externalCode) {
+        RspuMaster byRspuId = null;
         if (StringUtils.hasText(rspuId)) {
-            RspuMaster rspu = rspuMapper.selectById(rspuId.trim());
-            if (rspu != null) {
-                return rspu;
-            }
+            byRspuId = rspuMapper.selectById(rspuId.trim());
         }
+        RspuMaster byExternalCode = null;
         if (StringUtils.hasText(externalCode)) {
             List<RspuMaster> list = rspuMapper.selectList(
                 new QueryWrapper<RspuMaster>().eq("external_code", externalCode.trim())
             );
             if (!list.isEmpty()) {
-                return list.get(0);
+                byExternalCode = list.get(0);
             }
         }
-        return null;
+        // 行内 rspuId 与 externalCode 分别指向不同产品时显式报错，避免静默选其一导致误更新
+        if (byRspuId != null && byExternalCode != null
+            && !byRspuId.getRspuId().equals(byExternalCode.getRspuId())) {
+            throw new BusinessException("RSPU ID 与外部编码指向不同产品，请检查输入");
+        }
+        return byRspuId != null ? byRspuId : byExternalCode;
     }
 
     private RspuMaster createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
@@ -407,7 +487,7 @@ public class ProductImportService {
 
     private RspuMaster updateRspu(RspuMaster rspu, ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
         RspuMaster oldSnapshot = snapshot(rspu);
-        buildRspuFromRow(rspu, row, dictCache);
+        buildRspuFromRow(rspu, row, dictCache, true);
         if (StringUtils.hasText(row.getExternalCode())) {
             rspu.setExternalCode(row.getExternalCode().trim());
         }
@@ -419,23 +499,59 @@ public class ProductImportService {
 
     private RspuMaster buildRspuFromRow(RspuMaster rspu, ProductImportRow row,
                                        Map<String, List<CategoryDict>> dictCache) {
+        return buildRspuFromRow(rspu, row, dictCache, false);
+    }
+
+    /**
+     * 将导入行字段写入 RSPU 实体。
+     *
+     * <p>新建模式（isUpdate=false）：无条件赋值，空字段写入默认值/null。
+     * 更新模式（isUpdate=true）：仅更新 Excel 中显式有值的字段，空单元格不覆盖已有数据，
+     * 与 {@link RskuImportService} 更新模式的「空单元格不覆盖」设计对齐。</p>
+     *
+     * @param rspu      目标实体（新建时为新建对象，更新时为已有记录）
+     * @param row       导入行（已归一化）
+     * @param dictCache 字典缓存
+     * @param isUpdate  是否为更新模式
+     * @return 写入后的实体
+     */
+    private RspuMaster buildRspuFromRow(RspuMaster rspu, ProductImportRow row,
+                                       Map<String, List<CategoryDict>> dictCache, boolean isUpdate) {
         rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
         rspu.setCategoryPath(CategoryPaths.resolve(row.getCategoryCode().trim().toUpperCase()));
-        rspu.setPositioningLabel(StringUtils.hasText(row.getPositioningLabel())
-            ? normalizeDictCode(row.getPositioningLabel(), dictCache.get("style"))
-            : "待识别");
-        rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
-        rspu.setMaterialTags(writeJson(splitCsv(row.getMaterialTags())));
-        rspu.setSceneTags(writeJson(splitCsv(row.getSceneTags())));
-        rspu.setSixDimTags(trim(row.getSixDimTags()));
-        rspu.setReferencePriceBand(StringUtils.hasText(row.getReferencePriceBand())
-            ? row.getReferencePriceBand().trim().toLowerCase()
-            : null);
-        rspu.setProductLevel(StringUtils.hasText(row.getProductLevel())
-            ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
-            : null);
-        rspu.setWarrantyYears(row.getWarrantyYears());
-        rspu.setKeySpecs(trim(row.getKeySpecs()));
+        if (!isUpdate || StringUtils.hasText(row.getPositioningLabel())) {
+            rspu.setPositioningLabel(StringUtils.hasText(row.getPositioningLabel())
+                ? normalizeDictCode(row.getPositioningLabel(), dictCache.get("style"))
+                : "待识别");
+        }
+        if (!isUpdate || StringUtils.hasText(row.getColorPrimaryName())) {
+            rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
+        }
+        if (!isUpdate || StringUtils.hasText(row.getMaterialTags())) {
+            rspu.setMaterialTags(writeJson(splitCsv(row.getMaterialTags())));
+        }
+        if (!isUpdate || StringUtils.hasText(row.getSceneTags())) {
+            rspu.setSceneTags(writeJson(splitCsv(row.getSceneTags())));
+        }
+        if (!isUpdate || StringUtils.hasText(row.getSixDimTags())) {
+            rspu.setSixDimTags(trim(row.getSixDimTags()));
+        }
+        if (!isUpdate || StringUtils.hasText(row.getReferencePriceBand())) {
+            rspu.setReferencePriceBand(StringUtils.hasText(row.getReferencePriceBand())
+                ? row.getReferencePriceBand().trim().toLowerCase()
+                : null);
+        }
+        if (!isUpdate || StringUtils.hasText(row.getProductLevel())) {
+            rspu.setProductLevel(StringUtils.hasText(row.getProductLevel())
+                ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
+                : null);
+        }
+        if (!isUpdate || row.getWarrantyYears() != null) {
+            rspu.setWarrantyYears(row.getWarrantyYears());
+        }
+        if (!isUpdate || StringUtils.hasText(row.getKeySpecs())) {
+            rspu.setKeySpecs(trim(row.getKeySpecs()));
+        }
         // 品名：显式提供时更新（空单元格不覆盖已有值）
         if (StringUtils.hasText(row.getVariantDisplayName())) {
             rspu.setProductName(row.getVariantDisplayName().trim());
@@ -459,12 +575,14 @@ public class ProductImportService {
     }
 
     private void updateStyles(String rspuId, String positioningLabel, List<CategoryDict> styles) {
+        // 更新模式下定位标签留空表示不调整风格关联，跳过 delete+重建，避免清空已有数据
+        if (!StringUtils.hasText(positioningLabel)) {
+            return;
+        }
         rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
-        if (StringUtils.hasText(positioningLabel)) {
-            String code = normalizeDictCode(positioningLabel, styles);
-            if (code != null) {
-                insertStyle(rspuId, code, true);
-            }
+        String code = normalizeDictCode(positioningLabel, styles);
+        if (code != null) {
+            insertStyle(rspuId, code, true);
         }
     }
 
@@ -497,6 +615,10 @@ public class ProductImportService {
     }
 
     private void updateScenes(String rspuId, List<String> sceneCodes) {
+        // 更新模式下场景标签留空表示不调整场景关联，跳过 delete+重建，避免清空已有数据
+        if (sceneCodes == null || sceneCodes.isEmpty()) {
+            return;
+        }
         saveScenes(rspuId, sceneCodes);
     }
 
@@ -509,15 +631,22 @@ public class ProductImportService {
 
     private void createVariantIfNotExists(String rspuId, ProductImportRow row,
                                           Map<String, List<CategoryDict>> dictCache) {
-        // 根据尺寸+颜色+材质组合判断是否已存在
-        List<RspuVariant> existing = rspuVariantMapper.selectList(
-            new QueryWrapper<RspuVariant>()
-                .eq("rspu_id", rspuId)
-                .eq("size_code", trim(row.getSizeCode()))
-                .eq("color_code", trim(row.getColorCode()))
-                .eq("material_code", trim(row.getMaterialCode()))
-        );
-        if (existing != null && !existing.isEmpty()) {
+        // V19"原文为主、码为辅"：三码尽力归一（别名→字典），未识别降级为原文（*_text），不阻断导入
+        String sizeCode = resolveCodeOrNull("size", row.getSizeCode(), dictCache.get("size"), row::setSizeText);
+        String colorCode = resolveCodeOrNull("color", row.getColorCode(), dictCache.get("color"), row::setColorText);
+        String materialCode = resolveCodeOrNull("material", row.getMaterialCode(), dictCache.get("material"), row::setMaterialText);
+
+        // 判重与 uk_variant_attrs 唯一索引语义一致：比较 COALESCE(code, text) 有效值
+        String effSize = effectiveOf(sizeCode, row.getSizeText());
+        String effColor = effectiveOf(colorCode, row.getColorText());
+        String effMaterial = effectiveOf(materialCode, row.getMaterialText());
+        List<RspuVariant> existing = rspuVariantMapper.selectList(new QueryWrapper<RspuVariant>()
+            .eq("rspu_id", rspuId));
+        boolean duplicate = existing.stream().anyMatch(v ->
+            effSize.equals(effectiveOf(v.getSizeCode(), v.getSizeText()))
+                && effColor.equals(effectiveOf(v.getColorCode(), v.getColorText()))
+                && effMaterial.equals(effectiveOf(v.getMaterialCode(), v.getMaterialText())));
+        if (duplicate) {
             return;
         }
 
@@ -533,15 +662,12 @@ public class ProductImportService {
         variant.setDisplayName(StringUtils.hasText(row.getVariantDisplayName())
             ? row.getVariantDisplayName().trim()
             : "默认变体");
-        variant.setSizeCode(StringUtils.hasText(row.getSizeCode())
-            ? normalizeDictCode(row.getSizeCode(), dictCache.get("size"))
-            : null);
-        variant.setColorCode(StringUtils.hasText(row.getColorCode())
-            ? normalizeDictCode(row.getColorCode(), dictCache.get("color"))
-            : null);
-        variant.setMaterialCode(StringUtils.hasText(row.getMaterialCode())
-            ? normalizeDictCode(row.getMaterialCode(), dictCache.get("material"))
-            : null);
+        variant.setSizeCode(sizeCode);
+        variant.setSizeText(row.getSizeText());
+        variant.setColorCode(colorCode);
+        variant.setColorText(row.getColorText());
+        variant.setMaterialCode(materialCode);
+        variant.setMaterialText(row.getMaterialText());
         variant.setReferencePriceBand(StringUtils.hasText(row.getVariantReferencePriceBand())
             ? row.getVariantReferencePriceBand().trim().toLowerCase()
             : null);
@@ -551,8 +677,45 @@ public class ProductImportService {
         variant.setStatus("active");
         variant.setCreatedAt(LocalDateTime.now());
         variant.setUpdatedAt(LocalDateTime.now());
-        rspuVariantMapper.insert(variant);
+        try {
+            rspuVariantMapper.insert(variant);
+        } catch (DataIntegrityViolationException e) {
+            // 命中 uk_variant_attrs 部分唯一索引（并发导入同维度变体），给出准确的冲突文案
+            log.warn("导入变体触发维度唯一约束冲突，rspuId={}", rspuId, e);
+            throw new BusinessException("相同尺寸/颜色/材质的变体已存在，请检查是否重复导入");
+        }
         auditLogService.logCreate("rspu_variant", variantId, variant, SecurityOperatorContext.currentUsername());
+    }
+
+    /**
+     * 尽力将输入归一为字典码（别名 → 字典码 → 字典名）；未命中时原文写入 textSetter
+     * 并采集到 dict_unresolved_value 待治理，返回 null。
+     */
+    private String resolveCodeOrNull(String dictType, String raw, List<CategoryDict> dicts,
+                                     java.util.function.Consumer<String> textSetter) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        String byAlias = dictAliasService.resolveAlias(dictType, trimmed);
+        if (StringUtils.hasText(byAlias)) {
+            return byAlias;
+        }
+        String normalized = normalizeDictCode(trimmed, dicts);
+        if (isValidDictCode(normalized, dicts)) {
+            return normalized;
+        }
+        textSetter.accept(trimmed);
+        dictUnresolvedService.record(dictType, trimmed, null, SecurityOperatorContext.currentUsername());
+        return null;
+    }
+
+    /** 有效判重值：码优先，无码取原文，均无则为空串（与唯一索引 COALESCE 语义一致）。 */
+    private String effectiveOf(String code, String text) {
+        if (StringUtils.hasText(code)) {
+            return code.trim();
+        }
+        return StringUtils.hasText(text) ? text.trim() : "";
     }
 
     private void saveImages(String rspuId, List<DownloadedImage> images, int rowIndex,
@@ -560,11 +723,14 @@ public class ProductImportService {
         if (images == null || images.isEmpty()) {
             return;
         }
+        // 更新模式追加图片时，若该 RSPU 已有主图，新图一律不作为主图，避免同一 RSPU 出现多条主图
+        boolean hasExistingPrimary = imageAssetsMapper.selectCount(
+            new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId).eq("is_primary", true)) > 0;
         boolean hasPrimary = images.stream().anyMatch(DownloadedImage::primary);
         for (int i = 0; i < images.size(); i++) {
             DownloadedImage downloaded = images.get(i);
             String imageId = IdGenerator.imageId();
-            String extension = resolveExtension(downloaded.contentType);
+            String extension = downloaded.format;
             String objectKey = "images/" + imageId + "." + extension;
 
             try {
@@ -572,7 +738,7 @@ public class ProductImportService {
                     new ByteArrayInputStream(downloaded.bytes),
                     objectKey,
                     downloaded.bytes.length,
-                    downloaded.contentType
+                    resolveMimeType(downloaded.format)
                 );
             } catch (IOException e) {
                 log.error("存储图片失败，rspuId={}, imageId={}", rspuId, imageId, e);
@@ -581,7 +747,7 @@ public class ProductImportService {
                 continue;
             }
 
-            boolean isPrimary = downloaded.primary || (!hasPrimary && i == 0);
+            boolean isPrimary = !hasExistingPrimary && (downloaded.primary || (!hasPrimary && i == 0));
             ImageAssets imageAsset = new ImageAssets();
             imageAsset.setImageId(imageId);
             imageAsset.setRspuId(rspuId);
@@ -596,20 +762,6 @@ public class ProductImportService {
             imageAssetsMapper.insert(imageAsset);
             auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
         }
-    }
-
-    private String resolveExtension(String contentType) {
-        if (contentType == null) {
-            return "jpg";
-        }
-        return switch (contentType.toLowerCase()) {
-            case "image/png" -> "png";
-            case "image/gif" -> "gif";
-            case "image/webp" -> "webp";
-            case "image/bmp" -> "bmp";
-            case "image/svg+xml" -> "svg";
-            default -> "jpg";
-        };
     }
 
     private String validateRow(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
@@ -629,6 +781,33 @@ public class ProductImportService {
         }
         if (StringUtils.hasText(row.getExternalCode()) && row.getExternalCode().trim().length() > 64) {
             return "外部编码 长度不能超过 64";
+        }
+
+        // 关键字段长度校验（与 DB 列宽一致），避免超长触发数据库约束异常被误报
+        if (StringUtils.hasText(row.getPositioningLabel()) && row.getPositioningLabel().trim().length() > 64) {
+            return "定位标签 长度不能超过 64";
+        }
+        if (StringUtils.hasText(row.getColorPrimaryName()) && row.getColorPrimaryName().trim().length() > 64) {
+            return "主色 长度不能超过 64";
+        }
+        if (StringUtils.hasText(row.getProductLevel()) && row.getProductLevel().trim().length() > 16) {
+            return "产品等级 长度不能超过 16";
+        }
+        if (StringUtils.hasText(row.getVariantDisplayName()) && row.getVariantDisplayName().trim().length() > 128) {
+            return "变体显示名称 长度不能超过 128";
+        }
+        // 变体字段长度校验（原文列宽：size/color 64、material 128；码或原文均走此上限）
+        if (StringUtils.hasText(row.getSizeCode()) && row.getSizeCode().trim().length() > 64) {
+            return "尺寸码 长度不能超过 64";
+        }
+        if (StringUtils.hasText(row.getColorCode()) && row.getColorCode().trim().length() > 64) {
+            return "颜色码 长度不能超过 64";
+        }
+        if (StringUtils.hasText(row.getMaterialCode()) && row.getMaterialCode().trim().length() > 128) {
+            return "材质码 长度不能超过 128";
+        }
+        if (StringUtils.hasText(row.getVariantProductLevel()) && row.getVariantProductLevel().trim().length() > 8) {
+            return "变体产品等级 长度不能超过 8";
         }
 
         if (StringUtils.hasText(row.getPositioningLabel())
@@ -652,19 +831,8 @@ public class ProductImportService {
             return "保修年限 必须在 0~100 之间";
         }
 
-        // 变体字段校验
-        if (StringUtils.hasText(row.getSizeCode())
-            && !isValidDictCode(row.getSizeCode().trim(), dictCache.get("size"))) {
-            return "尺寸码不存在: " + row.getSizeCode();
-        }
-        if (StringUtils.hasText(row.getColorCode())
-            && !isValidDictCode(row.getColorCode().trim(), dictCache.get("color"))) {
-            return "颜色码不存在: " + row.getColorCode();
-        }
-        if (StringUtils.hasText(row.getMaterialCode())
-            && !isValidDictCode(row.getMaterialCode().trim(), dictCache.get("material"))) {
-            return "材质码不存在: " + row.getMaterialCode();
-        }
+        // 变体三码不再强制字典校验（V19：原文为主、码为辅）——
+        // 由 createVariantIfNotExists 做"别名→字典"尽力解析，未识别降级为原文保留并采集待治理
         if (StringUtils.hasText(row.getVariantReferencePriceBand())) {
             String band = row.getVariantReferencePriceBand().trim().toLowerCase();
             if (!List.of("low", "mid", "high").contains(band)) {
@@ -701,7 +869,7 @@ public class ProductImportService {
         }
     }
 
-    private void normalizeRow(ProductImportRow row) {
+    private void normalizeRow(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
         row.setRspuId(trim(row.getRspuId()));
         row.setExternalCode(trim(row.getExternalCode()));
         row.setCategoryCode(trim(row.getCategoryCode()));
@@ -721,6 +889,26 @@ public class ProductImportService {
         row.setMaterialCode(trim(row.getMaterialCode()));
         row.setVariantReferencePriceBand(trim(row.getVariantReferencePriceBand()));
         row.setVariantProductLevel(trim(row.getVariantProductLevel()));
+
+        // 字典字段先归一（支持中文名→字典码）再进入校验，避免中文名被误判为非法字典码
+        if (StringUtils.hasText(row.getPositioningLabel())) {
+            row.setPositioningLabel(normalizeDictCode(row.getPositioningLabel(), dictCache.get("style")));
+        }
+        if (StringUtils.hasText(row.getProductLevel())) {
+            row.setProductLevel(normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level")));
+        }
+        if (StringUtils.hasText(row.getSizeCode())) {
+            row.setSizeCode(normalizeDictCode(row.getSizeCode(), dictCache.get("size")));
+        }
+        if (StringUtils.hasText(row.getColorCode())) {
+            row.setColorCode(normalizeDictCode(row.getColorCode(), dictCache.get("color")));
+        }
+        if (StringUtils.hasText(row.getMaterialCode())) {
+            row.setMaterialCode(normalizeDictCode(row.getMaterialCode(), dictCache.get("material")));
+        }
+        if (StringUtils.hasText(row.getVariantProductLevel())) {
+            row.setVariantProductLevel(normalizeDictCode(row.getVariantProductLevel(), dictCache.get("factory_level")));
+        }
     }
 
     private boolean isValidDictCode(String code, List<CategoryDict> dicts) {
@@ -809,6 +997,6 @@ public class ProductImportService {
         return copy;
     }
 
-    private record DownloadedImage(String url, byte[] bytes, String contentType, boolean primary) {
+    private record DownloadedImage(String url, byte[] bytes, String format, boolean primary) {
     }
 }

@@ -20,6 +20,9 @@ public class RspuVariantCreateRequest {
 
     private String sizeCode;
 
+    /** 尺寸/规格原文（工厂方言，码解析不出时保留） */
+    private String sizeText;
+
     /**
      * 具体尺寸 JSON，例如 {"w":560,"d":580,"h":780,"unit":"mm"}
      */
@@ -27,8 +30,16 @@ public class RspuVariantCreateRequest {
 
     private String colorCode;
 
-    @NotBlank(message = "主材质码不能为空")
+    /** 颜色原文（工厂方言） */
+    private String colorText;
+
+    /**
+     * 主材质码（可空：码或材质原文至少提供一个，见 materialText）
+     */
     private String materialCode;
+
+    /** 材质原文（工厂方言，码解析不出时保留） */
+    private String materialText;
 
     /**
      * 多种材质组合，例如 ["实木框架", "布艺座包"]

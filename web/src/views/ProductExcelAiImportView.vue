@@ -7,7 +7,7 @@ import { listDicts } from '@/api/dict'
 import { useExcelImportStore } from '@/stores/excelImport'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
-import type { ExcelAiImportFailure, CategoryMappingItem } from '@/types/product'
+import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode } from '@/types/product'
 
 const router = useRouter()
 
@@ -26,14 +26,18 @@ const {
   updateIfExists,
   importResult,
   taskList,
-  selectedPriceColumns,
+  priceColumnRoles,
+  sheets,
+  currentSheetIndex,
+  currentSheetName,
   defaultFactoryCode,
   defaultShippingFrom,
   defaultMoq,
   hasSelectedFile,
-  pendingTaskCount
+  pendingTaskCount,
+  batchRecovering
 } = storeToRefs(store)
-const { handlePreview, handleImport, clearAll } = store
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll } = store
 
 const STANDARD_FIELDS = [
   { label: '（不映射）', value: '' },
@@ -52,17 +56,24 @@ const STANDARD_FIELDS = [
   { label: '主图URL (primaryImageUrl)', value: 'primaryImageUrl' },
   { label: '详情图URLs (detailImageUrls)', value: 'detailImageUrls' },
   { label: '变体显示名称 (variantDisplayName)', value: 'variantDisplayName' },
-  { label: '尺寸码 (sizeCode)', value: 'sizeCode' },
-  { label: '颜色码 (colorCode)', value: 'colorCode' },
-  { label: '材质码 (materialCode)', value: 'materialCode' },
-  { label: '尺寸文字 (dimensions)', value: 'dimensions' },
+  { label: '尺寸码 (sizeCode)（仅字典码 S/M/L/SINGLE，尺寸数值请选尺寸文字）', value: 'sizeCode' },
+  { label: '颜色码 (colorCode)（仅字典码，颜色名请选主色）', value: 'colorCode' },
+  { label: '材质码 (materialCode)（仅字典码 WO/PE/FA，材质名请选材质标签）', value: 'materialCode' },
+  { label: '尺寸文字 (dimensions)（W*D*H 数值尺寸选这个）', value: 'dimensions' },
   { label: '交期天数 (leadTimeDays)', value: 'leadTimeDays' }
 ]
 
 const categoryOptions = ref<DictItem[]>([])
 
+/** 价格列导入模式选项：出厂价/销售价/不导入 */
+const priceRoleOptions: { label: string; value: PriceColumnImportMode }[] = [
+  { label: '出厂价（生成工厂报价 RSKU）', value: 'factory' },
+  { label: '销售价（参考零售价）', value: 'sales' },
+  { label: '不导入', value: 'none' }
+]
+
 /** 批次已执行过导入（可能超时后重试触发）时，提示用户可刷新查看结果 */
-const isDuplicateImportError = computed(() => errorMessage.value.includes('不允许重复导入'))
+const isDuplicateImportError = computed(() => errorMessage.value.includes('重复导入'))
 
 async function loadCategoryDicts() {
   try {
@@ -221,7 +232,8 @@ const categoryMappingColumns = computed<DataTableColumns<CategoryMappingItem>>((
 const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
   {
     title: '行号',
-    key: 'rowIndex'
+    key: 'rowIndex',
+    render: (row) => row.rowIndex === 0 ? '批次级' : row.rowIndex
   },
   {
     title: '失败原因',
@@ -278,6 +290,20 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
     <n-card v-if="currentStep === 2" title="确认字段映射">
       <n-spin :show="uploading">
         <n-space vertical :size="16">
+          <n-space v-if="sheets.length > 1" align="center">
+            <span>工作表（Sheet）：</span>
+            <n-select
+              :value="currentSheetIndex"
+              :options="sheets.map(s => ({ label: `${s.name}（约 ${s.rowCount} 行）`, value: s.index }))"
+              :disabled="uploading"
+              style="width: 300px;"
+              @update:value="handleSwitchSheet"
+            />
+          </n-space>
+          <n-alert v-if="sheets.length > 1" type="warning" :show-icon="false">
+            切换工作表将重新识别字段映射，当前确认内容会被重置；每个工作表导入为独立批次。
+          </n-alert>
+
           <n-alert type="info" :show-icon="false">
             AI 已根据表头和样例数据推荐字段映射。请检查并调整，尤其是<b>品类码</b>必须正确映射或在下方选择品类提示。
           </n-alert>
@@ -285,17 +311,20 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
           <n-select
             v-model:value="categoryHint"
             :options="categoryOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="品类提示（当 Excel 中无品类字段时使用）"
+            placeholder="品类提示（可不填：优先取类别列，其次按 Sheet 名自动识别）"
             clearable
-            style="max-width: 320px;"
+            style="max-width: 420px;"
           />
           <p style="color: #999; font-size: 12px; margin: 0;">
-            品类提示作为兜底：未在下方「品类名归一」中指认的品类值，将统一使用该品类。
+            品类提示作为兜底：未在下方「品类名归一」中指认的品类值，将统一使用该品类。可不填：优先取类别列，其次按 Sheet 名自动识别。
           </p>
 
           <n-checkbox v-model:checked="updateIfExists">
             当外部编码已存在时更新已有产品
           </n-checkbox>
+          <p style="color: #999; font-size: 12px; margin: 0;">
+            关闭 = 跳过已存在的产品；开启 = 更新已存在的产品信息与工厂报价。
+          </p>
 
           <n-data-table
             :columns="mappingColumns"
@@ -320,16 +349,23 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
 
           <n-card v-if="mappingResponse?.priceColumns && mappingResponse.priceColumns.length > 0" title="价格列（每列将创建一个变体 + RSKU）" size="small">
             <n-space vertical :size="12">
-              <n-checkbox-group v-model:value="selectedPriceColumns">
-                <n-space>
-                  <n-checkbox
-                    v-for="col in mappingResponse.priceColumns"
-                    :key="col.header"
-                    :value="col.header"
-                    :label="`${col.header}（材质：${col.materialName || '未知'}）`"
-                  />
-                </n-space>
-              </n-checkbox-group>
+              <n-alert type="info" :show-icon="false">
+                出厂价 = 生成工厂报价（RSKU）；销售价 = 仅记录为产品参考零售价；不导入 = 跳过该价格列。
+              </n-alert>
+              <n-space
+                v-for="col in mappingResponse.priceColumns"
+                :key="col.header"
+                align="center"
+                justify="space-between"
+              >
+                <span>{{ col.header }}（材质：{{ col.materialName || '未知' }}）</span>
+                <n-select
+                  :value="priceColumnRoles[col.header] ?? 'factory'"
+                  :options="priceRoleOptions"
+                  style="width: 260px;"
+                  @update:value="(value: PriceColumnImportMode) => priceColumnRoles[col.header] = value"
+                />
+              </n-space>
 
               <n-space>
                 <n-input v-model:value="defaultFactoryCode" placeholder="默认工厂编码" style="width: 160px;" />
@@ -352,20 +388,56 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
     </n-card>
 
     <!-- 步骤 3：结果 -->
+    <n-card v-if="currentStep === 3 && batchRecovering" title="导入进行中">
+      <n-spin :show="true" description="正在查询批次导入进度…">
+        <n-alert type="info" :show-icon="true">
+          导入请求超时，但批次仍在后台导入中。正在等待结果，完成后将自动展示，请勿重复提交。
+        </n-alert>
+      </n-spin>
+    </n-card>
+
     <n-card v-if="currentStep === 3 && importResult" title="导入结果">
       <n-descriptions bordered :columns="3">
         <n-descriptions-item label="批次号">{{ importResult.batchId }}</n-descriptions-item>
+        <n-descriptions-item v-if="currentSheetName" label="工作表">{{ currentSheetName }}</n-descriptions-item>
         <n-descriptions-item label="总行数">{{ importResult.totalRows }}</n-descriptions-item>
         <n-descriptions-item label="成功数">{{ importResult.successCount }}</n-descriptions-item>
         <n-descriptions-item label="失败数">{{ importResult.failedCount }}</n-descriptions-item>
+        <n-descriptions-item label="跳过数">{{ importResult.skippedCount ?? 0 }}</n-descriptions-item>
       </n-descriptions>
+      <p style="color: #999; font-size: 12px; margin: 8px 0 0;">
+        跳过数包含说明行、重复表头及已存在被跳过的行；成功 + 失败 + 跳过 应与总行数相当。
+      </p>
 
-      <n-data-table
-        v-if="importResult.failures.length > 0"
-        :columns="failureColumns"
-        :data="importResult.failures"
+      <n-alert
+        v-if="(importResult.skippedCount ?? 0) > 0"
+        type="warning"
+        :show-icon="true"
         style="margin-top: 16px;"
-      />
+      >
+        {{ importResult.skippedCount }} 行因已存在被跳过。如需用本批次数据更新这些产品，可以更新模式重新导入。
+        <div style="margin-top: 8px;">
+          <n-button
+            type="primary"
+            size="small"
+            :loading="uploading"
+            @click="handleReimportWithUpdate"
+          >
+            以更新模式重新导入
+          </n-button>
+        </div>
+      </n-alert>
+
+      <template v-if="importResult.failures.length > 0">
+        <p v-if="currentSheetName" style="color: #999; font-size: 12px; margin: 16px 0 0;">
+          以下为工作表「{{ currentSheetName }}」的失败明细：
+        </p>
+        <n-data-table
+          :columns="failureColumns"
+          :data="importResult.failures"
+          style="margin-top: 8px;"
+        />
+      </template>
 
       <n-button style="margin-top: 16px;" @click="clearAll">
         重新导入
@@ -402,6 +474,14 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
               style="margin-top: 8px;"
             >
               {{ task.errorMessage }}
+            </n-alert>
+            <n-alert
+              v-if="task.pollError"
+              type="warning"
+              :show-icon="false"
+              style="margin-top: 8px;"
+            >
+              进度查询异常：{{ task.pollError }}（不影响后台识别，稍后自动恢复）
             </n-alert>
           </div>
         </n-space>
