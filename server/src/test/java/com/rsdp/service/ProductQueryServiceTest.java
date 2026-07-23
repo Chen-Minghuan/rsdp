@@ -128,6 +128,9 @@ class ProductQueryServiceTest {
     @Mock
     private DataScopeHelper dataScopeHelper;
 
+    @Mock
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -582,6 +585,57 @@ class ProductQueryServiceTest {
 
         assertThatThrownBy(() -> productQueryService.deleteProduct("RSPU-NOTEXIST"))
             .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void batchDeleteProducts_shouldReturnPartialFailures() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-OK01");
+        rspu.setStatus("active");
+
+        when(rspuMapper.selectById(eq("RSPU-OK01"))).thenReturn(rspu);
+        when(rspuMapper.deleteById(eq("RSPU-OK01"))).thenReturn(1);
+        when(rspuMapper.selectById(eq("RSPU-MISSING"))).thenReturn(null);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        var result = productQueryService.batchDeleteProducts(List.of("RSPU-OK01", "RSPU-MISSING"));
+
+        assertThat(result.getDeletedCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures()).hasSize(1);
+        assertThat(result.getFailures().get(0).getRspuId()).isEqualTo("RSPU-MISSING");
+        // 失败项不影响成功项：成功产品仍完成软删与事件发布
+        verify(rspuMapper).deleteById("RSPU-OK01");
+        verify(eventPublisher).publishEvent(any(RspuDeletedEvent.class));
+    }
+
+    @Test
+    void batchDeleteProducts_shouldRejectBlankId() {
+        var result = productQueryService.batchDeleteProducts(List.of("  "));
+
+        assertThat(result.getDeletedCount()).isZero();
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("不能为空");
+    }
+
+    @Test
+    void batchDeleteProducts_shouldContinueWhenOneDeleteThrows() {
+        RspuMaster rspu1 = new RspuMaster();
+        rspu1.setRspuId("RSPU-FAIL01");
+        RspuMaster rspu2 = new RspuMaster();
+        rspu2.setRspuId("RSPU-OK02");
+
+        when(rspuMapper.selectById(eq("RSPU-FAIL01"))).thenReturn(rspu1);
+        when(rspuMapper.selectById(eq("RSPU-OK02"))).thenReturn(rspu2);
+        when(rspuMapper.deleteById(eq("RSPU-FAIL01"))).thenReturn(0); // 已被删除，触发异常
+        when(rspuMapper.deleteById(eq("RSPU-OK02"))).thenReturn(1);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        var result = productQueryService.batchDeleteProducts(List.of("RSPU-FAIL01", "RSPU-OK02"));
+
+        assertThat(result.getDeletedCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        verify(rspuMapper).deleteById("RSPU-OK02");
     }
 
     @Test

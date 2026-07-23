@@ -10,6 +10,7 @@ import com.rsdp.common.PageResult;
 import com.rsdp.common.ReviewStatus;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
+import com.rsdp.dto.response.ProductBatchDeleteResponse;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductStyleMatchResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
@@ -42,7 +43,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -79,6 +82,7 @@ public class ProductQueryService {
     private final RskuSupplyMapper rskuSupplyMapper;
     private final SysUserMapper sysUserMapper;
     private final DataScopeHelper dataScopeHelper;
+    private final PlatformTransactionManager transactionManager;
 
     /**
      * 分页查询产品列表。
@@ -571,6 +575,35 @@ public class ProductQueryService {
         auditLogService.logDelete("rspu_master", rspuId, oldSnapshot, SecurityOperatorContext.currentUsername());
 
         eventPublisher.publishEvent(new RspuDeletedEvent(rspuId, imageIds));
+    }
+
+    /**
+     * 批量软删除产品。
+     *
+     * <p>每个产品在独立事务中删除（复用 {@link #deleteProduct} 的归属校验、
+     * 级联清理、审计与向量事件），单个失败不影响其他产品，失败明细逐个返回。</p>
+     *
+     * @param rspuIds 待删除的 RSPU ID 列表
+     * @return 删除结果（成功数 + 失败明细）
+     */
+    public ProductBatchDeleteResponse batchDeleteProducts(List<String> rspuIds) {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        List<ProductBatchDeleteResponse.Failure> failures = new ArrayList<>();
+        int deletedCount = 0;
+        for (String rspuId : rspuIds) {
+            if (!StringUtils.hasText(rspuId)) {
+                failures.add(new ProductBatchDeleteResponse.Failure(rspuId, "RSPU ID 不能为空"));
+                continue;
+            }
+            try {
+                transactionTemplate.executeWithoutResult(status -> deleteProduct(rspuId.trim()));
+                deletedCount++;
+            } catch (Exception e) {
+                log.warn("批量删除产品失败: rspuId={}, reason={}", rspuId, e.getMessage());
+                failures.add(new ProductBatchDeleteResponse.Failure(rspuId, e.getMessage()));
+            }
+        }
+        return new ProductBatchDeleteResponse(deletedCount, failures.size(), failures);
     }
 
     /**

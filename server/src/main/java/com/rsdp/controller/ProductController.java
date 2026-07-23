@@ -3,9 +3,11 @@ package com.rsdp.controller;
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
+import com.rsdp.dto.request.ProductBatchDeleteRequest;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductReviewRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
+import com.rsdp.dto.response.ProductBatchDeleteResponse;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.security.Permissions;
@@ -152,5 +154,18 @@ public class ProductController {
     public Result<Void> delete(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
         productQueryService.deleteProduct(rspuId);
         return Result.ok();
+    }
+
+    /**
+     * 批量软删除产品。
+     *
+     * <p>每个产品在独立事务中删除，单个失败不影响其他产品，失败明细逐个返回。</p>
+     *
+     * @param request 批量删除请求（RSPU ID 列表，单次最多 100 个）
+     * @return 删除结果（成功数 + 失败明细）
+     */
+    @PostMapping("/batch-delete")
+    public Result<ProductBatchDeleteResponse> batchDelete(@Valid @RequestBody ProductBatchDeleteRequest request) {
+        return Result.ok(productQueryService.batchDeleteProducts(request.getRspuIds()));
     }
 }

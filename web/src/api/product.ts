@@ -81,6 +81,32 @@ export async function deleteProduct(rspuId: string): Promise<void> {
 }
 
 /**
+ * 批量软删除结果。
+ */
+export interface ProductBatchDeleteResult {
+  /** 成功删除数量 */
+  deletedCount: number
+  /** 失败数量 */
+  failedCount: number
+  /** 失败明细 */
+  failures: Array<{ rspuId: string; reason: string }>
+}
+
+/**
+ * 批量软删除产品（单次最多 100 个）。单个失败不影响其他产品，失败明细逐个返回。
+ *
+ * @param rspuIds 待删除的 RSPU ID 列表
+ * @returns 删除结果（成功数 + 失败明细）
+ */
+export async function batchDeleteProducts(rspuIds: string[]): Promise<ProductBatchDeleteResult> {
+  const { data: result } = await apiClient.post<ApiResult<ProductBatchDeleteResult>>(
+    '/v1/products/batch-delete',
+    { rspuIds }
+  )
+  return result.data
+}
+
+/**
  * 下载产品批量导入模板文件。
  *
  * @param filename 保存文件名
@@ -100,7 +126,8 @@ function triggerDownload(blob: Blob, filename: string): void {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
-  window.URL.revokeObjectURL(url)
+  // 延迟回收：click 后同步 revoke 在 Firefox 下可能取消下载
+  setTimeout(() => window.URL.revokeObjectURL(url), 1000)
 }
 
 /**
@@ -184,10 +211,17 @@ export async function importSceneProducts(file: File, categoryHint?: string, sig
 
 /**
  * Excel AI 辅助导入：上传文件并预览字段映射。
+ *
+ * @param file Excel 文件
+ * @param sheetIndex 可选，预览的工作表索引（默认 0），多 sheet 文件切换时使用
+ * @param signal 可选的 AbortSignal，用于取消请求
  */
-export async function previewExcelAiImport(file: File, signal?: AbortSignal): Promise<ExcelAiMappingResponse> {
+export async function previewExcelAiImport(file: File, sheetIndex?: number, signal?: AbortSignal): Promise<ExcelAiMappingResponse> {
   const formData = new FormData()
   formData.append('file', file)
+  if (sheetIndex !== undefined) {
+    formData.append('sheetIndex', String(sheetIndex))
+  }
 
   const { data: result } = await uploadClient.post<ApiResult<ExcelAiMappingResponse>>(
     '/v1/products/excel-ai-import/preview',

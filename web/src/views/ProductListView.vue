@@ -19,7 +19,7 @@ import {
   useDialog,
   type DataTableColumns
 } from 'naive-ui'
-import { listProducts, deleteProduct } from '@/api/product'
+import { listProducts, deleteProduct, batchDeleteProducts } from '@/api/product'
 import { addFavorite, removeFavorite, checkFavorites } from '@/api/favorite'
 import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
@@ -78,6 +78,7 @@ const factoryOptions = computed(() => [
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
 // 全库视图对工厂管理员只读；平台运营人员（ADMIN/EDITOR）在全库视图下仍可编辑
 const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value)
+const batchDeleting = ref(false)
 
 /** 左侧筛选面板分组（单选，映射现有筛选参数）。 */
 type FilterKey = 'reviewStatus' | 'style' | 'scene' | 'material' | 'level'
@@ -195,6 +196,15 @@ function canDeleteRow(row: ProductSummary): boolean {
   const codes = row.factoryCodes || []
   return factoryCodes.value.some((c) => codes.includes(c))
 }
+
+/** 已勾选且当前用户有权删除的行（无权限的行由后端逐条返回失败明细，前端只提交可删行） */
+const deletableSelectedKeys = computed(() => {
+  if (!hasSelection.value) return [] as string[]
+  const selected = new Set(selectedRowKeys.value)
+  return products.value
+    .filter((row) => selected.has(row.rspuId) && canDeleteRow(row))
+    .map((row) => row.rspuId)
+})
 
 const columns: DataTableColumns<ProductSummary> = [
   {
@@ -442,6 +452,44 @@ function handleDelete(rspuId: string, label?: string) {
   })
 }
 
+function handleBatchDelete() {
+  const ids = deletableSelectedKeys.value
+  if (ids.length === 0 || batchDeleting.value) return
+  const skippedCount = selectedRowKeys.value.length - ids.length
+  dialog.warning({
+    title: '批量删除确认',
+    content: skippedCount > 0
+      ? `确定要删除选中的 ${ids.length} 个产品吗？（另有 ${skippedCount} 个无权限删除，将被跳过）删除后可在数据库中恢复，前端列表将不再展示。`
+      : `确定要删除选中的 ${ids.length} 个产品吗？删除后可在数据库中恢复，前端列表将不再展示。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchDeleting.value = true
+      try {
+        const result = await batchDeleteProducts(ids)
+        if (result.failedCount === 0) {
+          message.success(`已删除 ${result.deletedCount} 个产品`)
+          selectedRowKeys.value = []
+        } else {
+          // 部分失败：保留失败项勾选，便于用户核对后重试
+          const failedIds = result.failures.map((f) => f.rspuId)
+          selectedRowKeys.value = failedIds
+          dialog.warning({
+            title: `删除完成：成功 ${result.deletedCount} 个，失败 ${result.failedCount} 个`,
+            content: result.failures.map((f) => `${f.rspuId}：${f.reason}`).join('\n'),
+            positiveText: '确定'
+          })
+        }
+        loadProducts()
+      } catch (e: unknown) {
+        errorMessage.value = e instanceof Error ? e.message : '批量删除产品失败'
+      } finally {
+        batchDeleting.value = false
+      }
+    }
+  })
+}
+
 onMounted(async () => {
   if (!userStore.userInfo) {
     await userStore.fetchUserInfo()
@@ -541,9 +589,17 @@ watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilte
           </n-layout-sider>
 
           <n-layout-content class="filter-content">
-            <n-space v-if="hasSelection && canGenerateQuote" align="center" style="margin-bottom: 12px;">
+            <n-space v-if="hasSelection" align="center" style="margin-bottom: 12px;">
               <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
-              <n-button type="primary" @click="handleBuildQuote">生成报价单</n-button>
+              <n-button v-if="canGenerateQuote" type="primary" @click="handleBuildQuote">生成报价单</n-button>
+              <n-button
+                v-if="deletableSelectedKeys.length > 0"
+                type="error"
+                :loading="batchDeleting"
+                @click="handleBatchDelete"
+              >
+                批量删除（{{ deletableSelectedKeys.length }}）
+              </n-button>
             </n-space>
 
             <n-data-table
