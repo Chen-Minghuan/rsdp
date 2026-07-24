@@ -169,9 +169,13 @@ public final class ExcelImageExtractor {
                 return;
             }
             // 负锚点行无法对齐数据行，跳过而非错误归到第 0 行
-            int rowIndex = anchor.getRow1();
-            if (rowIndex < 0) {
+            int row1 = anchor.getRow1();
+            int row2 = anchor.getRow2();
+            if (row1 < 0) {
                 return;
+            }
+            if (row2 < row1) {
+                row2 = row1;
             }
 
             PictureData pictureData = picture.getPictureData();
@@ -199,16 +203,20 @@ public final class ExcelImageExtractor {
             }
 
             int colIndex = Math.max(0, anchor.getCol1());
-            String key = buildKey(sheetIndex, rowIndex);
-
-            EmbeddedImage image = new EmbeddedImage(
-                pictureData.getData(),
-                extension,
-                colIndex,
-                rowIndex,
-                sheetIndex
-            );
-            state.result.computeIfAbsent(key, k -> new ArrayList<>()).add(image);
+            // 组合式图片常跨多行锚定（如「一桌三椅」组合图覆盖茶桌/主椅/方凳行），
+            // 把同一张图分发到锚点覆盖的每一行，避免只有首行有图、其余成员无图。
+            // 配额（张数/字节）已在上方按原图计数，分发不再额外累加。
+            for (int row = row1; row <= row2; row++) {
+                String key = buildKey(sheetIndex, row);
+                EmbeddedImage image = new EmbeddedImage(
+                    pictureData.getData(),
+                    extension,
+                    colIndex,
+                    row,
+                    sheetIndex
+                );
+                state.result.computeIfAbsent(key, k -> new ArrayList<>()).add(image);
+            }
         } catch (Exception e) {
             // 单张图片损坏/无法解析时跳过，不影响其余图片提取
             log.warn("跳过无法解析的内嵌图片", e);

@@ -35,11 +35,14 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
+import javax.imageio.ImageIO;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -199,7 +202,7 @@ class ExcelAiImportServiceTest {
 
         when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
         when(storageService.get(anyString()))
-            .thenReturn(new ByteArrayInputStream(createMinimalExcelBytes()));
+            .thenAnswer(inv -> new ByteArrayInputStream(createMinimalExcelBytes()));
         when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
         when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
         when(dictService.listByType("scene")).thenReturn(List.of());
@@ -336,7 +339,7 @@ class ExcelAiImportServiceTest {
 
         when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
         when(storageService.get(anyString()))
-            .thenReturn(new ByteArrayInputStream(createExcelWithMultiPriceColumns()));
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithMultiPriceColumns()));
         when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
         when(dictService.listByType("style")).thenReturn(List.of());
         when(dictService.listByType("scene")).thenReturn(List.of());
@@ -441,7 +444,7 @@ class ExcelAiImportServiceTest {
 
         when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
         when(storageService.get(anyString()))
-            .thenReturn(new ByteArrayInputStream(createExcelWithNoteRow()));
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithNoteRow()));
         when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
         when(dictService.listByType("style")).thenReturn(List.of());
         when(dictService.listByType("scene")).thenReturn(List.of());
@@ -475,6 +478,79 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void confirmAndImport_shouldSkipComboSummaryRow() throws IOException {
+        // 工厂报价单常见组合套餐行：类别写「一桌三椅组合」，只有汇总价，无尺寸/材质/描述。
+        // 此类行应被识别为汇总价行跳过，避免生成无细节的「假产品」。
+        byte[] excelBytes = createExcelWithComboSummaryRow();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"类别\":\"categoryCode\",\"型号\":\"externalCode\",\"名称\":\"productName\",\"产品尺寸\":\"dimensions\",\"材质说明\":\"materialTags\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        // 导入阶段会多次读取原始文件（提取图片 + 重建物理布局），每次需返回新流
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithComboSummaryRow()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-TEST");
+            return 1;
+        });
+
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-DEFAULT");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertNotNull(result);
+        assertEquals(2, result.getTotalRows(), "原始数据行应包含 1 行产品 + 1 行组合汇总");
+        assertEquals(1, result.getSuccessCount(), "组合汇总行应被跳过");
+        assertEquals(0, result.getFailedCount());
+
+        // 只创建了 1 个产品（茶桌），组合汇总行未建 RSPU
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper).insert(rspuCaptor.capture());
+        assertEquals("WG-101", rspuCaptor.getValue().getExternalCode());
+    }
+
+    @Test
     void confirmAndImport_shouldInferPriceParentHeaderSpan() throws IOException {
         byte[] excelBytes = createExcelWithPriceParentSpan();
         MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
@@ -505,7 +581,7 @@ class ExcelAiImportServiceTest {
 
         when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
         when(storageService.get(anyString()))
-            .thenReturn(new ByteArrayInputStream(createExcelWithPriceParentSpan()));
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithPriceParentSpan()));
         when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
         when(dictService.listByType("style")).thenReturn(List.of());
         when(dictService.listByType("scene")).thenReturn(List.of());
@@ -1459,7 +1535,7 @@ class ExcelAiImportServiceTest {
 
         when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
         when(storageService.get(anyString()))
-            .thenReturn(new ByteArrayInputStream(createExcelWithMultiPriceColumns()));
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithMultiPriceColumns()));
         when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
         when(dictService.listByType("style")).thenReturn(List.of());
         when(dictService.listByType("scene")).thenReturn(List.of());
@@ -1534,7 +1610,7 @@ class ExcelAiImportServiceTest {
 
         when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
         when(storageService.get(anyString()))
-            .thenReturn(new ByteArrayInputStream(createExcelWithCodeAndName()));
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithCodeAndName()));
         when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
         when(dictService.listByType("style")).thenReturn(List.of());
         when(dictService.listByType("scene")).thenReturn(List.of());
@@ -1596,7 +1672,7 @@ class ExcelAiImportServiceTest {
 
         when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
         when(storageService.get(anyString()))
-            .thenReturn(new ByteArrayInputStream(createExcelWithCodeAndName()));
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithCodeAndName()));
         when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
         when(dictService.listByType("style")).thenReturn(List.of());
         when(dictService.listByType("scene")).thenReturn(List.of());
@@ -1836,6 +1912,37 @@ class ExcelAiImportServiceTest {
         }
     }
 
+    private byte[] createExcelWithComboSummaryRow() {
+        // 行1：正常产品；行2：组合汇总价行（有组合名、无尺寸/材质）
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("类别");
+            header.createCell(1).setCellValue("型号");
+            header.createCell(2).setCellValue("名称");
+            header.createCell(3).setCellValue("产品尺寸");
+            header.createCell(4).setCellValue("材质说明");
+            header.createCell(5).setCellValue("价格");
+            var data = sheet.createRow(1);
+            data.createCell(0).setCellValue("FS");
+            data.createCell(1).setCellValue("WG-101");
+            data.createCell(2).setCellValue("禅意茶桌");
+            data.createCell(3).setCellValue("1200*600*750");
+            data.createCell(4).setCellValue("实木");
+            data.createCell(5).setCellValue("1999");
+            var combo = sheet.createRow(2);
+            combo.createCell(0).setCellValue("一桌三椅组合");
+            combo.createCell(1).setCellValue("WG-SET-001");
+            combo.createCell(2).setCellValue("组合套餐");
+            combo.createCell(5).setCellValue("5999");
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private byte[] createExcelWithPriceParentSpan() {
         try (var out = new java.io.ByteArrayOutputStream();
              org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
@@ -1970,12 +2077,24 @@ class ExcelAiImportServiceTest {
         }
     }
 
+    private byte[] createPng(int rgb) {
+        try (var out = new java.io.ByteArrayOutputStream()) {
+            var image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
+            image.setRGB(0, 0, rgb);
+            ImageIO.write(image, "png", out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private byte[] createExcelWithModuleImagesAndLogo() {
         // PNG1：产品主图（行 1 图片列）；PNG2：模块图（行 2 图片列）；PNG3：logo（行 2 数据区域外）
         // 注意：col0 是无表头的空列，图片列在 col1——验证图片列索引用物理列而非 keySet 位置
         // （previewRows 经 jsonb 存储后键序乱序，位置推断会错位）
-        byte[] pngBytes = java.util.Base64.getDecoder().decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+        byte[] pngPrimary = createPng(0xFF0000);
+        byte[] pngDetail = createPng(0x00FF00);
+        byte[] pngLogo = createPng(0x0000FF);
         try (var out = new java.io.ByteArrayOutputStream();
              org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
             var sheet = workbook.createSheet("Sheet1");
@@ -1998,15 +2117,15 @@ class ExcelAiImportServiceTest {
             // PNG1 锚定：行 1 图片列（col1）
             var anchor1 = helper.createClientAnchor();
             anchor1.setRow1(1); anchor1.setCol1(1); anchor1.setRow2(2); anchor1.setCol2(2);
-            drawing.createPicture(anchor1, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            drawing.createPicture(anchor1, workbook.addPicture(pngPrimary, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
             // PNG2 锚定：行 2 图片列（col1）
             var anchor2 = helper.createClientAnchor();
             anchor2.setRow1(2); anchor2.setCol1(1); anchor2.setRow2(3); anchor2.setCol2(2);
-            drawing.createPicture(anchor2, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            drawing.createPicture(anchor2, workbook.addPicture(pngDetail, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
             // PNG3 锚定：行 2 数据区域外（col6，模拟 logo/二维码）
             var anchor3 = helper.createClientAnchor();
             anchor3.setRow1(2); anchor3.setCol1(6); anchor3.setRow2(3); anchor3.setCol2(7);
-            drawing.createPicture(anchor3, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            drawing.createPicture(anchor3, workbook.addPicture(pngLogo, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {
@@ -2868,8 +2987,8 @@ class ExcelAiImportServiceTest {
 
     private byte[] createExcelWithTwoImagesInImageColumn() {
         // 一行图片列（col1）锚两张内嵌图
-        byte[] pngBytes = java.util.Base64.getDecoder().decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+        byte[] pngFirst = createPng(0xFFAA00);
+        byte[] pngSecond = createPng(0x00AAFF);
         try (var out = new java.io.ByteArrayOutputStream();
              org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
             var sheet = workbook.createSheet("Sheet1");
@@ -2883,13 +3002,14 @@ class ExcelAiImportServiceTest {
 
             var helper = workbook.getCreationHelper();
             var drawing = sheet.createDrawingPatriarch();
-            int picIdx = workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG);
+            int picIdx1 = workbook.addPicture(pngFirst, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG);
+            int picIdx2 = workbook.addPicture(pngSecond, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG);
             var anchor1 = helper.createClientAnchor();
             anchor1.setRow1(1); anchor1.setCol1(1); anchor1.setRow2(2); anchor1.setCol2(2);
-            drawing.createPicture(anchor1, picIdx);
+            drawing.createPicture(anchor1, picIdx1);
             var anchor2 = helper.createClientAnchor();
             anchor2.setRow1(1); anchor2.setCol1(1); anchor2.setRow2(2); anchor2.setCol2(2);
-            drawing.createPicture(anchor2, picIdx);
+            drawing.createPicture(anchor2, picIdx2);
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {

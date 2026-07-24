@@ -94,7 +94,7 @@ import com.rsdp.util.IdGenerator;
 public class ExcelAiImportService {
 
     private static final int MAX_ROWS = 500;
-    private static final long MAX_FILE_SIZE = 200 * 1024 * 1024; // 200 MB
+    private static final long MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
     private static final int MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
     private static final int PREVIEW_ROW_COUNT = 5;
     private static final int MAX_CATEGORY_SUGGESTIONS = 50;
@@ -414,9 +414,15 @@ public class ExcelAiImportService {
                         currentGroup.rspuId = rowResult.rspuId;
                         currentGroup.hasPrimaryImage = rowResult.primaryImageSaved;
                         currentGroup.hasAiTask = rowResult.taskId != null;
+                        if (rowResult.imageHashes() != null) {
+                            currentGroup.storedImageHashes.addAll(rowResult.imageHashes());
+                        }
                     } else if (currentGroup != null) {
                         currentGroup.hasPrimaryImage |= rowResult.primaryImageSaved;
                         currentGroup.hasAiTask |= rowResult.taskId != null;
+                        if (rowResult.imageHashes() != null) {
+                            currentGroup.storedImageHashes.addAll(rowResult.imageHashes());
+                        }
                     }
                 } else if (rowResult.skipped) {
                     skippedCount++;
@@ -897,6 +903,71 @@ public class ExcelAiImportService {
     }
 
     /**
+     * 判断一行是否是「组合汇总价行」：工厂报价单常把「一桌三椅」「一桌三椅+茶盘+茶车」
+     * 等组合套餐作为独立行列出，该行只有汇总价格和组合名，没有具体产品细节。
+     *
+     * <p>此类行若按普通产品导入，会生成无尺寸、无材质、无独立型号的「假产品」。
+     * 识别特征：类别列值为组合/套餐名（含「一桌」「组合」「套餐」「套装」「搭配」或「+」），
+     * 且缺少尺寸、材质解析、材质标签等产品细节字段。</p>
+     *
+     * @param dataRow 数据行（表头 → 值）
+     * @param mapping 确认后的字段映射（表头 → 标准字段）
+     * @return true 表示应作为汇总价行跳过
+     */
+    private boolean isComboSummaryRow(Map<String, String> dataRow, Map<String, String> mapping) {
+        String categoryValue = getMappedCellValue(dataRow, mapping, "categoryCode");
+        if (!StringUtils.hasText(categoryValue)) {
+            return false;
+        }
+        String category = categoryValue.trim();
+        boolean isComboName = category.contains("一桌")
+            || category.contains("组合")
+            || category.contains("套餐")
+            || category.contains("套装")
+            || category.contains("搭配")
+            || category.contains("+");
+        if (!isComboName) {
+            return false;
+        }
+        // 组合汇总行通常只有价格/件数，没有产品细节；
+        // 若同时存在尺寸/材质/描述等细节，则视为真实产品，不跳过。
+        String dimensions = getMappedCellValue(dataRow, mapping, "dimensions");
+        String description = getMappedCellValue(dataRow, mapping, "description");
+        String materialTags = getMappedCellValue(dataRow, mapping, "materialTags");
+        return !StringUtils.hasText(dimensions)
+            && !StringUtils.hasText(description)
+            && !StringUtils.hasText(materialTags);
+    }
+
+    /**
+     * 根据字段映射从数据行中读取指定标准字段的值（兼容复合映射）。
+     *
+     * @param dataRow      数据行
+     * @param mapping      字段映射
+     * @param standardField 标准字段名
+     * @return 第一个匹配列的值；无匹配或值为空时返回 null
+     */
+    private String getMappedCellValue(Map<String, String> dataRow, Map<String, String> mapping,
+                                      String standardField) {
+        if (mapping == null || dataRow == null) {
+            return null;
+        }
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+            String mappedField = entry.getValue();
+            if (!StringUtils.hasText(mappedField)) {
+                continue;
+            }
+            if (mappedField.contains(standardField)) {
+                String value = dataRow.get(entry.getKey());
+                if (StringUtils.hasText(value)) {
+                    return value;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * 型号/品名列向下填充（纵向合并单元格语义）。
      *
      * <p>工厂 Excel 常把「型号品名」做成纵向合并单元格：同一产品的多个模块行
@@ -1369,8 +1440,22 @@ public class ExcelAiImportService {
         if (prep.earlyResult() != null) {
             return prep.earlyResult();
         }
-        List<StoredImage> storedProductImages = storeImages(prep.productImages(), prep.rowIssues());
-        List<StoredImage> storedVariantImages = storeImages(prep.variantImages(), prep.rowIssues());
+        // 同一张内嵌图跨多行锚定时，已在多行可见；同一产品组内只存储/登记一次，
+        // 避免模块行重复挂同一张图为详情图（P2-17）
+        boolean sameProductGroup = prep.sameProduct() && currentGroup != null;
+        List<DownloadedImage> uniqueProductImages = sameProductGroup
+            ? prep.productImages().stream()
+                .filter(img -> currentGroup.storedImageHashes.add(img.contentHash()))
+                .toList()
+            : prep.productImages();
+        List<DownloadedImage> uniqueVariantImages = sameProductGroup
+            ? prep.variantImages().stream()
+                .filter(img -> currentGroup.storedImageHashes.add(img.contentHash()))
+                .toList()
+            : prep.variantImages();
+
+        List<StoredImage> storedProductImages = storeImages(uniqueProductImages, prep.rowIssues());
+        List<StoredImage> storedVariantImages = storeImages(uniqueVariantImages, prep.rowIssues());
 
         // 事务内：纯数据库写入（RSPU/关联/变体/RSKU/图片元数据/异步任务），保持短事务
         DefaultTransactionDefinition def = new DefaultTransactionDefinition();
@@ -1408,6 +1493,10 @@ public class ExcelAiImportService {
         if (isRepeatedHeaderRow(dataRow)) {
             log.debug("第 {} 行为重复表头行，已跳过", rowIndex);
             return PreparedRow.skip(RowResult.skipped("重复表头行"));
+        }
+        if (isComboSummaryRow(dataRow, mapping)) {
+            log.debug("第 {} 行为组合汇总价行，已跳过", rowIndex);
+            return PreparedRow.skip(RowResult.skipped("组合汇总价行"));
         }
 
         excelImportRowService.updateStage(importRowId, "build_product_row");
@@ -1515,8 +1604,11 @@ public class ExcelAiImportService {
         }
 
         List<String> imageAssetIds = List.of(); // 目前 registerImages 未返回 ID 列表，后续可扩展
+        List<String> imageHashes = new ArrayList<>();
+        imageHashes.addAll(storedProductImages.stream().map(StoredImage::contentHash).filter(StringUtils::hasText).toList());
+        imageHashes.addAll(storedVariantImages.stream().map(StoredImage::contentHash).filter(StringUtils::hasText).toList());
         return RowResult.success(rspuId, variantId, variantRskuOutcome.rskuIds(), prep.imageCount(), imageAssetIds,
-            taskId, groupKey, createdNewRspu, primaryObjectKey != null, rowIssues);
+            taskId, groupKey, createdNewRspu, primaryObjectKey != null, rowIssues, imageHashes);
     }
 
     private ProductImportRow buildProductImportRow(Map<String, String> dataRow, Map<String, String> mapping,
@@ -2141,7 +2233,7 @@ public class ExcelAiImportService {
                 if (bytes.length == 0 || bytes.length > MAX_IMAGE_SIZE) {
                     return null;
                 }
-                return new DownloadedImage(url, bytes, contentType, primary, false);
+                return new DownloadedImage(url, bytes, contentType, primary, false, hashBytes(bytes));
             }
         } catch (Exception e) {
             log.warn("下载图片失败: {}", url, e);
@@ -2198,7 +2290,7 @@ public class ExcelAiImportService {
                 default -> "image/jpeg";
             };
             result.add(new DownloadedImage("embedded://" + img.rowIndex() + "-" + img.colIndex(),
-                img.bytes(), contentType, primary, variantLevel));
+                img.bytes(), contentType, primary, variantLevel, hashBytes(img.bytes())));
         }
         return result;
     }
@@ -2742,7 +2834,7 @@ public class ExcelAiImportService {
                 continue;
             }
             stored.add(new StoredImage(imageId, objectKey, extension, downloaded.contentType(),
-                downloaded.bytes().length, downloaded.primary(), downloaded.variantLevel()));
+                downloaded.bytes().length, downloaded.primary(), downloaded.variantLevel(), downloaded.contentHash()));
         }
         return stored;
     }
@@ -2936,18 +3028,18 @@ public class ExcelAiImportService {
                               Integer imageCount, List<String> imageAssetIds,
                               String taskId, boolean skipped, String skipReason,
                               String groupKey, boolean createdNewRspu, boolean primaryImageSaved,
-                              List<String> issues) {
+                              List<String> issues, List<String> imageHashes) {
 
         static RowResult success(String rspuId, String variantId, List<String> rskuIds,
                                  Integer imageCount, List<String> imageAssetIds, String taskId,
                                  String groupKey, boolean createdNewRspu, boolean primaryImageSaved,
-                                 List<String> issues) {
+                                 List<String> issues, List<String> imageHashes) {
             return new RowResult(rspuId, variantId, rskuIds, imageCount, imageAssetIds, taskId, false, null,
-                groupKey, createdNewRspu, primaryImageSaved, issues);
+                groupKey, createdNewRspu, primaryImageSaved, issues, imageHashes);
         }
 
         static RowResult skipped(String reason) {
-            return new RowResult(null, null, null, 0, null, null, true, reason, null, false, false, null);
+            return new RowResult(null, null, null, 0, null, null, true, reason, null, false, false, null, List.of());
         }
     }
 
@@ -2955,6 +3047,30 @@ public class ExcelAiImportService {
      * 变体 + RSKU 创建结果：首个变体 ID + 实际创建成功的 RSKU ID 列表。
      */
     private record VariantRskuOutcome(String firstVariantId, List<String> rskuIds) {
+    }
+
+    /**
+     * 计算图片字节数组的内容哈希（SHA-256，十六进制小写），用于跨行锚定图片去重。
+     *
+     * @param bytes 图片字节
+     * @return 十六进制哈希；bytes 为空时返回空字符串
+     */
+    private static String hashBytes(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return "";
+        }
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(bytes);
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            // 哈希计算失败时退回到长度+首字节+尾字节的弱标识，基本不会冲突
+            return bytes.length + ":" + bytes[0] + ":" + bytes[bytes.length - 1];
+        }
     }
 
     /**
@@ -2966,6 +3082,8 @@ public class ExcelAiImportService {
         String rspuId;
         boolean hasPrimaryImage;
         boolean hasAiTask;
+        /** 已为本产品组写入对象存储的图片内容哈希，避免跨行锚定的同一张图重复存储/登记。 */
+        final Set<String> storedImageHashes = new HashSet<>();
     }
 
     /**
@@ -2982,12 +3100,12 @@ public class ExcelAiImportService {
     }
 
     private record DownloadedImage(String source, byte[] bytes, String contentType, boolean primary,
-                                   boolean variantLevel) {
+                                   boolean variantLevel, String contentHash) {
     }
 
     /** 已写入对象存储的图片（事务外产出，事务内只登记元数据）。 */
     private record StoredImage(String imageId, String objectKey, String extension, String contentType,
-                               long size, boolean primary, boolean variantLevel) {
+                               long size, boolean primary, boolean variantLevel, String contentHash) {
     }
 
     /**

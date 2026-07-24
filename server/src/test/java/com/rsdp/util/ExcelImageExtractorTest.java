@@ -153,6 +153,28 @@ class ExcelImageExtractorTest {
     }
 
     @Test
+    void extract_shouldDistributeImageAcrossRowsForAnchorsSpanningMultipleRows() throws IOException {
+        // 组合式产品图跨多行锚定（如「一桌三椅」组合图覆盖茶桌/主椅/方凳行），
+        // 同一张图应分发到锚点覆盖的每一行，避免只有首行有图。
+        byte[] excelBytes = createExcelWithCrossRowAnchoredImage();
+        MultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        Map<String, List<ExcelImageExtractor.EmbeddedImage>> result = ExcelImageExtractor.extract(file);
+
+        assertNotNull(result);
+        assertTrue(result.containsKey("0,1"), "锚点起始行应有图片: " + result.keySet());
+        assertTrue(result.containsKey("0,2"), "锚点中间行应有图片: " + result.keySet());
+        assertTrue(result.containsKey("0,3"), "锚点结束行应有图片: " + result.keySet());
+
+        // 配额按原图计数，分发不额外累加：三张图实际来自同一张原图
+        assertEquals(1, result.get("0,1").size());
+        assertEquals(1, result.get("0,2").size());
+        assertEquals(1, result.get("0,3").size());
+        assertEquals("png", result.get("0,1").get(0).extension().toLowerCase());
+    }
+
+    @Test
     void extract_shouldSkipNegativeAnchorRow() throws IOException {
         // P2-16：负锚点行跳过，不归到第 0 行
         byte[] excelBytes = createExcelWithNegativeAnchorImage();
@@ -163,6 +185,30 @@ class ExcelImageExtractorTest {
 
         assertNotNull(result);
         assertTrue(result.isEmpty(), "负锚点行的图片应被跳过: " + result.keySet());
+    }
+
+    private byte[] createExcelWithCrossRowAnchoredImage() throws IOException {
+        try (Workbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+            sheet.createRow(0).createCell(0).setCellValue("产品名称");
+            sheet.createRow(1).createCell(0).setCellValue("产品A");
+            sheet.createRow(2).createCell(0).setCellValue("产品B");
+            sheet.createRow(3).createCell(0).setCellValue("产品C");
+
+            byte[] imageBytes = createPngImageBytes();
+            int pictureIdx = workbook.addPicture(imageBytes, Workbook.PICTURE_TYPE_PNG);
+            Drawing<?> drawing = sheet.createDrawingPatriarch();
+
+            ClientAnchor anchor = workbook.getCreationHelper().createClientAnchor();
+            anchor.setCol1(1);
+            anchor.setRow1(1);
+            anchor.setRow2(3);
+            drawing.createPicture(anchor, pictureIdx);
+
+            workbook.write(out);
+            return out.toByteArray();
+        }
     }
 
     private byte[] createExcelWithNegativeAnchorImage() throws IOException {

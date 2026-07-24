@@ -123,7 +123,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     }
   }
 
-  const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024
+  const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
 
   function isExcelFile(file: File): boolean {
     const name = file.name.toLowerCase()
@@ -141,7 +141,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       return
     }
     if (file.size > MAX_FILE_SIZE_BYTES) {
-      errorMessage.value = 'Excel 文件大小不能超过 200MB'
+      errorMessage.value = 'Excel 文件大小不能超过 500MB'
       return
     }
 

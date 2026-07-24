@@ -261,7 +261,7 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
     <n-card v-if="currentStep === 1" title="上传 Excel 产品目录">
       <n-space vertical :size="16">
         <p style="color: #666;">
-          支持 .xlsx / .xls / .csv。系统会自动识别表头语义，并提取 Excel 内嵌图片作为主图。
+          支持 .xlsx / .xls / .csv（最大 500MB）。系统会自动识别表头语义，并提取 Excel 内嵌图片作为主图。
         </p>
         <n-upload
           v-model:file-list="fileList"
