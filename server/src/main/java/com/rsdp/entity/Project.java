@@ -23,6 +23,12 @@ public class Project {
     private String status;
     private String remark;
 
+    /** 画布分享开关（开启后公开只读视图 /s/{projectId} 可访问） */
+    private Boolean shareEnabled;
+
+    /** 分享过期时间（null=永久有效） */
+    private LocalDateTime shareExpireAt;
+
     @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
 

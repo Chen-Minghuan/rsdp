@@ -1,4 +1,4 @@
-import { apiClient, type ApiResult } from './client'
+import { apiClient, uploadClient, type ApiResult } from './client'
 import type { Order, OrderDetail, OrderListResult } from '@/types/order'
 
 /**
@@ -103,4 +103,103 @@ export async function downloadContractTemplate(): Promise<void> {
   link.download = '采购合同模板.docx'
   link.click()
   window.URL.revokeObjectURL(url)
+}
+
+/**
+ * 订单明细行级改价（仅 PENDING；adjustPrice 为空表示清除改价）。
+ *
+ * @param orderId     订单 ID
+ * @param itemId      明细 ID
+ * @param adjustPrice 改价（到手单价，可空）
+ * @returns 更新后的订单详情
+ */
+export async function adjustOrderItemPrice(
+  orderId: string,
+  itemId: number,
+  adjustPrice: number | null
+): Promise<OrderDetail> {
+  const { data: result } = await apiClient.put<ApiResult<OrderDetail>>(
+    `/v1/orders/${orderId}/items/${itemId}/price`,
+    { adjustPrice }
+  )
+  return result.data
+}
+
+/**
+ * 解析 Content-Disposition 中的下载文件名（优先 RFC 5987 filename*）。
+ */
+function parseDownloadName(headers: unknown, fallback: string): string {
+  const contentDisposition = (headers as Record<string, string | undefined>)['content-disposition']
+  if (contentDisposition) {
+    const starMatch = contentDisposition.match(/filename\*=UTF-8''([^";]+)/i)
+      || contentDisposition.match(/filename\*=['"]?[^'"]*['"]?([^";]+)/i)
+    const plainMatch = contentDisposition.match(/filename=['"]?([^";]+)['"]?/i)
+    const raw = starMatch?.[1] || plainMatch?.[1]
+    if (raw) {
+      try {
+        return decodeURIComponent(raw.replace(/['"]/g, ''))
+      } catch {
+        return raw.replace(/['"]/g, '')
+      }
+    }
+  }
+  return fallback
+}
+
+/**
+ * 触发浏览器下载（Blob → 临时链接）。
+ */
+function triggerDownload(data: BlobPart, filename: string): void {
+  const blob = new Blob([data], {
+    type: 'application/octet-stream'
+  })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+}
+
+/**
+ * 导出订单明细 Excel 清单，触发浏览器下载。
+ *
+ * @param orderId 订单 ID
+ */
+export async function exportOrder(orderId: string): Promise<void> {
+  const response = await apiClient.get(`/v1/orders/${orderId}/export`, { responseType: 'blob' })
+  triggerDownload(response.data as BlobPart, parseDownloadName(response.headers, '订单明细.xlsx'))
+}
+
+/**
+ * 上传订单合同文件（doc/docx/pdf，≤20MB）。
+ *
+ * @param orderId 订单 ID
+ * @param file    合同文件
+ */
+export async function uploadOrderContract(orderId: string, file: File): Promise<void> {
+  const formData = new FormData()
+  formData.append('file', file)
+  await uploadClient.post<ApiResult<void>>(`/v1/orders/${orderId}/contract`, formData)
+}
+
+/**
+ * 下载订单合同文件。
+ *
+ * @param orderId 订单 ID
+ */
+export async function downloadOrderContract(orderId: string): Promise<void> {
+  const response = await apiClient.get(`/v1/orders/${orderId}/contract`, { responseType: 'blob' })
+  triggerDownload(response.data as BlobPart, parseDownloadName(response.headers, '合同.docx'))
+}
+
+/**
+ * 清除订单合同关联。
+ *
+ * @param orderId 订单 ID
+ */
+export async function deleteOrderContract(orderId: string): Promise<void> {
+  await apiClient.delete<ApiResult<void>>(`/v1/orders/${orderId}/contract`)
 }

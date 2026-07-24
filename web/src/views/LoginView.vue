@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert, NDivider, NTabs, NTabPane } from 'naive-ui'
+import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert, NDivider, NTabs, NTabPane, NCheckbox, NModal, NSpin } from 'naive-ui'
 import { login, register } from '@/api/auth'
+import { getPublicContent } from '@/api/platform'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
@@ -48,6 +49,29 @@ watch(inviteCodeFromQuery, (code) => {
 const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
+
+// 服务协议（CMS 内容驱动，免登录公开接口）
+const agreeProtocol = ref(false)
+const showAgreement = ref(false)
+const agreementLoading = ref(false)
+const agreementTitle = ref('服务协议')
+const agreementContent = ref('')
+
+async function openAgreement() {
+  showAgreement.value = true
+  if (agreementContent.value) return
+  agreementLoading.value = true
+  try {
+    const content = await getPublicContent('platform_user_agreement')
+    agreementTitle.value = content.title || '服务协议'
+    agreementContent.value = content.content || ''
+  } catch (e) {
+    agreementContent.value = ''
+    errorMessage.value = e instanceof Error ? e.message : '服务协议加载失败'
+  } finally {
+    agreementLoading.value = false
+  }
+}
 
 /** 用户手动切换 Tab 时清空提示，避免登录/注册共享错误信息串扰 */
 function handleTabChange() {
@@ -121,6 +145,10 @@ async function handleRegister() {
   }
   if (password !== confirmPassword) {
     errorMessage.value = '两次输入的密码不一致'
+    return
+  }
+  if (!agreeProtocol.value) {
+    errorMessage.value = '请先阅读并勾选《服务协议》'
     return
   }
 
@@ -229,6 +257,13 @@ async function handleRegister() {
             </n-form-item>
           </n-form>
 
+          <div style="margin-bottom: 12px;">
+            <n-checkbox v-model:checked="agreeProtocol">
+              我已阅读并同意
+            </n-checkbox>
+            <a class="agreement-link" @click="openAgreement">《服务协议》</a>
+          </div>
+
           <n-alert v-if="errorMessage" type="error" :show-icon="false" style="margin-bottom: 12px;">
             {{ errorMessage }}
           </n-alert>
@@ -241,6 +276,16 @@ async function handleRegister() {
         </n-tab-pane>
       </n-tabs>
     </n-card>
+
+    <!-- 服务协议弹窗（CMS 内容驱动） -->
+    <n-modal v-model:show="showAgreement" preset="card" :title="agreementTitle" style="width: 640px;">
+      <n-spin :show="agreementLoading">
+        <!-- 内容仅 ADMIN/EDITOR 可在管理端维护 -->
+        <!-- eslint-disable-next-line vue/no-v-html -->
+        <div v-if="agreementContent" class="agreement-content" v-html="agreementContent" />
+        <p v-else-if="!agreementLoading" style="color: var(--rsdp-text-secondary);">暂无协议内容</p>
+      </n-spin>
+    </n-modal>
   </div>
 </template>
 
@@ -251,5 +296,18 @@ async function handleRegister() {
   justify-content: center;
   min-height: 100vh;
   background-color: #f5f5f5;
+}
+
+.agreement-link {
+  color: var(--rsdp-primary);
+  cursor: pointer;
+  margin-left: 4px;
+}
+
+.agreement-content {
+  font-size: 14px;
+  line-height: 1.8;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 </style>

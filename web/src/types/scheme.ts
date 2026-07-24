@@ -43,6 +43,8 @@ export interface SchemeItem {
   subtotal?: number
   leadTimeDays?: number
   moq?: number
+  /** 空间分区标签（RSPU 首个场景标签名；无标签为 null，归入「未分区」） */
+  spaceTag?: string | null
   sortOrder: number
 }
 

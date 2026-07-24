@@ -4,6 +4,7 @@ import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
+import com.rsdp.dto.request.SchemeItemReorderRequest;
 import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
 import com.rsdp.dto.response.CopyFromTemplateResponse;
@@ -94,6 +95,20 @@ public class SchemeController {
         @PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
         @Valid @RequestBody SchemeTemplateRequest request) {
         return Result.ok(schemeService.setTemplate(schemeId, request));
+    }
+
+    /**
+     * 方案明细拖拽排序（itemIds 为全部明细按新顺序的完整列表）。
+     *
+     * @param schemeId 方案 ID
+     * @param request  排序请求
+     * @return 更新后的方案详情
+     */
+    @PutMapping("/{schemeId}/items/reorder")
+    public Result<SchemeResponse> reorderItems(
+        @PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
+        @Valid @RequestBody SchemeItemReorderRequest request) {
+        return Result.ok(schemeService.reorderItems(schemeId, request));
     }
 
     /**

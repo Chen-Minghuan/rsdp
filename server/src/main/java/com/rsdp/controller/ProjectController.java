@@ -3,6 +3,7 @@ package com.rsdp.controller;
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.ProjectRequest;
+import com.rsdp.dto.request.ProjectShareRequest;
 import com.rsdp.dto.response.ProjectDetailResponse;
 import com.rsdp.dto.response.ProjectResponse;
 import com.rsdp.service.ProjectService;
@@ -85,6 +86,20 @@ public class ProjectController {
         @PathVariable @NotBlank(message = "项目 ID 不能为空") String projectId,
         @RequestBody @Valid ProjectRequest request) {
         return Result.ok(projectService.update(projectId, request));
+    }
+
+    /**
+     * 设置项目画布分享开关（仅项目负责人或 ADMIN）。
+     *
+     * @param projectId 项目 ID
+     * @param request   分享请求（开关 + 有效期天数，空=永久）
+     * @return 更新后的项目
+     */
+    @PutMapping("/{projectId}/share")
+    public Result<ProjectResponse> updateShare(
+        @PathVariable @NotBlank(message = "项目 ID 不能为空") String projectId,
+        @RequestBody @Valid ProjectShareRequest request) {
+        return Result.ok(projectService.updateShare(projectId, request));
     }
 
     /**

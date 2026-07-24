@@ -2,6 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.OrderCreateRequest;
+import com.rsdp.dto.request.OrderItemPriceRequest;
 import com.rsdp.dto.request.OrderStatusRequest;
 import com.rsdp.dto.request.OrderUpdateRequest;
 import com.rsdp.dto.response.InviteTokenResponse;
@@ -9,6 +10,8 @@ import com.rsdp.dto.response.OrderDetailResponse;
 import com.rsdp.dto.response.OrderListResponse;
 import com.rsdp.dto.response.OrderResponse;
 import com.rsdp.service.ContractTemplateService;
+import com.rsdp.service.OrderContractService;
+import com.rsdp.service.OrderExportService;
 import com.rsdp.service.OrderInviteService;
 import com.rsdp.service.OrderService;
 import com.rsdp.service.OrderStatisticsService;
@@ -17,6 +20,10 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
@@ -24,6 +31,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -47,6 +55,75 @@ public class OrderController {
     private final OrderInviteService orderInviteService;
     private final ContractTemplateService contractTemplateService;
     private final OrderStatisticsService orderStatisticsService;
+    private final OrderExportService orderExportService;
+    private final OrderContractService orderContractService;
+
+    /**
+     * 上传订单合同文件（doc/docx/pdf，≤20MB；覆盖旧合同关联）。
+     *
+     * @param orderId 订单 ID
+     * @param file    合同文件
+     * @return 空结果
+     * @throws IOException 存储失败时抛出
+     */
+    @PostMapping("/{orderId}/contract")
+    public Result<Void> uploadContract(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId,
+        @RequestParam("file") org.springframework.web.multipart.MultipartFile file) throws IOException {
+        orderContractService.uploadContract(orderId, file);
+        return Result.ok();
+    }
+
+    /**
+     * 下载订单合同文件（归属校验）。
+     *
+     * @param orderId 订单 ID
+     * @return 合同文件流
+     * @throws IOException 读取失败时抛出
+     */
+    @GetMapping("/{orderId}/contract")
+    public ResponseEntity<org.springframework.core.io.InputStreamResource> downloadContract(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId) throws IOException {
+        OrderContractService.ContractFile file = orderContractService.downloadContract(orderId);
+        String encodedFileName = URLEncoder.encode(file.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+        ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFileName)
+            .contentType(MediaType.APPLICATION_OCTET_STREAM);
+        if (file.size() >= 0) {
+            builder.contentLength(file.size());
+        }
+        return builder.body(new org.springframework.core.io.InputStreamResource(file.content()));
+    }
+
+    /**
+     * 清除订单合同关联。
+     *
+     * @param orderId 订单 ID
+     * @return 空结果
+     */
+    @DeleteMapping("/{orderId}/contract")
+    public Result<Void> deleteContract(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId) {
+        orderContractService.deleteContract(orderId);
+        return Result.ok();
+    }
+
+    /**
+     * 导出订单明细 Excel 清单（{orderNo}-订单明细.xlsx）。
+     *
+     * @param orderId 订单 ID
+     * @return Excel 文件
+     */
+    @GetMapping("/{orderId}/export")
+    public ResponseEntity<byte[]> export(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId) {
+        OrderExportService.OrderExportFile file = orderExportService.export(orderId);
+        String encodedFileName = URLEncoder.encode(file.fileName(), StandardCharsets.UTF_8).replace("+", "%20");
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFileName)
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .body(file.content());
+    }
 
     /**
      * 由方案生成订单（价格快照 × 全局折扣率）。
@@ -89,8 +166,10 @@ public class OrderController {
         @RequestParam @NotBlank(message = "统计维度不能为空") String dim,
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        if (!OrderStatisticsService.DIM_PRODUCT.equals(dim) && !OrderStatisticsService.DIM_FACTORY.equals(dim)) {
-            throw new BusinessException("统计维度仅支持 product / factory");
+        if (!OrderStatisticsService.DIM_PRODUCT.equals(dim)
+            && !OrderStatisticsService.DIM_FACTORY.equals(dim)
+            && !OrderStatisticsService.DIM_INVITER.equals(dim)) {
+            throw new BusinessException("统计维度仅支持 product / factory / inviter");
         }
         return Result.ok(orderStatisticsService.statistics(dim, from, to));
     }
@@ -119,6 +198,22 @@ public class OrderController {
         @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId,
         @RequestBody @Valid OrderUpdateRequest request) {
         return Result.ok(orderService.update(orderId, request));
+    }
+
+    /**
+     * 订单明细行级改价（仅 PENDING；adjustPrice 为空表示清除改价）。
+     *
+     * @param orderId 订单 ID
+     * @param itemId  明细 ID
+     * @param request 改价请求
+     * @return 更新后的订单详情
+     */
+    @PutMapping("/{orderId}/items/{itemId}/price")
+    public Result<OrderDetailResponse> adjustItemPrice(
+        @PathVariable @NotBlank(message = "订单 ID 不能为空") String orderId,
+        @PathVariable @NotNull(message = "明细 ID 不能为空") Long itemId,
+        @RequestBody @Valid OrderItemPriceRequest request) {
+        return Result.ok(orderService.adjustItemPrice(orderId, itemId, request.getAdjustPrice()));
     }
 
     /**

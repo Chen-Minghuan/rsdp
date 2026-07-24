@@ -21,7 +21,11 @@ public class OrderItemResponse {
     private BigDecimal originalPrice;
     /** 到手单价快照 */
     private BigDecimal finalPrice;
+    /** 行级改价（非空时优先于 finalPrice 作为到手单价，仅 PENDING 可编辑） */
+    private BigDecimal adjustPrice;
+    /** 生效到手单价（adjustPrice 优先，其次 finalPrice） */
+    private BigDecimal effectivePrice;
     private String factoryCode;
-    /** 小计（到手单价 × 数量） */
+    /** 小计（生效到手单价 × 数量） */
     private BigDecimal subtotal;
 }

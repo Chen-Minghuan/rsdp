@@ -12,21 +12,30 @@ import {
   NFormItem,
   NImage,
   NInput,
+  NInputNumber,
   NModal,
+  NPopconfirm,
   NSpace,
   NSpin,
   NTag,
+  NUpload,
   useDialog,
-  useMessage
+  useMessage,
+  type UploadFileInfo
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
 import {
+  adjustOrderItemPrice,
   createOrderInvite,
+  deleteOrderContract,
   downloadContractTemplate,
+  downloadOrderContract,
+  exportOrder,
   getOrderDetail,
   updateOrder,
-  updateOrderStatus
+  updateOrderStatus,
+  uploadOrderContract
 } from '@/api/order'
 import { ORDER_STATUS, ORDER_STATUS_TEXT, type OrderDetail, type OrderItem } from '@/types/order'
 import { useUserStore } from '@/stores/user'
@@ -175,6 +184,96 @@ async function handleDownloadTemplate() {
   }
 }
 
+// ---------- 导出清单 ----------
+const exporting = ref(false)
+
+async function handleExport() {
+  exporting.value = true
+  try {
+    await exportOrder(orderId.value)
+    message.success('订单明细已导出')
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+// ---------- 行级改价 ----------
+/** 行级改价草稿（itemId → 草稿价） */
+const priceDrafts = ref<Record<number, number | null>>({})
+const priceSavingId = ref<number | null>(null)
+
+function draftPrice(row: OrderItem): number | null {
+  return priceDrafts.value[row.id] ?? row.effectivePrice ?? row.finalPrice ?? null
+}
+
+async function saveItemPrice(row: OrderItem) {
+  const draft = priceDrafts.value[row.id]
+  if (draft == null || draft < 0) {
+    message.warning('请输入有效的改价金额')
+    return
+  }
+  priceSavingId.value = row.id
+  try {
+    order.value = await adjustOrderItemPrice(orderId.value, row.id, draft)
+    message.success('改价已保存')
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '改价失败')
+  } finally {
+    priceSavingId.value = null
+  }
+}
+
+async function clearItemPrice(row: OrderItem) {
+  priceSavingId.value = row.id
+  try {
+    order.value = await adjustOrderItemPrice(orderId.value, row.id, null)
+    delete priceDrafts.value[row.id]
+    message.success('已恢复折扣快照价')
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '恢复失败')
+  } finally {
+    priceSavingId.value = null
+  }
+}
+
+// ---------- 合同上传回填 ----------
+const contractUploading = ref(false)
+
+async function handleUploadContract(options: { file: UploadFileInfo }) {
+  const raw = options.file.file
+  if (!raw) return
+  contractUploading.value = true
+  try {
+    await uploadOrderContract(orderId.value, raw)
+    message.success('合同已上传')
+    await loadDetail()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '上传失败')
+  } finally {
+    contractUploading.value = false
+  }
+}
+
+async function handleDownloadContract() {
+  try {
+    await downloadOrderContract(orderId.value)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '下载合同失败')
+  }
+}
+
+async function handleDeleteContract() {
+  try {
+    await deleteOrderContract(orderId.value)
+    message.success('合同已删除')
+    await loadDetail()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '删除失败')
+  }
+}
+
 const itemColumns: DataTableColumns<OrderItem> = [
   {
     title: '图片',
@@ -196,9 +295,55 @@ const itemColumns: DataTableColumns<OrderItem> = [
   },
   {
     title: '到手单价',
-    key: 'finalPrice',
-    width: 120,
-    render: row => formatPrice(row.finalPrice)
+    key: 'effectivePrice',
+    width: 230,
+    render: row => {
+      // PENDING 且有订单编辑权限：行内改价
+      if (isPending.value && canUpdateOrder.value) {
+        return h(NSpace, { size: 4, align: 'center', wrap: false }, () => [
+          h(NInputNumber, {
+            value: draftPrice(row),
+            min: 0,
+            precision: 2,
+            size: 'small',
+            style: 'width: 110px;',
+            placeholder: '改价',
+            'onUpdate:value': (value: number | null) => {
+              priceDrafts.value[row.id] = value
+            }
+          }),
+          h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'primary',
+              quaternary: true,
+              loading: priceSavingId.value === row.id,
+              onClick: () => saveItemPrice(row)
+            },
+            () => '保存'
+          ),
+          row.adjustPrice != null
+            ? h(
+                NButton,
+                { size: 'tiny', quaternary: true, onClick: () => clearItemPrice(row) },
+                () => '恢复'
+              )
+            : null
+        ])
+      }
+      // 只读展示：生效单价 + 改价标记（划线显示快照价）
+      return h('span', [
+        formatPrice(row.effectivePrice ?? row.finalPrice),
+        row.adjustPrice != null
+          ? h(
+              'span',
+              { style: 'color: #999; font-size: 12px; margin-left: 6px; text-decoration: line-through;' },
+              formatPrice(row.finalPrice)
+            )
+          : null
+      ])
+    }
   },
   { title: '小计', key: 'subtotal', width: 130, render: row => formatPrice(row.subtotal) }
 ]
@@ -249,7 +394,9 @@ onMounted(loadDetail)
             生成邀请链接
           </n-button>
         </template>
-        <n-button size="small" @click="handleDownloadTemplate">下载合同模板</n-button>
+        <n-button v-if="order" size="small" :loading="exporting" @click="handleExport">
+          导出清单
+        </n-button>
       </n-space>
     </template>
 
@@ -286,6 +433,34 @@ onMounted(loadDetail)
             <n-descriptions-item label="创建时间">{{ formatTime(order.createdAt) }}</n-descriptions-item>
             <n-descriptions-item label="更新时间" :span="2">{{ formatTime(order.updatedAt) }}</n-descriptions-item>
           </n-descriptions>
+        </n-card>
+
+        <n-card title="采购合同">
+          <n-space align="center">
+            <n-button size="small" @click="handleDownloadTemplate">下载合同模板</n-button>
+            <template v-if="order.contractFileId">
+              <n-button size="small" type="primary" @click="handleDownloadContract">下载合同</n-button>
+              <n-popconfirm v-if="canUpdateOrder" @positive-click="handleDeleteContract">
+                <template #trigger>
+                  <n-button size="small" type="error" quaternary>删除合同</n-button>
+                </template>
+                确定删除已上传的合同文件吗？
+              </n-popconfirm>
+            </template>
+            <n-upload
+              v-if="canUpdateOrder"
+              :show-file-list="false"
+              accept=".doc,.docx,.pdf"
+              @before-upload="handleUploadContract"
+            >
+              <n-button size="small" :loading="contractUploading">
+                {{ order.contractFileId ? '重新上传' : '上传合同' }}
+              </n-button>
+            </n-upload>
+          </n-space>
+          <p style="margin-top: 8px; font-size: 12px; color: var(--rsdp-text-secondary);">
+            流程：下载合同模板 → 线下签署 → 上传回填（支持 doc / docx / pdf，≤20MB）
+          </p>
         </n-card>
 
         <n-card title="订单明细（价格快照）">

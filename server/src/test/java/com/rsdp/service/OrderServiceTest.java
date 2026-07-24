@@ -44,8 +44,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -90,6 +92,9 @@ class OrderServiceTest {
 
     @Mock
     private DataScopeHelper dataScopeHelper;
+
+    @Mock
+    private AuditLogService auditLogService;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -280,6 +285,111 @@ class OrderServiceTest {
             assertThatThrownBy(() -> orderService.create(request))
                 .isInstanceOf(ForbiddenException.class)
                 .hasMessageContaining("无权");
+        }
+    }
+
+    @Test
+    void adjustItemPriceShouldRecomputeOrderTotal() {
+        DesignOrder order = pendingOrder();
+        when(designOrderMapper.selectById("ORD-1")).thenReturn(order);
+
+        DesignOrderItem item1 = new DesignOrderItem();
+        item1.setId(1L);
+        item1.setOrderId("ORD-1");
+        item1.setRspuId("RSPU-001");
+        item1.setFinalPrice(new BigDecimal("800.00"));
+        item1.setQuantity(2);
+        DesignOrderItem item2 = new DesignOrderItem();
+        item2.setId(2L);
+        item2.setOrderId("ORD-1");
+        item2.setRspuId("RSPU-002");
+        item2.setFinalPrice(new BigDecimal("800.00"));
+        item2.setQuantity(1);
+        when(designOrderItemMapper.selectById(1L)).thenReturn(item1);
+        when(designOrderItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item1, item2));
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.currentUsername()).thenReturn("designer1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            OrderDetailResponse response = orderService.adjustItemPrice("ORD-1", 1L, new BigDecimal("500.00"));
+
+            // 总价联动：500×2 + 800×1 = 1800
+            assertThat(order.getFinalTotalPrice()).isEqualByComparingTo("1800.00");
+            verify(designOrderItemMapper).updateById(any(DesignOrderItem.class));
+            verify(designOrderMapper).updateById(any(DesignOrder.class));
+            verify(auditLogService).logUpdate(eq("design_order_item"), eq("1"), any(), any(DesignOrderItem.class), any());
+            // 明细响应暴露改价与生效单价
+            assertThat(response.getItems().get(0).getAdjustPrice()).isEqualByComparingTo("500.00");
+            assertThat(response.getItems().get(0).getEffectivePrice()).isEqualByComparingTo("500.00");
+            assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo("1000.00");
+            assertThat(response.getItems().get(1).getEffectivePrice()).isEqualByComparingTo("800.00");
+        }
+    }
+
+    @Test
+    void adjustItemPriceShouldClearAndFallbackToSnapshot() {
+        DesignOrder order = pendingOrder();
+        when(designOrderMapper.selectById("ORD-1")).thenReturn(order);
+
+        DesignOrderItem item = new DesignOrderItem();
+        item.setId(1L);
+        item.setOrderId("ORD-1");
+        item.setRspuId("RSPU-001");
+        item.setFinalPrice(new BigDecimal("800.00"));
+        item.setAdjustPrice(new BigDecimal("500.00"));
+        item.setQuantity(2);
+        when(designOrderItemMapper.selectById(1L)).thenReturn(item);
+        when(designOrderItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item));
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            OrderDetailResponse response = orderService.adjustItemPrice("ORD-1", 1L, null);
+
+            // 清除改价后回退快照价：800×2 = 1600
+            assertThat(order.getFinalTotalPrice()).isEqualByComparingTo("1600.00");
+            verify(designOrderItemMapper).update(any(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class));
+            assertThat(response.getItems().get(0).getAdjustPrice()).isNull();
+            assertThat(response.getItems().get(0).getEffectivePrice()).isEqualByComparingTo("800.00");
+        }
+    }
+
+    @Test
+    void adjustItemPriceShouldRejectNonPendingOrder() {
+        DesignOrder order = pendingOrder();
+        order.setStatus(OrderService.STATUS_CONFIRMED);
+        when(designOrderMapper.selectById("ORD-1")).thenReturn(order);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            assertThatThrownBy(() -> orderService.adjustItemPrice("ORD-1", 1L, new BigDecimal("500")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("待确认");
+            verify(designOrderItemMapper, never()).updateById(any(DesignOrderItem.class));
+        }
+    }
+
+    @Test
+    void adjustItemPriceShouldRejectItemNotInOrder() {
+        DesignOrder order = pendingOrder();
+        when(designOrderMapper.selectById("ORD-1")).thenReturn(order);
+        DesignOrderItem other = new DesignOrderItem();
+        other.setId(9L);
+        other.setOrderId("ORD-2");
+        when(designOrderItemMapper.selectById(9L)).thenReturn(other);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            assertThatThrownBy(() -> orderService.adjustItemPrice("ORD-1", 9L, new BigDecimal("500")))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("订单明细不存在");
         }
     }
 

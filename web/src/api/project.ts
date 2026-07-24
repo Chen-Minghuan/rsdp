@@ -59,3 +59,26 @@ export async function updateProject(projectId: string, request: ProjectRequest):
 export async function deleteProject(projectId: string): Promise<void> {
   await apiClient.delete<ApiResult<void>>(`/v1/projects/${projectId}`)
 }
+
+/**
+ * 设置项目画布分享开关。
+ *
+ * @param projectId 项目 ID
+ * @param payload   分享开关 + 有效期天数（空=永久）
+ * @returns 更新后的项目
+ */
+export async function updateProjectShare(projectId: string, payload: import('@/types/project').ProjectSharePayload): Promise<Project> {
+  const { data: result } = await apiClient.put<ApiResult<Project>>(`/v1/projects/${projectId}/share`, payload)
+  return result.data
+}
+
+/**
+ * 获取项目分享公开视图（免登录）。
+ *
+ * @param projectId 项目 ID
+ * @returns 分享视图
+ */
+export async function getSharedProject(projectId: string): Promise<import('@/types/project').ProjectShareView> {
+  const { data: result } = await apiClient.get<ApiResult<import('@/types/project').ProjectShareView>>(`/v1/public/projects/${projectId}`)
+  return result.data
+}

@@ -23,6 +23,8 @@ export interface Order {
   remark?: string
   inviteExpireAt?: string
   inviteConfirmedAt?: string
+  /** 合同文件 ID（null=未上传合同） */
+  contractFileId?: string | null
   createdBy?: string
   createdAt?: string
   updatedAt?: string
@@ -43,6 +45,10 @@ export interface OrderItem {
   originalPrice?: number
   /** 到手单价快照 */
   finalPrice?: number
+  /** 行级改价（非空时优先于 finalPrice，仅 PENDING 可编辑） */
+  adjustPrice?: number | null
+  /** 生效到手单价（adjustPrice 优先，其次 finalPrice） */
+  effectivePrice?: number
   factoryCode?: string
   /** 小计（到手单价 × 数量） */
   subtotal?: number

@@ -283,6 +283,10 @@ make clean
   - `V17__rspu_external_code_unique.sql`：rspu_master.external_code 部分唯一索引（存量有重复时 WARNING 跳过）
   - `V18__excel_import_sheet_and_rspu_fields.sql`：excel_import_batch.sheet_index（多 Sheet 逐一导入）+ rspu_master.description/retail_price（长文本描述原文、不加密零售参考价）
   - `V19__variant_text_and_unresolved.sql`：变体原文列（rspu_variant.size_text/color_text/material_text）+ uk_variant_attrs 唯一索引改"码或原文"语义 + dict_unresolved_value 未归一值采集表
+  - `V15__platform_cms.sql`：官网 CMS 五表（platform_banner/case/content/custom_dict/customized）+ 协议/客服内容种子
+  - `V16__order_enhance.sql`：订单增强（design_order_item.adjust_price 行级改价 AES + design_order.contract_file_id 合同文件）
+  - `V17__scheme_item_sort.sql`：方案明细 sort_order 存量回填（拖拽排序前置，数据迁移）
+  - `V18__project_share.sql`：项目画布分享（project.share_enabled / share_expire_at）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

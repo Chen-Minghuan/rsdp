@@ -611,6 +611,12 @@ PUT    /api/v1/schemes/{schemeId}/template
        # Response: SchemeResponse
        # 说明：取消模板时自动清空 templateTags
 
+PUT    /api/v1/schemes/{schemeId}/items/reorder
+       # 方案明细拖拽排序（已实现，需 scheme:update + 方案归属）
+       # Request: { itemIds: number[] }（全部明细按新顺序排列的完整不重复列表，否则报错）
+       # Response: SchemeResponse（items 按 sort_order 升序，含 spaceTag 空间分区标签）
+       # 说明：空间标签取 RSPU 首个场景标签名，仅作展示分组，不支持跨区归属修改
+
 POST   /api/v1/schemes/{schemeId}/copy-from-template
        # 套用模板创建新方案（已实现，需 scheme:create）
        # Request: { projectId, schemeName? }
@@ -644,9 +650,25 @@ PUT    /api/v1/projects/{projectId}
        # Request: { projectName, projectType?, companyName?, remark? }
        # Response: ProjectResponse
 
+PUT    /api/v1/projects/{projectId}/share
+       # 设置项目画布分享开关（需 project:update + 归属或 ADMIN）
+       # Request: { shareEnabled, expireDays? }（有效期 1-365 天，空=永久；关闭时清空过期时间）
+       # Response: ProjectResponse（含 shareEnabled / shareExpireAt）
+
 DELETE /api/v1/projects/{projectId}
        # 软删除设计项目（需 project:delete + 归属或 ADMIN）
        # 说明：项目下方案保留，project_id 置空
+```
+
+### 项目画布分享公开接口（免登录）
+
+```
+GET    /api/v1/public/projects/{projectId}
+       # 项目分享公开只读视图（校验 share_enabled + share_expire_at，失效返回 404）
+       # Response: { projectId, projectName, companyName, remark, shareExpireAt,
+       #   schemes: [{ schemeId, schemeName, itemCount,
+       #     items: [{ rspuId, productName, imageId, quantity, spaceTag }] }] }
+       # 安全约束：只含空间分区/产品名/图片/数量，不含工厂/价格/RSKU 等敏感字段
 ```
 
 ### 运营统计
@@ -691,6 +713,30 @@ PUT    /api/v1/orders/{orderId}
        # 更新收件信息与备注（需 order:update + 归属；仅 PENDING 可改）
        # Request: { receiverName?, receiverPhone?, receiverArea?, receiverAddress?, remark? }
 
+PUT    /api/v1/orders/{orderId}/items/{itemId}/price
+       # 订单明细行级改价（需 order:update + 归属；仅 PENDING 可改）
+       # Request: { adjustPrice? }（到手单价 [0, 99999999.99]；为空表示清除改价）
+       # 说明：生效单价 = adjustPrice（非空优先）否则 finalPrice 快照；adjust_price 为 AES
+       #      加密列；订单 final_total_price 按 Σ 生效单价 × 数量联动重算；记审计
+       # Response: OrderDetailResponse（items 含 adjustPrice / effectivePrice / subtotal）
+
+GET    /api/v1/orders/{orderId}/export
+       # 导出订单明细 Excel 清单（需 order:read + 归属）
+       # 说明：双 sheet「订单明细 + 汇总」；文件名 {orderNo}-订单明细.xlsx（RFC 5987）
+       # Response: xlsx 文件流
+
+POST   /api/v1/orders/{orderId}/contract
+       # 上传订单合同文件（需 order:update + 归属；multipart/form-data，字段 file）
+       # 说明：仅 doc/docx/pdf 且 ≤20MB；落 image_assets（image_type=contract）+
+       #      design_order.contract_file_id 关联；重复上传覆盖旧关联
+
+GET    /api/v1/orders/{orderId}/contract
+       # 下载订单合同文件（需 order:read + 归属；专用端点，不走公开图片通道）
+       # Response: 文件流，文件名 {orderNo}-合同.{ext}
+
+DELETE /api/v1/orders/{orderId}/contract
+       # 清除订单合同关联（需 order:delete + 归属；合同文件软删）
+
 PUT    /api/v1/orders/{orderId}/status
        # 状态机迁移（需 order:update + 归属）
        # PENDING→CONFIRMED/CANCELLED，CONFIRMED→PRODUCING/CANCELLED，PRODUCING→COMPLETED
@@ -706,10 +752,15 @@ GET    /api/v1/orders/contract-template
 GET    /api/v1/orders/statistics
        # 订单统计（需 order:read；排除 CANCELLED；非 ADMIN 仅统计自己创建的订单）
        # 说明：到手价为 AES 加密列，实体级解密后内存聚合；商品名/图取订单明细快照
-       # Query: dim=product|factory（必填）, from?, to?（yyyy-MM-dd，含当日，可空）
+       # Query: dim=product|factory|inviter（必填）, from?, to?（yyyy-MM-dd，含当日，可空）
        #       时间窗默认为最近 90 天，最大不得超过 365 天；结果按 totalAmount 降序取前 50 条
        # Response(dim=product):  [{ rspuId, productName, imageId, totalQuantity, totalAmount }]
        # Response(dim=factory):  [{ factoryCode, factoryName, orderCount, totalQuantity, totalAmount }]
+       # Response(dim=inviter):  [{ inviterId, inviterUsername, inviterNickname,
+       #   inviteSuccessCount, orderCount, totalAmount,
+       #   invitees: [{ userId, username, nickname, orderCount, totalAmount }] }]
+       # dim=inviter 说明：按 sys_user.invited_by 归因聚合「邀请成功人数（有订单的被邀请人
+       #   去重）/订单数/支付金额」；非 ADMIN 仅统计「我邀请的人」产生的订单
        # 均按 totalAmount 降序
 ```
 
@@ -984,28 +1035,132 @@ DELETE /api/v1/collections/{collectionId}
        # Response: void
 ```
 
-### 收藏夹
+### 收藏夹（V14 两级模型：文件夹 + 收藏条目）
 
 ```
 GET    /api/v1/favorites
        # 查询当前用户的收藏列表（需登录，数据按用户隔离）
-       # Query: group? 分组筛选
+       # Query: folderId? 按文件夹筛选；unfiled?=true 仅未归档
        # Response: [FavoriteResponse...]
-       #   { favoriteId, rspuId, groupName?, productName?, primaryImageUrl?, createdAt }
+       #   { favoriteId, rspuId, groupName?, folderId?, productName?, primaryImageUrl?, createdAt }
 
 POST   /api/v1/favorites
        # 收藏产品（需登录；产品不存在 404，重复收藏报错）
-       # Request: { rspuId, groupName? (max 64) }
+       # Request: { rspuId, folderId? (优先), groupName? (max 64) }
+       # 说明：指定 folderId 时校验文件夹归属当前用户，并同步 group_name 轻量文本
        # Response: FavoriteResponse
 
 DELETE /api/v1/favorites/{rspuId}
        # 取消收藏（需登录；未收藏返回 404）
        # Response: void
 
+PUT    /api/v1/favorites/{rspuId}/folder
+       # 移动收藏条目到文件夹（folderId 为空表示未归档）
+       # Request: { folderId? }
+       # Response: FavoriteResponse
+
 GET    /api/v1/favorites/check
        # 批量检查收藏状态（需登录）
        # Query: rspuIds（可重复传参）
        # Response: string[]（其中已收藏的 rspuId 列表）
+
+GET    /api/v1/favorites/folders
+       # 我的收藏夹文件夹列表（含收藏数）
+       # Response: [{ folderId, folderName, sortOrder, favoriteCount, createdAt }]
+
+POST   /api/v1/favorites/folders
+       # 创建文件夹（同用户重名拒绝）
+       # Request: { folderName (max 64) }
+
+PUT    /api/v1/favorites/folders/{folderId}
+       # 重命名文件夹（同步收藏条目 group_name 轻量文本）
+       # Request: { folderName }
+
+DELETE /api/v1/favorites/folders/{folderId}
+       # 软删除文件夹（夹内收藏变为未归档）
+       # Response: void
+
+GET    /api/v1/favorites/export
+       # 导出收藏夹 Excel（明细 + 按文件夹汇总双 sheet）
+       # Query: folderId? 按文件夹导出；isSup?=true 显示供应商（工厂/出厂价）
+       # 说明：isSup=true 需 factory:read 权限（保护货源，默认仅产品维度）；
+       #      文件名按文件夹名或「我的收藏夹」，Content-Disposition RFC 5987 编码
+       # Response: xlsx 文件流
+```
+
+### 模板标签（受控字典）
+
+```
+GET    /api/v1/template-tags/simple-list
+       # 启用的模板标签（登录即可读；模板库页/设模板选择器）
+       # Response: [{ tagId, tagName, sortOrder, enabled, createdAt }]
+
+GET    /api/v1/template-tags
+       # 全部模板标签（含停用，限 ADMIN/EDITOR）
+
+POST   /api/v1/template-tags
+       # 创建标签（名称全局唯一，限 ADMIN/EDITOR）
+       # Request: { tagName (max 64), sortOrder?, enabled? }
+
+PUT    /api/v1/template-tags/{tagId}
+       # 更新标签（重命名/排序/启停；重命名同步替换存量模板方案中的标签名）
+       # Request: { tagName, sortOrder?, enabled? }
+
+DELETE /api/v1/template-tags/{tagId}
+       # 删除标签（仍被模板使用时拒绝并报使用数）
+       # Response: void
+```
+
+> 设模板联动：`PUT /api/v1/schemes/{id}/template` 设为模板时校验标签必须存在于
+> 受控标签字典；`scheme.template_tags` 仍以名称 JSON 存储（标签以名称为业务键）。
+
+### 官网 CMS（管理端限 ADMIN/EDITOR）
+
+```
+POST   /api/v1/platform/images
+       # 上传 CMS 图片素材（multipart/form-data，字段 file；≤10MB，jpg/png/webp/gif/bmp）
+       # 说明：落 image_assets（image_type=cms，不关联 RSPU），经 StorageService 存储
+       # Response: { imageId, url }
+
+GET/POST/PUT/DELETE  /api/v1/platform/banners[/{bannerId}]
+       # 首页轮播 Banner CRUD
+       # Request: { position?, title?, imageId (必填), linkType? (none/rspu/url),
+       #            linkValue?, sortOrder?, status? (active/inactive) }
+       # Response: [{ bannerId, position, title, imageId, linkType, linkValue,
+       #             sortOrder, status, createdAt, updatedAt }]
+
+GET/POST/PUT/DELETE  /api/v1/platform/cases[/{caseId}]
+       # 落地案例 CRUD
+       # Request: { title (必填), coverImageId?, content? (富文本 HTML), sortOrder?, status? }
+
+GET/POST/PUT/DELETE  /api/v1/platform/contents[/{contentId}]
+       # 内容配置 CRUD（code 唯一，创建后不可修改）
+       # Request: { code (小写字母/数字/下划线), title?, contentType? (image/rich_text/embed),
+       #            content?, status? }
+       # 说明：contentType=image 时 content 存 imageId；rich_text/embed 存 HTML/嵌入代码
+
+GET/POST/PUT/DELETE  /api/v1/platform/custom-dicts[/{dictId}]
+       # 自定义字典 CRUD（dict_type + dict_name 唯一）
+       # Request: { dictName (必填), dictType (必填), status? }
+
+GET/POST/PUT/DELETE  /api/v1/platform/customizeds[/{customizedId}]
+       # 产品定制卡片 CRUD
+       # Request: { title (必填), coverImageId?, description?, linkValue?, sortOrder?, status? }
+```
+
+### 官网公开读取（免登录，/api/v1/public/**）
+
+```
+GET    /api/v1/public/home
+       # 首页聚合：启用 Banner（home_top，排序）+ 落地案例（≤12）+ 产品定制（≤10）
+       # Response: { banners: [{ bannerId, title, imageUrl, linkType, linkValue }],
+       #            cases: [{ caseId, title, coverImageUrl, content }],
+       #            customizeds: [{ customizedId, title, coverImageUrl, description, linkValue }] }
+
+GET    /api/v1/public/content/{code}
+       # 按编码读取内容配置（仅 active；服务协议 platform_user_agreement /
+       # 客服咨询 platform_consulting_service 等；不存在或停用 404）
+       # Response: { contentId, code, title, contentType, content, status, ... }
 ```
 
 ### 设计师画像

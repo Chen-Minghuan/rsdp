@@ -38,3 +38,19 @@ export async function getOrderStatisticsByFactory(
   })
   return result.data
 }
+
+/**
+ * 查询订单统计（邀请维度）。排除已取消订单；非 ADMIN 仅统计「我邀请的人」产生的订单。
+ *
+ * @param params 时间范围（可选）
+ * @returns 邀请人统计列表（按支付金额降序，含被邀请人明细）
+ */
+export async function getOrderStatisticsByInviter(
+  params: OrderStatisticsParams = {}
+): Promise<import('@/types/orderStatistics').OrderInviterStat[]> {
+  const { data: result } = await apiClient.get<ApiResult<import('@/types/orderStatistics').OrderInviterStat[]>>(
+    '/v1/orders/statistics',
+    { params: { dim: 'inviter', ...params } }
+  )
+  return result.data
+}

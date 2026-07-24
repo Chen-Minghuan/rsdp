@@ -1047,6 +1047,8 @@ CREATE TABLE IF NOT EXISTS project (
     owner_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     status VARCHAR(20) NOT NULL DEFAULT 'active',
     remark VARCHAR(512),
+    share_enabled BOOLEAN NOT NULL DEFAULT false,
+    share_expire_at TIMESTAMP,
     deleted_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -1074,6 +1076,7 @@ CREATE TABLE IF NOT EXISTS design_order (
     invite_token_hash VARCHAR(128),
     invite_expire_at TIMESTAMP,
     invite_confirmed_at TIMESTAMP,
+    contract_file_id VARCHAR(64),
     created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     deleted_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -1104,6 +1107,7 @@ CREATE TABLE IF NOT EXISTS design_order_item (
     quantity INT NOT NULL DEFAULT 1,
     original_price TEXT,
     final_price TEXT,
+    adjust_price TEXT,
     factory_code VARCHAR(16),
     snapshot_json TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -1168,3 +1172,66 @@ SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_
 SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));
 SELECT setval('dict_alias_id_seq',                    COALESCE((SELECT MAX(id) FROM dict_alias), 1),                    (SELECT MAX(id) IS NOT NULL FROM dict_alias));
 SELECT setval('dict_unresolved_value_id_seq',         COALESCE((SELECT MAX(id) FROM dict_unresolved_value), 1),         (SELECT MAX(id) IS NOT NULL FROM dict_unresolved_value));
+
+-- ============================================================
+-- 官网 CMS（V15 并入）：Banner / 落地案例 / 内容配置 / 自定义字典 / 产品定制
+-- ============================================================
+CREATE TABLE IF NOT EXISTS platform_banner (
+    banner_id   VARCHAR(64) PRIMARY KEY,
+    position    VARCHAR(32) NOT NULL DEFAULT 'home_top',
+    title       VARCHAR(128),
+    image_id    VARCHAR(64) NOT NULL,
+    link_type   VARCHAR(16) NOT NULL DEFAULT 'none',
+    link_value  VARCHAR(512),
+    sort_order  INT NOT NULL DEFAULT 0,
+    status      VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_banner_position ON platform_banner(position, status, sort_order);
+
+CREATE TABLE IF NOT EXISTS platform_case (
+    case_id        VARCHAR(64) PRIMARY KEY,
+    title          VARCHAR(128) NOT NULL,
+    cover_image_id VARCHAR(64),
+    content        TEXT,
+    sort_order     INT NOT NULL DEFAULT 0,
+    status         VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_case_status ON platform_case(status, sort_order);
+
+CREATE TABLE IF NOT EXISTS platform_content (
+    content_id   VARCHAR(64) PRIMARY KEY,
+    code         VARCHAR(64) NOT NULL UNIQUE,
+    title        VARCHAR(128),
+    content_type VARCHAR(16) NOT NULL DEFAULT 'rich_text',
+    content      TEXT,
+    status       VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_custom_dict (
+    dict_id    VARCHAR(64) PRIMARY KEY,
+    dict_name  VARCHAR(64) NOT NULL,
+    dict_type  VARCHAR(32) NOT NULL,
+    status     VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (dict_type, dict_name)
+);
+
+CREATE TABLE IF NOT EXISTS platform_customized (
+    customized_id  VARCHAR(64) PRIMARY KEY,
+    title          VARCHAR(128) NOT NULL,
+    cover_image_id VARCHAR(64),
+    description    VARCHAR(512),
+    link_value     VARCHAR(512),
+    sort_order     INT NOT NULL DEFAULT 0,
+    status         VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_customized_status ON platform_customized(status, sort_order);

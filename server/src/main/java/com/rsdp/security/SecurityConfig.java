@@ -124,6 +124,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/orders", "/api/v1/orders/**").hasAuthority(Permissions.ORDER_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/orders").hasAuthority(Permissions.ORDER_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/orders/*/invite").hasAuthority(Permissions.ORDER_UPDATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/orders/*/contract").hasAuthority(Permissions.ORDER_UPDATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_DELETE)
 
@@ -216,6 +217,13 @@ public class SecurityConfig {
 
                 // 字典写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAuthority(Permissions.DICT_CREATE)
+
+                // 模板标签：simple-list 登录可读；管理端 CRUD 限 ADMIN/EDITOR
+                .requestMatchers(HttpMethod.GET, "/api/v1/template-tags/simple-list").authenticated()
+                .requestMatchers("/api/v1/template-tags/**").hasAnyRole("ADMIN", "EDITOR")
+
+                // 官网 CMS 管理端：限 ADMIN/EDITOR（公开读取走 /api/v1/public/**）
+                .requestMatchers("/api/v1/platform/**").hasAnyRole("ADMIN", "EDITOR")
 
                 .requestMatchers("/api/v1/**").authenticated()
                 .anyRequest().permitAll()

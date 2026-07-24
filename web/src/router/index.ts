@@ -10,6 +10,12 @@ const routes = [
     meta: { public: true, hideHeader: true }
   },
   {
+    path: '/s/:projectId',
+    name: 'ProjectShare',
+    component: () => import('@/views/ProjectShareView.vue'),
+    meta: { public: true, hideHeader: true }
+  },
+  {
     path: '/invite/order/:token',
     name: 'OrderInvite',
     component: () => import('@/views/OrderInviteView.vue'),
@@ -171,6 +177,24 @@ const routes = [
     name: 'RskuImport',
     component: () => import('@/views/RskuImportView.vue'),
     meta: { requiresAuth: true, permissions: [PERMISSIONS.RSKU_IMPORT] }
+  },
+  {
+    path: '/templates',
+    name: 'TemplateLibrary',
+    component: () => import('@/views/TemplateLibraryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
+  },
+  {
+    path: '/admin/template-tags',
+    name: 'TemplateTagAdmin',
+    component: () => import('@/views/TemplateTagAdminView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
+  },
+  {
+    path: '/admin/platform',
+    name: 'PlatformCms',
+    component: () => import('@/views/admin/platform/PlatformCmsView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
   },
   {
     path: '/admin/users',
