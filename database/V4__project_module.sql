@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS project (
 CREATE INDEX IF NOT EXISTS idx_project_owner ON project (owner_id) WHERE deleted_at IS NULL;
 
 -- 方案表扩展：项目归属 + 模板化（template_tags 存 JSON 字符串，与项目 TEXT 约定一致）
-ALTER TABLE scheme ADD COLUMN IF NOT EXISTS project_id VARCHAR(64) REFERENCES project (project_id);
+ALTER TABLE scheme ADD COLUMN IF NOT EXISTS project_id VARCHAR(64);
+ALTER TABLE scheme DROP CONSTRAINT IF EXISTS fk_scheme_project;
+ALTER TABLE scheme ADD CONSTRAINT fk_scheme_project FOREIGN KEY (project_id) REFERENCES project(project_id);
 ALTER TABLE scheme ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE scheme ADD COLUMN IF NOT EXISTS template_tags TEXT;
 CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme (project_id) WHERE deleted_at IS NULL;

@@ -1102,6 +1102,10 @@ CREATE TABLE IF NOT EXISTS project (
 );
 CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
 
+-- scheme.project_id 外键（表创建顺序约束，单独补加）
+ALTER TABLE scheme DROP CONSTRAINT IF EXISTS fk_scheme_project;
+ALTER TABLE scheme ADD CONSTRAINT fk_scheme_project FOREIGN KEY (project_id) REFERENCES project(project_id);
+
 -- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
 CREATE TABLE IF NOT EXISTS design_order (
     order_id VARCHAR(64) PRIMARY KEY,
