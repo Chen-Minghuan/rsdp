@@ -7,10 +7,17 @@ const path = require("path");
 
 const ROOT = path.resolve(__dirname, "..");
 const ENTITY_DIR = path.join(ROOT, "server/src/main/java/com/rsdp/entity");
-const SQL_FILES = [
-  path.join(ROOT, "database/V1__init_db.sql"),
-  path.join(ROOT, "database/V2__factory_module.sql"),
-];
+
+// 自动按版本号排序读取 database/V{数字}__*.sql 迁移脚本
+const DATABASE_DIR = path.join(ROOT, "database");
+const SQL_FILES = fs.readdirSync(DATABASE_DIR)
+  .filter((f) => /^V\d+__.*\.sql$/.test(f))
+  .sort((a, b) => {
+    const numA = parseInt(a.match(/^V(\d+)__/)[1], 10);
+    const numB = parseInt(b.match(/^V(\d+)__/)[1], 10);
+    return numA - numB;
+  })
+  .map((f) => path.join(DATABASE_DIR, f));
 
 function camelToSnake(name) {
   return name
