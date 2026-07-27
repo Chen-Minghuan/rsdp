@@ -44,6 +44,8 @@ public class DesignOrder {
     private LocalDateTime inviteConfirmedAt;
     /** 合同文件（image_assets.image_id，image_type=contract） */
     private String contractFileId;
+    /** 幂等键：前端生成的唯一键，用于防止重复提交。 */
+    private String idempotencyKey;
     private String createdBy;
 
     @TableLogic(value = "null", delval = "now()")

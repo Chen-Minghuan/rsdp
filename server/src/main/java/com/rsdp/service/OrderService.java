@@ -92,6 +92,19 @@ public class OrderService {
      */
     @Transactional
     public OrderDetailResponse create(OrderCreateRequest request) {
+        String currentUserId = SecurityOperatorContext.currentUserId();
+        if (StringUtils.hasText(request.getIdempotencyKey()) && StringUtils.hasText(currentUserId)) {
+            DesignOrder existing = designOrderMapper.selectOne(
+                new QueryWrapper<DesignOrder>()
+                    .eq("created_by", currentUserId)
+                    .eq("idempotency_key", request.getIdempotencyKey())
+                    .isNull("deleted_at")
+            );
+            if (existing != null) {
+                return detail(existing.getOrderId());
+            }
+        }
+
         Scheme scheme = schemeMapper.selectById(request.getSchemeId());
         if (scheme == null) {
             throw new ResourceNotFoundException("方案不存在: " + request.getSchemeId());
@@ -191,7 +204,8 @@ public class OrderService {
         order.setStatus(STATUS_PENDING);
         order.setExpectedLeadTime(maxLeadTime);
         order.setRemark(request.getRemark());
-        order.setCreatedBy(SecurityOperatorContext.currentUserId());
+        order.setIdempotencyKey(request.getIdempotencyKey());
+        order.setCreatedBy(currentUserId);
         order.setCreatedAt(LocalDateTime.now());
         order.setUpdatedAt(LocalDateTime.now());
         order.setOrderNo(orderNoGenerator.generate());

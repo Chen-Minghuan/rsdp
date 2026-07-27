@@ -1127,6 +1127,7 @@ CREATE TABLE IF NOT EXISTS design_order (
     invite_expire_at TIMESTAMP,
     invite_confirmed_at TIMESTAMP,
     contract_file_id VARCHAR(64),
+    idempotency_key VARCHAR(64),
     created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     deleted_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -1136,6 +1137,8 @@ CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE d
 CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_design_order_project ON design_order(project_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_design_order_scheme ON design_order(scheme_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_design_order_idempotency
+    ON design_order(created_by, idempotency_key) WHERE deleted_at IS NULL;
 
 -- 订单号每日序号计数器（解决 COUNT+1 在软删除下与唯一索引冲突的问题）
 CREATE TABLE IF NOT EXISTS order_no_counter (

@@ -1591,11 +1591,11 @@ public class ExcelAiImportService {
         if (price == null) {
             return null;
         }
-        // 简单分档：<=3000 low, <=8000 mid, >8000 high
-        if (price.compareTo(new BigDecimal("3000")) <= 0) {
+        // 与 RSKU 价格带保持一致：<=1000 low, <=5000 mid, >5000 high
+        if (price.compareTo(new BigDecimal("1000")) < 0) {
             return "low";
         }
-        if (price.compareTo(new BigDecimal("8000")) <= 0) {
+        if (price.compareTo(new BigDecimal("5000")) < 0) {
             return "mid";
         }
         return "high";
