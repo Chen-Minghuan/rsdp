@@ -5,6 +5,7 @@ import { NCard, NForm, NFormItem, NInput, NButton, NSpace, NAlert, NDivider, NTa
 import { login, register } from '@/api/auth'
 import { getPublicContent } from '@/api/platform'
 import { useUserStore } from '@/stores/user'
+import { sanitizeHtml } from '@/utils/htmlSanitizer'
 
 const router = useRouter()
 const route = useRoute()
@@ -56,6 +57,7 @@ const showAgreement = ref(false)
 const agreementLoading = ref(false)
 const agreementTitle = ref('服务协议')
 const agreementContent = ref('')
+const safeAgreementContent = computed(() => sanitizeHtml(agreementContent.value))
 
 async function openAgreement() {
   showAgreement.value = true
@@ -280,9 +282,8 @@ async function handleRegister() {
     <!-- 服务协议弹窗（CMS 内容驱动） -->
     <n-modal v-model:show="showAgreement" preset="card" :title="agreementTitle" style="width: 640px;">
       <n-spin :show="agreementLoading">
-        <!-- 内容仅 ADMIN/EDITOR 可在管理端维护 -->
-        <!-- eslint-disable-next-line vue/no-v-html -->
-        <div v-if="agreementContent" class="agreement-content" v-html="agreementContent" />
+        <!-- 内容仅 ADMIN/EDITOR 可在管理端维护，已做 HTML 消毒 -->
+        <div v-if="agreementContent" class="agreement-content" v-html="safeAgreementContent" />
         <p v-else-if="!agreementLoading" style="color: var(--rsdp-text-secondary);">暂无协议内容</p>
       </n-spin>
     </n-modal>

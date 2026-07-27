@@ -7,6 +7,7 @@ import { listDicts } from '@/api/dict'
 import { getPublicHome } from '@/api/platform'
 import { listProducts } from '@/api/product'
 import { useUserStore } from '@/stores/user'
+import { sanitizeHtml, isSafeExternalUrl } from '@/utils/htmlSanitizer'
 import { PERMISSIONS } from '@/utils/constants'
 import type { DictItem } from '@/types/dict'
 import type { PublicHomeBanner, PublicHomeCase, PublicHomeCustomized, PublicHomeData } from '@/types/platform'
@@ -36,6 +37,7 @@ const newProducts = ref<ProductSummary[]>([])
 // 案例详情弹窗
 const showCaseDetail = ref(false)
 const activeCase = ref<PublicHomeCase | null>(null)
+const safeCaseContent = computed(() => sanitizeHtml(activeCase.value?.content))
 
 /** 分级导航维度：点击标签携带对应筛选参数跳转产品库。 */
 const dimensions = computed(() => [
@@ -131,12 +133,14 @@ function gotoProducts(queryKey: string, value: string) {
   router.push({ path: '/products', query: { [queryKey]: value } })
 }
 
-/** Banner 点击：rspu 跳产品详情；url 开外链。 */
+/** Banner 点击：rspu 跳产品详情；url 开外链（仅允许 http/https）。 */
 function handleBannerClick(banner: PublicHomeBanner) {
   if (banner.linkType === 'rspu' && banner.linkValue) {
     router.push(`/products/${banner.linkValue}`)
   } else if (banner.linkType === 'url' && banner.linkValue) {
-    window.open(banner.linkValue, '_blank', 'noopener')
+    if (isSafeExternalUrl(banner.linkValue)) {
+      window.open(banner.linkValue, '_blank', 'noopener')
+    }
   }
 }
 
@@ -145,12 +149,12 @@ function openCaseDetail(item: PublicHomeCase) {
   showCaseDetail.value = true
 }
 
-/** 定制卡片点击：站内路径走路由，外链新开窗口。 */
+/** 定制卡片点击：站内路径走路由，外链仅允许 http/https。 */
 function handleCustomizedClick(item: PublicHomeCustomized) {
   if (!item.linkValue) return
   if (item.linkValue.startsWith('/')) {
     router.push(item.linkValue)
-  } else if (item.linkValue.startsWith('http')) {
+  } else if (isSafeExternalUrl(item.linkValue)) {
     window.open(item.linkValue, '_blank', 'noopener')
   }
 }
@@ -355,9 +359,8 @@ onMounted(async () => {
         object-fit="cover"
         style="width: 100%; border-radius: 8px; margin-bottom: 12px;"
       />
-      <!-- 内容仅 ADMIN/EDITOR 可在管理端维护 -->
-      <!-- eslint-disable-next-line vue/no-v-html -->
-      <div v-if="activeCase?.content" class="case-content" v-html="activeCase.content" />
+      <!-- 内容仅 ADMIN/EDITOR 可在管理端维护，已做 HTML 消毒 -->
+      <div v-if="activeCase?.content" class="case-content" v-html="safeCaseContent" />
       <p v-else style="color: var(--rsdp-text-secondary);">暂无详细介绍</p>
     </n-modal>
   </PageContainer>

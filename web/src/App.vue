@@ -6,6 +6,7 @@ import { useUserStore } from '@/stores/user'
 import { ROLES } from '@/utils/constants'
 import { navGroups, type NavGroup, type NavItem } from '@/config/navigation'
 import { getPublicContent } from '@/api/platform'
+import { sanitizeHtml } from '@/utils/htmlSanitizer'
 
 const router = useRouter()
 const route = useRoute()
@@ -115,6 +116,7 @@ const showConsult = ref(false)
 const consultLoading = ref(false)
 const consultTitle = ref('客服咨询')
 const consultContent = ref('')
+const safeConsultContent = computed(() => sanitizeHtml(consultContent.value))
 
 async function openConsult() {
   showConsult.value = true
@@ -202,9 +204,8 @@ async function openConsult() {
     <!-- 客服咨询弹窗（CMS 内容驱动） -->
     <n-modal v-model:show="showConsult" preset="card" :title="consultTitle" style="width: 560px;">
       <n-spin :show="consultLoading">
-        <!-- 内容仅 ADMIN/EDITOR 可在管理端维护 -->
-        <!-- eslint-disable-next-line vue/no-v-html -->
-        <div v-if="consultContent" class="consult-content" v-html="consultContent" />
+        <!-- 内容仅 ADMIN/EDITOR 可在管理端维护，已做 HTML 消毒 -->
+        <div v-if="consultContent" class="consult-content" v-html="safeConsultContent" />
         <p v-else-if="!consultLoading" style="color: var(--rsdp-text-secondary);">暂无咨询内容</p>
       </n-spin>
     </n-modal>
