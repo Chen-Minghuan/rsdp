@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
@@ -77,6 +78,7 @@ public class ProductImportService {
     private final StorageService storageService;
     private final ObjectMapper objectMapper;
     private final PlatformTransactionManager transactionManager;
+    private final DataScopeHelper dataScopeHelper;
 
     private java.util.Set<String> allowedImageHosts = java.util.Set.of();
 
@@ -354,6 +356,9 @@ public class ProductImportService {
 
         RspuMaster rspu;
         if (existing != null) {
+            if (!dataScopeHelper.canAccessRspu(existing.getRspuId())) {
+                throw new BusinessException("无权更新该产品: " + existing.getRspuId());
+            }
             rspu = updateRspu(existing, row, dictCache);
             // 更新时重新建立风格和场景
             updateStyles(existing.getRspuId(), row.getPositioningLabel(), dictCache.get("style"));

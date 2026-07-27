@@ -32,6 +32,7 @@ import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ExcelFileValidator;
@@ -157,6 +158,7 @@ public class ExcelAiImportService {
     private final RspuFactoryMappingService rspuFactoryMappingService;
     private final FactoryLeadTimeRuleService factoryLeadTimeRuleService;
     private final ExcelImportRowService excelImportRowService;
+    private final DataScopeHelper dataScopeHelper;
 
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
@@ -229,6 +231,11 @@ public class ExcelAiImportService {
         Map<String, String> mapping = sanitizeMapping(request.getMapping());
         if (mapping == null || mapping.isEmpty()) {
             throw new BusinessException("字段映射不能为空");
+        }
+
+        if (StringUtils.hasText(request.getDefaultFactoryCode())
+            && !dataScopeHelper.canAccessFactory(request.getDefaultFactoryCode())) {
+            throw new BusinessException("无权使用该工厂: " + request.getDefaultFactoryCode());
         }
 
         List<Map<String, String>> rawDataRows = loadRawDataRows(batch);
