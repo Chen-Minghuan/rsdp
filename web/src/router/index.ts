@@ -200,7 +200,7 @@ const routes = [
     path: '/settings',
     name: 'UserSettings',
     component: () => import('@/views/UserSettingsView.vue'),
-    meta: { requiresAuth: true, roles: [ROLES.FACTORY_ADMIN] }
+    meta: { requiresAuth: true }
   },
   {
     path: '/user',
