@@ -132,6 +132,9 @@ public class SchemeService {
                 throw new BusinessException(
                     "RSKU 与 RSPU 不匹配: " + itemRequest.getRskuId());
             }
+            if (!dataScopeHelper.canAccessFactory(rsku.getFactoryCode())) {
+                throw new BusinessException("无权使用该工厂报价: " + rsku.getFactoryCode());
+            }
 
             int quantity = quantityMap.getOrDefault(itemRequest.getRskuId(), 1);
 
@@ -243,6 +246,9 @@ public class SchemeService {
             if (!rsku.getRspuId().equals(itemRequest.getRspuId())) {
                 throw new BusinessException(
                     "RSKU 与 RSPU 不匹配: " + itemRequest.getRskuId());
+            }
+            if (!dataScopeHelper.canAccessFactory(rsku.getFactoryCode())) {
+                throw new BusinessException("无权使用该工厂报价: " + rsku.getFactoryCode());
             }
 
             int quantity = quantityMap.getOrDefault(itemRequest.getRskuId(), 1);
@@ -583,6 +589,10 @@ public class SchemeService {
         for (SchemeItem templateItem : templateItems) {
             RskuSupply rsku = rskuSupplyMapper.selectById(templateItem.getRskuId());
             if (rsku == null) {
+                skippedRskuIds.add(templateItem.getRskuId());
+                continue;
+            }
+            if (!dataScopeHelper.canAccessFactory(rsku.getFactoryCode())) {
                 skippedRskuIds.add(templateItem.getRskuId());
                 continue;
             }

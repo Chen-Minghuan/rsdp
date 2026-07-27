@@ -17,6 +17,7 @@ import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -44,6 +45,7 @@ public class AiMatchingService {
     private final DictService dictService;
     private final VisionService visionService;
     private final ObjectMapper objectMapper;
+    private final DataScopeHelper dataScopeHelper;
 
     private static final int MAX_CANDIDATES = 30;
 
@@ -200,6 +202,7 @@ public class AiMatchingService {
         List<RskuSupply> capableRskus = rskuSupplyMapper.selectCapableByRspuIds(rspuIds);
         return capableRskus.stream()
             .filter(r -> r.getFactoryPrice() != null)
+            .filter(r -> dataScopeHelper.canAccessFactory(r.getFactoryCode()))
             .collect(Collectors.groupingBy(
                 RskuSupply::getRspuId,
                 Collectors.mapping(
@@ -370,6 +373,7 @@ public class AiMatchingService {
         List<RskuSupply> capableRskus = rskuSupplyMapper.selectCapableByRspuIds(rspuIds);
         return capableRskus.stream()
             .filter(r -> r.getFactoryPrice() != null)
+            .filter(r -> dataScopeHelper.canAccessFactory(r.getFactoryCode()))
             .collect(Collectors.groupingBy(
                 RskuSupply::getRspuId,
                 Collectors.minBy(Comparator.comparing(RskuSupply::getFactoryPrice))
