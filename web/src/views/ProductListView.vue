@@ -234,6 +234,7 @@ const columns: DataTableColumns<ProductSummary> = [
     }
   },
   { title: 'RSPU ID', key: 'rspuId', width: 160 },
+  { title: '业务编码', key: 'rspuCode', width: 140 },
   { title: '品类', key: 'categoryPath', ellipsis: { tooltip: true } },
   {
     title: '风格',

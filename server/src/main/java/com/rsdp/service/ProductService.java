@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -54,6 +55,8 @@ public class ProductService {
     private final RspuVariantService rspuVariantService;
     private final RskuService rskuService;
     private final UserFactoryService userFactoryService;
+    private final RspuCodeService rspuCodeService;
+    private final RskuCodeService rskuCodeService;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
     private String maxFileSize;
@@ -214,7 +217,13 @@ public class ProductService {
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
-        // 2. 创建默认变体
+        // 2. 生成并写入 RSPU 业务编码
+        String sizeCode = StringUtils.hasText(request.getSizeCode())
+            ? request.getSizeCode().trim().toUpperCase()
+            : null;
+        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+
+        // 3. 创建默认变体
         RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
         variantRequest.setDisplayName(request.getVariantDisplayName());
         variantRequest.setSizeCode(request.getSizeCode());

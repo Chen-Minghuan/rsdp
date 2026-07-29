@@ -62,6 +62,12 @@ class ProductServiceTest {
     @Mock
     private DictService dictService;
 
+    @Mock
+    private RspuCodeService rspuCodeService;
+
+    @Mock
+    private RskuCodeService rskuCodeService;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -76,6 +82,8 @@ class ProductServiceTest {
         setField("storageService", storageService);
         setField("auditLogService", auditLogService);
         setField("dictService", dictService);
+        setField("rspuCodeService", rspuCodeService);
+        setField("rskuCodeService", rskuCodeService);
     }
 
     private void setField(String name, Object value) throws Exception {

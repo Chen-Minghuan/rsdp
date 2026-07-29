@@ -79,6 +79,7 @@ public class ProductImportService {
     private final ObjectMapper objectMapper;
     private final PlatformTransactionManager transactionManager;
     private final DataScopeHelper dataScopeHelper;
+    private final RspuCodeService rspuCodeService;
 
     private java.util.Set<String> allowedImageHosts = java.util.Set.of();
 
@@ -407,6 +408,12 @@ public class ProductImportService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+
+        String sizeCode = StringUtils.hasText(row.getSizeCode())
+            ? normalizeDictCode(row.getSizeCode(), dictCache.get("size"))
+            : null;
+        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+
         return rspu;
     }
 
@@ -785,6 +792,7 @@ public class ProductImportService {
         RspuMaster copy = new RspuMaster();
         copy.setRspuId(source.getRspuId());
         copy.setExternalCode(source.getExternalCode());
+        copy.setRspuCode(source.getRspuCode());
         copy.setCategoryCode(source.getCategoryCode());
         copy.setCategoryPath(source.getCategoryPath());
         copy.setPositioningLabel(source.getPositioningLabel());

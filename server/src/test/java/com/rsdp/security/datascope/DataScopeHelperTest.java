@@ -90,7 +90,6 @@ class DataScopeHelperTest {
     @Test
     void canAccessFactory_nullFactoryCode_shouldReturnFalse() {
         when(dataScopeContext.currentDataScope()).thenReturn(DataScope.FACTORY_LIST);
-        when(dataScopeContext.currentFactoryCodes()).thenReturn(List.of("F001"));
 
         assertThat(dataScopeHelper.canAccessFactory(null)).isFalse();
     }
@@ -124,8 +123,8 @@ class DataScopeHelperTest {
         verify(rskuSupplyMapper).selectCount(captor.capture());
         String sqlSegment = captor.getValue().getSqlSegment();
         assertThat(sqlSegment).contains("rspu_id");
-        assertThat(sqlSegment).contains("F001");
-        assertThat(sqlSegment).contains("F002");
+        assertThat(captor.getValue().getParamNameValuePairs().values())
+            .contains("F001", "F002");
     }
 
     @Test
@@ -219,8 +218,8 @@ class DataScopeHelperTest {
 
         String sqlSegment = wrapper.getSqlSegment();
         assertThat(sqlSegment).contains("factory_code");
-        assertThat(sqlSegment).contains("F001");
-        assertThat(sqlSegment).contains("F002");
+        assertThat(wrapper.getParamNameValuePairs().values())
+            .contains("F001", "F002");
     }
 
     @Test

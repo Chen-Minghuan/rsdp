@@ -55,6 +55,7 @@ public class RskuService {
     private final AuditLogService auditLogService;
     private final DataScopeHelper dataScopeHelper;
     private final PlatformTransactionManager transactionManager;
+    private final RskuCodeService rskuCodeService;
 
     /**
      * 查询某 RSPU 下的所有 RSKU 报价。
@@ -151,7 +152,8 @@ public class RskuService {
         }
 
         RskuSupply rsku = new RskuSupply();
-        rsku.setRskuId(IdGenerator.rskuId());
+        String rskuId = IdGenerator.rskuId();
+        rsku.setRskuId(rskuId);
         rsku.setRspuId(request.getRspuId());
         rsku.setVariantId(request.getVariantId());
         rsku.setFactoryCode(request.getFactoryCode());
@@ -159,7 +161,8 @@ public class RskuService {
         rsku.setFactoryPrice(request.getFactoryPrice());
         rsku.setPriceBand(resolvePriceBand(request.getFactoryPrice()));
         rsku.setProductLevel(productLevel);
-        rsku.setMaterialCode(request.getMaterialCode());
+        String materialCode = resolveMaterialCode(request.getMaterialCode(), variant);
+        rsku.setMaterialCode(materialCode);
         rsku.setMaterialDescription(request.getMaterialDescription());
         rsku.setLeadTimeDays(request.getLeadTimeDays());
         rsku.setMoq(request.getMoq());
@@ -172,6 +175,10 @@ public class RskuService {
         rsku.setPriceUpdated(LocalDate.now());
         rsku.setCreatedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
+
+        // 生成并写入 RSKU 业务编码
+        String rskuCode = rskuCodeService.assignCode(rskuId, request.getRspuId(), request.getFactoryCode(), materialCode);
+        rsku.setRskuCode(rskuCode);
 
         try {
             rskuSupplyMapper.insert(rsku);
@@ -267,6 +274,16 @@ public class RskuService {
         throw new BusinessException("请为产品或变体设置产品等级，或在报价中指定产品等级");
     }
 
+    private String resolveMaterialCode(String requestMaterialCode, RspuVariant variant) {
+        if (StringUtils.hasText(requestMaterialCode)) {
+            return requestMaterialCode.trim().toUpperCase();
+        }
+        if (variant != null && StringUtils.hasText(variant.getMaterialCode())) {
+            return variant.getMaterialCode().trim().toUpperCase();
+        }
+        throw new BusinessException("材质码不能为空，无法生成 RSKU 业务编码");
+    }
+
     private void validateProductLevel(String level) {
         boolean exists = dictService.listByType("factory_level").stream()
             .anyMatch(d -> level.equals(d.getDictCode()));
@@ -349,6 +366,7 @@ public class RskuService {
     private RskuSupply snapshot(RskuSupply source) {
         RskuSupply copy = new RskuSupply();
         copy.setRskuId(source.getRskuId());
+        copy.setRskuCode(source.getRskuCode());
         copy.setRspuId(source.getRspuId());
         copy.setVariantId(source.getVariantId());
         copy.setFactoryCode(source.getFactoryCode());
@@ -408,6 +426,7 @@ public class RskuService {
                                     Map<String, List<String>> capabilityMap) {
         RskuResponse response = new RskuResponse();
         response.setRskuId(rsku.getRskuId());
+        response.setRskuCode(rsku.getRskuCode());
         response.setRspuId(rsku.getRspuId());
         response.setVariantId(rsku.getVariantId());
         response.setFactoryCode(rsku.getFactoryCode());

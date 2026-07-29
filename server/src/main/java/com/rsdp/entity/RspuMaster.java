@@ -16,6 +16,7 @@ public class RspuMaster {
     @TableId
     private String rspuId;
     private String externalCode;
+    private String rspuCode;
     private String categoryCode;
     private String categoryPath;
     private String positioningLabel;

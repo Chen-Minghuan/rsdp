@@ -49,6 +49,8 @@ class RskuServiceTest {
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
         lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+        lenient().when(rskuCodeService.assignCode(anyString(), anyString(), anyString(), anyString()))
+            .thenReturn("FS-MC-001-M-F001-PE-001");
     }
 
     @AfterEach
@@ -82,6 +84,9 @@ class RskuServiceTest {
 
     @Mock
     private AuditLogService auditLogService;
+
+    @Mock
+    private RskuCodeService rskuCodeService;
 
     @InjectMocks
     private RskuService rskuService;
@@ -160,9 +165,11 @@ class RskuServiceTest {
         request.setFactoryCode("F001");
         request.setVariantId("RSPU-TEST01-V001");
         request.setFactoryPrice(new BigDecimal("2500"));
+        request.setMaterialCode("PE");
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
         rspu.setProductLevel("S");
 
         RspuVariant variant = new RspuVariant();
@@ -189,9 +196,11 @@ class RskuServiceTest {
         request.setFactoryCode("F001");
         request.setVariantId("RSPU-TEST01-V001");
         request.setFactoryPrice(new BigDecimal("2500"));
+        request.setMaterialCode("PE");
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
         rspu.setProductLevel("S");
 
         RspuVariant variant = new RspuVariant();
@@ -219,10 +228,12 @@ class RskuServiceTest {
         request.setFactoryCode("F001");
         request.setVariantId("RSPU-TEST01-V001");
         request.setFactoryPrice(new BigDecimal("2500"));
+        request.setMaterialCode("PE");
         request.setProductLevel("C");
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
 
         RspuVariant variant = new RspuVariant();
         variant.setVariantId("RSPU-TEST01-V001");
@@ -246,11 +257,13 @@ class RskuServiceTest {
         request.setFactoryCode("F001");
         request.setVariantId("RSPU-TEST01-V001");
         request.setFactoryPrice(new BigDecimal("2500"));
+        request.setMaterialCode("PE");
         request.setProductLevel("C");
         request.setAutoExtendCapability(true);
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
 
         RspuVariant variant = new RspuVariant();
         variant.setVariantId("RSPU-TEST01-V001");
@@ -277,6 +290,7 @@ class RskuServiceTest {
         request.setFactoryCode("F001");
         request.setVariantId("RSPU-OTHER-V001");
         request.setFactoryPrice(new BigDecimal("2500"));
+        request.setMaterialCode("PE");
 
         RspuVariant variant = new RspuVariant();
         variant.setVariantId("RSPU-OTHER-V001");
@@ -298,9 +312,11 @@ class RskuServiceTest {
         request.setFactoryCode("F001");
         request.setVariantId("RSPU-TEST01-V001");
         request.setFactoryPrice(new BigDecimal("2500"));
+        request.setMaterialCode("PE");
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
         rspu.setProductLevel("S");
 
         RspuVariant variant = new RspuVariant();

@@ -18,6 +18,7 @@ import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -99,6 +100,10 @@ class ExcelAiImportServiceTest {
     private FactoryLeadTimeRuleService factoryLeadTimeRuleService;
     @Mock
     private ExcelImportRowService excelImportRowService;
+    @Mock
+    private RspuCodeService rspuCodeService;
+    @Mock
+    private DataScopeHelper dataScopeHelper;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -106,8 +111,11 @@ class ExcelAiImportServiceTest {
     void setUp() {
         lenient().when(excelImportRowService.initRow(anyString(), anyInt(), anyString(), anyMap(), any()))
             .thenAnswer(inv -> System.nanoTime());
+        lenient().when(rspuCodeService.assignCode(anyString(), anyString(), anyString(), anyString()))
+            .thenReturn("FS-MC-001-M");
         lenient().when(factoryLeadTimeRuleService.calculateLeadTime(anyString(), any(), any(), anyString(), anyInt()))
             .thenReturn(null);
+        lenient().when(dataScopeHelper.canAccessFactory(anyString())).thenReturn(true);
     }
 
     @Test

@@ -60,6 +60,7 @@ export interface ProductListParams {
  */
 export interface ProductSummary {
   rspuId: string
+  rspuCode?: string
   categoryCode: string
   categoryPath: string
   positioningLabel: string
@@ -150,6 +151,7 @@ export interface ProductStyleMatch {
 export interface ProductDetail {
   rspu: {
     rspuId: string
+    rspuCode?: string
     categoryCode: string
     categoryPath: string
     positioningLabel: string

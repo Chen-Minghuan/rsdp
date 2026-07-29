@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
     external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
+    rspu_code VARCHAR(32) UNIQUE,                    -- 业务编码，如 FS-MC-001-M
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
@@ -62,6 +63,16 @@ CREATE TABLE IF NOT EXISTS rspu_code_counter (
     sequence_value BIGINT NOT NULL DEFAULT 1,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (category_code, style_code)
+);
+
+-- RSKU 编码流水计数器（按 RSPU 业务编码+工厂+材质维度生成流水号）
+CREATE TABLE IF NOT EXISTS rsku_code_counter (
+    rspu_code VARCHAR(32) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+    material_code VARCHAR(16) NOT NULL,
+    sequence_value BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (rspu_code, factory_code, material_code)
 );
 
 -- RSPU 多场景关联表（一个款式可适用于多个场景）
@@ -279,6 +290,7 @@ CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(
 -- RSKU 供应单元子表（工厂对某变体的报价）
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
+    rsku_code VARCHAR(64) UNIQUE,                    -- 业务编码，如 FS-MC-001-M-A004-PE-001
     rspu_id VARCHAR(64) NOT NULL,
     variant_id VARCHAR(64),                        -- 关联具体变体
     factory_code VARCHAR(16) NOT NULL,

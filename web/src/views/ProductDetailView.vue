@@ -330,6 +330,7 @@ const dictCreateForm = ref({
 
 const rskuColumns: DataTableColumns<Rsku> = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
+  { title: '业务编码', key: 'rskuCode', width: 160 },
   { title: '工厂', key: 'factoryName' },
   { title: '工厂代码', key: 'factoryCode', width: 120 },
   {
@@ -1111,6 +1112,9 @@ onBeforeRouteUpdate((to, from) => {
           <n-descriptions bordered :column="2" label-placement="left">
             <n-descriptions-item label="RSPU ID">
               {{ detail.rspu.rspuId }}
+            </n-descriptions-item>
+            <n-descriptions-item label="业务编码">
+              {{ detail.rspu.rspuCode || '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="品类">
               {{ detail.rspu.categoryPath }}

@@ -12,8 +12,12 @@ import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryLevelCapabilityMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -57,6 +61,15 @@ class FactoryServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+
+        var user = User.withUsername("factory-admin").password("").roles("FACTORY_ADMIN").build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     private List<CategoryDict> factoryLevelDicts() {

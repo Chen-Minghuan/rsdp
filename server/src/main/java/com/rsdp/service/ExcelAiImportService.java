@@ -159,6 +159,7 @@ public class ExcelAiImportService {
     private final FactoryLeadTimeRuleService factoryLeadTimeRuleService;
     private final ExcelImportRowService excelImportRowService;
     private final DataScopeHelper dataScopeHelper;
+    private final RspuCodeService rspuCodeService;
 
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
@@ -1369,6 +1370,12 @@ public class ExcelAiImportService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+
+        String sizeCode = StringUtils.hasText(row.getSizeCode())
+            ? normalizeDictCode(row.getSizeCode(), dictCache.get("size"))
+            : null;
+        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+
         return rspuId;
     }
 

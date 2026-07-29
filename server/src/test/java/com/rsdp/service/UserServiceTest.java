@@ -14,12 +14,17 @@ import com.rsdp.mapper.SysRoleMapper;
 import com.rsdp.mapper.SysUserFactoryMapper;
 import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.mapper.SysUserRoleMapper;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Collections;
@@ -32,6 +37,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -75,6 +81,26 @@ class UserServiceTest {
 
     @InjectMocks
     private UserService userService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(sysUserMapper.selectByUsername(anyString()))
+            .thenAnswer(invocation -> {
+                String username = invocation.getArgument(0);
+                return buildUser(username, "designer", "设计师");
+            });
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private void authenticateAs(String userId) {
+        var auth = new UsernamePasswordAuthenticationToken(
+            userId, null, List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_DESIGNER")));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
 
     @Test
     void listUsers_shouldBatchMapRolesAndFactories() {
@@ -286,6 +312,7 @@ class UserServiceTest {
 
     @Test
     void updateMyProfile_shouldUpdateNicknameAndAudit() {
+        authenticateAs("USER-015");
         SysUser existing = buildUser("USER-015", "designer", "旧昵称");
         when(sysUserMapper.selectById("USER-015")).thenReturn(existing);
         when(userRoleService.getRoleCodesByUserId("USER-015")).thenReturn(List.of("DESIGNER"));
@@ -303,6 +330,7 @@ class UserServiceTest {
 
     @Test
     void updateMyPassword_shouldRejectWrongOldPassword() {
+        authenticateAs("USER-016");
         SysUser existing = buildUser("USER-016", "designer", "设计师");
         existing.setPasswordHash("old-hash");
         when(sysUserMapper.selectById("USER-016")).thenReturn(existing);
@@ -320,6 +348,7 @@ class UserServiceTest {
 
     @Test
     void updateMyPassword_shouldEncodeAndIncrementTokenVersion() {
+        authenticateAs("USER-017");
         SysUser existing = buildUser("USER-017", "designer", "设计师");
         existing.setPasswordHash("old-hash");
         existing.setTokenVersion(0);

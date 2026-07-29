@@ -51,6 +51,8 @@ class AiRecognitionPersistenceServiceTest {
     private AuditLogService auditLogService;
     @Mock
     private DictResolverService dictResolverService;
+    @Mock
+    private RspuCodeService rspuCodeService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 

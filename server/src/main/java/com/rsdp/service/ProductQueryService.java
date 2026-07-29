@@ -855,6 +855,7 @@ public class ProductQueryService {
                                              Map<String, List<String>> factoryCodeMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
+        summary.setRspuCode(rspu.getRspuCode());
         summary.setCategoryCode(rspu.getCategoryCode());
         summary.setCategoryPath(rspu.getCategoryPath());
         summary.setPositioningLabel(rspu.getPositioningLabel());

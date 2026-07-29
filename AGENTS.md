@@ -282,6 +282,8 @@ make clean
   - `V16__order_enhance.sql`：订单增强（design_order_item.adjust_price 行级改价 AES + design_order.contract_file_id 合同文件）
   - `V17__scheme_item_sort.sql`：方案明细 sort_order 存量回填（拖拽排序前置，数据迁移）
   - `V18__project_share.sql`：项目画布分享（project.share_enabled / share_expire_at）
+  - `V19__order_idempotency.sql`：订单幂等键与去重
+  - `V20__business_code.sql`：RSPU/RSKU 业务编码（rspu_code / rsku_code / rsku_code_counter）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。
