@@ -58,7 +58,15 @@ public final class ImageCropper {
         return encodeJpeg(cropped, outputQuality);
     }
 
-    private static byte[] encodeJpeg(BufferedImage image, float quality) throws IOException {
+    /**
+     * 将图片编码为 JPEG 字节。
+     *
+     * @param image   源图片
+     * @param quality JPEG 质量，0.0 ~ 1.0
+     * @return JPEG 字节
+     * @throws IOException 编码失败
+     */
+    public static byte[] encodeJpeg(BufferedImage image, float quality) throws IOException {
         Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpg");
         if (!writers.hasNext()) {
             throw new IOException("找不到 JPEG 编码器");
