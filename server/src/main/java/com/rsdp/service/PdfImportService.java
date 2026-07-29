@@ -43,7 +43,7 @@ public class PdfImportService {
     @Value("${rsdp.document-import.pdf.max-pages:200}")
     private int maxPages;
 
-    @Value("${rsdp.document-import.pdf.render-dpi:150}")
+    @Value("${rsdp.document-import.pdf.render-dpi:200}")
     private float renderDpi;
 
     @Value("${rsdp.document-import.pdf.detect-batch-size:5}")
@@ -52,7 +52,11 @@ public class PdfImportService {
     @Value("${rsdp.document-import.pdf.output-quality:0.9}")
     private float outputQuality;
 
-    private static final int DETECT_IMAGE_MAX_EDGE = 1024;
+    /**
+     * AI 检测用图长边上限。qwen-vl 支持高分辨率输入，
+     * 1568px 相比 1024px 能显著提升 bbox 坐标精度。
+     */
+    private static final int DETECT_IMAGE_MAX_EDGE = 1568;
 
     /**
      * 导入 PDF 文件，自动识别产品页、裁剪产品图并创建 RSPU 录入任务。
