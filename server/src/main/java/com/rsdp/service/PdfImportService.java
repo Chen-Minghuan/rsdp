@@ -100,6 +100,11 @@ public class PdfImportService {
         result.setBatchId(batchId);
 
         byte[] pdfBytes = file.getBytes();
+
+        // 嵌入图直取（零渲染损失的原图，优先于 AI 裁剪）；失败不影响主流程。
+        // 放在渲染之前执行：避免与整页位图同时占堆，降低内存峰值
+        Map<Integer, List<BufferedImage>> embeddedByPage = extractEmbeddedImagesSafely(pdfBytes, batchId);
+
         List<BufferedImage> pageImages = PdfRenderer.renderPages(pdfBytes, renderDpi);
         result.setTotalPages(pageImages.size());
         log.info("PDF 渲染完成，batchId={}，总页数={}，耗时 {}ms",
@@ -110,9 +115,6 @@ public class PdfImportService {
             result.getFailures().add(new DocumentImportFailure(0, "PDF 没有可读取的页面"));
             return result;
         }
-
-        // 嵌入图直取（零渲染损失的原图，优先于 AI 裁剪）；失败不影响主流程
-        Map<Integer, List<BufferedImage>> embeddedByPage = extractEmbeddedImagesSafely(pdfBytes, batchId);
 
         // 分批进行页面区域检测
         List<DocumentProductRegion> allRegions = detectProductRegions(pageImages);
@@ -211,7 +213,7 @@ public class PdfImportService {
     }
 
     /**
-     * 抽取嵌入大图，失败时降级为空 Map（纯 AI 裁剪路径）。
+     * 抽取嵌入大图，失败（含 OOM）时降级为空 Map（纯 AI 裁剪路径）。
      */
     private Map<Integer, List<BufferedImage>> extractEmbeddedImagesSafely(byte[] pdfBytes, String batchId) {
         try {
@@ -221,6 +223,10 @@ public class PdfImportService {
                 log.info("PDF 嵌入图抽取完成，batchId={}，共 {} 页含大嵌入图", batchId, embedded.size());
             }
             return embedded;
+        } catch (OutOfMemoryError e) {
+            // 防御性兜底：单图解码已有像素上限拦截，理论上不应到达；一旦发生必须让主流程继续
+            log.error("PDF 嵌入图抽取内存不足，降级为纯 AI 裁剪路径，batchId={}", batchId);
+            return Map.of();
         } catch (Exception e) {
             log.warn("PDF 嵌入图抽取失败，降级为纯 AI 裁剪路径，batchId={}", batchId, e);
             return Map.of();

@@ -62,6 +62,19 @@ class PdfEmbeddedImageExtractorTest {
     }
 
     @Test
+    void extract_shouldDownscaleHugeImage() throws IOException {
+        // 3000x2400 像素原图（未超 2500 万解码上限）→ 抽取结果应降采样到长边 ≤2048，控制常驻内存
+        byte[] pdf = createPdfWithImage(3000, 2400, 400, 320);
+
+        Map<Integer, List<BufferedImage>> result =
+            PdfEmbeddedImageExtractor.extractLargeImages(pdf, MIN_AREA_RATIO, MIN_PIXEL_EDGE);
+
+        assertThat(result).containsKey(0);
+        BufferedImage extracted = result.get(0).get(0);
+        assertThat(Math.max(extracted.getWidth(), extracted.getHeight())).isLessThanOrEqualTo(2048);
+    }
+
+    @Test
     void extract_shouldHandleBlankPdf() throws IOException {
         byte[] pdf;
         try (PDDocument document = new PDDocument()) {

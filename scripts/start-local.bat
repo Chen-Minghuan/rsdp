@@ -88,7 +88,7 @@ if %ERRORLEVEL% neq 0 (
 
 echo [1/2] 启动后端 Spring Boot（端口 8081）...
 echo 后端日志: %LOG_DIR%\backend.log
-start "RSDP Backend :8081" /d "%PROJECT_ROOT%\server" cmd /k "mvn spring-boot:run -Dspring-boot.run.profiles=dev ^>^> "%LOG_DIR%\backend.log" 2^>^&1 & echo 后端已启动，按 Ctrl+C 停止后关闭窗口 & pause"
+start "RSDP Backend :8081" /d "%PROJECT_ROOT%\server" cmd /k "mvn spring-boot:run -Dspring-boot.run.profiles=dev "-Dspring-boot.run.jvmArguments=-Xmx2g" ^>^> "%LOG_DIR%\backend.log" 2^>^&1 & echo 后端已启动，按 Ctrl+C 停止后关闭窗口 & pause"
 
 echo [2/2] 等待 10 秒后启动前端 Vite（端口 5173）...
 timeout /t 10 /nobreak >nul

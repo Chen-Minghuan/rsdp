@@ -64,7 +64,7 @@ echo ""
 
 echo "[1/2] 启动后端 Spring Boot（端口 8081）..."
 cd "$PROJECT_ROOT/server"
-nohup mvn spring-boot:run -Dspring-boot.run.profiles=dev > "$BACKEND_LOG" 2>&1 &
+nohup mvn spring-boot:run -Dspring-boot.run.profiles=dev -Dspring-boot.run.jvmArguments=-Xmx2g > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 echo "后端 PID: $BACKEND_PID"
 

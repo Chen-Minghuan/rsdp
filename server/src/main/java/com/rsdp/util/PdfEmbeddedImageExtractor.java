@@ -36,6 +36,19 @@ import java.util.Set;
 @Slf4j
 public final class PdfEmbeddedImageExtractor {
 
+    /**
+     * 单张嵌入图解码前的最大像素数（约 2500 万像素）。
+     *
+     * <p>画册常嵌入数千万像素的原图，解码一张即占数百 MB 堆内存，
+     * 必须在解码前拦截，超限的图放弃直取（由 AI 裁剪路径兜底）。</p>
+     */
+    private static final long MAX_DECODE_PIXELS = 25_000_000L;
+
+    /**
+     * 抽取后图片降采样的长边上限，控制常驻内存并满足主图展示/AI 识别需要。
+     */
+    private static final int EXTRACT_MAX_EDGE = 2048;
+
     private PdfEmbeddedImageExtractor() {
     }
 
@@ -126,11 +139,41 @@ public final class PdfEmbeddedImageExtractor {
             if (image.getWidth() < minPixelEdge || image.getHeight() < minPixelEdge) {
                 return;
             }
+            // 解码前拦截：超大原图解码会耗尽堆内存，放弃直取由 AI 裁剪兜底
+            long pixels = (long) image.getWidth() * image.getHeight();
+            if (pixels > MAX_DECODE_PIXELS) {
+                log.info("嵌入图像素过大（{}x{}），跳过直取，由 AI 裁剪路径兜底",
+                    image.getWidth(), image.getHeight());
+                return;
+            }
             try {
-                images.add(image.getImage());
+                images.add(downscaleIfNeeded(image.getImage()));
+            } catch (OutOfMemoryError e) {
+                log.error("嵌入图解码内存不足，跳过该图（{}x{}）", image.getWidth(), image.getHeight());
             } catch (Exception e) {
                 log.debug("嵌入图解码失败，跳过（可能为不支持的色彩空间/编码）", e);
             }
+        }
+
+        /**
+         * 长边超过 {@link #EXTRACT_MAX_EDGE} 时等比降采样，控制常驻内存。
+         */
+        private static BufferedImage downscaleIfNeeded(BufferedImage image) {
+            int width = image.getWidth();
+            int height = image.getHeight();
+            if (Math.max(width, height) <= EXTRACT_MAX_EDGE) {
+                return image;
+            }
+            double ratio = (double) EXTRACT_MAX_EDGE / Math.max(width, height);
+            int newWidth = Math.max(1, (int) Math.round(width * ratio));
+            int newHeight = Math.max(1, (int) Math.round(height * ratio));
+            BufferedImage output = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D g = output.createGraphics();
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.drawImage(image, 0, 0, newWidth, newHeight, null);
+            g.dispose();
+            return output;
         }
     }
 }
