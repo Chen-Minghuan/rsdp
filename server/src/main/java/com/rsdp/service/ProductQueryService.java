@@ -45,8 +45,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -119,9 +121,10 @@ public class ProductQueryService {
         List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
+        Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(rspuIds);
 
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap))
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
@@ -326,9 +329,10 @@ public class ProductQueryService {
         List<String> pageRspuIds = pageRecords.stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(pageRspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(pageRspuIds);
+        Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(pageRspuIds);
 
         List<ProductSummaryResponse> rows = pageRecords.stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap))
             .collect(Collectors.toList());
 
         return PageResult.of(total, page, size, rows);
@@ -454,6 +458,33 @@ public class ProductQueryService {
                 Collectors.mapping(
                     RskuSupply::getFactoryCode,
                     Collectors.collectingAndThen(Collectors.toSet(), ArrayList::new)
+                )
+            ));
+    }
+
+    /**
+     * 批量查询 RSPU 的最低出厂价（用于产品列表价格展示）。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return RSPU ID -> 最低出厂价；无报价返回空 Map
+     */
+    private Map<String, BigDecimal> batchMinFactoryPrices(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>()
+                .in("rspu_id", rspuIds)
+                .isNotNull("factory_price")
+                .isNull("deleted_at")
+        );
+        return rskus.stream()
+            .filter(r -> r.getFactoryPrice() != null)
+            .collect(Collectors.groupingBy(
+                RskuSupply::getRspuId,
+                Collectors.collectingAndThen(
+                    Collectors.minBy(Comparator.comparing(RskuSupply::getFactoryPrice)),
+                    opt -> opt.map(RskuSupply::getFactoryPrice).orElse(null)
                 )
             ));
     }
@@ -852,7 +883,8 @@ public class ProductQueryService {
 
     private ProductSummaryResponse toSummary(RspuMaster rspu,
                                              Map<String, String> primaryImageUrlMap,
-                                             Map<String, List<String>> factoryCodeMap) {
+                                             Map<String, List<String>> factoryCodeMap,
+                                             Map<String, BigDecimal> minPriceMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
         summary.setRspuCode(rspu.getRspuCode());
@@ -864,6 +896,7 @@ public class ProductQueryService {
         summary.setReviewStatus(rspu.getReviewStatus());
         summary.setAestheticsConfidence(rspu.getAestheticsConfidence());
         summary.setProductLevel(rspu.getProductLevel());
+        summary.setMinFactoryPrice(minPriceMap.get(rspu.getRspuId()));
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());
         summary.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));

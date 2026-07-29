@@ -201,50 +201,161 @@ const columns: DataTableColumns<ProductSummary> = [
     type: 'selection'
   },
   {
-    title: '图片',
-    key: 'image',
-    width: 100,
+    title: '商品编号',
+    key: 'rspuId',
+    width: 120,
     render(row: ProductSummary) {
-      return row.primaryImageUrl
+      return h(
+        'span',
+        {
+          style: {
+            color: '#666',
+            fontSize: '12px',
+            fontFamily: 'monospace'
+          }
+        },
+        row.rspuId
+      )
+    }
+  },
+  {
+    title: '商品信息',
+    key: 'productInfo',
+    width: 240,
+    render(row: ProductSummary) {
+      const image = row.primaryImageUrl
         ? h(NImage, {
             src: row.primaryImageUrl,
             fallbackSrc: IMAGE_FALLBACK_SRC,
-            width: 80,
-            height: 80,
+            width: 64,
+            height: 64,
             objectFit: 'cover',
-            style: 'border-radius: 4px;'
+            style: 'border-radius: 4px; flex-shrink: 0;'
           })
         : h(
             'div',
             {
               style: {
-                width: '80px',
-                height: '80px',
+                width: '64px',
+                height: '64px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 borderRadius: '4px',
                 background: '#f0f0f0',
                 color: '#999',
-                fontSize: '12px'
+                fontSize: '12px',
+                flexShrink: 0
               }
             },
             '暂无'
           )
+      return h(
+        'div',
+        {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px'
+          }
+        },
+        [
+          image,
+          h(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                overflow: 'hidden'
+              }
+            },
+            [
+              h(
+                'span',
+                {
+                  style: {
+                    fontWeight: 500,
+                    color: '#333',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }
+                },
+                row.categoryPath || '-'
+              ),
+              h(
+                'span',
+                {
+                  style: {
+                    fontSize: '12px',
+                    color: '#999',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }
+                },
+                resolveStyleName(row.positioningLabel)
+              )
+            ]
+          )
+        ]
+      )
     }
   },
-  { title: 'RSPU ID', key: 'rspuId', width: 160 },
-  { title: '业务编码', key: 'rspuCode', width: 140 },
-  { title: '品类', key: 'categoryPath', ellipsis: { tooltip: true } },
+  { title: '商品分类', key: 'categoryPath', ellipsis: { tooltip: true }, width: 140 },
   {
-    title: '风格',
-    key: 'positioningLabel',
+    title: '价格',
+    key: 'minFactoryPrice',
     width: 120,
     render(row: ProductSummary) {
-      return resolveStyleName(row.positioningLabel)
+      const price = row.minFactoryPrice
+      return h(
+        'span',
+        { style: { fontWeight: 500, color: '#f5222d' } },
+        price != null ? `¥ ${Number(price).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'
+      )
     }
   },
-  { title: '主色', key: 'colorPrimaryName', width: 100 },
+  {
+    title: 'SPU编码',
+    key: 'rspuCode',
+    width: 150,
+    render(row: ProductSummary) {
+      return h(
+        NButton,
+        {
+          text: true,
+          type: 'primary',
+          size: 'small',
+          onClick: () => router.push(`/products/${row.rspuId}`)
+        },
+        { default: () => row.rspuCode || '-' }
+      )
+    }
+  },
+  {
+    title: '供应商编码',
+    key: 'factoryCodes',
+    width: 140,
+    render(row: ProductSummary) {
+      const codes = row.factoryCodes || []
+      return codes.length === 0
+        ? h('span', { style: { color: '#999' } }, '-')
+        : h(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '4px'
+              }
+            },
+            codes.map(code => h(NTag, { size: 'small' }, { default: () => code }))
+          )
+    }
+  },
   {
     title: '产品等级',
     key: 'productLevel',
@@ -254,17 +365,22 @@ const columns: DataTableColumns<ProductSummary> = [
     }
   },
   {
-    title: '复核状态',
-    key: 'reviewStatus',
+    title: '销售状态',
+    key: 'status',
     width: 100,
     render(row: ProductSummary) {
-      const type = row.reviewStatus === '已确认'
-        ? 'success'
-        : row.reviewStatus === '存疑'
-          ? 'error'
-          : 'warning'
-      return h(NTag, { type, size: 'small' }, { default: () => row.reviewStatus || '-' })
+      const isActive = row.status === 'active'
+      return h(
+        NTag,
+        { type: isActive ? 'success' : 'default', size: 'small' },
+        { default: () => (isActive ? '在售' : '停售') }
+      )
     }
+  },
+  {
+    title: '创建时间',
+    key: 'createdAt',
+    width: 160
   },
   {
     title: '收藏',
@@ -288,7 +404,7 @@ const columns: DataTableColumns<ProductSummary> = [
   {
     title: '操作',
     key: 'actions',
-    width: 180,
+    width: 160,
     render(row: ProductSummary) {
       return h(
         NSpace,

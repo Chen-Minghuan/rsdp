@@ -69,6 +69,7 @@ export interface ProductSummary {
   reviewStatus: string
   aestheticsConfidence: string
   productLevel?: string
+  minFactoryPrice?: number
   primaryImageUrl: string
   factoryCodes?: string[]
   createdAt: string
