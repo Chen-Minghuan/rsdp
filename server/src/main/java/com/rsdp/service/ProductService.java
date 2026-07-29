@@ -14,6 +14,7 @@ import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ImageUploadValidator;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
+import com.rsdp.dto.request.ManualProductEntryRequest;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.request.RskuCreateRequest;
 import lombok.RequiredArgsConstructor;
@@ -195,81 +196,20 @@ public class ProductService {
         validateFactoryEntryOwnership(request.getFactoryCode());
         validateCategoryCode(request.getCategoryCode());
 
-        String rspuId = IdGenerator.rspuId();
+        RspuMaster rspu = insertRspuForEntry(
+            request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
+            request.getMaterialTags(), request.getSceneTags(), request.getSixDimTags(),
+            request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs());
+        assignRspuCode(rspu, request.getSizeCode());
+        String variantId = createDefaultVariantForEntry(
+            rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
+            request.getSizeCode(), request.getDimensions(), request.getColorCode(),
+            request.getVariantMaterialCode(), request.getMaterialMix());
+        List<String> imageIds = storeEntryImages(rspu.getRspuId(), variantId, images);
 
-        // 1. 创建 RSPU
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setCategoryCode(request.getCategoryCode().trim().toUpperCase());
-        rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
-        rspu.setPositioningLabel(request.getPositioningLabel().trim().toUpperCase());
-        rspu.setColorPrimaryName(request.getColorPrimaryName());
-        rspu.setMaterialTags(toJson(request.getMaterialTags()));
-        rspu.setSceneTags(toJson(request.getSceneTags()));
-        rspu.setSixDimTags(toJson(request.getSixDimTags()));
-        rspu.setProductLevel(request.getProductLevel().trim().toUpperCase());
-        rspu.setWarrantyYears(request.getWarrantyYears());
-        rspu.setKeySpecs(toJson(request.getKeySpecs()));
-        rspu.setStatus("active");
-        rspu.setReviewStatus("待复核");
-        rspu.setCreatedAt(LocalDateTime.now());
-        rspu.setUpdatedAt(LocalDateTime.now());
-        rspuMapper.insert(rspu);
-        auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
-
-        // 2. 生成并写入 RSPU 业务编码
-        String sizeCode = StringUtils.hasText(request.getSizeCode())
-            ? request.getSizeCode().trim().toUpperCase()
-            : null;
-        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
-
-        // 3. 创建默认变体
-        RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
-        variantRequest.setDisplayName(request.getVariantDisplayName());
-        variantRequest.setSizeCode(request.getSizeCode());
-        variantRequest.setDimensions(request.getDimensions());
-        variantRequest.setColorCode(request.getColorCode());
-        variantRequest.setMaterialCode(request.getVariantMaterialCode());
-        variantRequest.setMaterialMix(request.getMaterialMix());
-        variantRequest.setProductLevel(rspu.getProductLevel());
-        String variantId = rspuVariantService.createVariant(rspuId, variantRequest).getVariantId();
-
-        // 3. 保存图片（可选）
-        List<String> imageIds = new ArrayList<>();
-        List<String> storedObjectKeys = new ArrayList<>();
-        if (images != null && !images.isEmpty()) {
-            long maxSize = parseMaxFileSize(maxFileSize);
-            for (int i = 0; i < images.size(); i++) {
-                MultipartFile image = images.get(i);
-                imageUploadValidator.validate(image, maxSize);
-                String imageId = IdGenerator.imageId();
-                String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
-                String storagePath = storageService.store(image, objectKey);
-                storedObjectKeys.add(storagePath);
-
-                boolean isPrimary = i == 0;
-                ImageAssets imageAsset = new ImageAssets();
-                imageAsset.setImageId(imageId);
-                imageAsset.setRspuId(rspuId);
-                imageAsset.setVariantId(variantId);
-                imageAsset.setImageType(isPrimary ? "white_bg" : "detail");
-                imageAsset.setStoragePath(storagePath);
-                imageAsset.setPrimary(isPrimary);
-                imageAsset.setAiProcessed(false);
-                imageAsset.setFileSize(image.getSize());
-                imageAsset.setFormat(getExtension(image.getOriginalFilename()));
-                imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
-                imageAsset.setCreatedAt(LocalDateTime.now());
-                imageAssetsMapper.insert(imageAsset);
-                auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
-                imageIds.add(imageId);
-            }
-            registerStorageRollbackCleanup(storedObjectKeys);
-        }
-
-        // 4. 创建第一条 RSKU
+        // 创建第一条 RSKU
         RskuCreateRequest rskuRequest = new RskuCreateRequest();
-        rskuRequest.setRspuId(rspuId);
+        rskuRequest.setRspuId(rspu.getRspuId());
         rskuRequest.setVariantId(variantId);
         rskuRequest.setFactoryCode(request.getFactoryCode());
         rskuRequest.setFactorySku(request.getFactorySku());
@@ -287,12 +227,141 @@ public class ProductService {
         String rskuId = rskuService.createRsku(rskuRequest);
 
         return Map.of(
-            "rspuId", rspuId,
+            "rspuId", rspu.getRspuId(),
             "variantId", variantId,
             "rskuId", rskuId,
             "imageIds", imageIds,
             "message", "工厂产品录入成功"
         );
+    }
+
+    /**
+     * 传统手工录入新产品（不调用 AI、不关联工厂报价）。
+     *
+     * <p>在一个事务中完成 RSPU、默认变体、图片资源（可选）的创建。
+     * 供平台运营人员按传统表单方式维护产品使用；工厂报价可后续在产品详情页补充。</p>
+     *
+     * @param request 手工录入请求
+     * @param images  产品图片，可选
+     * @return 创建结果，包含 rspuId、variantId
+     * @throws IOException 图片存储失败
+     */
+    @Transactional
+    public Map<String, Object> createManualEntry(ManualProductEntryRequest request, List<MultipartFile> images) throws IOException {
+        validateCategoryCode(request.getCategoryCode());
+
+        RspuMaster rspu = insertRspuForEntry(
+            request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
+            request.getMaterialTags(), request.getSceneTags(), null,
+            request.getProductLevel(), request.getWarrantyYears(), null);
+        assignRspuCode(rspu, request.getSizeCode());
+        String variantId = createDefaultVariantForEntry(
+            rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
+            request.getSizeCode(), request.getDimensions(), request.getColorCode(),
+            request.getVariantMaterialCode(), request.getMaterialMix());
+        List<String> imageIds = storeEntryImages(rspu.getRspuId(), variantId, images);
+
+        return Map.of(
+            "rspuId", rspu.getRspuId(),
+            "variantId", variantId,
+            "imageIds", imageIds,
+            "message", "手工录入产品成功"
+        );
+    }
+
+    /**
+     * 创建并落库 RSPU（active + 待复核），写审计日志。
+     */
+    private RspuMaster insertRspuForEntry(String categoryCode, String positioningLabel, String colorPrimaryName,
+                                          List<String> materialTags, List<String> sceneTags, Object sixDimTags,
+                                          String productLevel, Integer warrantyYears, Object keySpecs) {
+        String rspuId = IdGenerator.rspuId();
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setCategoryCode(categoryCode.trim().toUpperCase());
+        rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
+        rspu.setPositioningLabel(positioningLabel.trim().toUpperCase());
+        rspu.setColorPrimaryName(colorPrimaryName);
+        rspu.setMaterialTags(toJson(materialTags));
+        rspu.setSceneTags(toJson(sceneTags));
+        rspu.setSixDimTags(toJson(sixDimTags));
+        rspu.setProductLevel(productLevel.trim().toUpperCase());
+        rspu.setWarrantyYears(warrantyYears);
+        rspu.setKeySpecs(toJson(keySpecs));
+        rspu.setStatus("active");
+        rspu.setReviewStatus("待复核");
+        rspu.setCreatedAt(LocalDateTime.now());
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.insert(rspu);
+        auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+        return rspu;
+    }
+
+    /**
+     * 生成并写入 RSPU 业务编码（rspu_code）。
+     */
+    private void assignRspuCode(RspuMaster rspu, String rawSizeCode) {
+        String sizeCode = StringUtils.hasText(rawSizeCode)
+            ? rawSizeCode.trim().toUpperCase()
+            : null;
+        rspuCodeService.assignCode(rspu.getRspuId(), rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+    }
+
+    /**
+     * 为新 RSPU 创建默认变体。
+     */
+    private String createDefaultVariantForEntry(String rspuId, String productLevel, String displayName,
+                                                String sizeCode, String dimensions, String colorCode,
+                                                String materialCode, List<String> materialMix) {
+        RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
+        variantRequest.setDisplayName(displayName);
+        variantRequest.setSizeCode(sizeCode);
+        variantRequest.setDimensions(dimensions);
+        variantRequest.setColorCode(colorCode);
+        variantRequest.setMaterialCode(materialCode);
+        variantRequest.setMaterialMix(materialMix);
+        variantRequest.setProductLevel(productLevel);
+        return rspuVariantService.createVariant(rspuId, variantRequest).getVariantId();
+    }
+
+    /**
+     * 保存录入图片（可选）：第一张为主图，逐张写入 image_assets 并记审计。
+     */
+    private List<String> storeEntryImages(String rspuId, String variantId, List<MultipartFile> images) throws IOException {
+        List<String> imageIds = new ArrayList<>();
+        if (images == null || images.isEmpty()) {
+            return imageIds;
+        }
+        List<String> storedObjectKeys = new ArrayList<>();
+        long maxSize = parseMaxFileSize(maxFileSize);
+        for (int i = 0; i < images.size(); i++) {
+            MultipartFile image = images.get(i);
+            imageUploadValidator.validate(image, maxSize);
+            String imageId = IdGenerator.imageId();
+            String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
+            String storagePath = storageService.store(image, objectKey);
+            storedObjectKeys.add(storagePath);
+
+            boolean isPrimary = i == 0;
+            ImageAssets imageAsset = new ImageAssets();
+            imageAsset.setImageId(imageId);
+            imageAsset.setRspuId(rspuId);
+            imageAsset.setVariantId(variantId);
+            imageAsset.setImageType(isPrimary ? "white_bg" : "detail");
+            imageAsset.setStoragePath(storagePath);
+            imageAsset.setPrimary(isPrimary);
+            imageAsset.setAiProcessed(false);
+            imageAsset.setFileSize(image.getSize());
+            imageAsset.setFormat(getExtension(image.getOriginalFilename()));
+            imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
+            imageAsset.setCreatedAt(LocalDateTime.now());
+            imageAssetsMapper.insert(imageAsset);
+            auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
+            imageIds.add(imageId);
+        }
+        registerStorageRollbackCleanup(storedObjectKeys);
+        return imageIds;
     }
 
     /**

@@ -68,6 +68,9 @@ class ProductServiceTest {
     @Mock
     private RskuCodeService rskuCodeService;
 
+    @Mock
+    private RspuVariantService rspuVariantService;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -330,5 +333,82 @@ class ProductServiceTest {
         } finally {
             TransactionSynchronizationManager.clear();
         }
+    }
+
+    @Test
+    void createManualEntry_shouldCreateRspuAndDefaultVariant() throws Exception {
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-001");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("mc");
+        request.setProductLevel("a");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+
+        Map<String, Object> result = productService.createManualEntry(request, null);
+
+        assertThat(result).containsKeys("rspuId", "variantId", "imageIds", "message");
+        assertThat(result.get("variantId")).isEqualTo("VAR-001");
+        assertThat(result.get("imageIds")).asList().isEmpty();
+
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
+        assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("active");
+        assertThat(rspuCaptor.getValue().getReviewStatus()).isEqualTo("待复核");
+        assertThat(rspuCaptor.getValue().getCategoryCode()).isEqualTo("FS");
+        assertThat(rspuCaptor.getValue().getPositioningLabel()).isEqualTo("MC");
+        assertThat(rspuCaptor.getValue().getProductLevel()).isEqualTo("A");
+
+        verify(rspuCodeService, times(1)).assignCode(anyString(), eq("FS"), eq("MC"), isNull());
+        verify(rspuVariantService, times(1)).createVariant(anyString(), any());
+        verify(auditLogService, times(1)).logCreate(eq("rspu_master"), anyString(), any(), any());
+    }
+
+    @Test
+    void createManualEntry_withImages_shouldStoreImages() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(), anyString())).thenReturn("images/IMG-MANUAL.jpg");
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-002");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+
+        Map<String, Object> result = productService.createManualEntry(request, List.of(image));
+
+        assertThat(result.get("imageIds")).asList().hasSize(1);
+        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper, times(1)).insert(imageCaptor.capture());
+        assertThat(imageCaptor.getValue().getPrimary()).isTrue();
+        assertThat(imageCaptor.getValue().getImageType()).isEqualTo("white_bg");
+        assertThat(imageCaptor.getValue().getVariantId()).isEqualTo("VAR-002");
+    }
+
+    @Test
+    void createManualEntry_shouldRejectInvalidCategory() {
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("XX");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+
+        assertThatThrownBy(() -> productService.createManualEntry(request, null))
+            .isInstanceOf(BusinessException.class);
+        verify(rspuMapper, never()).insert(any(RspuMaster.class));
     }
 }

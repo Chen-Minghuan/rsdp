@@ -64,6 +64,12 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
   },
   {
+    path: '/products/manual-entry',
+    name: 'ProductManualEntry',
+    component: () => import('@/views/ProductManualEntryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+  },
+  {
     path: '/products/:rspuId',
     name: 'ProductDetail',
     component: () => import('@/views/ProductDetailView.vue'),

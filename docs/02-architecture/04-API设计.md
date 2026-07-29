@@ -80,6 +80,20 @@ POST   /api/v1/products/factory-entry
        #   - 必须属于 `factoryCode` 指定工厂，否则返回 403
        #   - 同一张图片同时作为主图写入 `image_assets`，并用于创建首条 RSKU
 
+POST   /api/v1/products/manual-entry
+       # 传统手工录入（原子创建 RSPU + 默认变体 + 可选图片；不调用 AI、不关联工厂报价）
+       # Request: multipart/form-data
+       #   request: JSON { categoryCode, positioningLabel, colorPrimaryName?, materialTags?,
+       #                   sceneTags?, productLevel, warrantyYears?,
+       #                   variantDisplayName, sizeCode?, dimensions?, colorCode?,
+       #                   variantMaterialCode, materialMix? }
+       #   images: File[] (可选, 第一张为主图, 单张 ≤10MB)
+       # Response: { rspuId, variantId, imageIds: string[] }
+       # 说明：
+       #   - 需 `product:create` 权限（不限工厂管理员角色）
+       #   - RSPU 创建为 active + 待复核，自动分配 rspu_code 业务编码
+       #   - 工厂报价（RSKU）后续在产品详情页或 RSKU 导入中补充
+
 GET    /api/v1/tasks/{taskId}
        # 查询异步任务状态（前端轮询用）
        # Response: {

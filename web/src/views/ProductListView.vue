@@ -698,7 +698,7 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
             <n-space align="center">
               <n-button type="primary" @click="handleSearch">搜索</n-button>
               <n-button @click="handleReset">重置</n-button>
-              <n-button v-if="canCreateProduct" type="primary" ghost @click="router.push('/entry')">新增</n-button>
+              <n-button v-if="canCreateProduct" type="primary" ghost @click="router.push('/products/manual-entry')">新增</n-button>
               <n-button v-if="canImportProduct" @click="router.push('/products/import')">批量导入</n-button>
               <n-button text type="primary" class="expand-toggle" @click="filtersExpanded = !filtersExpanded">
                 {{ filtersExpanded ? '收起筛选' : '展开筛选' }}

@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, ManualProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -152,6 +152,20 @@ export async function importProducts(file: File, updateIfExists: boolean): Promi
 export async function factoryEntry(formData: FormData): Promise<FactoryProductEntryResult> {
   const { data: result } = await uploadClient.post<ApiResult<FactoryProductEntryResult>>(
     '/v1/products/factory-entry',
+    formData
+  )
+  return result.data
+}
+
+/**
+ * 传统手工录入：一次性创建 RSPU + 默认变体（不调用 AI、不关联工厂报价）。
+ *
+ * @param formData multipart/form-data，包含 request (JSON 字符串) 与 images（可选）
+ * @returns 创建结果
+ */
+export async function manualEntry(formData: FormData): Promise<ManualProductEntryResult> {
+  const { data: result } = await uploadClient.post<ApiResult<ManualProductEntryResult>>(
+    '/v1/products/manual-entry',
     formData
   )
   return result.data

@@ -3,6 +3,7 @@ package com.rsdp.controller;
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
+import com.rsdp.dto.request.ManualProductEntryRequest;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductReviewRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
@@ -91,6 +92,25 @@ public class ProductController {
             validateImages(images);
         }
         return Result.ok(productService.createFactoryEntry(request, images));
+    }
+
+    /**
+     * 传统手工录入新产品（不调用 AI、不关联工厂报价）。
+     *
+     * @param request 录入请求（RSPU + 默认变体信息）
+     * @param images  产品图片，可选
+     * @return 创建结果
+     * @throws IOException 文件保存失败
+     */
+    @PostMapping("/manual-entry")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_CREATE + "')")
+    public Result<Map<String, Object>> manualEntry(
+        @Valid @RequestPart("request") ManualProductEntryRequest request,
+        @RequestParam(value = "images", required = false) List<MultipartFile> images) throws IOException {
+        if (images != null && !images.isEmpty()) {
+            validateImages(images);
+        }
+        return Result.ok(productService.createManualEntry(request, images));
     }
 
     /**

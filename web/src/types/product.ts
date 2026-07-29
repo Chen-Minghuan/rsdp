@@ -9,6 +9,15 @@ export interface FactoryProductEntryResult {
 }
 
 /**
+ * 手工录入结果。
+ */
+export interface ManualProductEntryResult {
+  rspuId: string
+  variantId: string
+  imageIds: string[]
+}
+
+/**
  * 工厂单条录入表单（前端用）。
  */
 export interface FactoryProductEntryForm {
