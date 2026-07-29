@@ -53,6 +53,31 @@ export interface ProductListParams {
   keyword?: string
   viewMode?: 'own' | 'full'
   factoryCode?: string
+  /** SPU 业务编码模糊搜索 */
+  rspuCode?: string
+  /** 供应商编码（工厂代码）模糊搜索 */
+  supplierCode?: string
+  /** 创建时间起（yyyy-MM-dd） */
+  createdFrom?: string
+  /** 创建时间止（yyyy-MM-dd） */
+  createdTo?: string
+  /** 状态页签 */
+  statusTab?: SpuStatusTab
+}
+
+/**
+ * 商品列表状态页签。
+ */
+export type SpuStatusTab = 'onSale' | 'warehouse' | 'soldOut' | 'recycled'
+
+/**
+ * 状态页签统计。
+ */
+export interface SpuStatusCounts {
+  onSale: number
+  inWarehouse: number
+  soldOut: number
+  recycled: number
 }
 
 /**
@@ -232,6 +257,8 @@ export interface ProductUpdateRequest {
   productLevel?: string
   warrantyYears?: number
   keySpecs?: Record<string, string>
+  /** 销售状态：active=上架、inactive=下架 */
+  status?: 'active' | 'inactive'
 }
 
 /**

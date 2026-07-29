@@ -45,4 +45,7 @@ public class ProductUpdateRequest {
 
     /** 关键规格。 */
     private Map<String, String> keySpecs;
+
+    /** 销售状态：active=上架出售中、inactive=下架入仓库中。 */
+    private String status;
 }

@@ -125,7 +125,7 @@ export const navGroups: NavGroup[] = [
     items: [
       {
         key: 'products',
-        label: '产品列表',
+        label: '商品列表',
         path: '/products',
         permission: PERMISSIONS.PRODUCT_READ,
         activeMatch: 'prefix',

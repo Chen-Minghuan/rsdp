@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest } from '@/types/product'
+import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -38,6 +38,27 @@ export async function uploadProductImages(files: File[], categoryCode?: string, 
 export async function listProducts(params: ProductListParams, options?: ApiOptions): Promise<PageResult<ProductSummary>> {
   const { data: result } = await apiClient.get<ApiResult<PageResult<ProductSummary>>>('/v1/products', { params, signal: options?.signal })
   return result.data
+}
+
+/**
+ * 商品列表状态页签统计（出售中/仓库中/已售罄/回收站）。
+ *
+ * @param params 查询条件（statusTab 忽略）
+ * @returns 各页签数量
+ */
+export async function getProductStatusCounts(params: ProductListParams, options?: ApiOptions): Promise<SpuStatusCounts> {
+  const { data: result } = await apiClient.get<ApiResult<SpuStatusCounts>>('/v1/products/status-counts', { params, signal: options?.signal })
+  return result.data
+}
+
+/**
+ * 修改产品销售状态（上架 active / 下架 inactive）。
+ *
+ * @param rspuId RSPU ID
+ * @param status 目标状态
+ */
+export async function updateProductStatus(rspuId: string, status: 'active' | 'inactive'): Promise<void> {
+  await updateProduct(rspuId, { status })
 }
 
 /**

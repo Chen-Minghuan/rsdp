@@ -7,6 +7,7 @@ import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductReviewRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
+import com.rsdp.dto.response.ProductStatusCountsResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.security.Permissions;
 import com.rsdp.service.ProductQueryService;
@@ -101,6 +102,17 @@ public class ProductController {
     @GetMapping
     public Result<PageResult<ProductSummaryResponse>> list(@Valid ProductListRequest request) {
         return Result.ok(productQueryService.listProducts(request));
+    }
+
+    /**
+     * 商城商品列表状态页签统计（出售中/仓库中/已售罄/回收站）。
+     *
+     * @param request 查询条件（statusTab 忽略）
+     * @return 各页签数量
+     */
+    @GetMapping("/status-counts")
+    public Result<ProductStatusCountsResponse> statusCounts(@Valid ProductListRequest request) {
+        return Result.ok(productQueryService.statusCounts(request));
     }
 
     /**

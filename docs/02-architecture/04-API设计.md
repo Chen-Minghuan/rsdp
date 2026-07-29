@@ -96,7 +96,13 @@ GET    /api/v1/products
        #        materialTag（材质码）, status, reviewStatus,
        #        keyword（搜 category_path 或 rspu_id）,
        #        viewMode: "own" | "full" (可选, 默认 own),
-       #        factoryCode: string (可选, 工厂管理员可指定本厂编码)
+       #        factoryCode: string (可选, 工厂管理员可指定本厂编码),
+       #        rspuCode: string (可选, SPU 业务编码 rspu_code 模糊),
+       #        supplierCode: string (可选, 存在该工厂代码 RSKU 报价的产品, 模糊),
+       #        createdFrom / createdTo: yyyy-MM-dd (可选, 创建时间范围, 含当日),
+       #        statusTab: "onSale"|"warehouse"|"soldOut"|"recycled" (可选, 商城状态页签;
+       #                 onSale=status=active, warehouse=status!=active,
+       #                 soldOut=恒空, recycled=回收站即已软删除记录)
        # Response: { total, page, size, rows: [ProductSummary...] }
        # 说明：
        #   - positioningLabel / sceneCode / materialTag 均按字典码精确查询
@@ -104,6 +110,14 @@ GET    /api/v1/products
        #   - full：平台全量 RSPU，按 `factory_product_capability` 能力覆盖去重，
        #     对已被本厂能力覆盖且本厂未报价的 RSPU 进行折叠隐藏；
        #     仅当用户拥有 `view_full_catalog=true` 或对应权限时可用
+       #   - statusTab=recycled 时走独立回收站查询（绕过逻辑删除过滤），
+       #     其他搜索条件不叠加，行内最低出厂价/供应商编码为空
+
+GET    /api/v1/products/status-counts
+       # 商城商品列表状态页签统计（已实现）
+       # Query: 同产品列表（statusTab 忽略，统计复用其余过滤条件）
+       # Response: { onSale, inWarehouse, soldOut, recycled }
+       # 说明：soldOut 当前无业务概念恒为 0；recycled 为全库软删除总数（不叠加搜索条件）
 
 GET    /api/v1/products/{rspuId}
        # 产品详情（含图片、AI 识别记录、官方搭配与适配来源，已实现）
@@ -140,6 +154,7 @@ PUT    /api/v1/products/{rspuId}/review
 PUT    /api/v1/products/{rspuId}
        # 更新产品元数据（定位标签、颜色、材质、场景、六维标签、价格带、保修年限等，已实现）
        # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）
+       #        status: "active"|"inactive"（可选，销售状态上下架，非法值返回 400）
        # 说明：工厂管理员/业务员只能更新本厂已录入 RSKU 的 RSPU；非本厂产品返回 403
 
 DELETE /api/v1/products/{rspuId}
