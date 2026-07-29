@@ -5,9 +5,11 @@ import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.dto.response.DocumentImportFailure;
 import com.rsdp.dto.response.DocumentImportResult;
 import com.rsdp.exception.BusinessException;
-import com.rsdp.util.ImageCropper;
+import com.rsdp.util.ImageWhitespaceTrimmer;
+import com.rsdp.util.PdfEmbeddedImageExtractor;
 import com.rsdp.util.PdfFileValidator;
 import com.rsdp.util.PdfRenderer;
+import com.rsdp.util.ProductBoxRefiner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -53,10 +55,32 @@ public class PdfImportService {
     private float outputQuality;
 
     /**
+     * 嵌入图直取：图片绘制面积占页面面积的最小比例。
+     */
+    @Value("${rsdp.document-import.pdf.embedded-image.min-area-ratio:0.20}")
+    private double embeddedMinAreaRatio;
+
+    /**
+     * 嵌入图直取：图片原始像素的最小边长。
+     */
+    @Value("${rsdp.document-import.pdf.embedded-image.min-pixel-edge:200}")
+    private int embeddedMinPixelEdge;
+
+    /**
      * AI 检测用图长边上限。qwen-vl 支持高分辨率输入，
      * 1568px 相比 1024px 能显著提升 bbox 坐标精度。
      */
     private static final int DETECT_IMAGE_MAX_EDGE = 1568;
+
+    /**
+     * 裁剪前 bbox 外扩比例（相对页面宽高），防止 AI 低估边界切断产品。
+     */
+    private static final double CROP_EXPAND_RATIO = 0.03;
+
+    /**
+     * 白边收紧后的留白比例（相对内容宽高）。
+     */
+    private static final double CROP_PAD_RATIO = 0.02;
 
     /**
      * 导入 PDF 文件，自动识别产品页、裁剪产品图并创建 RSPU 录入任务。
@@ -75,10 +99,8 @@ public class PdfImportService {
         DocumentImportResult result = new DocumentImportResult();
         result.setBatchId(batchId);
 
-        List<BufferedImage> pageImages;
-        try (InputStream in = file.getInputStream()) {
-            pageImages = PdfRenderer.renderPages(in, renderDpi);
-        }
+        byte[] pdfBytes = file.getBytes();
+        List<BufferedImage> pageImages = PdfRenderer.renderPages(pdfBytes, renderDpi);
         result.setTotalPages(pageImages.size());
         log.info("PDF 渲染完成，batchId={}，总页数={}，耗时 {}ms",
             batchId, pageImages.size(), System.currentTimeMillis() - start);
@@ -89,34 +111,36 @@ public class PdfImportService {
             return result;
         }
 
+        // 嵌入图直取（零渲染损失的原图，优先于 AI 裁剪）；失败不影响主流程
+        Map<Integer, List<BufferedImage>> embeddedByPage = extractEmbeddedImagesSafely(pdfBytes, batchId);
+
         // 分批进行页面区域检测
         List<DocumentProductRegion> allRegions = detectProductRegions(pageImages);
         log.info("PDF 页面区域检测完成，batchId={}，共 {} 页产品页",
-            batchId, allRegions.stream().filter(DocumentProductRegion::isProductPage).count());
+            batchId, allRegions.stream().filter(PdfImportService::isProductPageType).count());
 
+        // 逐产品创建录入任务：嵌入图直取优先，AI bbox 精修裁剪兜底
         int productPages = 0;
         int totalProducts = 0;
-        for (DocumentProductRegion region : allRegions) {
-            if (region.isProductPage()) {
-                productPages++;
-                totalProducts += region.getProducts().size();
-            }
-        }
-        result.setProductPages(productPages);
-        result.setTotalProducts(totalProducts);
-
-        // 裁剪并逐产品创建录入任务
         int successCount = 0;
         int failedCount = 0;
         for (DocumentProductRegion region : allRegions) {
-            if (!region.isProductPage()) {
+            // 注意：只按 pageType 判断，AI 判为产品页但漏检 bbox 时也要走嵌入图兜底
+            if (!isProductPageType(region)) {
                 continue;
             }
+            productPages++;
             BufferedImage pageImage = pageImages.get(region.getPageIndex());
-            for (DocumentProductRegion.PageProduct product : region.getProducts()) {
+            List<ProductSource> sources = buildProductSources(region,
+                embeddedByPage.get(region.getPageIndex()), pageImage.getWidth(), pageImage.getHeight());
+            if (sources.isEmpty()) {
+                log.warn("产品页未提取到任何产品图（AI 漏检且无嵌入大图），batchId={}，pageIndex={}",
+                    batchId, region.getPageIndex());
+            }
+            totalProducts += sources.size();
+            for (ProductSource source : sources) {
                 try {
-                    String effectiveCategory = resolveCategory(product.getEstimatedCategory(), categoryHint);
-                    EntryInfo entryInfo = createEntryFromCrop(batchId, pageImage, product.getBbox(), effectiveCategory);
+                    EntryInfo entryInfo = createEntryFromSource(batchId, pageImage, source, categoryHint);
                     if (entryInfo != null && entryInfo.rspuId != null) {
                         result.getRspuIds().add(entryInfo.rspuId);
                         result.getTaskIds().add(entryInfo.taskId);
@@ -124,13 +148,14 @@ public class PdfImportService {
                     }
                 } catch (Exception e) {
                     failedCount++;
-                    log.warn("裁剪或录入产品失败，batchId={}，pageIndex={}", batchId, region.getPageIndex(), e);
+                    log.warn("产品图提取或录入失败，batchId={}，pageIndex={}", batchId, region.getPageIndex(), e);
                     result.getFailures().add(new DocumentImportFailure(region.getPageIndex(),
                         "产品录入失败: " + e.getMessage()));
                 }
             }
         }
-
+        result.setProductPages(productPages);
+        result.setTotalProducts(totalProducts);
         result.setSuccessCount(successCount);
         result.setFailedCount(failedCount);
 
@@ -139,6 +164,67 @@ public class PdfImportService {
             successCount, failedCount, System.currentTimeMillis() - start);
 
         return result;
+    }
+
+    /**
+     * 按 pageType 判断产品页（不要求 products 非空，容忍 AI 漏检 bbox 的情况）。
+     */
+    private static boolean isProductPageType(DocumentProductRegion region) {
+        return "product".equalsIgnoreCase(region.getPageType());
+    }
+
+    /**
+     * 单个产品的图片来源：嵌入原图（embeddedImage 非空）或页面 bbox 裁剪（bbox 非空）。
+     */
+    private record ProductSource(String estimatedCategory, ProductBoundingBox bbox, BufferedImage embeddedImage) {
+    }
+
+    /**
+     * 构建一页的产品来源列表。
+     *
+     * <p>决策规则：页面含大面积嵌入图且数量不少于 AI 检出的有效产品时，
+     * 直接使用嵌入原图（零渲染损失、天然完整）；否则走 AI bbox 裁剪路径
+     * （bbox 先经 {@link ProductBoxRefiner} 清洗去重）。</p>
+     */
+    private List<ProductSource> buildProductSources(DocumentProductRegion region,
+                                                    List<BufferedImage> embeddedImages,
+                                                    int pageWidth, int pageHeight) {
+        List<ProductBoxRefiner.Refined<DocumentProductRegion.PageProduct>> refined =
+            ProductBoxRefiner.refineAll(region.getProducts(),
+                DocumentProductRegion.PageProduct::getBbox, pageWidth, pageHeight);
+
+        if (embeddedImages != null && !embeddedImages.isEmpty() && embeddedImages.size() >= refined.size()) {
+            List<ProductSource> sources = new ArrayList<>(embeddedImages.size());
+            for (int i = 0; i < embeddedImages.size(); i++) {
+                // 品类按检出顺序映射，嵌入图多于 AI 产品时映射不到则交给 hint 兜底
+                String category = i < refined.size() ? refined.get(i).source().getEstimatedCategory() : null;
+                sources.add(new ProductSource(category, null, embeddedImages.get(i)));
+            }
+            return sources;
+        }
+
+        List<ProductSource> sources = new ArrayList<>(refined.size());
+        for (ProductBoxRefiner.Refined<DocumentProductRegion.PageProduct> r : refined) {
+            sources.add(new ProductSource(r.source().getEstimatedCategory(), r.box(), null));
+        }
+        return sources;
+    }
+
+    /**
+     * 抽取嵌入大图，失败时降级为空 Map（纯 AI 裁剪路径）。
+     */
+    private Map<Integer, List<BufferedImage>> extractEmbeddedImagesSafely(byte[] pdfBytes, String batchId) {
+        try {
+            Map<Integer, List<BufferedImage>> embedded =
+                PdfEmbeddedImageExtractor.extractLargeImages(pdfBytes, embeddedMinAreaRatio, embeddedMinPixelEdge);
+            if (!embedded.isEmpty()) {
+                log.info("PDF 嵌入图抽取完成，batchId={}，共 {} 页含大嵌入图", batchId, embedded.size());
+            }
+            return embedded;
+        } catch (Exception e) {
+            log.warn("PDF 嵌入图抽取失败，降级为纯 AI 裁剪路径，batchId={}", batchId, e);
+            return Map.of();
+        }
     }
 
     /**
@@ -236,21 +322,31 @@ public class PdfImportService {
     }
 
     /**
-     * 根据 bbox 裁剪产品图并创建录入任务。
+     * 提取产品图（嵌入原图直取 或 bbox 外扩裁剪 + 白边精修）并创建录入任务。
      *
      * @return 录入信息，包含 RSPU ID 和任务 ID
      */
-    private EntryInfo createEntryFromCrop(String batchId, BufferedImage pageImage, ProductBoundingBox bbox,
-                                          String categoryCode) throws IOException {
-        byte[] croppedBytes = ImageCropper.cropToJpeg(pageImage, bbox, outputQuality);
-        if (croppedBytes == null || croppedBytes.length == 0) {
-            throw new BusinessException("裁剪产品图失败");
+    private EntryInfo createEntryFromSource(String batchId, BufferedImage pageImage, ProductSource source,
+                                            String categoryHint) throws IOException {
+        byte[] imageBytes;
+        if (source.embeddedImage() != null) {
+            // 嵌入原图：整图白边精修（去扫描边距 + 留白），不经任何渲染缩放
+            imageBytes = ImageWhitespaceTrimmer.cropRefineToJpeg(source.embeddedImage(),
+                new ProductBoundingBox(0.0, 0.0, 1.0, 1.0), 0.0, CROP_PAD_RATIO, outputQuality);
+        } else {
+            // AI bbox：外扩防切边 + 白边收紧 + 留白
+            imageBytes = ImageWhitespaceTrimmer.cropRefineToJpeg(pageImage, source.bbox(),
+                CROP_EXPAND_RATIO, CROP_PAD_RATIO, outputQuality);
+        }
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new BusinessException("提取产品图失败");
         }
 
+        String effectiveCategory = resolveCategory(source.estimatedCategory(), categoryHint);
         String filename = batchId + "_page_product.jpg";
         Map<String, Object> entryResult;
-        try (InputStream in = new ByteArrayInputStream(croppedBytes)) {
-            entryResult = productService.createEntryFromStream(in, filename, croppedBytes.length, categoryCode);
+        try (InputStream in = new ByteArrayInputStream(imageBytes)) {
+            entryResult = productService.createEntryFromStream(in, filename, imageBytes.length, effectiveCategory);
         }
 
         Object rspuId = entryResult.get("rspuId");

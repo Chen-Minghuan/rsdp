@@ -35,6 +35,14 @@ public final class ProductBoxRefiner {
     }
 
     /**
+     * 清洗结果：保留来源对象与清洗后的 bbox 配对。
+     *
+     * @param <T> 来源对象类型（如 AI 返回的完整产品记录）
+     */
+    public record Refined<T>(T source, ProductBoundingBox box) {
+    }
+
+    /**
      * 清洗 AI 返回的 bbox 列表。
      *
      * @param boxes      AI 原始 bbox 列表，可为空
@@ -43,13 +51,30 @@ public final class ProductBoxRefiner {
      * @return 清洗后的 bbox 列表（已按面积降序），不会为 null
      */
     public static List<ProductBoundingBox> refine(List<ProductBoundingBox> boxes, int pageWidth, int pageHeight) {
-        if (boxes == null || boxes.isEmpty()) {
+        return refineAll(boxes, java.util.function.Function.identity(), pageWidth, pageHeight)
+            .stream().map(Refined::box).toList();
+    }
+
+    /**
+     * 清洗 bbox 并保留来源对象配对（用于品类等附加信息的映射）。
+     *
+     * @param items      来源对象列表
+     * @param extractor  从来源对象提取 bbox 的函数
+     * @param pageWidth  渲染页面宽度（像素）
+     * @param pageHeight 渲染页面高度（像素）
+     * @param <T>        来源对象类型
+     * @return 清洗结果列表（按面积降序），不会为 null
+     */
+    public static <T> List<Refined<T>> refineAll(List<T> items,
+                                                 java.util.function.Function<T, ProductBoundingBox> extractor,
+                                                 int pageWidth, int pageHeight) {
+        if (items == null || items.isEmpty()) {
             return List.of();
         }
 
-        List<ProductBoundingBox> candidates = new ArrayList<>(boxes.size());
-        for (ProductBoundingBox box : boxes) {
-            ProductBoundingBox clamped = clamp(box);
+        List<Refined<T>> candidates = new ArrayList<>(items.size());
+        for (T item : items) {
+            ProductBoundingBox clamped = clamp(extractor.apply(item));
             if (clamped == null) {
                 continue;
             }
@@ -63,18 +88,18 @@ public final class ProductBoxRefiner {
                 log.debug("丢弃像素尺寸过小的 bbox，box={}", clamped);
                 continue;
             }
-            candidates.add(clamped);
+            candidates.add(new Refined<>(item, clamped));
         }
 
         // 面积降序，IoU 去重保留大框
         candidates.sort(Comparator.comparingDouble(
-            (ProductBoundingBox b) -> b.getWidth() * b.getHeight()).reversed());
+            (Refined<T> r) -> r.box().getWidth() * r.box().getHeight()).reversed());
 
-        List<ProductBoundingBox> kept = new ArrayList<>(candidates.size());
-        for (ProductBoundingBox candidate : candidates) {
+        List<Refined<T>> kept = new ArrayList<>(candidates.size());
+        for (Refined<T> candidate : candidates) {
             boolean duplicated = false;
-            for (ProductBoundingBox existing : kept) {
-                if (iou(candidate, existing) > IOU_DEDUP_THRESHOLD) {
+            for (Refined<T> existing : kept) {
+                if (iou(candidate.box(), existing.box()) > IOU_DEDUP_THRESHOLD) {
                     duplicated = true;
                     break;
                 }
