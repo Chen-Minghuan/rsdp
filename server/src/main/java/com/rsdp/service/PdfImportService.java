@@ -46,7 +46,7 @@ public class PdfImportService {
     @Value("${rsdp.document-import.pdf.render-dpi:150}")
     private float renderDpi;
 
-    @Value("${rsdp.document-import.pdf.detect-batch-size:20}")
+    @Value("${rsdp.document-import.pdf.detect-batch-size:5}")
     private int detectBatchSize;
 
     @Value("${rsdp.document-import.pdf.output-quality:0.9}")
@@ -173,7 +173,34 @@ public class PdfImportService {
             }
         }
 
+        retryUnknownPages(pageImages, allRegions);
         return allRegions;
+    }
+
+    /**
+     * 对降级为 unknown 的页（批检测失败或 JSON 截断）逐页单独重试一次，
+     * 避免整批失败导致产品页整体丢失。
+     */
+    private void retryUnknownPages(List<BufferedImage> pageImages, List<DocumentProductRegion> allRegions) {
+        for (int i = 0; i < allRegions.size(); i++) {
+            DocumentProductRegion region = allRegions.get(i);
+            if (region == null || !"unknown".equals(region.getPageType())) {
+                continue;
+            }
+            try {
+                List<DocumentProductRegion> retried = visionService.detectPageRegions(
+                    List.of(compressForDetection(pageImages.get(i))), null);
+                if (!retried.isEmpty() && retried.get(0) != null
+                    && !"unknown".equals(retried.get(0).getPageType())) {
+                    DocumentProductRegion recovered = retried.get(0);
+                    recovered.setPageIndex(i);
+                    allRegions.set(i, recovered);
+                    log.info("unknown 页单页重试成功，pageIndex={}，pageType={}", i, recovered.getPageType());
+                }
+            } catch (Exception e) {
+                log.warn("unknown 页单页重试失败，保持 unknown，pageIndex={}", i, e);
+            }
+        }
     }
 
     /**

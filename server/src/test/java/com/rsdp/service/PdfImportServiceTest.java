@@ -120,6 +120,31 @@ class PdfImportServiceTest {
         assertThat(result.getSuccessCount()).isEqualTo(0);
     }
 
+    @Test
+    void importPdf_shouldRetryUnknownPageIndividually() throws IOException {
+        byte[] pdfBytes = createPdfBytes(1);
+        MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", pdfBytes);
+
+        DocumentProductRegion productPage = new DocumentProductRegion();
+        productPage.setPageType("product");
+        productPage.setProducts(List.of(
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF")
+        ));
+
+        // 批检测整体失败 → 整页降级 unknown；单页重试时恢复为产品页
+        when(visionService.detectPageRegions(any(), any()))
+            .thenThrow(new RuntimeException("AI 服务超时"))
+            .thenReturn(List.of(productPage));
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString()))
+            .thenReturn(Map.of("rspuId", "RSPU-TEST03", "taskId", "TASK-TEST03"));
+
+        DocumentImportResult result = pdfImportService.importPdf(file, null);
+
+        assertThat(result.getProductPages()).isEqualTo(1);
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getRspuIds()).containsExactly("RSPU-TEST03");
+    }
+
     private void setField(String name, Object value) throws Exception {
         Field field = PdfImportService.class.getDeclaredField(name);
         field.setAccessible(true);
