@@ -159,7 +159,15 @@ export interface RecognitionHistoryItem {
   recognitionId: string
   modelName: string
   parsedStyle: string
+  /** OCR 识别结果（JSON 字符串，含品名/型号/尺寸等） */
+  parsedOcr?: string
+  /** 六维标签识别结果（JSON 字符串） */
+  parsedSixDim?: string
+  /** 场景标签识别结果（JSON 字符串） */
+  parsedSceneTags?: string
   confidence: string
+  /** 识别处理耗时（毫秒） */
+  processingTimeMs?: number
   status: string
   errorMessage: string
   createdAt: string
@@ -188,30 +196,49 @@ export interface ProductDetail {
   rspu: {
     rspuId: string
     rspuCode?: string
+    /** 外部编码（导入来源编码） */
+    externalCode?: string
     categoryCode: string
     categoryPath: string
     positioningLabel: string
+    /** 商品名称 */
+    productName?: string
     sixDimTags: Record<string, string>
     colorPrimaryName: string
     colorPrimaryHsv: number[]
+    /** 辅色名 */
+    colorSecondary?: string
     materialTags: string[]
     sceneTags: string[]
     referencePriceBand: string
+    /** 预算区间（JSON 值，结构由 AI/导入决定，如 { min, max, currency }） */
+    budgetRange?: unknown
     productLevel?: string
     warrantyYears: number
     keySpecs: Record<string, string>
     status: string
     reviewStatus: string
+    /** 复核备注 */
+    reviewComment?: string
     aestheticsConfidence: string
+    /** 来源模型版本（AI 识别录入时写入） */
+    sourceAgentVersion?: string
     createdAt: string
     updatedAt: string
   }
   images: Array<{
     imageId: string
+    variantId?: string
     imageType: string
     storagePath: string
     storageUrl: string
-    isPrimary: boolean
+    /** 是否主图（后端 Jackson 序列化字段为 primary） */
+    primary: boolean
+    width?: number
+    height?: number
+    format?: string
+    /** 文件大小（字节） */
+    fileSize?: number
   }>
   recognitions: RecognitionHistoryItem[]
   styleMatches: ProductStyleMatch[]
@@ -256,6 +283,8 @@ export interface ProductReviewRequest {
  */
 export interface ProductUpdateRequest {
   positioningLabel?: string
+  /** 商品名称 */
+  productName?: string
   /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel */
   styleCodes?: string[]
   colorPrimaryName?: string
