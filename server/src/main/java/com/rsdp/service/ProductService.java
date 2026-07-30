@@ -199,7 +199,8 @@ public class ProductService {
         RspuMaster rspu = insertRspuForEntry(
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
             request.getMaterialTags(), request.getSceneTags(), request.getSixDimTags(),
-            request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs());
+            request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs(),
+            request.getProductName());
         assignRspuCode(rspu, request.getSizeCode());
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
@@ -253,7 +254,8 @@ public class ProductService {
         RspuMaster rspu = insertRspuForEntry(
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
             request.getMaterialTags(), request.getSceneTags(), null,
-            request.getProductLevel(), request.getWarrantyYears(), null);
+            request.getProductLevel(), request.getWarrantyYears(), null,
+            request.getProductName());
         assignRspuCode(rspu, request.getSizeCode());
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
@@ -274,7 +276,8 @@ public class ProductService {
      */
     private RspuMaster insertRspuForEntry(String categoryCode, String positioningLabel, String colorPrimaryName,
                                           List<String> materialTags, List<String> sceneTags, Object sixDimTags,
-                                          String productLevel, Integer warrantyYears, Object keySpecs) {
+                                          String productLevel, Integer warrantyYears, Object keySpecs,
+                                          String productName) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -282,6 +285,7 @@ public class ProductService {
         rspu.setCategoryCode(categoryCode.trim().toUpperCase());
         rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
         rspu.setPositioningLabel(positioningLabel.trim().toUpperCase());
+        rspu.setProductName(StringUtils.hasText(productName) ? productName.trim() : null);
         rspu.setColorPrimaryName(colorPrimaryName);
         rspu.setMaterialTags(toJson(materialTags));
         rspu.setSceneTags(toJson(sceneTags));

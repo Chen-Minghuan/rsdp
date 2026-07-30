@@ -744,6 +744,11 @@ public class ProductQueryService {
         if (request.getColorPrimaryName() != null) {
             rspu.setColorPrimaryName(request.getColorPrimaryName().trim());
         }
+        if (request.getProductName() != null) {
+            rspu.setProductName(StringUtils.hasText(request.getProductName())
+                ? request.getProductName().trim()
+                : null);
+        }
         if (request.getColorPrimaryHsv() != null) {
             rspu.setColorPrimaryHsv(writeJson(request.getColorPrimaryHsv()));
         }
@@ -982,6 +987,7 @@ public class ProductQueryService {
         summary.setCategoryCode(rspu.getCategoryCode());
         summary.setCategoryPath(rspu.getCategoryPath());
         summary.setPositioningLabel(rspu.getPositioningLabel());
+        summary.setProductName(rspu.getProductName());
         summary.setColorPrimaryName(rspu.getColorPrimaryName());
         summary.setStatus(rspu.getStatus());
         summary.setReviewStatus(rspu.getReviewStatus());

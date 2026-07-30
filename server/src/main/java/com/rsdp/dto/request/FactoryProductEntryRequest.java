@@ -23,6 +23,9 @@ public class FactoryProductEntryRequest {
     @NotBlank(message = "风格定位不能为空")
     private String positioningLabel;
 
+    /** 商品名称（可选），如「云屿三人位沙发」 */
+    private String productName;
+
     private String colorPrimaryName;
 
     /**

@@ -44,6 +44,7 @@ const form = ref({
   // RSPU
   categoryCode: null as string | null,
   positioningLabel: null as string | null,
+  productName: '',
   colorPrimaryName: null as string | null,
   materialTags: [] as string[],
   sceneTags: [] as string[],
@@ -162,6 +163,7 @@ async function handleSubmit() {
   const request = {
     categoryCode: form.value.categoryCode!,
     positioningLabel: form.value.positioningLabel!,
+    productName: form.value.productName || undefined,
     colorPrimaryName: form.value.colorPrimaryName || undefined,
     materialTags: form.value.materialTags,
     sceneTags: form.value.sceneTags,
@@ -201,6 +203,7 @@ function resetForm() {
   form.value = {
     categoryCode: null,
     positioningLabel: null,
+    productName: '',
     colorPrimaryName: null,
     materialTags: [],
     sceneTags: [],
@@ -266,6 +269,10 @@ function viewCreatedProduct() {
             placeholder="请选择风格"
             clearable
           />
+        </n-form-item>
+
+        <n-form-item label="商品名称">
+          <n-input v-model:value="form.productName" placeholder="如：云屿三人位沙发（可选）" />
         </n-form-item>
 
         <n-form-item label="主色">

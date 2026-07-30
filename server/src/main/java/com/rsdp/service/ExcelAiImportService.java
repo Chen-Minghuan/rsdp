@@ -1050,6 +1050,7 @@ public class ExcelAiImportService {
         }
 
         row.setExternalCode(getValue(standardValues, "externalCode"));
+        row.setProductName(getValue(standardValues, "productName"));
         row.setVariantDisplayName(getValue(standardValues, "productName"));
 
         // 复合表头"型号品名"的值同时包含型号和品名时，尝试拆分
@@ -1090,7 +1091,9 @@ public class ExcelAiImportService {
 
     private void splitExternalCodeAndProductName(ProductImportRow row) {
         String externalCode = row.getExternalCode();
-        String productName = row.getVariantDisplayName();
+        String productName = StringUtils.hasText(row.getProductName())
+            ? row.getProductName()
+            : row.getVariantDisplayName();
         if (!StringUtils.hasText(externalCode) || !externalCode.equals(productName)) {
             return;
         }
@@ -1099,7 +1102,9 @@ public class ExcelAiImportService {
         int idx = findSplitIndex(combined);
         if (idx > 0) {
             row.setExternalCode(combined.substring(0, idx).trim());
-            row.setVariantDisplayName(combined.substring(idx + 1).trim());
+            String namePart = combined.substring(idx + 1).trim();
+            row.setVariantDisplayName(namePart);
+            row.setProductName(namePart);
         }
     }
 
@@ -1352,6 +1357,7 @@ public class ExcelAiImportService {
         rspu.setPositioningLabel(StringUtils.hasText(primaryStyleName)
             ? normalizeDictCode(primaryStyleName, dictCache.get("style"))
             : "待识别");
+        rspu.setProductName(trim(row.getProductName()));
         rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
         rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));

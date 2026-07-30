@@ -414,7 +414,7 @@ const columns: DataTableColumns<ProductSummary> = [
               whiteSpace: 'nowrap'
             }
           },
-          formatCategoryPath(row.categoryPath)
+          row.productName || formatCategoryPath(row.categoryPath)
         )
       ])
     }

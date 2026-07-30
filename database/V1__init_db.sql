@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
+    product_name VARCHAR(256),                     -- 商品名称（AI OCR/录入表单/Excel导入填充，可空）
     six_dim_tags JSONB,                            -- 六维标签 JSON：{"A":"A字架形","B":"编织镂空",...}
     style_vector JSONB,                            -- 512维向量备份：由 SpringBoot 调用 Ollama /api/embeddings 生成
     color_primary_name VARCHAR(64),                -- AI识别主色名称

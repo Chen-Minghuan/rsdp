@@ -22,6 +22,9 @@ public class ManualProductEntryRequest {
     @NotBlank(message = "风格定位不能为空")
     private String positioningLabel;
 
+    /** 商品名称（可选），如「云屿三人位沙发」 */
+    private String productName;
+
     private String colorPrimaryName;
 
     /** 材质标签字典码列表，例如 ["PE","LE"] */

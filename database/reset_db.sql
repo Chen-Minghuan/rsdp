@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,
+    product_name VARCHAR(256),
     six_dim_tags JSONB,
     style_vector JSONB,
     color_primary_name VARCHAR(64),

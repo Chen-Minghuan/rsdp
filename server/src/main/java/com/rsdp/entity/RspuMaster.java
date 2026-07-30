@@ -20,6 +20,7 @@ public class RspuMaster {
     private String categoryCode;
     private String categoryPath;
     private String positioningLabel;
+    private String productName;
 
     @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)

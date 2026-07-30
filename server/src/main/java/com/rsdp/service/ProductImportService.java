@@ -436,6 +436,7 @@ public class ProductImportService {
         rspu.setPositioningLabel(StringUtils.hasText(row.getPositioningLabel())
             ? normalizeDictCode(row.getPositioningLabel(), dictCache.get("style"))
             : "待识别");
+        rspu.setProductName(trim(row.getProductName()));
         rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         rspu.setMaterialTags(writeJson(splitCsv(row.getMaterialTags())));
         rspu.setSceneTags(writeJson(splitCsv(row.getSceneTags())));

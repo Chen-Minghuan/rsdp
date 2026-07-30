@@ -98,6 +98,7 @@ export interface ProductSummary {
   categoryCode: string
   categoryPath: string
   positioningLabel: string
+  productName?: string
   colorPrimaryName: string
   status: string
   reviewStatus: string

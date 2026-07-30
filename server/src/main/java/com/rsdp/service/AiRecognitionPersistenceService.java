@@ -121,6 +121,11 @@ public class AiRecognitionPersistenceService {
         if (!StringUtils.hasText(rspu.getColorPrimaryName())) {
             rspu.setColorPrimaryName(labels.getColorPrimaryName());
         }
+        // 商品名称：取 OCR 识别结果，同样只补空缺
+        if (!StringUtils.hasText(rspu.getProductName()) && labels.getOcr() != null
+                && StringUtils.hasText(labels.getOcr().getProductName())) {
+            rspu.setProductName(labels.getOcr().getProductName());
+        }
         if (isEmptyJson(rspu.getColorPrimaryHsv(), "[]")) {
             rspu.setColorPrimaryHsv(toJson(labels.getColorPrimaryHsv()));
         }

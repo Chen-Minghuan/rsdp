@@ -17,6 +17,7 @@ public class ProductSummaryResponse {
     private String categoryCode;
     private String categoryPath;
     private String positioningLabel;
+    private String productName;
     private String colorPrimaryName;
     private String status;
     private String reviewStatus;
