@@ -1517,6 +1517,7 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('scheme:update', '编辑搭配方案'),
 ('scheme:delete', '删除搭配方案'),
 ('dict:create', '创建字典项'),
+('dict:update', '编辑字典项'),
 ('user:read', '查看用户'),
 ('user:create', '创建用户'),
 ('user:update', '编辑用户'),

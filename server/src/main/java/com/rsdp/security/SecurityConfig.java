@@ -215,6 +215,8 @@ public class SecurityConfig {
 
                 // 字典写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAuthority(Permissions.DICT_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/dicts/*/*").hasAuthority(Permissions.DICT_UPDATE)
+                .requestMatchers(HttpMethod.PATCH, "/api/v1/dicts/*/*/status").hasAuthority(Permissions.DICT_UPDATE)
 
                 // 模板标签：simple-list 登录可读；管理端 CRUD 限 ADMIN/EDITOR
                 .requestMatchers(HttpMethod.GET, "/api/v1/template-tags/simple-list").authenticated()

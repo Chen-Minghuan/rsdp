@@ -44,6 +44,7 @@ public final class Permissions {
 
     // 字典
     public static final String DICT_CREATE = "dict:create";
+    public static final String DICT_UPDATE = "dict:update";
 
     // 用户管理
     public static final String USER_READ = "user:read";

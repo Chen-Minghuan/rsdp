@@ -505,21 +505,38 @@ POST   /api/v1/export/batch-import
 ### 字典
 
 ```
-GET    /api/v1/dicts/{dictType}
+GET    /api/v1/dicts
+       # 字典类型汇总（字典管理中心左栏数据源，V23 新增）
+       # Response: [{ dictType, count }]
+
+GET    /api/v1/dicts/{dictType}?all=false
        # 查询指定类型的字典项（已实现）
-       # dictType: style, scene, category, material, size, color,
+       # dictType: style, scene, category, material, fabric, size, color,
        #           room_type, quote_confidence, review_status, factory_level, product_status 等
-       # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder }]
+       # all=true 时返回含停用项的全部条目（字典管理中心使用）；默认仅启用项
+       # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases }]
 
 POST   /api/v1/dicts
-       # 创建新的字典项（当前仅允许扩展 material / scene 两类业务标签）
-       # Request:  { dictType: "material" | "scene", dictCode, dictName, dictNameEn? }
-       # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder }
+       # 创建新的字典项（V23 起允许扩展全部业务标签类字典：material/fabric/style/scene/
+       # category/color/size/wood_type/six_dim_*/factory_level/factory_source_type/
+       # equipment_type/process_type/material_grade/packaging_type/logistics_method；
+       # 业务状态枚举不允许界面维护）
+       # Request:  { dictType, dictCode, dictName, dictNameEn? }
+       # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases }
        # 注意：
        # 1. dictCode 仅支持字母和数字，服务端自动归一化为大写。
        # 2. 同一类型下 dictCode 重复会返回 400 "字典项已存在"。
        # 3. 创建成功后自动清除 dicts 缓存，前端可立即看到新选项。
-       # 4. 新增标签不会被 AI 自动识别，只能人工或导入时赋值。
+
+PUT    /api/v1/dicts/{dictType}/{dictCode}          # 权限 dict:update（V23 新增）
+       # 编辑字典项：名称/英文名/别名/排序（编码与类型不可改）
+       # Request:  { dictName?, dictNameEn?, aliases?: string[], sortOrder? }（null 字段不修改）
+       # Response: 更新后的字典项
+
+PATCH  /api/v1/dicts/{dictType}/{dictCode}/status   # 权限 dict:update（V23 新增）
+       # 启停用字典项。停用后不再进入 AI 枚举注入与前端下拉，
+       # 历史数据的名称解析（resolveNameByCode）不受影响
+       # Request:  { status: "active" | "disabled" }
 ```
 
 ### 报价单

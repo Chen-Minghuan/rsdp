@@ -57,11 +57,20 @@ public class DictResolverService {
      * @param dictCode 字典码
      * @return 中文名称；找不到返回原码
      */
+    /**
+     * 根据字典类型和字典码查找中文名称。
+     *
+     * <p>使用含停用项的全量字典，保证历史数据在字典项停用后仍能正常显示名称。</p>
+     *
+     * @param dictType 字典类型
+     * @param dictCode 字典码
+     * @return 中文名称；找不到返回原码
+     */
     public String resolveNameByCode(String dictType, String dictCode) {
         if (dictCode == null || dictCode.isBlank()) {
             return dictCode;
         }
-        return dictService.listByType(dictType).stream()
+        return dictService.listAllByType(dictType).stream()
             .filter(d -> dictCode.equals(d.getDictCode()))
             .map(CategoryDict::getDictName)
             .findFirst()
@@ -100,7 +109,8 @@ public class DictResolverService {
         if (codes == null || codes.isEmpty()) {
             return List.of();
         }
-        Map<String, String> codeToName = dictService.listByType(dictType).stream()
+        // 含停用项：历史数据名称解析不受停用影响
+        Map<String, String> codeToName = dictService.listAllByType(dictType).stream()
             .collect(Collectors.toMap(
                 CategoryDict::getDictCode,
                 d -> d.getDictName() != null ? d.getDictName() : d.getDictCode(),
