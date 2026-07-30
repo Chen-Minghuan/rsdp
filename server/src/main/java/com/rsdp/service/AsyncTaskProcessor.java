@@ -102,6 +102,9 @@ public class AsyncTaskProcessor {
             labels = visionService.recognizeImage(imageStream, categoryCode);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
+            // 文档导入时，页面级检测提取的产品旁说明文字合并进 OCR（裁剪图不含这些文字）
+            mergePageOcr(labels, extractPageOcr(taskId));
+
             // AI 标签后处理：清洗 OCR 字段，规范化尺寸，OCR 材质兜底
             postProcessLabels(labels);
 
@@ -141,6 +144,91 @@ public class AsyncTaskProcessor {
             log.error("AI 识别失败，taskId={}", taskId, e);
             persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+        }
+    }
+
+    /**
+     * 从任务 input_data 中提取页面级 OCR 文字（文档导入时写入，图片录入无此字段）。
+     *
+     * @param taskId 任务 ID
+     * @return 页面级 OCR 结果，无则返回 null
+     */
+    private OcrResult extractPageOcr(String taskId) {
+        try {
+            AsyncTask task = asyncTaskMapper.selectById(taskId);
+            if (task == null || !StringUtils.hasText(task.getInputData())) {
+                return null;
+            }
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
+            com.fasterxml.jackson.databind.JsonNode pageOcrNode = root.get("pageOcr");
+            if (pageOcrNode == null || pageOcrNode.isNull()) {
+                return null;
+            }
+            return objectMapper.treeToValue(pageOcrNode, OcrResult.class);
+        } catch (Exception e) {
+            log.warn("解析任务 pageOcr 失败，忽略页面文字，taskId={}", taskId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 将页面级检测提取的产品旁说明文字合并进裁剪图 OCR 结果。
+     *
+     * <p>文档（PDF）导入时，品名/型号/尺寸/价格等文字排在产品图旁边，裁剪图 OCR 看不到；
+     * 页面级文字逐字段补缺（裁剪图 OCR 已识别出的字段不覆盖），rawText 拼接在前面。</p>
+     *
+     * @param labels  AI 识别标签（原地修改）
+     * @param pageOcr 页面级 OCR 文字，可为 null
+     */
+    private void mergePageOcr(AiLabels labels, OcrResult pageOcr) {
+        if (labels == null || pageOcr == null) {
+            return;
+        }
+        OcrResult ocr = labels.getOcr();
+        if (ocr == null) {
+            labels.setOcr(pageOcr);
+            return;
+        }
+        if (!StringUtils.hasText(ocr.getProductName())) {
+            ocr.setProductName(pageOcr.getProductName());
+        }
+        if (!StringUtils.hasText(ocr.getModelNumber())) {
+            ocr.setModelNumber(pageOcr.getModelNumber());
+        }
+        if (!StringUtils.hasText(ocr.getBrand())) {
+            ocr.setBrand(pageOcr.getBrand());
+        }
+        if (!StringUtils.hasText(ocr.getFactoryName())) {
+            ocr.setFactoryName(pageOcr.getFactoryName());
+        }
+        if (!StringUtils.hasText(ocr.getDimensionText())) {
+            ocr.setDimensionText(pageOcr.getDimensionText());
+        }
+        if (ocr.getDimensions() == null) {
+            ocr.setDimensions(pageOcr.getDimensions());
+        }
+        if (!StringUtils.hasText(ocr.getMaterialDescription())) {
+            ocr.setMaterialDescription(pageOcr.getMaterialDescription());
+        }
+        if (!StringUtils.hasText(ocr.getColorText())) {
+            ocr.setColorText(pageOcr.getColorText());
+        }
+        if (!StringUtils.hasText(ocr.getPriceText())) {
+            ocr.setPriceText(pageOcr.getPriceText());
+        }
+        if (ocr.getPrice() == null) {
+            ocr.setPrice(pageOcr.getPrice());
+        }
+        if (!StringUtils.hasText(ocr.getCurrency())) {
+            ocr.setCurrency(pageOcr.getCurrency());
+        }
+        if (ocr.getOtherInfo() == null || ocr.getOtherInfo().isEmpty()) {
+            ocr.setOtherInfo(pageOcr.getOtherInfo());
+        }
+        if (StringUtils.hasText(pageOcr.getRawText())) {
+            ocr.setRawText(StringUtils.hasText(ocr.getRawText())
+                ? pageOcr.getRawText() + "\n" + ocr.getRawText()
+                : pageOcr.getRawText());
         }
     }
 

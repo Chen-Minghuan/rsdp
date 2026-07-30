@@ -17,6 +17,7 @@ import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.ManualProductEntryRequest;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.request.RskuCreateRequest;
+import com.rsdp.dto.OcrResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,6 +32,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -378,12 +380,14 @@ public class ProductService {
      * @param filename     原始文件名，用于生成对象键和记录格式
      * @param size         图片字节数
      * @param categoryCode 品类码
+     * @param pageOcr      页面级检测提取的产品旁说明文字（可为空），随任务传递，
+     *                     异步识别时作为裁剪图 OCR 的补充合并进识别结果
      * @return 包含 taskId、rspuId、imageIds 的映射
      * @throws IOException 文件保存失败
      */
     @Transactional
     public Map<String, Object> createEntryFromStream(InputStream imageStream, String filename, long size,
-                                                     String categoryCode) throws IOException {
+                                                     String categoryCode, OcrResult pageOcr) throws IOException {
         long start = System.currentTimeMillis();
 
         if (imageStream == null) {
@@ -435,12 +439,16 @@ public class ProductService {
         task.setTaskType("product_entry");
         task.setStatus("pending");
         task.setProgress(0);
-        task.setInputData(objectMapper.writeValueAsString(Map.of(
-            "rspuId", rspuId,
-            "imageId", imageId,
-            "objectKey", storagePath,
-            "originalFilename", filename
-        )));
+        // 创建异步任务（pageOcr 为文档导入时页面级提取的产品旁说明文字，供异步识别合并）
+        Map<String, Object> inputData = new HashMap<>();
+        inputData.put("rspuId", rspuId);
+        inputData.put("imageId", imageId);
+        inputData.put("objectKey", storagePath);
+        inputData.put("originalFilename", filename);
+        if (pageOcr != null) {
+            inputData.put("pageOcr", pageOcr);
+        }
+        task.setInputData(objectMapper.writeValueAsString(inputData));
         task.setCreatedBy(SecurityOperatorContext.currentUsername());
         task.setCreatedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);

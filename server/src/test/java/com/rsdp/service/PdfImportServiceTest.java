@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.dto.DocumentProductRegion;
+import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.dto.response.DocumentImportResult;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -61,14 +62,14 @@ class PdfImportServiceTest {
         DocumentProductRegion productPage = new DocumentProductRegion();
         productPage.setPageType("product");
         productPage.setProducts(List.of(
-            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF")
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null)
         ));
         DocumentProductRegion coverPage = new DocumentProductRegion();
         coverPage.setPageType("cover");
         coverPage.setProducts(List.of());
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage, coverPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST01", "taskId", "TASK-TEST01"));
 
         DocumentImportResult result = pdfImportService.importPdf(file, null);
@@ -90,17 +91,46 @@ class PdfImportServiceTest {
         DocumentProductRegion productPage = new DocumentProductRegion();
         productPage.setPageType("product");
         productPage.setProducts(List.of(
-            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), null)
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), null, null)
         ));
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), eq("TB")))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), eq("TB"), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST02", "taskId", "TASK-TEST02"));
 
         DocumentImportResult result = pdfImportService.importPdf(file, "TB");
 
         assertThat(result.getSuccessCount()).isEqualTo(1);
         assertThat(result.getRspuIds()).containsExactly("RSPU-TEST02");
+    }
+
+    @Test
+    void importPdf_shouldPassNearbyTextToEntry() throws IOException {
+        byte[] pdfBytes = createPdfBytes(1);
+        MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", pdfBytes);
+
+        OcrResult nearbyText = new OcrResult();
+        nearbyText.setProductName("兰卡沙发");
+        nearbyText.setModelNumber("LK-2450");
+
+        DocumentProductRegion productPage = new DocumentProductRegion();
+        productPage.setPageType("product");
+        productPage.setProducts(List.of(
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", nearbyText)
+        ));
+
+        when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+            .thenReturn(Map.of("rspuId", "RSPU-TEST04", "taskId", "TASK-TEST04"));
+
+        DocumentImportResult result = pdfImportService.importPdf(file, null);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        org.mockito.ArgumentCaptor<OcrResult> ocrCaptor = org.mockito.ArgumentCaptor.forClass(OcrResult.class);
+        org.mockito.Mockito.verify(productService).createEntryFromStream(any(), anyString(), anyLong(),
+            anyString(), ocrCaptor.capture());
+        assertThat(ocrCaptor.getValue().getProductName()).isEqualTo("兰卡沙发");
+        assertThat(ocrCaptor.getValue().getModelNumber()).isEqualTo("LK-2450");
     }
 
     @Test
@@ -130,14 +160,14 @@ class PdfImportServiceTest {
         DocumentProductRegion productPage = new DocumentProductRegion();
         productPage.setPageType("product");
         productPage.setProducts(List.of(
-            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF")
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null)
         ));
 
         // 批检测整体失败 → 整页降级 unknown；单页重试时恢复为产品页
         when(visionService.detectPageRegions(any(), any()))
             .thenThrow(new RuntimeException("AI 服务超时"))
             .thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST03", "taskId", "TASK-TEST03"));
 
         DocumentImportResult result = pdfImportService.importPdf(file, null);
@@ -159,7 +189,7 @@ class PdfImportServiceTest {
         productPage.setProducts(List.of());
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST04", "taskId", "TASK-TEST04"));
 
         DocumentImportResult result = pdfImportService.importPdf(file, null);

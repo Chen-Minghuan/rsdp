@@ -56,5 +56,11 @@ public class DocumentProductRegion {
          * AI 预估的品类码，如 SF / TB / FC。
          */
         private String estimatedCategory;
+
+        /**
+         * 产品图旁边的说明文字（品名/型号/尺寸/价格等），页面级检测时一并提取。
+         * 裁剪产品图时不含这些文字，此处作为该产品 OCR 的补充来源。
+         */
+        private OcrResult nearbyText;
     }
 }

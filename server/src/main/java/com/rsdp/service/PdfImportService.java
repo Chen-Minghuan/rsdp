@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.dto.DocumentProductRegion;
+import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.dto.response.DocumentImportFailure;
 import com.rsdp.dto.response.DocumentImportResult;
@@ -177,8 +178,10 @@ public class PdfImportService {
 
     /**
      * 单个产品的图片来源：嵌入原图（embeddedImage 非空）或页面 bbox 裁剪（bbox 非空）。
+     * nearbyText 为页面级检测时提取的产品旁说明文字，随录入任务传递，作为裁剪图 OCR 的补充。
      */
-    private record ProductSource(String estimatedCategory, ProductBoundingBox bbox, BufferedImage embeddedImage) {
+    private record ProductSource(String estimatedCategory, ProductBoundingBox bbox, BufferedImage embeddedImage,
+                                 OcrResult nearbyText) {
     }
 
     /**
@@ -198,16 +201,18 @@ public class PdfImportService {
         if (embeddedImages != null && !embeddedImages.isEmpty() && embeddedImages.size() >= refined.size()) {
             List<ProductSource> sources = new ArrayList<>(embeddedImages.size());
             for (int i = 0; i < embeddedImages.size(); i++) {
-                // 品类按检出顺序映射，嵌入图多于 AI 产品时映射不到则交给 hint 兜底
+                // 品类与文字按检出顺序映射，嵌入图多于 AI 产品时映射不到则交给 hint 兜底
                 String category = i < refined.size() ? refined.get(i).source().getEstimatedCategory() : null;
-                sources.add(new ProductSource(category, null, embeddedImages.get(i)));
+                OcrResult nearbyText = i < refined.size() ? refined.get(i).source().getNearbyText() : null;
+                sources.add(new ProductSource(category, null, embeddedImages.get(i), nearbyText));
             }
             return sources;
         }
 
         List<ProductSource> sources = new ArrayList<>(refined.size());
         for (ProductBoxRefiner.Refined<DocumentProductRegion.PageProduct> r : refined) {
-            sources.add(new ProductSource(r.source().getEstimatedCategory(), r.box(), null));
+            sources.add(new ProductSource(r.source().getEstimatedCategory(), r.box(), null,
+                r.source().getNearbyText()));
         }
         return sources;
     }
@@ -352,7 +357,8 @@ public class PdfImportService {
         String filename = batchId + "_page_product.jpg";
         Map<String, Object> entryResult;
         try (InputStream in = new ByteArrayInputStream(imageBytes)) {
-            entryResult = productService.createEntryFromStream(in, filename, imageBytes.length, effectiveCategory);
+            entryResult = productService.createEntryFromStream(in, filename, imageBytes.length, effectiveCategory,
+                source.nearbyText());
         }
 
         Object rspuId = entryResult.get("rspuId");

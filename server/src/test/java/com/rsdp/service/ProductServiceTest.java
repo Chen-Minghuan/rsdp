@@ -296,7 +296,7 @@ class ProductServiceTest {
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
             productService.createEntryFromStream(
-                new ByteArrayInputStream("fake-image".getBytes()), "chair.jpg", 100, null
+                new ByteArrayInputStream("fake-image".getBytes()), "chair.jpg", 100, null, null
             );
 
             List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
@@ -321,7 +321,7 @@ class ProductServiceTest {
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
             productService.createEntryFromStream(
-                new ByteArrayInputStream("fake-image".getBytes()), "chair.jpg", 100, null
+                new ByteArrayInputStream("fake-image".getBytes()), "chair.jpg", 100, null, null
             );
 
             List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();

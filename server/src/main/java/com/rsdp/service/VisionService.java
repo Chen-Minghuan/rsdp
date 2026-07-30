@@ -268,6 +268,8 @@ public class VisionService {
         判断每页类型并输出页面中每个产品的相对位置框（bbox）。
         bbox 的准确度要求极高：必须紧贴产品主体边缘，宁可略大也不可切断产品，
         但不得包含说明文字、页眉页脚等无关内容。
+        同时，每个产品图旁边通常配有品名、型号、尺寸、价格等说明文字，
+        这些文字不属于产品图（不要框进 bbox），但必须完整提取到 nearbyText 中。
         只输出 JSON 数组，不要任何其他文字说明。
         """;
 
@@ -276,7 +278,7 @@ public class VisionService {
 
         对每一页，判断其类型并输出产品中每个产品的位置信息：
         - pageType: product（产品页）/ cover（封面）/ toc（目录）/ separator（分隔页）/ blank（空白页）/ unknown（未知）
-        - products: 当 pageType=product 时，列出该页中所有产品的位置框和预估品类码
+        - products: 当 pageType=product 时，列出该页中所有产品的位置框、预估品类码和产品旁的说明文字
 
         bbox 使用相对于页面宽高的比例坐标（0.0 ~ 1.0）：
         {"x": 左上角 x, "y": 左上角 y, "w": 宽度, "h": 高度}
@@ -289,6 +291,13 @@ public class VisionService {
         - 产品图几乎占满整页时，给出接近整页的框是允许的
         - 坐标必须满足 0<=x、0<=y、x+w<=1、y+h<=1
 
+        nearbyText 规则（每个产品都要尽力提取，实在没有对应文字时输出 null）：
+        - 只提取紧邻该产品图、明显描述该产品的文字，不要把其他产品或页眉页脚的文字混入
+        - productName: 产品名称/品名；modelNumber: 型号/货号；dimensionText: 尺寸原文（如 2450×900×850mm）
+        - priceText: 价格原文（如 ¥12800）；materialDescription: 材质描述原文
+        - rawText: 该产品旁所有说明文字按原文完整输出，不要遗漏
+        - 提取不到的单项填 null，不要编造
+
         预估品类码必须从以下枚举中精确选择，无法判断时填 null：
         %s
 
@@ -297,7 +306,18 @@ public class VisionService {
           {
             "pageType": "product",
             "products": [
-              {"bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5}, "estimatedCategory": "SF"}
+              {
+                "bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5},
+                "estimatedCategory": "SF",
+                "nearbyText": {
+                  "productName": "兰卡沙发",
+                  "modelNumber": "LK-2450",
+                  "dimensionText": "2450×900×850mm",
+                  "priceText": "¥12800",
+                  "materialDescription": "头层牛皮+实木框架",
+                  "rawText": "兰卡沙发 LK-2450 2450×900×850mm ¥12800 头层牛皮+实木框架"
+                }
+              }
             ]
           },
           ...
@@ -342,7 +362,7 @@ public class VisionService {
                     OpenAiChatMessage.multiVision("user", userPrompt, base64Images)
                 ))
                 .temperature(0.2)
-                .maxTokens(8192)
+                .maxTokens(12288)
                 .build();
 
             String json = executeChat(request, "PDF 页面区域检测");
@@ -445,12 +465,28 @@ public class VisionService {
                     pp.setBbox(parseBoundingBox(pm.get("bbox")));
                     Object category = pm.get("estimatedCategory");
                     pp.setEstimatedCategory(category != null ? category.toString() : null);
+                    pp.setNearbyText(parseNearbyText(pm.get("nearbyText")));
                     pageProducts.add(pp);
                 }
             }
             region.setProducts(pageProducts);
         }
         return region;
+    }
+
+    /**
+     * 解析产品旁的说明文字。AI 输出不规范（非对象/字段类型异常）时返回 null，不影响 bbox 主流程。
+     */
+    private OcrResult parseNearbyText(Object raw) {
+        if (!(raw instanceof Map<?, ?>)) {
+            return null;
+        }
+        try {
+            return objectMapper.convertValue(raw, OcrResult.class);
+        } catch (Exception e) {
+            log.warn("解析 nearbyText 失败，忽略该产品文字", e);
+            return null;
+        }
     }
 
     @SuppressWarnings("unchecked")
