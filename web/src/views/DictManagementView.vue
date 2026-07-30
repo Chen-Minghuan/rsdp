@@ -1,24 +1,31 @@
 <script setup lang="ts">
 /**
- * 字典管理中心（Step 2：只读浏览）。
+ * 字典管理中心（Step 3：编辑交互）。
  *
  * 左栏按分组展示字典类型（含条目数与只读标记），右栏表格浏览选中类型的全部条目（含停用项与别名）。
- * 新增/编辑/启停用交互在 Step 3 实现，本页不提供任何变更入口。
+ * 具备 dict:update 权限的用户可新增 / 编辑条目（名称、别名、排序）、启用 / 停用条目；
+ * readonly 类型（被系统逻辑引用）与无权限用户退化为只读浏览。
  */
-import { ref, computed, onMounted, h, watch } from 'vue'
+import { ref, reactive, computed, onMounted, h, watch } from 'vue'
 import {
-  NAlert, NCard, NDataTable, NInput, NSpin, NTag, useMessage,
-  type DataTableColumns
+  NAlert, NButton, NCard, NDataTable, NDynamicTags, NForm, NFormItem, NInput, NInputNumber,
+  NModal, NPopconfirm, NSpace, NSpin, NTag, useMessage,
+  type DataTableColumns, type FormInst, type FormRules
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
-import { listAllDicts, listDictTypeSummary } from '@/api/dict'
-import { DICT_TYPE_GROUPS, type DictTypeGroup, type DictTypeMeta } from '@/utils/constants'
+import { createDict, listAllDicts, listDictTypeSummary, updateDict, updateDictStatus } from '@/api/dict'
+import { useUserStore } from '@/stores/user'
+import { DICT_TYPE_GROUPS, PERMISSIONS, type DictTypeGroup, type DictTypeMeta } from '@/utils/constants'
 import type { DictItem, DictTypeSummary } from '@/types/dict'
 
 const message = useMessage()
+const userStore = useUserStore()
 
 /** 只读类型提示文案 */
 const READONLY_TIP = '该类型被系统逻辑引用，仅供查看，如需变更请联系管理员通过数据脚本维护'
+
+// dict:create 与 dict:update 通常同时授予 ADMIN/EDITOR，页面统一按 dict:update 控制所有变更入口
+const canEditDict = computed(() => userStore.hasPermission(PERMISSIONS.DICT_UPDATE))
 
 // ---------- 左栏：类型分组 ----------
 
@@ -63,6 +70,9 @@ const selectedMeta = computed<DictTypeMeta | null>(() => {
   return null
 })
 
+/** 当前类型是否允许变更（有权限且非只读类型） */
+const canMutateSelected = computed(() => canEditDict.value && !selectedMeta.value?.readonly)
+
 // ---------- 右栏：条目表格 ----------
 
 const itemsLoading = ref(false)
@@ -90,6 +100,111 @@ const isSixDim = computed(() => selectedType.value.startsWith('six_dim_'))
 function isDisabled(row: DictItem): boolean {
   const status = (row.status ?? '').toLowerCase()
   return status === 'disabled' || status === '0'
+}
+
+// ---------- 新增 / 编辑弹窗 ----------
+
+const formRef = ref<FormInst | null>(null)
+const showEditModal = ref(false)
+const editingItem = ref<DictItem | null>(null)
+const saving = ref(false)
+
+const form = reactive({
+  dictCode: '',
+  dictName: '',
+  dictNameEn: '',
+  aliases: [] as string[],
+  sortOrder: null as number | null
+})
+
+const formRules: FormRules = {
+  dictCode: [
+    { required: true, message: '请输入字典编码', trigger: ['input', 'blur'] },
+    { pattern: /^[A-Za-z0-9]+$/, message: '仅支持字母与数字', trigger: ['input', 'blur'] }
+  ],
+  dictName: [
+    { required: true, message: '请输入中文名', trigger: ['input', 'blur'] },
+    { max: 64, message: '中文名不超过 64 个字符', trigger: ['input', 'blur'] }
+  ]
+}
+
+function resetForm() {
+  form.dictCode = ''
+  form.dictName = ''
+  form.dictNameEn = ''
+  form.aliases = []
+  form.sortOrder = null
+}
+
+function openCreate() {
+  editingItem.value = null
+  resetForm()
+  showEditModal.value = true
+}
+
+function openEdit(row: DictItem) {
+  editingItem.value = row
+  form.dictCode = row.dictCode
+  form.dictName = row.dictName
+  form.dictNameEn = row.dictNameEn ?? ''
+  form.aliases = [...(row.aliases ?? [])]
+  form.sortOrder = row.sortOrder ?? null
+  showEditModal.value = true
+}
+
+/** 提交成功后刷新条目表格与左栏条目数 */
+async function refreshAfterSave() {
+  await Promise.all([loadSummary(), loadItems(selectedType.value)])
+}
+
+async function handleSave() {
+  try {
+    await formRef.value?.validate()
+  } catch {
+    return
+  }
+  saving.value = true
+  try {
+    if (editingItem.value) {
+      await updateDict(selectedType.value, editingItem.value.dictCode, {
+        dictName: form.dictName.trim(),
+        dictNameEn: form.dictNameEn.trim() || undefined,
+        aliases: form.aliases,
+        sortOrder: form.sortOrder ?? undefined
+      })
+      message.success('字典项已更新')
+    } else {
+      // 后端 DictCreateRequest 暂不支持 parentCode / sortOrder，
+      // 六维标签的所属品类与新增排序由后端决定，待后端支持后再透传
+      await createDict({
+        dictType: selectedType.value,
+        dictCode: form.dictCode.trim(),
+        dictName: form.dictName.trim(),
+        dictNameEn: form.dictNameEn.trim() || undefined
+      })
+      message.success('字典项已创建')
+    }
+    showEditModal.value = false
+    await refreshAfterSave()
+  } catch (e) {
+    // 业务错误（如 code=400「字典项已存在」）直接展示后端 message
+    message.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+// ---------- 启用 / 停用 ----------
+
+async function handleToggleStatus(row: DictItem) {
+  const target = isDisabled(row) ? 'active' : 'disabled'
+  try {
+    await updateDictStatus(selectedType.value, row.dictCode, target)
+    message.success(target === 'active' ? `「${row.dictName}」已启用` : `「${row.dictName}」已停用`)
+    await loadItems(selectedType.value)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '操作失败')
+  }
 }
 
 const columns = computed<DataTableColumns<DictItem>>(() => {
@@ -126,6 +241,35 @@ const columns = computed<DataTableColumns<DictItem>>(() => {
           : h(NTag, { size: 'small', type: 'success' }, () => '启用')
     }
   )
+  if (canMutateSelected.value) {
+    cols.push({
+      title: '操作',
+      key: 'actions',
+      width: 150,
+      render: (row) => {
+        const disabled = isDisabled(row)
+        return h(NSpace, { size: 4 }, () => [
+          h(NButton, { size: 'small', quaternary: true, onClick: () => openEdit(row) }, () => '编辑'),
+          h(
+            NPopconfirm,
+            { onPositiveClick: () => handleToggleStatus(row) },
+            {
+              trigger: () =>
+                h(
+                  NButton,
+                  { size: 'small', quaternary: true, type: disabled ? 'primary' : 'warning' },
+                  () => (disabled ? '启用' : '停用')
+                ),
+              default: () =>
+                disabled
+                  ? `确定启用「${row.dictName}」吗？`
+                  : `确定停用「${row.dictName}」吗？停用后 AI 识别候选与下拉选项将不再包含该条目。`
+            }
+          )
+        ])
+      }
+    })
+  }
   return cols
 })
 
@@ -181,7 +325,7 @@ function rowClassName(row: DictItem): string {
 </script>
 
 <template>
-  <PageContainer title="字典管理中心" subtitle="产品 / 工厂 / 业务字典的统一浏览（当前为只读模式）">
+  <PageContainer title="字典管理中心" subtitle="产品 / 工厂 / 业务字典的统一维护，别名将即时影响 AI 识别归一">
     <n-alert type="warning" :bordered="false" class="dict-warning">
       字典变更会即时影响 AI 识别候选词与匹配归一，请谨慎维护
     </n-alert>
@@ -219,6 +363,15 @@ function rowClassName(row: DictItem): string {
             class="dict-search"
           />
           <span class="dict-count">共 {{ filteredItems.length }} 条</span>
+          <n-button
+            v-if="canMutateSelected"
+            type="primary"
+            size="small"
+            class="dict-create-btn"
+            @click="openCreate"
+          >
+            + 新增条目
+          </n-button>
         </div>
 
         <n-alert v-if="selectedMeta?.readonly" type="info" :bordered="false" class="dict-readonly-alert">
@@ -236,6 +389,54 @@ function rowClassName(row: DictItem): string {
         </n-spin>
       </n-card>
     </div>
+
+    <n-modal
+      v-model:show="showEditModal"
+      preset="card"
+      :title="editingItem ? '编辑字典项' : '新增字典项'"
+      style="width: 460px;"
+    >
+      <n-form ref="formRef" :model="form" :rules="formRules" label-placement="left" label-width="80">
+        <n-form-item label="字典编码" path="dictCode">
+          <n-input
+            v-model:value="form.dictCode"
+            :disabled="!!editingItem"
+            placeholder="大写字母/数字，如 KJ"
+          />
+        </n-form-item>
+        <n-form-item label="中文名" path="dictName">
+          <n-input v-model:value="form.dictName" maxlength="64" placeholder="如：科技布" />
+        </n-form-item>
+        <n-form-item label="英文名" path="dictNameEn">
+          <n-input v-model:value="form.dictNameEn" maxlength="64" placeholder="选填" />
+        </n-form-item>
+        <n-form-item v-if="editingItem && isSixDim" label="所属品类">
+          <!-- 所属品类为系统归类字段，仅展示不可修改；新增时由后端决定 -->
+          <n-input :value="editingItem.parentCode || '-'" disabled />
+        </n-form-item>
+        <n-form-item label="别名" path="aliases">
+          <n-dynamic-tags v-model:value="form.aliases" placeholder="回车添加别名，如 真皮" />
+        </n-form-item>
+        <n-form-item label="排序" path="sortOrder">
+          <!-- 新增时排序由后端取当前最大 sortOrder+1，不透传 -->
+          <n-input-number
+            v-model:value="form.sortOrder"
+            :min="0"
+            :max="9999"
+            :precision="0"
+            :disabled="!editingItem"
+            :placeholder="editingItem ? '整数排序值' : '新增由后端自动排在末尾'"
+            style="width: 100%;"
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showEditModal = false">取消</n-button>
+          <n-button type="primary" :loading="saving" @click="handleSave">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </PageContainer>
 </template>
 
@@ -322,6 +523,11 @@ function rowClassName(row: DictItem): string {
 .dict-count {
   font-size: 13px;
   color: var(--rsdp-text-secondary);
+}
+
+.dict-create-btn {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .dict-readonly-alert {

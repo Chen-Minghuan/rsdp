@@ -42,6 +42,7 @@ export const PERMISSIONS = {
   SCHEME_DELETE: 'scheme:delete',
 
   DICT_CREATE: 'dict:create',
+  DICT_UPDATE: 'dict:update',
 
   USER_READ: 'user:read',
   USER_CREATE: 'user:create',
