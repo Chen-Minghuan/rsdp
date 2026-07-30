@@ -30,6 +30,9 @@ public class ManualProductEntryRequest {
     /** 材质标签字典码列表，例如 ["PE","LE"] */
     private List<String> materialTags;
 
+    /** 面料标签字典码列表（软体类商品），例如 ["LI","KJ"] */
+    private List<String> fabricTags;
+
     /** 场景标签字典码列表，例如 ["LIVING","OFFICE"] */
     private List<String> sceneTags;
 

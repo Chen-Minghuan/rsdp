@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NDescriptions, NDescriptionsItem, NTag } from 'naive-ui'
-import type { ProductDetail } from '@/types/product'
+import type { ProductDetail, OcrResult } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
-import { toKeyValuePairs, toRawText } from '@/utils/jsonDisplay'
+import { toKeyValuePairs, toRawText, safeParseJson } from '@/utils/jsonDisplay'
 
 /**
  * 产品详情「基本信息」页签：分组 descriptions 展示全部 RSPU 元数据。
@@ -13,6 +13,7 @@ const props = defineProps<{
   detail: ProductDetail
   styleOptions: DictItem[]
   materialOptions: DictItem[]
+  fabricOptions: DictItem[]
   sceneOptions: DictItem[]
 }>()
 
@@ -38,6 +39,29 @@ const materialNames = computed(() =>
   Array.isArray(rspu.value.materialTags)
     ? rspu.value.materialTags.map(code => resolveDictName(props.materialOptions, code))
     : []
+)
+
+const fabricNames = computed(() =>
+  Array.isArray(rspu.value.fabricTags)
+    ? rspu.value.fabricTags.map(code => resolveDictName(props.fabricOptions, code))
+    : []
+)
+
+/** AI 识别记录中最近一条 OCR 材质原文（识别记录按时间倒序，取首个带材质描述的）。 */
+const ocrMaterialDescription = computed(() => {
+  const recognitions = props.detail.recognitions
+  if (!Array.isArray(recognitions)) return ''
+  for (const rec of recognitions) {
+    const ocr = safeParseJson(rec.parsedOcr) as OcrResult | undefined
+    const text = ocr?.materialDescription?.trim()
+    if (text) return text
+  }
+  return ''
+})
+
+/** 材质/面料标签未收录时的识别原文兜底。 */
+const showMaterialFallback = computed(() =>
+  materialNames.value.length === 0 || fabricNames.value.length === 0
 )
 
 const sceneNames = computed(() =>
@@ -129,11 +153,17 @@ const primaryColorCss = computed(() => {
     </section>
 
     <section class="info-group">
-      <h3 class="info-group-title">材质与场景</h3>
+      <h3 class="info-group-title">材质·面料·场景</h3>
       <n-descriptions bordered :column="2" label-placement="left" size="small">
         <n-descriptions-item label="材质">
           <template v-if="materialNames.length">
             <n-tag v-for="name in materialNames" :key="name" size="small" style="margin-right: 6px;">{{ name }}</n-tag>
+          </template>
+          <template v-else>-</template>
+        </n-descriptions-item>
+        <n-descriptions-item label="面料">
+          <template v-if="fabricNames.length">
+            <n-tag v-for="name in fabricNames" :key="name" size="small" style="margin-right: 6px;">{{ name }}</n-tag>
           </template>
           <template v-else>-</template>
         </n-descriptions-item>
@@ -142,6 +172,9 @@ const primaryColorCss = computed(() => {
             <n-tag v-for="name in sceneNames" :key="name" size="small" style="margin-right: 6px;">{{ name }}</n-tag>
           </template>
           <template v-else>-</template>
+        </n-descriptions-item>
+        <n-descriptions-item v-if="showMaterialFallback && ocrMaterialDescription" label="识别原文">
+          <span class="empty-text">{{ ocrMaterialDescription }}（未收录进字典）</span>
         </n-descriptions-item>
       </n-descriptions>
     </section>

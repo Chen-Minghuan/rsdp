@@ -200,7 +200,7 @@ public class ProductService {
 
         RspuMaster rspu = insertRspuForEntry(
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
-            request.getMaterialTags(), request.getSceneTags(), request.getSixDimTags(),
+            request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), request.getSixDimTags(),
             request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs(),
             request.getProductName());
         assignRspuCode(rspu, request.getSizeCode());
@@ -255,7 +255,7 @@ public class ProductService {
 
         RspuMaster rspu = insertRspuForEntry(
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
-            request.getMaterialTags(), request.getSceneTags(), null,
+            request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), null,
             request.getProductLevel(), request.getWarrantyYears(), null,
             request.getProductName());
         assignRspuCode(rspu, request.getSizeCode());
@@ -277,7 +277,8 @@ public class ProductService {
      * 创建并落库 RSPU（active + 待复核），写审计日志。
      */
     private RspuMaster insertRspuForEntry(String categoryCode, String positioningLabel, String colorPrimaryName,
-                                          List<String> materialTags, List<String> sceneTags, Object sixDimTags,
+                                          List<String> materialTags, List<String> fabricTags, List<String> sceneTags,
+                                          Object sixDimTags,
                                           String productLevel, Integer warrantyYears, Object keySpecs,
                                           String productName) {
         String rspuId = IdGenerator.rspuId();
@@ -290,6 +291,7 @@ public class ProductService {
         rspu.setProductName(StringUtils.hasText(productName) ? productName.trim() : null);
         rspu.setColorPrimaryName(colorPrimaryName);
         rspu.setMaterialTags(toJson(materialTags));
+        rspu.setFabricTags(toJson(fabricTags));
         rspu.setSceneTags(toJson(sceneTags));
         rspu.setSixDimTags(toJson(sixDimTags));
         rspu.setProductLevel(productLevel.trim().toUpperCase());

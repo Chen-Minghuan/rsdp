@@ -243,9 +243,10 @@ public class AsyncTaskProcessor {
 
         OcrPostProcessor.clean(ocr);
 
-        // 如果视觉识别没有返回材质标签，尝试用 OCR 材质描述兜底
-        if ((labels.getMaterialTags() == null || labels.getMaterialTags().isEmpty())
-            && StringUtils.hasText(ocr.getMaterialDescription())) {
+        // 材质优先级：文字明确说明的优先于视觉识别。
+        // OCR/页面文字提取到材质描述且能解析出标签时，覆盖视觉直判结果；
+        // 没有明确文字说明时才保留视觉识别结果
+        if (StringUtils.hasText(ocr.getMaterialDescription())) {
             List<String> parsedMaterials = OcrPostProcessor.parseMaterials(ocr.getMaterialDescription());
             if (!parsedMaterials.isEmpty()) {
                 labels.setMaterialTags(parsedMaterials);

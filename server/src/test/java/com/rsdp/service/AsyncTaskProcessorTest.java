@@ -248,6 +248,73 @@ class AsyncTaskProcessorTest {
     }
 
     @Test
+    void processProductEntry_shouldPreferOcrMaterialOverVision() throws Exception {
+        // Given：视觉直判给出材质，但图中文字有明确材质说明 → 文字优先，覆盖视觉结果
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setMaterialTags(List.of("布艺"));
+        OcrResult ocr = new OcrResult();
+        ocr.setMaterialDescription("头层牛皮+金属框架");
+        labels.setOcr(ocr);
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
+        verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
+            org.mockito.ArgumentMatchers.anyInt(), any());
+        assertThat(labelsCaptor.getValue().getMaterialTags())
+            .containsExactly("头层牛皮", "金属框架");
+    }
+
+    @Test
+    void processProductEntry_shouldKeepVisionMaterialWhenNoOcrText() throws Exception {
+        // Given：图中无材质文字说明 → 保留视觉直判结果
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setMaterialTags(List.of("布艺"));
+        labels.setOcr(new OcrResult());
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
+        verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
+            org.mockito.ArgumentMatchers.anyInt(), any());
+        assertThat(labelsCaptor.getValue().getMaterialTags()).containsExactly("布艺");
+    }
+
+    @Test
     void processProductEntry_shouldCallFailureWhenVisionFails() throws Exception {
         // Given
         when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());

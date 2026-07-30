@@ -31,6 +31,9 @@ public class ProductUpdateRequest {
     /** 材质标签字典码列表。 */
     private List<String> materialTags;
 
+    /** 面料标签字典码列表（软体类商品），如 ["LI","KJ"]。 */
+    private List<String> fabricTags;
+
     /** 场景标签字典码列表。 */
     private List<String> sceneTags;
 

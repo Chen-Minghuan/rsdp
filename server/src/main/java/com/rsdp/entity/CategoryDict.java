@@ -36,4 +36,11 @@ public class CategoryDict {
 
     @TableField("status")
     private String status;
+
+    /**
+     * 同义词别名 JSON 数组，如 ["真皮","头层牛皮"]。
+     * 字典匹配时标准名/英文名未命中则按别名匹配（V22）。
+     */
+    @TableField("aliases")
+    private String aliases;
 }

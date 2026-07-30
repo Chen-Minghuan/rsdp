@@ -75,8 +75,9 @@ public class AiRecognitionPersistenceService {
         List<String> secondaryStyleCodes = dictResolverService.resolveCodesByNames("style", labels.getSecondaryStyles());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
         List<String> materialCodes = dictResolverService.resolveCodesByNames("material", labels.getMaterialTags());
+        List<String> fabricCodes = dictResolverService.resolveCodesByNames("fabric", labels.getFabricTags());
 
-        updateRspu(rspuId, labels, styleCode, materialCodes, sceneCodes, embedding, modelName);
+        updateRspu(rspuId, labels, styleCode, materialCodes, fabricCodes, sceneCodes, embedding, modelName);
         refreshStyleAssociations(rspuId, styleCode, secondaryStyleCodes);
         refreshSceneAssociations(rspuId, sceneCodes);
         markImageProcessed(imageId);
@@ -101,7 +102,7 @@ public class AiRecognitionPersistenceService {
     }
 
     private void updateRspu(String rspuId, AiLabels labels, String styleCode,
-                            List<String> materialCodes, List<String> sceneCodes,
+                            List<String> materialCodes, List<String> fabricCodes, List<String> sceneCodes,
                             float[] embedding, String modelName) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
@@ -131,6 +132,12 @@ public class AiRecognitionPersistenceService {
         }
         if (isEmptyJson(rspu.getMaterialTags(), "[]")) {
             rspu.setMaterialTags(toJson(materialCodes));
+        }
+        // 面料标签：与材质同模式，AI 只补空缺。
+        // 面料由同一次 AI 调用综合图片文字与视觉输出（模型看图同时读字），
+        // 无需像材质那样再做 OCR 文字覆盖
+        if (isEmptyJson(rspu.getFabricTags(), "[]")) {
+            rspu.setFabricTags(toJson(fabricCodes));
         }
         if (isEmptyJson(rspu.getSceneTags(), "[]")) {
             rspu.setSceneTags(toJson(sceneCodes));
@@ -315,6 +322,7 @@ public class AiRecognitionPersistenceService {
         copy.setColorPrimaryName(source.getColorPrimaryName());
         copy.setColorPrimaryHsv(source.getColorPrimaryHsv());
         copy.setMaterialTags(source.getMaterialTags());
+        copy.setFabricTags(source.getFabricTags());
         copy.setSceneTags(source.getSceneTags());
         copy.setSixDimTags(source.getSixDimTags());
         copy.setStatus(source.getStatus());

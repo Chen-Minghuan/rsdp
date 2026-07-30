@@ -289,6 +289,7 @@ const variantForm = ref<RspuVariantCreateRequest>({
 const sizeOptions = ref<DictItem[]>([])
 const colorOptions = ref<DictItem[]>([])
 const materialOptions = ref<DictItem[]>([])
+const fabricOptions = ref<DictItem[]>([])
 const styleOptions = ref<DictItem[]>([])
 const sceneOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
@@ -326,11 +327,17 @@ const editForm = ref<ProductEditForm>({})
 
 const showDictCreateModal = ref(false)
 const submittingDictCreate = ref(false)
-const dictCreateType = ref<'material' | 'scene'>('material')
+const dictCreateType = ref<'material' | 'fabric' | 'scene'>('material')
 const dictCreateForm = ref({
   dictCode: '',
   dictName: '',
   dictNameEn: ''
+})
+
+/** 新增字典弹窗标题。 */
+const dictCreateModalTitle = computed(() => {
+  const label = dictCreateType.value === 'material' ? '材质' : dictCreateType.value === 'fabric' ? '面料' : '场景'
+  return `新增${label}标签`
 })
 
 /** 页面标题：商品名称 → 业务编码 → RSPU ID。 */
@@ -414,11 +421,12 @@ async function loadFactories() {
 
 async function loadDicts() {
   try {
-    const [quoteConfidence, sizes, colors, materials, styles, scenes, levels] = await Promise.all([
+    const [quoteConfidence, sizes, colors, materials, fabrics, styles, scenes, levels] = await Promise.all([
       listDicts('quote_confidence', { signal }),
       listDicts('size', { signal }),
       listDicts('color', { signal }),
       listDicts('material', { signal }),
+      listDicts('fabric', { signal }),
       listDicts('style', { signal }),
       listDicts('scene', { signal }),
       listDicts('factory_level', { signal })
@@ -427,6 +435,7 @@ async function loadDicts() {
     sizeOptions.value = sizes
     colorOptions.value = colors
     materialOptions.value = materials
+    fabricOptions.value = fabrics
     styleOptions.value = styles
     sceneOptions.value = scenes
     productLevelOptions.value = levels
@@ -451,7 +460,7 @@ async function handleReview(status: '已确认' | '存疑') {
   }
 }
 
-function openDictCreateModal(type: 'material' | 'scene') {
+function openDictCreateModal(type: 'material' | 'fabric' | 'scene') {
   dictCreateType.value = type
   dictCreateForm.value = { dictCode: '', dictName: '', dictNameEn: '' }
   showDictCreateModal.value = true
@@ -486,6 +495,11 @@ async function handleCreateDict() {
       if (!editForm.value.materialTags?.includes(created.dictCode)) {
         editForm.value.materialTags = [...(editForm.value.materialTags || []), created.dictCode]
       }
+    } else if (dictCreateType.value === 'fabric') {
+      fabricOptions.value = await listDicts('fabric')
+      if (!editForm.value.fabricTags?.includes(created.dictCode)) {
+        editForm.value.fabricTags = [...(editForm.value.fabricTags || []), created.dictCode]
+      }
     } else {
       sceneOptions.value = await listDicts('scene')
       if (!editForm.value.sceneTags?.includes(created.dictCode)) {
@@ -493,7 +507,8 @@ async function handleCreateDict() {
       }
     }
 
-    successMessage.value = `已新增${dictCreateType.value === 'material' ? '材质' : '场景'}标签：${name}`
+    const dictTypeLabel = dictCreateType.value === 'material' ? '材质' : dictCreateType.value === 'fabric' ? '面料' : '场景'
+    successMessage.value = `已新增${dictTypeLabel}标签：${name}`
     showDictCreateModal.value = false
   } catch (e) {
     successMessage.value = ''
@@ -515,6 +530,7 @@ function openEditModal() {
     colorPrimaryName: r.colorPrimaryName,
     colorPrimaryHsv: Array.isArray(r.colorPrimaryHsv) ? [...r.colorPrimaryHsv] : [],
     materialTags: Array.isArray(r.materialTags) ? [...r.materialTags] : [],
+    fabricTags: Array.isArray(r.fabricTags) ? [...r.fabricTags] : [],
     sceneTags: Array.isArray(r.sceneTags) ? [...r.sceneTags] : [],
     referencePriceBand: r.referencePriceBand,
     productLevel: r.productLevel,
@@ -553,6 +569,7 @@ async function handleUpdateProduct() {
     colorPrimaryName: editForm.value.colorPrimaryName,
     colorPrimaryHsv: editForm.value.colorPrimaryHsv,
     materialTags: editForm.value.materialTags,
+    fabricTags: editForm.value.fabricTags,
     sceneTags: editForm.value.sceneTags,
     sixDimTags,
     referencePriceBand: editForm.value.referencePriceBand,
@@ -985,6 +1002,7 @@ onBeforeRouteUpdate((to, from) => {
                   :detail="detail"
                   :style-options="styleOptions"
                   :material-options="materialOptions"
+                  :fabric-options="fabricOptions"
                   :scene-options="sceneOptions"
                 />
               </n-tab-pane>
@@ -1402,6 +1420,21 @@ onBeforeRouteUpdate((to, from) => {
             </n-button>
           </n-space>
         </n-form-item>
+        <n-form-item label="面料标签">
+          <n-space align="center" style="width: 100%;">
+            <n-select
+              v-model:value="editForm.fabricTags"
+              :options="fabricOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="选择面料"
+              multiple
+              filterable
+              style="width: 420px;"
+            />
+            <n-button v-if="canCreateDict && !isReadOnly" type="primary" ghost size="small" @click="openDictCreateModal('fabric')">
+              + 新增面料
+            </n-button>
+          </n-space>
+        </n-form-item>
         <n-form-item label="场景标签">
           <n-space align="center" style="width: 100%;">
             <n-select
@@ -1462,7 +1495,7 @@ onBeforeRouteUpdate((to, from) => {
 
     <n-modal
       v-model:show="showDictCreateModal"
-      :title="dictCreateType === 'material' ? '新增材质标签' : '新增场景标签'"
+      :title="dictCreateModalTitle"
       preset="card"
       style="width: 480px;"
     >

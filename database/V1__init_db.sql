@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
     parent_code VARCHAR(32),
     sort_order INTEGER,
     status VARCHAR(16) DEFAULT 'active',
+    aliases TEXT,                            -- 同义词别名 JSON 数组（V22）
     PRIMARY KEY (dict_type, dict_code)
 );
 
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     color_primary_hsv JSONB,                       -- AI识别主色HSV值 [H,S,V]
     color_secondary VARCHAR(64),                   -- AI识别辅色名称
     material_tags JSONB,                           -- AI识别材质标签
+    fabric_tags JSONB DEFAULT '[]',                -- 面料标签字典码 JSON 数组（V22），如 ["LI","KJ"]
     scene_tags JSONB,                              -- AI识别适用场景标签
     reference_price_band VARCHAR(16),              -- 参考价格带 low/mid/high
     product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华

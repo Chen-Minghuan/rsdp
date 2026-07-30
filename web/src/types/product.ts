@@ -26,6 +26,7 @@ export interface FactoryProductEntryForm {
   positioningLabel: string | null
   colorPrimaryName: string | null
   materialTags: string[]
+  fabricTags: string[]
   sceneTags: string[]
   productLevel: string | null
   warrantyYears: number | null
@@ -209,6 +210,8 @@ export interface ProductDetail {
     /** 辅色名 */
     colorSecondary?: string
     materialTags: string[]
+    /** 面料标签字典码数组（字典类型 fabric） */
+    fabricTags?: string[]
     sceneTags: string[]
     referencePriceBand: string
     /** 预算区间（JSON 值，结构由 AI/导入决定，如 { min, max, currency }） */
@@ -290,6 +293,8 @@ export interface ProductUpdateRequest {
   colorPrimaryName?: string
   colorPrimaryHsv?: number[]
   materialTags?: string[]
+  /** 面料标签字典码数组（字典类型 fabric） */
+  fabricTags?: string[]
   sceneTags?: string[]
   sixDimTags?: Record<string, string>
   referencePriceBand?: string

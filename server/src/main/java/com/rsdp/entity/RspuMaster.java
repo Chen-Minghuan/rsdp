@@ -44,6 +44,10 @@ public class RspuMaster {
 
     @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
+    private String fabricTags;
+
+    @JsonRawValue
+    @TableField(typeHandler = JsonbTypeHandler.class)
     private String sceneTags;
 
     private String referencePriceBand;

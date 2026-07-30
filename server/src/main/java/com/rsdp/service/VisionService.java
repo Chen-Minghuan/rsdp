@@ -52,6 +52,7 @@ public class VisionService {
     private static final String DEFAULT_STYLE_ENUM = "中古风、奶油风、侘寂风、意式、法式、包豪斯、工业风、新中式、孟菲斯";
     private static final String DEFAULT_SCENE_ENUM = "客厅、卧室、书房、办公室、酒店、咖啡厅";
     private static final String DEFAULT_MATERIAL_ENUM = "实木、皮革、亚麻、金属、玻璃、石材";
+    private static final String DEFAULT_FABRIC_ENUM = "亚麻/棉麻、科技布、天鹅绒/绒布、真皮、超纤皮、PU/PVC革";
 
     /**
      * 用户提示词模板。风格、场景、材质枚举会在运行时从 category_dict 动态注入，
@@ -73,6 +74,7 @@ public class VisionService {
           "colorPrimaryName": "主色名称，如：焦糖棕、米白、原木色",
           "colorPrimaryHsv": [H值0-360, S值0-1, V值0-1],
           "materialTags": ["材质1", "材质2"],
+          "fabricTags": ["面料1", "面料2"],
           "sceneTags": ["适用场景1", "适用场景2"],
           "confidence": "high|mid|low",
           "ocr": {
@@ -99,10 +101,13 @@ public class VisionService {
           }
         }
         %s
-        风格、场景、材质的枚举约束如下，请优先从中选择：
+        风格、场景、材质、面料的枚举约束如下，请优先从中选择：
         - 风格（style）：%s
         - 场景（scene）：%s
         - 材质（material）：%s
+        - 面料（fabric）：%s
+        面料（fabricTags）指沙发、床垫、软包椅等软体商品的接触面面料（如亚麻、科技布、真皮），
+        与框架等结构材质（materialTags）区分；非软体商品或无法判断时填 []。
         如果无法判断某个字段或图片中没有对应文字，填 null 或 "unknown"。
         只输出 JSON，不要任何其他文字说明。
         """;
@@ -227,8 +232,9 @@ public class VisionService {
         String styleEnum = buildEnumText("style");
         String sceneEnum = buildEnumText("scene");
         String materialEnum = buildEnumText("material");
+        String fabricEnum = buildEnumText("fabric");
         String sixDimDescription = SixDimSchemaConfig.buildPromptDescription(categoryCode);
-        return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription, styleEnum, sceneEnum, materialEnum);
+        return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription, styleEnum, sceneEnum, materialEnum, fabricEnum);
     }
 
     /**
@@ -255,6 +261,7 @@ public class VisionService {
             case "style" -> DEFAULT_STYLE_ENUM;
             case "scene" -> DEFAULT_SCENE_ENUM;
             case "material" -> DEFAULT_MATERIAL_ENUM;
+            case "fabric" -> DEFAULT_FABRIC_ENUM;
             default -> "";
         };
     }

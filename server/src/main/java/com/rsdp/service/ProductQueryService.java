@@ -757,6 +757,11 @@ public class ProductQueryService {
             validateDictCodes("material", materialCodes);
             rspu.setMaterialTags(writeJson(materialCodes));
         }
+        if (request.getFabricTags() != null) {
+            List<String> fabricCodes = normalizeCodes(request.getFabricTags());
+            validateDictCodes("fabric", fabricCodes);
+            rspu.setFabricTags(writeJson(fabricCodes));
+        }
         List<String> sceneCodes = null;
         if (request.getSceneTags() != null) {
             sceneCodes = normalizeCodes(request.getSceneTags());

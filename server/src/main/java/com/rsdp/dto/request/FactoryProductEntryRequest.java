@@ -33,6 +33,9 @@ public class FactoryProductEntryRequest {
      */
     private List<String> materialTags;
 
+    /** 面料标签字典码列表（软体类商品），例如 ["LI","KJ"] */
+    private List<String> fabricTags;
+
     /**
      * 场景标签 JSON 数组，例如 ["LIVING","OFFICE"]
      */
