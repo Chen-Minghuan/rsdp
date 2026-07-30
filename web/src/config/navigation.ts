@@ -228,6 +228,12 @@ export const navGroups: NavGroup[] = [
         label: '官网内容',
         path: '/admin/platform',
         roles: [ROLES.ADMIN, ROLES.EDITOR]
+      },
+      {
+        // 字典浏览对所有登录用户开放（与后端一致），不设角色限制
+        key: 'admin-dicts',
+        label: '字典管理',
+        path: '/dicts'
       }
     ]
   }

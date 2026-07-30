@@ -197,6 +197,13 @@ const routes = [
     meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
   },
   {
+    path: '/dicts',
+    name: 'DictManagement',
+    component: () => import('@/views/DictManagementView.vue'),
+    // 字典读取与后端一致：登录即可访问；编辑交互（Step 3）再按 dict:update 收敛
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/admin/users',
     name: 'UserManagement',
     component: () => import('@/views/UserManagementView.vue'),

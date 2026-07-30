@@ -1,5 +1,5 @@
 import { apiClient, type ApiResult } from './client'
-import type { DictItem } from '@/types/dict'
+import type { DictItem, DictTypeSummary } from '@/types/dict'
 import type { ApiOptions } from './product'
 
 export interface DictCreatePayload {
@@ -24,5 +24,24 @@ export async function listDicts(dictType: string, options?: ApiOptions): Promise
  */
 export async function createDict(payload: DictCreatePayload, options?: ApiOptions): Promise<DictItem> {
   const { data: result } = await apiClient.post<ApiResult<DictItem>>('/v1/dicts', payload, { signal: options?.signal })
+  return result.data
+}
+
+/**
+ * 查询全部字典类型的条目数汇总。
+ */
+export async function listDictTypeSummary(options?: ApiOptions): Promise<DictTypeSummary[]> {
+  const { data: result } = await apiClient.get<ApiResult<DictTypeSummary[]>>('/v1/dicts', { signal: options?.signal })
+  return result.data
+}
+
+/**
+ * 查询指定类型的全部字典项（all=true，含停用项与别名）。
+ */
+export async function listAllDicts(dictType: string, options?: ApiOptions): Promise<DictItem[]> {
+  const { data: result } = await apiClient.get<ApiResult<DictItem[]>>(`/v1/dicts/${dictType}`, {
+    params: { all: true },
+    signal: options?.signal
+  })
   return result.data
 }
