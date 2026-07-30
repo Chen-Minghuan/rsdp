@@ -8,8 +8,8 @@ import lombok.Data;
 /**
  * 字典项创建请求。
  *
- * <p>当前仅开放 {@code material} 与 {@code scene} 两类字典的扩展，
- * 避免用户随意修改核心受控字典（如 category、factory_level 等）。</p>
+ * <p>开放业务标签类字典（材质/面料/风格/场景/六维/工厂供应链等）的扩展，
+ * 业务状态枚举由数据脚本维护。</p>
  */
 @Data
 public class DictCreateRequest {
@@ -29,4 +29,10 @@ public class DictCreateRequest {
 
     @Size(max = 64, message = "英文名称长度不能超过 64")
     private String dictNameEn;
+
+    /**
+     * 父级编码（如 six_dim_* 类型的所属品类码），可选。
+     */
+    @Size(max = 32, message = "父级编码长度不能超过 32")
+    private String parentCode;
 }

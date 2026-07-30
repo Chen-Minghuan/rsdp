@@ -77,6 +77,7 @@ public class DictController {
         dict.setDictCode(request.getDictCode());
         dict.setDictName(request.getDictName());
         dict.setDictNameEn(request.getDictNameEn());
+        dict.setParentCode(request.getParentCode());
         dictService.createDict(dict);
         return Result.ok(toResponse(dict));
     }

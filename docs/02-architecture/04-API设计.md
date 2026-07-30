@@ -521,12 +521,14 @@ POST   /api/v1/dicts
        # category/color/size/wood_type/six_dim_*/factory_level/factory_source_type/
        # equipment_type/process_type/material_grade/packaging_type/logistics_method；
        # 业务状态枚举不允许界面维护）
-       # Request:  { dictType, dictCode, dictName, dictNameEn? }
+       # Request:  { dictType, dictCode, dictName, dictNameEn?, parentCode? }
        # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases }
        # 注意：
        # 1. dictCode 仅支持字母和数字，服务端自动归一化为大写。
        # 2. 同一类型下 dictCode 重复会返回 400 "字典项已存在"。
        # 3. 创建成功后自动清除 dicts 缓存，前端可立即看到新选项。
+       # 4. parentCode 仅 six_dim_* 类型使用（所属品类码），可选，≤32 字符，
+       #    空白自动归一化为 null；创建后不可修改（编辑接口不含 parentCode）。
 
 PUT    /api/v1/dicts/{dictType}/{dictCode}          # 权限 dict:update（V23 新增）
        # 编辑字典项：名称/英文名/别名/排序（编码与类型不可改）

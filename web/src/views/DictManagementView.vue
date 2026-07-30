@@ -13,7 +13,7 @@ import {
   type DataTableColumns, type FormInst, type FormRules
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
-import { createDict, listAllDicts, listDictTypeSummary, updateDict, updateDictStatus } from '@/api/dict'
+import { createDict, listAllDicts, listDicts, listDictTypeSummary, updateDict, updateDictStatus } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { DICT_TYPE_GROUPS, PERMISSIONS, type DictTypeGroup, type DictTypeMeta } from '@/utils/constants'
 import type { DictItem, DictTypeSummary } from '@/types/dict'
@@ -97,6 +97,29 @@ const filteredItems = computed(() => {
 /** 六维标签类型额外展示所属品类（parentCode）列 */
 const isSixDim = computed(() => selectedType.value.startsWith('six_dim_'))
 
+/** 品类码 → 品类中文名映射（six_dim 所属品类列与新增表单使用） */
+const categoryNameMap = ref<Map<string, string>>(new Map())
+
+/** 所属品类下拉选项（新增 six_dim 条目时选择） */
+const categoryOptions = computed(() =>
+  [...categoryNameMap.value.entries()].map(([code, name]) => ({ label: `${name}（${code}）`, value: code }))
+)
+
+/** 品类码转中文名，未收录返回原码 */
+function categoryName(code?: string): string {
+  if (!code) return '-'
+  return categoryNameMap.value.get(code) ?? code
+}
+
+async function loadCategoryNames() {
+  try {
+    const list = await listDicts('category')
+    categoryNameMap.value = new Map(list.map((d) => [d.dictCode, d.dictName]))
+  } catch {
+    // 品类名称加载失败不阻塞主流程，列显示原码
+  }
+}
+
 function isDisabled(row: DictItem): boolean {
   const status = (row.status ?? '').toLowerCase()
   return status === 'disabled' || status === '0'
@@ -114,7 +137,8 @@ const form = reactive({
   dictName: '',
   dictNameEn: '',
   aliases: [] as string[],
-  sortOrder: null as number | null
+  sortOrder: null as number | null,
+  parentCode: null as string | null
 })
 
 const formRules: FormRules = {
@@ -134,6 +158,7 @@ function resetForm() {
   form.dictNameEn = ''
   form.aliases = []
   form.sortOrder = null
+  form.parentCode = null
 }
 
 function openCreate() {
@@ -174,13 +199,12 @@ async function handleSave() {
       })
       message.success('字典项已更新')
     } else {
-      // 后端 DictCreateRequest 暂不支持 parentCode / sortOrder，
-      // 六维标签的所属品类与新增排序由后端决定，待后端支持后再透传
       await createDict({
         dictType: selectedType.value,
         dictCode: form.dictCode.trim(),
         dictName: form.dictName.trim(),
-        dictNameEn: form.dictNameEn.trim() || undefined
+        dictNameEn: form.dictNameEn.trim() || undefined,
+        parentCode: isSixDim.value && form.parentCode ? form.parentCode : undefined
       })
       message.success('字典项已创建')
     }
@@ -214,7 +238,7 @@ const columns = computed<DataTableColumns<DictItem>>(() => {
     { title: '英文名', key: 'dictNameEn', width: 140, render: (row) => row.dictNameEn || '-' }
   ]
   if (isSixDim.value) {
-    cols.push({ title: '所属品类', key: 'parentCode', width: 110, render: (row) => row.parentCode || '-' })
+    cols.push({ title: '所属品类', key: 'parentCode', width: 110, render: (row) => categoryName(row.parentCode) })
   }
   cols.push(
     {
@@ -273,7 +297,10 @@ const columns = computed<DataTableColumns<DictItem>>(() => {
   return cols
 })
 
-onMounted(loadSummary)
+onMounted(() => {
+  loadSummary()
+  loadCategoryNames()
+})
 
 async function loadSummary() {
   summaryLoading.value = true
@@ -411,8 +438,17 @@ function rowClassName(row: DictItem): string {
           <n-input v-model:value="form.dictNameEn" maxlength="64" placeholder="选填" />
         </n-form-item>
         <n-form-item v-if="editingItem && isSixDim" label="所属品类">
-          <!-- 所属品类为系统归类字段，仅展示不可修改；新增时由后端决定 -->
-          <n-input :value="editingItem.parentCode || '-'" disabled />
+          <!-- 所属品类为系统归类字段，编辑时仅展示不可修改 -->
+          <n-input :value="categoryName(editingItem.parentCode)" disabled />
+        </n-form-item>
+        <n-form-item v-else-if="isSixDim" label="所属品类" path="parentCode">
+          <n-select
+            v-model:value="form.parentCode"
+            :options="categoryOptions"
+            clearable
+            filterable
+            placeholder="选填，归属到某个品类"
+          />
         </n-form-item>
         <n-form-item label="别名" path="aliases">
           <n-dynamic-tags v-model:value="form.aliases" placeholder="回车添加别名，如 真皮" />

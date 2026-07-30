@@ -149,6 +149,38 @@ class DictServiceTest {
     }
 
     @Test
+    void createDict_withParentCode_shouldPersistTrimmed() {
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("six_dim_A");
+        dict.setDictCode("LEG1");
+        dict.setDictName("直脚");
+        dict.setParentCode(" CH ");
+
+        dictService.createDict(dict);
+
+        assertThat(dict.getParentCode()).isEqualTo("CH");
+        verify(categoryDictMapper).insert(any(CategoryDict.class));
+    }
+
+    @Test
+    void createDict_blankParentCode_shouldNormalizeToNull() {
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("six_dim_A");
+        dict.setDictCode("LEG2");
+        dict.setDictName("弯脚");
+        dict.setParentCode("   ");
+
+        dictService.createDict(dict);
+
+        assertThat(dict.getParentCode()).isNull();
+        verify(categoryDictMapper).insert(any(CategoryDict.class));
+    }
+
+    @Test
     void createDict_invalidCode_shouldThrow() {
         CategoryDict dict = new CategoryDict();
         dict.setDictType("material");

@@ -109,6 +109,7 @@ public class DictService {
         dict.setDictType(dictType);
         dict.setDictCode(dictCode);
         dict.setDictName(dictName);
+        dict.setParentCode(StringUtils.hasText(dict.getParentCode()) ? dict.getParentCode().trim() : null);
         dict.setSortOrder(resolveNextSortOrder(dictType));
         dict.setStatus(STATUS_ACTIVE);
         categoryDictMapper.insert(dict);
@@ -195,18 +196,38 @@ public class DictService {
     }
 
     private CategoryDict requireEditableDict(String dictType, String dictCode) {
-        if (!StringUtils.hasText(dictType) || !EDITABLE_TYPES.contains(dictType.trim().toLowerCase())) {
+        String canonicalType = normalizeEditableType(dictType);
+        if (canonicalType == null) {
             throw new BusinessException("该字典类型不允许通过界面维护: " + dictType);
         }
         CategoryDict dict = categoryDictMapper.selectOne(
             new QueryWrapper<CategoryDict>()
-                .eq("dict_type", dictType.trim().toLowerCase())
+                .eq("dict_type", canonicalType)
                 .eq("dict_code", dictCode)
         );
         if (dict == null) {
             throw new BusinessException("字典项不存在: " + dictType + "=" + dictCode);
         }
         return dict;
+    }
+
+    /**
+     * 归一化字典类型为规范形式（six_dim_* 保留大写后缀，其余小写）。
+     *
+     * @param dictType 原始类型
+     * @return 规范类型；不在可维护白名单内返回 null
+     */
+    private String normalizeEditableType(String dictType) {
+        if (!StringUtils.hasText(dictType)) {
+            return null;
+        }
+        String trimmed = dictType.trim();
+        for (String editable : EDITABLE_TYPES) {
+            if (editable.equalsIgnoreCase(trimmed)) {
+                return editable;
+            }
+        }
+        return null;
     }
 
     private String serializeAliases(List<String> aliases) {
@@ -236,11 +257,11 @@ public class DictService {
     }
 
     private String validateAndNormalizeType(String dictType) {
-        if (!StringUtils.hasText(dictType)) {
-            throw new BusinessException("字典类型不能为空");
-        }
-        String normalized = dictType.trim().toLowerCase();
-        if (!EDITABLE_TYPES.contains(normalized)) {
+        String normalized = normalizeEditableType(dictType);
+        if (normalized == null) {
+            if (!StringUtils.hasText(dictType)) {
+                throw new BusinessException("字典类型不能为空");
+            }
             throw new BusinessException("不允许扩展该字典类型: " + dictType);
         }
         return normalized;

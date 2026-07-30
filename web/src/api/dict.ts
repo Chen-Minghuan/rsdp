@@ -7,6 +7,8 @@ export interface DictCreatePayload {
   dictCode: string
   dictName: string
   dictNameEn?: string
+  /** 父级编码（如 six_dim_* 类型的所属品类码），可选 */
+  parentCode?: string
 }
 
 /**
@@ -20,7 +22,7 @@ export async function listDicts(dictType: string, options?: ApiOptions): Promise
 /**
  * 创建新的字典项。
  *
- * 当前仅支持扩展 material / scene 两类标签字典。
+ * 仅支持扩展业务标签类字典（材质/面料/风格/场景/六维/工厂供应链等）。
  */
 export async function createDict(payload: DictCreatePayload, options?: ApiOptions): Promise<DictItem> {
   const { data: result } = await apiClient.post<ApiResult<DictItem>>('/v1/dicts', payload, { signal: options?.signal })
