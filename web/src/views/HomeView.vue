@@ -133,6 +133,12 @@ function gotoProducts(queryKey: string, value: string) {
   router.push({ path: '/products', query: { [queryKey]: value } })
 }
 
+/** 风格编码（如 IL/IT）映射为字典名称，未匹配时原样返回。 */
+function styleName(code?: string): string {
+  if (!code) return ''
+  return styleDicts.value.find(d => d.dictCode === code)?.dictName ?? code
+}
+
 /** Banner 点击：rspu 跳产品详情；url 开外链（仅允许 http/https）。 */
 function handleBannerClick(banner: PublicHomeBanner) {
   if (banner.linkType === 'rspu' && banner.linkValue) {
@@ -240,10 +246,10 @@ onMounted(async () => {
               />
               <div v-else class="product-image-placeholder">暂无图片</div>
             </div>
-            <div class="product-name" :title="product.positioningLabel || product.rspuId">
-              {{ product.positioningLabel || product.rspuId }}
+            <div class="product-name" :title="product.productName || styleName(product.positioningLabel) || product.rspuId">
+              {{ product.productName || styleName(product.positioningLabel) || product.rspuId }}
             </div>
-            <div class="product-meta">{{ product.categoryPath }}</div>
+            <div class="product-meta">{{ styleName(product.positioningLabel) }}</div>
           </n-card>
         </n-grid-item>
       </n-grid>
