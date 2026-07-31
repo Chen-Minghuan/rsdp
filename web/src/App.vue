@@ -42,7 +42,9 @@ function navigate(path: string) {
 }
 
 onMounted(async () => {
-  if (!userStore.userInfo) {
+  // 公开路由（登录页、分享页、邀请页、首页等）不主动拉取登录信息，
+  // 避免无 token 时 /auth/me 返回 403 触发全局登录跳转，导致公开页面无法访问。
+  if (!userStore.userInfo && !route.meta.public) {
     try {
       await userStore.fetchUserInfo()
     } catch {

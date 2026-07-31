@@ -14,6 +14,7 @@ import com.rsdp.entity.SysUserFactory;
 import com.rsdp.entity.SysUserRole;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.SysRoleMapper;
+import com.rsdp.security.SecurityUser;
 import com.rsdp.mapper.SysUserFactoryMapper;
 import com.rsdp.mapper.SysUserMapper;
 import com.rsdp.mapper.SysUserRoleMapper;
@@ -335,6 +336,10 @@ public class UserService {
             return null;
         }
         Object principal = authentication.getPrincipal();
+        // SecurityUser 已携带 userId，优先直接获取，避免 toString() 不是用户名导致查询失败
+        if (principal instanceof SecurityUser securityUser) {
+            return securityUser.getUserId();
+        }
         String username = principal.toString();
         SysUser user = sysUserMapper.selectByUsername(username);
         return user == null ? null : user.getUserId();
