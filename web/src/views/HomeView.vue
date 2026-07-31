@@ -240,7 +240,7 @@ onMounted(async () => {
               <n-image
                 v-if="product.primaryImageUrl"
                 :src="product.primaryImageUrl"
-                object-fit="cover"
+                object-fit="contain"
                 preview-disabled
                 class="product-image-inner"
               />
@@ -474,7 +474,12 @@ onMounted(async () => {
   height: 100%;
 }
 
-.product-image-inner :deep(img),
+.product-image-inner :deep(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .case-image-inner :deep(img) {
   width: 100%;
   height: 100%;
