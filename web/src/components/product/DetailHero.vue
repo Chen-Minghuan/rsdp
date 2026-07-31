@@ -89,8 +89,8 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
             :fallback-src="IMAGE_FALLBACK_SRC"
             width="280"
             height="280"
-            object-fit="cover"
-            style="border-radius: var(--rsdp-radius);"
+            object-fit="contain"
+            style="border-radius: var(--rsdp-radius); background: var(--rsdp-serve-bg);"
           />
           <span class="primary-badge">主图</span>
         </div>
