@@ -53,6 +53,7 @@ public class VisionService {
     private static final String DEFAULT_STYLE_ENUM = "中古风、奶油风、侘寂风、意式、法式、包豪斯、工业风、新中式、孟菲斯";
     private static final String DEFAULT_SCENE_ENUM = "客厅、卧室、书房、办公室、酒店、咖啡厅";
     private static final String DEFAULT_MATERIAL_ENUM = "实木、皮革、亚麻、金属、玻璃、石材";
+    private static final String DEFAULT_FABRIC_ENUM = "亚麻/棉麻、科技布、天鹅绒/绒布、真皮、超纤皮、PU/PVC革";
 
     /**
      * 用户提示词模板。风格、场景、材质枚举会在运行时从 category_dict 动态注入，
@@ -74,6 +75,7 @@ public class VisionService {
           "colorPrimaryName": "主色名称，如：焦糖棕、米白、原木色",
           "colorPrimaryHsv": [H值0-360, S值0-1, V值0-1],
           "materialTags": ["材质1", "材质2"],
+          "fabricTags": ["面料1", "面料2"],
           "sceneTags": ["适用场景1", "适用场景2"],
           "confidence": "high|mid|low",
           "ocr": {
@@ -100,10 +102,13 @@ public class VisionService {
           }
         }
         %s
-        风格、场景、材质的枚举约束如下，请优先从中选择：
+        风格、场景、材质、面料的枚举约束如下，请优先从中选择：
         - 风格（style）：%s
         - 场景（scene）：%s
         - 材质（material）：%s
+        - 面料（fabric）：%s
+        面料（fabricTags）指沙发、床垫、软包椅等软体商品的接触面面料（如亚麻、科技布、真皮），
+        与框架等结构材质（materialTags）区分；非软体商品或无法判断时填 []。
         如果无法判断某个字段或图片中没有对应文字，填 null 或 "unknown"。
         只输出 JSON，不要任何其他文字说明。
         """;
@@ -228,8 +233,9 @@ public class VisionService {
         String styleEnum = buildEnumText("style");
         String sceneEnum = buildEnumText("scene");
         String materialEnum = buildEnumText("material");
+        String fabricEnum = buildEnumText("fabric");
         String sixDimDescription = SixDimSchemaConfig.buildPromptDescription(categoryCode);
-        return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription, styleEnum, sceneEnum, materialEnum);
+        return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription, styleEnum, sceneEnum, materialEnum, fabricEnum);
     }
 
     /**
@@ -256,6 +262,7 @@ public class VisionService {
             case "style" -> DEFAULT_STYLE_ENUM;
             case "scene" -> DEFAULT_SCENE_ENUM;
             case "material" -> DEFAULT_MATERIAL_ENUM;
+            case "fabric" -> DEFAULT_FABRIC_ENUM;
             default -> "";
         };
     }
@@ -267,6 +274,10 @@ public class VisionService {
     private static final String PAGE_DETECTION_SYSTEM_PROMPT = """
         你是家具产品目录分析专家。请对用户提供的一系列 PDF 页面图片逐页分析，
         判断每页类型并输出页面中每个产品的相对位置框（bbox）。
+        bbox 的准确度要求极高：必须紧贴产品主体边缘，宁可略大也不可切断产品，
+        但不得包含说明文字、页眉页脚等无关内容。
+        同时，每个产品图旁边通常配有品名、型号、尺寸、价格等说明文字，
+        这些文字不属于产品图（不要框进 bbox），但必须完整提取到 nearbyText 中。
         只输出 JSON 数组，不要任何其他文字说明。
         """;
 
@@ -275,10 +286,25 @@ public class VisionService {
 
         对每一页，判断其类型并输出产品中每个产品的位置信息：
         - pageType: product（产品页）/ cover（封面）/ toc（目录）/ separator（分隔页）/ blank（空白页）/ unknown（未知）
-        - products: 当 pageType=product 时，列出该页中所有产品的位置框和预估品类码
+        - products: 当 pageType=product 时，列出该页中所有产品的位置框、预估品类码和产品旁的说明文字
 
         bbox 使用相对于页面宽高的比例坐标（0.0 ~ 1.0）：
         {"x": 左上角 x, "y": 左上角 y, "w": 宽度, "h": 高度}
+
+        bbox 规则（必须严格遵守）：
+        - 必须紧贴产品主体边缘，允许略微外扩，但绝不可切断产品的任何部分
+        - 不得包含产品名称、价格、参数说明等文字，不得包含页眉页脚和页边距
+        - 每个产品独立一个框：禁止把多个产品合并为一个框，也禁止把一个产品拆成多个框
+        - 页面中有多个产品时必须全部列出，不得遗漏；一个都没有时 products 输出空数组
+        - 产品图几乎占满整页时，给出接近整页的框是允许的
+        - 坐标必须满足 0<=x、0<=y、x+w<=1、y+h<=1
+
+        nearbyText 规则（每个产品都要尽力提取，实在没有对应文字时输出 null）：
+        - 只提取紧邻该产品图、明显描述该产品的文字，不要把其他产品或页眉页脚的文字混入
+        - productName: 产品名称/品名；modelNumber: 型号/货号；dimensionText: 尺寸原文（如 2450×900×850mm）
+        - priceText: 价格原文（如 ¥12800）；materialDescription: 材质描述原文
+        - rawText: 该产品旁所有说明文字按原文完整输出，不要遗漏
+        - 提取不到的单项填 null，不要编造
 
         预估品类码必须从以下枚举中精确选择，无法判断时填 null：
         %s
@@ -288,7 +314,18 @@ public class VisionService {
           {
             "pageType": "product",
             "products": [
-              {"bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5}, "estimatedCategory": "SF"}
+              {
+                "bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5},
+                "estimatedCategory": "SF",
+                "nearbyText": {
+                  "productName": "兰卡沙发",
+                  "modelNumber": "LK-2450",
+                  "dimensionText": "2450×900×850mm",
+                  "priceText": "¥12800",
+                  "materialDescription": "头层牛皮+实木框架",
+                  "rawText": "兰卡沙发 LK-2450 2450×900×850mm ¥12800 头层牛皮+实木框架"
+                }
+              }
             ]
           },
           ...
@@ -333,7 +370,7 @@ public class VisionService {
                     OpenAiChatMessage.multiVision("user", userPrompt, base64Images)
                 ))
                 .temperature(0.2)
-                .maxTokens(8192)
+                .maxTokens(12288)
                 .build();
 
             String json = executeChat(request, "PDF 页面区域检测");
@@ -629,12 +666,28 @@ public class VisionService {
                     pp.setBbox(parseBoundingBox(pm.get("bbox")));
                     Object category = pm.get("estimatedCategory");
                     pp.setEstimatedCategory(category != null ? category.toString() : null);
+                    pp.setNearbyText(parseNearbyText(pm.get("nearbyText")));
                     pageProducts.add(pp);
                 }
             }
             region.setProducts(pageProducts);
         }
         return region;
+    }
+
+    /**
+     * 解析产品旁的说明文字。AI 输出不规范（非对象/字段类型异常）时返回 null，不影响 bbox 主流程。
+     */
+    private OcrResult parseNearbyText(Object raw) {
+        if (!(raw instanceof Map<?, ?>)) {
+            return null;
+        }
+        try {
+            return objectMapper.convertValue(raw, OcrResult.class);
+        } catch (Exception e) {
+            log.warn("解析 nearbyText 失败，忽略该产品文字", e);
+            return null;
+        }
     }
 
     @SuppressWarnings("unchecked")

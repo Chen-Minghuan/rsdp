@@ -41,6 +41,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ExcelFileValidator;
@@ -184,6 +185,8 @@ public class ExcelAiImportService {
     private final DictResolverService dictResolverService;
     private final DictAliasService dictAliasService;
     private final DictUnresolvedService dictUnresolvedService;
+    private final DataScopeHelper dataScopeHelper;
+    private final RspuCodeService rspuCodeService;
 
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
@@ -292,6 +295,10 @@ public class ExcelAiImportService {
         // pending / done 均可抢占（done 批次支持「以更新模式重新导入」），importing 拒绝
         if (batchMapper.claimForImport(batch.getBatchId()) == 0) {
             throw new BusinessException("批次正在导入中，请稍后重试: " + batch.getStatus());
+        }
+        if (StringUtils.hasText(request.getDefaultFactoryCode())
+            && !dataScopeHelper.canAccessFactory(request.getDefaultFactoryCode())) {
+            throw new BusinessException("无权使用该工厂: " + request.getDefaultFactoryCode());
         }
         batch.setStatus("importing");
         try {
@@ -1637,6 +1644,7 @@ public class ExcelAiImportService {
         // 缺失时回退 productName（复合「型号品名」列场景）
         String productName = getValue(standardValues, "productName");
         String variantDisplayName = getValue(standardValues, "variantDisplayName");
+        row.setProductName(productName);
         row.setVariantDisplayName(StringUtils.hasText(variantDisplayName) ? variantDisplayName : productName);
 
         // 复合表头"型号品名"的值同时包含型号和品名时，尝试拆分
@@ -1695,10 +1703,12 @@ public class ExcelAiImportService {
         int idx = findSplitIndex(combined);
         if (idx > 0) {
             row.setExternalCode(combined.substring(0, idx).trim());
-            // 仅当变体名同样来自该复合值（无独立「规格/模块」列）时才回填品名部分，
+            String namePart = combined.substring(idx + 1).trim();
+            row.setProductName(namePart);
+            // 仅当变体名同样来自该复合值（无独立「规格/模块」列）时才回填变体名，
             // 避免覆盖 variantDisplayName 标准字段读到的模块名
             if (combined.equals(row.getVariantDisplayName())) {
-                row.setVariantDisplayName(combined.substring(idx + 1).trim());
+                row.setVariantDisplayName(namePart);
             }
         }
     }
@@ -2312,6 +2322,7 @@ public class ExcelAiImportService {
         rspu.setPositioningLabel(StringUtils.hasText(primaryStyleName)
             ? normalizeDictCode(primaryStyleName, dictCache.get("style"))
             : "待识别");
+        rspu.setProductName(trim(row.getProductName()));
         rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
         rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
@@ -2330,6 +2341,12 @@ public class ExcelAiImportService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+
+        String sizeCode = StringUtils.hasText(row.getSizeCode())
+            ? normalizeDictCode(row.getSizeCode(), dictCache.get("size"))
+            : null;
+        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+
         return rspuId;
     }
 
@@ -2741,11 +2758,11 @@ public class ExcelAiImportService {
         if (price == null) {
             return null;
         }
-        // 简单分档：<=3000 low, <=8000 mid, >8000 high
-        if (price.compareTo(new BigDecimal("3000")) <= 0) {
+        // 与 RSKU 价格带保持一致：<=1000 low, <=5000 mid, >5000 high
+        if (price.compareTo(new BigDecimal("1000")) < 0) {
             return "low";
         }
-        if (price.compareTo(new BigDecimal("8000")) <= 0) {
+        if (price.compareTo(new BigDecimal("5000")) < 0) {
             return "mid";
         }
         return "high";

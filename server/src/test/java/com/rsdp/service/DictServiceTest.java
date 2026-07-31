@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.CategoryDictMapper;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
@@ -26,6 +28,12 @@ class DictServiceTest {
 
     @Mock
     private CategoryDictMapper categoryDictMapper;
+
+    @Mock
+    private AuditLogService auditLogService;
+
+    @Spy
+    private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private DictService dictService;
@@ -111,9 +119,9 @@ class DictServiceTest {
     @Test
     void createDict_forbiddenType_shouldThrow() {
         CategoryDict dict = new CategoryDict();
-        dict.setDictType("category");
+        dict.setDictType("design_order_status");
         dict.setDictCode("NEW");
-        dict.setDictName("新品类");
+        dict.setDictName("新状态");
 
         assertThatThrownBy(() -> dictService.createDict(dict))
             .isInstanceOf(BusinessException.class)
@@ -121,6 +129,55 @@ class DictServiceTest {
 
         verify(categoryDictMapper, never()).selectOne(any());
         verify(categoryDictMapper, never()).insert(any(CategoryDict.class));
+    }
+
+    @Test
+    void createDict_fabric_shouldSucceed() {
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("FABRIC");
+        dict.setDictCode("chenille");
+        dict.setDictName("雪尼尔提花");
+
+        dictService.createDict(dict);
+
+        assertThat(dict.getDictType()).isEqualTo("fabric");
+        assertThat(dict.getDictCode()).isEqualTo("CHENILLE");
+        verify(categoryDictMapper).insert(any(CategoryDict.class));
+        verify(auditLogService).logCreate(eq("category_dict"), eq("fabric:CHENILLE"), any(), any());
+    }
+
+    @Test
+    void createDict_withParentCode_shouldPersistTrimmed() {
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("six_dim_A");
+        dict.setDictCode("LEG1");
+        dict.setDictName("直脚");
+        dict.setParentCode(" CH ");
+
+        dictService.createDict(dict);
+
+        assertThat(dict.getParentCode()).isEqualTo("CH");
+        verify(categoryDictMapper).insert(any(CategoryDict.class));
+    }
+
+    @Test
+    void createDict_blankParentCode_shouldNormalizeToNull() {
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("six_dim_A");
+        dict.setDictCode("LEG2");
+        dict.setDictName("弯脚");
+        dict.setParentCode("   ");
+
+        dictService.createDict(dict);
+
+        assertThat(dict.getParentCode()).isNull();
+        verify(categoryDictMapper).insert(any(CategoryDict.class));
     }
 
     @Test
@@ -169,5 +226,113 @@ class DictServiceTest {
         dictService.createDict(dict);
 
         assertThat(dict.getSortOrder()).isEqualTo(6);
+    }
+
+    @Test
+    void updateDict_shouldUpdateNameAndAliases() {
+        CategoryDict existing = new CategoryDict();
+        existing.setDictType("material");
+        existing.setDictCode("LE");
+        existing.setDictName("皮革");
+        existing.setStatus("active");
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(existing);
+
+        CategoryDict result = dictService.updateDict("material", "LE", "头层皮革", "Leather",
+            List.of("真皮", "牛皮"), 10);
+
+        assertThat(result.getDictName()).isEqualTo("头层皮革");
+        assertThat(result.getDictNameEn()).isEqualTo("Leather");
+        assertThat(result.getAliases()).isEqualTo("[\"真皮\",\"牛皮\"]");
+        assertThat(result.getSortOrder()).isEqualTo(10);
+        verify(categoryDictMapper).updateById(existing);
+        verify(auditLogService).logUpdate(eq("category_dict"), eq("material:LE"), any(), any(), any());
+    }
+
+    @Test
+    void updateDict_nullFields_shouldKeepOriginal() {
+        CategoryDict existing = new CategoryDict();
+        existing.setDictType("material");
+        existing.setDictCode("LE");
+        existing.setDictName("皮革");
+        existing.setDictNameEn("Leather");
+        existing.setStatus("active");
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(existing);
+
+        CategoryDict result = dictService.updateDict("material", "LE", null, null, null, null);
+
+        assertThat(result.getDictName()).isEqualTo("皮革");
+        assertThat(result.getDictNameEn()).isEqualTo("Leather");
+        assertThat(result.getAliases()).isNull();
+        verify(categoryDictMapper).updateById(existing);
+    }
+
+    @Test
+    void updateDict_readonlyType_shouldThrow() {
+        assertThatThrownBy(() -> dictService.updateDict("review_status", "DONE", "已复核", null, null, null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不允许通过界面维护");
+
+        verify(categoryDictMapper, never()).updateById(any(CategoryDict.class));
+    }
+
+    @Test
+    void updateDict_notFound_shouldThrow() {
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        assertThatThrownBy(() -> dictService.updateDict("material", "NOPE", "名称", null, null, null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("字典项不存在");
+    }
+
+    @Test
+    void updateDictStatus_shouldDisable() {
+        CategoryDict existing = new CategoryDict();
+        existing.setDictType("fabric");
+        existing.setDictCode("WB");
+        existing.setDictName("网布");
+        existing.setStatus("active");
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(existing);
+
+        CategoryDict result = dictService.updateDictStatus("fabric", "WB", "disabled");
+
+        assertThat(result.getStatus()).isEqualTo("disabled");
+        verify(categoryDictMapper).updateById(existing);
+        verify(auditLogService).logUpdate(eq("category_dict"), eq("fabric:WB"), any(), any(), any());
+    }
+
+    @Test
+    void updateDictStatus_invalidStatus_shouldThrow() {
+        assertThatThrownBy(() -> dictService.updateDictStatus("fabric", "WB", "deleted"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("active 或 disabled");
+
+        verify(categoryDictMapper, never()).updateById(any(CategoryDict.class));
+    }
+
+    @Test
+    void listTypeSummary_shouldMapRows() {
+        when(categoryDictMapper.countGroupByType()).thenReturn(List.of(
+            java.util.Map.of("dictType", "fabric", "count", 12L),
+            java.util.Map.of("dictType", "material", "count", 19L)));
+
+        var result = dictService.listTypeSummary();
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getDictType()).isEqualTo("fabric");
+        assertThat(result.get(0).getCount()).isEqualTo(12L);
+    }
+
+    @Test
+    void listAllByType_shouldIncludeDisabled() {
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("material");
+        dict.setDictCode("PE");
+        dict.setStatus("disabled");
+        when(categoryDictMapper.selectAllByType("material")).thenReturn(List.of(dict));
+
+        List<CategoryDict> result = dictService.listAllByType("material");
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getStatus()).isEqualTo("disabled");
     }
 }

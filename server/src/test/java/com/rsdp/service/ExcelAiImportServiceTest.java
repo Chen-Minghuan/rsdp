@@ -22,6 +22,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -117,6 +118,10 @@ class ExcelAiImportServiceTest {
     private DictAliasService dictAliasService;
     @Mock
     private DictUnresolvedService dictUnresolvedService;
+    @Mock
+    private RspuCodeService rspuCodeService;
+    @Mock
+    private DataScopeHelper dataScopeHelper;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -124,12 +129,15 @@ class ExcelAiImportServiceTest {
     void setUp() {
         lenient().when(excelImportRowService.initRow(anyString(), anyInt(), anyString(), anyMap(), any()))
             .thenAnswer(inv -> System.nanoTime());
+        lenient().when(rspuCodeService.assignCode(anyString(), anyString(), anyString(), anyString()))
+            .thenReturn("FS-MC-001-M");
         lenient().when(factoryLeadTimeRuleService.calculateLeadTime(anyString(), any(), any(), anyString(), anyInt()))
             .thenReturn(null);
         // 默认批次可抢占导入权（P1-6 并发防护）；个别测试可覆盖为 0 模拟冲突
         lenient().when(batchMapper.claimForImport(anyString())).thenReturn(1);
         // previewMapping 的 saveBatch 使用编程式事务（P1-7），单测中事务管理器全部 mock
         lenient().when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+        lenient().when(dataScopeHelper.canAccessFactory(anyString())).thenReturn(true);
     }
 
     @Test

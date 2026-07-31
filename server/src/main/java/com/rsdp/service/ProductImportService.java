@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
@@ -79,6 +80,8 @@ public class ProductImportService {
     private final PlatformTransactionManager transactionManager;
     private final DictAliasService dictAliasService;
     private final DictUnresolvedService dictUnresolvedService;
+    private final DataScopeHelper dataScopeHelper;
+    private final RspuCodeService rspuCodeService;
 
     private java.util.Set<String> allowedImageHosts = java.util.Set.of();
 
@@ -430,6 +433,9 @@ public class ProductImportService {
 
         RspuMaster rspu;
         if (existing != null) {
+            if (!dataScopeHelper.canAccessRspu(existing.getRspuId())) {
+                throw new BusinessException("无权更新该产品: " + existing.getRspuId());
+            }
             rspu = updateRspu(existing, row, dictCache);
             // 更新时重新建立风格和场景
             updateStyles(existing.getRspuId(), row.getPositioningLabel(), dictCache.get("style"));
@@ -482,6 +488,12 @@ public class ProductImportService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+
+        String sizeCode = StringUtils.hasText(row.getSizeCode())
+            ? normalizeDictCode(row.getSizeCode(), dictCache.get("size"))
+            : null;
+        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+
         return rspu;
     }
 
@@ -524,6 +536,9 @@ public class ProductImportService {
                 ? normalizeDictCode(row.getPositioningLabel(), dictCache.get("style"))
                 : "待识别");
         }
+        if (!isUpdate || StringUtils.hasText(row.getProductName())) {
+            rspu.setProductName(trim(row.getProductName()));
+        }
         if (!isUpdate || StringUtils.hasText(row.getColorPrimaryName())) {
             rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         }
@@ -552,9 +567,11 @@ public class ProductImportService {
         if (!isUpdate || StringUtils.hasText(row.getKeySpecs())) {
             rspu.setKeySpecs(trim(row.getKeySpecs()));
         }
-        // 品名：显式提供时更新（空单元格不覆盖已有值）
-        if (StringUtils.hasText(row.getVariantDisplayName())) {
-            rspu.setProductName(row.getVariantDisplayName().trim());
+        if (!isUpdate || StringUtils.hasText(row.getDescription())) {
+            rspu.setDescription(trim(row.getDescription()));
+        }
+        if (!isUpdate || row.getRetailPrice() != null) {
+            rspu.setRetailPrice(row.getRetailPrice());
         }
         return rspu;
     }
@@ -874,6 +891,8 @@ public class ProductImportService {
         row.setExternalCode(trim(row.getExternalCode()));
         row.setCategoryCode(trim(row.getCategoryCode()));
         row.setPositioningLabel(trim(row.getPositioningLabel()));
+        row.setProductName(trim(row.getProductName()));
+        row.setDescription(trim(row.getDescription()));
         row.setColorPrimaryName(trim(row.getColorPrimaryName()));
         row.setMaterialTags(trim(row.getMaterialTags()));
         row.setSceneTags(trim(row.getSceneTags()));
@@ -972,6 +991,7 @@ public class ProductImportService {
         RspuMaster copy = new RspuMaster();
         copy.setRspuId(source.getRspuId());
         copy.setExternalCode(source.getExternalCode());
+        copy.setRspuCode(source.getRspuCode());
         copy.setCategoryCode(source.getCategoryCode());
         copy.setCategoryPath(source.getCategoryPath());
         copy.setPositioningLabel(source.getPositioningLabel());

@@ -16,6 +16,10 @@ public class AiLabels {
     private String colorPrimaryName;
     private List<Double> colorPrimaryHsv;
     private List<String> materialTags;
+    /**
+     * 面料标签（沙发/床垫/椅子等软体商品的接触面面料，如 亚麻/科技布；与结构材质区分）。
+     */
+    private List<String> fabricTags;
     private List<String> sceneTags;
     private String confidence;
 

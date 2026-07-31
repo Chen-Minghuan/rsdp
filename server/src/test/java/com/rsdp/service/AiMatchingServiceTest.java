@@ -16,6 +16,7 @@ import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,6 +31,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -60,7 +62,7 @@ class AiMatchingServiceTest {
     private FactoryService factoryService;
 
     @Mock
-    private com.rsdp.security.datascope.DataScopeHelper dataScopeHelper;
+    private DataScopeHelper dataScopeHelper;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -72,7 +74,8 @@ class AiMatchingServiceTest {
         Field field = AiMatchingService.class.getDeclaredField("objectMapper");
         field.setAccessible(true);
         field.set(aiMatchingService, objectMapper);
-        org.mockito.Mockito.lenient().when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+        lenient().when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
     }
 
     @Test

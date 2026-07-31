@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import axios from 'axios'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import {
   NCard,
   NButton,
@@ -15,103 +15,32 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NDataTable,
-  type UploadFileInfo,
   type DataTableColumns
 } from 'naive-ui'
-import { importProductsFromDocument } from '@/api/product'
-import { getTaskStatus } from '@/api/task'
+import { useDocumentImportStore } from '@/stores/documentImport'
 import { listDicts } from '@/api/dict'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
-import type { DocumentImportResult, DocumentImportFailure } from '@/types/product'
+import type { DocumentImportFailure } from '@/types/product'
 
 const router = useRouter()
 
-const fileList = ref<UploadFileInfo[]>([])
-const uploading = ref(false)
-const errorMessage = ref('')
-const categoryHint = ref<string | null>(null)
+// 导入状态在 Pinia 中，切换页面后返回进度不丢失；
+// 上传/导入请求与识别轮询由 store 驱动，组件卸载不影响流程进行
+const store = useDocumentImportStore()
+const {
+  fileList,
+  uploading,
+  errorMessage,
+  categoryHint,
+  importResult,
+  taskList,
+  hasSelectedFile,
+  pendingTaskCount
+} = storeToRefs(store)
+const { handleStartImport, clearAll, ensurePolling } = store
+
 const categoryOptions = ref<DictItem[]>([])
-const importResult = ref<DocumentImportResult | null>(null)
-const taskList = ref<TaskItem[]>([])
-
-const selectedFile = computed(() => {
-  const item = fileList.value[0]
-  return item?.file ?? null
-})
-
-const hasSelectedFile = computed(() => selectedFile.value !== null)
-const terminalStatuses = ['done', 'partial_success', 'failed']
-const pendingTaskCount = computed(
-  () => taskList.value.filter(t => !terminalStatuses.includes(t.status)).length
-)
-
-let pollTimeoutId: ReturnType<typeof setTimeout> | null = null
-let pollAbortController: AbortController | null = null
-let uploadAbortController: AbortController | null = null
-
-function stopPolling() {
-  if (pollTimeoutId) {
-    clearTimeout(pollTimeoutId)
-    pollTimeoutId = null
-  }
-  if (pollAbortController) {
-    pollAbortController.abort()
-    pollAbortController = null
-  }
-}
-
-function ensurePolling() {
-  if (pollTimeoutId) return
-  pollOnce()
-}
-
-async function pollOnce() {
-  if (pendingTaskCount.value === 0) {
-    pollTimeoutId = null
-    return
-  }
-
-  pollAbortController = new AbortController()
-  const signal = pollAbortController.signal
-
-  try {
-    await pollAllTasks(signal)
-  } finally {
-    pollAbortController = null
-
-    if (pendingTaskCount.value > 0 && !signal.aborted) {
-      pollTimeoutId = setTimeout(pollOnce, 1500)
-    } else {
-      pollTimeoutId = null
-    }
-  }
-}
-
-async function pollAllTasks(signal?: AbortSignal) {
-  const pendingTasks = taskList.value.filter(
-    t => !terminalStatuses.includes(t.status)
-  )
-  await Promise.all(pendingTasks.map(task => pollTask(task, signal)))
-}
-
-async function pollTask(taskItem: TaskItem, signal?: AbortSignal) {
-  try {
-    const status = await getTaskStatus(taskItem.taskId, signal)
-    taskItem.status = status.status
-    taskItem.progress = status.progress
-    taskItem.result = status.result
-    taskItem.errorMessage = status.errorMessage
-    taskItem.createdAt = status.createdAt
-    taskItem.completedAt = status.completedAt
-  } catch (e) {
-    if (axios.isCancel(e)) {
-      return
-    }
-    taskItem.status = 'failed'
-    taskItem.errorMessage = e instanceof Error ? e.message : '轮询失败'
-  }
-}
 
 async function loadCategoryDicts() {
   try {
@@ -119,80 +48,6 @@ async function loadCategoryDicts() {
   } catch (e) {
     console.error('加载品类字典失败', e)
   }
-}
-
-const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
-
-function isPdfFile(file: File): boolean {
-  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-}
-
-async function handleStartImport() {
-  const file = selectedFile.value
-  if (!file) {
-    errorMessage.value = '请先选择 PDF 文件'
-    return
-  }
-
-  if (!isPdfFile(file)) {
-    errorMessage.value = '仅支持 PDF 文件'
-    return
-  }
-
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    errorMessage.value = 'PDF 文件大小不能超过 50MB'
-    return
-  }
-
-  errorMessage.value = ''
-  uploading.value = true
-  importResult.value = null
-  taskList.value = []
-  uploadAbortController = new AbortController()
-
-  try {
-    const result = await importProductsFromDocument(
-      file,
-      categoryHint.value ?? undefined,
-      uploadAbortController.signal
-    )
-
-    importResult.value = result
-
-    // 为每个 RSPU 创建任务项用于轮询
-    for (let i = 0; i < result.taskIds.length; i++) {
-      taskList.value.push({
-        taskId: result.taskIds[i],
-        rspuId: result.rspuIds[i],
-        fileName: `${file.name} - 产品 ${i + 1}`,
-        imageIds: [],
-        status: 'pending',
-        progress: 0,
-        result: {},
-        errorMessage: ''
-      })
-    }
-
-    await pollAllTasks()
-    ensurePolling()
-  } catch (e) {
-    if (axios.isCancel(e)) {
-      errorMessage.value = '上传已取消'
-    } else {
-      errorMessage.value = e instanceof Error ? e.message : '导入失败'
-    }
-  } finally {
-    uploading.value = false
-    uploadAbortController = null
-  }
-}
-
-function clearAll() {
-  fileList.value = []
-  importResult.value = null
-  taskList.value = []
-  errorMessage.value = ''
-  stopPolling()
 }
 
 function handleBeforeUnload(e: BeforeUnloadEvent) {
@@ -204,12 +59,15 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 
 onMounted(() => {
   loadCategoryDicts()
+  // 从其他页面返回时，如仍有进行中的识别任务，恢复轮询展示进度
+  if (pendingTaskCount.value > 0) {
+    ensurePolling()
+  }
   window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 onUnmounted(() => {
-  stopPolling()
-  uploadAbortController?.abort()
+  // 刻意不停止轮询：导入流程由 store 驱动，跨页面持续进行
   window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 

@@ -78,7 +78,7 @@ public class SecurityConfig {
 
                 // 认证即可访问的读接口（非敏感）
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
-                .requestMatchers(HttpMethod.PUT, "/api/v1/auth/me/preferences").hasRole("FACTORY_ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/v1/auth/me/preferences").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/dicts/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/tasks/*").authenticated()
 
@@ -135,6 +135,7 @@ public class SecurityConfig {
                 // 产品录入与批量导入
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/factory-entry").hasAuthority(Permissions.PRODUCT_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/manual-entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)
 
                 // RSKU 写接口：必须放在产品写通配规则之前
@@ -217,6 +218,8 @@ public class SecurityConfig {
 
                 // 字典写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAuthority(Permissions.DICT_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/dicts/*/*").hasAuthority(Permissions.DICT_UPDATE)
+                .requestMatchers(HttpMethod.PATCH, "/api/v1/dicts/*/*/status").hasAuthority(Permissions.DICT_UPDATE)
 
                 // 模板标签：simple-list 登录可读；管理端 CRUD 限 ADMIN/EDITOR
                 .requestMatchers(HttpMethod.GET, "/api/v1/template-tags/simple-list").authenticated()

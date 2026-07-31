@@ -80,6 +80,20 @@ POST   /api/v1/products/factory-entry
        #   - 必须属于 `factoryCode` 指定工厂，否则返回 403
        #   - 同一张图片同时作为主图写入 `image_assets`，并用于创建首条 RSKU
 
+POST   /api/v1/products/manual-entry
+       # 传统手工录入（原子创建 RSPU + 默认变体 + 可选图片；不调用 AI、不关联工厂报价）
+       # Request: multipart/form-data
+       #   request: JSON { categoryCode, positioningLabel, colorPrimaryName?, materialTags?,
+       #                   sceneTags?, productLevel, warrantyYears?,
+       #                   variantDisplayName, sizeCode?, dimensions?, colorCode?,
+       #                   variantMaterialCode, materialMix? }
+       #   images: File[] (可选, 第一张为主图, 单张 ≤10MB)
+       # Response: { rspuId, variantId, imageIds: string[] }
+       # 说明：
+       #   - 需 `product:create` 权限（不限工厂管理员角色）
+       #   - RSPU 创建为 active + 待复核，自动分配 rspu_code 业务编码
+       #   - 工厂报价（RSKU）后续在产品详情页或 RSKU 导入中补充
+
 GET    /api/v1/tasks/{taskId}
        # 查询异步任务状态（前端轮询用）
        # Response: {
@@ -96,7 +110,13 @@ GET    /api/v1/products
        #        materialTag（材质码）, status, reviewStatus,
        #        keyword（搜 category_path 或 rspu_id）,
        #        viewMode: "own" | "full" (可选, 默认 own),
-       #        factoryCode: string (可选, 工厂管理员可指定本厂编码)
+       #        factoryCode: string (可选, 工厂管理员可指定本厂编码),
+       #        rspuCode: string (可选, SPU 业务编码 rspu_code 模糊),
+       #        supplierCode: string (可选, 存在该工厂代码 RSKU 报价的产品, 模糊),
+       #        createdFrom / createdTo: yyyy-MM-dd (可选, 创建时间范围, 含当日),
+       #        statusTab: "onSale"|"warehouse"|"soldOut"|"recycled" (可选, 商城状态页签;
+       #                 onSale=status=active, warehouse=status!=active,
+       #                 soldOut=恒空, recycled=回收站即已软删除记录)
        # Response: { total, page, size, rows: [ProductSummary...] }
        # 说明：
        #   - positioningLabel / sceneCode / materialTag 均按字典码精确查询
@@ -104,6 +124,14 @@ GET    /api/v1/products
        #   - full：平台全量 RSPU，按 `factory_product_capability` 能力覆盖去重，
        #     对已被本厂能力覆盖且本厂未报价的 RSPU 进行折叠隐藏；
        #     仅当用户拥有 `view_full_catalog=true` 或对应权限时可用
+       #   - statusTab=recycled 时走独立回收站查询（绕过逻辑删除过滤），
+       #     其他搜索条件不叠加，行内最低出厂价/供应商编码为空
+
+GET    /api/v1/products/status-counts
+       # 商城商品列表状态页签统计（已实现）
+       # Query: 同产品列表（statusTab 忽略，统计复用其余过滤条件）
+       # Response: { onSale, inWarehouse, soldOut, recycled }
+       # 说明：soldOut 当前无业务概念恒为 0；recycled 为全库软删除总数（不叠加搜索条件）
 
 GET    /api/v1/products/{rspuId}
        # 产品详情（含图片、AI 识别记录、官方搭配与适配来源，已实现）
@@ -140,6 +168,7 @@ PUT    /api/v1/products/{rspuId}/review
 PUT    /api/v1/products/{rspuId}
        # 更新产品元数据（产品名称、定位标签、颜色、材质、场景、六维标签、价格带、保修年限等，已实现）
        # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）
+       #        status: "active"|"inactive"（可选，销售状态上下架，非法值返回 400）
        # 说明：工厂管理员/业务员只能更新本厂已录入 RSKU 的 RSPU；非本厂产品返回 403
        # 2026-07-22：新增 productName 字段（≤256，空串视为清空）；产品列表摘要响应同步返回 productName
 
@@ -523,21 +552,40 @@ POST   /api/v1/export/batch-import
 ### 字典
 
 ```
-GET    /api/v1/dicts/{dictType}
+GET    /api/v1/dicts
+       # 字典类型汇总（字典管理中心左栏数据源，V23 新增）
+       # Response: [{ dictType, count }]
+
+GET    /api/v1/dicts/{dictType}?all=false
        # 查询指定类型的字典项（已实现）
-       # dictType: style, scene, category, material, size, color,
+       # dictType: style, scene, category, material, fabric, size, color,
        #           room_type, quote_confidence, review_status, factory_level, product_status 等
-       # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder }]
+       # all=true 时返回含停用项的全部条目（字典管理中心使用）；默认仅启用项
+       # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases }]
 
 POST   /api/v1/dicts
-       # 创建新的字典项（当前仅允许扩展 material / scene 两类业务标签）
-       # Request:  { dictType: "material" | "scene", dictCode, dictName, dictNameEn? }
-       # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder }
+       # 创建新的字典项（V23 起允许扩展全部业务标签类字典：material/fabric/style/scene/
+       # category/color/size/wood_type/six_dim_*/factory_level/factory_source_type/
+       # equipment_type/process_type/material_grade/packaging_type/logistics_method；
+       # 业务状态枚举不允许界面维护）
+       # Request:  { dictType, dictCode, dictName, dictNameEn?, parentCode? }
+       # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases }
        # 注意：
        # 1. dictCode 仅支持字母和数字，服务端自动归一化为大写。
        # 2. 同一类型下 dictCode 重复会返回 400 "字典项已存在"。
        # 3. 创建成功后自动清除 dicts 缓存，前端可立即看到新选项。
-       # 4. 新增标签不会被 AI 自动识别，只能人工或导入时赋值。
+       # 4. parentCode 仅 six_dim_* 类型使用（所属品类码），可选，≤32 字符，
+       #    空白自动归一化为 null；创建后不可修改（编辑接口不含 parentCode）。
+
+PUT    /api/v1/dicts/{dictType}/{dictCode}          # 权限 dict:update（V23 新增）
+       # 编辑字典项：名称/英文名/别名/排序（编码与类型不可改）
+       # Request:  { dictName?, dictNameEn?, aliases?: string[], sortOrder? }（null 字段不修改）
+       # Response: 更新后的字典项
+
+PATCH  /api/v1/dicts/{dictType}/{dictCode}/status   # 权限 dict:update（V23 新增）
+       # 启停用字典项。停用后不再进入 AI 枚举注入与前端下拉，
+       # 历史数据的名称解析（resolveNameByCode）不受影响
+       # Request:  { status: "active" | "disabled" }
 ```
 
 ### 报价单

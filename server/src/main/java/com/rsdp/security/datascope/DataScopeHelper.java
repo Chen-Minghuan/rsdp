@@ -81,7 +81,7 @@ public class DataScopeHelper {
             return true;
         }
         if (scope == DataScope.FACTORY_LIST) {
-            return dataScopeContext.currentFactoryCodes().contains(factoryCode);
+            return factoryCode != null && dataScopeContext.currentFactoryCodes().contains(factoryCode);
         }
         return false;
     }

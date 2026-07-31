@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SceneImportResult } from '@/types/product'
+import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, ManualProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SceneImportResult, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -38,6 +38,27 @@ export async function uploadProductImages(files: File[], categoryCode?: string, 
 export async function listProducts(params: ProductListParams, options?: ApiOptions): Promise<PageResult<ProductSummary>> {
   const { data: result } = await apiClient.get<ApiResult<PageResult<ProductSummary>>>('/v1/products', { params, signal: options?.signal })
   return result.data
+}
+
+/**
+ * 商品列表状态页签统计（出售中/仓库中/已售罄/回收站）。
+ *
+ * @param params 查询条件（statusTab 忽略）
+ * @returns 各页签数量
+ */
+export async function getProductStatusCounts(params: ProductListParams, options?: ApiOptions): Promise<SpuStatusCounts> {
+  const { data: result } = await apiClient.get<ApiResult<SpuStatusCounts>>('/v1/products/status-counts', { params, signal: options?.signal })
+  return result.data
+}
+
+/**
+ * 修改产品销售状态（上架 active / 下架 inactive）。
+ *
+ * @param rspuId RSPU ID
+ * @param status 目标状态
+ */
+export async function updateProductStatus(rspuId: string, status: 'active' | 'inactive'): Promise<void> {
+  await updateProduct(rspuId, { status })
 }
 
 /**
@@ -158,6 +179,20 @@ export async function importProducts(file: File, updateIfExists: boolean): Promi
 export async function factoryEntry(formData: FormData): Promise<FactoryProductEntryResult> {
   const { data: result } = await uploadClient.post<ApiResult<FactoryProductEntryResult>>(
     '/v1/products/factory-entry',
+    formData
+  )
+  return result.data
+}
+
+/**
+ * 传统手工录入：一次性创建 RSPU + 默认变体（不调用 AI、不关联工厂报价）。
+ *
+ * @param formData multipart/form-data，包含 request (JSON 字符串) 与 images（可选）
+ * @returns 创建结果
+ */
+export async function manualEntry(formData: FormData): Promise<ManualProductEntryResult> {
+  const { data: result } = await uploadClient.post<ApiResult<ManualProductEntryResult>>(
+    '/v1/products/manual-entry',
     formData
   )
   return result.data

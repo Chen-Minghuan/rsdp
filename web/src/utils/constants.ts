@@ -42,6 +42,7 @@ export const PERMISSIONS = {
   SCHEME_DELETE: 'scheme:delete',
 
   DICT_CREATE: 'dict:create',
+  DICT_UPDATE: 'dict:update',
 
   USER_READ: 'user:read',
   USER_CREATE: 'user:create',
@@ -85,3 +86,84 @@ export const PERMISSIONS = {
   ADMIN_ASYNC_METRICS: 'admin:async-metrics',
   ADMIN_VECTOR_BACKFILL: 'admin:vector-backfill'
 } as const
+
+// ========== 字典类型元数据（字典管理中心） ==========
+
+/**
+ * 字典类型元数据。readonly=true 表示被系统逻辑引用，页面仅供查看。
+ */
+export interface DictTypeMeta {
+  dictType: string
+  label: string
+  readonly?: boolean
+}
+
+/**
+ * 字典类型分组。数组顺序即页面展示顺序；
+ * 后端返回配置外的类型时，页面兜底归入"其他"组（只读）。
+ */
+export interface DictTypeGroup {
+  key: string
+  label: string
+  types: DictTypeMeta[]
+}
+
+/**
+ * 字典类型四分组配置（顺序即展示顺序）。
+ */
+export const DICT_TYPE_GROUPS: DictTypeGroup[] = [
+  {
+    key: 'product-attr',
+    label: '产品属性',
+    types: [
+      { dictType: 'category', label: '品类' },
+      { dictType: 'style', label: '风格' },
+      { dictType: 'scene', label: '场景' },
+      { dictType: 'material', label: '材质' },
+      { dictType: 'fabric', label: '面料' },
+      { dictType: 'color', label: '颜色' },
+      { dictType: 'size', label: '尺寸' },
+      { dictType: 'wood_type', label: '木材' }
+    ]
+  },
+  {
+    key: 'six-dim',
+    label: '六维标签',
+    types: [
+      { dictType: 'six_dim_A', label: '六维-A' },
+      { dictType: 'six_dim_B', label: '六维-B' },
+      { dictType: 'six_dim_C', label: '六维-C' },
+      { dictType: 'six_dim_D', label: '六维-D' },
+      { dictType: 'six_dim_E', label: '六维-E' },
+      { dictType: 'six_dim_F', label: '六维-F' }
+    ]
+  },
+  {
+    key: 'supply-chain',
+    label: '工厂与供应链',
+    types: [
+      { dictType: 'factory_level', label: '工厂等级' },
+      { dictType: 'factory_source_type', label: '工厂来源' },
+      { dictType: 'equipment_type', label: '设备类型' },
+      { dictType: 'process_type', label: '工艺类型' },
+      { dictType: 'material_grade', label: '材质等级' },
+      { dictType: 'packaging_type', label: '包装方式' },
+      { dictType: 'logistics_method', label: '物流方式' }
+    ]
+  },
+  {
+    key: 'business-status',
+    label: '业务状态',
+    types: [
+      { dictType: 'design_order_status', label: '订单状态', readonly: true },
+      { dictType: 'import_row_status', label: '导入行状态', readonly: true },
+      { dictType: 'import_row_type', label: '导入行类型', readonly: true },
+      { dictType: 'mapping_status', label: '映射状态', readonly: true },
+      { dictType: 'quote_confidence', label: '报价置信度', readonly: true },
+      { dictType: 'review_status', label: '复核状态', readonly: true },
+      { dictType: 'grade', label: '职级', readonly: true },
+      { dictType: 'project_type', label: '项目类型', readonly: true },
+      { dictType: 'room_type', label: '房间类型', readonly: true }
+    ]
+  }
+]

@@ -14,6 +14,7 @@ import java.util.List;
 public class RskuResponse {
 
     private String rskuId;
+    private String rskuCode;
     private String rspuId;
     private String variantId;
     private String factoryCode;

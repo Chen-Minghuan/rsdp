@@ -17,6 +17,7 @@ import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -95,10 +96,16 @@ class ProductImportServiceTest {
     private PlatformTransactionManager transactionManager;
 
     @Mock
-    private com.rsdp.service.DictAliasService dictAliasService;
+    private DictAliasService dictAliasService;
 
     @Mock
-    private com.rsdp.service.DictUnresolvedService dictUnresolvedService;
+    private DictUnresolvedService dictUnresolvedService;
+
+    @Mock
+    private RspuCodeService rspuCodeService;
+
+    @Mock
+    private DataScopeHelper dataScopeHelper;
 
     @InjectMocks
     private ProductImportService productImportService;
@@ -129,6 +136,13 @@ class ProductImportServiceTest {
 
         // 测试环境允许访问本地图片服务
         productImportService.setAllowedImageHosts(Set.of("127.0.0.1", "localhost"));
+
+        // 跳过真实 RSPU 业务编码生成
+        when(rspuCodeService.assignCode(anyString(), anyString(), anyString(), anyString()))
+            .thenReturn("FS-MC-001-M");
+
+        // 跳过数据权限校验
+        when(dataScopeHelper.canAccessRspu(anyString())).thenReturn(true);
 
         // 预加载字典
         when(dictService.listByType("category")).thenReturn(List.of(createDict("FS", "座椅")));

@@ -9,6 +9,15 @@ export interface FactoryProductEntryResult {
 }
 
 /**
+ * 手工录入结果。
+ */
+export interface ManualProductEntryResult {
+  rspuId: string
+  variantId: string
+  imageIds: string[]
+}
+
+/**
  * 工厂单条录入表单（前端用）。
  */
 export interface FactoryProductEntryForm {
@@ -17,6 +26,7 @@ export interface FactoryProductEntryForm {
   positioningLabel: string | null
   colorPrimaryName: string | null
   materialTags: string[]
+  fabricTags: string[]
   sceneTags: string[]
   productLevel: string | null
   warrantyYears: number | null
@@ -53,6 +63,31 @@ export interface ProductListParams {
   keyword?: string
   viewMode?: 'own' | 'full'
   factoryCode?: string
+  /** SPU 业务编码模糊搜索 */
+  rspuCode?: string
+  /** 供应商编码（工厂代码）模糊搜索 */
+  supplierCode?: string
+  /** 创建时间起（yyyy-MM-dd） */
+  createdFrom?: string
+  /** 创建时间止（yyyy-MM-dd） */
+  createdTo?: string
+  /** 状态页签 */
+  statusTab?: SpuStatusTab
+}
+
+/**
+ * 商品列表状态页签。
+ */
+export type SpuStatusTab = 'onSale' | 'warehouse' | 'soldOut' | 'recycled'
+
+/**
+ * 状态页签统计。
+ */
+export interface SpuStatusCounts {
+  onSale: number
+  inWarehouse: number
+  soldOut: number
+  recycled: number
 }
 
 /**
@@ -60,15 +95,17 @@ export interface ProductListParams {
  */
 export interface ProductSummary {
   rspuId: string
-  productName?: string
+  rspuCode?: string
   categoryCode: string
   categoryPath: string
   positioningLabel: string
+  productName?: string
   colorPrimaryName: string
   status: string
   reviewStatus: string
   aestheticsConfidence: string
   productLevel?: string
+  minFactoryPrice?: number
   primaryImageUrl: string
   factoryCodes?: string[]
   createdAt: string
@@ -123,7 +160,15 @@ export interface RecognitionHistoryItem {
   recognitionId: string
   modelName: string
   parsedStyle: string
+  /** OCR 识别结果（JSON 字符串，含品名/型号/尺寸等） */
+  parsedOcr?: string
+  /** 六维标签识别结果（JSON 字符串） */
+  parsedSixDim?: string
+  /** 场景标签识别结果（JSON 字符串） */
+  parsedSceneTags?: string
   confidence: string
+  /** 识别处理耗时（毫秒） */
+  processingTimeMs?: number
   status: string
   errorMessage: string
   createdAt: string
@@ -151,31 +196,52 @@ export interface ProductStyleMatch {
 export interface ProductDetail {
   rspu: {
     rspuId: string
-    productName?: string
+    rspuCode?: string
+    /** 外部编码（导入来源编码） */
+    externalCode?: string
     categoryCode: string
     categoryPath: string
     positioningLabel: string
+    /** 商品名称 */
+    productName?: string
     sixDimTags: Record<string, string>
     colorPrimaryName: string
     colorPrimaryHsv: number[]
+    /** 辅色名 */
+    colorSecondary?: string
     materialTags: string[]
+    /** 面料标签字典码数组（字典类型 fabric） */
+    fabricTags?: string[]
     sceneTags: string[]
     referencePriceBand: string
+    /** 预算区间（JSON 值，结构由 AI/导入决定，如 { min, max, currency }） */
+    budgetRange?: unknown
     productLevel?: string
     warrantyYears: number
     keySpecs: Record<string, string>
     status: string
     reviewStatus: string
+    /** 复核备注 */
+    reviewComment?: string
     aestheticsConfidence: string
+    /** 来源模型版本（AI 识别录入时写入） */
+    sourceAgentVersion?: string
     createdAt: string
     updatedAt: string
   }
   images: Array<{
     imageId: string
+    variantId?: string
     imageType: string
     storagePath: string
     storageUrl: string
-    isPrimary: boolean
+    /** 是否主图（后端 Jackson 序列化字段为 primary） */
+    primary: boolean
+    width?: number
+    height?: number
+    format?: string
+    /** 文件大小（字节） */
+    fileSize?: number
   }>
   recognitions: RecognitionHistoryItem[]
   styleMatches: ProductStyleMatch[]
@@ -220,19 +286,23 @@ export interface ProductReviewRequest {
  */
 export interface ProductUpdateRequest {
   positioningLabel?: string
-  /** 产品名称 */
+  /** 商品名称 */
   productName?: string
   /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel */
   styleCodes?: string[]
   colorPrimaryName?: string
   colorPrimaryHsv?: number[]
   materialTags?: string[]
+  /** 面料标签字典码数组（字典类型 fabric） */
+  fabricTags?: string[]
   sceneTags?: string[]
   sixDimTags?: Record<string, string>
   referencePriceBand?: string
   productLevel?: string
   warrantyYears?: number
   keySpecs?: Record<string, string>
+  /** 销售状态：active=上架、inactive=下架 */
+  status?: 'active' | 'inactive'
 }
 
 /**

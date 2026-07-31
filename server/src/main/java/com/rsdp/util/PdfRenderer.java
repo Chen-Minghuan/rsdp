@@ -24,7 +24,7 @@ public final class PdfRenderer {
      * 将 PDF 所有页面渲染为图片。
      *
      * @param inputStream PDF 输入流
-     * @param dpi         渲染 DPI，建议 150
+     * @param dpi         渲染 DPI，建议 150~200（越高裁剪图越清晰，内存占用随平方增长）
      * @return 按页码顺序排列的图片列表
      * @throws IOException 渲染失败
      */

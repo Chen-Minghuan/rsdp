@@ -23,12 +23,18 @@ public class FactoryProductEntryRequest {
     @NotBlank(message = "风格定位不能为空")
     private String positioningLabel;
 
+    /** 商品名称（可选），如「云屿三人位沙发」 */
+    private String productName;
+
     private String colorPrimaryName;
 
     /**
      * 材质标签 JSON 数组，例如 ["PE","LE"]
      */
     private List<String> materialTags;
+
+    /** 面料标签字典码列表（软体类商品），例如 ["LI","KJ"] */
+    private List<String> fabricTags;
 
     /**
      * 场景标签 JSON 数组，例如 ["LIVING","OFFICE"]

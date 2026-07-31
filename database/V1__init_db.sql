@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
     parent_code VARCHAR(32),
     sort_order INTEGER,
     status VARCHAR(16) DEFAULT 'active',
+    aliases TEXT,                            -- 同义词别名 JSON 数组（V22）
     PRIMARY KEY (dict_type, dict_code)
 );
 
@@ -18,18 +19,20 @@ CREATE TABLE IF NOT EXISTS category_dict (
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
     external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
-    product_name VARCHAR(256),                       -- 产品名称（AI OCR 提取 / Excel 导入品名；纯图无文字时为空）
-    description TEXT,                                -- 长文本描述原文（Excel 导入材质解析/功能配置等，V18 并入）
-    retail_price NUMERIC(14,2),                      -- 零售参考价（销售价/含税价，不加密，V18 并入）
+    rspu_code VARCHAR(32) UNIQUE,                    -- 业务编码，如 FS-MC-001-M
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
+    product_name VARCHAR(256),                     -- 商品名称（AI OCR/录入表单/Excel导入填充，可空）
+    description TEXT,                                -- 长文本描述原文（Excel 导入材质解析/功能配置等，V18 并入）
+    retail_price NUMERIC(14,2),                      -- 零售参考价（销售价/含税价，不加密，V18 并入）
     six_dim_tags JSONB,                            -- 六维标签 JSON：{"A":"A字架形","B":"编织镂空",...}
     style_vector JSONB,                            -- 512维向量备份：由 SpringBoot 调用 Ollama /api/embeddings 生成
     color_primary_name VARCHAR(64),                -- AI识别主色名称
     color_primary_hsv JSONB,                       -- AI识别主色HSV值 [H,S,V]
     color_secondary VARCHAR(64),                   -- AI识别辅色名称
     material_tags JSONB,                           -- AI识别材质标签
+    fabric_tags JSONB DEFAULT '[]',                -- 面料标签字典码 JSON 数组（V22），如 ["LI","KJ"]
     scene_tags JSONB,                              -- AI识别适用场景标签
     reference_price_band VARCHAR(16),              -- 参考价格带 low/mid/high
     product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华
@@ -65,6 +68,16 @@ CREATE TABLE IF NOT EXISTS rspu_code_counter (
     sequence_value BIGINT NOT NULL DEFAULT 1,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (category_code, style_code)
+);
+
+-- RSKU 编码流水计数器（按 RSPU 业务编码+工厂+材质维度生成流水号）
+CREATE TABLE IF NOT EXISTS rsku_code_counter (
+    rspu_code VARCHAR(32) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+    material_code VARCHAR(16) NOT NULL,
+    sequence_value BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (rspu_code, factory_code, material_code)
 );
 
 -- RSPU 多场景关联表（一个款式可适用于多个场景）
@@ -285,6 +298,7 @@ CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(
 -- RSKU 供应单元子表（工厂对某变体的报价）
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
+    rsku_code VARCHAR(64) UNIQUE,                    -- 业务编码，如 FS-MC-001-M-A004-PE-001
     rspu_id VARCHAR(64) NOT NULL,
     variant_id VARCHAR(64),                        -- 关联具体变体
     factory_code VARCHAR(16) NOT NULL,
@@ -1055,6 +1069,10 @@ CREATE TABLE IF NOT EXISTS project (
 );
 CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
 
+-- scheme.project_id 外键（表创建顺序约束，单独补加）
+ALTER TABLE scheme DROP CONSTRAINT IF EXISTS fk_scheme_project;
+ALTER TABLE scheme ADD CONSTRAINT fk_scheme_project FOREIGN KEY (project_id) REFERENCES project(project_id);
+
 
 -- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
 CREATE TABLE IF NOT EXISTS design_order (
@@ -1077,6 +1095,7 @@ CREATE TABLE IF NOT EXISTS design_order (
     invite_expire_at TIMESTAMP,
     invite_confirmed_at TIMESTAMP,
     contract_file_id VARCHAR(64),
+    idempotency_key VARCHAR(64),
     created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     deleted_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -1086,6 +1105,8 @@ CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE d
 CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_design_order_project ON design_order(project_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_design_order_scheme ON design_order(scheme_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_design_order_idempotency
+    ON design_order(created_by, idempotency_key) WHERE deleted_at IS NULL;
 
 -- 订单号每日序号计数器（解决 COUNT+1 在软删除下与唯一索引冲突的问题）
 CREATE TABLE IF NOT EXISTS order_no_counter (

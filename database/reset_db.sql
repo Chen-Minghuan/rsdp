@@ -35,6 +35,7 @@ DROP TABLE IF EXISTS rspu_relation CASCADE;
 DROP TABLE IF EXISTS factory_master CASCADE;
 DROP TABLE IF EXISTS rspu_scene CASCADE;
 DROP TABLE IF EXISTS rspu_code_counter CASCADE;
+DROP TABLE IF EXISTS rsku_code_counter CASCADE;
 DROP TABLE IF EXISTS rspu_style CASCADE;
 DROP TABLE IF EXISTS rspu_master CASCADE;
 DROP TABLE IF EXISTS excel_import_batch CASCADE;
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
     parent_code VARCHAR(32),
     sort_order INTEGER,
     status VARCHAR(16) DEFAULT 'active',
+    aliases TEXT,
     PRIMARY KEY (dict_type, dict_code)
 );
 
@@ -93,18 +95,20 @@ CREATE TABLE IF NOT EXISTS category_dict (
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
     external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
-    product_name VARCHAR(256),
-    description TEXT,                                -- 长文本描述原文（Excel 导入材质解析/功能配置等，V18 并入）
-    retail_price NUMERIC(14,2),                      -- 零售参考价（销售价/含税价，不加密，V18 并入）
+    rspu_code VARCHAR(32) UNIQUE,                    -- 业务编码，如 FS-MC-001-M
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,
+    product_name VARCHAR(256),
+    description TEXT,                                -- 长文本描述原文（Excel 导入材质解析/功能配置等，V18 并入）
+    retail_price NUMERIC(14,2),                      -- 零售参考价（销售价/含税价，不加密，V18 并入）
     six_dim_tags JSONB,
     style_vector JSONB,
     color_primary_name VARCHAR(64),
     color_primary_hsv JSONB,
     color_secondary VARCHAR(64),
     material_tags JSONB,
+    fabric_tags JSONB DEFAULT '[]',
     scene_tags JSONB,
     reference_price_band VARCHAR(16),
     product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华
@@ -140,6 +144,16 @@ CREATE TABLE IF NOT EXISTS rspu_code_counter (
     sequence_value BIGINT NOT NULL DEFAULT 1,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (category_code, style_code)
+);
+
+-- RSKU 编码流水计数器
+CREATE TABLE IF NOT EXISTS rsku_code_counter (
+    rspu_code VARCHAR(32) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+    material_code VARCHAR(16) NOT NULL,
+    sequence_value BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (rspu_code, factory_code, material_code)
 );
 
 -- RSPU 多场景关联表
@@ -359,6 +373,7 @@ CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(
 -- RSKU 供应单元子表
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
+    rsku_code VARCHAR(64) UNIQUE,                    -- 业务编码，如 FS-MC-001-M-A004-PE-001
     rspu_id VARCHAR(64) NOT NULL,
     variant_id VARCHAR(64),
     factory_code VARCHAR(16) NOT NULL,
@@ -1114,6 +1129,10 @@ CREATE TABLE IF NOT EXISTS project (
 );
 CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
 
+-- scheme.project_id 外键（表创建顺序约束，单独补加）
+ALTER TABLE scheme DROP CONSTRAINT IF EXISTS fk_scheme_project;
+ALTER TABLE scheme ADD CONSTRAINT fk_scheme_project FOREIGN KEY (project_id) REFERENCES project(project_id);
+
 -- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
 CREATE TABLE IF NOT EXISTS design_order (
     order_id VARCHAR(64) PRIMARY KEY,
@@ -1135,6 +1154,7 @@ CREATE TABLE IF NOT EXISTS design_order (
     invite_expire_at TIMESTAMP,
     invite_confirmed_at TIMESTAMP,
     contract_file_id VARCHAR(64),
+    idempotency_key VARCHAR(64),
     created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     deleted_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -1144,6 +1164,8 @@ CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE d
 CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_design_order_project ON design_order(project_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_design_order_scheme ON design_order(scheme_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_design_order_idempotency
+    ON design_order(created_by, idempotency_key) WHERE deleted_at IS NULL;
 
 -- 订单号每日序号计数器（解决 COUNT+1 在软删除下与唯一索引冲突的问题）
 CREATE TABLE IF NOT EXISTS order_no_counter (
@@ -1277,6 +1299,46 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('material', 'GP', '石膏/PU线条', 18),
 ('material', 'PL', '塑料/亚克力', 19)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 面料类型字典（V22，软体类商品专用；与 material_grade 面料等级区分）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('fabric', 'LI', '亚麻/棉麻', 1),
+('fabric', 'XN', '雪尼尔', 2),
+('fabric', 'KJ', '科技布', 3),
+('fabric', 'VE', '天鹅绒/绒布', 4),
+('fabric', 'SF', '羊羔绒/泰迪绒', 5),
+('fabric', 'DX', '灯芯绒', 6),
+('fabric', 'ZP', '真皮', 7),
+('fabric', 'NP', '纳帕皮', 8),
+('fabric', 'MS', '磨砂皮', 9),
+('fabric', 'CX', '超纤皮', 10),
+('fabric', 'PU', 'PU/PVC革', 11),
+('fabric', 'WB', '网布', 12)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 常用材质/面料别名（V22：AI 识别叫法 → 字典标准项）
+UPDATE category_dict SET aliases = '["橡木","胡桃木","松木","原木","木头","木质"]' WHERE dict_type='material' AND dict_code='WO';
+UPDATE category_dict SET aliases = '["真皮","牛皮","头层牛皮","黄牛皮","皮质"]' WHERE dict_type='material' AND dict_code='LE';
+UPDATE category_dict SET aliases = '["棉麻","麻布","亚麻布","棉麻布"]' WHERE dict_type='material' AND dict_code='LI';
+UPDATE category_dict SET aliases = '["绒布","丝绒","天鹅绒布"]' WHERE dict_type='material' AND dict_code='VE';
+UPDATE category_dict SET aliases = '["羊羔毛","泰迪绒","圈圈绒","羊羔绒"]' WHERE dict_type='material' AND dict_code='SF';
+UPDATE category_dict SET aliases = '["不锈钢","黄铜","铁艺","铝合金","金属框架"]' WHERE dict_type='material' AND dict_code='MT';
+UPDATE category_dict SET aliases = '["大理石","岩板","洞石","石材"]' WHERE dict_type='material' AND dict_code='ST';
+UPDATE category_dict SET aliases = '["仿藤","PE藤","塑料藤"]' WHERE dict_type='material' AND dict_code='PE';
+UPDATE category_dict SET aliases = '["藤编","竹编","草编","真藤"]' WHERE dict_type='material' AND dict_code='TN';
+UPDATE category_dict SET aliases = '["亚克力","有机玻璃"]' WHERE dict_type='material' AND dict_code='PL';
+UPDATE category_dict SET aliases = '["棉麻","麻布","亚麻布","棉麻布"]' WHERE dict_type='fabric' AND dict_code='LI';
+UPDATE category_dict SET aliases = '["雪尼尔绒","雪尼尔布"]' WHERE dict_type='fabric' AND dict_code='XN';
+UPDATE category_dict SET aliases = '["科技绒","科技皮革","三防布"]' WHERE dict_type='fabric' AND dict_code='KJ';
+UPDATE category_dict SET aliases = '["绒布","丝绒","天鹅绒布"]' WHERE dict_type='fabric' AND dict_code='VE';
+UPDATE category_dict SET aliases = '["羊羔毛","泰迪绒","圈圈绒","羊羔绒"]' WHERE dict_type='fabric' AND dict_code='SF';
+UPDATE category_dict SET aliases = '["灯芯绒布","条绒"]' WHERE dict_type='fabric' AND dict_code='DX';
+UPDATE category_dict SET aliases = '["牛皮","头层牛皮","黄牛皮","全皮"]' WHERE dict_type='fabric' AND dict_code='ZP';
+UPDATE category_dict SET aliases = '["纳帕真皮","Napa皮","NAPPA皮"]' WHERE dict_type='fabric' AND dict_code='NP';
+UPDATE category_dict SET aliases = '["反绒皮","麂皮"]' WHERE dict_type='fabric' AND dict_code='MS';
+UPDATE category_dict SET aliases = '["超纤","超纤革"]' WHERE dict_type='fabric' AND dict_code='CX';
+UPDATE category_dict SET aliases = '["PU皮","PVC革","人造革","仿皮","西皮"]' WHERE dict_type='fabric' AND dict_code='PU';
+UPDATE category_dict SET aliases = '["网眼布","透气网布"]' WHERE dict_type='fabric' AND dict_code='WB';
 
 -- 六维标签 - 休闲椅 A 维度（轮廓）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, parent_code, sort_order) VALUES
@@ -1497,6 +1559,7 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('scheme:update', '编辑搭配方案'),
 ('scheme:delete', '删除搭配方案'),
 ('dict:create', '创建字典项'),
+('dict:update', '编辑字典项'),
 ('user:read', '查看用户'),
 ('user:create', '创建用户'),
 ('user:update', '编辑用户'),

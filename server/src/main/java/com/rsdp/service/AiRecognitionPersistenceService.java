@@ -9,6 +9,7 @@ import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -41,6 +42,7 @@ public class AiRecognitionPersistenceService {
     private final RspuSceneMapper rspuSceneMapper;
     private final AuditLogService auditLogService;
     private final DictResolverService dictResolverService;
+    private final RspuCodeService rspuCodeService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -74,8 +76,9 @@ public class AiRecognitionPersistenceService {
         List<String> secondaryStyleCodes = dictResolverService.resolveCodesByNames("style", labels.getSecondaryStyles());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
         List<String> materialCodes = dictResolverService.resolveCodesByNames("material", labels.getMaterialTags());
+        List<String> fabricCodes = dictResolverService.resolveCodesByNames("fabric", labels.getFabricTags());
 
-        String productName = updateRspu(rspuId, labels, styleCode, materialCodes, sceneCodes, embedding, modelName);
+        String productName = updateRspu(rspuId, labels, styleCode, materialCodes, fabricCodes, sceneCodes, embedding, modelName);
         refreshStyleAssociations(rspuId, styleCode, secondaryStyleCodes);
         refreshSceneAssociations(rspuId, sceneCodes);
         markImageProcessed(imageId);
@@ -101,7 +104,7 @@ public class AiRecognitionPersistenceService {
     }
 
     private String updateRspu(String rspuId, AiLabels labels, String styleCode,
-                            List<String> materialCodes, List<String> sceneCodes,
+                            List<String> materialCodes, List<String> fabricCodes, List<String> sceneCodes,
                             float[] embedding, String modelName) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
@@ -140,6 +143,12 @@ public class AiRecognitionPersistenceService {
         if (isEmptyJson(rspu.getMaterialTags(), "[]")) {
             rspu.setMaterialTags(toJson(materialCodes));
         }
+        // 面料标签：与材质同模式，AI 只补空缺。
+        // 面料由同一次 AI 调用综合图片文字与视觉输出（模型看图同时读字），
+        // 无需像材质那样再做 OCR 文字覆盖
+        if (isEmptyJson(rspu.getFabricTags(), "[]")) {
+            rspu.setFabricTags(toJson(fabricCodes));
+        }
         if (isEmptyJson(rspu.getSceneTags(), "[]")) {
             rspu.setSceneTags(toJson(sceneCodes));
         }
@@ -150,10 +159,44 @@ public class AiRecognitionPersistenceService {
         rspu.setAestheticsConfidence(labels.getConfidence());
         rspu.setSourceAgentVersion(modelName);
         rspu.setStatus("active");
+
+        // AI 识别后尝试生成 RSPU 业务编码；无法推断尺寸或风格时标记为存疑
+        assignRspuCodeIfPossible(rspu, labels, styleCode);
+
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
         return rspu.getProductName();
+    }
+
+    private void assignRspuCodeIfPossible(RspuMaster rspu, AiLabels labels, String styleCode) {
+        if (StringUtils.hasText(rspu.getRspuCode())) {
+            return;
+        }
+        String categoryCode = rspu.getCategoryCode();
+        if (!StringUtils.hasText(categoryCode)) {
+            return;
+        }
+        String inferredSizeCode = rspuCodeService.inferSizeCode(labels);
+        if (!StringUtils.hasText(inferredSizeCode)) {
+            rspu.setReviewStatus("存疑");
+            rspu.setReviewComment("无法推断尺寸码，需补充尺寸后生成业务编码");
+            return;
+        }
+        String effectiveStyleCode = StringUtils.hasText(styleCode) ? styleCode : rspu.getPositioningLabel();
+        if (!StringUtils.hasText(effectiveStyleCode) || "待识别".equals(effectiveStyleCode)) {
+            rspu.setReviewStatus("存疑");
+            rspu.setReviewComment("无法确定风格码，需补充风格后生成业务编码");
+            return;
+        }
+        try {
+            String code = rspuCodeService.generateNextCode(categoryCode, effectiveStyleCode, inferredSizeCode);
+            rspu.setRspuCode(code);
+        } catch (BusinessException e) {
+            log.warn("AI 识别后生成 RSPU 业务编码失败，rspuId={}，原因={}", rspu.getRspuId(), e.getMessage());
+            rspu.setReviewStatus("存疑");
+            rspu.setReviewComment("生成业务编码失败: " + e.getMessage());
+        }
     }
 
     /**
@@ -290,6 +333,7 @@ public class AiRecognitionPersistenceService {
         copy.setColorPrimaryName(source.getColorPrimaryName());
         copy.setColorPrimaryHsv(source.getColorPrimaryHsv());
         copy.setMaterialTags(source.getMaterialTags());
+        copy.setFabricTags(source.getFabricTags());
         copy.setSceneTags(source.getSceneTags());
         copy.setSixDimTags(source.getSixDimTags());
         copy.setStatus(source.getStatus());

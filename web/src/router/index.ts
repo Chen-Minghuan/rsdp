@@ -70,6 +70,12 @@ const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
   },
   {
+    path: '/products/manual-entry',
+    name: 'ProductManualEntry',
+    component: () => import('@/views/ProductManualEntryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+  },
+  {
     path: '/products/:rspuId',
     name: 'ProductDetail',
     component: () => import('@/views/ProductDetailView.vue'),
@@ -197,6 +203,13 @@ const routes = [
     meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
   },
   {
+    path: '/dicts',
+    name: 'DictManagement',
+    component: () => import('@/views/DictManagementView.vue'),
+    // 字典读取与后端一致：登录即可访问；编辑交互（Step 3）再按 dict:update 收敛
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/admin/users',
     name: 'UserManagement',
     component: () => import('@/views/UserManagementView.vue'),
@@ -206,7 +219,7 @@ const routes = [
     path: '/settings',
     name: 'UserSettings',
     component: () => import('@/views/UserSettingsView.vue'),
-    meta: { requiresAuth: true, roles: [ROLES.FACTORY_ADMIN] }
+    meta: { requiresAuth: true }
   },
   {
     path: '/user',

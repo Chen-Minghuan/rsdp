@@ -1,7 +1,9 @@
 package com.rsdp.service;
 
 import com.rsdp.entity.CategoryDict;
+import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.RspuCodeMapper;
+import com.rsdp.mapper.RspuMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -26,6 +28,9 @@ class RspuCodeServiceTest {
 
     @Mock
     private DictService dictService;
+
+    @Mock
+    private RspuMapper rspuMapper;
 
     @InjectMocks
     private RspuCodeService rspuCodeService;
@@ -56,15 +61,10 @@ class RspuCodeServiceTest {
     }
 
     @Test
-    void generateNextCode_shouldUseX_WhenSizeCodeMissing() {
-        when(dictService.listByType("category")).thenReturn(List.of(createDict("FS"), createDict("DT")));
-        when(dictService.listByType("style")).thenReturn(List.of(createDict("MC")));
-        when(dictService.listByType("grade")).thenReturn(List.of());
-        when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(7L);
-
-        String code = rspuCodeService.generateNextCode("DT", "MC", null);
-
-        assertThat(code).isEqualTo("DT-MC-007-X");
+    void generateNextCode_shouldThrow_WhenSizeCodeMissing() {
+        assertThatThrownBy(() -> rspuCodeService.generateNextCode("FS", "MC", null))
+            .isInstanceOf(com.rsdp.exception.BusinessException.class)
+            .hasMessageContaining("尺寸码不能为空");
     }
 
     @Test
@@ -105,6 +105,33 @@ class RspuCodeServiceTest {
         assertThatThrownBy(() -> rspuCodeService.generateNextCode("FS", "MC", "XX"))
             .isInstanceOf(com.rsdp.exception.BusinessException.class)
             .hasMessageContaining("尺寸码不存在");
+    }
+
+    @Test
+    void assignCode_shouldReturnExistingCode_whenAlreadyAssigned() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setRspuCode("FS-MC-001-M");
+        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
+
+        String code = rspuCodeService.assignCode("RSPU-001", "FS", "MC", "M");
+
+        assertThat(code).isEqualTo("FS-MC-001-M");
+    }
+
+    @Test
+    void assignCode_shouldGenerateAndPersist_whenNotAssigned() {
+        stubDicts();
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setRspuCode(null);
+        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
+        when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(5L);
+
+        String code = rspuCodeService.assignCode("RSPU-001", "FS", "MC", "M");
+
+        assertThat(code).isEqualTo("FS-MC-005-M");
+        assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-005-M");
     }
 
     @Test

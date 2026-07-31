@@ -51,6 +51,8 @@ class AiRecognitionPersistenceServiceTest {
     private AuditLogService auditLogService;
     @Mock
     private DictResolverService dictResolverService;
+    @Mock
+    private RspuCodeService rspuCodeService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -92,6 +94,7 @@ class AiRecognitionPersistenceServiceTest {
             .thenReturn(List.of("CR", "MC", "NC"));
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
@@ -123,6 +126,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
@@ -154,6 +158,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", List.of("卧室"))).thenReturn(List.of("BEDROOM"));
         when(dictResolverService.resolveCodesByNames("material", List.of("金属"))).thenReturn(List.of("METAL"));
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
         labels.setStyle("北欧风");
@@ -272,6 +277,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");

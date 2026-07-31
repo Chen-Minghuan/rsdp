@@ -20,6 +20,7 @@ public class RskuSupply {
 
     @TableId
     private String rskuId;
+    private String rskuCode;
     private String rspuId;
     private String variantId;
     private String factoryCode;

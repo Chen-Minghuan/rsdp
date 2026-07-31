@@ -25,6 +25,9 @@ public class ProductImportRow {
     @ExcelProperty("定位标签")
     private String positioningLabel;
 
+    @ExcelProperty("商品名称")
+    private String productName;
+
     @ExcelProperty("主色")
     private String colorPrimaryName;
 

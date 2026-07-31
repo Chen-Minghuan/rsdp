@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
@@ -740,8 +741,128 @@ class ProductQueryServiceTest {
             .hasMessageContaining("只能编辑自己工厂已报价的产品");
     }
 
-    private void authenticateFactoryAdmin(String username) {
-        SecurityContextHolder.clearContext();
+    @Test
+    void listProducts_recycledTab_shouldQuerySoftDeleted() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setStatusTab("recycled");
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-DELETED");
+        rspu.setCategoryCode("FS");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectRecycledPage(any(Page.class))).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getTotal()).isEqualTo(1);
+        assertThat(result.getRows()).hasSize(1);
+        assertThat(result.getRows().get(0).getRspuId()).isEqualTo("RSPU-DELETED");
+        verify(rspuMapper).selectRecycledPage(any(Page.class));
+        verify(rspuMapper, times(0)).selectPage(any(Page.class), any());
+    }
+
+    @Test
+    void listProducts_rspuCodeAndSupplierCode_shouldAppendConditions() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setRspuCode("FS-MC");
+        request.setSupplierCode("A004");
+        request.setCreatedFrom("2026-07-01");
+        request.setCreatedTo("2026-07-29");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        assertThat(sqlSegment).contains("rspu_code");
+        assertThat(sqlSegment).contains("rsku_supply");
+        assertThat(sqlSegment).contains("created_at");
+    }
+
+    @Test
+    void listProducts_statusTabWarehouse_shouldFilterNonActive() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setStatusTab("warehouse");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).contains("status");
+    }
+
+    @Test
+    void statusCounts_shouldReturnCountsPerTab() {
+        ProductListRequest request = new ProductListRequest();
+
+        when(rspuMapper.selectCount(any())).thenReturn(5L, 2L);
+        when(rspuMapper.selectRecycledCount()).thenReturn(3L);
+
+        com.rsdp.dto.response.ProductStatusCountsResponse counts = productQueryService.statusCounts(request);
+
+        assertThat(counts.getOnSale()).isEqualTo(5L);
+        assertThat(counts.getInWarehouse()).isEqualTo(2L);
+        assertThat(counts.getSoldOut()).isZero();
+        assertThat(counts.getRecycled()).isEqualTo(3L);
+        verify(rspuMapper, times(2)).selectCount(any());
+    }
+
+    @Test
+    void updateProduct_shouldUpdateStatus() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setStatus("active");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setStatus("inactive");
+
+        productQueryService.updateProduct("RSPU-TEST01", request);
+
+        assertThat(rspu.getStatus()).isEqualTo("inactive");
+        verify(rspuMapper).updateById(rspu);
+    }
+
+    @Test
+    void updateProduct_shouldRejectInvalidStatus() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        ProductUpdateRequest request = new ProductUpdateRequest();
+        request.setStatus("deleted");
+
+        assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-TEST01", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("非法的销售状态");
+    }
+
+    private void authenticateFactoryAdmin(String username) {        SecurityContextHolder.clearContext();
         var user = User.withUsername(username).password("").roles("FACTORY_ADMIN").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);

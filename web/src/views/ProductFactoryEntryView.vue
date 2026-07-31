@@ -42,6 +42,7 @@ const categoryOptions = ref<DictItem[]>([])
 const styleOptions = ref<DictItem[]>([])
 const sceneOptions = ref<DictItem[]>([])
 const materialOptions = ref<DictItem[]>([])
+const fabricOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
 
 const fileList = ref<UploadFileInfo[]>([])
@@ -50,8 +51,10 @@ const form = ref({
   // RSPU
   categoryCode: null as string | null,
   positioningLabel: null as string | null,
+  productName: '',
   colorPrimaryName: null as string | null,
   materialTags: [] as string[],
+  fabricTags: [] as string[],
   sceneTags: [] as string[],
   productLevel: null as string | null,
   warrantyYears: null as number | null,
@@ -123,17 +126,19 @@ onMounted(async () => {
     return
   }
   try {
-    const [categories, styles, scenes, materials, levels] = await Promise.all([
+    const [categories, styles, scenes, materials, fabrics, levels] = await Promise.all([
       listDicts('category'),
       listDicts('style'),
       listDicts('scene'),
       listDicts('material'),
+      listDicts('fabric'),
       listDicts('factory_level')
     ])
     categoryOptions.value = categories
     styleOptions.value = styles
     sceneOptions.value = scenes
     materialOptions.value = materials
+    fabricOptions.value = fabrics
     productLevelOptions.value = levels
   } catch (e) {
     errorMessage.value = '加载字典失败，请刷新页面重试'
@@ -215,8 +220,10 @@ async function handleSubmit() {
   const request = {
     categoryCode: form.value.categoryCode!,
     positioningLabel: form.value.positioningLabel!,
+    productName: form.value.productName || undefined,
     colorPrimaryName: form.value.colorPrimaryName || undefined,
     materialTags: form.value.materialTags,
+    fabricTags: form.value.fabricTags,
     sceneTags: form.value.sceneTags,
     productLevel: form.value.productLevel!,
     warrantyYears: form.value.warrantyYears || undefined,
@@ -260,8 +267,10 @@ function resetForm() {
   form.value = {
     categoryCode: null,
     positioningLabel: null,
+    productName: '',
     colorPrimaryName: null,
     materialTags: [],
+    fabricTags: [],
     sceneTags: [],
     productLevel: null,
     warrantyYears: null,
@@ -335,6 +344,10 @@ function viewCreatedProduct() {
           />
         </n-form-item>
 
+        <n-form-item label="商品名称">
+          <n-input v-model:value="form.productName" placeholder="如：云屿三人位沙发（可选）" />
+        </n-form-item>
+
         <n-form-item label="主色">
           <n-input v-model:value="form.colorPrimaryName" placeholder="如：深咖色" />
         </n-form-item>
@@ -344,6 +357,16 @@ function viewCreatedProduct() {
             v-model:value="form.materialTags"
             :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
             placeholder="请选择材质标签"
+            multiple
+            clearable
+          />
+        </n-form-item>
+
+        <n-form-item label="面料标签">
+          <n-select
+            v-model:value="form.fabricTags"
+            :options="fabricOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+            placeholder="请选择面料标签"
             multiple
             clearable
           />

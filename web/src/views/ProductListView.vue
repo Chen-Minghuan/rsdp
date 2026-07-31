@@ -2,32 +2,43 @@
 import { ref, h, onMounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  NCard,
-  NButton,
-  NSpace,
-  NInput,
-  NSelect,
-  NSwitch,
-  NDataTable,
-  NPagination,
-  NTag,
-  NImage,
   NAlert,
-  NLayout,
-  NLayoutSider,
-  NLayoutContent,
+  NButton,
+  NCard,
+  NDataTable,
+  NDatePicker,
+  NForm,
+  NFormItemGi,
+  NGrid,
+  NImage,
+  NInput,
+  NModal,
+  NPagination,
+  NRadioGroup,
+  NRadioButton,
+  NSelect,
+  NSpace,
+  NSwitch,
+  NTag,
   useDialog,
+  useMessage,
   type DataTableColumns
 } from 'naive-ui'
-import { listProducts, deleteProduct, batchDeleteProducts } from '@/api/product'
+import {
+  listProducts,
+  getProductStatusCounts,
+  updateProductStatus,
+  deleteProduct,
+  batchDeleteProducts
+} from '@/api/product'
 import { addFavorite, removeFavorite, checkFavorites } from '@/api/favorite'
 import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES, IMAGE_FALLBACK_SRC } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
-import type { ProductSummary } from '@/types/product'
-import { useMessage } from 'naive-ui'
+import type { ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
+import dayjs from 'dayjs'
 
 const router = useRouter()
 const route = useRoute()
@@ -37,106 +48,113 @@ const userStore = useUserStore()
 const signal = useRequestAbort()
 
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
+const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_UPDATE))
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
+const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_CREATE))
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
 const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
 
+// ---------- 搜索条件 ----------
+const keyword = ref('')
+const supplierCode = ref('')
+const rspuCode = ref('')
+// 高级筛选（默认折叠）
+const categoryCode = ref<string | null>(null)
+const productLevel = ref<string | null>(null)
+const reviewStatus = ref<string | null>(null)
+const styleCode = ref<string | null>(null)
+const sceneCode = ref<string | null>(null)
+const materialTag = ref<string | null>(null)
+const createdRange = ref<[number, number] | null>(null)
+
+const categoryOptions = ref<{ label: string; value: string }[]>([])
+const levelOptions = ref<{ label: string; value: string }[]>([])
+const reviewStatusOptions = ref<{ label: string; value: string }[]>([])
+const styleOptions = ref<{ label: string; value: string }[]>([])
+const sceneOptions = ref<{ label: string; value: string }[]>([])
+const materialOptions = ref<{ label: string; value: string }[]>([])
+
+/** 高级筛选区默认折叠。 */
+const filtersExpanded = ref(false)
+
+/** 已生效的高级筛选数量，用于折叠状态下提示。 */
+const activeAdvancedCount = computed(
+  () =>
+    [
+      categoryCode.value,
+      productLevel.value,
+      reviewStatus.value,
+      styleCode.value,
+      sceneCode.value,
+      materialTag.value,
+      createdRange.value
+    ].filter(v => v != null && v !== '').length
+)
+
+// ---------- 状态页签 ----------
+const statusTab = ref<SpuStatusTab>('onSale')
+const counts = ref<SpuStatusCounts>({ onSale: 0, inWarehouse: 0, soldOut: 0, recycled: 0 })
+
+const tabs: { key: SpuStatusTab; label: string; countKey: keyof SpuStatusCounts }[] = [
+  { key: 'onSale', label: '出售中', countKey: 'onSale' },
+  { key: 'warehouse', label: '仓库中', countKey: 'inWarehouse' },
+  { key: 'soldOut', label: '已售罄', countKey: 'soldOut' },
+  { key: 'recycled', label: '回收站', countKey: 'recycled' }
+]
+
+const isRecycledTab = computed(() => statusTab.value === 'recycled')
+
+// ---------- 列表数据 ----------
 const loading = ref(false)
 const errorMessage = ref('')
 const products = ref<ProductSummary[]>([])
 const total = ref(0)
 const page = ref(1)
 const size = ref(10)
-const keyword = ref('')
-const reviewStatus = ref<string | null>(null)
-const styleFilter = ref<string | null>(null)
-const sceneFilter = ref<string | null>(null)
-const materialFilter = ref<string | null>(null)
-const productLevelFilter = ref<string | null>(null)
 const selectedRowKeys = ref<string[]>([])
+const hasSelection = computed(() => selectedRowKeys.value.length > 0)
+
+// ---------- 工厂管理员视图模式 ----------
 const viewFullCatalog = computed(() => userStore.userInfo?.viewFullCatalog || false)
 const viewMode = ref<'own' | 'full'>(
   isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
 )
 const factoryCode = ref<string | null>(null)
 const savingPreference = ref(false)
-
-const reviewStatusOptions = ref<{ label: string; value: string }[]>([
-  { label: '全部复核状态', value: '' }
-])
-const styleOptions = ref<{ label: string; value: string }[]>([])
-const sceneOptions = ref<{ label: string; value: string }[]>([])
-const materialOptions = ref<{ label: string; value: string }[]>([])
-const productLevelOptions = ref<{ label: string; value: string }[]>([])
 const factoryOptions = computed(() => [
   { label: '我的全部工厂', value: '' },
   ...factoryCodes.value.map(code => ({ label: code, value: code }))
 ])
+/** 全库视图对工厂管理员只读；平台运营人员（ADMIN/EDITOR）在全库视图下仍可编辑 */
+const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value && isFactoryAdmin.value)
 
-const hasSelection = computed(() => selectedRowKeys.value.length > 0)
-// 全库视图对工厂管理员只读；平台运营人员（ADMIN/EDITOR）在全库视图下仍可编辑
-const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value)
 const batchDeleting = ref(false)
 
-/** 左侧筛选面板分组（单选，映射现有筛选参数）。 */
-type FilterKey = 'reviewStatus' | 'style' | 'scene' | 'material' | 'level'
-
-const filterGroups: { key: FilterKey; title: string }[] = [
-  { key: 'reviewStatus', title: '复核状态' },
-  { key: 'style', title: '风格' },
-  { key: 'scene', title: '场景' },
-  { key: 'material', title: '材质' },
-  { key: 'level', title: '产品等级' }
-]
-
-const filterModels: Record<FilterKey, typeof reviewStatus> = {
-  reviewStatus,
-  style: styleFilter,
-  scene: sceneFilter,
-  material: materialFilter,
-  level: productLevelFilter
+async function toggleFullCatalog(value: boolean) {
+  if (savingPreference.value) return
+  savingPreference.value = true
+  try {
+    await updateMyPreferences({ viewFullCatalog: value })
+    await userStore.fetchUserInfo(true)
+    viewMode.value = value ? 'full' : 'own'
+    page.value = 1
+    refreshAll()
+    message.success('视图偏好已保存')
+  } catch (err: unknown) {
+    message.error(err instanceof Error ? err.message : '保存失败')
+  } finally {
+    savingPreference.value = false
+  }
 }
 
-const filterOptionsMap: Record<FilterKey, typeof reviewStatusOptions> = {
-  reviewStatus: reviewStatusOptions,
-  style: styleOptions,
-  scene: sceneOptions,
-  material: materialOptions,
-  level: productLevelOptions
-}
-
-const hasActiveFilter = computed(() =>
-  (Object.keys(filterModels) as FilterKey[]).some(k => filterModels[k].value)
-)
-
-function filterValue(key: FilterKey) {
-  return filterModels[key].value
-}
-
-function groupOptionsFor(key: FilterKey) {
-  return filterOptionsMap[key].value.filter(o => o.value !== '')
-}
-
-function toggleFilter(key: FilterKey, value: string) {
-  filterModels[key].value = filterModels[key].value === value ? null : value
-}
-
-function clearFilter(key: FilterKey) {
-  filterModels[key].value = null
-}
-
-function resetFilters() {
-  ;(Object.keys(filterModels) as FilterKey[]).forEach(k => (filterModels[k].value = null))
-}
-
-/** 当前页产品的收藏状态（rspuId 集合）。 */
+// ---------- 收藏 ----------
 const favoritedIds = ref<Set<string>>(new Set())
 const favoriteToggling = ref<string | null>(null)
 
 async function refreshFavoritedStatus() {
-  if (products.value.length === 0) {
+  if (products.value.length === 0 || isRecycledTab.value) {
     favoritedIds.value = new Set()
     return
   }
@@ -161,7 +179,6 @@ async function toggleFavorite(row: ProductSummary) {
       favoritedIds.value.add(row.rspuId)
       message.success('已收藏')
     }
-    // 触发响应式更新
     favoritedIds.value = new Set(favoritedIds.value)
   } catch (e) {
     message.error(e instanceof Error ? e.message : '收藏操作失败')
@@ -170,31 +187,169 @@ async function toggleFavorite(row: ProductSummary) {
   }
 }
 
-async function toggleFullCatalog(value: boolean) {
-  if (savingPreference.value) return
-  savingPreference.value = true
+// ---------- 批量修改状态 ----------
+const batchStatusVisible = ref(false)
+const batchStatusValue = ref<'active' | 'inactive'>('active')
+const batchStatusSaving = ref(false)
+
+// ---------- 数据加载 ----------
+function buildParams(includeTab: boolean): import('@/types/product').ProductListParams {
+  const params: import('@/types/product').ProductListParams = {
+    page: page.value,
+    size: size.value,
+    keyword: keyword.value.trim() || undefined,
+    supplierCode: supplierCode.value.trim() || undefined,
+    rspuCode: rspuCode.value.trim() || undefined,
+    categoryCode: categoryCode.value || undefined,
+    productLevel: productLevel.value || undefined,
+    reviewStatus: reviewStatus.value || undefined,
+    positioningLabel: styleCode.value || undefined,
+    sceneCode: sceneCode.value || undefined,
+    materialTag: materialTag.value || undefined,
+    createdFrom: createdRange.value ? dayjs(createdRange.value[0]).format('YYYY-MM-DD') : undefined,
+    createdTo: createdRange.value ? dayjs(createdRange.value[1]).format('YYYY-MM-DD') : undefined,
+    statusTab: includeTab ? statusTab.value : undefined
+  }
+  if (isPlatformStaff.value) {
+    // 平台运营人员默认全库视图，可编辑所有产品
+    params.viewMode = 'full'
+  } else if (isFactoryAdmin.value) {
+    params.viewMode = viewMode.value
+    if (viewMode.value === 'own' && factoryCode.value) {
+      params.factoryCode = factoryCode.value
+    }
+  } else {
+    // 普通用户、浏览者、设计师等只能看到已复核通过的产品
+    params.viewMode = 'full'
+  }
+  return params
+}
+
+async function loadProducts() {
+  loading.value = true
+  errorMessage.value = ''
   try {
-    await updateMyPreferences({ viewFullCatalog: value })
-    await userStore.fetchUserInfo(true)
-    viewMode.value = value ? 'full' : 'own'
-    page.value = 1
-    loadProducts()
-    message.success('视图偏好已保存')
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : '保存失败'
-    message.error(msg)
+    const result = await listProducts(buildParams(true), { signal })
+    products.value = result.rows
+    total.value = result.total
+    refreshFavoritedStatus()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '加载产品列表失败'
   } finally {
-    savingPreference.value = false
+    loading.value = false
   }
 }
 
+async function loadCounts() {
+  try {
+    counts.value = await getProductStatusCounts(buildParams(false), { signal })
+  } catch (e) {
+    console.error('加载状态统计失败', e)
+  }
+}
+
+function refreshAll() {
+  loadProducts()
+  loadCounts()
+}
+
+function handleSearch() {
+  page.value = 1
+  refreshAll()
+}
+
+function handleReset() {
+  keyword.value = ''
+  supplierCode.value = ''
+  rspuCode.value = ''
+  categoryCode.value = null
+  productLevel.value = null
+  reviewStatus.value = null
+  styleCode.value = null
+  sceneCode.value = null
+  materialTag.value = null
+  createdRange.value = null
+  page.value = 1
+  refreshAll()
+}
+
+function handleTabChange(tab: SpuStatusTab) {
+  if (statusTab.value === tab) return
+  statusTab.value = tab
+  page.value = 1
+  selectedRowKeys.value = []
+  loadProducts()
+}
+
+// ---------- 表格渲染 ----------
 const rowKey = (row: ProductSummary) => row.rspuId
+
+/** categoryPath 为 JSON 数组字符串，展示为「一级 / 二级」。 */
+function formatCategoryPath(raw: string): string {
+  if (!raw) return '-'
+  try {
+    const arr = JSON.parse(raw)
+    if (Array.isArray(arr)) return arr.join(' / ')
+  } catch {
+    /* 非 JSON 时原样展示 */
+  }
+  return raw
+}
+
+function formatPrice(price?: number): string {
+  return price != null ? `¥ ${Number(price).toFixed(2)}` : '-'
+}
+
+function resolveDictName(options: { label: string; value: string }[], code?: string): string {
+  if (!code) return '-'
+  return options.find(o => o.value === code)?.label || code
+}
+
+function levelTagType(code?: string): 'success' | 'info' | 'warning' | 'error' | 'default' {
+  switch ((code || '').toUpperCase()) {
+    case 'A': return 'success'
+    case 'B': return 'info'
+    case 'C': return 'warning'
+    case 'S': return 'error'
+    default: return 'default'
+  }
+}
+
+function renderExpand(row: ProductSummary) {
+  const item = (label: string, value: string, tagType: 'default' | 'success' | 'info' = 'default') =>
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, [
+      h('span', { style: { fontWeight: 600, color: '#303133' } }, `${label}:`),
+      h(NTag, { size: 'small', type: tagType, bordered: false }, { default: () => value })
+    ])
+  return h(
+    'div',
+    {
+      style: {
+        background: '#fafafa',
+        padding: '12px 32px',
+        display: 'flex',
+        gap: '48px',
+        flexWrap: 'wrap',
+        fontSize: '13px'
+      }
+    },
+    [
+      item('复核状态', resolveDictName(reviewStatusOptions.value, row.reviewStatus)),
+      item('风格', resolveDictName(styleOptions.value, row.positioningLabel), 'info'),
+      item('产品等级', resolveDictName(levelOptions.value, row.productLevel)),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, [
+        h('span', { style: { fontWeight: 600, color: '#303133' } }, '更新时间:'),
+        h('span', { style: { color: '#606266' } }, row.updatedAt || '-')
+      ])
+    ]
+  )
+}
 
 function canDeleteRow(row: ProductSummary): boolean {
   if (!canDeleteProduct.value || isReadOnlyFullCatalog.value) return false
   if (isPlatformStaff.value) return true
   const codes = row.factoryCodes || []
-  return factoryCodes.value.some((c) => codes.includes(c))
+  return factoryCodes.value.some(c => codes.includes(c))
 }
 
 /** 已勾选且当前用户有权删除的行（无权限的行由后端逐条返回失败明细，前端只提交可删行） */
@@ -208,86 +363,156 @@ const deletableSelectedKeys = computed(() => {
 
 const columns: DataTableColumns<ProductSummary> = [
   {
-    type: 'selection'
+    type: 'selection',
+    disabled: () => isRecycledTab.value
   },
   {
-    title: '图片',
-    key: 'image',
-    width: 100,
-    render(row: ProductSummary) {
-      return row.primaryImageUrl
+    type: 'expand',
+    renderExpand
+  },
+  {
+    title: '商品编号',
+    key: 'rspuId',
+    width: 150,
+    render(row) {
+      return h(
+        'span',
+        { style: { fontSize: '12px', fontFamily: 'monospace', color: '#606266', wordBreak: 'break-all' } },
+        row.rspuId
+      )
+    }
+  },
+  {
+    title: '商品信息',
+    key: 'productInfo',
+    width: 220,
+    render(row) {
+      const image = row.primaryImageUrl
         ? h(NImage, {
             src: row.primaryImageUrl,
             fallbackSrc: IMAGE_FALLBACK_SRC,
-            width: 80,
-            height: 80,
+            width: 50,
+            height: 50,
             objectFit: 'cover',
-            style: 'border-radius: 4px;'
+            style: 'border-radius: 4px; flex-shrink: 0;'
           })
         : h(
             'div',
             {
               style: {
-                width: '80px',
-                height: '80px',
+                width: '50px',
+                height: '50px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 borderRadius: '4px',
                 background: '#f0f0f0',
                 color: '#999',
-                fontSize: '12px'
+                fontSize: '12px',
+                flexShrink: 0
               }
             },
             '暂无'
           )
+      return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
+        image,
+        h(
+          'span',
+          {
+            style: {
+              color: '#303133',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }
+          },
+          row.productName || formatCategoryPath(row.categoryPath)
+        )
+      ])
     }
   },
-  { title: 'RSPU ID', key: 'rspuId', width: 160 },
   {
-    title: '产品名称',
-    key: 'productName',
+    title: '商品分类',
+    key: 'categoryPath',
+    width: 140,
     ellipsis: { tooltip: true },
-    render(row: ProductSummary) {
-      return row.productName || '-'
+    render(row) {
+      return formatCategoryPath(row.categoryPath)
     }
   },
-  { title: '品类', key: 'categoryPath', ellipsis: { tooltip: true } },
   {
-    title: '风格',
-    key: 'positioningLabel',
-    width: 120,
-    render(row: ProductSummary) {
-      return resolveStyleName(row.positioningLabel)
+    title: '价格',
+    key: 'minFactoryPrice',
+    width: 110,
+    align: 'center',
+    render(row) {
+      return h('span', { style: { fontWeight: 500, color: '#f5222d' } }, formatPrice(row.minFactoryPrice))
     }
   },
-  { title: '主色', key: 'colorPrimaryName', width: 100 },
+  {
+    title: 'SPU编码',
+    key: 'rspuCode',
+    width: 140,
+    render(row) {
+      return h(
+        NButton,
+        {
+          text: true,
+          type: 'primary',
+          size: 'small',
+          onClick: () => router.push(`/products/${row.rspuId}`)
+        },
+        { default: () => row.rspuCode || '-' }
+      )
+    }
+  },
+  {
+    title: '供应商编码',
+    key: 'factoryCodes',
+    width: 120,
+    render(row) {
+      const codes = row.factoryCodes || []
+      return codes.length === 0 ? h('span', { style: { color: '#999' } }, '-') : codes.join(', ')
+    }
+  },
   {
     title: '产品等级',
     key: 'productLevel',
-    width: 100,
-    render(row: ProductSummary) {
-      return resolveLevelName(row.productLevel)
+    width: 90,
+    align: 'center',
+    render(row) {
+      if (!row.productLevel) return h('span', { style: { color: '#999' } }, '-')
+      return h(
+        NTag,
+        { size: 'small', type: levelTagType(row.productLevel), bordered: false },
+        { default: () => resolveDictName(levelOptions.value, row.productLevel) }
+      )
     }
   },
   {
-    title: '复核状态',
-    key: 'reviewStatus',
-    width: 100,
-    render(row: ProductSummary) {
-      const type = row.reviewStatus === '已确认'
-        ? 'success'
-        : row.reviewStatus === '存疑'
-          ? 'error'
-          : 'warning'
-      return h(NTag, { type, size: 'small' }, { default: () => row.reviewStatus || '-' })
+    title: '销售状态',
+    key: 'status',
+    width: 90,
+    align: 'center',
+    render(row) {
+      if (isRecycledTab.value) {
+        return h(NTag, { size: 'small', type: 'default' }, { default: () => '已回收' })
+      }
+      return h(NSwitch, {
+        value: row.status === 'active',
+        size: 'small',
+        disabled: !canUpdateProduct.value || isReadOnlyFullCatalog.value,
+        onUpdateValue: (value: boolean) => handleToggleStatus(row, value)
+      })
     }
   },
+  { title: '创建时间', key: 'createdAt', width: 160 },
   {
     title: '收藏',
     key: 'favorite',
     width: 70,
-    render(row: ProductSummary) {
+    render(row) {
+      if (isRecycledTab.value) return h('span', { style: { color: '#999' } }, '-')
       const favorited = favoritedIds.value.has(row.rspuId)
       return h(
         NButton,
@@ -305,127 +530,115 @@ const columns: DataTableColumns<ProductSummary> = [
   {
     title: '操作',
     key: 'actions',
-    width: 180,
-    render(row: ProductSummary) {
-      return h(
-        NSpace,
-        { size: 'small' },
-        {
-          default: () => [
+    width: 150,
+    fixed: 'right',
+    render(row) {
+      const buttons = [
+        h(
+          NButton,
+          { text: true, type: 'primary', size: 'small', onClick: () => router.push(`/products/${row.rspuId}`) },
+          { default: () => '详情' }
+        )
+      ]
+      if (!isRecycledTab.value) {
+        if (canUpdateProduct.value && !isReadOnlyFullCatalog.value) {
+          buttons.push(
             h(
               NButton,
-              {
-                size: 'small',
-                onClick: () => router.push(`/products/${row.rspuId}`)
-              },
-              { default: () => '详情' }
-            ),
-            canDeleteRow(row)
-              ? h(
-                  NButton,
-                  {
-                    size: 'small',
-                    type: 'error',
-                    onClick: () => handleDelete(row.rspuId, row.positioningLabel)
-                  },
-                  { default: () => '删除' }
-                )
-              : null
-          ]
+              { text: true, type: 'primary', size: 'small', onClick: () => router.push(`/products/${row.rspuId}`) },
+              { default: () => '修改' }
+            )
+          )
         }
-      )
+        if (canDeleteRow(row)) {
+          buttons.push(
+            h(
+              NButton,
+              { text: true, type: 'error', size: 'small', onClick: () => handleRecycle(row) },
+              { default: () => '回收' }
+            )
+          )
+        }
+      }
+      return h(NSpace, { size: 4 }, { default: () => buttons })
     }
   }
 ]
 
-async function loadDicts() {
-  try {
-    const [reviewDicts, styleDicts, sceneDicts, materialDicts, levelDicts] = await Promise.all([
-      listDicts('review_status', { signal }),
-      listDicts('style', { signal }),
-      listDicts('scene', { signal }),
-      listDicts('material', { signal }),
-      listDicts('factory_level', { signal })
-    ])
-    reviewStatusOptions.value = [
-      { label: '全部复核状态', value: '' },
-      ...reviewDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
-    ]
-    styleOptions.value = [
-      { label: '全部风格', value: '' },
-      ...styleDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
-    ]
-    sceneOptions.value = [
-      { label: '全部场景', value: '' },
-      ...sceneDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
-    ]
-    materialOptions.value = [
-      { label: '全部材质', value: '' },
-      ...materialDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
-    ]
-    productLevelOptions.value = [
-      { label: '全部等级', value: '' },
-      ...levelDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
-    ]
-  } catch (e) {
-    console.error('加载字典失败', e)
-  }
-}
-
-function resolveStyleName(code: string) {
-  return styleOptions.value.find(s => s.value === code)?.label || code
-}
-
-function resolveLevelName(code: string | undefined) {
-  if (!code) return '-'
-  return productLevelOptions.value.find(l => l.value === code)?.label || code
-}
-
-async function loadProducts() {
-  loading.value = true
-  errorMessage.value = ''
-  try {
-    const params: import('@/types/product').ProductListParams = {
-      page: page.value,
-      size: size.value,
-      keyword: keyword.value || undefined,
-      reviewStatus: reviewStatus.value || undefined,
-      positioningLabel: styleFilter.value || undefined,
-      sceneCode: sceneFilter.value || undefined,
-      materialTag: materialFilter.value || undefined,
-      productLevel: productLevelFilter.value || undefined
-    }
-    if (isPlatformStaff.value) {
-      // 平台运营人员默认全库视图，可编辑所有产品
-      params.viewMode = 'full'
-    } else if (isFactoryAdmin.value) {
-      params.viewMode = viewMode.value
-      if (viewMode.value === 'own' && factoryCode.value) {
-        params.factoryCode = factoryCode.value
+// ---------- 交互动作 ----------
+function handleToggleStatus(row: ProductSummary, target: boolean) {
+  const action = target ? '上架' : '下架'
+  dialog.warning({
+    title: `确认${action}`,
+    content: `确定要${action}商品「${formatCategoryPath(row.categoryPath)}」吗？`,
+    positiveText: `确认${action}`,
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await updateProductStatus(row.rspuId, target ? 'active' : 'inactive')
+        message.success(`已${action}`)
+        refreshAll()
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : `${action}失败`)
       }
-    } else {
-      // 普通用户、浏览者、设计师等只能看到已复核通过的产品
-      params.viewMode = 'full'
     }
-    const result = await listProducts(params, { signal })
-    products.value = result.rows
-    total.value = result.total
-    refreshFavoritedStatus()
-  } catch (e) {
-    errorMessage.value = e instanceof Error ? e.message : '加载产品列表失败'
+  })
+}
+
+function handleRecycle(row: ProductSummary) {
+  dialog.warning({
+    title: '确认回收',
+    content: `确定要回收商品「${formatCategoryPath(row.categoryPath)}」吗？回收后可在「回收站」页签查看，删除后可在数据库中恢复。`,
+    positiveText: '确认回收',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await deleteProduct(row.rspuId)
+        message.success('已回收')
+        refreshAll()
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '回收失败')
+      }
+    }
+  })
+}
+
+function handleBatchStatus() {
+  if (selectedRowKeys.value.length === 0) {
+    message.warning('请先选择商品')
+    return
+  }
+  batchStatusValue.value = 'active'
+  batchStatusVisible.value = true
+}
+
+async function confirmBatchStatus() {
+  batchStatusSaving.value = true
+  try {
+    const results = await Promise.allSettled(
+      selectedRowKeys.value.map(id => updateProductStatus(id, batchStatusValue.value))
+    )
+    const failed = results.filter(r => r.status === 'rejected').length
+    const succeeded = results.length - failed
+    if (failed === 0) {
+      message.success(`已批量${batchStatusValue.value === 'active' ? '上架' : '下架'} ${succeeded} 个商品`)
+    } else {
+      message.warning(`成功 ${succeeded} 个，失败 ${failed} 个`)
+    }
+    batchStatusVisible.value = false
+    selectedRowKeys.value = []
+    refreshAll()
   } finally {
-    loading.value = false
+    batchStatusSaving.value = false
   }
 }
 
-function handleSearch() {
-  page.value = 1
-  loadProducts()
-}
-
-function handlePageChange(newPage: number) {
-  page.value = newPage
-  loadProducts()
+function handleBatchPrice() {
+  if (selectedRowKeys.value.length === 0) {
+    message.warning('请先选择商品')
+    return
+  }
+  message.info('批量修改价格功能即将上线，敬请期待')
 }
 
 function handleBuildQuote() {
@@ -433,23 +646,26 @@ function handleBuildQuote() {
   router.push(`/quotes/build?rspuIds=${selectedRowKeys.value.join(',')}`)
 }
 
-function handleDelete(rspuId: string, label?: string) {
-  dialog.warning({
-    title: '确认删除',
-    content: `确定要删除产品「${label || rspuId}」吗？删除后可在数据库中恢复，前端列表将不再展示。`,
-    positiveText: '确认删除',
-    negativeText: '取消',
-    onPositiveClick: () => {
-      return deleteProduct(rspuId)
-        .then(() => {
-          dialog.success({ title: '删除成功', content: '产品已删除', positiveText: '确定' })
-          loadProducts()
-        })
-        .catch((e) => {
-          errorMessage.value = e instanceof Error ? e.message : '删除产品失败'
-        })
-    }
-  })
+// ---------- 字典 ----------
+async function loadDicts() {
+  try {
+    const [categoryDicts, levelDicts, reviewDicts, styleDicts, sceneDicts, materialDicts] = await Promise.all([
+      listDicts('category', { signal }),
+      listDicts('factory_level', { signal }),
+      listDicts('review_status', { signal }),
+      listDicts('style', { signal }),
+      listDicts('scene', { signal }),
+      listDicts('material', { signal })
+    ])
+    categoryOptions.value = categoryDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
+    levelOptions.value = levelDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
+    reviewStatusOptions.value = reviewDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
+    styleOptions.value = styleDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
+    sceneOptions.value = sceneDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
+    materialOptions.value = materialDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
+  } catch (e) {
+    console.error('加载字典失败', e)
+  }
 }
 
 function handleBatchDelete() {
@@ -499,210 +715,226 @@ onMounted(async () => {
   // 支持从首页分级导航等入口带筛选参数进入
   const query = route.query
   if (typeof query.keyword === 'string') keyword.value = query.keyword
-  if (typeof query.positioningLabel === 'string') styleFilter.value = query.positioningLabel
-  if (typeof query.sceneCode === 'string') sceneFilter.value = query.sceneCode
-  if (typeof query.materialTag === 'string') materialFilter.value = query.materialTag
+  if (typeof query.positioningLabel === 'string') styleCode.value = query.positioningLabel
+  if (typeof query.sceneCode === 'string') sceneCode.value = query.sceneCode
+  if (typeof query.materialTag === 'string') materialTag.value = query.materialTag
   loadDicts()
-  loadProducts()
+  refreshAll()
 })
 
-watch([reviewStatus, styleFilter, sceneFilter, materialFilter, productLevelFilter, factoryCode], () => {
+// 下拉类筛选变化即刷新（文本输入与日期范围由「搜索」按钮触发）
+watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialTag, factoryCode], () => {
   page.value = 1
-  loadProducts()
+  refreshAll()
 })
 </script>
 
 <template>
-  <n-space vertical style="padding: 24px;">
-    <n-card title="产品库">
-      <n-space vertical>
-        <n-space align="center">
-          <n-input
-            v-model:value="keyword"
-            placeholder="搜索品类或风格"
-            clearable
-            style="width: 260px;"
-            @keydown.enter="handleSearch"
-          />
-          <n-button type="primary" @click="handleSearch">搜索</n-button>
-          <n-button v-if="canImportProduct" @click="router.push('/products/import')">
-            批量导入
-          </n-button>
-        </n-space>
-
-        <n-space v-if="isFactoryAdmin" align="center">
-          <n-select
-            v-model:value="factoryCode"
-            :options="factoryOptions"
-            clearable
-            style="width: 180px;"
-            placeholder="选择工厂"
-            :disabled="viewMode === 'full'"
-          />
-          <n-switch
-            :value="viewFullCatalog"
-            :loading="savingPreference"
-            @update:value="toggleFullCatalog"
-          >
-            <template #checked>全库去重视图</template>
-            <template #unchecked>仅自己的产品</template>
-          </n-switch>
-        </n-space>
-
-        <n-alert v-if="errorMessage" type="error" :show-icon="true">
-          {{ errorMessage }}
-        </n-alert>
-
-        <n-alert v-if="isReadOnlyFullCatalog" type="info" :show-icon="true" style="margin-bottom: 12px;">
-          当前为全库去重只读视图，仅支持查看详情与生成报价单；编辑、删除等维护操作需切换到自己的产品视图或由平台运营人员执行。
-        </n-alert>
-
-        <n-layout has-sider class="filter-layout">
-          <n-layout-sider :width="240" bordered class="filter-sider">
-            <div class="filter-panel">
-              <div class="filter-header">
-                <span class="filter-title">筛选</span>
-                <n-button v-if="hasActiveFilter" size="tiny" quaternary type="primary" @click="resetFilters">
-                  重置全部
-                </n-button>
-              </div>
-              <div v-for="group in filterGroups" :key="group.key" class="filter-group">
-                <div class="filter-group-title">{{ group.title }}</div>
-                <div
-                  class="filter-option"
-                  :class="{ active: !filterValue(group.key) }"
-                  @click="clearFilter(group.key)"
-                >
-                  不限
-                </div>
-                <div
-                  v-for="opt in groupOptionsFor(group.key)"
-                  :key="opt.value"
-                  class="filter-option"
-                  :class="{ active: filterValue(group.key) === opt.value }"
-                  @click="toggleFilter(group.key, opt.value)"
-                >
-                  {{ opt.label }}
-                </div>
-              </div>
-            </div>
-          </n-layout-sider>
-
-          <n-layout-content class="filter-content">
-            <n-space v-if="hasSelection" align="center" style="margin-bottom: 12px;">
-              <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
-              <n-button v-if="canGenerateQuote" type="primary" @click="handleBuildQuote">生成报价单</n-button>
-              <n-button
-                v-if="deletableSelectedKeys.length > 0"
-                type="error"
-                :loading="batchDeleting"
-                @click="handleBatchDelete"
-              >
-                批量删除（{{ deletableSelectedKeys.length }}）
+  <div class="product-list-page">
+    <n-card title="产品库 · 商品列表" :bordered="false">
+      <!-- 搜索行 -->
+      <n-form label-placement="left" label-width="80" :show-feedback="false">
+        <n-grid :cols="4" :x-gap="24" :y-gap="12">
+          <n-form-item-gi label="商品名称">
+            <n-input v-model:value="keyword" placeholder="请输入商品名称" clearable @keydown.enter="handleSearch" />
+          </n-form-item-gi>
+          <n-form-item-gi label="供应商编码">
+            <n-input v-model:value="supplierCode" placeholder="请输入供应商编码" clearable @keydown.enter="handleSearch" />
+          </n-form-item-gi>
+          <n-form-item-gi label="SPU 编码">
+            <n-input v-model:value="rspuCode" placeholder="请输入SPU 编码" clearable @keydown.enter="handleSearch" />
+          </n-form-item-gi>
+          <n-form-item-gi>
+            <n-space align="center">
+              <n-button type="primary" @click="handleSearch">搜索</n-button>
+              <n-button @click="handleReset">重置</n-button>
+              <n-button v-if="canCreateProduct" type="primary" ghost @click="router.push('/products/manual-entry')">新增</n-button>
+              <n-button v-if="canImportProduct" @click="router.push('/products/import')">批量导入</n-button>
+              <n-button text type="primary" class="expand-toggle" @click="filtersExpanded = !filtersExpanded">
+                {{ filtersExpanded ? '收起筛选' : '展开筛选' }}
+                <span v-if="!filtersExpanded && activeAdvancedCount > 0">({{ activeAdvancedCount }})</span>
+                <span class="expand-arrow">{{ filtersExpanded ? '▲' : '▼' }}</span>
               </n-button>
             </n-space>
+          </n-form-item-gi>
+        </n-grid>
+        <!-- 高级筛选区（默认折叠） -->
+        <n-grid v-show="filtersExpanded" :cols="4" :x-gap="24" :y-gap="12" style="margin-top: 12px;">
+          <n-form-item-gi label="商品分类">
+            <n-select v-model:value="categoryCode" :options="categoryOptions" placeholder="请选择商品分类" clearable />
+          </n-form-item-gi>
+          <n-form-item-gi label="产品等级">
+            <n-select v-model:value="productLevel" :options="levelOptions" placeholder="请选择" clearable />
+          </n-form-item-gi>
+          <n-form-item-gi label="复核状态">
+            <n-select v-model:value="reviewStatus" :options="reviewStatusOptions" placeholder="请选择" clearable />
+          </n-form-item-gi>
+          <n-form-item-gi label="风格">
+            <n-select v-model:value="styleCode" :options="styleOptions" placeholder="请选择" clearable />
+          </n-form-item-gi>
+          <n-form-item-gi label="场景">
+            <n-select v-model:value="sceneCode" :options="sceneOptions" placeholder="请选择" clearable />
+          </n-form-item-gi>
+          <n-form-item-gi label="材质">
+            <n-select v-model:value="materialTag" :options="materialOptions" placeholder="请选择" clearable />
+          </n-form-item-gi>
+          <n-form-item-gi label="创建时间" :span="2">
+            <n-date-picker v-model:value="createdRange" type="daterange" clearable style="width: 100%;" />
+          </n-form-item-gi>
+        </n-grid>
+      </n-form>
 
-            <n-data-table
-              v-model:checked-row-keys="selectedRowKeys"
-              :row-key="rowKey"
-              :columns="columns"
-              :data="products"
-              :loading="loading"
-              :bordered="true"
-              :single-line="false"
-              :scroll-x="1150"
-            />
-
-            <n-space justify="end" style="margin-top: 12px;">
-              <n-pagination
-                v-model:page="page"
-                :page-size="size"
-                :item-count="total"
-                @update:page="handlePageChange"
-              />
-            </n-space>
-          </n-layout-content>
-        </n-layout>
+      <!-- 工厂管理员视图切换 -->
+      <n-space v-if="isFactoryAdmin" align="center" style="margin-top: 12px;">
+        <n-select
+          v-model:value="factoryCode"
+          :options="factoryOptions"
+          clearable
+          style="width: 180px;"
+          placeholder="选择工厂"
+          :disabled="viewMode === 'full'"
+        />
+        <n-switch
+          :value="viewFullCatalog"
+          :loading="savingPreference"
+          @update:value="toggleFullCatalog"
+        >
+          <template #checked>全库去重视图</template>
+          <template #unchecked>仅自己的产品</template>
+        </n-switch>
       </n-space>
+
+      <n-alert v-if="errorMessage" type="error" :show-icon="true" style="margin-top: 12px;">
+        {{ errorMessage }}
+      </n-alert>
+
+      <n-alert v-if="isReadOnlyFullCatalog" type="info" :show-icon="true" style="margin-top: 12px;">
+        当前为全库去重只读视图，仅支持查看详情与生成报价单；编辑、回收等维护操作需切换到自己的产品视图或由平台运营人员执行。
+      </n-alert>
+
+      <!-- 列表区 -->
+      <div style="margin-top: 16px;">
+        <n-space v-if="!isRecycledTab" style="margin-bottom: 4px;">
+          <n-button v-if="canUpdateProduct" type="primary" @click="handleBatchStatus">修改产品状态</n-button>
+          <n-button v-if="canUpdateProduct" type="error" @click="handleBatchPrice">批量修改价格</n-button>
+          <n-button
+            v-if="deletableSelectedKeys.length > 0"
+            type="error"
+            :loading="batchDeleting"
+            @click="handleBatchDelete"
+          >
+            批量删除（{{ deletableSelectedKeys.length }}）
+          </n-button>
+          <template v-if="hasSelection && canGenerateQuote">
+            <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
+            <n-button type="primary" secondary @click="handleBuildQuote">生成报价单</n-button>
+          </template>
+        </n-space>
+
+        <!-- 状态页签 -->
+        <div class="status-tabs">
+          <div
+            v-for="tab in tabs"
+            :key="tab.key"
+            class="status-tab"
+            :class="{ active: statusTab === tab.key }"
+            @click="handleTabChange(tab.key)"
+          >
+            {{ tab.label }}({{ counts[tab.countKey] }})
+          </div>
+        </div>
+
+        <n-data-table
+          v-model:checked-row-keys="selectedRowKeys"
+          :row-key="rowKey"
+          :columns="columns"
+          :data="products"
+          :loading="loading"
+          :bordered="false"
+          :single-line="false"
+          :scroll-x="1490"
+          striped
+        />
+
+        <n-space justify="end" style="margin-top: 16px;">
+          <n-pagination
+            v-model:page="page"
+            v-model:page-size="size"
+            :item-count="total"
+            :page-sizes="[10, 20, 50]"
+            show-size-picker
+            show-quick-jumper
+            @update:page="loadProducts"
+            @update:page-size="(s: number) => { size = s; page = 1; loadProducts() }"
+          >
+            <template #prefix>
+              共 {{ total }} 条
+            </template>
+          </n-pagination>
+        </n-space>
+      </div>
     </n-card>
-  </n-space>
+
+    <!-- 批量修改产品状态弹窗 -->
+    <n-modal
+      v-model:show="batchStatusVisible"
+      preset="dialog"
+      title="修改产品状态"
+      positive-text="确认"
+      negative-text="取消"
+      :positive-button-props="{ loading: batchStatusSaving }"
+      @positive-click="confirmBatchStatus"
+    >
+      <n-space vertical style="margin-top: 8px;">
+        <span>已选择 {{ selectedRowKeys.length }} 个商品，请选择目标状态：</span>
+        <n-radio-group v-model:value="batchStatusValue">
+          <n-radio-button value="active">上架（出售中）</n-radio-button>
+          <n-radio-button value="inactive">下架（仓库中）</n-radio-button>
+        </n-radio-group>
+      </n-space>
+    </n-modal>
+  </div>
 </template>
 
 <style scoped>
-.filter-layout {
-  background: transparent;
+.product-list-page {
+  padding: 15px;
+  background: #f0f2f5;
+  min-height: calc(100vh - 60px);
 }
 
-.filter-sider {
-  background: transparent;
-  padding: 4px 0 4px 0;
-  /* 宽表格挤压 flex 行时，筛选面板宽度必须保持 240 不被压缩 */
-  flex-shrink: 0;
+.expand-toggle {
+  font-size: 13px;
 }
 
-/* 面板独立滚动：风格/材质选项较多时不高度过载，底部留出呼吸空间 */
-.filter-panel {
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 140px);
-  overflow-y: auto;
-  padding: 0 16px 24px 4px;
+.expand-arrow {
+  margin-left: 2px;
+  font-size: 10px;
 }
 
-.filter-header {
+.status-tabs {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 24px;
+  border-bottom: 1px solid var(--rsdp-border, #efeff5);
+  margin-bottom: 12px;
 }
 
-.filter-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--rsdp-text);
-}
-
-/* 分组之间用分隔线拉开层级，标题突出 */
-.filter-group {
-  padding: 12px 0;
-  border-top: 1px solid var(--rsdp-border);
-}
-
-.filter-group:first-of-type {
-  border-top: none;
-  padding-top: 4px;
-}
-
-.filter-group-title {
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--rsdp-text);
-}
-
-.filter-option {
-  padding: 5px 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--rsdp-text);
+.status-tab {
+  padding: 8px 2px;
+  font-size: 14px;
+  color: #606266;
   cursor: pointer;
-  transition: background 0.15s;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s;
 }
 
-.filter-option:hover {
-  background: var(--rsdp-serve-bg);
+.status-tab:hover {
+  color: var(--rsdp-primary, #2453fc);
 }
 
-.filter-option.active {
-  background: var(--rsdp-primary-suppl);
-  color: var(--rsdp-primary);
+.status-tab.active {
+  color: var(--rsdp-primary, #2453fc);
   font-weight: 600;
-}
-
-.filter-content {
-  padding-left: 16px;
-  background: transparent;
-  /* flex 子项默认 min-width:auto，宽表格会撑破布局压到左侧筛选面板，必须允许收缩 */
-  min-width: 0;
+  border-bottom-color: var(--rsdp-primary, #2453fc);
 }
 </style>

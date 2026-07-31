@@ -2,6 +2,7 @@ package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.dto.OcrResult;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
@@ -247,6 +248,73 @@ class AsyncTaskProcessorTest {
     }
 
     @Test
+    void processProductEntry_shouldPreferOcrMaterialOverVision() throws Exception {
+        // Given：视觉直判给出材质，但图中文字有明确材质说明 → 文字优先，覆盖视觉结果
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setMaterialTags(List.of("布艺"));
+        OcrResult ocr = new OcrResult();
+        ocr.setMaterialDescription("头层牛皮+金属框架");
+        labels.setOcr(ocr);
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
+        verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
+            org.mockito.ArgumentMatchers.anyInt(), any());
+        assertThat(labelsCaptor.getValue().getMaterialTags())
+            .containsExactly("头层牛皮", "金属框架");
+    }
+
+    @Test
+    void processProductEntry_shouldKeepVisionMaterialWhenNoOcrText() throws Exception {
+        // Given：图中无材质文字说明 → 保留视觉直判结果
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setMaterialTags(List.of("布艺"));
+        labels.setOcr(new OcrResult());
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
+        verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
+            org.mockito.ArgumentMatchers.anyInt(), any());
+        assertThat(labelsCaptor.getValue().getMaterialTags()).containsExactly("布艺");
+    }
+
+    @Test
     void processProductEntry_shouldCallFailureWhenVisionFails() throws Exception {
         // Given
         when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
@@ -276,5 +344,84 @@ class AsyncTaskProcessorTest {
         verify(persistenceService).saveFailure(eq(taskId), eq(rspuId), eq(imageId),
             anyString(), eq("qwen3-vl-plus"), eq("存储读取失败"));
         verify(visionService, times(0)).recognizeImage(any(), any());
+    }
+
+    @Test
+    void processProductEntry_shouldMergePageOcrIntoLabels() throws Exception {
+        // Given：任务 input_data 含页面级 OCR 文字（文档导入场景）
+        AsyncTask task = new AsyncTask();
+        task.setInputData("{\"rspuId\":\"RSPU-TEST01\",\"pageOcr\":{"
+            + "\"productName\":\"页面品名\","
+            + "\"modelNumber\":\"LK-2450\","
+            + "\"dimensionText\":\"2450*900*850mm\","
+            + "\"rawText\":\"页面原始文字\"}}");
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(task);
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        // 裁剪图 OCR 已识别出品名（不应被页面文字覆盖），型号/尺寸缺失（应由页面文字补缺）
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        OcrResult cropOcr = new OcrResult();
+        cropOcr.setProductName("裁剪图品名");
+        cropOcr.setRawText("裁剪图文字");
+        labels.setOcr(cropOcr);
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then：合并后的 OCR 结果随 labels 持久化
+        ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
+        verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
+            org.mockito.ArgumentMatchers.anyInt(), any());
+        OcrResult merged = labelsCaptor.getValue().getOcr();
+        assertThat(merged.getProductName()).isEqualTo("裁剪图品名");
+        assertThat(merged.getModelNumber()).isEqualTo("LK-2450");
+        assertThat(merged.getDimensionText()).isEqualTo("2450*900*850mm");
+        assertThat(merged.getRawText()).isEqualTo("页面原始文字\n裁剪图文字");
+    }
+
+    @Test
+    void processProductEntry_shouldUsePageOcrWhenCropOcrMissing() throws Exception {
+        // Given：裁剪图 OCR 整体缺失时，直接采用页面级 OCR
+        AsyncTask task = new AsyncTask();
+        task.setInputData("{\"pageOcr\":{\"productName\":\"页面品名\",\"rawText\":\"页面原始文字\"}}");
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(task);
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then
+        ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
+        verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
+            anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
+            org.mockito.ArgumentMatchers.anyInt(), any());
+        OcrResult merged = labelsCaptor.getValue().getOcr();
+        assertThat(merged.getProductName()).isEqualTo("页面品名");
+        assertThat(merged.getRawText()).isEqualTo("页面原始文字");
     }
 }

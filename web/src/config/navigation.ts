@@ -100,6 +100,12 @@ export const navGroups: NavGroup[] = [
         permission: PERMISSIONS.PRODUCT_CREATE
       },
       {
+        key: 'manual-entry',
+        label: '手工录入',
+        path: '/products/manual-entry',
+        permission: PERMISSIONS.PRODUCT_CREATE
+      },
+      {
         key: 'factory-entry',
         label: '工厂录入',
         path: '/factory-entry',
@@ -118,6 +124,12 @@ export const navGroups: NavGroup[] = [
         permission: PERMISSIONS.PRODUCT_CREATE
       },
       {
+        key: 'excel-import',
+        label: 'Excel 批量导入',
+        path: '/products/import',
+        permission: PERMISSIONS.PRODUCT_IMPORT
+      },
+      {
         key: 'excel-ai-import',
         label: 'Excel AI 导入',
         path: '/products/excel-ai-import',
@@ -131,11 +143,11 @@ export const navGroups: NavGroup[] = [
     items: [
       {
         key: 'products',
-        label: '产品列表',
+        label: '商品列表',
         path: '/products',
         permission: PERMISSIONS.PRODUCT_READ,
         activeMatch: 'prefix',
-        activeExcludes: ['/products/document-import', '/products/excel-ai-import', '/products/scene-import']
+        activeExcludes: ['/products/document-import', '/products/excel-ai-import', '/products/import', '/products/manual-entry', '/products/scene-import']
       },
       {
         key: 'visual-search',
@@ -222,6 +234,12 @@ export const navGroups: NavGroup[] = [
         label: '官网内容',
         path: '/admin/platform',
         roles: [ROLES.ADMIN, ROLES.EDITOR]
+      },
+      {
+        // 字典浏览对所有登录用户开放（与后端一致），不设角色限制
+        key: 'admin-dicts',
+        label: '字典管理',
+        path: '/dicts'
       }
     ]
   }

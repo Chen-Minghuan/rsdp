@@ -3,6 +3,7 @@
  */
 export interface Rsku {
   rskuId: string
+  rskuCode?: string
   rspuId: string
   variantId?: string
   factoryCode: string

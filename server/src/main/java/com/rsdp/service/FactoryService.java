@@ -87,6 +87,11 @@ public class FactoryService {
      */
     @Transactional
     public void createFactory(FactoryCreateRequest request) {
+        if (!SecurityOperatorContext.isCurrentUserFactoryAdmin()
+            && !SecurityOperatorContext.isPlatformStaff()) {
+            throw new BusinessException("无权创建工厂档案");
+        }
+
         if (factoryMasterMapper.selectById(request.getFactoryCode()) != null) {
             throw new BusinessException("工厂代码已存在: " + request.getFactoryCode());
         }

@@ -30,4 +30,8 @@ public class OrderCreateRequest {
 
     @Size(max = 512, message = "备注不能超过 512 个字符")
     private String remark;
+
+    /** 幂等键：同一用户同一幂等键在 24 小时内只能生成一个订单。 */
+    @Size(max = 64, message = "幂等键不能超过 64 个字符")
+    private String idempotencyKey;
 }

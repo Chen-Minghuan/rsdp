@@ -3,12 +3,14 @@ package com.rsdp.controller;
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
+import com.rsdp.dto.request.ManualProductEntryRequest;
 import com.rsdp.dto.request.ProductBatchDeleteRequest;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductReviewRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductBatchDeleteResponse;
 import com.rsdp.dto.response.ProductDetailResponse;
+import com.rsdp.dto.response.ProductStatusCountsResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.security.Permissions;
 import com.rsdp.service.ProductQueryService;
@@ -95,6 +97,25 @@ public class ProductController {
     }
 
     /**
+     * 传统手工录入新产品（不调用 AI、不关联工厂报价）。
+     *
+     * @param request 录入请求（RSPU + 默认变体信息）
+     * @param images  产品图片，可选
+     * @return 创建结果
+     * @throws IOException 文件保存失败
+     */
+    @PostMapping("/manual-entry")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_CREATE + "')")
+    public Result<Map<String, Object>> manualEntry(
+        @Valid @RequestPart("request") ManualProductEntryRequest request,
+        @RequestParam(value = "images", required = false) List<MultipartFile> images) throws IOException {
+        if (images != null && !images.isEmpty()) {
+            validateImages(images);
+        }
+        return Result.ok(productService.createManualEntry(request, images));
+    }
+
+    /**
      * 产品列表分页查询。
      *
      * @param request 查询条件
@@ -103,6 +124,17 @@ public class ProductController {
     @GetMapping
     public Result<PageResult<ProductSummaryResponse>> list(@Valid ProductListRequest request) {
         return Result.ok(productQueryService.listProducts(request));
+    }
+
+    /**
+     * 商城商品列表状态页签统计（出售中/仓库中/已售罄/回收站）。
+     *
+     * @param request 查询条件（statusTab 忽略）
+     * @return 各页签数量
+     */
+    @GetMapping("/status-counts")
+    public Result<ProductStatusCountsResponse> statusCounts(@Valid ProductListRequest request) {
+        return Result.ok(productQueryService.statusCounts(request));
     }
 
     /**

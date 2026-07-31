@@ -197,6 +197,7 @@ public class UserService {
      */
     @Transactional
     public UserResponse updateMyPreferences(String userId, UserPreferenceUpdateRequest request) {
+        assertCurrentUser(userId);
         SysUser user = sysUserMapper.selectById(userId);
         if (user == null) {
             throw new BusinessException("用户不存在");
@@ -218,6 +219,7 @@ public class UserService {
      */
     @Transactional
     public UserResponse updateMyProfile(String userId, UserProfileUpdateRequest request) {
+        assertCurrentUser(userId);
         SysUser user = sysUserMapper.selectById(userId);
         if (user == null) {
             throw new BusinessException("用户不存在");
@@ -241,6 +243,7 @@ public class UserService {
      */
     @Transactional
     public void updateMyPassword(String userId, PasswordUpdateRequest request) {
+        assertCurrentUser(userId);
         SysUser user = sysUserMapper.selectById(userId);
         if (user == null) {
             throw new BusinessException("用户不存在");
@@ -335,6 +338,18 @@ public class UserService {
         String username = principal.toString();
         SysUser user = sysUserMapper.selectByUsername(username);
         return user == null ? null : user.getUserId();
+    }
+
+    /**
+     * 断言传入的 userId 属于当前登录用户。
+     *
+     * @param userId 用户 ID
+     */
+    private void assertCurrentUser(String userId) {
+        String currentUserId = getCurrentUserId();
+        if (currentUserId == null || !currentUserId.equals(userId)) {
+            throw new BusinessException("只能操作当前登录用户自己的资料");
+        }
     }
 
     private UserResponse toResponse(SysUser user) {

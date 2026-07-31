@@ -200,6 +200,9 @@ onBeforeRouteUpdate((to) => {
             <n-descriptions-item label="RSKU ID">
               {{ rsku.rskuId }}
             </n-descriptions-item>
+            <n-descriptions-item label="业务编码">
+              {{ rsku.rskuCode || '-' }}
+            </n-descriptions-item>
             <n-descriptions-item label="所属 RSPU">
               {{ rsku.rspuId }}
             </n-descriptions-item>

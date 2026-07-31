@@ -278,6 +278,7 @@ class VisionServiceTest {
               ]
             }
             """;
+
         stubFor(post(urlEqualTo("/chat/completions"))
             .willReturn(aResponse()
                 .withStatus(200)
@@ -335,5 +336,65 @@ class VisionServiceTest {
         var refined = visionService.refineSceneProduct(new ByteArrayInputStream("fake-crop".getBytes()));
 
         assertThat(refined).isNull();
+    }
+
+    @Test
+    void detectPageRegions_shouldParseNearbyText() throws Exception {
+        String aiJson = """
+            [
+              {"pageType": "product", "products": [{
+                "bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5},
+                "estimatedCategory": "SF",
+                "nearbyText": {
+                  "productName": "兰卡沙发",
+                  "modelNumber": "LK-2450",
+                  "dimensionText": "2450×900×850mm",
+                  "priceText": "¥12800",
+                  "rawText": "兰卡沙发 LK-2450 2450×900×850mm ¥12800"
+                }
+              }]}
+            ]
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        List<InputStream> images = List.of(new ByteArrayInputStream("fake-page-1".getBytes()));
+
+        var regions = visionService.detectPageRegions(images, null);
+
+        assertThat(regions).hasSize(1);
+        var product = regions.get(0).getProducts().get(0);
+        assertThat(product.getNearbyText()).isNotNull();
+        assertThat(product.getNearbyText().getProductName()).isEqualTo("兰卡沙发");
+        assertThat(product.getNearbyText().getModelNumber()).isEqualTo("LK-2450");
+        assertThat(product.getNearbyText().getDimensionText()).isEqualTo("2450×900×850mm");
+        assertThat(product.getNearbyText().getPriceText()).isEqualTo("¥12800");
+    }
+
+    @Test
+    void detectPageRegions_shouldTolerateMissingNearbyText() throws Exception {
+        String aiJson = """
+            [
+              {"pageType": "product", "products": [{"bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5}, "estimatedCategory": "SF", "nearbyText": null}]}
+            ]
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        List<InputStream> images = List.of(new ByteArrayInputStream("fake-page-1".getBytes()));
+
+        var regions = visionService.detectPageRegions(images, null);
+
+        assertThat(regions).hasSize(1);
+        assertThat(regions.get(0).getProducts().get(0).getNearbyText()).isNull();
+        assertThat(regions.get(0).getProducts().get(0).getEstimatedCategory()).isEqualTo("SF");
     }
 }

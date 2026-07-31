@@ -106,7 +106,7 @@ public class SceneImportService {
                 Map<String, Object> entryResult;
                 try (InputStream cropIn = new ByteArrayInputStream(croppedBytes)) {
                     entryResult = productService.createEntryFromStream(
-                        cropIn, batchId + "_scene_product.jpg", croppedBytes.length, item.getCategoryCode());
+                        cropIn, batchId + "_scene_product.jpg", (long) croppedBytes.length, item.getCategoryCode(), null);
                 }
                 item.setRspuId(String.valueOf(entryResult.get("rspuId")));
                 item.setTaskId(String.valueOf(entryResult.get("taskId")));

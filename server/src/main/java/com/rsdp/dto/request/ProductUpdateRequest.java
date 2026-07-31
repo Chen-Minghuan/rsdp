@@ -18,7 +18,7 @@ public class ProductUpdateRequest {
     /** 定位标签/风格字典码，如 MC。 */
     private String positioningLabel;
 
-    /** 产品名称。 */
+    /** 产品名称/商品名称。 */
     @Size(max = 256)
     private String productName;
 
@@ -33,6 +33,9 @@ public class ProductUpdateRequest {
 
     /** 材质标签字典码列表。 */
     private List<String> materialTags;
+
+    /** 面料标签字典码列表（软体类商品），如 ["LI","KJ"]。 */
+    private List<String> fabricTags;
 
     /** 场景标签字典码列表。 */
     private List<String> sceneTags;
@@ -51,4 +54,7 @@ public class ProductUpdateRequest {
 
     /** 关键规格。 */
     private Map<String, String> keySpecs;
+
+    /** 销售状态：active=上架出售中、inactive=下架入仓库中。 */
+    private String status;
 }

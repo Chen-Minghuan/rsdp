@@ -116,8 +116,8 @@ rsdp:
       max-file-size-mb: 50
       # PDF 最大页数
       max-pages: 200
-      # 渲染 DPI
-      render-dpi: 150
+      # 渲染 DPI（越高裁剪图越清晰，内存占用随平方增长）
+      render-dpi: 200
       # 页面区域检测每批最大页数
       # 注意：AI 对长 JSON 输出有截断风险，MVP 阶段建议保持 <=5，确保每批返回结果完整
       detect-batch-size: 5
@@ -125,3 +125,8 @@ rsdp:
       output-format: jpg
       # 裁剪输出图片质量（1-100，仅对 jpg 有效）
       output-quality: 90
+      # 嵌入图直取：图片绘制面积占页面面积的最小比例（低于该值视为 Logo/装饰图）
+      embedded-image:
+        min-area-ratio: 0.20
+        # 嵌入图原始像素最小边长（过滤缩略图）
+        min-pixel-edge: 200

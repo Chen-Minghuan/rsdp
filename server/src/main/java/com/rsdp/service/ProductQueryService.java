@@ -12,6 +12,7 @@ import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductBatchDeleteResponse;
 import com.rsdp.dto.response.ProductDetailResponse;
+import com.rsdp.dto.response.ProductStatusCountsResponse;
 import com.rsdp.dto.response.ProductStyleMatchResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.AiRecognition;
@@ -48,8 +49,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -98,6 +103,9 @@ public class ProductQueryService {
      * @return 分页结果
      */
     public PageResult<ProductSummaryResponse> listProducts(ProductListRequest request) {
+        if ("recycled".equals(request.getStatusTab())) {
+            return listRecycledProducts(request);
+        }
         List<String> userFactoryCodes = resolveUserFactoryCodes(request.getFactoryCode());
         String viewMode = resolveViewMode(request.getViewMode());
         boolean isFullView = "full".equals(viewMode) && isFullViewEligible(userFactoryCodes);
@@ -123,9 +131,10 @@ public class ProductQueryService {
         List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
+        Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(rspuIds);
 
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap))
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
@@ -174,12 +183,90 @@ public class ProductQueryService {
         if (StringUtils.hasText(request.getProductLevel())) {
             wrapper.eq("product_level", request.getProductLevel());
         }
+        if (StringUtils.hasText(request.getRspuCode())) {
+            wrapper.like("rspu_code", "%" + request.getRspuCode().trim() + "%");
+        }
+        if (StringUtils.hasText(request.getSupplierCode())) {
+            wrapper.exists(
+                "SELECT 1 FROM rsku_supply r WHERE r.rspu_id = rspu_master.rspu_id"
+                    + " AND r.deleted_at IS NULL AND r.factory_code LIKE {0}",
+                "%" + request.getSupplierCode().trim() + "%"
+            );
+        }
+        if (StringUtils.hasText(request.getCreatedFrom())) {
+            wrapper.ge("created_at", LocalDate.parse(request.getCreatedFrom().trim()).atStartOfDay());
+        }
+        if (StringUtils.hasText(request.getCreatedTo())) {
+            wrapper.le("created_at", LocalDate.parse(request.getCreatedTo().trim()).atTime(LocalTime.MAX));
+        }
+        applyStatusTab(wrapper, request.getStatusTab());
         if (StringUtils.hasText(request.getKeyword())) {
             String keyword = "%" + request.getKeyword().trim() + "%";
             wrapper.and(w -> w.like("category_path", keyword).or().like("rspu_id", keyword));
         }
 
         return wrapper;
+    }
+
+    /**
+     * 商城状态页签条件：onSale=出售中、warehouse=仓库中、soldOut=已售罄（恒空）。
+     * recycled 不走常规 wrapper，由 {@link #listRecycledProducts} 单独处理。
+     */
+    private void applyStatusTab(QueryWrapper<RspuMaster> wrapper, String statusTab) {
+        if (!StringUtils.hasText(statusTab)) {
+            return;
+        }
+        switch (statusTab.trim()) {
+            case "onSale" -> wrapper.eq("status", "active");
+            case "warehouse" -> wrapper.ne("status", "active");
+            case "soldOut" -> wrapper.apply("1 = 0");
+            default -> { /* 未知页签不追加条件 */ }
+        }
+    }
+
+    /**
+     * 回收站分页查询（已软删除的 RSPU，绕过 @TableLogic 自动过滤）。
+     * 已删除产品的 RSKU/图片多已级联软删，最低出厂价与工厂代码可能为空。
+     */
+    private PageResult<ProductSummaryResponse> listRecycledProducts(ProductListRequest request) {
+        Page<RspuMaster> page = rspuMapper.selectRecycledPage(new Page<>(request.getPage(), request.getSize()));
+        List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
+        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
+        List<ProductSummaryResponse> rows = page.getRecords().stream()
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, Map.of(), Map.of()))
+            .collect(Collectors.toList());
+        return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
+    }
+
+    /**
+     * 商城商品列表状态页签统计。
+     *
+     * <p>出售中/仓库中复用列表过滤条件（不含 statusTab 自身）；已售罄当前无业务概念恒为 0；
+     * 回收站为全库软删除总数（不叠加搜索条件）。
+     *
+     * @param request 查询条件（statusTab 忽略）
+     * @return 各页签数量
+     */
+    public ProductStatusCountsResponse statusCounts(ProductListRequest request) {
+        List<String> userFactoryCodes = resolveUserFactoryCodes(request.getFactoryCode());
+        String viewMode = resolveViewMode(request.getViewMode());
+
+        QueryWrapper<RspuMaster> base = buildListWrapper(request, viewMode);
+        if ("own".equals(viewMode)) {
+            applyOwnProductFilter(base, userFactoryCodes);
+        }
+
+        QueryWrapper<RspuMaster> onSale = base.clone();
+        onSale.eq("status", "active");
+        QueryWrapper<RspuMaster> inWarehouse = base.clone();
+        inWarehouse.ne("status", "active");
+
+        return new ProductStatusCountsResponse(
+            rspuMapper.selectCount(onSale),
+            rspuMapper.selectCount(inWarehouse),
+            0L,
+            rspuMapper.selectRecycledCount()
+        );
     }
 
     private List<String> resolveUserFactoryCodes(String requestedFactoryCode) {
@@ -330,9 +417,10 @@ public class ProductQueryService {
         List<String> pageRspuIds = pageRecords.stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(pageRspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(pageRspuIds);
+        Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(pageRspuIds);
 
         List<ProductSummaryResponse> rows = pageRecords.stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap))
             .collect(Collectors.toList());
 
         return PageResult.of(total, page, size, rows);
@@ -458,6 +546,33 @@ public class ProductQueryService {
                 Collectors.mapping(
                     RskuSupply::getFactoryCode,
                     Collectors.collectingAndThen(Collectors.toSet(), ArrayList::new)
+                )
+            ));
+    }
+
+    /**
+     * 批量查询 RSPU 的最低出厂价（用于产品列表价格展示）。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return RSPU ID -> 最低出厂价；无报价返回空 Map
+     */
+    private Map<String, BigDecimal> batchMinFactoryPrices(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>()
+                .in("rspu_id", rspuIds)
+                .isNotNull("factory_price")
+                .isNull("deleted_at")
+        );
+        return rskus.stream()
+            .filter(r -> r.getFactoryPrice() != null)
+            .collect(Collectors.groupingBy(
+                RskuSupply::getRspuId,
+                Collectors.collectingAndThen(
+                    Collectors.minBy(Comparator.comparing(RskuSupply::getFactoryPrice)),
+                    opt -> opt.map(RskuSupply::getFactoryPrice).orElse(null)
                 )
             ));
     }
@@ -675,6 +790,11 @@ public class ProductQueryService {
             validateDictCodes("material", materialCodes);
             rspu.setMaterialTags(writeJson(materialCodes));
         }
+        if (request.getFabricTags() != null) {
+            List<String> fabricCodes = normalizeCodes(request.getFabricTags());
+            validateDictCodes("fabric", fabricCodes);
+            rspu.setFabricTags(writeJson(fabricCodes));
+        }
         List<String> sceneCodes = null;
         if (request.getSceneTags() != null) {
             sceneCodes = normalizeCodes(request.getSceneTags());
@@ -697,6 +817,13 @@ public class ProductQueryService {
         }
         if (request.getKeySpecs() != null) {
             rspu.setKeySpecs(writeJson(request.getKeySpecs()));
+        }
+        if (StringUtils.hasText(request.getStatus())) {
+            String status = request.getStatus().trim().toLowerCase();
+            if (!"active".equals(status) && !"inactive".equals(status)) {
+                throw new BusinessException("非法的销售状态: " + request.getStatus());
+            }
+            rspu.setStatus(status);
         }
 
         rspu.setUpdatedAt(LocalDateTime.now());
@@ -890,18 +1017,22 @@ public class ProductQueryService {
 
     private ProductSummaryResponse toSummary(RspuMaster rspu,
                                              Map<String, String> primaryImageUrlMap,
-                                             Map<String, List<String>> factoryCodeMap) {
+                                             Map<String, List<String>> factoryCodeMap,
+                                             Map<String, BigDecimal> minPriceMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
+        summary.setRspuCode(rspu.getRspuCode());
         summary.setProductName(rspu.getProductName());
         summary.setCategoryCode(rspu.getCategoryCode());
         summary.setCategoryPath(rspu.getCategoryPath());
         summary.setPositioningLabel(rspu.getPositioningLabel());
+        summary.setProductName(rspu.getProductName());
         summary.setColorPrimaryName(rspu.getColorPrimaryName());
         summary.setStatus(rspu.getStatus());
         summary.setReviewStatus(rspu.getReviewStatus());
         summary.setAestheticsConfidence(rspu.getAestheticsConfidence());
         summary.setProductLevel(rspu.getProductLevel());
+        summary.setMinFactoryPrice(minPriceMap.get(rspu.getRspuId()));
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());
         summary.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));
