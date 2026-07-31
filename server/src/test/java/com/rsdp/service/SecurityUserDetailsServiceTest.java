@@ -58,15 +58,20 @@ class SecurityUserDetailsServiceTest {
     }
 
     @Test
-    void loadUserByUsername_inactiveUser_shouldThrow() {
+    void loadUserByUsername_inactiveUser_shouldReturnDisabledUserDetails() {
         SysUser user = new SysUser();
+        user.setUserId("USER-001");
         user.setUsername("admin");
+        user.setPasswordHash("hashed");
         user.setStatus("inactive");
 
         when(sysUserMapper.selectByUsername("admin")).thenReturn(user);
+        when(userRoleService.getRoleCodesByUserId("USER-001")).thenReturn(List.of());
+        when(permissionService.getPermissionsByUserId("USER-001")).thenReturn(Set.of("user:read"));
 
-        assertThatThrownBy(() -> userDetailsService.loadUserByUsername("admin"))
-            .isInstanceOf(UsernameNotFoundException.class);
+        UserDetails details = userDetailsService.loadUserByUsername("admin");
+
+        assertThat(details.isEnabled()).isFalse();
     }
 
     @Test

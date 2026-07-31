@@ -17,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -147,6 +148,22 @@ class AuthServiceTest {
             .hasMessageContaining("用户名或密码错误");
 
         verify(sysUserMapper, never()).selectByUsername(any());
+    }
+
+    @Test
+    void login_disabledUser_shouldThrowAccountDisabledException() {
+        when(authenticationManager.authenticate(any()))
+            .thenThrow(new DisabledException("user disabled"));
+
+        LoginRequest request = new LoginRequest();
+        request.setUsername("disabledUser");
+        request.setPassword("any");
+
+        assertThatThrownBy(() -> authService.login(request, "127.0.0.1"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("账户已被禁用");
+
+        verify(loginAttemptService, never()).recordFailure(any(), any());
     }
 
     @Test

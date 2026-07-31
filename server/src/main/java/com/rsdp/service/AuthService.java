@@ -11,6 +11,7 @@ import com.rsdp.util.IdGenerator;
 import com.rsdp.util.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.authentication.AccountStatusException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -67,6 +68,9 @@ public class AuthService {
                 loginAttemptService.recordFailure(ip, request.getUsername());
                 throw new BusinessException("登录失败");
             }
+        } catch (AccountStatusException e) {
+            // 账户被禁用/锁定等状态异常，不记录为登录失败尝试，直接提示用户
+            throw new BusinessException("账户已被禁用");
         } catch (BadCredentialsException e) {
             loginAttemptService.recordFailure(ip, request.getUsername());
             throw new BusinessException("用户名或密码错误");

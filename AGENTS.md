@@ -291,6 +291,7 @@ make clean
   - `V25__excel_import_sheet_and_rspu_fields.sql`：excel_import_batch.sheet_index（多 Sheet 逐一导入）+ rspu_master.description/retail_price（长文本描述原文、不加密零售参考价，本地分支 V18 升号）
   - `V26__variant_text_and_unresolved.sql`：变体原文列（rspu_variant.size_text/color_text/material_text）+ uk_variant_attrs 唯一索引改"码或原文"语义 + dict_unresolved_value 未归一值采集表（本地分支 V19 升号）
   - `V27__dict_alias_table.sql`：字典别名表（dict_alias，工厂方言叫法 → 字典码自学习；与 V22 category_dict.aliases 列并存，本地分支 V16 升号）
+  - `V28__scheme_unique_name.sql`：搭配方案名称唯一性约束（个人方案按创建人去重、项目方案按项目去重；TC-SEC-012 / TC-PERF-003）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

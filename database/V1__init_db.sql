@@ -434,6 +434,12 @@ CREATE TABLE IF NOT EXISTS scheme (
 CREATE INDEX IF NOT EXISTS idx_scheme_created_by ON scheme(created_by, status);
 CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme(project_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_scheme_template ON scheme(is_template) WHERE is_template = true AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_scheme_name_user_active
+    ON scheme(scheme_name, created_by)
+    WHERE project_id IS NULL AND status = 'active' AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_scheme_name_project_active
+    ON scheme(scheme_name, project_id)
+    WHERE project_id IS NOT NULL AND status = 'active' AND deleted_at IS NULL;
 
 -- 搭配方案项表
 CREATE TABLE IF NOT EXISTS scheme_item (

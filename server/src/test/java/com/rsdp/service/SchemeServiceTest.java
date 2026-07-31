@@ -219,6 +219,49 @@ class SchemeServiceTest {
     }
 
     @Test
+    void createScheme_shouldRejectDuplicateNameInSameProject() {
+        SchemeItemRequest itemRequest = new SchemeItemRequest();
+        itemRequest.setRspuId("RSPU-001");
+        itemRequest.setRskuId("RSKU-001");
+
+        SchemeCreateRequest request = new SchemeCreateRequest();
+        request.setSchemeName("客厅搭配方案");
+        request.setProjectId("PROJ-1");
+        request.setItems(List.of(itemRequest));
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-001");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F001");
+
+        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(schemeMapper.selectCount(any())).thenReturn(1L);
+
+        assertThatThrownBy(() -> schemeService.createScheme(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("已存在同名方案");
+    }
+
+    @Test
+    void createScheme_shouldRejectMoreThan50Items() {
+        List<SchemeItemRequest> items = new java.util.ArrayList<>();
+        for (int i = 0; i < 51; i++) {
+            SchemeItemRequest item = new SchemeItemRequest();
+            item.setRspuId("RSPU-" + i);
+            item.setRskuId("RSKU-" + i);
+            items.add(item);
+        }
+
+        SchemeCreateRequest request = new SchemeCreateRequest();
+        request.setSchemeName("超量方案");
+        request.setItems(items);
+
+        assertThatThrownBy(() -> schemeService.createScheme(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("方案项数量不能超过 50 个");
+    }
+
+    @Test
     void getSchemeDetail_shouldReturnScheme() {
         Scheme scheme = new Scheme();
         scheme.setSchemeId("SCHEME-001");

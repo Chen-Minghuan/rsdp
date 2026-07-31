@@ -28,21 +28,21 @@ public class LoginAttemptService {
     @Value("${rsdp.security.login.attempt-window-minutes:30}")
     private int attemptWindowMinutes;
 
-    private final Map<String, AttemptRecord> ipAttempts = new ConcurrentHashMap<>();
-    private final Map<String, AttemptRecord> userAttempts = new ConcurrentHashMap<>();
+    private final Map<String, AttemptRecord> attempts = new ConcurrentHashMap<>();
 
     /**
      * 检查指定 IP 和用户名是否被锁定。
+     *
+     * <p>锁定维度为 IP + 用户名，同一 IP 下不同用户互不影响。</p>
      *
      * @param ip       客户端 IP
      * @param username 用户名
      * @return true 表示已被锁定
      */
     public boolean isBlocked(String ip, String username) {
-        cleanupIfExpired(ipAttempts, ipKey(ip));
-        cleanupIfExpired(userAttempts, userKey(username));
-        return isRecordBlocked(ipAttempts.get(ipKey(ip)))
-            || isRecordBlocked(userAttempts.get(userKey(username)));
+        String key = compositeKey(ip, username);
+        cleanupIfExpired(attempts, key);
+        return isRecordBlocked(attempts.get(key));
     }
 
     /**
@@ -52,8 +52,7 @@ public class LoginAttemptService {
      * @param username 用户名
      */
     public void recordFailure(String ip, String username) {
-        increment(ipAttempts, ipKey(ip));
-        increment(userAttempts, userKey(username));
+        increment(attempts, compositeKey(ip, username));
         log.warn("登录失败计数增加: ip={}, username={}", ip, username);
     }
 
@@ -64,8 +63,7 @@ public class LoginAttemptService {
      * @param username 用户名
      */
     public void recordSuccess(String ip, String username) {
-        ipAttempts.remove(ipKey(ip));
-        userAttempts.remove(userKey(username));
+        attempts.remove(compositeKey(ip, username));
     }
 
     private void increment(Map<String, AttemptRecord> store, String key) {
@@ -88,12 +86,8 @@ public class LoginAttemptService {
         return record != null && record.isLocked();
     }
 
-    private String ipKey(String ip) {
-        return "ip:" + ip;
-    }
-
-    private String userKey(String username) {
-        return "user:" + username;
+    private String compositeKey(String ip, String username) {
+        return ip + ":" + username;
     }
 
     /**
