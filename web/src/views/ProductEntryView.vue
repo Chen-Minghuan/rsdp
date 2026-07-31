@@ -155,7 +155,7 @@ async function loadCategoryDicts() {
 }
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
-const MAX_FILE_COUNT = 20
+const MAX_FILE_COUNT = 8
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml']
 
 function isImageFile(file: File): boolean {
@@ -325,7 +325,7 @@ function formatPrice(ocr?: OcrResult): string {
           :default-upload="false"
           v-model:file-list="fileList"
           accept="image/*"
-          :max="20"
+          :max="8"
           multiple
         >
           <n-button>选择产品图片</n-button>

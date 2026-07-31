@@ -17,7 +17,8 @@ import {
   NSpin,
   NTabs,
   NTabPane,
-  useDialog
+  useDialog,
+  useMessage
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
 import DetailHero from '@/components/product/DetailHero.vue'
@@ -27,7 +28,7 @@ import ImageGalleryTab from '@/components/product/ImageGalleryTab.vue'
 import RelationTab from '@/components/product/RelationTab.vue'
 import AiInsightTab from '@/components/product/AiInsightTab.vue'
 import { getProductDetail, listProducts, reviewProduct, updateProduct, deleteProduct } from '@/api/product'
-import { addFavorite, removeFavorite, checkFavorites } from '@/api/favorite'
+import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
 import { listRskuByRspu, createRsku, deleteRsku, batchCreateRskus } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
 import { listFactories } from '@/api/factory'
@@ -41,12 +42,14 @@ import type { Rsku, RskuBatchCreateRequest, RskuBatchCreateResult, RskuBatchFact
 import type { Factory } from '@/types/factory'
 import type { RspuVariant, RspuVariantCreateRequest } from '@/types/variant'
 import type { RspuRelationCreateRequest } from '@/types/relation'
+import type { FavoriteFolder } from '@/types/favorite'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 
 const route = useRoute()
 const signal = useRequestAbort()
 const router = useRouter()
 const dialog = useDialog()
+const message = useMessage()
 const userStore = useUserStore()
 const rspuId = ref(route.params.rspuId as string)
 
@@ -63,6 +66,9 @@ const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
 /** 当前产品的收藏状态。 */
 const isFavorited = ref(false)
 const favoriteLoading = ref(false)
+const favoriteFolders = ref<FavoriteFolder[]>([])
+const showFavoriteFolderModal = ref(false)
+const selectedFavoriteFolderId = ref<string | null>(null)
 
 async function refreshFavoriteStatus() {
   try {
@@ -73,21 +79,53 @@ async function refreshFavoriteStatus() {
   }
 }
 
+async function loadFavoriteFolders() {
+  try {
+    favoriteFolders.value = await listFavoriteFolders()
+  } catch (e) {
+    console.error('加载收藏文件夹失败', e)
+  }
+}
+
 async function toggleFavorite() {
   if (favoriteLoading.value) return
-  favoriteLoading.value = true
   errorMessage.value = ''
   successMessage.value = ''
+
+  if (isFavorited.value) {
+    message.warning('该产品已在收藏中')
+    return
+  }
+
+  await loadFavoriteFolders()
+  if (favoriteFolders.value.length > 0) {
+    selectedFavoriteFolderId.value = null
+    showFavoriteFolderModal.value = true
+    return
+  }
+
+  favoriteLoading.value = true
   try {
-    if (isFavorited.value) {
-      await removeFavorite(rspuId.value)
-      isFavorited.value = false
-      successMessage.value = '已取消收藏'
-    } else {
-      await addFavorite({ rspuId: rspuId.value })
-      isFavorited.value = true
-      successMessage.value = '已收藏'
-    }
+    const result = await addFavorite({ rspuId: rspuId.value })
+    isFavorited.value = true
+    message.success(`已收藏（${result.favoriteId}）`)
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '收藏操作失败'
+  } finally {
+    favoriteLoading.value = false
+  }
+}
+
+async function confirmAddFavorite() {
+  favoriteLoading.value = true
+  try {
+    const result = await addFavorite({
+      rspuId: rspuId.value,
+      folderId: selectedFavoriteFolderId.value || undefined
+    })
+    isFavorited.value = true
+    showFavoriteFolderModal.value = false
+    message.success(`已收藏（${result.favoriteId}）`)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '收藏操作失败'
   } finally {
@@ -1586,6 +1624,30 @@ onBeforeRouteUpdate((to, from) => {
           添加
         </n-button>
       </n-space>
+    </n-modal>
+
+    <!-- 收藏文件夹选择弹窗 -->
+    <n-modal
+      v-model:show="showFavoriteFolderModal"
+      preset="card"
+      title="选择收藏文件夹"
+      style="width: 420px;"
+    >
+      <p style="margin-bottom: 12px; color: var(--rsdp-text-secondary);">
+        选择要放入的文件夹，不选则归入「未归类」。
+      </p>
+      <n-select
+        v-model:value="selectedFavoriteFolderId"
+        :options="favoriteFolders.map(f => ({ label: f.folderName, value: f.folderId }))"
+        clearable
+        placeholder="选择文件夹（可选）"
+      />
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showFavoriteFolderModal = false">取消</n-button>
+          <n-button type="primary" :loading="favoriteLoading" @click="confirmAddFavorite">确认收藏</n-button>
+        </n-space>
+      </template>
     </n-modal>
   </PageContainer>
 </template>

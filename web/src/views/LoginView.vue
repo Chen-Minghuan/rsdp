@@ -55,7 +55,7 @@ const successMessage = ref('')
 const agreeProtocol = ref(false)
 const showAgreement = ref(false)
 const agreementLoading = ref(false)
-const agreementTitle = ref('服务协议')
+const agreementTitle = ref('用户服务协议')
 const agreementContent = ref('')
 const safeAgreementContent = computed(() => sanitizeHtml(agreementContent.value))
 
@@ -65,7 +65,7 @@ async function openAgreement() {
   agreementLoading.value = true
   try {
     const content = await getPublicContent('platform_user_agreement')
-    agreementTitle.value = content.title || '服务协议'
+    agreementTitle.value = content.title || '用户服务协议'
     agreementContent.value = content.content || ''
   } catch (e) {
     agreementContent.value = ''
@@ -263,7 +263,7 @@ async function handleRegister() {
             <n-checkbox v-model:checked="agreeProtocol">
               我已阅读并同意
             </n-checkbox>
-            <a class="agreement-link" @click="openAgreement">《服务协议》</a>
+            <a class="agreement-link" @click="openAgreement">《{{ agreementTitle }}》</a>
           </div>
 
           <n-alert v-if="errorMessage" type="error" :show-icon="false" style="margin-bottom: 12px;">

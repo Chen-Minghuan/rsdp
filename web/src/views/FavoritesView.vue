@@ -68,7 +68,7 @@ const exporting = ref(false)
 
 const activeFolderName = computed(() => {
   if (activeFolder.value === 'all') return '全部收藏'
-  if (activeFolder.value === 'unfiled') return '未归档'
+  if (activeFolder.value === 'unfiled') return '未归类'
   return folders.value.find(f => f.folderId === activeFolder.value)?.folderName || ''
 })
 
@@ -258,7 +258,7 @@ function formatTime(value?: string): string {
           :class="{ active: activeFolder === 'unfiled' }"
           @click="selectFolder('unfiled')"
         >
-          未归档
+          未归类
         </div>
         <div
           v-for="folder in folders"
@@ -268,6 +268,7 @@ function formatTime(value?: string): string {
           @click="selectFolder(folder.folderId)"
         >
           <span class="folder-name" :title="folder.folderName">{{ folder.folderName }}</span>
+          <span class="folder-id" :title="folder.folderId">{{ folder.folderId }}</span>
           <n-tag size="tiny" :bordered="false">{{ folder.favoriteCount }}</n-tag>
           <span class="folder-actions" @click.stop>
             <n-button size="tiny" quaternary @click="handleRenameFolder(folder)">改名</n-button>
@@ -426,6 +427,17 @@ function formatTime(value?: string): string {
 
 .folder-name {
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-id {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--rsdp-text-secondary);
+  font-family: monospace;
+  max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

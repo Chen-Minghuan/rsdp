@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { NButton, NCard, NCarousel, NGrid, NGridItem, NImage, NModal, NSpace, NTag } from 'naive-ui'
+import { NButton, NCard, NCarousel, NGrid, NGridItem, NImage, NModal, NSpace, NSpin, NTag } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageContainer from '@/components/PageContainer.vue'
 import { listDicts } from '@/api/dict'
-import { getPublicHome } from '@/api/platform'
+import { getPublicHome, getPublicContent } from '@/api/platform'
 import { listProducts } from '@/api/product'
 import { useUserStore } from '@/stores/user'
 import { sanitizeHtml, isSafeExternalUrl } from '@/utils/htmlSanitizer'
 import { PERMISSIONS } from '@/utils/constants'
 import type { DictItem } from '@/types/dict'
-import type { PublicHomeBanner, PublicHomeCase, PublicHomeCustomized, PublicHomeData } from '@/types/platform'
+import type { PublicHomeBanner, PublicHomeCase, PublicHomeCustomized, PublicHomeData, PlatformContent } from '@/types/platform'
 import type { ProductSummary } from '@/types/product'
 
 const router = useRouter()
@@ -38,6 +38,13 @@ const newProducts = ref<ProductSummary[]>([])
 const showCaseDetail = ref(false)
 const activeCase = ref<PublicHomeCase | null>(null)
 const safeCaseContent = computed(() => sanitizeHtml(activeCase.value?.content))
+
+// 客服咨询（CMS 内容驱动）
+const showConsulting = ref(false)
+const consultingLoading = ref(false)
+const consultingContent = ref<PlatformContent | null>(null)
+const safeConsultingContent = computed(() => sanitizeHtml(consultingContent.value?.content))
+const consultingTitle = computed(() => consultingContent.value?.title || '客服咨询')
 
 /** 分级导航维度：点击标签携带对应筛选参数跳转产品库。 */
 const dimensions = computed(() => [
@@ -147,6 +154,19 @@ function handleBannerClick(banner: PublicHomeBanner) {
 function openCaseDetail(item: PublicHomeCase) {
   activeCase.value = item
   showCaseDetail.value = true
+}
+
+async function openConsulting() {
+  showConsulting.value = true
+  if (consultingContent.value) return
+  consultingLoading.value = true
+  try {
+    consultingContent.value = await getPublicContent('platform_consulting_service')
+  } catch (e) {
+    console.error('加载客服咨询内容失败', e)
+  } finally {
+    consultingLoading.value = false
+  }
 }
 
 /** 定制卡片点击：站内路径走路由，外链仅允许 http/https。 */
@@ -362,6 +382,20 @@ onMounted(async () => {
       <!-- 内容仅 ADMIN/EDITOR 可在管理端维护，已做 HTML 消毒 -->
       <div v-if="activeCase?.content" class="case-content" v-html="safeCaseContent" />
       <p v-else style="color: var(--rsdp-text-secondary);">暂无详细介绍</p>
+    </n-modal>
+
+    <!-- 客服咨询入口 -->
+    <n-button class="consulting-entry" type="primary" size="large" round @click="openConsulting">
+      客服咨询
+    </n-button>
+
+    <!-- 客服咨询弹窗 -->
+    <n-modal v-model:show="showConsulting" preset="card" :title="consultingTitle" style="width: 640px;">
+      <n-spin :show="consultingLoading">
+        <!-- 内容仅 ADMIN/EDITOR 可在管理端维护，已做 HTML 消毒 -->
+        <div v-if="consultingContent?.content" class="consulting-content" v-html="safeConsultingContent" />
+        <p v-else-if="!consultingLoading" style="color: var(--rsdp-text-secondary);">暂无客服内容</p>
+      </n-spin>
     </n-modal>
   </PageContainer>
 </template>
@@ -618,6 +652,26 @@ onMounted(async () => {
   font-size: 12px;
   line-height: 1.6;
   color: var(--rsdp-text-secondary);
+}
+
+.consulting-entry {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 100;
+  box-shadow: var(--rsdp-shadow-card);
+}
+
+.consulting-content {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--rsdp-text);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.consulting-content :deep(img) {
+  max-width: 100%;
 }
 
 @media (max-width: 900px) {
