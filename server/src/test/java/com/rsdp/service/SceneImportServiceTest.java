@@ -76,7 +76,7 @@ class SceneImportServiceTest {
     void importScene_shouldCreateEntryPerDetectedProduct() throws Exception {
         when(visionService.detectSceneProducts(any(InputStream.class), anyInt()))
             .thenReturn(List.of(product(0.05, "SF"), product(0.55, null)));
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), anyString()))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), anyString(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-1", "taskId", "TASK-1", "imageIds", List.of("IMG-1")))
             .thenReturn(Map.of("rspuId", "RSPU-2", "taskId", "TASK-2", "imageIds", List.of("IMG-2")));
 
@@ -96,9 +96,9 @@ class SceneImportServiceTest {
     void importScene_shouldContinueWhenSingleProductFails() throws Exception {
         when(visionService.detectSceneProducts(any(InputStream.class), anyInt()))
             .thenReturn(List.of(product(0.05, "SF"), product(0.55, "FS")));
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("SF")))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("SF"), any()))
             .thenThrow(new RuntimeException("存储失败"));
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("FS")))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("FS"), any()))
             .thenReturn(Map.of("rspuId", "RSPU-2", "taskId", "TASK-2", "imageIds", List.of("IMG-2")));
 
         SceneImportResult result = sceneImportService.importScene(sceneFile(), null);
@@ -115,7 +115,7 @@ class SceneImportServiceTest {
     void importScene_shouldFallbackToDefaultCategoryFs() throws Exception {
         when(visionService.detectSceneProducts(any(InputStream.class), anyInt()))
             .thenReturn(List.of(product(0.05, null)));
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("FS")))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("FS"), any()))
             .thenReturn(Map.of("rspuId", "RSPU-1", "taskId", "TASK-1", "imageIds", List.of("IMG-1")));
 
         SceneImportResult result = sceneImportService.importScene(sceneFile(), null);
@@ -146,7 +146,7 @@ class SceneImportServiceTest {
             new ProductBoundingBox(0.3, 0.3, 0.3, 0.3), "TB", "正常茶几");
         when(visionService.detectSceneProducts(any(InputStream.class), anyInt()))
             .thenReturn(List.of(tooSmall, tooLarge, normal));
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("TB")))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("TB"), any()))
             .thenReturn(Map.of("rspuId", "RSPU-1", "taskId", "TASK-1", "imageIds", List.of("IMG-1")));
 
         SceneImportResult result = sceneImportService.importScene(sceneFile(), null);
@@ -164,7 +164,7 @@ class SceneImportServiceTest {
             new ProductBoundingBox(0.2, 0.2, 0.2, 0.2), "TB", "紧贴茶几");
         when(visionService.detectSceneProducts(any(InputStream.class), anyInt()))
             .thenReturn(List.of(big, small));
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("TB")))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("TB"), any()))
             .thenReturn(Map.of("rspuId", "RSPU-1", "taskId", "TASK-1", "imageIds", List.of("IMG-1")));
 
         SceneImportResult result = sceneImportService.importScene(sceneFile(), null);
@@ -183,7 +183,7 @@ class SceneImportServiceTest {
         when(visionService.detectSceneProducts(any(InputStream.class), anyInt()))
             .thenReturn(List.of(coarse));
         when(visionService.refineSceneProduct(any(InputStream.class))).thenReturn(refined);
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("TB")))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("TB"), any()))
             .thenReturn(Map.of("rspuId", "RSPU-1", "taskId", "TASK-1", "imageIds", List.of("IMG-1")));
 
         SceneImportResult result = sceneImportService.importScene(sceneFile(), null);
@@ -201,7 +201,7 @@ class SceneImportServiceTest {
             .thenReturn(List.of(product(0.1, "SF")));
         when(visionService.refineSceneProduct(any(InputStream.class)))
             .thenThrow(new com.rsdp.exception.ExternalServiceException("AI 超时"));
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("SF")))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("SF"), any()))
             .thenReturn(Map.of("rspuId", "RSPU-1", "taskId", "TASK-1", "imageIds", List.of("IMG-1")));
 
         SceneImportResult result = sceneImportService.importScene(sceneFile(), null);
@@ -217,7 +217,7 @@ class SceneImportServiceTest {
         when(visionService.detectSceneProducts(any(InputStream.class), anyInt()))
             .thenReturn(List.of(product(0.1, "SF")));
         when(visionService.refineSceneProduct(any(InputStream.class))).thenReturn(null);
-        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("SF")))
+        when(productService.createEntryFromStream(any(InputStream.class), anyString(), anyLong(), eq("SF"), any()))
             .thenReturn(Map.of("rspuId", "RSPU-1", "taskId", "TASK-1", "imageIds", List.of("IMG-1")));
 
         SceneImportResult result = sceneImportService.importScene(sceneFile(), null);

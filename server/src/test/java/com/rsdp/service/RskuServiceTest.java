@@ -518,10 +518,12 @@ class RskuServiceTest {
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
         rspu.setProductLevel("S");
         RspuVariant variant = new RspuVariant();
         variant.setVariantId("RSPU-TEST01-V001");
         variant.setRspuId("RSPU-TEST01");
+        variant.setMaterialCode("PE");
 
         when(rskuSupplyMapper.selectOne(any())).thenReturn(null);
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
