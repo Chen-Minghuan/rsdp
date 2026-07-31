@@ -46,7 +46,7 @@ onMounted(async () => {
   try {
     share.value = await getSharedProject(projectId.value)
   } catch (e) {
-    errorMessage.value = e instanceof Error ? e.message : '分享不存在或已过期'
+    errorMessage.value = e instanceof Error ? e.message : '未开启分享或该页面不存在'
   } finally {
     loading.value = false
   }

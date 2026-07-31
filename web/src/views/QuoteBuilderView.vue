@@ -366,7 +366,14 @@ const quoteColumns: DataTableColumns<QuoteItem> = [
       return formatPrice(row.factoryPrice)
     }
   },
-  { title: '数量', key: 'quantity', width: 80 },
+  {
+    title: '数量',
+    key: 'quantity',
+    width: 80,
+    render(row: QuoteItem) {
+      return row.quantity ?? '-'
+    }
+  },
   {
     title: '小计',
     key: 'subtotal',
@@ -558,12 +565,15 @@ onBeforeRouteUpdate((to) => {
               :single-line="false"
             />
 
-            <n-descriptions bordered :column="4" label-placement="left" style="margin-top: 16px;">
+            <n-descriptions bordered :column="5" label-placement="left" style="margin-top: 16px;">
               <n-descriptions-item label="总价">
                 ¥{{ (quoteResult.summary.totalPrice ?? 0).toFixed(2) }}
               </n-descriptions-item>
               <n-descriptions-item label="项数">
                 {{ quoteResult.summary.itemCount }}
+              </n-descriptions-item>
+              <n-descriptions-item label="总数量">
+                {{ quoteResult.summary.totalQuantity }}
               </n-descriptions-item>
               <n-descriptions-item label="涉及工厂">
                 {{ quoteResult.summary.factoryCount }} 家

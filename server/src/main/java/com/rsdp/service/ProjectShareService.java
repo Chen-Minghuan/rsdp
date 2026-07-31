@@ -53,10 +53,10 @@ public class ProjectShareService {
     public ProjectShareResponse getSharedProject(String projectId) {
         Project project = projectMapper.selectById(projectId);
         if (project == null || !Boolean.TRUE.equals(project.getShareEnabled())) {
-            throw new ResourceNotFoundException("分享不存在或已关闭");
+            throw new ResourceNotFoundException("未开启分享或该页面不存在");
         }
         if (project.getShareExpireAt() != null && project.getShareExpireAt().isBefore(LocalDateTime.now())) {
-            throw new ResourceNotFoundException("分享已过期");
+            throw new ResourceNotFoundException("分享已过期或该页面不存在");
         }
 
         List<Scheme> schemes = schemeMapper.selectList(new QueryWrapper<Scheme>()
