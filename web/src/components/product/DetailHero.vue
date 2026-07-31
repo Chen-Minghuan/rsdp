@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NCard, NImage, NTag, NAlert } from 'naive-ui'
+import { NCard, NTag, NAlert } from 'naive-ui'
+import ImageMagnifier from '@/components/ImageMagnifier.vue'
 import type { ProductDetail } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import { IMAGE_FALLBACK_SRC } from '@/utils/constants'
@@ -84,13 +85,12 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
     <div class="hero-layout">
       <div class="hero-image">
         <div v-if="primaryImage" class="hero-image-wrapper">
-          <n-image
+          <ImageMagnifier
             :src="`/api/v1/images/${primaryImage.imageId}`"
             :fallback-src="IMAGE_FALLBACK_SRC"
-            width="280"
-            height="280"
-            object-fit="cover"
-            style="border-radius: var(--rsdp-radius);"
+            :width="280"
+            :height="280"
+            alt="主图"
           />
           <span class="primary-badge">主图</span>
         </div>

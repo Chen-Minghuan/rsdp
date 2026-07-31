@@ -56,7 +56,7 @@ function imageMeta(img: ProductDetail['images'][number]): string {
           :fallback-src="IMAGE_FALLBACK_SRC"
           width="100%"
           height="180"
-          object-fit="cover"
+          object-fit="contain"
           style="border-radius: var(--rsdp-radius) var(--rsdp-radius) 0 0;"
         />
         <span v-if="img.primary" class="primary-badge">主图</span>
