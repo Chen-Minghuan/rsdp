@@ -74,7 +74,14 @@ public class AiRecognitionPersistenceService {
         String styleCode = dictResolverService.resolveCodeByName("style", labels.getStyle());
         List<String> secondaryStyleCodes = dictResolverService.resolveCodesByNames("style", labels.getSecondaryStyles());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
-        List<String> materialCodes = dictResolverService.resolveCodesByNames("material", labels.getMaterialTags());
+        // E 维（表面材质）与材质标签同源：E 值并入材质解析候选，统一走 material 字典归一
+        List<String> materialCandidates = new java.util.ArrayList<>(
+            labels.getMaterialTags() != null ? labels.getMaterialTags() : List.of());
+        String dimE = labels.getSixDimTags() != null ? labels.getSixDimTags().get("E") : null;
+        if (StringUtils.hasText(dimE)) {
+            materialCandidates.add(dimE.trim());
+        }
+        List<String> materialCodes = dictResolverService.resolveCodesByNames("material", materialCandidates);
         List<String> fabricCodes = dictResolverService.resolveCodesByNames("fabric", labels.getFabricTags());
 
         updateRspu(rspuId, labels, styleCode, materialCodes, fabricCodes, sceneCodes, embedding, modelName);
@@ -117,7 +124,7 @@ public class AiRecognitionPersistenceService {
             rspu.setPositioningLabel(styleCode != null ? styleCode : labels.getStyle());
         }
         if (isEmptyJson(rspu.getSixDimTags(), "{}")) {
-            rspu.setSixDimTags(toJson(normalizeSixDimTags(labels.getSixDimTags(), rspu.getCategoryCode())));
+            rspu.setSixDimTags(toJson(normalizeSixDimTags(labels.getSixDimTags(), rspu.getCategoryCode(), materialCodes)));
         }
         if (!StringUtils.hasText(rspu.getColorPrimaryName())) {
             rspu.setColorPrimaryName(labels.getColorPrimaryName());
@@ -161,13 +168,19 @@ public class AiRecognitionPersistenceService {
     /**
      * 六维标签归一（P1 枚举化）：AI 输出的枚举中文名/别名替换为带品类前缀的 dict_code
      * （如 SF-宽厚扶手），筛选/精确匹配用码、展示用名；未命中保留原文并记日志
-     * （供字典运营补充枚举/别名）。E 维度（表面材质）与 material/fabric 字典同源，不做六维枚举归一。
+     * （供字典运营补充枚举/别名）。
      *
-     * @param sixDimTags   AI 输出的六维标签（原始 map 不被修改，识别记录留档用原文）
-     * @param categoryCode RSPU 品类码
+     * <p>E 维度（表面材质）与材质标签同源（P3-⑤）：E 值已并入 material 字典解析候选，
+     * 此处 E 直接取第一个归一材质码的中文名（与 materialTags 展示同源，避免两处不一致）；
+     * 材质未归一时保留 AI 输出的 E 原文。</p>
+     *
+     * @param sixDimTags    AI 输出的六维标签（原始 map 不被修改，识别记录留档用原文）
+     * @param categoryCode  RSPU 品类码
+     * @param materialCodes 归一后的材质字典码列表（含 E 值并入的候选）
      * @return 归一后的六维标签 map
      */
-    private java.util.Map<String, String> normalizeSixDimTags(java.util.Map<String, String> sixDimTags, String categoryCode) {
+    private java.util.Map<String, String> normalizeSixDimTags(java.util.Map<String, String> sixDimTags, String categoryCode,
+                                                              List<String> materialCodes) {
         if (sixDimTags == null || sixDimTags.isEmpty()) {
             return sixDimTags;
         }
@@ -183,6 +196,12 @@ public class AiRecognitionPersistenceService {
                 log.info("六维标签未命中字典枚举，保留原文: dim={}, category={}, value={}", dim, categoryCode, value);
             }
         });
+        if (materialCodes != null && !materialCodes.isEmpty()) {
+            String materialName = dictResolverService.resolveNameByCode("material", materialCodes.get(0));
+            if (StringUtils.hasText(materialName)) {
+                normalized.put("E", materialName);
+            }
+        }
         return normalized;
     }
 

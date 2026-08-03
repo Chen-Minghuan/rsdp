@@ -122,7 +122,7 @@ public class AsyncTaskProcessor {
             postProcessLabels(labels);
 
             // 风格数据库校验：基于 style_matching_formula 计算风格匹配得分
-            StyleMatchResult styleMatch = styleMatchingService.match(labels, rspuId);
+            StyleMatchResult styleMatch = styleMatchingService.match(labels, rspuId, categoryCode);
             if (styleMatch != null) {
                 labels.setConfidence(styleMatch.getConfidence());
                 log.info("风格匹配评分完成，rspuId={}，style={}，score={}，confidence={}",

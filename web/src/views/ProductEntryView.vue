@@ -15,7 +15,6 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NSelect,
-  NInput,
   useMessage,
   type UploadFileInfo
 } from 'naive-ui'
@@ -41,8 +40,10 @@ const categoryOptions = ref<DictItem[]>([])
 const currentSixDimSchema = computed(() => getSixDimSchema(categoryCode.value ?? undefined))
 
 // ---------- 六维标签即时修正 ----------
-/** 六维维度键（E 维表面材质暂为自由文本输入）。 */
+/** 六维维度键（E 维表面材质与材质标签同源，不在修正区展示）。 */
 const sixDimEditKeys = ['A', 'B', 'C', 'D', 'E', 'F'] as const
+/** 修正区展示的维度（不含 E，E 随材质标签展示）。 */
+const sixDimEditDisplayKeys = sixDimEditKeys.filter(k => k !== 'E')
 /** 六维字典（一次拉全，按已选品类的 parentCode 过滤）。 */
 const sixDimDicts = ref<Record<string, DictItem[]>>({ A: [], B: [], C: [], D: [], F: [] })
 /** 按任务 ID 标记六维修正保存中。 */
@@ -516,10 +517,9 @@ function formatPrice(ocr?: OcrResult): string {
                     v-if="task.result.sixDimTags && typeof task.result.sixDimTags === 'object'"
                     class="six-dim-edit-grid"
                   >
-                    <div v-for="dimKey in sixDimEditKeys" :key="dimKey" class="six-dim-edit-item">
+                    <div v-for="dimKey in sixDimEditDisplayKeys" :key="dimKey" class="six-dim-edit-item">
                       <span class="six-dim-edit-label">{{ currentSixDimSchema.dims[dimKey]?.label ?? `维度 ${dimKey}` }}</span>
                       <n-select
-                        v-if="dimKey !== 'E'"
                         :value="sixDimValue(task, dimKey)"
                         :options="sixDimOptions(dimKey)"
                         size="small"
@@ -529,15 +529,6 @@ function formatPrice(ocr?: OcrResult): string {
                         :loading="!!sixDimSaving[task.taskId]"
                         :disabled="!!sixDimSaving[task.taskId]"
                         @update:value="(v: string | null) => handleSixDimChange(task, dimKey, v)"
-                      />
-                      <n-input
-                        v-else
-                        :value="sixDimValue(task, dimKey) ?? ''"
-                        size="small"
-                        clearable
-                        placeholder="表面材质（失焦保存）"
-                        :disabled="!!sixDimSaving[task.taskId]"
-                        @change="(v: string) => handleSixDimChange(task, dimKey, v)"
                       />
                     </div>
                   </div>

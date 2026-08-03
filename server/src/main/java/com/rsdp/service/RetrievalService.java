@@ -8,6 +8,7 @@ import com.rsdp.dto.response.SimilarProductResponse;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.common.ReviewStatus;
+import com.rsdp.config.properties.RetrievalProperties;
 import com.rsdp.exception.ExternalServiceException;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuStyleMapper;
@@ -57,6 +58,8 @@ public class RetrievalService {
     private final VisionService visionService;
     private final RspuStyleMapper rspuStyleMapper;
     private final DictService dictService;
+    private final DictResolverService dictResolverService;
+    private final RetrievalProperties retrievalProperties;
 
     /**
      * 以图/以文搜索相似产品。
@@ -372,24 +375,56 @@ public class RetrievalService {
             reasons.add("场景匹配：" + rspuScenes.stream().limit(2).collect(Collectors.joining(", ")));
         }
 
-        // 六维标签维度一致
-        Map<String, String> querySixDim = queryLabels.getSixDimTags();
-        Map<String, String> rspuSixDim = parseJsonObject(rspu.getSixDimTags());
-        if (querySixDim != null && !querySixDim.isEmpty() && !rspuSixDim.isEmpty()) {
-            int matched = 0;
-            for (Map.Entry<String, String> entry : querySixDim.entrySet()) {
-                String rspuValue = rspuSixDim.get(entry.getKey());
-                if (rspuValue != null && rspuValue.equalsIgnoreCase(entry.getValue())) {
-                    matched++;
+        // 六维标签维度一致（配置开关默认关闭，灰度验证后开启；
+        // 比较经品类字典归一，查询图枚举名与存库前缀码可互相命中）
+        if (retrievalProperties.isSixDimRerankEnabled()) {
+            Map<String, String> querySixDim = queryLabels.getSixDimTags();
+            Map<String, String> rspuSixDim = parseJsonObject(rspu.getSixDimTags());
+            if (querySixDim != null && !querySixDim.isEmpty() && !rspuSixDim.isEmpty()) {
+                int matched = 0;
+                for (Map.Entry<String, String> entry : querySixDim.entrySet()) {
+                    String rspuValue = rspuSixDim.get(entry.getKey());
+                    if (rspuValue != null
+                        && sixDimEquals(entry.getKey(), rspu.getCategoryCode(), entry.getValue(), rspuValue)) {
+                        matched++;
+                    }
                 }
-            }
-            if (matched > 0) {
-                boost += 0.01 * Math.min(matched, 6);
-                reasons.add("形态匹配 " + matched + " 维");
+                if (matched > 0) {
+                    boost += 0.01 * Math.min(matched, 6);
+                    reasons.add("形态匹配 " + matched + " 维");
+                }
             }
         }
 
         return Math.min(boost, 0.20);
+    }
+
+    /**
+     * 六维同维度一致性判定（混合态兼容）：原值相等 → 品类字典归一码相等
+     * （枚举名/别名与前缀码互相命中）→ 去前缀精确相等兜底；E 维不走字典归一。
+     */
+    private boolean sixDimEquals(String dimKey, String categoryCode, String queryValue, String rspuValue) {
+        if (queryValue == null || rspuValue == null) {
+            return false;
+        }
+        if (queryValue.trim().equalsIgnoreCase(rspuValue.trim())) {
+            return true;
+        }
+        if (!"E".equalsIgnoreCase(dimKey) && categoryCode != null && !categoryCode.isBlank()) {
+            String queryCode = dictResolverService.resolveSixDimCode(dimKey, categoryCode, queryValue);
+            String rspuCode = dictResolverService.resolveSixDimCode(dimKey, categoryCode, rspuValue);
+            if (queryCode != null && queryCode.equals(rspuCode)) {
+                return true;
+            }
+        }
+        return stripSixDimPrefix(queryValue).equalsIgnoreCase(stripSixDimPrefix(rspuValue));
+    }
+
+    /**
+     * 去掉六维值的品类前缀（如 SF-宽厚扶手 → 宽厚扶手），用于混合态精确比较。
+     */
+    private static String stripSixDimPrefix(String value) {
+        return value == null ? "" : value.trim().replaceAll("^[A-Z]{2}-", "");
     }
 
     /**

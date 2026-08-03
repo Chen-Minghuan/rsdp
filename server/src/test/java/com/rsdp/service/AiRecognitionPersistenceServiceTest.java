@@ -93,7 +93,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodesByNames("style", List.of("奶油风", "中古风", "北欧风")))
             .thenReturn(List.of("CR", "MC", "NC"));
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
-        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
@@ -125,7 +125,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
-        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
@@ -197,7 +197,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
-        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
@@ -223,7 +223,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
-        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
         when(dictResolverService.resolveSixDimCode("C", "SF", "宽厚扶手")).thenReturn("SF-宽厚扶手");
         when(dictResolverService.resolveSixDimCode("F", "SF", "某种自由文本")).thenReturn(null);
@@ -248,5 +248,39 @@ class AiRecognitionPersistenceServiceTest {
             .containsEntry("F", "某种自由文本");
         // AI 原始输出不被修改（识别记录留档用原文）
         assertThat(labels.getSixDimTags()).containsEntry("C", "宽厚扶手");
+    }
+
+    @Test
+    void saveSuccess_shouldSyncSixDimEFromMaterialTags() throws Exception {
+        // P3-⑤ E 维与材质标签同源：E 值并入 material 解析候选，落库 E 取归一材质码的中文名
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("SF");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        // E 值「皮革」已并入材质解析候选
+        when(dictResolverService.resolveCodesByNames("material", List.of("头层牛皮", "皮革")))
+            .thenReturn(List.of("LE"));
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+        when(dictResolverService.resolveNameByCode("material", "LE")).thenReturn("皮革");
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setMaterialTags(List.of("头层牛皮"));
+        labels.setSixDimTags(java.util.Map.of("A", "一字型", "E", "皮革"));
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        // 材质标签归一为字典码；六维 E 与材质同源（取归一材质码的中文名）
+        assertThat(rspu.getMaterialTags()).isEqualTo("[\"LE\"]");
+        java.util.Map<String, String> stored = objectMapper.readValue(rspu.getSixDimTags(),
+            objectMapper.getTypeFactory().constructMapType(java.util.Map.class, String.class, String.class));
+        assertThat(stored).containsEntry("E", "皮革");
     }
 }

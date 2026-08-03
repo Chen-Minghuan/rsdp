@@ -21,8 +21,9 @@ const rspu = computed(() => props.detail.rspu)
 
 const sixDimSchema = computed(() => getSixDimSchema(rspu.value.categoryCode))
 
-/** 六维标签动态维度键（A–F，按品类 schema 动态生成）。 */
-const sixDimKeys = computed(() => Object.keys(sixDimSchema.value.dims))
+/** 六维标签动态维度键（A–D/F，按品类 schema 动态生成）。
+ *  E 维（表面材质）与材质标签同源，由「材质标签」行展示，此处不再重复显示。 */
+const sixDimKeys = computed(() => Object.keys(sixDimSchema.value.dims).filter(k => k !== 'E'))
 
 function resolveDictName(options: DictItem[], code: string) {
   return options.find(d => d.dictCode === code)?.dictName || code

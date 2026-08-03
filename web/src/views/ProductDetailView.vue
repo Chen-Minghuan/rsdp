@@ -295,8 +295,10 @@ const styleOptions = ref<DictItem[]>([])
 const sceneOptions = ref<DictItem[]>([])
 
 // ---------- 六维标签结构化编辑 ----------
-/** 六维维度键（E 维表面材质暂为自由文本，P3-⑤ 再与材质标签统一）。 */
+/** 六维维度键（E 维表面材质与材质标签同源，在状态中保留以便保存时不丢失，但不在编辑区展示）。 */
 const sixDimEditKeys = ['A', 'B', 'C', 'D', 'E', 'F'] as const
+/** 编辑区展示的维度（不含 E，E 由材质标签字段维护）。 */
+const sixDimEditDisplayKeys = sixDimEditKeys.filter(k => k !== 'E')
 /** 六维字典（一次拉全，按当前产品品类的 parentCode 过滤）。 */
 const sixDimDicts = ref<Record<string, DictItem[]>>({ A: [], B: [], C: [], D: [], F: [] })
 const editSixDimSchema = computed(() => getSixDimSchema(detail.value?.rspu.categoryCode))
@@ -1500,23 +1502,15 @@ onBeforeRouteUpdate((to, from) => {
         </n-form-item>
         <n-form-item label="六维标签">
           <div class="six-dim-edit-grid">
-            <div v-for="dimKey in sixDimEditKeys" :key="dimKey" class="six-dim-edit-item">
+            <div v-for="dimKey in sixDimEditDisplayKeys" :key="dimKey" class="six-dim-edit-item">
               <span class="six-dim-edit-label">{{ editSixDimSchema.dims[dimKey]?.label ?? `维度 ${dimKey}` }}</span>
               <n-select
-                v-if="dimKey !== 'E'"
                 :value="editForm.sixDimTagsEdit?.[dimKey] ?? null"
                 :options="sixDimEditOptions(dimKey)"
                 placeholder="请选择"
                 clearable
                 filterable
                 @update:value="(v: string | null) => { if (editForm.sixDimTagsEdit) editForm.sixDimTagsEdit[dimKey] = v }"
-              />
-              <n-input
-                v-else
-                :value="editForm.sixDimTagsEdit?.E ?? ''"
-                placeholder="表面材质（自由文本）"
-                clearable
-                @update:value="(v: string) => { if (editForm.sixDimTagsEdit) editForm.sixDimTagsEdit.E = v }"
               />
             </div>
           </div>

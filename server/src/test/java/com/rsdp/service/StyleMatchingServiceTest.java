@@ -287,4 +287,115 @@ class StyleMatchingServiceTest {
         assertThat(result).isNotNull();
         assertThat(result.getFormulaScores()).anyMatch(fs -> "six_dim".equals(fs.getDimension()) && fs.getScore().compareTo(BigDecimal.ZERO) > 0);
     }
+
+    @Test
+    void match_shouldScoreSixDim_whenDictCodeAndAliasMatchStyleCaseKeyword() {
+        // Given：六维值与案例关键词经品类字典归一后为同一码（含别名路径）
+        StyleMatchingFormula formula = new StyleMatchingFormula();
+        formula.setFormulaId("FORM-SF-001");
+        formula.setStyleCode("MC");
+        formula.setStatus("active");
+        formula.setFormulaJson("""
+            { "must_have": [], "compatible": [], "avoid": [] }
+            """);
+        when(formulaMapper.selectList(any())).thenReturn(List.of(formula));
+
+        StyleCase styleCase = new StyleCase();
+        styleCase.setCaseId("CASE-SF-001");
+        styleCase.setStyleCode("MC");
+        styleCase.setIsSuccess(true);
+        styleCase.setAiRawOutput("""
+            {"key_characteristics": {"forms": ["一字型", "宽扶手"], "textures": []}}
+            """);
+        when(styleCaseMapper.selectList(any())).thenReturn(List.of(styleCase));
+
+        // 值侧：已是前缀码直通 / 枚举名归一；关键词侧：枚举名与别名归一
+        when(dictResolver.resolveSixDimCode("A", "SF", "SF-一字型")).thenReturn("SF-一字型");
+        when(dictResolver.resolveSixDimCode("A", "SF", "一字型")).thenReturn("SF-一字型");
+        when(dictResolver.resolveSixDimCode("C", "SF", "宽厚扶手")).thenReturn("SF-宽厚扶手");
+        when(dictResolver.resolveSixDimCode("C", "SF", "宽扶手")).thenReturn("SF-宽厚扶手");
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("MC");
+        labels.setSixDimTags(java.util.Map.of("A", "SF-一字型", "C", "宽厚扶手"));
+
+        // When
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-009", "SF");
+
+        // Then：两个维度均命中（码直通 + 别名归一）
+        assertThat(result).isNotNull();
+        assertThat(result.getFormulaScores())
+            .anyMatch(fs -> "six_dim".equals(fs.getDimension()) && fs.getScore().compareTo(BigDecimal.ZERO) > 0);
+        assertThat(result.getElementMatches())
+            .anyMatch(em -> "six_dim".equals(em.getType()) && em.isMatched());
+    }
+
+    @Test
+    void match_shouldNotScoreSixDim_whenOnlyFuzzyContainsWouldMatch() {
+        // Given：旧逻辑下 "弧形" 模糊包含于 "弧形沙发" 会命中，新逻辑不应命中
+        StyleMatchingFormula formula = new StyleMatchingFormula();
+        formula.setFormulaId("FORM-SF-002");
+        formula.setStyleCode("MC");
+        formula.setStatus("active");
+        formula.setFormulaJson("""
+            { "must_have": [], "compatible": [], "avoid": [] }
+            """);
+        when(formulaMapper.selectList(any())).thenReturn(List.of(formula));
+
+        StyleCase styleCase = new StyleCase();
+        styleCase.setCaseId("CASE-SF-002");
+        styleCase.setStyleCode("MC");
+        styleCase.setIsSuccess(true);
+        styleCase.setAiRawOutput("""
+            {"key_characteristics": {"forms": ["弧形沙发"], "textures": []}}
+            """);
+        when(styleCaseMapper.selectList(any())).thenReturn(List.of(styleCase));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("MC");
+        labels.setSixDimTags(java.util.Map.of("A", "弧形"));
+
+        // When
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-010", "SF");
+
+        // Then
+        assertThat(result).isNotNull();
+        assertThat(result.getFormulaScores())
+            .anyMatch(fs -> "six_dim".equals(fs.getDimension()) && fs.getScore().compareTo(BigDecimal.ZERO) == 0);
+    }
+
+    @Test
+    void match_shouldScoreSixDimEDimByExactTextOnly() {
+        // Given：E 维（表面材质）不枚举，仅按去前缀精确相等匹配，不走字典归一
+        StyleMatchingFormula formula = new StyleMatchingFormula();
+        formula.setFormulaId("FORM-SF-003");
+        formula.setStyleCode("MC");
+        formula.setStatus("active");
+        formula.setFormulaJson("""
+            { "must_have": [], "compatible": [], "avoid": [] }
+            """);
+        when(formulaMapper.selectList(any())).thenReturn(List.of(formula));
+
+        StyleCase styleCase = new StyleCase();
+        styleCase.setCaseId("CASE-SF-003");
+        styleCase.setStyleCode("MC");
+        styleCase.setIsSuccess(true);
+        styleCase.setAiRawOutput("""
+            {"key_characteristics": {"forms": [], "textures": ["皮革"]}}
+            """);
+        when(styleCaseMapper.selectList(any())).thenReturn(List.of(styleCase));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("MC");
+        labels.setSixDimTags(java.util.Map.of("E", "皮革"));
+
+        // When
+        StyleMatchResult result = service.match(labels, "RSPU-TEST-011", "SF");
+
+        // Then
+        assertThat(result).isNotNull();
+        assertThat(result.getFormulaScores())
+            .anyMatch(fs -> "six_dim".equals(fs.getDimension()) && fs.getScore().compareTo(BigDecimal.ZERO) > 0);
+        verify(dictResolver, never()).resolveSixDimCode(eq("E"), any(), any());
+    }
 }
