@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { NDescriptions, NDescriptionsItem, NTag } from 'naive-ui'
 import type { ProductDetail, OcrResult } from '@/types/product'
 import type { DictItem } from '@/types/dict'
-import { getSixDimSchema } from '@/utils/sixDimLabels'
+import { getSixDimSchema, formatSixDimValue } from '@/utils/sixDimLabels'
 import { toKeyValuePairs, toRawText, safeParseJson } from '@/utils/jsonDisplay'
 
 /**
@@ -129,7 +129,7 @@ const primaryColorCss = computed(() => {
               :key="key"
               :label="sixDimSchema.dims[key]?.label ?? `维度 ${key}`"
             >
-              {{ rspu.sixDimTags?.[key] || '-' }}
+              {{ formatSixDimValue(rspu.sixDimTags?.[key]) }}
             </n-descriptions-item>
           </n-descriptions>
         </n-descriptions-item>

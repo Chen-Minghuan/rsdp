@@ -178,12 +178,12 @@ public class VisionService {
         AiLabels labels = new AiLabels();
         labels.setStyle("MC");
         labels.setSixDimTags(Map.of(
-            "A", "直线轮廓",
+            "A", "一字型",
             "B", "高靠背",
-            "C", "直扶手",
-            "D", "金属腿",
-            "E", "仿皮",
-            "F", "海绵软包"
+            "C", "无扶手",
+            "D", "金属框架底座",
+            "E", "皮革",
+            "F", "光面软包"
         ));
         labels.setColorPrimaryName("米白");
         labels.setColorPrimaryHsv(List.of(40.0, 0.15, 0.95));
@@ -223,7 +223,7 @@ public class VisionService {
 
     /**
      * 构建用户提示词，运行时从 category_dict 注入风格、场景、材质枚举，
-     * 并按品类码注入对应的六维标签维度定义。
+     * 并按品类码注入对应的六维标签维度定义与六维枚举约束。
      *
      * @param categoryCode 产品品类码
      * @return 完整的用户提示词
@@ -234,7 +234,82 @@ public class VisionService {
         String materialEnum = buildEnumText("material");
         String fabricEnum = buildEnumText("fabric");
         String sixDimDescription = SixDimSchemaConfig.buildPromptDescription(categoryCode);
-        return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription, styleEnum, sceneEnum, materialEnum, fabricEnum);
+        String sixDimEnum = buildSixDimEnumPrompt(categoryCode);
+        return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription + sixDimEnum,
+            styleEnum, sceneEnum, materialEnum, fabricEnum);
+    }
+
+    /**
+     * 构建六维标签枚举约束文本（P1 枚举化）。
+     *
+     * <p>按品类从 category_dict 读取 six_dim_A~D/F 字典（parent_code = 品类码），
+     * 每个枚举值只注入「中文名（一句话锚点）」控制 token 成本：锚点取自 remark（视觉判别要点），
+     * 超过 20 字时截到首个分句。完整判别要点与 aliases 留在字典，不进 prompt。
+     * E 维度（表面材质）不建独立枚举，提示 AI 从材质/面料枚举中选择。
+     * 品类无六维字典（如 GENERIC）时返回空串，prompt 行为与枚举化前一致。</p>
+     *
+     * @param categoryCode 产品品类码
+     * @return 枚举约束文本，无字典时返回空串
+     */
+    private String buildSixDimEnumPrompt(String categoryCode) {
+        if (categoryCode == null || categoryCode.isBlank()) {
+            return "";
+        }
+        var schema = SixDimSchemaConfig.getSchema(categoryCode);
+        StringBuilder sb = new StringBuilder();
+        for (String dim : List.of("A", "B", "C", "D", "F")) {
+            List<CategoryDict> entries;
+            try {
+                List<CategoryDict> all = dictService.listByType("six_dim_" + dim);
+                if (all == null) {
+                    continue;
+                }
+                entries = all.stream()
+                    .filter(d -> categoryCode.equalsIgnoreCase(d.getParentCode() == null ? "" : d.getParentCode()))
+                    .sorted(java.util.Comparator.comparingInt(d -> d.getSortOrder() == null ? 0 : d.getSortOrder()))
+                    .toList();
+            } catch (Exception e) {
+                log.warn("读取六维字典枚举失败，跳过该维度枚举注入，dim={}", dim, e);
+                continue;
+            }
+            if (entries.isEmpty()) {
+                continue;
+            }
+            String label = schema.dims().containsKey(dim) ? schema.dims().get(dim).label() : dim;
+            String enums = entries.stream()
+                .map(d -> d.getDictName() + anchorOf(d.getRemark()))
+                .collect(Collectors.joining("、"));
+            sb.append(dim).append(" ").append(label).append("：").append(enums).append("\n");
+        }
+        if (sb.length() == 0) {
+            return "";
+        }
+        return """
+            六维标签枚举约束（保证输出一致、可统计，务必遵守）：
+            A~D、F 每个维度必须从下列对应枚举中精确选择一项，只输出枚举中文名（不要带括号锚点）；确实无法归入任何一项时输出 "其他"。
+            E 维度请从上方的材质/面料枚举中选择。
+            """ + sb;
+    }
+
+    /**
+     * 从 remark（视觉判别要点）提取一句话锚点：不超过 20 字直接使用，
+     * 超过则截到首个分句（仍超长再硬截 20 字），控制 prompt token 成本。
+     */
+    private String anchorOf(String remark) {
+        if (remark == null || remark.isBlank()) {
+            return "";
+        }
+        String anchor = remark.trim();
+        if (anchor.length() > 20) {
+            int cut = anchor.indexOf('，');
+            if (cut > 0) {
+                anchor = anchor.substring(0, cut);
+            }
+            if (anchor.length() > 20) {
+                anchor = anchor.substring(0, 20);
+            }
+        }
+        return "（" + anchor + "）";
     }
 
     /**

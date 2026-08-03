@@ -417,4 +417,60 @@ class VisionServiceTest {
         assertThat(regions.get(0).getProducts().get(0).getNearbyText()).isNull();
         assertThat(regions.get(0).getProducts().get(0).getEstimatedCategory()).isEqualTo("SF");
     }
+
+    @Test
+    void recognizeImage_shouldInjectSixDimEnumsIntoPrompt() throws Exception {
+        // P1 枚举化：按品类注入六维枚举（中文名+锚点），约束 AI 从枚举中选择
+        CategoryDict arm = new CategoryDict();
+        arm.setDictType("six_dim_C");
+        arm.setDictCode("SF-宽厚扶手");
+        arm.setDictName("宽厚扶手");
+        arm.setParentCode("SF");
+        arm.setSortOrder(3);
+        arm.setRemark("扶手又宽又厚，顶面可置物/坐人");
+        CategoryDict other = new CategoryDict();
+        other.setDictType("six_dim_C");
+        other.setDictCode("SF-异形/其他");
+        other.setDictName("异形/其他");
+        other.setParentCode("SF");
+        other.setSortOrder(99);
+        other.setRemark("不属于以上形态");
+        CategoryDict tbEntry = new CategoryDict();
+        tbEntry.setDictType("six_dim_C");
+        tbEntry.setDictCode("TB-直边");
+        tbEntry.setDictName("直边");
+        tbEntry.setParentCode("TB");
+        tbEntry.setSortOrder(1);
+        when(dictService.listByType("six_dim_C")).thenReturn(List.of(arm, other, tbEntry));
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"style\":\"中古风\"}"))));
+
+        visionService.recognizeImage(new ByteArrayInputStream("fake-image".getBytes()), "SF");
+
+        // 注入本品类枚举名+锚点与选择约束；不注入其他品类条目
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("必须从下列对应枚举中精确选择一项"))
+            .withRequestBody(containing("宽厚扶手（扶手又宽又厚，顶面可置物/坐人）"))
+            .withRequestBody(containing("异形/其他"))
+            .withRequestBody(notMatching(".*TB-直边.*")));
+    }
+
+    @Test
+    void recognizeImage_shouldSkipSixDimEnumInjectionWhenNoCategoryDict() throws Exception {
+        // 品类无六维字典（或未指定品类）时不注入枚举约束，行为与枚举化前一致
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"style\":\"中古风\"}"))));
+
+        visionService.recognizeImage(new ByteArrayInputStream("fake-image".getBytes()));
+
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(notMatching(".*必须从下列对应枚举中精确选择一项.*")));
+    }
 }

@@ -23,7 +23,7 @@ import { listDicts } from '@/api/dict'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
 import type { OcrResult } from '@/types/product'
-import { getSixDimSchema } from '@/utils/sixDimLabels'
+import { getSixDimSchema, formatSixDimValue } from '@/utils/sixDimLabels'
 
 const router = useRouter()
 
@@ -463,22 +463,22 @@ function formatPrice(ocr?: OcrResult): string {
                     size="small"
                   >
                     <n-descriptions-item :label="currentSixDimSchema.dims.A?.label ?? '维度 A'">
-                      {{ (task.result.sixDimTags as Record<string, string>).A || '-' }}
+                      {{ formatSixDimValue((task.result.sixDimTags as Record<string, string>).A) }}
                     </n-descriptions-item>
                     <n-descriptions-item :label="currentSixDimSchema.dims.B?.label ?? '维度 B'">
-                      {{ (task.result.sixDimTags as Record<string, string>).B || '-' }}
+                      {{ formatSixDimValue((task.result.sixDimTags as Record<string, string>).B) }}
                     </n-descriptions-item>
                     <n-descriptions-item :label="currentSixDimSchema.dims.C?.label ?? '维度 C'">
-                      {{ (task.result.sixDimTags as Record<string, string>).C || '-' }}
+                      {{ formatSixDimValue((task.result.sixDimTags as Record<string, string>).C) }}
                     </n-descriptions-item>
                     <n-descriptions-item :label="currentSixDimSchema.dims.D?.label ?? '维度 D'">
-                      {{ (task.result.sixDimTags as Record<string, string>).D || '-' }}
+                      {{ formatSixDimValue((task.result.sixDimTags as Record<string, string>).D) }}
                     </n-descriptions-item>
                     <n-descriptions-item :label="currentSixDimSchema.dims.E?.label ?? '维度 E'">
-                      {{ (task.result.sixDimTags as Record<string, string>).E || '-' }}
+                      {{ formatSixDimValue((task.result.sixDimTags as Record<string, string>).E) }}
                     </n-descriptions-item>
                     <n-descriptions-item :label="currentSixDimSchema.dims.F?.label ?? '维度 F'">
-                      {{ (task.result.sixDimTags as Record<string, string>).F || '-' }}
+                      {{ formatSixDimValue((task.result.sixDimTags as Record<string, string>).F) }}
                     </n-descriptions-item>
                   </n-descriptions>
                   <span v-else>-</span>

@@ -137,3 +137,13 @@ export function getSixDimLabel(categoryCode: string | undefined, dimKey: string)
   const schema = getSixDimSchema(categoryCode)
   return schema.dims[dimKey]?.label ?? `维度 ${dimKey}`
 }
+
+/**
+ * 六维值展示格式化。
+ * 枚举化后六维值存储的是带品类前缀的 dict_code（如 SF-宽厚扶手），
+ * 展示时剥离前缀只显示中文名；过渡期自由文本（无前缀）原样显示。
+ */
+export function formatSixDimValue(value?: string): string {
+  if (!value) return '-'
+  return value.replace(/^[A-Z]{2}-/, '')
+}

@@ -87,4 +87,68 @@ class DictResolverServiceTest {
         when(dictService.listByType("material")).thenReturn(List.of(broken));
         assertThat(dictResolverService.resolveCodeByName("material", "玻璃")).isEqualTo("GL");
     }
+
+    // ==================== 六维标签归一（resolveSixDimCode） ====================
+
+    private CategoryDict sixDimDict(String dim, String code, String name, String parentCode, String aliases) {
+        CategoryDict d = dict("six_dim_" + dim, code, name, null, aliases);
+        d.setParentCode(parentCode);
+        return d;
+    }
+
+    private void stubSixDimC() {
+        when(dictService.listByType("six_dim_C")).thenReturn(List.of(
+            sixDimDict("C", "SF-宽厚扶手", "宽厚扶手", "SF", "[\"宽扶手\",\"厚扶手\",\"面包扶手\"]"),
+            sixDimDict("C", "SF-异形/其他", "异形/其他", "SF", null),
+            sixDimDict("C", "TB-直边", "直边", "TB", null),
+            sixDimDict("C", "DT-直边", "直边", "DT", null)
+        ));
+    }
+
+    @Test
+    void resolveSixDimCode_shouldMatchExactNameToPrefixedCode() {
+        stubSixDimC();
+        assertThat(dictResolverService.resolveSixDimCode("C", "SF", "宽厚扶手")).isEqualTo("SF-宽厚扶手");
+    }
+
+    @Test
+    void resolveSixDimCode_shouldMatchAlias() {
+        stubSixDimC();
+        assertThat(dictResolverService.resolveSixDimCode("C", "SF", "面包扶手")).isEqualTo("SF-宽厚扶手");
+    }
+
+    @Test
+    void resolveSixDimCode_shouldPassThroughPrefixedCode() {
+        stubSixDimC();
+        assertThat(dictResolverService.resolveSixDimCode("C", "SF", "SF-宽厚扶手")).isEqualTo("SF-宽厚扶手");
+    }
+
+    @Test
+    void resolveSixDimCode_shouldIsolateByParentCode() {
+        stubSixDimC();
+        // TB/DT 同名"直边"各自归到自己品类的码，互不串扰
+        assertThat(dictResolverService.resolveSixDimCode("C", "TB", "直边")).isEqualTo("TB-直边");
+        assertThat(dictResolverService.resolveSixDimCode("C", "DT", "直边")).isEqualTo("DT-直边");
+        // SF 品类下没有"直边"条目，不应命中其他品类
+        assertThat(dictResolverService.resolveSixDimCode("C", "SF", "直边")).isNull();
+    }
+
+    @Test
+    void resolveSixDimCode_shouldFallbackOtherToIrregularEntry() {
+        stubSixDimC();
+        // AI 输出"其他"，字典兜底条目名为"异形/其他"，宽松匹配命中
+        assertThat(dictResolverService.resolveSixDimCode("C", "SF", "其他")).isEqualTo("SF-异形/其他");
+    }
+
+    @Test
+    void resolveSixDimCode_shouldReturnNullWhenMissOrNoCategory() {
+        stubSixDimC();
+        assertThat(dictResolverService.resolveSixDimCode("C", "SF", "某种没收录的扶手")).isNull();
+        // 品类为空不做归一（避免跨品类同名歧义）
+        assertThat(dictResolverService.resolveSixDimCode("C", null, "宽厚扶手")).isNull();
+        assertThat(dictResolverService.resolveSixDimCode("C", "", "宽厚扶手")).isNull();
+        assertThat(dictResolverService.resolveSixDimCode("C", "SF", null)).isNull();
+        // 品类在字典中无条目
+        assertThat(dictResolverService.resolveSixDimCode("C", "BD", "宽厚扶手")).isNull();
+    }
 }

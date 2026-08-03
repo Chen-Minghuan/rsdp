@@ -117,7 +117,7 @@ public class AiRecognitionPersistenceService {
             rspu.setPositioningLabel(styleCode != null ? styleCode : labels.getStyle());
         }
         if (isEmptyJson(rspu.getSixDimTags(), "{}")) {
-            rspu.setSixDimTags(toJson(labels.getSixDimTags()));
+            rspu.setSixDimTags(toJson(normalizeSixDimTags(labels.getSixDimTags(), rspu.getCategoryCode())));
         }
         if (!StringUtils.hasText(rspu.getColorPrimaryName())) {
             rspu.setColorPrimaryName(labels.getColorPrimaryName());
@@ -156,6 +156,34 @@ public class AiRecognitionPersistenceService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+    }
+
+    /**
+     * 六维标签归一（P1 枚举化）：AI 输出的枚举中文名/别名替换为带品类前缀的 dict_code
+     * （如 SF-宽厚扶手），筛选/精确匹配用码、展示用名；未命中保留原文并记日志
+     * （供字典运营补充枚举/别名）。E 维度（表面材质）与 material/fabric 字典同源，不做六维枚举归一。
+     *
+     * @param sixDimTags   AI 输出的六维标签（原始 map 不被修改，识别记录留档用原文）
+     * @param categoryCode RSPU 品类码
+     * @return 归一后的六维标签 map
+     */
+    private java.util.Map<String, String> normalizeSixDimTags(java.util.Map<String, String> sixDimTags, String categoryCode) {
+        if (sixDimTags == null || sixDimTags.isEmpty()) {
+            return sixDimTags;
+        }
+        java.util.Map<String, String> normalized = new java.util.LinkedHashMap<>(sixDimTags);
+        sixDimTags.forEach((dim, value) -> {
+            if ("E".equalsIgnoreCase(dim) || value == null || value.isBlank()) {
+                return;
+            }
+            String code = dictResolverService.resolveSixDimCode(dim, categoryCode, value);
+            if (code != null) {
+                normalized.put(dim, code);
+            } else {
+                log.info("六维标签未命中字典枚举，保留原文: dim={}, category={}, value={}", dim, categoryCode, value);
+            }
+        });
+        return normalized;
     }
 
     private void assignRspuCodeIfPossible(RspuMaster rspu, AiLabels labels, String styleCode) {

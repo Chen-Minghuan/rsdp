@@ -209,4 +209,44 @@ class AiRecognitionPersistenceServiceTest {
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
         verify(rspuStyleMapper, times(1)).insert(any(RspuStyle.class));
     }
+
+    @Test
+    void saveSuccess_shouldNormalizeSixDimTagsToPrefixedDictCodes() throws Exception {
+        // P1 枚举化：命中的六维值替换为带品类前缀的 dict_code，未命中保留原文，E 维度不归一
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("SF");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+        when(dictResolverService.resolveSixDimCode("C", "SF", "宽厚扶手")).thenReturn("SF-宽厚扶手");
+        when(dictResolverService.resolveSixDimCode("F", "SF", "某种自由文本")).thenReturn(null);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setSixDimTags(java.util.Map.of(
+            "C", "宽厚扶手",
+            "E", "皮革",
+            "F", "某种自由文本"
+        ));
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        // 命中 → 前缀码；未命中 → 原文；E 维度 → 原样不归一
+        java.util.Map<String, String> stored = objectMapper.readValue(rspu.getSixDimTags(),
+            objectMapper.getTypeFactory().constructMapType(java.util.Map.class, String.class, String.class));
+        assertThat(stored)
+            .containsEntry("C", "SF-宽厚扶手")
+            .containsEntry("E", "皮革")
+            .containsEntry("F", "某种自由文本");
+        // AI 原始输出不被修改（识别记录留档用原文）
+        assertThat(labels.getSixDimTags()).containsEntry("C", "宽厚扶手");
+    }
 }
