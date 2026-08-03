@@ -81,6 +81,69 @@ class ImageWhitespaceTrimmerTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void cropRefine_conservativeShouldKeepThinLeg() throws IOException {
+        // 400x400 白底：200x100 深色柜体 + 柜体下方 3px 宽细腿（低占比内容）
+        BufferedImage page = createPage(400, 400, Color.WHITE);
+        fillRect(page, 100, 150, 200, 100, new Color(30, 60, 120));
+        fillRect(page, 195, 250, 3, 100, new Color(30, 60, 120));
+
+        ProductBoundingBox bbox = new ProductBoundingBox(0.25, 0.375, 0.5, 0.5);
+        byte[] jpeg = ImageWhitespaceTrimmer.cropRefineToJpeg(
+            page, bbox, 0.05, 0.02, 0.9f, ImageWhitespaceTrimmer.TrimOptions.conservative());
+        BufferedImage result = decode(jpeg);
+
+        // 细腿所在区域应保留：结果图底部附近仍能找到产品色
+        boolean legFound = false;
+        for (int y = result.getHeight() - 30; y < result.getHeight(); y++) {
+            for (int x = 0; x < result.getWidth(); x++) {
+                int rgb = result.getRGB(x, y);
+                if (Math.abs((rgb & 0xFF) - 120) < 40 && Math.abs(((rgb >> 16) & 0xFF) - 30) < 40) {
+                    legFound = true;
+                    break;
+                }
+            }
+            if (legFound) break;
+        }
+        assertThat(legFound).as("保守模式不应切掉细腿").isTrue();
+    }
+
+    @Test
+    void cropRefine_conservativeShouldSkipTrimOnSceneBackground() throws IOException {
+        // 场景背景：四角颜色差异大（四象限异色），中心深色产品
+        BufferedImage page = createPage(400, 400, Color.WHITE);
+        fillRect(page, 0, 0, 200, 200, new Color(200, 50, 50));
+        fillRect(page, 200, 0, 200, 200, new Color(50, 200, 50));
+        fillRect(page, 0, 200, 200, 200, new Color(50, 50, 200));
+        fillRect(page, 200, 200, 200, 200, new Color(200, 200, 50));
+        fillRect(page, 120, 120, 160, 160, new Color(40, 40, 40));
+
+        ProductBoundingBox bbox = new ProductBoundingBox(0.2, 0.2, 0.4, 0.4);
+        byte[] jpeg = ImageWhitespaceTrimmer.cropRefineToJpeg(
+            page, bbox, 0.05, 0.02, 0.9f, ImageWhitespaceTrimmer.TrimOptions.conservative());
+        BufferedImage result = decode(jpeg);
+
+        // 非纯色背景跳过收紧：结果尺寸 ≈ 外扩裁剪框（0.5*400=200）+ 留白，明显大于产品本身 160px
+        assertThat(result.getWidth()).isBetween(195, 215);
+        assertThat(result.getHeight()).isBetween(195, 215);
+    }
+
+    @Test
+    void cropRefine_conservativeShouldLimitTrimRatio() throws IOException {
+        // 浅色产品（与白色背景差异 < 容差）：收紧上限 25% 防止产品被过度切小
+        BufferedImage page = createPage(400, 400, Color.WHITE);
+        fillRect(page, 100, 100, 200, 200, new Color(248, 248, 248));
+
+        ProductBoundingBox bbox = new ProductBoundingBox(0.25, 0.25, 0.5, 0.5);
+        byte[] jpeg = ImageWhitespaceTrimmer.cropRefineToJpeg(
+            page, bbox, 0.05, 0.02, 0.9f, ImageWhitespaceTrimmer.TrimOptions.conservative());
+        BufferedImage result = decode(jpeg);
+
+        // 外扩裁剪框 240px，每边最多收紧 25%（60px）→ 收紧后 >= 120px，加留白后 >= 124px
+        assertThat(result.getWidth()).isGreaterThanOrEqualTo(120);
+        assertThat(result.getHeight()).isGreaterThanOrEqualTo(120);
+    }
+
     private BufferedImage createPage(int width, int height, Color bg) {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();

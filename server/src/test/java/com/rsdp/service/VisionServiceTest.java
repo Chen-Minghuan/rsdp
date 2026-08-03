@@ -215,6 +215,70 @@ class VisionServiceTest {
     }
 
     @Test
+    void detectProductSubject_shouldParseXyxyPermilleBbox() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": [100, 50, 900, 950]}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNotNull();
+        assertThat(bbox.getX()).isEqualTo(0.1);
+        assertThat(bbox.getY()).isEqualTo(0.05);
+        assertThat(bbox.getWidth()).isEqualTo(0.8);
+        assertThat(bbox.getHeight()).isEqualTo(0.9);
+    }
+
+    @Test
+    void detectProductSubject_shouldReturnNullOnInvalidXyxy() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": [900, 900, 100, 100]}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNull();
+    }
+
+    @Test
+    void isProductComplete_shouldReturnTrue() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"complete\": true}"))));
+
+        assertThat(visionService.isProductComplete(new ByteArrayInputStream("fake-image".getBytes()))).isTrue();
+    }
+
+    @Test
+    void isProductComplete_shouldReturnFalse() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"complete\": false}"))));
+
+        assertThat(visionService.isProductComplete(new ByteArrayInputStream("fake-image".getBytes()))).isFalse();
+    }
+
+    @Test
+    void isProductComplete_shouldReturnTrueOnInvalidResponse() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("这不是 JSON"))));
+
+        // 校验失败时默认视为完整，不误杀裁剪结果
+        assertThat(visionService.isProductComplete(new ByteArrayInputStream("fake-image".getBytes()))).isTrue();
+    }
+
+    @Test
     void detectPageRegions_shouldClosePageStreams() throws Exception {
         stubFor(post(urlEqualTo("/chat/completions"))
             .willReturn(aResponse()

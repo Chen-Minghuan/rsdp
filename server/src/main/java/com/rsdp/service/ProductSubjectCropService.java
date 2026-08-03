@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -47,15 +48,22 @@ public class ProductSubjectCropService {
     private boolean keepOriginal;
 
     /** bbox 面积下限（相对全图），低于则视为误检不裁剪 */
-    @Value("${rsdp.ai.subject-crop.min-area-ratio:0.15}")
+    @Value("${rsdp.ai.subject-crop.min-area-ratio:0.10}")
     private double minAreaRatio;
 
     /** bbox 面积上限（相对全图），高于则说明图本身已是纯产品图，无需裁剪 */
     @Value("${rsdp.ai.subject-crop.max-area-ratio:0.95}")
     private double maxAreaRatio;
 
-    /** 裁剪前外扩比例（与 PDF 导入一致） */
-    private static final double CROP_EXPAND_RATIO = 0.03;
+    /** 裁剪后是否再做一次 AI 完整性校验（不完整时加大框重裁或回退原图） */
+    @Value("${rsdp.ai.subject-crop.verify-crop:true}")
+    private boolean verifyCrop;
+
+    /** 裁剪前外扩比例（相对全图宽高；录入主图比 PDF 导入更保守，防止切断部件） */
+    private static final double CROP_EXPAND_RATIO = 0.05;
+
+    /** 完整性校验不通过时的加大外扩比例 */
+    private static final double RETRY_EXPAND_RATIO = 0.10;
 
     /** 收紧后留白比例（与 PDF 导入一致） */
     private static final double CROP_PAD_RATIO = 0.02;
@@ -105,8 +113,20 @@ public class ProductSubjectCropService {
                 return Optional.empty();
             }
 
-            byte[] cropped = ImageWhitespaceTrimmer.cropRefineToJpeg(
-                image, bbox, CROP_EXPAND_RATIO, CROP_PAD_RATIO, OUTPUT_QUALITY);
+            byte[] cropped = cropWithTrim(image, bbox, CROP_EXPAND_RATIO);
+
+            // AI 完整性校验：裁剪结果有部件被切断时，加大外扩框重裁一次；仍不完整则回退原图
+            if (verifyCrop && !visionService.isProductComplete(new ByteArrayInputStream(cropped))) {
+                log.info("裁剪图完整性校验未通过，加大外扩框重裁，bbox={}", bbox);
+                byte[] retried = cropWithTrim(image, bbox, RETRY_EXPAND_RATIO);
+                if (visionService.isProductComplete(new ByteArrayInputStream(retried))) {
+                    cropped = retried;
+                } else {
+                    log.warn("加大框重裁后产品仍不完整，回退原图，bbox={}", bbox);
+                    return Optional.empty();
+                }
+            }
+
             log.info("产品主图裁剪完成，bbox={}，原图 {} 字节 -> 裁剪图 {} 字节",
                 bbox, imageBytes.length, cropped.length);
             return Optional.of(cropped);
@@ -114,6 +134,13 @@ public class ProductSubjectCropService {
             log.warn("产品主体裁剪失败，回退原图：{}", e.getMessage());
             return Optional.empty();
         }
+    }
+
+    /** 按指定外扩比例裁剪并保守精修（防细腿/浅色产品误切）。 */
+    private byte[] cropWithTrim(BufferedImage image, ProductBoundingBox bbox, double expandRatio) throws IOException {
+        return ImageWhitespaceTrimmer.cropRefineToJpeg(
+            image, bbox, expandRatio, CROP_PAD_RATIO, OUTPUT_QUALITY,
+            ImageWhitespaceTrimmer.TrimOptions.conservative());
     }
 
     /**

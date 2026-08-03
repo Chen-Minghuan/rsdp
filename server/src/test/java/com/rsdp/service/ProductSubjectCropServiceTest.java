@@ -144,6 +144,37 @@ class ProductSubjectCropServiceTest {
     }
 
     @Test
+    void cropToSubject_shouldRetryWithLargerBoxWhenFirstCropIncomplete() throws Exception {
+        ReflectionTestUtils.setField(cropService, "verifyCrop", true);
+        byte[] imageBytes = buildTestImage();
+        when(visionService.detectProductSubject(any(InputStream.class)))
+            .thenReturn(new ProductBoundingBox(0.25, 0.25, 0.5, 0.5));
+        // 第一次校验不完整（部件被切断），加大框重裁后完整
+        when(visionService.isProductComplete(any(InputStream.class)))
+            .thenReturn(false, true);
+
+        Optional<byte[]> result = cropService.cropToSubject(imageBytes);
+
+        assertThat(result).isPresent();
+        verify(visionService, org.mockito.Mockito.times(2)).isProductComplete(any(InputStream.class));
+    }
+
+    @Test
+    void cropToSubject_shouldFallbackWhenStillIncompleteAfterRetry() throws Exception {
+        ReflectionTestUtils.setField(cropService, "verifyCrop", true);
+        byte[] imageBytes = buildTestImage();
+        when(visionService.detectProductSubject(any(InputStream.class)))
+            .thenReturn(new ProductBoundingBox(0.25, 0.25, 0.5, 0.5));
+        // 加大框重裁后仍不完整 → 回退原图
+        when(visionService.isProductComplete(any(InputStream.class)))
+            .thenReturn(false, false);
+
+        Optional<byte[]> result = cropService.cropToSubject(imageBytes);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
     void cropAndReplacePrimary_shouldStoreCroppedAndKeepOriginal() throws Exception {
         byte[] imageBytes = buildTestImage();
         when(visionService.detectProductSubject(any(InputStream.class)))

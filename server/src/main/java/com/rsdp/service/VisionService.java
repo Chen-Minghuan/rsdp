@@ -395,30 +395,33 @@ public class VisionService {
 
     /**
      * 单图产品主体检测提示词。
-     * 要求 AI 框出图中最主要的家具产品，排除搭配品、装饰、文字等干扰。
+     * 要求 AI 完整包围图中最主要的家具产品（所有部件不可切断），排除搭配品、装饰、文字等干扰。
      */
     private static final String SUBJECT_DETECTION_SYSTEM_PROMPT = """
         你是家具产品图片分析专家。请找出图片中最主要的家具产品（面积最大、视觉主体），
-        输出其相对位置框（bbox）。bbox 的准确度要求极高：必须紧贴产品主体边缘，
-        宁可略大也不可切断产品，但不得包含搭配产品、装饰品、绿植、文字、水印和场景背景。
+        输出其完整包围框（bbox）。bbox 必须完整包含产品的所有部件，
+        宁可多带少量背景边距，也绝不可切断产品的任何部分；
+        但不得包含搭配产品、装饰品、绿植、文字、水印。
         只输出 JSON，不要任何其他文字说明。
         """;
 
     private static final String SUBJECT_DETECTION_USER_PROMPT = """
-        请分析这张图片，找出图中最主要的家具产品，输出它的位置框。
+        请分析这张图片，找出图中最主要的家具产品，输出它的完整包围框。
 
-        bbox 使用相对于图片宽高的比例坐标（0.0 ~ 1.0）：
-        {"x": 左上角 x, "y": 左上角 y, "w": 宽度, "h": 高度}
+        bbox 使用相对于图片宽高的千分比整数坐标（0 ~ 1000）：
+        [x1, y1, x2, y2] = [左上角 x, 左上角 y, 右下角 x, 右下角 y]
 
         bbox 规则（必须严格遵守）：
         - 只框最主要的那个家具产品；图片中有多个产品/搭配品时，只选视觉主体（通常是最大、最居中的那个）
-        - 必须紧贴产品主体边缘，允许略微外扩，但绝不可切断产品的任何部分
-        - 不得包含搭配产品、装饰品、绿植、地毯、文字、水印和纯背景区域
-        - 坐标必须满足 0<=x、0<=y、x+w<=1、y+h<=1
+        - 必须完整包含产品的所有部件：腿、脚、扶手、靠背、装饰性突出物，一个都不能少
+        - 常见错误（严禁出现）：切断椅腿/沙发脚、截掉靠背顶部、漏掉扶手、把产品的任何部件框在框外
+        - 框内允许带少量背景边距，宁可略大也绝不可切断产品的任何部分
+        - 不得包含搭配产品、装饰品、绿植、地毯、文字、水印
+        - 坐标必须满足 0<=x1<x2<=1000、0<=y1<y2<=1000
         - 如果图中没有明确的家具产品主体，bbox 输出 null
 
         输出格式：
-        {"bbox": {"x": 0.1, "y": 0.05, "w": 0.8, "h": 0.9}}
+        {"bbox": [120, 50, 880, 950]}
         只输出 JSON，不要任何其他文字说明。
         """;
 
@@ -464,7 +467,10 @@ public class VisionService {
     }
 
     /**
-     * 解析产品主体检测结果。AI 输出不规范时返回 null，由调用方回退原图。
+     * 解析产品主体检测结果，兼容两种格式：
+     * 千分比 xyxy 数组 {@code [x1,y1,x2,y2]}（0~1000，新提示词格式）与
+     * 浮点 xywh 对象 {@code {"x","y","w","h"}}（0.0~1.0，旧格式）。
+     * AI 输出不规范时返回 null，由调用方回退原图。
      */
     @SuppressWarnings("unchecked")
     private ProductBoundingBox parseSubjectBbox(String json) {
@@ -473,10 +479,98 @@ public class VisionService {
         }
         try {
             Map<String, Object> map = objectMapper.readValue(json, Map.class);
-            return parseBoundingBox(map.get("bbox"));
+            Object bbox = map.get("bbox");
+            if (bbox instanceof List<?> xyxy) {
+                return parseXyxyBbox(xyxy);
+            }
+            return parseBoundingBox(bbox);
         } catch (Exception e) {
             log.warn("解析产品主体检测结果失败，json={}", json, e);
             return null;
+        }
+    }
+
+    /** 解析千分比 xyxy 数组坐标并转为比例 xywh。 */
+    private ProductBoundingBox parseXyxyBbox(List<?> xyxy) {
+        if (xyxy.size() != 4) {
+            return null;
+        }
+        try {
+            double x1 = parseDoubleValue(xyxy.get(0));
+            double y1 = parseDoubleValue(xyxy.get(1));
+            double x2 = parseDoubleValue(xyxy.get(2));
+            double y2 = parseDoubleValue(xyxy.get(3));
+            // 千分比整数坐标（0~1000）归一化；若模型直接给了 0~1 浮点则直接使用
+            double scale = Math.max(Math.max(x1, y1), Math.max(x2, y2)) > 1.5 ? 1000.0 : 1.0;
+            ProductBoundingBox bbox = new ProductBoundingBox(
+                x1 / scale, y1 / scale, (x2 - x1) / scale, (y2 - y1) / scale);
+            return bbox.isValid() ? bbox : null;
+        } catch (Exception e) {
+            log.warn("解析 xyxy bbox 失败：{}", xyxy, e);
+            return null;
+        }
+    }
+
+    /**
+     * 产品完整性校验提示词：判断裁剪图中产品是否有部件被切断。
+     */
+    private static final String COMPLETE_CHECK_SYSTEM_PROMPT = """
+        你是家具产品图片质检专家。请判断图片中的家具产品是否完整。
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    private static final String COMPLETE_CHECK_USER_PROMPT = """
+        请判断这张图片中的家具产品是否完整。
+
+        判定规则：
+        - 只有当产品的部件（腿、脚、扶手、靠背、顶部、边缘）明显被图片边界切断时，才判为不完整
+        - 产品完整、或无法确定时，一律判为完整
+        - 图片中是否包含背景、搭配品不影响完整性判断
+
+        输出格式：
+        {"complete": true}
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    /**
+     * 校验图片中的家具产品是否完整（无明显被切断的部件）。
+     *
+     * <p>用于主图裁剪后的质量校验。AI 调用失败、输出不规范或 Mock 模式时返回 true
+     * （宁可信任裁剪结果，不误杀）。</p>
+     *
+     * @param imageStream 裁剪后的图片流
+     * @return 产品是否完整
+     */
+    @SuppressWarnings("unchecked")
+    public boolean isProductComplete(InputStream imageStream) {
+        try (imageStream) {
+            byte[] imageBytes = imageStream.readAllBytes();
+            if (imageBytes.length == 0 || mockEnabled) {
+                return true;
+            }
+
+            String base64 = Base64.getEncoder().encodeToString(imageBytes);
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", COMPLETE_CHECK_SYSTEM_PROMPT),
+                    OpenAiChatMessage.vision("user", COMPLETE_CHECK_USER_PROMPT, base64)
+                ))
+                .temperature(0.1)
+                .maxTokens(256)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+                .build();
+
+            String json = executeChat(request, "产品完整性校验");
+            Map<String, Object> map = objectMapper.readValue(json, Map.class);
+            Object complete = map.get("complete");
+            if (complete instanceof Boolean b) {
+                return b;
+            }
+            return complete == null || Boolean.parseBoolean(complete.toString());
+        } catch (Exception e) {
+            log.warn("产品完整性校验失败，默认视为完整：{}", e.getMessage());
+            return true;
         }
     }
 
