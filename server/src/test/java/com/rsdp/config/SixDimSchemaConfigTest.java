@@ -34,4 +34,36 @@ class SixDimSchemaConfigTest {
         assertThat(description).contains("B = 台面形态");
         assertThat(description).contains("D = 桌腿/底座");
     }
+
+    @Test
+    void getSchema_shouldReturnDiningTableSchema() {
+        var schema = SixDimSchemaConfig.getSchema("DT");
+        assertThat(schema.categoryName()).isEqualTo("餐桌");
+        assertThat(schema.dims().get("B").label()).isEqualTo("台面形态");
+        assertThat(schema.dims().get("F").label()).isEqualTo("功能/展开方式");
+    }
+
+    @Test
+    void getSchema_shouldReturnBedSchema() {
+        var schema = SixDimSchemaConfig.getSchema("BD");
+        assertThat(schema.categoryName()).isEqualTo("床");
+        assertThat(schema.dims().get("B").label()).isEqualTo("床头");
+        assertThat(schema.dims().get("F").label()).isEqualTo("储物/功能");
+    }
+
+    @Test
+    void getSchema_shouldReturnLampSchema() {
+        var schema = SixDimSchemaConfig.getSchema("LT");
+        assertThat(schema.categoryName()).isEqualTo("灯具");
+        assertThat(schema.dims().get("B").label()).isEqualTo("灯罩/出光");
+        assertThat(schema.dims().get("D").label()).isEqualTo("安装/底座");
+    }
+
+    @Test
+    void buildPromptDescription_shouldContainNewCategoryDimLabels() {
+        String description = SixDimSchemaConfig.buildPromptDescription("BD");
+        assertThat(description).contains("A = 整体造型");
+        assertThat(description).contains("B = 床头");
+        assertThat(description).contains("F = 储物/功能");
+    }
 }

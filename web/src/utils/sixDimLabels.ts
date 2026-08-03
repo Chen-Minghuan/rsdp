@@ -82,6 +82,39 @@ const schemas: Record<string, SixDimSchema> = {
       F: { label: '功能件/软包', description: '抽屉、线槽、升降机构、坐垫软包等功能件' }
     }
   },
+  DT: {
+    categoryName: '餐桌',
+    dims: {
+      A: { label: '造型', description: '餐桌整体俯视轮廓，如长桌、圆桌、方桌、跑道形、岛台一体桌' },
+      B: { label: '台面形态', description: '台面厚度与构造，如平板薄面、厚台面、悬浮台面、转盘台面' },
+      C: { label: '边缘/结构', description: '台面边缘工艺与附属结构，如直边、马肚边、瀑布边、裙边/立水' },
+      D: { label: '桌腿/底座', description: '支撑形态，如四直腿、外八腿、喇叭/郁金香底座、落地箱式' },
+      E: { label: '表面材质', description: '岩板、实木、玻璃、大理石等台面/框架材质' },
+      F: { label: '功能/展开方式', description: '固定式、伸缩、折叠、旋转展开、升降、储物等' }
+    }
+  },
+  BD: {
+    categoryName: '床',
+    dims: {
+      A: { label: '整体造型', description: '床体整体形态，如齐边床、内嵌床、地台床、箱体床、上下床' },
+      B: { label: '床头', description: '床头/床屏形态（识别置信度最高维度），如软包大靠包、拉扣床头、平板薄床头、拱形床头' },
+      C: { label: '床尾/床边', description: '床尾屏板与床沿形态，如齐边无床尾、高床尾屏、宽边床沿' },
+      D: { label: '床脚/底座', description: '支脚与底座形态，如实木脚、金属脚、落地无脚、悬浮底座' },
+      E: { label: '表面材质', description: '真皮、布艺、实木、绒布等床体表面材质' },
+      F: { label: '储物/功能', description: '气压上掀储物、床体抽屉、床头功能区、床底灯带等' }
+    }
+  },
+  LT: {
+    categoryName: '灯具',
+    dims: {
+      A: { label: '灯体造型', description: '灯体整体剪影，如球形、长条形、枝形、分子式' },
+      B: { label: '灯罩/出光', description: '灯罩形态与出光方式，如玻璃罩、布艺罩、无罩裸光源' },
+      C: { label: '灯臂/连接', description: '灯体与安装面的连接结构，如吊线吊杆、弧形悬臂、折叠摇臂' },
+      D: { label: '安装/底座', description: '安装方式与底座形态，如吊挂式、吸顶式、落地立式、壁挂式' },
+      E: { label: '表面材质', description: '金属、玻璃、亚克力、藤竹、布艺等灯体材质' },
+      F: { label: '装饰元素', description: '附加装饰构件，如水晶挂饰、流苏穗边、彩色玻璃' }
+    }
+  },
   GENERIC: {
     categoryName: '通用',
     dims: {

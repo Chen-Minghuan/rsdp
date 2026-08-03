@@ -80,6 +80,30 @@ public final class SixDimSchemaConfig {
             "E", new DimDefinition("表面材质", "实木皮、板材、金属、网布、皮革等"),
             "F", new DimDefinition("功能件/软包", "抽屉、线槽、升降机构、坐垫软包等功能件")
         ));
+        register("DT", "餐桌", Map.of(
+            "A", new DimDefinition("造型", "餐桌整体俯视轮廓，如长桌、圆桌、方桌、跑道形、岛台一体桌"),
+            "B", new DimDefinition("台面形态", "台面厚度与构造，如平板薄面、厚台面、悬浮台面、转盘台面"),
+            "C", new DimDefinition("边缘/结构", "台面边缘工艺与附属结构，如直边、马肚边、瀑布边、裙边/立水"),
+            "D", new DimDefinition("桌腿/底座", "支撑形态，如四直腿、外八腿、喇叭/郁金香底座、落地箱式"),
+            "E", new DimDefinition("表面材质", "岩板、实木、玻璃、大理石等台面/框架材质"),
+            "F", new DimDefinition("功能/展开方式", "固定式、伸缩、折叠、旋转展开、升降、储物等")
+        ));
+        register("BD", "床", Map.of(
+            "A", new DimDefinition("整体造型", "床体整体形态，如齐边床、内嵌床、地台床、箱体床、上下床"),
+            "B", new DimDefinition("床头", "床头/床屏形态（识别置信度最高维度），如软包大靠包、拉扣床头、平板薄床头、拱形床头"),
+            "C", new DimDefinition("床尾/床边", "床尾屏板与床沿形态，如齐边无床尾、高床尾屏、宽边床沿"),
+            "D", new DimDefinition("床脚/底座", "支脚与底座形态，如实木脚、金属脚、落地无脚、悬浮底座"),
+            "E", new DimDefinition("表面材质", "真皮、布艺、实木、绒布等床体表面材质"),
+            "F", new DimDefinition("储物/功能", "气压上掀储物、床体抽屉、床头功能区、床底灯带等")
+        ));
+        register("LT", "灯具", Map.of(
+            "A", new DimDefinition("灯体造型", "灯体整体剪影，如球形、长条形、枝形、分子式"),
+            "B", new DimDefinition("灯罩/出光", "灯罩形态与出光方式，如玻璃罩、布艺罩、无罩裸光源"),
+            "C", new DimDefinition("灯臂/连接", "灯体与安装面的连接结构，如吊线吊杆、弧形悬臂、折叠摇臂"),
+            "D", new DimDefinition("安装/底座", "安装方式与底座形态，如吊挂式、吸顶式、落地立式、壁挂式"),
+            "E", new DimDefinition("表面材质", "金属、玻璃、亚克力、藤竹、布艺等灯体材质"),
+            "F", new DimDefinition("装饰元素", "附加装饰构件，如水晶挂饰、流苏穗边、彩色玻璃")
+        ));
         register("GENERIC", "通用", Map.of(
             "A", new DimDefinition("整体造型/轮廓", "产品整体外观形态"),
             "B", new DimDefinition("上部/背部特征", "座椅靠背、柜类背板/门板、桌类台面"),
