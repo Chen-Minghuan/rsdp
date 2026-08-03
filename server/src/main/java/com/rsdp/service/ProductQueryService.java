@@ -163,6 +163,11 @@ public class ProductQueryService {
                 wrapper.apply("1 = 0");
             }
         }
+        applySixDimFilter(wrapper, "A", request.getDimA());
+        applySixDimFilter(wrapper, "B", request.getDimB());
+        applySixDimFilter(wrapper, "C", request.getDimC());
+        applySixDimFilter(wrapper, "D", request.getDimD());
+        applySixDimFilter(wrapper, "F", request.getDimF());
         if (StringUtils.hasText(request.getStatus())) {
             wrapper.eq("status", request.getStatus());
         }
@@ -202,6 +207,28 @@ public class ProductQueryService {
         }
 
         return wrapper;
+    }
+
+    /**
+     * 六维标签筛选：six_dim_tags JSONB 包含 {"A":"字典码"}，命中 GIN 索引 idx_rspu_six_dim_gin。
+     * 筛选值为带品类前缀的字典码（如 SF-一字型），存量自由文本不匹配属预期。
+     * E 维（表面材质）不枚举，通过材质标签筛选代替，不在此处理。
+     *
+     * @param wrapper 查询构造器
+     * @param dimKey 维度键（A/B/C/D/F）
+     * @param value 字典码筛选值，空则忽略
+     */
+    private void applySixDimFilter(QueryWrapper<RspuMaster> wrapper, String dimKey, String value) {
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+        try {
+            String dimJson = objectMapper.writeValueAsString(Map.of(dimKey, value.trim()));
+            wrapper.apply("six_dim_tags @> {0}::jsonb", dimJson);
+        } catch (Exception e) {
+            log.warn("六维标签 JSON 序列化失败: dim={}, value={}", dimKey, value, e);
+            wrapper.apply("1 = 0");
+        }
     }
 
     /**

@@ -114,6 +114,9 @@ GET    /api/v1/products
        #        rspuCode: string (可选, SPU 业务编码 rspu_code 模糊),
        #        supplierCode: string (可选, 存在该工厂代码 RSKU 报价的产品, 模糊),
        #        createdFrom / createdTo: yyyy-MM-dd (可选, 创建时间范围, 含当日),
+       #        dimA / dimB / dimC / dimD / dimF: string (可选, 六维形态特征筛选,
+       #                 值为带品类前缀的字典码如 SF-一字型, 按 six_dim_tags JSONB
+       #                 包含查询, 命中 GIN 索引; E 维表面材质不枚举不参与筛选),
        #        statusTab: "onSale"|"warehouse"|"soldOut"|"recycled" (可选, 商城状态页签;
        #                 onSale=status=active, warehouse=status!=active,
        #                 soldOut=恒空, recycled=回收站即已软删除记录)

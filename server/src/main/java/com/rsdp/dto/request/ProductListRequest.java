@@ -38,6 +38,13 @@ public class ProductListRequest {
     /** 创建时间止（yyyy-MM-dd，含当日）。 */
     private String createdTo;
 
+    /** 六维标签筛选（值为带品类前缀的字典码，如 SF-一字型；E 维为自由材质文本不枚举，不参与筛选）。 */
+    private String dimA;
+    private String dimB;
+    private String dimC;
+    private String dimD;
+    private String dimF;
+
     /**
      * 商城状态页签：onSale=出售中(status=active)、warehouse=仓库中(status!=active)、
      * soldOut=已售罄（当前无业务概念，恒为空）、recycled=回收站（已软删除记录）。

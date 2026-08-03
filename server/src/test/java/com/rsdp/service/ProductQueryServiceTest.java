@@ -274,6 +274,49 @@ class ProductQueryServiceTest {
     }
 
     @Test
+    void listProducts_sixDimFilters_shouldAppendJsonbContainsConditions() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setDimA("SF-一字型");
+        request.setDimC("SF-宽厚扶手");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        // A、C 两维各生成一条 JSONB 包含条件（命中 GIN 索引），未传维度不追加
+        assertThat(sqlSegment).contains("six_dim_tags @>");
+        assertThat(sqlSegment.split("six_dim_tags @>", -1)).hasSize(3);
+    }
+
+    @Test
+    void listProducts_withoutSixDimFilters_shouldNotAppendSixDimCondition() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).doesNotContain("six_dim_tags");
+    }
+
+    @Test
     void getProductDetail_shouldReturnDetail() {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");

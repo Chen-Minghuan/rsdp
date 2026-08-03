@@ -71,6 +71,12 @@ export interface ProductListParams {
   createdFrom?: string
   /** 创建时间止（yyyy-MM-dd） */
   createdTo?: string
+  /** 六维标签筛选（带品类前缀的字典码，如 SF-一字型；E 维不枚举不参与筛选） */
+  dimA?: string
+  dimB?: string
+  dimC?: string
+  dimD?: string
+  dimF?: string
   /** 状态页签 */
   statusTab?: SpuStatusTab
 }
