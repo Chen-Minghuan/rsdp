@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
     sort_order INTEGER,
     status VARCHAR(16) DEFAULT 'active',
     aliases TEXT,                            -- 同义词别名 JSON 数组（V22）
+    remark TEXT,                             -- 备注；六维字典存视觉判别要点（V24）
     PRIMARY KEY (dict_type, dict_code)
 );
 

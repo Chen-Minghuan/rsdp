@@ -43,4 +43,11 @@ public class CategoryDict {
      */
     @TableField("aliases")
     private String aliases;
+
+    /**
+     * 备注说明。六维字典（six_dim_*）存视觉判别要点（一句话锚点），
+     * 供 AI prompt 注入与识别后归一使用（V24）。
+     */
+    @TableField("remark")
+    private String remark;
 }
