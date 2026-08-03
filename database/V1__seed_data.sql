@@ -9,7 +9,10 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'TB', '茶几', 3),
 ('category', 'FC', '柜类', 4),
 ('category', 'BS', '吧椅', 5),
-('category', 'OF', '办公家具', 6)
+('category', 'OF', '办公家具', 6),
+('category', 'DT', '餐桌', 7),
+('category', 'BD', '床', 8),
+('category', 'LT', '灯具', 9)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 家装风格（扩展为 11 个独立风格，保留 2 位编码）
@@ -105,18 +108,18 @@ UPDATE category_dict SET aliases = '["超纤","超纤革"]' WHERE dict_type='fab
 UPDATE category_dict SET aliases = '["PU皮","PVC革","人造革","仿皮","西皮"]' WHERE dict_type='fabric' AND dict_code='PU';
 UPDATE category_dict SET aliases = '["网眼布","透气网布"]' WHERE dict_type='fabric' AND dict_code='WB';
 
--- 六维标签 - 休闲椅 A 维度（轮廓）
+-- 六维标签 - 休闲椅 A 维度（轮廓）（V24：dict_code = {品类码}-{中文名}）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, parent_code, sort_order) VALUES
-('six_dim_A', 'A字架形', 'A字架形', 'FS', 1),
-('six_dim_A', '蛋形', '蛋形', 'FS', 2),
-('six_dim_A', '方盒形', '方盒形', 'FS', 3)
+('six_dim_A', 'FS-外露骨架形', '外露骨架形', 'FS', 1),
+('six_dim_A', 'FS-蛋形/球形', '蛋形/球形', 'FS', 2),
+('six_dim_A', 'FS-方盒形', '方盒形', 'FS', 3)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 六维标签 - 休闲椅 B 维度（靠背）
+-- 六维标签 - 休闲椅 B 维度（靠背）（V24：dict_code = {品类码}-{中文名}）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, parent_code, sort_order) VALUES
-('six_dim_B', '编织镂空', '编织镂空', 'FS', 1),
-('six_dim_B', '高背包裹', '高背包裹', 'FS', 2),
-('six_dim_B', '无靠背', '无靠背', 'FS', 3)
+('six_dim_B', 'FS-编织镂空靠背', '编织镂空靠背', 'FS', 1),
+('six_dim_B', 'FS-高背包裹', '高背包裹', 'FS', 2),
+('six_dim_B', 'FS-无靠背', '无靠背', 'FS', 3)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 工厂等级
