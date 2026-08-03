@@ -393,6 +393,93 @@ public class VisionService {
         }
     }
 
+    /**
+     * 单图产品主体检测提示词。
+     * 要求 AI 框出图中最主要的家具产品，排除搭配品、装饰、文字等干扰。
+     */
+    private static final String SUBJECT_DETECTION_SYSTEM_PROMPT = """
+        你是家具产品图片分析专家。请找出图片中最主要的家具产品（面积最大、视觉主体），
+        输出其相对位置框（bbox）。bbox 的准确度要求极高：必须紧贴产品主体边缘，
+        宁可略大也不可切断产品，但不得包含搭配产品、装饰品、绿植、文字、水印和场景背景。
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    private static final String SUBJECT_DETECTION_USER_PROMPT = """
+        请分析这张图片，找出图中最主要的家具产品，输出它的位置框。
+
+        bbox 使用相对于图片宽高的比例坐标（0.0 ~ 1.0）：
+        {"x": 左上角 x, "y": 左上角 y, "w": 宽度, "h": 高度}
+
+        bbox 规则（必须严格遵守）：
+        - 只框最主要的那个家具产品；图片中有多个产品/搭配品时，只选视觉主体（通常是最大、最居中的那个）
+        - 必须紧贴产品主体边缘，允许略微外扩，但绝不可切断产品的任何部分
+        - 不得包含搭配产品、装饰品、绿植、地毯、文字、水印和纯背景区域
+        - 坐标必须满足 0<=x、0<=y、x+w<=1、y+h<=1
+        - 如果图中没有明确的家具产品主体，bbox 输出 null
+
+        输出格式：
+        {"bbox": {"x": 0.1, "y": 0.05, "w": 0.8, "h": 0.9}}
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    /**
+     * 检测单张图片中的产品主体位置。
+     *
+     * <p>用于录入时自动裁剪主图：AI 框出最主要的家具产品，排除搭配品/装饰/文字。
+     * Mock 模式下直接返回 null（不裁剪）。</p>
+     *
+     * @param imageStream 图片流
+     * @return 产品主体 bbox（比例坐标）；无明确主体时返回 null
+     */
+    public ProductBoundingBox detectProductSubject(InputStream imageStream) {
+        try (imageStream) {
+            byte[] imageBytes = imageStream.readAllBytes();
+            if (imageBytes.length == 0) {
+                throw new ExternalServiceException("图片流为空");
+            }
+
+            if (mockEnabled) {
+                log.info("AI Mock 已启用，跳过产品主体检测");
+                return null;
+            }
+
+            String base64 = Base64.getEncoder().encodeToString(imageBytes);
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", SUBJECT_DETECTION_SYSTEM_PROMPT),
+                    OpenAiChatMessage.vision("user", SUBJECT_DETECTION_USER_PROMPT, base64)
+                ))
+                .temperature(0.2)
+                .maxTokens(1024)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+                .build();
+
+            String json = executeChat(request, "产品主体检测");
+            return parseSubjectBbox(json);
+        } catch (IOException e) {
+            log.error("读取图片流失败", e);
+            throw new ExternalServiceException("读取图片流失败", e);
+        }
+    }
+
+    /**
+     * 解析产品主体检测结果。AI 输出不规范时返回 null，由调用方回退原图。
+     */
+    @SuppressWarnings("unchecked")
+    private ProductBoundingBox parseSubjectBbox(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> map = objectMapper.readValue(json, Map.class);
+            return parseBoundingBox(map.get("bbox"));
+        } catch (Exception e) {
+            log.warn("解析产品主体检测结果失败，json={}", json, e);
+            return null;
+        }
+    }
+
     private List<DocumentProductRegion> parsePageRegions(String json, int expectedSize) {
         if (json == null || json.isBlank()) {
             throw new ExternalServiceException("AI 页面检测返回为空");

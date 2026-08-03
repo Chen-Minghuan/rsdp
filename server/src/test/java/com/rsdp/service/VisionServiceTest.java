@@ -159,6 +159,62 @@ class VisionServiceTest {
     }
 
     @Test
+    void detectProductSubject_shouldParseBbox() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": {\"x\": 0.1, \"y\": 0.05, \"w\": 0.8, \"h\": 0.9}}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNotNull();
+        assertThat(bbox.getX()).isEqualTo(0.1);
+        assertThat(bbox.getY()).isEqualTo(0.05);
+        assertThat(bbox.getWidth()).isEqualTo(0.8);
+        assertThat(bbox.getHeight()).isEqualTo(0.9);
+    }
+
+    @Test
+    void detectProductSubject_shouldReturnNullWhenNoSubject() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": null}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNull();
+    }
+
+    @Test
+    void detectProductSubject_shouldReturnNullOnInvalidJson() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("这不是 JSON"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNull();
+    }
+
+    @Test
+    void detectProductSubject_shouldReturnNullOnInvalidBboxCoords() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": {\"x\": 0.9, \"y\": 0.9, \"w\": 0.5, \"h\": 0.5}}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNull();
+    }
+
+    @Test
     void detectPageRegions_shouldClosePageStreams() throws Exception {
         stubFor(post(urlEqualTo("/chat/completions"))
             .willReturn(aResponse()

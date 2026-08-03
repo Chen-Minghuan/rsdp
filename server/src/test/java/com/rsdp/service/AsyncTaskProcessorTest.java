@@ -65,6 +65,9 @@ class AsyncTaskProcessorTest {
     @Mock
     private RspuVariantService rspuVariantService;
 
+    @Mock
+    private ProductSubjectCropService subjectCropService;
+
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks

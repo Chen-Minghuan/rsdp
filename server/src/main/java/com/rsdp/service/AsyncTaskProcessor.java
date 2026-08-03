@@ -25,6 +25,7 @@ import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import com.rsdp.util.IdGenerator;
 
 /**
@@ -47,6 +48,7 @@ public class AsyncTaskProcessor {
     private final AiRecognitionPersistenceService persistenceService;
     private final StyleMatchingService styleMatchingService;
     private final RspuVariantService rspuVariantService;
+    private final ProductSubjectCropService subjectCropService;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.ai.model}")
@@ -94,6 +96,17 @@ public class AsyncTaskProcessor {
             persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
             return;
+        }
+
+        // 主图智能裁剪：AI 识别产品主体并替换主图，识别失败时回退原图不影响流程。
+        // 命中时后续 AI 识别与向量计算均基于裁剪图，保证以图搜图语义一致。
+        // 文档导入（PDF/PPT）的图片已经过页面级主体裁剪，跳过二次检测。
+        if (!isDocumentImportTask(taskId)) {
+            Optional<byte[]> croppedImage = subjectCropService.cropAndReplacePrimary(
+                imageBytes, rspuId, null, imageId, objectKey);
+            if (croppedImage.isPresent()) {
+                imageBytes = croppedImage.get();
+            }
         }
 
         AiLabels labels;
@@ -153,6 +166,25 @@ public class AsyncTaskProcessor {
      * @param taskId 任务 ID
      * @return 页面级 OCR 结果，无则返回 null
      */
+    /**
+     * 判断任务是否来自文档导入（PDF/PPT）。
+     * 文档导入的图片已经过页面级主体裁剪，无需再做单图主体检测。
+     */
+    private boolean isDocumentImportTask(String taskId) {
+        try {
+            AsyncTask task = asyncTaskMapper.selectById(taskId);
+            if (task == null || !StringUtils.hasText(task.getInputData())) {
+                return false;
+            }
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
+            com.fasterxml.jackson.databind.JsonNode source = root.get("source");
+            return source != null && "document_import".equals(source.asText());
+        } catch (Exception e) {
+            log.warn("解析任务 source 失败，按普通录入处理，taskId={}", taskId, e);
+            return false;
+        }
+    }
+
     private OcrResult extractPageOcr(String taskId) {
         try {
             AsyncTask task = asyncTaskMapper.selectById(taskId);
