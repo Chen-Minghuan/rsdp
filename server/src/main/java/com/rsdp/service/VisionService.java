@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
@@ -154,18 +155,88 @@ public class VisionService {
                 .build();
 
             String json = executeChat(request, "AI 识别");
-            try {
-                return objectMapper.readValue(json, AiLabels.class);
-            } catch (IOException e) {
-                log.error("解析 AI 识别结果失败，json={}", json, e);
-                throw new ExternalServiceException("解析 AI 识别结果失败", e);
-            }
+            return parseLabels(json);
 
         } catch (IOException e) {
             log.error("读取图片流失败", e);
             throw new ExternalServiceException("读取图片流失败", e);
         }
     }
+
+    /**
+     * 解析 AI 返回的 JSON 为识别标签。
+     *
+     * @param json AI 原始返回
+     * @return 识别标签
+     */
+    private AiLabels parseLabels(String json) {
+        try {
+            return objectMapper.readValue(json, AiLabels.class);
+        } catch (IOException e) {
+            log.error("解析 AI 识别结果失败，json={}", json, e);
+            throw new ExternalServiceException("解析 AI 识别结果失败", e);
+        }
+    }
+
+    /**
+     * 识别图片（双图模式）：裁剪图负责形态识别，原图负责 OCR 文字提取。
+     *
+     * <p>主图智能裁剪会把原图中的文字版面（品名/型号/尺寸/价格等）裁掉，
+     * 单用裁剪图识别会导致 OCR 字段全空、产品名回退为品类名。
+     * 双图模式将两张图一并发送，由 prompt 分工：形态看裁剪图、文字看原图。</p>
+     *
+     * @param croppedImageStream 裁剪后的主体图输入流（方法内关闭）
+     * @param originalImageBytes 原始上传图字节（OCR 文字提取依据）；为空时退化为单图识别
+     * @param categoryCode       产品品类码，如 FS/TB/FC；为空时使用通用定义
+     * @return AI 识别标签
+     */
+    public AiLabels recognizeImage(InputStream croppedImageStream, byte[] originalImageBytes, String categoryCode) {
+        try (croppedImageStream) {
+            byte[] croppedBytes = croppedImageStream.readAllBytes();
+            if (croppedBytes.length == 0) {
+                throw new ExternalServiceException("图片流为空");
+            }
+            if (originalImageBytes == null || originalImageBytes.length == 0) {
+                return recognizeImage(new ByteArrayInputStream(croppedBytes), categoryCode);
+            }
+            if (mockEnabled) {
+                log.info("AI 识别 Mock 已启用，返回模拟识别结果");
+                return buildMockLabels();
+            }
+
+            String userPrompt = DUAL_IMAGE_NOTE + buildUserPrompt(categoryCode);
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", SYSTEM_PROMPT),
+                    OpenAiChatMessage.multiVision("user", userPrompt, List.of(
+                        Base64.getEncoder().encodeToString(croppedBytes),
+                        Base64.getEncoder().encodeToString(originalImageBytes)
+                    ))
+                ))
+                .temperature(0.3)
+                .maxTokens(4096)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+                .build();
+
+            String json = executeChat(request, "AI 识别（双图）");
+            return parseLabels(json);
+        } catch (IOException e) {
+            log.error("读取图片流失败", e);
+            throw new ExternalServiceException("读取图片流失败", e);
+        }
+    }
+
+    /**
+     * 双图识别说明（前缀注入用户提示词）：声明两张图的分工，防止 AI 用裁剪图硬猜文字。
+     */
+    private static final String DUAL_IMAGE_NOTE = """
+        本次提供两张图片：第一张是产品主体裁剪图，第二张是原始上传图。
+        - 风格、六维形态、颜色、场景等视觉特征以第一张裁剪图为准；
+        - OCR 文字信息（品名、型号、尺寸、价格、工厂等）优先从第二张原图中提取
+          （裁剪图可能已裁掉文字区域，严禁因裁剪图无文字就判定图上无文字）。
+
+        """;
 
     /**
      * 构造开发/测试环境使用的模拟 AI 识别结果。

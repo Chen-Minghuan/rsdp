@@ -99,13 +99,17 @@ public class AsyncTaskProcessor {
         }
 
         // 主图智能裁剪：AI 识别产品主体并替换主图，识别失败时回退原图不影响流程。
-        // 命中时后续 AI 识别与向量计算均基于裁剪图，保证以图搜图语义一致。
+        // 命中时向量计算基于裁剪图（保证以图搜图语义一致）；
+        // AI 识别走双图模式（裁剪图看形态 + 原图提取 OCR 文字），避免裁剪裁掉品名/尺寸文字。
         // 文档导入（PDF/PPT）的图片已经过页面级主体裁剪，跳过二次检测。
+        byte[] originalImageBytes = imageBytes;
+        boolean subjectCropped = false;
         if (!isDocumentImportTask(taskId)) {
             Optional<byte[]> croppedImage = subjectCropService.cropAndReplacePrimary(
                 imageBytes, rspuId, null, imageId, objectKey);
             if (croppedImage.isPresent()) {
                 imageBytes = croppedImage.get();
+                subjectCropped = true;
             }
         }
 
@@ -115,7 +119,9 @@ public class AsyncTaskProcessor {
         boolean successSaved = false;
         try (InputStream imageStream = new ByteArrayInputStream(imageBytes)) {
             long aiStart = System.currentTimeMillis();
-            labels = visionService.recognizeImage(imageStream, categoryCode);
+            labels = subjectCropped
+                ? visionService.recognizeImage(imageStream, originalImageBytes, categoryCode)
+                : visionService.recognizeImage(imageStream, categoryCode);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
             // 文档导入时，页面级检测提取的产品旁说明文字合并进 OCR（裁剪图不含这些文字）

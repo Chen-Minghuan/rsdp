@@ -161,6 +161,46 @@ class VisionServiceTest {
     }
 
     @Test
+    void recognizeImage_dualImage_shouldSendTwoImagesWithRoleNote() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"style\":\"中古风\",\"ocr\":{\"productName\":\"昌迪加尔餐椅\"}}"))));
+
+        AiLabels labels = visionService.recognizeImage(
+            new ByteArrayInputStream("cropped-image".getBytes()),
+            "original-image".getBytes(),
+            "FS");
+
+        assertThat(labels.getOcr().getProductName()).isEqualTo("昌迪加尔餐椅");
+        // 双图模式：content 前两段为图片（裁剪图 + 原图），末段文本含分工说明
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[0].type", equalTo("image_url")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[1].type", equalTo("image_url")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[2].type", equalTo("text")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[2].text", containing("原始上传图"))));
+    }
+
+    @Test
+    void recognizeImage_dualImageWithoutOriginal_shouldFallBackToSingleImage() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"style\":\"中古风\"}"))));
+
+        visionService.recognizeImage(
+            new ByteArrayInputStream("fake-image".getBytes()), null, "FS");
+
+        // 无原图时退化为单图：content 仅 1 图 1 文
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[0].type", equalTo("image_url")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[1].type", equalTo("text"))));
+    }
+
+    @Test
     void recognizeImage_shouldThrowParseErrorWhenAiReturnsInvalidJson() throws Exception {
         stubFor(post(urlEqualTo("/chat/completions"))
             .willReturn(aResponse()
