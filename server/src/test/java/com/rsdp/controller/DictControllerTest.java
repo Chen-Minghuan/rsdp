@@ -1,11 +1,13 @@
 package com.rsdp.controller;
 
 import com.rsdp.dto.request.DictCreateRequest;
+import com.rsdp.dto.response.SixDimSchemaResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.DictService;
+import com.rsdp.service.SixDimSchemaService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,6 +47,9 @@ class DictControllerTest {
 
     @MockBean
     private DictService dictService;
+
+    @MockBean
+    private SixDimSchemaService sixDimSchemaService;
 
     @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
@@ -197,6 +202,58 @@ class DictControllerTest {
         mockMvc.perform(patch("/api/v1/dicts/fabric/WB/status")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"status\":\"deleted\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400));
+    }
+
+    // ---------- 六维标签维度定义（V25） ----------
+
+    private SixDimSchemaResponse sfSchema() {
+        java.util.Map<String, SixDimSchemaResponse.DimDefinition> dims = new java.util.LinkedHashMap<>();
+        dims.put("A", new SixDimSchemaResponse.DimDefinition("轮廓形态", "整体造型"));
+        dims.put("C", new SixDimSchemaResponse.DimDefinition("扶手特征", "扶手形态"));
+        return new SixDimSchemaResponse("SF", "沙发", dims);
+    }
+
+    @Test
+    void getSixDimSchema_withCategoryCode_shouldReturnSingleSchema() throws Exception {
+        when(sixDimSchemaService.getSchema("SF")).thenReturn(sfSchema());
+
+        mockMvc.perform(get("/api/v1/dicts/six-dim-schema").param("categoryCode", "SF"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.categoryCode").value("SF"))
+            .andExpect(jsonPath("$.data.dims.A.label").value("轮廓形态"));
+    }
+
+    @Test
+    void getSixDimSchema_withoutCategoryCode_shouldReturnAllSchemas() throws Exception {
+        when(sixDimSchemaService.listAllSchemas()).thenReturn(List.of(sfSchema()));
+
+        mockMvc.perform(get("/api/v1/dicts/six-dim-schema"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data[0].categoryCode").value("SF"));
+    }
+
+    @Test
+    void updateSixDimSchema_shouldReturnUpdatedSchema() throws Exception {
+        when(sixDimSchemaService.updateDim(eq("SF"), eq("C"), eq("扶手形态特征"), eq("新说明")))
+            .thenReturn(sfSchema());
+
+        mockMvc.perform(put("/api/v1/dicts/six-dim-schema/sf/c")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"label\":\"扶手形态特征\",\"description\":\"新说明\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.categoryCode").value("SF"));
+    }
+
+    @Test
+    void updateSixDimSchema_blankLabel_shouldReturnValidationError() throws Exception {
+        mockMvc.perform(put("/api/v1/dicts/six-dim-schema/SF/C")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"label\":\"\",\"description\":\"新说明\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(400));
     }

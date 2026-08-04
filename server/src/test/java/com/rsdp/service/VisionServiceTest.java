@@ -26,6 +26,7 @@ class VisionServiceTest {
     private WireMockServer wireMockServer;
     private VisionService visionService;
     private DictService dictService;
+    private SixDimSchemaService sixDimSchemaService;
 
     @BeforeEach
     void setUp() {
@@ -45,7 +46,24 @@ class VisionServiceTest {
         stubDictFor("scene", List.of("客厅", "书房"));
         stubDictFor("material", List.of("实木", "布艺"));
 
-        visionService = new VisionService(restClient, new ObjectMapper(), dictService);
+        // 六维维度定义（P4 配置化后改为服务注入）：固定返回 A-F 标签定义
+        sixDimSchemaService = mock(SixDimSchemaService.class);
+        when(sixDimSchemaService.buildPromptDescription(any()))
+            .thenReturn("本产品的六维标签定义如下（请严格按 A-F 输出，键名不变）：\n");
+        when(sixDimSchemaService.getSchema(any())).thenReturn(schemaWithLabels());
+
+        visionService = new VisionService(restClient, new ObjectMapper(), dictService, sixDimSchemaService);
+    }
+
+    private com.rsdp.dto.response.SixDimSchemaResponse schemaWithLabels() {
+        java.util.Map<String, com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition> dims = new java.util.LinkedHashMap<>();
+        dims.put("A", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("轮廓形态", ""));
+        dims.put("B", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("靠背/背部特征", ""));
+        dims.put("C", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("扶手特征", ""));
+        dims.put("D", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("腿部/底座特征", ""));
+        dims.put("E", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("表面材质", ""));
+        dims.put("F", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("软包填充形态", ""));
+        return new com.rsdp.dto.response.SixDimSchemaResponse("SF", "沙发", dims);
     }
 
     private void stubDictFor(String dictType, List<String> names) {

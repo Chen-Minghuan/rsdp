@@ -542,6 +542,20 @@ PATCH  /api/v1/dicts/{dictType}/{dictCode}/status   # 权限 dict:update（V23 �
        # 启停用字典项。停用后不再进入 AI 枚举注入与前端下拉，
        # 历史数据的名称解析（resolveNameByCode）不受影响
        # Request:  { status: "active" | "disabled" }
+
+GET    /api/v1/dicts/six-dim-schema                 # 六维标签维度定义（V25 新增，登录可读）
+       # Query: categoryCode: string (可选; 不传返回全部品类定义列表,
+       #        传则返回该品类定义, 未知品类回退 GENERIC)
+       # Response: { categoryCode, categoryName,
+       #             dims: { "A": { label, description }, ..., "F": {...} } }
+       #        或不传 categoryCode 时为上结构的数组
+       # 说明: 前端六维展示/筛选/编辑的运行时数据源（sixDimLabels.ts 带缓存拉取），
+       #       数据落 six_dim_schema 表，替代原前后端静态双写
+
+PUT    /api/v1/dicts/six-dim-schema/{categoryCode}/{dimKey}   # 权限 dict:update（V25 新增）
+       # 更新六维维度定义（字典管理中心"维度定义"维护入口）
+       # Request:  { label: string (必填, ≤64), description: string (可选, ≤255) }
+       # Response: 更新后的该品类六维定义（结构同 GET 单品类响应）
 ```
 
 ### 报价单

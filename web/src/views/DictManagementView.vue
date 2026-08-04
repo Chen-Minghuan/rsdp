@@ -13,7 +13,8 @@ import {
   type DataTableColumns, type FormInst, type FormRules
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
-import { createDict, listAllDicts, listDicts, listDictTypeSummary, updateDict, updateDictStatus } from '@/api/dict'
+import { createDict, listAllDicts, listDicts, listDictTypeSummary, listSixDimSchemas, updateDict, updateDictStatus, updateSixDimSchemaDim } from '@/api/dict'
+import { refreshSixDimSchema } from '@/utils/sixDimLabels'
 import { useUserStore } from '@/stores/user'
 import { DICT_TYPE_GROUPS, PERMISSIONS, type DictTypeGroup, type DictTypeMeta } from '@/utils/constants'
 import type { DictItem, DictTypeSummary } from '@/types/dict'
@@ -94,8 +95,122 @@ const filteredItems = computed(() => {
   )
 })
 
+// ---------- 六维维度定义（six_dim_schema 独立表，非 category_dict，V25） ----------
+
+const SIX_DIM_SCHEMA_TYPE = 'six_dim_schema'
+
 /** 六维标签类型额外展示所属品类（parentCode）列 */
-const isSixDim = computed(() => selectedType.value.startsWith('six_dim_'))
+const isSixDim = computed(() => selectedType.value.startsWith('six_dim_') && selectedType.value !== SIX_DIM_SCHEMA_TYPE)
+
+/** 当前选中类型是否为六维维度定义 */
+const isSixDimSchema = computed(() => selectedType.value === SIX_DIM_SCHEMA_TYPE)
+
+/** 维度定义表格行（品类 × 维度键拍平） */
+interface SixDimSchemaRow {
+  categoryCode: string
+  categoryName: string
+  dimKey: string
+  label: string
+  description: string
+}
+
+const schemaRows = ref<SixDimSchemaRow[]>([])
+
+const filteredSchemaRows = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+  if (!kw) return schemaRows.value
+  return schemaRows.value.filter(
+    (r) =>
+      r.categoryCode.toLowerCase().includes(kw) ||
+      r.categoryName.toLowerCase().includes(kw) ||
+      r.dimKey.toLowerCase().includes(kw) ||
+      r.label.toLowerCase().includes(kw) ||
+      r.description.toLowerCase().includes(kw)
+  )
+})
+
+async function loadSchemas() {
+  const seq = ++loadSeq
+  itemsLoading.value = true
+  try {
+    const list = await listSixDimSchemas()
+    if (seq === loadSeq) {
+      schemaRows.value = list.flatMap((s) =>
+        Object.entries(s.dims).map(([dimKey, def]) => ({
+          categoryCode: s.categoryCode,
+          categoryName: s.categoryName,
+          dimKey,
+          label: def.label,
+          description: def.description
+        }))
+      )
+    }
+  } catch (e) {
+    if (seq === loadSeq) {
+      schemaRows.value = []
+      message.error(e instanceof Error ? e.message : '加载六维维度定义失败')
+    }
+  } finally {
+    if (seq === loadSeq) itemsLoading.value = false
+  }
+}
+
+// ---------- 维度定义编辑弹窗 ----------
+
+const showSchemaModal = ref(false)
+const editingSchemaRow = ref<SixDimSchemaRow | null>(null)
+const schemaSaving = ref(false)
+const schemaForm = reactive({ label: '', description: '' })
+
+function openSchemaEdit(row: SixDimSchemaRow) {
+  editingSchemaRow.value = row
+  schemaForm.label = row.label
+  schemaForm.description = row.description
+  showSchemaModal.value = true
+}
+
+async function handleSchemaSave() {
+  if (!editingSchemaRow.value) return
+  if (!schemaForm.label.trim()) {
+    message.warning('请输入维度标签')
+    return
+  }
+  schemaSaving.value = true
+  const { categoryCode, dimKey } = editingSchemaRow.value
+  try {
+    const updated = await updateSixDimSchemaDim(categoryCode, dimKey, {
+      label: schemaForm.label.trim(),
+      description: schemaForm.description.trim()
+    })
+    // 同步前端六维缓存，详情/筛选/录入页展示即时生效
+    refreshSixDimSchema(updated)
+    message.success(`「${categoryCode} · ${dimKey}」维度定义已更新`)
+    showSchemaModal.value = false
+    await loadSchemas()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    schemaSaving.value = false
+  }
+}
+
+const schemaColumns = computed<DataTableColumns<SixDimSchemaRow>>(() => {
+  const cols: DataTableColumns<SixDimSchemaRow> = [
+    { title: '品类', key: 'categoryName', width: 130, render: (row) => `${row.categoryName}（${row.categoryCode}）` },
+    { title: '维度', key: 'dimKey', width: 70 },
+    { title: '维度标签', key: 'label', width: 160 },
+    { title: '维度说明（AI prompt 与前端展示）', key: 'description', minWidth: 260 }
+  ]
+  if (canEditDict.value) {
+    cols.push({
+      title: '操作',
+      key: 'actions',
+      width: 90,
+      render: (row) => h(NButton, { size: 'small', quaternary: true, onClick: () => openSchemaEdit(row) }, () => '编辑')
+    })
+  }
+  return cols
+})
 
 /** 品类码 → 品类中文名映射（six_dim 所属品类列与新增表单使用） */
 const categoryNameMap = ref<Map<string, string>>(new Map())
@@ -327,7 +442,12 @@ function selectType(dictType: string) {
 
 watch(selectedType, (dictType) => {
   keyword.value = ''
-  if (dictType) loadItems(dictType)
+  if (!dictType) return
+  if (dictType === SIX_DIM_SCHEMA_TYPE) {
+    loadSchemas()
+  } else {
+    loadItems(dictType)
+  }
 })
 
 async function loadItems(dictType: string) {
@@ -374,7 +494,9 @@ function rowClassName(row: DictItem): string {
                 <n-tag v-if="meta.readonly" size="small" :bordered="false" class="dict-readonly-tag">
                   🔒 只读
                 </n-tag>
-                <span class="dict-type-count">{{ summaryCountMap.get(meta.dictType) ?? 0 }}</span>
+                <span v-if="meta.dictType !== 'six_dim_schema'" class="dict-type-count">
+                  {{ summaryCountMap.get(meta.dictType) ?? 0 }}
+                </span>
               </div>
             </div>
           </div>
@@ -386,12 +508,12 @@ function rowClassName(row: DictItem): string {
           <n-input
             v-model:value="keyword"
             clearable
-            placeholder="搜索编码 / 中文名 / 英文名 / 别名"
+            :placeholder="isSixDimSchema ? '搜索品类 / 维度 / 标签 / 说明' : '搜索编码 / 中文名 / 英文名 / 别名'"
             class="dict-search"
           />
-          <span class="dict-count">共 {{ filteredItems.length }} 条</span>
+          <span class="dict-count">共 {{ isSixDimSchema ? filteredSchemaRows.length : filteredItems.length }} 条</span>
           <n-button
-            v-if="canMutateSelected"
+            v-if="canMutateSelected && !isSixDimSchema"
             type="primary"
             size="small"
             class="dict-create-btn"
@@ -404,9 +526,20 @@ function rowClassName(row: DictItem): string {
         <n-alert v-if="selectedMeta?.readonly" type="info" :bordered="false" class="dict-readonly-alert">
           {{ READONLY_TIP }}
         </n-alert>
+        <n-alert v-else-if="isSixDimSchema" type="info" :bordered="false" class="dict-readonly-alert">
+          维度定义控制 AI 六维识别 prompt 与前端展示文案；新增品类定义请通过数据脚本维护
+        </n-alert>
 
         <n-spin :show="itemsLoading">
           <n-data-table
+            v-if="isSixDimSchema"
+            :columns="schemaColumns"
+            :data="filteredSchemaRows"
+            :pagination="false"
+            size="small"
+          />
+          <n-data-table
+            v-else
             :columns="columns"
             :data="filteredItems"
             :row-class-name="rowClassName"
@@ -470,6 +603,33 @@ function rowClassName(row: DictItem): string {
         <n-space justify="end">
           <n-button @click="showEditModal = false">取消</n-button>
           <n-button type="primary" :loading="saving" @click="handleSave">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showSchemaModal"
+      preset="card"
+      :title="`编辑维度定义：${editingSchemaRow?.categoryName ?? ''}（${editingSchemaRow?.categoryCode ?? ''}）· ${editingSchemaRow?.dimKey ?? ''} 维`"
+      style="width: 460px;"
+    >
+      <n-form label-placement="left" label-width="80">
+        <n-form-item label="维度标签" required>
+          <n-input v-model:value="schemaForm.label" maxlength="64" placeholder="如：轮廓形态" />
+        </n-form-item>
+        <n-form-item label="维度说明">
+          <n-input
+            v-model:value="schemaForm.description"
+            type="textarea"
+            maxlength="255"
+            placeholder="取值范围提示，将进入 AI prompt 与前端展示"
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showSchemaModal = false">取消</n-button>
+          <n-button type="primary" :loading="schemaSaving" @click="handleSchemaSave">保存</n-button>
         </n-space>
       </template>
     </n-modal>

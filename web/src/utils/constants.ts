@@ -130,6 +130,7 @@ export const DICT_TYPE_GROUPS: DictTypeGroup[] = [
     key: 'six-dim',
     label: '六维标签',
     types: [
+      { dictType: 'six_dim_schema', label: '维度定义' },
       { dictType: 'six_dim_A', label: '六维-A' },
       { dictType: 'six_dim_B', label: '六维-B' },
       { dictType: 'six_dim_C', label: '六维-C' },

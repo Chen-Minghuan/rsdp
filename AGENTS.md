@@ -287,6 +287,8 @@ make clean
   - `V21__rspu_product_name.sql`：RSPU 商品名称（rspu_master.product_name，产品库列表展示）
   - `V22__fabric_tags_and_dict_aliases.sql`：面料标签（rspu_master.fabric_tags + fabric 字典）+ 字典别名机制（category_dict.aliases，AI 识别同义词归一）
   - `V23__dict_update_permission.sql`：字典管理权限（dict:update，授予 ADMIN/EDITOR）
+  - `V24__six_dim_dict_seed.sql`：六维字典全品类枚举种子 427 条（9 品类 × A/B/C/D/F，含别名与 remark 判别要点）+ category 补种 DT/BD/LT + category_dict 新增 remark 列（生成器 scripts/generate_six_dim_dict_seed.js）
+  - `V25__six_dim_schema.sql`：六维维度定义配置化（six_dim_schema 表 + 10 套维度定义种子，替代前后端双写）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

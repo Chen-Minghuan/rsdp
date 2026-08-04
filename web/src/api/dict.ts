@@ -1,5 +1,5 @@
 import { apiClient, type ApiResult } from './client'
-import type { DictItem, DictTypeSummary } from '@/types/dict'
+import type { DictItem, DictTypeSummary, SixDimSchemaData } from '@/types/dict'
 import type { ApiOptions } from './product'
 
 export interface DictCreatePayload {
@@ -86,5 +86,43 @@ export async function listAllDicts(dictType: string, options?: ApiOptions): Prom
     params: { all: true },
     signal: options?.signal
   })
+  return result.data
+}
+
+/**
+ * 查询指定品类的六维标签维度定义（未知品类后端回退 GENERIC）。
+ */
+export async function getSixDimSchema(categoryCode: string, options?: ApiOptions): Promise<SixDimSchemaData> {
+  const { data: result } = await apiClient.get<ApiResult<SixDimSchemaData>>('/v1/dicts/six-dim-schema', {
+    params: { categoryCode },
+    signal: options?.signal
+  })
+  return result.data
+}
+
+/**
+ * 查询全部品类的六维标签维度定义（字典管理中心维护入口数据源）。
+ */
+export async function listSixDimSchemas(options?: ApiOptions): Promise<SixDimSchemaData[]> {
+  const { data: result } = await apiClient.get<ApiResult<SixDimSchemaData[]>>('/v1/dicts/six-dim-schema', {
+    signal: options?.signal
+  })
+  return result.data
+}
+
+/**
+ * 更新某品类某维度的标签与说明（需 dict:update 权限）。
+ */
+export async function updateSixDimSchemaDim(
+  categoryCode: string,
+  dimKey: string,
+  payload: { label: string; description?: string },
+  options?: ApiOptions
+): Promise<SixDimSchemaData> {
+  const { data: result } = await apiClient.put<ApiResult<SixDimSchemaData>>(
+    `/v1/dicts/six-dim-schema/${categoryCode}/${dimKey}`,
+    payload,
+    { signal: options?.signal }
+  )
   return result.data
 }

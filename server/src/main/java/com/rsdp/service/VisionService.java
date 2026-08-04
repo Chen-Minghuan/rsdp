@@ -3,7 +3,6 @@ package com.rsdp.service;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rsdp.config.SixDimSchemaConfig;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.Dimensions;
 import com.rsdp.dto.DocumentProductRegion;
@@ -37,6 +36,7 @@ public class VisionService {
     private final RestClient aiRestClient;
     private final ObjectMapper objectMapper;
     private final DictService dictService;
+    private final SixDimSchemaService sixDimSchemaService;
 
     @Value("${rsdp.ai.model}")
     private String model;
@@ -233,7 +233,7 @@ public class VisionService {
         String sceneEnum = buildEnumText("scene");
         String materialEnum = buildEnumText("material");
         String fabricEnum = buildEnumText("fabric");
-        String sixDimDescription = SixDimSchemaConfig.buildPromptDescription(categoryCode);
+        String sixDimDescription = sixDimSchemaService.buildPromptDescription(categoryCode);
         String sixDimEnum = buildSixDimEnumPrompt(categoryCode);
         return USER_PROMPT_TEMPLATE.formatted(styleEnum, sixDimDescription + sixDimEnum,
             styleEnum, sceneEnum, materialEnum, fabricEnum);
@@ -255,7 +255,7 @@ public class VisionService {
         if (categoryCode == null || categoryCode.isBlank()) {
             return "";
         }
-        var schema = SixDimSchemaConfig.getSchema(categoryCode);
+        var schema = sixDimSchemaService.getSchema(categoryCode);
         StringBuilder sb = new StringBuilder();
         for (String dim : List.of("A", "B", "C", "D", "F")) {
             List<CategoryDict> entries;
