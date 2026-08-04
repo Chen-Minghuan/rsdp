@@ -517,25 +517,30 @@ GET    /api/v1/dicts/{dictType}?all=false
        # dictType: style, scene, category, material, fabric, size, color,
        #           room_type, quote_confidence, review_status, factory_level, product_status 等
        # all=true 时返回含停用项的全部条目（字典管理中心使用）；默认仅启用项
-       # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases }]
+       # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases, remark }]
+       # remark: 备注说明；六维字典为视觉判别要点（AI prompt 锚点，V24 起透传）
 
 POST   /api/v1/dicts
        # 创建新的字典项（V23 起允许扩展全部业务标签类字典：material/fabric/style/scene/
        # category/color/size/wood_type/six_dim_*/factory_level/factory_source_type/
        # equipment_type/process_type/material_grade/packaging_type/logistics_method；
        # 业务状态枚举不允许界面维护）
-       # Request:  { dictType, dictCode, dictName, dictNameEn?, parentCode? }
-       # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases }
+       # Request:  { dictType, dictCode, dictName, dictNameEn?, parentCode?, remark? }
+       # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases, remark }
        # 注意：
-       # 1. dictCode 仅支持字母和数字，服务端自动归一化为大写。
+       # 1. 普通类型 dictCode 仅支持字母和数字（≤32），服务端自动归一化为大写；
+       #    six_dim_* 类型遵循 V24 编码规范 {品类码}-{中文名}（如 SF-宽厚扶手，≤64），
+       #    品类码前缀归一为大写、中文名部分保持原样。
        # 2. 同一类型下 dictCode 重复会返回 400 "字典项已存在"。
        # 3. 创建成功后自动清除 dicts 缓存，前端可立即看到新选项。
        # 4. parentCode 仅 six_dim_* 类型使用（所属品类码），可选，≤32 字符，
        #    空白自动归一化为 null；创建后不可修改（编辑接口不含 parentCode）。
+       # 5. remark 可选（≤255），六维字典存视觉判别要点（供 AI prompt 锚点与归一）。
 
 PUT    /api/v1/dicts/{dictType}/{dictCode}          # 权限 dict:update（V23 新增）
-       # 编辑字典项：名称/英文名/别名/排序（编码与类型不可改）
-       # Request:  { dictName?, dictNameEn?, aliases?: string[], sortOrder? }（null 字段不修改）
+       # 编辑字典项：名称/英文名/别名/排序/备注（编码与类型不可改）
+       # Request:  { dictName?, dictNameEn?, aliases?: string[], sortOrder?, remark? }
+       #        （null 字段不修改；remark 传空串表示清空）
        # Response: 更新后的字典项
 
 PATCH  /api/v1/dicts/{dictType}/{dictCode}/status   # 权限 dict:update（V23 新增）

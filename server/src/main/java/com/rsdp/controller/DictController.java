@@ -113,12 +113,13 @@ public class DictController {
         dict.setDictName(request.getDictName());
         dict.setDictNameEn(request.getDictNameEn());
         dict.setParentCode(request.getParentCode());
+        dict.setRemark(request.getRemark());
         dictService.createDict(dict);
         return Result.ok(toResponse(dict));
     }
 
     /**
-     * 更新字典项（名称/英文名/别名/排序），编码与类型不可改。
+     * 更新字典项（名称/英文名/别名/排序/备注），编码与类型不可改。
      *
      * @param dictType 字典类型
      * @param dictCode 字典编码
@@ -131,7 +132,7 @@ public class DictController {
         @PathVariable @NotBlank(message = "字典编码不能为空") String dictCode,
         @Valid @RequestBody DictUpdateRequest request) {
         CategoryDict dict = dictService.updateDict(dictType, dictCode, request.getDictName(),
-            request.getDictNameEn(), request.getAliases(), request.getSortOrder());
+            request.getDictNameEn(), request.getAliases(), request.getSortOrder(), request.getRemark());
         return Result.ok(toResponse(dict));
     }
 
@@ -161,6 +162,7 @@ public class DictController {
         response.setSortOrder(dict.getSortOrder());
         response.setStatus(dict.getStatus());
         response.setAliases(dictService.parseAliases(dict.getAliases()));
+        response.setRemark(dict.getRemark());
         return response;
     }
 }

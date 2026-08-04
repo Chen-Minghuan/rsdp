@@ -166,7 +166,7 @@ class DictControllerTest {
         updated.setStatus("active");
         updated.setAliases("[\"真皮\",\"牛皮\"]");
 
-        when(dictService.updateDict(eq("material"), eq("LE"), eq("头层皮革"), any(), any(), any()))
+        when(dictService.updateDict(eq("material"), eq("LE"), eq("头层皮革"), any(), any(), any(), any()))
             .thenReturn(updated);
         when(dictService.parseAliases("[\"真皮\",\"牛皮\"]")).thenReturn(List.of("真皮", "牛皮"));
 

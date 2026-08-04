@@ -93,7 +93,7 @@ public class DictService {
     @CacheEvict(value = CacheConfig.CACHE_NAME_DICTS, allEntries = true)
     public void createDict(CategoryDict dict) {
         String dictType = validateAndNormalizeType(dict.getDictType());
-        String dictCode = validateAndNormalizeCode(dict.getDictCode());
+        String dictCode = validateAndNormalizeCode(dictType, dict.getDictCode());
         String dictName = validateAndNormalizeName(dict.getDictName());
 
         CategoryDict existing = categoryDictMapper.selectOne(
@@ -110,6 +110,7 @@ public class DictService {
         dict.setDictCode(dictCode);
         dict.setDictName(dictName);
         dict.setParentCode(StringUtils.hasText(dict.getParentCode()) ? dict.getParentCode().trim() : null);
+        dict.setRemark(StringUtils.hasText(dict.getRemark()) ? dict.getRemark().trim() : null);
         dict.setSortOrder(resolveNextSortOrder(dictType));
         dict.setStatus(STATUS_ACTIVE);
         categoryDictMapper.insert(dict);
@@ -118,7 +119,7 @@ public class DictService {
     }
 
     /**
-     * 更新字典项（名称/英文名/别名/排序），编码与类型不可改。
+     * 更新字典项（名称/英文名/别名/排序/备注），编码与类型不可改。
      *
      * @param dictType  字典类型
      * @param dictCode  字典编码
@@ -126,11 +127,12 @@ public class DictService {
      * @param dictNameEn 新英文名（null 表示不修改）
      * @param aliases   新别名列表（null 表示不修改，否则整体替换）
      * @param sortOrder 新排序号（null 表示不修改）
+     * @param remark    新备注（null 表示不修改，空串表示清空）
      * @return 更新后的字典项
      */
     @CacheEvict(value = CacheConfig.CACHE_NAME_DICTS, allEntries = true)
     public CategoryDict updateDict(String dictType, String dictCode, String dictName,
-                                   String dictNameEn, List<String> aliases, Integer sortOrder) {
+                                   String dictNameEn, List<String> aliases, Integer sortOrder, String remark) {
         CategoryDict dict = requireEditableDict(dictType, dictCode);
         CategoryDict oldSnapshot = snapshot(dict);
 
@@ -145,6 +147,9 @@ public class DictService {
         }
         if (sortOrder != null) {
             dict.setSortOrder(sortOrder);
+        }
+        if (remark != null) {
+            dict.setRemark(remark.trim().isEmpty() ? null : remark.trim());
         }
 
         categoryDictMapper.updateById(dict);
@@ -253,6 +258,7 @@ public class DictService {
         copy.setSortOrder(source.getSortOrder());
         copy.setStatus(source.getStatus());
         copy.setAliases(source.getAliases());
+        copy.setRemark(source.getRemark());
         return copy;
     }
 
@@ -267,11 +273,23 @@ public class DictService {
         return normalized;
     }
 
-    private String validateAndNormalizeCode(String dictCode) {
+    private String validateAndNormalizeCode(String dictType, String dictCode) {
         if (!StringUtils.hasText(dictCode)) {
             throw new BusinessException("字典编码不能为空");
         }
-        String normalized = dictCode.trim().toUpperCase();
+        String trimmed = dictCode.trim();
+        // 六维类型遵循 V24 编码规范：{品类码}-{中文名}（如 SF-宽厚扶手），品类码前缀归一为大写
+        if (dictType.startsWith("six_dim_")) {
+            if (trimmed.length() > 64) {
+                throw new BusinessException("字典编码长度不能超过 64");
+            }
+            if (!trimmed.matches("^[A-Za-z0-9]{2,8}-\\S.{0,55}$")) {
+                throw new BusinessException("六维字典编码格式应为 {品类码}-{中文名}，如 SF-宽厚扶手: " + dictCode);
+            }
+            int dash = trimmed.indexOf('-');
+            return trimmed.substring(0, dash).toUpperCase() + trimmed.substring(dash);
+        }
+        String normalized = trimmed.toUpperCase();
         if (normalized.length() > 32) {
             throw new BusinessException("字典编码长度不能超过 32");
         }

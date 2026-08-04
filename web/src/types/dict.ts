@@ -11,6 +11,8 @@ export interface DictItem {
   status?: string
   /** 别名列表（AI 识别同义词归一），仅全量查询（all=true）返回 */
   aliases?: string[]
+  /** 备注说明；六维字典为视觉判别要点（AI prompt 锚点） */
+  remark?: string
 }
 
 /**

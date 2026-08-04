@@ -9,6 +9,8 @@ export interface DictCreatePayload {
   dictNameEn?: string
   /** 父级编码（如 six_dim_* 类型的所属品类码），可选 */
   parentCode?: string
+  /** 备注说明（六维字典为视觉判别要点），可选 */
+  remark?: string
 }
 
 /**
@@ -34,10 +36,12 @@ export interface DictUpdatePayload {
   dictNameEn?: string
   aliases?: string[]
   sortOrder?: number
+  /** 备注（六维字典为视觉判别要点）；不传不修改，传空串清空 */
+  remark?: string
 }
 
 /**
- * 更新字典项（名称 / 英文名 / 别名 / 排序），null 字段不修改；编码与类型不可改。
+ * 更新字典项（名称 / 英文名 / 别名 / 排序 / 备注），undefined 字段不修改；编码与类型不可改。
  */
 export async function updateDict(
   dictType: string,

@@ -25,4 +25,10 @@ public class DictUpdateRequest {
     private List<String> aliases;
 
     private Integer sortOrder;
+
+    /**
+     * 备注说明（六维字典为视觉判别要点）；传 null 表示不修改，传空字符串表示清空。
+     */
+    @Size(max = 255, message = "备注长度不能超过 255")
+    private String remark;
 }
