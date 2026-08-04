@@ -634,6 +634,7 @@ function rowClassName(row: DictItem): string {
             size="small"
             class="dict-category-filter"
             placeholder="选择品类"
+            :virtual-scroll="false"
           />
           <template v-if="sixDimCategory && currentDimDef">
             <span class="dict-dim-title">
@@ -737,6 +738,7 @@ function rowClassName(row: DictItem): string {
             clearable
             filterable
             placeholder="必选，枚举按品类隔离维护"
+            :virtual-scroll="false"
           />
         </n-form-item>
         <n-form-item label="别名" path="aliases">
