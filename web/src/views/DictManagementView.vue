@@ -14,8 +14,8 @@
  */
 import { ref, reactive, computed, onMounted, h, watch } from 'vue'
 import {
-  NAlert, NButton, NCard, NDataTable, NDynamicTags, NForm, NFormItem, NInput, NInputNumber,
-  NModal, NPopconfirm, NSpace, NSpin, NTag, useMessage,
+  NButton, NCard, NDataTable, NDynamicTags, NForm, NFormItem, NInput, NInputNumber,
+  NModal, NPopconfirm, NSpace, NSpin, NTag, NTooltip, useMessage,
   type DataTableColumns, type FormInst, type FormRules
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
@@ -580,10 +580,6 @@ function rowClassName(row: DictItem): string {
 
 <template>
   <PageContainer title="字典管理中心" subtitle="产品 / 工厂 / 业务字典的统一维护，别名将即时影响 AI 识别归一">
-    <n-alert type="warning" :bordered="false" class="dict-warning">
-      字典变更会即时影响 AI 识别候选词与匹配归一，请谨慎维护
-    </n-alert>
-
     <div class="dict-layout">
       <n-card class="dict-side" size="small">
         <n-spin :show="summaryLoading">
@@ -658,11 +654,17 @@ function rowClassName(row: DictItem): string {
             />
             <span class="dict-count">共 {{ isSixDimSchema ? filteredSchemaRows.length : filteredItems.length }} 条</span>
           </template>
+          <!-- 弱提示：高饱和警告条降级为操作区旁的灰字提示，hover 查看完整说明 -->
+          <n-tooltip trigger="hover" placement="bottom-end">
+            <template #trigger>
+              <span class="dict-risk-hint">⚠ 变更即时生效于 AI 识别</span>
+            </template>
+            字典变更会即时影响 AI 识别候选词与匹配归一，请谨慎维护
+          </n-tooltip>
           <n-button
             v-if="canMutateSelected && !isSixDimSchema && !isSixDimE"
             type="primary"
             size="small"
-            class="dict-create-btn"
             @click="openCreate"
           >
             + 新增条目
@@ -681,22 +683,25 @@ function rowClassName(row: DictItem): string {
           </n-space>
         </div>
 
-        <n-spin v-else :show="itemsLoading">
-          <n-data-table
-            v-if="isSixDimSchema"
-            :columns="schemaColumns"
-            :data="filteredSchemaRows"
-            :pagination="false"
-            size="small"
-          />
-          <n-data-table
-            v-else
-            :columns="columns"
-            :data="filteredItems"
-            :row-class-name="rowClassName"
-            :pagination="false"
-            size="small"
-          />
+        <n-spin v-else :show="itemsLoading" class="dict-table-spin">
+          <!-- 单表渲染 + 容器滚动 + CSS sticky 表头：不做任何像素计算，表头再高也不会错位 -->
+          <div class="dict-table-wrap">
+            <n-data-table
+              v-if="isSixDimSchema"
+              :columns="schemaColumns"
+              :data="filteredSchemaRows"
+              :pagination="false"
+              size="small"
+            />
+            <n-data-table
+              v-else
+              :columns="columns"
+              :data="filteredItems"
+              :row-class-name="rowClassName"
+              :pagination="false"
+              size="small"
+            />
+          </div>
         </n-spin>
       </n-card>
     </div>
@@ -799,24 +804,33 @@ function rowClassName(row: DictItem): string {
 </template>
 
 <style scoped>
-.dict-warning {
-  margin-bottom: 16px;
-}
-
+/*
+ * 固定高度双栏布局：整页不滚动，左栏常驻可视，右栏表格内部滚动（表头吸附）。
+ * 高度预算 = 100vh - 应用头 56px - 页面上下 padding 48px - 页头约 76px
+ */
 .dict-layout {
   display: flex;
   gap: 16px;
-  align-items: flex-start;
+  align-items: stretch;
+  height: calc(100vh - 180px);
+  min-height: 480px;
 }
 
 .dict-side {
   width: 240px;
   flex-shrink: 0;
+  height: 100%;
+}
+
+/* 左栏卡片内容区独立滚动：类型再多也不会被推离可视区
+   （注意 naive 内容区类名是 n-card-content，不是 n-card__content） */
+.dict-side :deep(.n-card-content) {
+  height: 100%;
+  overflow-y: auto;
 }
 
 .dict-side-body {
-  max-height: calc(100vh - 260px);
-  overflow-y: auto;
+  height: 100%;
 }
 
 .dict-group + .dict-group {
@@ -873,6 +887,47 @@ function rowClassName(row: DictItem): string {
 .dict-main {
   flex: 1;
   min-width: 0;
+  height: 100%;
+}
+
+/* 右栏卡片内容区纵向 flex：说明区/工具条固定，表格区占满剩余高度
+   （注意 naive 内容区类名是 n-card-content，不是 n-card__content） */
+.dict-main :deep(.n-card-content) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 表格滚动链路：spin/wrap 逐层 flex 占位；wrap 自身滚动（overflow-y auto），
+   表格单表渲染，表头用 sticky 吸附——不测量任何像素，天然不会溢出容器边框 */
+.dict-table-spin {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dict-table-spin :deep(.n-spin-content) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dict-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 滚动时表头吸附在容器顶部（需不透明背景盖住下方数据行） */
+.dict-table-wrap :deep(.n-data-table-th) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--rsdp-card-bg, #fff);
 }
 
 /* 类型说明区 */
@@ -950,17 +1005,25 @@ function rowClassName(row: DictItem): string {
   color: var(--rsdp-text-secondary);
 }
 
-.dict-create-btn {
+/* 风险提示（弱提示）：灰字小标，hover 出完整说明，不干扰主任务 */
+.dict-risk-hint {
   margin-left: auto;
   flex-shrink: 0;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+  cursor: default;
 }
 
-/* E 维度引用说明卡 */
+/* E 维度引用说明卡（占满表格区并居中） */
 .dict-e-redirect {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   padding: 24px;
   border: 1px dashed var(--rsdp-border, #e0e0e6);
   border-radius: var(--rsdp-radius);
-  text-align: center;
 }
 
 .dict-e-text {
