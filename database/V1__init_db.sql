@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
     sort_order INTEGER,
     status VARCHAR(16) DEFAULT 'active',
     aliases TEXT,                            -- 同义词别名 JSON 数组（V22）
+    remark TEXT,                             -- 备注；六维字典存视觉判别要点（V24）
     PRIMARY KEY (dict_type, dict_code)
 );
 
@@ -1262,3 +1263,16 @@ CREATE TABLE IF NOT EXISTS platform_customized (
     updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_platform_customized_status ON platform_customized(status, sort_order);
+
+-- 六维标签维度定义表（V25）：品类 × A-F 维度键 → 标签/说明，替代前后端双写
+CREATE TABLE IF NOT EXISTS six_dim_schema (
+    id            BIGSERIAL PRIMARY KEY,
+    category_code VARCHAR(16)  NOT NULL,
+    dim_key       VARCHAR(4)   NOT NULL,
+    label         VARCHAR(64)  NOT NULL,
+    description   VARCHAR(255) NOT NULL DEFAULT '',
+    sort_order    INTEGER      NOT NULL DEFAULT 0,
+    created_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
+    CONSTRAINT uk_six_dim_schema UNIQUE (category_code, dim_key)
+);

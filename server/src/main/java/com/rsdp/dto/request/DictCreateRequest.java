@@ -1,7 +1,6 @@
 package com.rsdp.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -18,9 +17,12 @@ public class DictCreateRequest {
     @Size(max = 32, message = "字典类型长度不能超过 32")
     private String dictType;
 
+    /**
+     * 字典编码。普通类型为字母数字（服务层归一为大写）；
+     * 六维类型（six_dim_*）遵循 V24 编码规范 {品类码}-{中文名}（如 SF-宽厚扶手），由服务层按类型校验。
+     */
     @NotBlank(message = "字典编码不能为空")
-    @Pattern(regexp = "^[a-zA-Z0-9]+$", message = "字典编码只能包含字母和数字")
-    @Size(max = 32, message = "字典编码长度不能超过 32")
+    @Size(max = 64, message = "字典编码长度不能超过 64")
     private String dictCode;
 
     @NotBlank(message = "字典名称不能为空")
@@ -35,4 +37,10 @@ public class DictCreateRequest {
      */
     @Size(max = 32, message = "父级编码长度不能超过 32")
     private String parentCode;
+
+    /**
+     * 备注说明（六维字典为视觉判别要点），可选。
+     */
+    @Size(max = 255, message = "备注长度不能超过 255")
+    private String remark;
 }

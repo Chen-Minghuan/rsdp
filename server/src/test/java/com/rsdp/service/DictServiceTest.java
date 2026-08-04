@@ -154,7 +154,7 @@ class DictServiceTest {
 
         CategoryDict dict = new CategoryDict();
         dict.setDictType("six_dim_A");
-        dict.setDictCode("LEG1");
+        dict.setDictCode("SF-直脚");
         dict.setDictName("直脚");
         dict.setParentCode(" CH ");
 
@@ -170,7 +170,7 @@ class DictServiceTest {
 
         CategoryDict dict = new CategoryDict();
         dict.setDictType("six_dim_A");
-        dict.setDictCode("LEG2");
+        dict.setDictCode("SF-弯脚");
         dict.setDictName("弯脚");
         dict.setParentCode("   ");
 
@@ -192,6 +192,55 @@ class DictServiceTest {
             .hasMessageContaining("字典编码只能包含大写字母和数字");
 
         verify(categoryDictMapper, never()).insert(any(CategoryDict.class));
+    }
+
+    @Test
+    void createDict_sixDimPrefixedCode_shouldKeepChineseName() {
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("six_dim_A");
+        dict.setDictCode("sf-宽厚扶手");
+        dict.setDictName("宽厚扶手");
+        dict.setParentCode("SF");
+        dict.setRemark(" 扶手又宽又厚，顶面可置物/坐人 ");
+
+        dictService.createDict(dict);
+
+        // 品类码前缀归一为大写，中文名部分保持原样；备注去首尾空格
+        assertThat(dict.getDictCode()).isEqualTo("SF-宽厚扶手");
+        assertThat(dict.getRemark()).isEqualTo("扶手又宽又厚，顶面可置物/坐人");
+        verify(categoryDictMapper).insert(any(CategoryDict.class));
+    }
+
+    @Test
+    void createDict_sixDimInvalidCode_shouldThrow() {
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("six_dim_A");
+        dict.setDictCode("宽厚扶手");
+        dict.setDictName("宽厚扶手");
+
+        assertThatThrownBy(() -> dictService.createDict(dict))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("品类码");
+
+        verify(categoryDictMapper, never()).insert(any(CategoryDict.class));
+    }
+
+    @Test
+    void updateDict_withRemark_shouldPersist() {
+        CategoryDict existing = new CategoryDict();
+        existing.setDictType("six_dim_C");
+        existing.setDictCode("SF-宽厚扶手");
+        existing.setDictName("宽厚扶手");
+        existing.setStatus("active");
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(existing);
+
+        CategoryDict result = dictService.updateDict("six_dim_C", "SF-宽厚扶手", null, null, null, null,
+            "扶手又宽又厚");
+
+        assertThat(result.getRemark()).isEqualTo("扶手又宽又厚");
+        verify(categoryDictMapper).updateById(existing);
     }
 
     @Test
@@ -238,7 +287,7 @@ class DictServiceTest {
         when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(existing);
 
         CategoryDict result = dictService.updateDict("material", "LE", "头层皮革", "Leather",
-            List.of("真皮", "牛皮"), 10);
+            List.of("真皮", "牛皮"), 10, null);
 
         assertThat(result.getDictName()).isEqualTo("头层皮革");
         assertThat(result.getDictNameEn()).isEqualTo("Leather");
@@ -258,7 +307,7 @@ class DictServiceTest {
         existing.setStatus("active");
         when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(existing);
 
-        CategoryDict result = dictService.updateDict("material", "LE", null, null, null, null);
+        CategoryDict result = dictService.updateDict("material", "LE", null, null, null, null, null);
 
         assertThat(result.getDictName()).isEqualTo("皮革");
         assertThat(result.getDictNameEn()).isEqualTo("Leather");
@@ -268,7 +317,7 @@ class DictServiceTest {
 
     @Test
     void updateDict_readonlyType_shouldThrow() {
-        assertThatThrownBy(() -> dictService.updateDict("review_status", "DONE", "已复核", null, null, null))
+        assertThatThrownBy(() -> dictService.updateDict("review_status", "DONE", "已复核", null, null, null, null))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("不允许通过界面维护");
 
@@ -279,7 +328,7 @@ class DictServiceTest {
     void updateDict_notFound_shouldThrow() {
         when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
 
-        assertThatThrownBy(() -> dictService.updateDict("material", "NOPE", "名称", null, null, null))
+        assertThatThrownBy(() -> dictService.updateDict("material", "NOPE", "名称", null, null, null, null))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("字典项不存在");
     }

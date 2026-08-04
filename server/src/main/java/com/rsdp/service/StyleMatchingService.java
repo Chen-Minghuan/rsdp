@@ -26,6 +26,7 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -87,6 +88,19 @@ public class StyleMatchingService {
      */
     @Transactional(rollbackFor = Exception.class)
     public StyleMatchResult match(AiLabels labels, String rspuId) {
+        return match(labels, rspuId, null);
+    }
+
+    /**
+     * 对 AI 识别结果进行风格匹配评分（带品类上下文，六维匹配可经品类字典归一）。
+     *
+     * @param labels       AI 识别标签
+     * @param rspuId       产品 RSPU ID
+     * @param categoryCode 品类码（可为 null，此时六维退化为去前缀精确相等匹配）
+     * @return 匹配结果；若无法匹配则返回 null
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public StyleMatchResult match(AiLabels labels, String rspuId, String categoryCode) {
         if (labels == null || !StringUtils.hasText(labels.getStyle())) {
             log.warn("风格匹配入参为空，跳过评分，rspuId={}", rspuId);
             return null;
@@ -105,7 +119,7 @@ public class StyleMatchingService {
         }
 
         FormulaDto formulaDto = parseFormula(formula.getFormulaJson());
-        MatchContext ctx = new MatchContext(labels);
+        MatchContext ctx = new MatchContext(labels, categoryCode);
 
         List<ElementMatchDetail> elementMatches = new ArrayList<>();
         List<FormulaScore> formulaScores = new ArrayList<>();
@@ -285,7 +299,12 @@ public class StyleMatchingService {
 
     /**
      * 六维标签评分：从 style_case 中读取该风格的典型 forms 与 textures，
-     * 与 AI 识别的六维标签做模糊匹配。
+     * 与 AI 识别的六维标签做"枚举精确 + aliases 精确"匹配。
+     *
+     * <p>匹配规则：维度值与关键词先各自经 {@link DictResolverService#resolveSixDimCode}
+     * 归一为品类字典码比较（枚举名/别名命中即同码）；无法归一的自由文本
+     * （如 E 维表面材质）退化为去前缀、忽略大小写的精确相等，不再做模糊包含，
+     * 减少误判。权重与评分逻辑不变。</p>
      */
     private void evaluateSixDim(String styleCode, MatchContext ctx,
                                 List<ElementMatchDetail> elementMatches,
@@ -302,25 +321,26 @@ public class StyleMatchingService {
 
         StyleCase styleCase = cases.get(0);
         List<String> caseKeywords = extractCaseKeywords(styleCase.getAiRawOutput());
-        if (caseKeywords.isEmpty() || ctx.sixDimValues.isEmpty()) {
+        if (caseKeywords.isEmpty() || ctx.sixDimTags.isEmpty()) {
             return;
         }
 
         List<String> matched = new ArrayList<>();
-        for (String dimValue : ctx.sixDimValues) {
+        ctx.sixDimTags.forEach((dimKey, dimValue) -> {
+            String valueCode = "E".equalsIgnoreCase(dimKey) ? null
+                : dictResolver.resolveSixDimCode(dimKey, ctx.categoryCode, dimValue);
             for (String keyword : caseKeywords) {
-                if (MatchContext.containsIgnoreCase(dimValue, keyword)
-                        || MatchContext.containsIgnoreCase(keyword, dimValue)) {
+                if (sixDimMatches(dimKey, ctx.categoryCode, dimValue, valueCode, keyword)) {
                     matched.add(dimValue);
                     break;
                 }
             }
-        }
+        });
 
         boolean hasMatch = !matched.isEmpty();
         elementMatches.add(ElementMatchDetail.builder()
             .type("six_dim")
-            .value(String.join(",", ctx.sixDimValues))
+            .value(String.join(",", ctx.sixDimTags.values()))
             .role("compatible")
             .matched(hasMatch)
             .reason(hasMatch ? "六维标签与风格案例特征匹配" : "六维标签与风格案例特征不匹配")
@@ -334,6 +354,29 @@ public class StyleMatchingService {
             .matchedValues(String.join(",", matched))
             .reason("轮廓/靠背/扶手/腿部/表面材质/软包形态与风格典型特征匹配度")
             .build());
+    }
+
+    /**
+     * 六维单值与风格案例关键词的匹配判定：字典码相等（含枚举名/别名归一），
+     * 或双方去品类前缀后精确相等（忽略大小写）。
+     */
+    private boolean sixDimMatches(String dimKey, String categoryCode, String dimValue,
+                                  String valueCode, String keyword) {
+        if (valueCode != null
+                && valueCode.equals(dictResolver.resolveSixDimCode(dimKey, categoryCode, keyword))) {
+            return true;
+        }
+        return stripSixDimPrefix(dimValue).equalsIgnoreCase(stripSixDimPrefix(keyword));
+    }
+
+    /**
+     * 去掉六维值的品类前缀（如 SF-宽厚扶手 → 宽厚扶手），用于自由文本精确比较。
+     */
+    private static String stripSixDimPrefix(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim().replaceAll("^[A-Z]{2}-", "");
     }
 
     @SneakyThrows
@@ -456,9 +499,13 @@ public class StyleMatchingService {
         private final List<String> colors = new ArrayList<>();
         private final List<String> categories = new ArrayList<>();
         private final List<String> moods = new ArrayList<>();
-        private final List<String> sixDimValues = new ArrayList<>();
+        /** 六维标签（维度键 → 值），保留维度键以便按品类字典归一匹配。 */
+        private final Map<String, String> sixDimTags = new LinkedHashMap<>();
+        /** 品类码，六维字典归一的上下文；可为 null。 */
+        private final String categoryCode;
 
-        MatchContext(AiLabels labels) {
+        MatchContext(AiLabels labels, String categoryCode) {
+            this.categoryCode = categoryCode;
             Optional.ofNullable(labels.getMaterialTags()).ifPresent(materials::addAll);
             Optional.ofNullable(labels.getSceneTags()).ifPresent(scenes::addAll);
             if (StringUtils.hasText(labels.getColorPrimaryName())) {
@@ -469,9 +516,11 @@ public class StyleMatchingService {
                 materials.add(labels.getOcr().getMaterialDescription());
             }
             if (labels.getSixDimTags() != null) {
-                labels.getSixDimTags().values().stream()
-                    .filter(StringUtils::hasText)
-                    .forEach(sixDimValues::add);
+                labels.getSixDimTags().forEach((key, value) -> {
+                    if (StringUtils.hasText(value)) {
+                        sixDimTags.put(key, value);
+                    }
+                });
             }
         }
 

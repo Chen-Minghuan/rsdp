@@ -16,7 +16,8 @@ const imageTypeTextMap: Record<string, string> = {
   white_bg: '白底图',
   detail: '细节图',
   scene: '场景图',
-  anchor: '锚点图'
+  anchor: '锚点图',
+  original: '原图'
 }
 
 function imageTypeText(type: string): string {

@@ -34,10 +34,12 @@ import {
 import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
 import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
+import { getSixDimSchema } from '@/utils/sixDimLabels'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES, IMAGE_FALLBACK_SRC } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
+import type { DictItem } from '@/types/dict'
 import dayjs from 'dayjs'
 
 const router = useRouter()
@@ -69,6 +71,35 @@ const sceneCode = ref<string | null>(null)
 const materialTag = ref<string | null>(null)
 const createdRange = ref<[number, number] | null>(null)
 
+// ---------- 六维形态特征筛选（A/B/C/D/F，E 维不枚举不参与筛选） ----------
+const dimA = ref<string | null>(null)
+const dimB = ref<string | null>(null)
+const dimC = ref<string | null>(null)
+const dimD = ref<string | null>(null)
+const dimF = ref<string | null>(null)
+const sixDimFilterKeys = ['A', 'B', 'C', 'D', 'F'] as const
+const sixDimRefs: Record<(typeof sixDimFilterKeys)[number], typeof dimA> = { A: dimA, B: dimB, C: dimC, D: dimD, F: dimF }
+/** 原始六维字典（一次拉全，按已选品类的 parentCode 过滤） */
+const sixDimDicts = ref<Record<string, DictItem[]>>({ A: [], B: [], C: [], D: [], F: [] })
+const sixDimSchema = computed(() => getSixDimSchema(categoryCode.value ?? undefined))
+/** 品类未选时六维筛选不可用 */
+const sixDimDisabled = computed(() => !categoryCode.value)
+
+function sixDimOptions(dimKey: string): { label: string; value: string }[] {
+  const category = categoryCode.value?.toUpperCase()
+  if (!category) return []
+  return (sixDimDicts.value[dimKey] || [])
+    .filter(d => d.parentCode?.toUpperCase() === category)
+    .map(d => ({ label: d.dictName, value: d.dictCode }))
+}
+
+/** 切换品类后，原有六维筛选值属于旧品类枚举，全部清空。 */
+watch(categoryCode, () => {
+  sixDimFilterKeys.forEach(k => {
+    sixDimRefs[k].value = null
+  })
+})
+
 const categoryOptions = ref<{ label: string; value: string }[]>([])
 const levelOptions = ref<{ label: string; value: string }[]>([])
 const reviewStatusOptions = ref<{ label: string; value: string }[]>([])
@@ -89,7 +120,12 @@ const activeAdvancedCount = computed(
       styleCode.value,
       sceneCode.value,
       materialTag.value,
-      createdRange.value
+      createdRange.value,
+      dimA.value,
+      dimB.value,
+      dimC.value,
+      dimD.value,
+      dimF.value
     ].filter(v => v != null && v !== '').length
 )
 
@@ -249,6 +285,11 @@ function buildParams(includeTab: boolean): import('@/types/product').ProductList
     materialTag: materialTag.value || undefined,
     createdFrom: createdRange.value ? dayjs(createdRange.value[0]).format('YYYY-MM-DD') : undefined,
     createdTo: createdRange.value ? dayjs(createdRange.value[1]).format('YYYY-MM-DD') : undefined,
+    dimA: dimA.value || undefined,
+    dimB: dimB.value || undefined,
+    dimC: dimC.value || undefined,
+    dimD: dimD.value || undefined,
+    dimF: dimF.value || undefined,
     statusTab: includeTab ? statusTab.value : undefined
   }
   if (isPlatformStaff.value) {
@@ -310,6 +351,9 @@ function handleReset() {
   sceneCode.value = null
   materialTag.value = null
   createdRange.value = null
+  sixDimFilterKeys.forEach(k => {
+    sixDimRefs[k].value = null
+  })
   page.value = 1
   refreshAll()
 }
@@ -690,20 +734,27 @@ function handleBuildQuote() {
 // ---------- 字典 ----------
 async function loadDicts() {
   try {
-    const [categoryDicts, levelDicts, reviewDicts, styleDicts, sceneDicts, materialDicts] = await Promise.all([
-      listDicts('category', { signal }),
-      listDicts('factory_level', { signal }),
-      listDicts('review_status', { signal }),
-      listDicts('style', { signal }),
-      listDicts('scene', { signal }),
-      listDicts('material', { signal })
-    ])
+    const [categoryDicts, levelDicts, reviewDicts, styleDicts, sceneDicts, materialDicts, dimADicts, dimBDicts, dimCDicts, dimDDicts, dimFDicts] =
+      await Promise.all([
+        listDicts('category', { signal }),
+        listDicts('factory_level', { signal }),
+        listDicts('review_status', { signal }),
+        listDicts('style', { signal }),
+        listDicts('scene', { signal }),
+        listDicts('material', { signal }),
+        listDicts('six_dim_A', { signal }),
+        listDicts('six_dim_B', { signal }),
+        listDicts('six_dim_C', { signal }),
+        listDicts('six_dim_D', { signal }),
+        listDicts('six_dim_F', { signal })
+      ])
     categoryOptions.value = categoryDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     levelOptions.value = levelDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     reviewStatusOptions.value = reviewDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     styleOptions.value = styleDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     sceneOptions.value = sceneDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     materialOptions.value = materialDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
+    sixDimDicts.value = { A: dimADicts, B: dimBDicts, C: dimCDicts, D: dimDDicts, F: dimFDicts }
   } catch (e) {
     console.error('加载字典失败', e)
   }
@@ -765,7 +816,7 @@ onMounted(async () => {
 })
 
 // 下拉类筛选变化即刷新（文本输入与日期范围由「搜索」按钮触发）
-watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialTag, factoryCode], () => {
+watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialTag, dimA, dimB, dimC, dimD, dimF, factoryCode], () => {
   page.value = 1
   refreshAll()
 })
@@ -819,6 +870,22 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
           </n-form-item-gi>
           <n-form-item-gi label="材质">
             <n-select v-model:value="materialTag" :options="materialOptions" placeholder="请选择" clearable />
+          </n-form-item-gi>
+          <!-- 六维形态特征筛选：维度名与枚举项跟随已选品类（A/B/C/D/F） -->
+          <n-form-item-gi
+            v-for="dimKey in sixDimFilterKeys"
+            :key="dimKey"
+            :label="sixDimSchema.dims[dimKey]?.label || `维度 ${dimKey}`"
+          >
+            <n-select
+              :value="sixDimRefs[dimKey].value"
+              :options="sixDimOptions(dimKey)"
+              :placeholder="sixDimDisabled ? '请先选择商品分类' : '请选择'"
+              :disabled="sixDimDisabled"
+              clearable
+              filterable
+              @update:value="(v: string | null) => (sixDimRefs[dimKey].value = v)"
+            />
           </n-form-item-gi>
           <n-form-item-gi label="创建时间" :span="2">
             <n-date-picker v-model:value="createdRange" type="daterange" clearable style="width: 100%;" />

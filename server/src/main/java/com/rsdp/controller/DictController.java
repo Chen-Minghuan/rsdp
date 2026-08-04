@@ -4,10 +4,13 @@ import com.rsdp.common.Result;
 import com.rsdp.dto.request.DictCreateRequest;
 import com.rsdp.dto.request.DictStatusRequest;
 import com.rsdp.dto.request.DictUpdateRequest;
+import com.rsdp.dto.request.SixDimSchemaUpdateRequest;
 import com.rsdp.dto.response.DictItemResponse;
 import com.rsdp.dto.response.DictTypeSummaryResponse;
+import com.rsdp.dto.response.SixDimSchemaResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.service.DictService;
+import com.rsdp.service.SixDimSchemaService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +38,38 @@ import java.util.stream.Collectors;
 public class DictController {
 
     private final DictService dictService;
+    private final SixDimSchemaService sixDimSchemaService;
+
+    /**
+     * 六维标签维度定义查询（前端六维展示/筛选/编辑的运行时数据源）。
+     *
+     * @param categoryCode 品类码；不传返回全部品类定义，传则返回该品类定义（未知品类回退 GENERIC）
+     * @return 六维维度定义（单品类或全量列表）
+     */
+    @GetMapping("/six-dim-schema")
+    public Result<?> getSixDimSchema(@RequestParam(required = false) String categoryCode) {
+        if (categoryCode == null || categoryCode.isBlank()) {
+            return Result.ok(sixDimSchemaService.listAllSchemas());
+        }
+        return Result.ok(sixDimSchemaService.getSchema(categoryCode));
+    }
+
+    /**
+     * 更新六维标签维度定义（字典管理中心维护入口，需 dict:update 权限）。
+     *
+     * @param categoryCode 品类码
+     * @param dimKey       维度键（A-F）
+     * @param request      更新请求（标签/说明）
+     * @return 更新后的该品类六维定义
+     */
+    @PutMapping("/six-dim-schema/{categoryCode}/{dimKey}")
+    public Result<SixDimSchemaResponse> updateSixDimSchema(
+        @PathVariable @NotBlank(message = "品类码不能为空") String categoryCode,
+        @PathVariable @NotBlank(message = "维度键不能为空") String dimKey,
+        @Valid @RequestBody SixDimSchemaUpdateRequest request) {
+        return Result.ok(sixDimSchemaService.updateDim(
+            categoryCode.toUpperCase(), dimKey.toUpperCase(), request.getLabel(), request.getDescription()));
+    }
 
     /**
      * 字典类型汇总（字典管理中心左栏数据源）。
@@ -78,12 +113,13 @@ public class DictController {
         dict.setDictName(request.getDictName());
         dict.setDictNameEn(request.getDictNameEn());
         dict.setParentCode(request.getParentCode());
+        dict.setRemark(request.getRemark());
         dictService.createDict(dict);
         return Result.ok(toResponse(dict));
     }
 
     /**
-     * 更新字典项（名称/英文名/别名/排序），编码与类型不可改。
+     * 更新字典项（名称/英文名/别名/排序/备注），编码与类型不可改。
      *
      * @param dictType 字典类型
      * @param dictCode 字典编码
@@ -96,7 +132,7 @@ public class DictController {
         @PathVariable @NotBlank(message = "字典编码不能为空") String dictCode,
         @Valid @RequestBody DictUpdateRequest request) {
         CategoryDict dict = dictService.updateDict(dictType, dictCode, request.getDictName(),
-            request.getDictNameEn(), request.getAliases(), request.getSortOrder());
+            request.getDictNameEn(), request.getAliases(), request.getSortOrder(), request.getRemark());
         return Result.ok(toResponse(dict));
     }
 
@@ -126,6 +162,7 @@ public class DictController {
         response.setSortOrder(dict.getSortOrder());
         response.setStatus(dict.getStatus());
         response.setAliases(dictService.parseAliases(dict.getAliases()));
+        response.setRemark(dict.getRemark());
         return response;
     }
 }

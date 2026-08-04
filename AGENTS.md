@@ -292,6 +292,9 @@ make clean
   - `V26__variant_text_and_unresolved.sql`：变体原文列（rspu_variant.size_text/color_text/material_text）+ uk_variant_attrs 唯一索引改"码或原文"语义 + dict_unresolved_value 未归一值采集表（本地分支 V19 升号）
   - `V27__dict_alias_table.sql`：字典别名表（dict_alias，工厂方言叫法 → 字典码自学习；与 V22 category_dict.aliases 列并存，本地分支 V16 升号）
   - `V28__scheme_unique_name.sql`：搭配方案名称唯一性约束（个人方案按创建人去重、项目方案按项目去重；TC-SEC-012 / TC-PERF-003）
+  - `V24__six_dim_dict_seed.sql`：六维字典全品类枚举种子 427 条（9 品类 × A/B/C/D/F，含别名与 remark 判别要点）+ category 补种 DT/BD/LT + category_dict 新增 remark 列（生成器 scripts/generate_six_dim_dict_seed.js）
+  - `V25__six_dim_schema.sql`：六维维度定义配置化（six_dim_schema 表 + 10 套维度定义种子，替代前后端双写）
+  - ⚠️ **版本号冲突（待处理）**：本地分支与 main 各自占用了 V24/V25，目前同名不同内容并存，执行顺序按文件名排序为 V24_rspu_external_code → V24_six_dim_dict_seed → V25_excel_import → V25_six_dim_schema；合并后需统一重编号并同步三处脚本
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

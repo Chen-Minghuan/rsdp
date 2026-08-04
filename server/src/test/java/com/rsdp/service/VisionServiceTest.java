@@ -26,6 +26,7 @@ class VisionServiceTest {
     private WireMockServer wireMockServer;
     private VisionService visionService;
     private DictService dictService;
+    private SixDimSchemaService sixDimSchemaService;
 
     @BeforeEach
     void setUp() {
@@ -45,7 +46,24 @@ class VisionServiceTest {
         stubDictFor("scene", List.of("客厅", "书房"));
         stubDictFor("material", List.of("实木", "布艺"));
 
-        visionService = new VisionService(restClient, new ObjectMapper(), dictService);
+        // 六维维度定义（P4 配置化后改为服务注入）：固定返回 A-F 标签定义
+        sixDimSchemaService = mock(SixDimSchemaService.class);
+        when(sixDimSchemaService.buildPromptDescription(any()))
+            .thenReturn("本产品的六维标签定义如下（请严格按 A-F 输出，键名不变）：\n");
+        when(sixDimSchemaService.getSchema(any())).thenReturn(schemaWithLabels());
+
+        visionService = new VisionService(restClient, new ObjectMapper(), dictService, sixDimSchemaService);
+    }
+
+    private com.rsdp.dto.response.SixDimSchemaResponse schemaWithLabels() {
+        java.util.Map<String, com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition> dims = new java.util.LinkedHashMap<>();
+        dims.put("A", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("轮廓形态", ""));
+        dims.put("B", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("靠背/背部特征", ""));
+        dims.put("C", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("扶手特征", ""));
+        dims.put("D", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("腿部/底座特征", ""));
+        dims.put("E", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("表面材质", ""));
+        dims.put("F", new com.rsdp.dto.response.SixDimSchemaResponse.DimDefinition("软包填充形态", ""));
+        return new com.rsdp.dto.response.SixDimSchemaResponse("SF", "沙发", dims);
     }
 
     private void stubDictFor(String dictType, List<String> names) {
@@ -156,6 +174,126 @@ class VisionServiceTest {
         assertThatThrownBy(() -> visionService.recognizeImage(imageStream))
             .isInstanceOf(RuntimeException.class)
             .hasMessageContaining("解析 AI 识别结果失败");
+    }
+
+    @Test
+    void detectProductSubject_shouldParseBbox() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": {\"x\": 0.1, \"y\": 0.05, \"w\": 0.8, \"h\": 0.9}}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNotNull();
+        assertThat(bbox.getX()).isEqualTo(0.1);
+        assertThat(bbox.getY()).isEqualTo(0.05);
+        assertThat(bbox.getWidth()).isEqualTo(0.8);
+        assertThat(bbox.getHeight()).isEqualTo(0.9);
+    }
+
+    @Test
+    void detectProductSubject_shouldReturnNullWhenNoSubject() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": null}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNull();
+    }
+
+    @Test
+    void detectProductSubject_shouldReturnNullOnInvalidJson() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("这不是 JSON"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNull();
+    }
+
+    @Test
+    void detectProductSubject_shouldReturnNullOnInvalidBboxCoords() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": {\"x\": 0.9, \"y\": 0.9, \"w\": 0.5, \"h\": 0.5}}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNull();
+    }
+
+    @Test
+    void detectProductSubject_shouldParseXyxyPermilleBbox() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": [100, 50, 900, 950]}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNotNull();
+        assertThat(bbox.getX()).isEqualTo(0.1);
+        assertThat(bbox.getY()).isEqualTo(0.05);
+        assertThat(bbox.getWidth()).isEqualTo(0.8);
+        assertThat(bbox.getHeight()).isEqualTo(0.9);
+    }
+
+    @Test
+    void detectProductSubject_shouldReturnNullOnInvalidXyxy() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"bbox\": [900, 900, 100, 100]}"))));
+
+        var bbox = visionService.detectProductSubject(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(bbox).isNull();
+    }
+
+    @Test
+    void isProductComplete_shouldReturnTrue() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"complete\": true}"))));
+
+        assertThat(visionService.isProductComplete(new ByteArrayInputStream("fake-image".getBytes()))).isTrue();
+    }
+
+    @Test
+    void isProductComplete_shouldReturnFalse() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"complete\": false}"))));
+
+        assertThat(visionService.isProductComplete(new ByteArrayInputStream("fake-image".getBytes()))).isFalse();
+    }
+
+    @Test
+    void isProductComplete_shouldReturnTrueOnInvalidResponse() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("这不是 JSON"))));
+
+        // 校验失败时默认视为完整，不误杀裁剪结果
+        assertThat(visionService.isProductComplete(new ByteArrayInputStream("fake-image".getBytes()))).isTrue();
     }
 
     @Test
@@ -396,5 +534,61 @@ class VisionServiceTest {
         assertThat(regions).hasSize(1);
         assertThat(regions.get(0).getProducts().get(0).getNearbyText()).isNull();
         assertThat(regions.get(0).getProducts().get(0).getEstimatedCategory()).isEqualTo("SF");
+    }
+
+    @Test
+    void recognizeImage_shouldInjectSixDimEnumsIntoPrompt() throws Exception {
+        // P1 枚举化：按品类注入六维枚举（中文名+锚点），约束 AI 从枚举中选择
+        CategoryDict arm = new CategoryDict();
+        arm.setDictType("six_dim_C");
+        arm.setDictCode("SF-宽厚扶手");
+        arm.setDictName("宽厚扶手");
+        arm.setParentCode("SF");
+        arm.setSortOrder(3);
+        arm.setRemark("扶手又宽又厚，顶面可置物/坐人");
+        CategoryDict other = new CategoryDict();
+        other.setDictType("six_dim_C");
+        other.setDictCode("SF-异形/其他");
+        other.setDictName("异形/其他");
+        other.setParentCode("SF");
+        other.setSortOrder(99);
+        other.setRemark("不属于以上形态");
+        CategoryDict tbEntry = new CategoryDict();
+        tbEntry.setDictType("six_dim_C");
+        tbEntry.setDictCode("TB-直边");
+        tbEntry.setDictName("直边");
+        tbEntry.setParentCode("TB");
+        tbEntry.setSortOrder(1);
+        when(dictService.listByType("six_dim_C")).thenReturn(List.of(arm, other, tbEntry));
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"style\":\"中古风\"}"))));
+
+        visionService.recognizeImage(new ByteArrayInputStream("fake-image".getBytes()), "SF");
+
+        // 注入本品类枚举名+锚点与选择约束；不注入其他品类条目
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("必须从下列对应枚举中精确选择一项"))
+            .withRequestBody(containing("宽厚扶手（扶手又宽又厚，顶面可置物/坐人）"))
+            .withRequestBody(containing("异形/其他"))
+            .withRequestBody(notMatching(".*TB-直边.*")));
+    }
+
+    @Test
+    void recognizeImage_shouldSkipSixDimEnumInjectionWhenNoCategoryDict() throws Exception {
+        // 品类无六维字典（或未指定品类）时不注入枚举约束，行为与枚举化前一致
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"style\":\"中古风\"}"))));
+
+        visionService.recognizeImage(new ByteArrayInputStream("fake-image".getBytes()));
+
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(notMatching(".*必须从下列对应枚举中精确选择一项.*")));
     }
 }

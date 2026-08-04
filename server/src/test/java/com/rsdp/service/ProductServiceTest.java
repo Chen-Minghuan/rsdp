@@ -71,6 +71,9 @@ class ProductServiceTest {
     @Mock
     private RspuVariantService rspuVariantService;
 
+    @Mock
+    private ProductSubjectCropService subjectCropService;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 

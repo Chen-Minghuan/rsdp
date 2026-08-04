@@ -36,6 +36,7 @@ import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { getSixDimSchema } from '@/utils/sixDimLabels'
 import type { ProductDetail, ProductSummary, ProductUpdateRequest } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuBatchCreateRequest, RskuBatchCreateResult, RskuBatchFactoryQuote, RskuCreateRequest } from '@/types/rsku'
@@ -330,6 +331,24 @@ const materialOptions = ref<DictItem[]>([])
 const fabricOptions = ref<DictItem[]>([])
 const styleOptions = ref<DictItem[]>([])
 const sceneOptions = ref<DictItem[]>([])
+
+// ---------- 六维标签结构化编辑 ----------
+/** 六维维度键（E 维表面材质与材质标签同源，在状态中保留以便保存时不丢失，但不在编辑区展示）。 */
+const sixDimEditKeys = ['A', 'B', 'C', 'D', 'E', 'F'] as const
+/** 编辑区展示的维度（不含 E，E 由材质标签字段维护）。 */
+const sixDimEditDisplayKeys = sixDimEditKeys.filter(k => k !== 'E')
+/** 六维字典（一次拉全，按当前产品品类的 parentCode 过滤）。 */
+const sixDimDicts = ref<Record<string, DictItem[]>>({ A: [], B: [], C: [], D: [], F: [] })
+const editSixDimSchema = computed(() => getSixDimSchema(detail.value?.rspu.categoryCode))
+
+/** 某维度的下拉选项：字典枚举按品类过滤，label 展示中文名、value 为带前缀字典码。 */
+function sixDimEditOptions(dimKey: string): { label: string; value: string }[] {
+  const category = detail.value?.rspu.categoryCode?.toUpperCase()
+  if (!category) return []
+  return (sixDimDicts.value[dimKey] || [])
+    .filter(d => d.parentCode?.toUpperCase() === category)
+    .map(d => ({ label: d.dictName, value: d.dictCode }))
+}
 const productLevelOptions = ref<DictItem[]>([])
 const priceBandOptions = ref<DictItem[]>([
   { dictCode: 'low', dictName: '低', sortOrder: 1 },
@@ -355,7 +374,8 @@ const relationTypeOptions = ref<{ label: string; value: string }[]>([
 ])
 
 interface ProductEditForm extends ProductUpdateRequest {
-  sixDimTagsJson?: string
+  /** 六维标签编辑态（维度键 → 字典码或自由文本，null 表示未设置） */
+  sixDimTagsEdit?: Record<string, string | null>
   keySpecsJson?: string
 }
 
@@ -459,16 +479,22 @@ async function loadFactories() {
 
 async function loadDicts() {
   try {
-    const [quoteConfidence, sizes, colors, materials, fabrics, styles, scenes, levels] = await Promise.all([
-      listDicts('quote_confidence', { signal }),
-      listDicts('size', { signal }),
-      listDicts('color', { signal }),
-      listDicts('material', { signal }),
-      listDicts('fabric', { signal }),
-      listDicts('style', { signal }),
-      listDicts('scene', { signal }),
-      listDicts('factory_level', { signal })
-    ])
+    const [quoteConfidence, sizes, colors, materials, fabrics, styles, scenes, levels, dimA, dimB, dimC, dimD, dimF] =
+      await Promise.all([
+        listDicts('quote_confidence', { signal }),
+        listDicts('size', { signal }),
+        listDicts('color', { signal }),
+        listDicts('material', { signal }),
+        listDicts('fabric', { signal }),
+        listDicts('style', { signal }),
+        listDicts('scene', { signal }),
+        listDicts('factory_level', { signal }),
+        listDicts('six_dim_A', { signal }),
+        listDicts('six_dim_B', { signal }),
+        listDicts('six_dim_C', { signal }),
+        listDicts('six_dim_D', { signal }),
+        listDicts('six_dim_F', { signal })
+      ])
     quoteConfidenceOptions.value = quoteConfidence
     sizeOptions.value = sizes
     colorOptions.value = colors
@@ -477,6 +503,7 @@ async function loadDicts() {
     styleOptions.value = styles
     sceneOptions.value = scenes
     productLevelOptions.value = levels
+    sixDimDicts.value = { A: dimA, B: dimB, C: dimC, D: dimD, F: dimF }
   } catch (e) {
     console.error('加载字典失败', e)
   }
@@ -573,7 +600,7 @@ function openEditModal() {
     referencePriceBand: r.referencePriceBand,
     productLevel: r.productLevel,
     warrantyYears: r.warrantyYears,
-    sixDimTagsJson: r.sixDimTags ? JSON.stringify(r.sixDimTags, null, 2) : '{}',
+    sixDimTagsEdit: Object.fromEntries(sixDimEditKeys.map(k => [k, r.sixDimTags?.[k] ?? null])),
     keySpecsJson: r.keySpecs ? JSON.stringify(r.keySpecs, null, 2) : '{}'
   }
   showEditModal.value = true
@@ -585,18 +612,22 @@ async function handleUpdateProduct() {
     return
   }
 
-  let sixDimTags: Record<string, string> | undefined
+  // 六维标签由下拉/输入组装，空值维度不写入
+  const sixDimTags: Record<string, string> = {}
+  sixDimEditKeys.forEach(k => {
+    const v = editForm.value.sixDimTagsEdit?.[k]
+    if (v && v.trim()) {
+      sixDimTags[k] = v.trim()
+    }
+  })
   let keySpecs: Record<string, string> | undefined
 
   try {
-    if (editForm.value.sixDimTagsJson?.trim()) {
-      sixDimTags = JSON.parse(editForm.value.sixDimTagsJson.trim())
-    }
     if (editForm.value.keySpecsJson?.trim()) {
       keySpecs = JSON.parse(editForm.value.keySpecsJson.trim())
     }
   } catch {
-    errorMessage.value = '六维标签或关键规格 JSON 格式不正确'
+    errorMessage.value = '关键规格 JSON 格式不正确'
     return
   }
 
@@ -1508,11 +1539,19 @@ onBeforeRouteUpdate((to, from) => {
           <n-input-number v-model:value="editForm.warrantyYears" :min="0" placeholder="保修年限" />
         </n-form-item>
         <n-form-item label="六维标签">
-          <n-input
-            v-model:value="editForm.sixDimTagsJson"
-            type="textarea"
-            placeholder="{&quot;A&quot;:&quot;现代&quot;,&quot;B&quot;:&quot;简约&quot;}"
-          />
+          <div class="six-dim-edit-grid">
+            <div v-for="dimKey in sixDimEditDisplayKeys" :key="dimKey" class="six-dim-edit-item">
+              <span class="six-dim-edit-label">{{ editSixDimSchema.dims[dimKey]?.label ?? `维度 ${dimKey}` }}</span>
+              <n-select
+                :value="editForm.sixDimTagsEdit?.[dimKey] ?? null"
+                :options="sixDimEditOptions(dimKey)"
+                placeholder="请选择"
+                clearable
+                filterable
+                @update:value="(v: string | null) => { if (editForm.sixDimTagsEdit) editForm.sixDimTagsEdit[dimKey] = v }"
+              />
+            </div>
+          </div>
         </n-form-item>
         <n-form-item label="关键规格">
           <n-input
@@ -1651,3 +1690,25 @@ onBeforeRouteUpdate((to, from) => {
     </n-modal>
   </PageContainer>
 </template>
+
+<style scoped>
+.six-dim-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 16px;
+  width: 100%;
+}
+
+.six-dim-edit-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.six-dim-edit-label {
+  flex-shrink: 0;
+  min-width: 96px;
+  font-size: 13px;
+  color: #606266;
+}
+</style>

@@ -218,6 +218,7 @@ public class SecurityConfig {
 
                 // 字典写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/dicts").hasAuthority(Permissions.DICT_CREATE)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/dicts/six-dim-schema/*/*").hasAuthority(Permissions.DICT_UPDATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/dicts/*/*").hasAuthority(Permissions.DICT_UPDATE)
                 .requestMatchers(HttpMethod.PATCH, "/api/v1/dicts/*/*/status").hasAuthority(Permissions.DICT_UPDATE)
 

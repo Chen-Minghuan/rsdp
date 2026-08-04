@@ -1,5 +1,5 @@
 import { apiClient, type ApiResult } from './client'
-import type { DictItem, DictTypeSummary } from '@/types/dict'
+import type { DictItem, DictTypeSummary, SixDimSchemaData } from '@/types/dict'
 import type { ApiOptions } from './product'
 
 export interface DictCreatePayload {
@@ -9,6 +9,8 @@ export interface DictCreatePayload {
   dictNameEn?: string
   /** 父级编码（如 six_dim_* 类型的所属品类码），可选 */
   parentCode?: string
+  /** 备注说明（六维字典为视觉判别要点），可选 */
+  remark?: string
 }
 
 /**
@@ -34,10 +36,12 @@ export interface DictUpdatePayload {
   dictNameEn?: string
   aliases?: string[]
   sortOrder?: number
+  /** 备注（六维字典为视觉判别要点）；不传不修改，传空串清空 */
+  remark?: string
 }
 
 /**
- * 更新字典项（名称 / 英文名 / 别名 / 排序），null 字段不修改；编码与类型不可改。
+ * 更新字典项（名称 / 英文名 / 别名 / 排序 / 备注），undefined 字段不修改；编码与类型不可改。
  */
 export async function updateDict(
   dictType: string,
@@ -86,5 +90,43 @@ export async function listAllDicts(dictType: string, options?: ApiOptions): Prom
     params: { all: true },
     signal: options?.signal
   })
+  return result.data
+}
+
+/**
+ * 查询指定品类的六维标签维度定义（未知品类后端回退 GENERIC）。
+ */
+export async function getSixDimSchema(categoryCode: string, options?: ApiOptions): Promise<SixDimSchemaData> {
+  const { data: result } = await apiClient.get<ApiResult<SixDimSchemaData>>('/v1/dicts/six-dim-schema', {
+    params: { categoryCode },
+    signal: options?.signal
+  })
+  return result.data
+}
+
+/**
+ * 查询全部品类的六维标签维度定义（字典管理中心维护入口数据源）。
+ */
+export async function listSixDimSchemas(options?: ApiOptions): Promise<SixDimSchemaData[]> {
+  const { data: result } = await apiClient.get<ApiResult<SixDimSchemaData[]>>('/v1/dicts/six-dim-schema', {
+    signal: options?.signal
+  })
+  return result.data
+}
+
+/**
+ * 更新某品类某维度的标签与说明（需 dict:update 权限）。
+ */
+export async function updateSixDimSchemaDim(
+  categoryCode: string,
+  dimKey: string,
+  payload: { label: string; description?: string },
+  options?: ApiOptions
+): Promise<SixDimSchemaData> {
+  const { data: result } = await apiClient.put<ApiResult<SixDimSchemaData>>(
+    `/v1/dicts/six-dim-schema/${categoryCode}/${dimKey}`,
+    payload,
+    { signal: options?.signal }
+  )
   return result.data
 }

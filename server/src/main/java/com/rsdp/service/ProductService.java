@@ -60,6 +60,7 @@ public class ProductService {
     private final UserFactoryService userFactoryService;
     private final RspuCodeService rspuCodeService;
     private final RskuCodeService rskuCodeService;
+    private final ProductSubjectCropService subjectCropService;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
     private String maxFileSize;
@@ -367,6 +368,11 @@ public class ProductService {
             imageAssetsMapper.insert(imageAsset);
             auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
             imageIds.add(imageId);
+
+            // 主图智能裁剪：AI 识别产品主体并替换主图存储与元数据，失败时回退原图
+            if (isPrimary) {
+                subjectCropService.cropAndReplacePrimary(image.getBytes(), rspuId, variantId, imageId, storagePath);
+            }
         }
         registerStorageRollbackCleanup(storedObjectKeys);
         return imageIds;
@@ -447,6 +453,8 @@ public class ProductService {
         inputData.put("imageId", imageId);
         inputData.put("objectKey", storagePath);
         inputData.put("originalFilename", filename);
+        // 文档导入标记：图片已经过页面级主体裁剪，异步管线跳过二次主体检测
+        inputData.put("source", "document_import");
         if (pageOcr != null) {
             inputData.put("pageOcr", pageOcr);
         }

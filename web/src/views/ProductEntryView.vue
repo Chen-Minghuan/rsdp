@@ -15,9 +15,10 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NSelect,
+  useMessage,
   type UploadFileInfo
 } from 'naive-ui'
-import { uploadProductImages } from '@/api/product'
+import { uploadProductImages, updateProduct } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import { listDicts } from '@/api/dict'
 import type { TaskItem } from '@/types/task'
@@ -26,6 +27,7 @@ import type { OcrResult } from '@/types/product'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
 
 const router = useRouter()
+const message = useMessage()
 
 const TASKS_STORAGE_KEY = 'rsdp:product-entry:tasks'
 
@@ -36,6 +38,52 @@ const errorMessage = ref('')
 const categoryCode = ref<string | null>(null)
 const categoryOptions = ref<DictItem[]>([])
 const currentSixDimSchema = computed(() => getSixDimSchema(categoryCode.value ?? undefined))
+
+// ---------- 六维标签即时修正 ----------
+/** 六维维度键（E 维表面材质与材质标签同源，不在修正区展示）。 */
+const sixDimEditKeys = ['A', 'B', 'C', 'D', 'E', 'F'] as const
+/** 修正区展示的维度（不含 E，E 随材质标签展示）。 */
+const sixDimEditDisplayKeys = sixDimEditKeys.filter(k => k !== 'E')
+/** 六维字典（一次拉全，按已选品类的 parentCode 过滤）。 */
+const sixDimDicts = ref<Record<string, DictItem[]>>({ A: [], B: [], C: [], D: [], F: [] })
+/** 按任务 ID 标记六维修正保存中。 */
+const sixDimSaving = ref<Record<string, boolean>>({})
+
+/** 某维度的下拉选项：字典枚举按品类过滤，label 展示中文名、value 为带前缀字典码。 */
+function sixDimOptions(dimKey: string): { label: string; value: string }[] {
+  const category = categoryCode.value?.toUpperCase()
+  if (!category) return []
+  return (sixDimDicts.value[dimKey] || [])
+    .filter(d => d.parentCode?.toUpperCase() === category)
+    .map(d => ({ label: d.dictName, value: d.dictCode }))
+}
+
+/** 读取任务识别结果中某维度的当前值。 */
+function sixDimValue(task: TaskItem, dimKey: string): string | null {
+  const tags = task.result.sixDimTags as Record<string, string> | undefined
+  return tags?.[dimKey] ?? null
+}
+
+/** 修正某维度值：合并其余维度后整体提交，成功后同步本地任务结果。 */
+async function handleSixDimChange(task: TaskItem, dimKey: string, value: string | null) {
+  const tags: Record<string, string> = { ...((task.result.sixDimTags as Record<string, string>) || {}) }
+  if (value && value.trim()) {
+    tags[dimKey] = value.trim()
+  } else {
+    delete tags[dimKey]
+  }
+  sixDimSaving.value[task.taskId] = true
+  try {
+    await updateProduct(task.rspuId, { sixDimTags: tags })
+    task.result.sixDimTags = tags
+    saveTasks()
+    message.success(`已修正「${currentSixDimSchema.value.dims[dimKey]?.label ?? `维度 ${dimKey}`}」`)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '六维标签修正失败')
+  } finally {
+    sixDimSaving.value[task.taskId] = false
+  }
+}
 
 const selectedFiles = computed(() =>
   fileList.value.map(item => item.file).filter((f): f is File => f !== null)
@@ -148,7 +196,16 @@ async function pollTask(taskItem: TaskItem, signal?: AbortSignal) {
 
 async function loadCategoryDicts() {
   try {
-    categoryOptions.value = await listDicts('category')
+    const [categories, dimA, dimB, dimC, dimD, dimF] = await Promise.all([
+      listDicts('category'),
+      listDicts('six_dim_A'),
+      listDicts('six_dim_B'),
+      listDicts('six_dim_C'),
+      listDicts('six_dim_D'),
+      listDicts('six_dim_F')
+    ])
+    categoryOptions.value = categories
+    sixDimDicts.value = { A: dimA, B: dimB, C: dimC, D: dimD, F: dimF }
   } catch (e) {
     console.error('加载品类字典失败', e)
   }
@@ -456,31 +513,25 @@ function formatPrice(ocr?: OcrResult): string {
                   {{ Array.isArray(task.result.sceneTags) ? task.result.sceneTags.join('、') : '-' }}
                 </n-descriptions-item>
                 <n-descriptions-item label="六维标签">
-                  <n-descriptions
+                  <div
                     v-if="task.result.sixDimTags && typeof task.result.sixDimTags === 'object'"
-                    bordered
-                    :column="1"
-                    size="small"
+                    class="six-dim-edit-grid"
                   >
-                    <n-descriptions-item :label="currentSixDimSchema.dims.A?.label ?? '维度 A'">
-                      {{ (task.result.sixDimTags as Record<string, string>).A || '-' }}
-                    </n-descriptions-item>
-                    <n-descriptions-item :label="currentSixDimSchema.dims.B?.label ?? '维度 B'">
-                      {{ (task.result.sixDimTags as Record<string, string>).B || '-' }}
-                    </n-descriptions-item>
-                    <n-descriptions-item :label="currentSixDimSchema.dims.C?.label ?? '维度 C'">
-                      {{ (task.result.sixDimTags as Record<string, string>).C || '-' }}
-                    </n-descriptions-item>
-                    <n-descriptions-item :label="currentSixDimSchema.dims.D?.label ?? '维度 D'">
-                      {{ (task.result.sixDimTags as Record<string, string>).D || '-' }}
-                    </n-descriptions-item>
-                    <n-descriptions-item :label="currentSixDimSchema.dims.E?.label ?? '维度 E'">
-                      {{ (task.result.sixDimTags as Record<string, string>).E || '-' }}
-                    </n-descriptions-item>
-                    <n-descriptions-item :label="currentSixDimSchema.dims.F?.label ?? '维度 F'">
-                      {{ (task.result.sixDimTags as Record<string, string>).F || '-' }}
-                    </n-descriptions-item>
-                  </n-descriptions>
+                    <div v-for="dimKey in sixDimEditDisplayKeys" :key="dimKey" class="six-dim-edit-item">
+                      <span class="six-dim-edit-label">{{ currentSixDimSchema.dims[dimKey]?.label ?? `维度 ${dimKey}` }}</span>
+                      <n-select
+                        :value="sixDimValue(task, dimKey)"
+                        :options="sixDimOptions(dimKey)"
+                        size="small"
+                        clearable
+                        filterable
+                        placeholder="请选择"
+                        :loading="!!sixDimSaving[task.taskId]"
+                        :disabled="!!sixDimSaving[task.taskId]"
+                        @update:value="(v: string | null) => handleSixDimChange(task, dimKey, v)"
+                      />
+                    </div>
+                  </div>
                   <span v-else>-</span>
                 </n-descriptions-item>
               </n-descriptions>
@@ -543,3 +594,25 @@ function formatPrice(ocr?: OcrResult): string {
     </n-card>
   </n-space>
 </template>
+
+<style scoped>
+.six-dim-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px 12px;
+  width: 100%;
+}
+
+.six-dim-edit-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.six-dim-edit-label {
+  flex-shrink: 0;
+  min-width: 88px;
+  font-size: 12px;
+  color: #606266;
+}
+</style>

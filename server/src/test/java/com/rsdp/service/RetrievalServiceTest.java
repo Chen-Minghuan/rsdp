@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.config.properties.RetrievalProperties;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.request.SimilarProductRequest;
 import com.rsdp.dto.response.SimilarProductResponse;
@@ -59,14 +60,21 @@ class RetrievalServiceTest {
     @Mock
     private DictService dictService;
 
+    @Mock
+    private DictResolverService dictResolverService;
+
+    private RetrievalProperties retrievalProperties;
+
     private RetrievalService retrievalService;
 
     @BeforeEach
     void setUp() {
-        // 构造函数注入真实 ObjectMapper，避免反射设值
+        // 构造函数注入真实 ObjectMapper 与默认配置（六维 rerank 开关默认关），避免反射设值
+        retrievalProperties = new RetrievalProperties();
         retrievalService = new RetrievalService(
             embeddingService, chromaDbClient, rspuMapper, imageAssetsMapper,
-            new ObjectMapper(), visionService, rspuStyleMapper, dictService);
+            new ObjectMapper(), visionService, rspuStyleMapper, dictService,
+            dictResolverService, retrievalProperties);
         var user = User.withUsername("admin").password("").roles("ADMIN").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
@@ -306,6 +314,91 @@ class RetrievalServiceTest {
         assertThat(results).hasSize(3);
         assertThat(results).extracting(SimilarProductResponse::getRspuId)
             .containsExactlyInAnyOrder("RSPU-A", "RSPU-B", "RSPU-C");
+    }
+
+    @Test
+    void searchSimilar_byImage_sixDimRerankDisabledByDefault_shouldNotApplySixDimBoost() {
+        // Given：查询图与候选六维完全一致，但开关默认关闭，不应产生「形态匹配」加成
+        SimilarProductRequest request = new SimilarProductRequest();
+        request.setImage(new MockMultipartFile("image", "test.jpg", "image/jpeg", "fake".getBytes()));
+        request.setTopK(5);
+
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.3f, 0.4f});
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("MC");
+        labels.setSixDimTags(Map.of("A", "直线条", "B", "高靠背"));
+        when(visionService.recognizeImage(any())).thenReturn(labels);
+
+        Map<String, Object> response = Map.of(
+            "ids", List.of(List.of("IMG-001")),
+            "distances", List.of(List.of(0.1)),
+            "metadatas", List.of(List.of(
+                Map.of("rspu_id", "RSPU-001", "category_code", "SF", "positioning_label", "MC")
+            ))
+        );
+        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+
+        ImageAssets img1 = new ImageAssets();
+        img1.setImageId("IMG-001");
+        img1.setStorageUrl("http://localhost/images/IMG-001.jpg");
+        when(imageAssetsMapper.selectBatchIds(any())).thenReturn(List.of(img1));
+
+        RspuMaster rspu1 = buildRspu("RSPU-001", "SF", "MC", null, null, null,
+            "{\"A\":\"直线条\",\"B\":\"高靠背\"}");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu1));
+
+        // When
+        List<SimilarProductResponse> results = retrievalService.searchSimilar(request);
+
+        // Then
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getMatchReasons()).noneMatch(r -> r.startsWith("形态匹配"));
+    }
+
+    @Test
+    void searchSimilar_byImage_sixDimRerankEnabled_shouldBoostWithNormalizedCodes() {
+        // Given：开启开关后，查询图枚举名「一字型」与存库前缀码「SF-一字型」经字典归一为同码，应命中
+        retrievalProperties.setSixDimRerankEnabled(true);
+
+        SimilarProductRequest request = new SimilarProductRequest();
+        request.setImage(new MockMultipartFile("image", "test.jpg", "image/jpeg", "fake".getBytes()));
+        request.setTopK(5);
+
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.3f, 0.4f});
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("MC");
+        labels.setSixDimTags(Map.of("A", "一字型"));
+        when(visionService.recognizeImage(any())).thenReturn(labels);
+
+        Map<String, Object> response = Map.of(
+            "ids", List.of(List.of("IMG-001")),
+            "distances", List.of(List.of(0.1)),
+            "metadatas", List.of(List.of(
+                Map.of("rspu_id", "RSPU-001", "category_code", "SF", "positioning_label", "MC")
+            ))
+        );
+        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+
+        ImageAssets img1 = new ImageAssets();
+        img1.setImageId("IMG-001");
+        img1.setStorageUrl("http://localhost/images/IMG-001.jpg");
+        when(imageAssetsMapper.selectBatchIds(any())).thenReturn(List.of(img1));
+
+        RspuMaster rspu1 = buildRspu("RSPU-001", "SF", "MC", null, null, null,
+            "{\"A\":\"SF-一字型\"}");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu1));
+
+        when(dictResolverService.resolveSixDimCode("A", "SF", "一字型")).thenReturn("SF-一字型");
+        when(dictResolverService.resolveSixDimCode("A", "SF", "SF-一字型")).thenReturn("SF-一字型");
+
+        // When
+        List<SimilarProductResponse> results = retrievalService.searchSimilar(request);
+
+        // Then
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getMatchReasons()).contains("形态匹配 1 维");
     }
 
     private RspuMaster buildRspu(String rspuId, String categoryCode, String positioningLabel,

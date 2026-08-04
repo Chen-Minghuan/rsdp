@@ -11,6 +11,8 @@ export interface DictItem {
   status?: string
   /** 别名列表（AI 识别同义词归一），仅全量查询（all=true）返回 */
   aliases?: string[]
+  /** 备注说明；六维字典为视觉判别要点（AI prompt 锚点） */
+  remark?: string
 }
 
 /**
@@ -19,4 +21,23 @@ export interface DictItem {
 export interface DictTypeSummary {
   dictType: string
   count: number
+}
+
+/**
+ * 六维标签单维度定义。
+ */
+export interface SixDimDimDef {
+  /** 维度标签（如 轮廓形态） */
+  label: string
+  /** 维度说明（取值范围提示） */
+  description: string
+}
+
+/**
+ * 六维标签维度定义（品类 × A-F 维度键，V25 配置化）。
+ */
+export interface SixDimSchemaData {
+  categoryCode: string
+  categoryName: string
+  dims: Record<string, SixDimDimDef>
 }
