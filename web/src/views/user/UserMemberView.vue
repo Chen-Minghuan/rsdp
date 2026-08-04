@@ -271,8 +271,8 @@ const memberColumns = computed<DataTableColumns<CompanyMember>>(() => [
               onPositiveClick: () => doRemoveMember(row)
             },
             {
-              trigger: () => h(NButton, { size: 'small', type: 'error', quaternary: true }, () => '移出'),
-              default: () => `确定移出「${row.nickname || row.username}」吗？`
+              trigger: () => h(NButton, { size: 'small', type: 'error', quaternary: true }, () => '移出企业'),
+              default: () => `确定将「${row.nickname || row.username}」移出企业吗？`
             }
           )
         : null
@@ -347,7 +347,7 @@ const memberColumns = computed<DataTableColumns<CompanyMember>>(() => [
             style="width: 100%; padding: 6px 0; border-bottom: 1px solid var(--rsdp-border);"
           >
             <span>{{ user.nickname || user.username }}（{{ user.username }}）</span>
-            <n-button size="small" type="primary" quaternary @click="handleJoin(user)">加入企业</n-button>
+            <n-button size="small" type="primary" quaternary @click="handleJoin(user)">邀请加入</n-button>
           </n-space>
         </n-space>
       </n-card>

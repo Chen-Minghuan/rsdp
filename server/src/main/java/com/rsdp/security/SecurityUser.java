@@ -17,7 +17,12 @@ public class SecurityUser extends User {
 
     public SecurityUser(String userId, String username, String password,
                         Collection<? extends GrantedAuthority> authorities) {
-        super(username, password, authorities);
+        this(userId, username, password, true, authorities);
+    }
+
+    public SecurityUser(String userId, String username, String password, boolean enabled,
+                        Collection<? extends GrantedAuthority> authorities) {
+        super(username, password, enabled, true, true, true, authorities);
         this.userId = userId;
     }
 

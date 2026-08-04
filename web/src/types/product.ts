@@ -355,12 +355,78 @@ export interface DocumentImportResult {
 }
 
 /**
+ * 场景图拆分录入的单件产品明细。
+ */
+export interface SceneImportProduct {
+  bbox: { x: number; y: number; width: number; height: number }
+  categoryCode: string
+  label?: string
+  status: 'success' | 'failed'
+  rspuId?: string
+  taskId?: string
+  imageId?: string
+  error?: string
+}
+
+/**
+ * 场景图拆分录入批次结果。
+ */
+export interface SceneImportResult {
+  batchId: string
+  totalProducts: number
+  successCount: number
+  failedCount: number
+  products: SceneImportProduct[]
+}
+
+/**
+ * 价格列角色：factory=出厂价（生成工厂报价 RSKU）；sales=销售价（仅记录为产品参考零售价）。
+ */
+export type PriceColumnRole = 'factory' | 'sales'
+
+/**
+ * 价格列导入模式（仅前端使用）：角色 + none（不导入）。
+ */
+export type PriceColumnImportMode = PriceColumnRole | 'none'
+
+/**
  * Excel AI 导入中识别出的价格列。
  */
 export interface PriceColumnInfo {
   header: string
   materialName: string
   suggestedField: string
+  /** 后端建议的价格列角色；缺省时前端默认 factory */
+  role?: PriceColumnRole
+}
+
+/**
+ * 用户确认后的价格列选择（「不导入」的列不进入该数组）。
+ */
+export interface PriceColumnSelection {
+  header: string
+  role: PriceColumnRole
+}
+
+/**
+ * Excel 工作表（Sheet）信息。
+ */
+export interface SheetInfo {
+  index: number
+  name: string
+  rowCount: number
+}
+
+/**
+ * Excel AI 辅助导入：品类原始值 → 字典码归一建议。
+ */
+export interface CategoryMappingItem {
+  /** Excel 中的原始品类值，如「茶桌」 */
+  rawValue: string
+  /** 建议的字典码，如 "TB"；无法归一为 null */
+  suggestedCode: string | null
+  /** 建议来源：字典名匹配/别名库/AI 归一/无建议 */
+  source: 'dict' | 'alias' | 'ai' | 'none'
 }
 
 /**
@@ -372,6 +438,11 @@ export interface ExcelAiMappingResponse {
   suggestedMapping: Record<string, string | null>
   previewRows: Record<string, string>[]
   priceColumns: PriceColumnInfo[]
+  categoryMappings?: CategoryMappingItem[]
+  /** 本次预览的工作表索引（回显） */
+  sheetIndex?: number
+  /** 文件内全部工作表列表；多 sheet 时前端展示切换器 */
+  sheets?: SheetInfo[]
   notes?: string
 }
 
@@ -383,10 +454,15 @@ export interface ExcelAiMappingRequest {
   mapping: Record<string, string>
   updateIfExists?: boolean
   categoryHint?: string
+  /** 用户确认后的品类归一映射（rawValue → dictCode） */
+  categoryMapping?: Record<string, string>
   defaultFactoryCode?: string
   defaultShippingFrom?: string
   defaultMoq?: number
+  /** 旧版价格列选择（保留兼容；不传 priceColumnSelections 时后端按全 factory 处理）。空数组=不选，缺省=全部 */
   selectedPriceColumns?: string[]
+  /** 价格列角色选择（优先于 selectedPriceColumns；「不导入」的列不进数组）。空数组=不选，缺省=全部按 factory */
+  priceColumnSelections?: PriceColumnSelection[]
 }
 
 /**
@@ -405,8 +481,12 @@ export interface ExcelAiImportResult {
   totalRows: number
   successCount: number
   failedCount: number
+  /** 跳过行数（说明行/重复表头/已存在跳过），成功+失败+跳过 ≈ 总行数 */
+  skippedCount?: number
   taskIds: string[]
   rspuIds: string[]
+  /** 异步任务与 RSPU 的配对列表（优先使用；旧 taskIds/rspuIds 数组不保证对齐）。taskId 为 null 表示该 RSPU 无识别任务 */
+  tasks?: { taskId: string | null; rspuId: string }[]
   failures: ExcelAiImportFailure[]
 }
 
@@ -416,10 +496,15 @@ export interface ExcelAiImportResult {
 export interface ExcelAiImportStatus {
   batchId: string
   fileName: string
+  /** 批次状态机：pending → importing → done / failed */
   status: string
   totalRows: number
   successCount: number
   failedCount: number
+  /** 跳过行数（说明行/重复表头/已存在跳过） */
+  skippedCount?: number
+  /** 异步任务与 RSPU 的配对列表（用于超时恢复识别进度轮询）。taskId 为 null 表示该 RSPU 无识别任务 */
+  tasks?: { taskId: string | null; rspuId: string }[]
   failures: ExcelAiImportFailure[]
   createdAt: string
   updatedAt: string

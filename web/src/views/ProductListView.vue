@@ -28,9 +28,10 @@ import {
   listProducts,
   getProductStatusCounts,
   updateProductStatus,
-  deleteProduct
+  deleteProduct,
+  batchDeleteProducts
 } from '@/api/product'
-import { addFavorite, removeFavorite, checkFavorites } from '@/api/favorite'
+import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
 import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
@@ -165,6 +166,8 @@ const factoryOptions = computed(() => [
 /** 全库视图对工厂管理员只读；平台运营人员（ADMIN/EDITOR）在全库视图下仍可编辑 */
 const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value && isFactoryAdmin.value)
 
+const batchDeleting = ref(false)
+
 async function toggleFullCatalog(value: boolean) {
   if (savingPreference.value) return
   savingPreference.value = true
@@ -185,6 +188,10 @@ async function toggleFullCatalog(value: boolean) {
 // ---------- 收藏 ----------
 const favoritedIds = ref<Set<string>>(new Set())
 const favoriteToggling = ref<string | null>(null)
+const favoriteFolders = ref<{ folderId: string; folderName: string }[]>([])
+const showFavoriteFolderModal = ref(false)
+const selectedFavoriteFolderId = ref<string | null>(null)
+const pendingFavoriteRow = ref<ProductSummary | null>(null)
 
 async function refreshFavoritedStatus() {
   if (products.value.length === 0 || isRecycledTab.value) {
@@ -199,20 +206,57 @@ async function refreshFavoritedStatus() {
   }
 }
 
+async function loadFavoriteFolders() {
+  try {
+    favoriteFolders.value = await listFavoriteFolders()
+  } catch (e) {
+    console.error('加载收藏文件夹失败', e)
+  }
+}
+
 async function toggleFavorite(row: ProductSummary) {
   if (favoriteToggling.value) return
+
+  if (favoritedIds.value.has(row.rspuId)) {
+    message.warning('该产品已在收藏中')
+    return
+  }
+
   favoriteToggling.value = row.rspuId
   try {
-    if (favoritedIds.value.has(row.rspuId)) {
-      await removeFavorite(row.rspuId)
-      favoritedIds.value.delete(row.rspuId)
-      message.success('已取消收藏')
-    } else {
-      await addFavorite({ rspuId: row.rspuId })
-      favoritedIds.value.add(row.rspuId)
-      message.success('已收藏')
+    await loadFavoriteFolders()
+    if (favoriteFolders.value.length > 0) {
+      pendingFavoriteRow.value = row
+      selectedFavoriteFolderId.value = null
+      showFavoriteFolderModal.value = true
+      return
     }
+
+    const result = await addFavorite({ rspuId: row.rspuId })
+    favoritedIds.value.add(row.rspuId)
     favoritedIds.value = new Set(favoritedIds.value)
+    message.success(`已收藏（${result.favoriteId}）`)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '收藏操作失败')
+  } finally {
+    favoriteToggling.value = null
+  }
+}
+
+async function confirmAddFavorite() {
+  const row = pendingFavoriteRow.value
+  if (!row) return
+  favoriteToggling.value = row.rspuId
+  try {
+    const result = await addFavorite({
+      rspuId: row.rspuId,
+      folderId: selectedFavoriteFolderId.value || undefined
+    })
+    favoritedIds.value.add(row.rspuId)
+    favoritedIds.value = new Set(favoritedIds.value)
+    showFavoriteFolderModal.value = false
+    pendingFavoriteRow.value = null
+    message.success(`已收藏（${result.favoriteId}）`)
   } catch (e) {
     message.error(e instanceof Error ? e.message : '收藏操作失败')
   } finally {
@@ -392,6 +436,15 @@ function canDeleteRow(row: ProductSummary): boolean {
   const codes = row.factoryCodes || []
   return factoryCodes.value.some(c => codes.includes(c))
 }
+
+/** 已勾选且当前用户有权删除的行（无权限的行由后端逐条返回失败明细，前端只提交可删行） */
+const deletableSelectedKeys = computed(() => {
+  if (!hasSelection.value) return [] as string[]
+  const selected = new Set(selectedRowKeys.value)
+  return products.value
+    .filter((row) => selected.has(row.rspuId) && canDeleteRow(row))
+    .map((row) => row.rspuId)
+})
 
 const columns: DataTableColumns<ProductSummary> = [
   {
@@ -707,6 +760,44 @@ async function loadDicts() {
   }
 }
 
+function handleBatchDelete() {
+  const ids = deletableSelectedKeys.value
+  if (ids.length === 0 || batchDeleting.value) return
+  const skippedCount = selectedRowKeys.value.length - ids.length
+  dialog.warning({
+    title: '批量删除确认',
+    content: skippedCount > 0
+      ? `确定要删除选中的 ${ids.length} 个产品吗？（另有 ${skippedCount} 个无权限删除，将被跳过）删除后可在数据库中恢复，前端列表将不再展示。`
+      : `确定要删除选中的 ${ids.length} 个产品吗？删除后可在数据库中恢复，前端列表将不再展示。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchDeleting.value = true
+      try {
+        const result = await batchDeleteProducts(ids)
+        if (result.failedCount === 0) {
+          message.success(`已删除 ${result.deletedCount} 个产品`)
+          selectedRowKeys.value = []
+        } else {
+          // 部分失败：保留失败项勾选，便于用户核对后重试
+          const failedIds = result.failures.map((f) => f.rspuId)
+          selectedRowKeys.value = failedIds
+          dialog.warning({
+            title: `删除完成：成功 ${result.deletedCount} 个，失败 ${result.failedCount} 个`,
+            content: result.failures.map((f) => `${f.rspuId}：${f.reason}`).join('\n'),
+            positiveText: '确定'
+          })
+        }
+        loadProducts()
+      } catch (e: unknown) {
+        errorMessage.value = e instanceof Error ? e.message : '批量删除产品失败'
+      } finally {
+        batchDeleting.value = false
+      }
+    }
+  })
+}
+
 onMounted(async () => {
   if (!userStore.userInfo) {
     await userStore.fetchUserInfo()
@@ -720,6 +811,7 @@ onMounted(async () => {
   if (typeof query.sceneCode === 'string') sceneCode.value = query.sceneCode
   if (typeof query.materialTag === 'string') materialTag.value = query.materialTag
   loadDicts()
+  loadFavoriteFolders()
   refreshAll()
 })
 
@@ -834,6 +926,14 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
         <n-space v-if="!isRecycledTab" style="margin-bottom: 4px;">
           <n-button v-if="canUpdateProduct" type="primary" @click="handleBatchStatus">修改产品状态</n-button>
           <n-button v-if="canUpdateProduct" type="error" @click="handleBatchPrice">批量修改价格</n-button>
+          <n-button
+            v-if="deletableSelectedKeys.length > 0"
+            type="error"
+            :loading="batchDeleting"
+            @click="handleBatchDelete"
+          >
+            批量删除（{{ deletableSelectedKeys.length }}）
+          </n-button>
           <template v-if="hasSelection && canGenerateQuote">
             <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
             <n-button type="primary" secondary @click="handleBuildQuote">生成报价单</n-button>
@@ -901,6 +1001,31 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
           <n-radio-button value="inactive">下架（仓库中）</n-radio-button>
         </n-radio-group>
       </n-space>
+    </n-modal>
+
+    <!-- 收藏文件夹选择弹窗 -->
+    <n-modal
+      v-model:show="showFavoriteFolderModal"
+      preset="card"
+      title="选择收藏文件夹"
+      style="width: 420px;"
+      @update:show="(show: boolean) => { if (!show) { pendingFavoriteRow = null; favoriteToggling = null } }"
+    >
+      <p style="margin-bottom: 12px; color: var(--rsdp-text-secondary);">
+        选择要放入的文件夹，不选则归入「未归类」。
+      </p>
+      <n-select
+        v-model:value="selectedFavoriteFolderId"
+        :options="favoriteFolders.map(f => ({ label: f.folderName, value: f.folderId }))"
+        clearable
+        placeholder="选择文件夹（可选）"
+      />
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showFavoriteFolderModal = false; pendingFavoriteRow = null; favoriteToggling = null">取消</n-button>
+          <n-button type="primary" :loading="!!favoriteToggling" @click="confirmAddFavorite">确认收藏</n-button>
+        </n-space>
+      </template>
     </n-modal>
   </div>
 </template>

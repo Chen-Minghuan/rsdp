@@ -66,6 +66,9 @@ import com.rsdp.util.IdGenerator;
 @RequiredArgsConstructor
 public class SchemeService {
 
+    /** 单个方案允许的最大明细项数量（性能与安全阈值）。 */
+    public static final int MAX_SCHEME_ITEMS = 50;
+
     private final SchemeMapper schemeMapper;
     private final SchemeItemMapper schemeItemMapper;
     private final RspuSceneMapper rspuSceneMapper;
@@ -91,6 +94,9 @@ public class SchemeService {
     public SchemeResponse createScheme(SchemeCreateRequest request) {
         if (request.getItems() == null || request.getItems().isEmpty()) {
             throw new BusinessException("方案项不能为空");
+        }
+        if (request.getItems().size() > MAX_SCHEME_ITEMS) {
+            throw new BusinessException("方案项数量不能超过 " + MAX_SCHEME_ITEMS + " 个");
         }
         if (!StringUtils.hasText(request.getSchemeName())) {
             throw new BusinessException("方案名称不能为空");
@@ -162,8 +168,9 @@ public class SchemeService {
             schemeItems.add(schemeItem);
         }
 
-        // 同一创建人下不允许存在同名活动方案
-        assertSchemeNameUnique(request.getSchemeName().trim(), SecurityOperatorContext.currentUsername(), null);
+        // 同一项目/用户下不允许存在同名活动方案
+        assertSchemeNameUnique(request.getSchemeName().trim(), request.getProjectId(),
+            SecurityOperatorContext.currentUsername(), null);
 
         // 先写入主表，再写入子表，避免外键约束异常
         Scheme scheme = new Scheme();
@@ -202,6 +209,9 @@ public class SchemeService {
     public SchemeResponse updateScheme(String schemeId, SchemeUpdateRequest request) {
         if (request.getItems() == null || request.getItems().isEmpty()) {
             throw new BusinessException("方案项不能为空");
+        }
+        if (request.getItems().size() > MAX_SCHEME_ITEMS) {
+            throw new BusinessException("方案项数量不能超过 " + MAX_SCHEME_ITEMS + " 个");
         }
         if (!StringUtils.hasText(request.getSchemeName())) {
             throw new BusinessException("方案名称不能为空");
@@ -277,8 +287,12 @@ public class SchemeService {
             schemeItems.add(schemeItem);
         }
 
-        // 同一创建人下不允许存在同名活动方案（排除当前方案自身）
-        assertSchemeNameUnique(request.getSchemeName().trim(), scheme.getCreatedBy(), schemeId);
+        // 同一项目/用户下不允许存在同名活动方案（排除当前方案自身）
+        String effectiveProjectId = StringUtils.hasText(request.getProjectId())
+            ? request.getProjectId()
+            : scheme.getProjectId();
+        assertSchemeNameUnique(request.getSchemeName().trim(), effectiveProjectId,
+            scheme.getCreatedBy(), schemeId);
 
         // 物理删除旧子项
         schemeItemMapper.delete(
@@ -305,11 +319,25 @@ public class SchemeService {
         return getSchemeDetail(schemeId);
     }
 
-    private void assertSchemeNameUnique(String schemeName, String owner, String excludeSchemeId) {
+    /**
+     * 校验同一项目/用户下是否存在同名活动方案。
+     *
+     * <p>存在项目 ID 时按项目维度去重；无项目 ID 时按创建人维度去重。</p>
+     *
+     * @param schemeName      方案名称
+     * @param projectId       所属项目 ID（可为空）
+     * @param owner           创建人用户名
+     * @param excludeSchemeId 需要排除的方案 ID（更新时排除自身）
+     */
+    private void assertSchemeNameUnique(String schemeName, String projectId, String owner, String excludeSchemeId) {
         QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
             .eq("scheme_name", schemeName)
-            .eq("status", "active")
-            .eq("created_by", owner);
+            .eq("status", "active");
+        if (StringUtils.hasText(projectId)) {
+            wrapper.eq("project_id", projectId);
+        } else {
+            wrapper.eq("created_by", owner);
+        }
         if (excludeSchemeId != null) {
             wrapper.ne("scheme_id", excludeSchemeId);
         }
@@ -643,7 +671,8 @@ public class SchemeService {
         String baseName = StringUtils.hasText(request.getSchemeName())
             ? request.getSchemeName().trim()
             : template.getSchemeName() + "-套用";
-        String newName = resolveUniqueSchemeName(baseName, SecurityOperatorContext.currentUsername());
+        String newName = resolveUniqueSchemeName(baseName, project.getProjectId(),
+            SecurityOperatorContext.currentUsername());
 
         Scheme scheme = new Scheme();
         scheme.setSchemeId(newSchemeId);
@@ -671,14 +700,27 @@ public class SchemeService {
         return response;
     }
 
-    private String resolveUniqueSchemeName(String baseName, String owner) {
+    /**
+     * 在指定项目/用户范围内生成不重复的方案名称。
+     *
+     * @param baseName 基础名称
+     * @param projectId 所属项目 ID（可为空）
+     * @param owner     创建人用户名
+     * @return 可用的方案名称
+     */
+    private String resolveUniqueSchemeName(String baseName, String projectId, String owner) {
         String name = baseName;
         int suffix = 1;
         while (true) {
-            Long count = schemeMapper.selectCount(new QueryWrapper<Scheme>()
+            QueryWrapper<Scheme> wrapper = new QueryWrapper<Scheme>()
                 .eq("scheme_name", name)
-                .eq("status", "active")
-                .eq("created_by", owner));
+                .eq("status", "active");
+            if (StringUtils.hasText(projectId)) {
+                wrapper.eq("project_id", projectId);
+            } else {
+                wrapper.eq("created_by", owner);
+            }
+            Long count = schemeMapper.selectCount(wrapper);
             if (count == null || count == 0) {
                 return name;
             }
@@ -792,10 +834,12 @@ public class SchemeService {
         response.setFactoryCode(item.getFactoryCode());
         response.setFactoryName(factory != null ? factory.getFactoryName() : null);
         response.setFactorySku(rsku != null ? rsku.getFactorySku() : null);
-        response.setFactoryPrice(item.getFactoryPrice());
+        // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见；掩码时小计同步隐藏
+        boolean canViewPrice = dataScopeHelper.canViewFactoryPrice(item.getFactoryCode());
+        response.setFactoryPrice(canViewPrice ? item.getFactoryPrice() : null);
         int quantity = item.getQuantity() != null && item.getQuantity() > 0 ? item.getQuantity() : 1;
         response.setQuantity(quantity);
-        if (item.getFactoryPrice() != null) {
+        if (canViewPrice && item.getFactoryPrice() != null) {
             response.setSubtotal(item.getFactoryPrice().multiply(BigDecimal.valueOf(quantity)));
         }
         response.setLeadTimeDays(item.getLeadTimeDays());

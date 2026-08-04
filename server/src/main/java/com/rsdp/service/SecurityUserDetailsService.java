@@ -28,10 +28,11 @@ public class SecurityUserDetailsService implements UserDetailsService {
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         SysUser user = sysUserMapper.selectByUsername(username);
-        if (user == null || !"active".equals(user.getStatus())) {
-            throw new UsernameNotFoundException("用户不存在或已禁用: " + username);
+        if (user == null) {
+            throw new UsernameNotFoundException("用户不存在: " + username);
         }
 
+        boolean enabled = "active".equals(user.getStatus());
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
 
         // 保留角色前缀，兼容现有基于角色的配置
@@ -47,6 +48,7 @@ public class SecurityUserDetailsService implements UserDetailsService {
             user.getUserId(),
             user.getUsername(),
             user.getPasswordHash(),
+            enabled,
             authorities
         );
     }

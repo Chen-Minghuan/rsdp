@@ -140,6 +140,20 @@ public class ExcelImportRowService {
         return rowMapper.selectByBatchId(batchId);
     }
 
+    /**
+     * 清理批次下全部行级记录。
+     *
+     * <p>done 批次「以更新模式重新导入」时调用：整体删除比逐行覆盖更简单安全——
+     * 行记录本质是上一轮导入的结果快照（含唯一约束 batch_id+excel_row_number），
+     * 重新导入会按同一批物理行号重建，旧记录无保留价值。</p>
+     *
+     * @param batchId 批次 ID
+     */
+    @Transactional
+    public void deleteByBatch(String batchId) {
+        rowMapper.deleteByBatchId(batchId);
+    }
+
     private String toJson(Object value) {
         if (value == null) {
             return null;

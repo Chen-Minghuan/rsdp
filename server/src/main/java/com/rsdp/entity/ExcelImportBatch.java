@@ -47,6 +47,8 @@ public class ExcelImportBatch {
     private Integer headerRowCount;
     private Integer dataStartRow;
     private String importNote;
+    /** 多 Sheet 文件导入的工作表索引（0-based，默认 0） */
+    private Integer sheetIndex;
     private LocalDateTime processedAt;
 
     private String createdBy;

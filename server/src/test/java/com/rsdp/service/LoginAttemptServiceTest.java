@@ -55,21 +55,22 @@ class LoginAttemptServiceTest {
     }
 
     @Test
-    void ipAndUser_shouldBeBlockedIndependently() {
+    void ipAndUser_shouldBeBlockedByCompositeKey() {
         ReflectionTestUtils.setField(loginAttemptService, "maxAttempts", 2);
 
-        // 仅 IP 失败超限 → IP 被锁定，用户未锁定
+        // 同一 IP 下 user3 失败超限，只锁定 user3，不影响同 IP 的 user4
         loginAttemptService.recordFailure("192.168.1.4", "user3");
-        loginAttemptService.recordFailure("192.168.1.4", "user4");
+        loginAttemptService.recordFailure("192.168.1.4", "user3");
 
-        assertThat(loginAttemptService.isBlocked("192.168.1.4", "user5")).isTrue();
+        assertThat(loginAttemptService.isBlocked("192.168.1.4", "user3")).isTrue();
+        assertThat(loginAttemptService.isBlocked("192.168.1.4", "user4")).isFalse();
         assertThat(loginAttemptService.isBlocked("192.168.1.5", "user3")).isFalse();
-        assertThat(loginAttemptService.isBlocked("192.168.1.5", "user4")).isFalse();
 
-        // 仅用户失败超限 → 用户被锁定，IP 未锁定
+        // 同一用户在不同 IP 失败，各 IP 独立计数
         loginAttemptService.recordFailure("192.168.1.5", "user5");
         loginAttemptService.recordFailure("192.168.1.6", "user5");
 
-        assertThat(loginAttemptService.isBlocked("192.168.1.7", "user5")).isTrue();
+        assertThat(loginAttemptService.isBlocked("192.168.1.5", "user5")).isFalse();
+        assertThat(loginAttemptService.isBlocked("192.168.1.6", "user5")).isFalse();
     }
 }

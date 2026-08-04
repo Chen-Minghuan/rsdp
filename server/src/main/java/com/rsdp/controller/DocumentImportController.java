@@ -27,6 +27,7 @@ import java.io.IOException;
 public class DocumentImportController {
 
     private final PdfImportService pdfImportService;
+    private final com.rsdp.service.SceneImportService sceneImportService;
 
     /**
      * 从 PDF 文档批量导入产品。
@@ -41,5 +42,20 @@ public class DocumentImportController {
         @RequestPart("file") MultipartFile file,
         @RequestParam(value = "categoryHint", required = false) String categoryHint) throws IOException {
         return Result.ok(pdfImportService.importPdf(file, categoryHint));
+    }
+
+    /**
+     * 场景图拆分录入：一张室内场景照片，AI 检测家具单品并逐件裁剪建档。
+     *
+     * @param file         场景照片
+     * @param categoryHint 品类提示，可为空（AI 检测品类优先，其次提示，兜底 FS）
+     * @return 批次结果（含逐件明细）
+     * @throws IOException 文件处理失败
+     */
+    @PostMapping("/scene-import")
+    public Result<com.rsdp.dto.response.SceneImportResult> importFromScene(
+        @RequestPart("file") MultipartFile file,
+        @RequestParam(value = "categoryHint", required = false) String categoryHint) throws IOException {
+        return Result.ok(sceneImportService.importScene(file, categoryHint));
     }
 }

@@ -35,11 +35,18 @@ public class VectorBackfillService {
     private final StorageService storageService;
     private final ObjectMapper objectMapper;
 
+    /** 单次扫描页大小（游标翻页，避免大页内存压力） */
+    private static final int SCAN_PAGE_SIZE = 200;
+
     /**
      * 回填指定数量的存量图片向量。
      *
      * <p>对应 RSPU 已写入 style_vector 且 ChromaDB 中向量存在的图片会跳过，避免重复调用
      * embedding API；PG 有向量但 ChromaDB 缺失的记录会直接复用存量向量补偿回填。</p>
+     *
+     * <p>分页使用 created_at + image_id 游标：已完成的图片仍满足过滤条件，固定取第一页
+     * 会导致每次调用都扫到同一批记录、永远无法推进。游标翻页让每次调用跳过已完成项，
+     * 持续向后扫描直到实际处理满 batchSize（成功+失败计数，跳过不计）或候选集耗尽。</p>
      *
      * @param batchSize 本次处理数量
      * @return 处理结果统计
@@ -49,36 +56,59 @@ public class VectorBackfillService {
             batchSize = 100;
         }
 
-        Page<ImageAssets> pageParam = new Page<>(1, batchSize);
-        QueryWrapper<ImageAssets> wrapper = new QueryWrapper<>();
-        wrapper.eq("ai_processed", true)
-            .isNotNull("rspu_id")
-            .isNotNull("storage_path")
-            .orderByAsc("created_at");
-        List<ImageAssets> images = imageAssetsMapper.selectPage(pageParam, wrapper).getRecords();
-
-        // 批量加载 RSPU，减少 N+1
-        Set<String> rspuIds = images.stream()
-            .map(ImageAssets::getRspuId)
-            .collect(Collectors.toSet());
-        Map<String, RspuMaster> rspuMap = rspuIds.isEmpty() ? Map.of() :
-            rspuMapper.selectBatchIds(rspuIds).stream()
-                .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
-
-        // 批量检查「PG 已有向量」的图片在 ChromaDB 中是否真实存在，修复 PG 有/Chroma 缺的死区
-        Set<String> chromaExistingIds = queryChromaExistingIds(images, rspuMap);
-
         int success = 0;
         int failed = 0;
-        for (ImageAssets image : images) {
-            try {
-                RspuMaster rspu = rspuMap.get(image.getRspuId());
-                if (processImage(image, rspu, chromaExistingIds)) {
-                    success++;
+        java.time.LocalDateTime cursorCreatedAt = null;
+        String cursorImageId = null;
+
+        while (success + failed < batchSize) {
+            QueryWrapper<ImageAssets> wrapper = new QueryWrapper<>();
+            wrapper.eq("ai_processed", true)
+                .isNotNull("rspu_id")
+                .isNotNull("storage_path");
+            if (cursorCreatedAt != null) {
+                java.time.LocalDateTime cAt = cursorCreatedAt;
+                String cId = cursorImageId;
+                wrapper.and(w -> w.gt("created_at", cAt)
+                    .or(n -> n.eq("created_at", cAt).gt("image_id", cId)));
+            }
+            wrapper.orderByAsc("created_at").orderByAsc("image_id");
+            List<ImageAssets> images = imageAssetsMapper.selectPage(new Page<>(1, SCAN_PAGE_SIZE), wrapper).getRecords();
+            if (images.isEmpty()) {
+                break;
+            }
+
+            // 批量加载 RSPU，减少 N+1
+            Set<String> rspuIds = images.stream()
+                .map(ImageAssets::getRspuId)
+                .collect(Collectors.toSet());
+            Map<String, RspuMaster> rspuMap = rspuIds.isEmpty() ? Map.of() :
+                rspuMapper.selectBatchIds(rspuIds).stream()
+                    .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+
+            // 批量检查「PG 已有向量」的图片在 ChromaDB 中是否真实存在，修复 PG 有/Chroma 缺的死区
+            Set<String> chromaExistingIds = queryChromaExistingIds(images, rspuMap);
+
+            for (ImageAssets image : images) {
+                if (success + failed >= batchSize) {
+                    break;
                 }
-            } catch (Exception e) {
-                failed++;
-                log.error("回填向量失败，imageId={}", image.getImageId(), e);
+                try {
+                    RspuMaster rspu = rspuMap.get(image.getRspuId());
+                    if (processImage(image, rspu, chromaExistingIds)) {
+                        success++;
+                    }
+                } catch (Exception e) {
+                    failed++;
+                    log.error("回填向量失败，imageId={}", image.getImageId(), e);
+                }
+            }
+
+            ImageAssets last = images.get(images.size() - 1);
+            cursorCreatedAt = last.getCreatedAt();
+            cursorImageId = last.getImageId();
+            if (images.size() < SCAN_PAGE_SIZE) {
+                break; // 候选集已耗尽
             }
         }
 

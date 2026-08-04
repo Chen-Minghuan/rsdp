@@ -54,6 +54,13 @@ const order = ref<OrderDetail | null>(null)
 
 const canUpdateOrder = computed(() => userStore.hasPermission(PERMISSIONS.ORDER_UPDATE))
 const isPending = computed(() => order.value?.status === ORDER_STATUS.PENDING)
+const isTerminal = computed(() =>
+  order.value?.status === ORDER_STATUS.COMPLETED || order.value?.status === ORDER_STATUS.CANCELLED
+)
+const statusText = computed(() => {
+  const value = order.value?.status
+  return value ? (ORDER_STATUS_TEXT[value] ?? value) : '未知'
+})
 
 /** 编辑收件信息弹窗。 */
 const showEditModal = ref(false)
@@ -356,7 +363,7 @@ onMounted(loadDetail)
     <template #actions>
       <n-space>
         <n-button size="small" @click="router.push('/orders')">返回订单列表</n-button>
-        <template v-if="order && canUpdateOrder">
+        <template v-if="order && canUpdateOrder && !isTerminal">
           <n-button v-if="isPending" size="small" @click="openEditModal">编辑收件信息</n-button>
           <n-button
             v-if="isPending"
@@ -407,8 +414,8 @@ onMounted(loadDetail)
           <n-descriptions :column="3" label-placement="left" bordered>
             <n-descriptions-item label="订单编号">{{ order.orderNo }}</n-descriptions-item>
             <n-descriptions-item label="状态">
-              <n-tag size="small" :type="statusTagType(order.status)">
-                {{ ORDER_STATUS_TEXT[order.status] ?? order.status }}
+              <n-tag size="small" :type="statusTagType(order.status ?? '')">
+                {{ statusText }}
               </n-tag>
             </n-descriptions-item>
             <n-descriptions-item label="明细数">{{ order.itemCount ?? '-' }}</n-descriptions-item>
@@ -440,7 +447,7 @@ onMounted(loadDetail)
             <n-button size="small" @click="handleDownloadTemplate">下载合同模板</n-button>
             <template v-if="order.contractFileId">
               <n-button size="small" type="primary" @click="handleDownloadContract">下载合同</n-button>
-              <n-popconfirm v-if="canUpdateOrder" @positive-click="handleDeleteContract">
+              <n-popconfirm v-if="canUpdateOrder && !isTerminal" @positive-click="handleDeleteContract">
                 <template #trigger>
                   <n-button size="small" type="error" quaternary>删除合同</n-button>
                 </template>
@@ -448,7 +455,7 @@ onMounted(loadDetail)
               </n-popconfirm>
             </template>
             <n-upload
-              v-if="canUpdateOrder"
+              v-if="canUpdateOrder && !isTerminal"
               :show-file-list="false"
               accept=".doc,.docx,.pdf"
               @before-upload="handleUploadContract"

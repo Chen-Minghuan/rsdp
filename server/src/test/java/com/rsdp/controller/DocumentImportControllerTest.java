@@ -37,6 +37,9 @@ class DocumentImportControllerTest {
     private PdfImportService pdfImportService;
 
     @MockBean
+    private com.rsdp.service.SceneImportService sceneImportService;
+
+    @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Test
@@ -81,5 +84,33 @@ class DocumentImportControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.batchId").value("BATCH-TEST02"));
+    }
+
+    @Test
+    void importFromScene_shouldReturnResult() throws Exception {
+        com.rsdp.dto.response.SceneImportResult result = new com.rsdp.dto.response.SceneImportResult();
+        result.setBatchId("BATCH-SCENE01");
+        result.setTotalProducts(2);
+        result.setSuccessCount(2);
+        com.rsdp.dto.response.SceneImportResult.SceneImportProduct product =
+            new com.rsdp.dto.response.SceneImportResult.SceneImportProduct();
+        product.setCategoryCode("SF");
+        product.setStatus("success");
+        product.setRspuId("RSPU-01");
+        product.setTaskId("TASK-01");
+        product.setImageId("IMG-01");
+        result.getProducts().add(product);
+
+        when(sceneImportService.importScene(any(), any())).thenReturn(result);
+
+        MockMultipartFile file = new MockMultipartFile("file", "scene.jpg", "image/jpeg", "fake-image".getBytes());
+
+        mockMvc.perform(multipart("/api/v1/products/scene-import")
+                .file(file))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.batchId").value("BATCH-SCENE01"))
+            .andExpect(jsonPath("$.data.totalProducts").value(2))
+            .andExpect(jsonPath("$.data.products[0].rspuId").value("RSPU-01"));
     }
 }

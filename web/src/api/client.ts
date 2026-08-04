@@ -102,11 +102,10 @@ async function errorInterceptor(error: AxiosError | ApiError) {
   }
 
   if (response.status === 403) {
-    // /auth/me 返回 403 通常是因为 token 版本过期或已登出，按未登录处理
+    // /auth/me 返回 403 通常是因为 token 版本过期或已登出，按未登录处理。
+    // 不再强制跳转登录页：调用方（路由守卫、App.vue）会清除用户状态；
+    // 公开页面（邀请链接、分享页等）不应因未登录而被跳走。
     if (error.config?.url?.endsWith('/auth/me')) {
-      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        window.location.href = '/login'
-      }
       return Promise.reject(new HttpError(403, '登录已过期，请重新登录'))
     }
     if (discreteApi) {

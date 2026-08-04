@@ -27,12 +27,21 @@ public class RspuVariant {
 
     private String sizeCode;
 
+    /** 尺寸/规格原文（工厂方言，码归一化前的事实层） */
+    private String sizeText;
+
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String dimensions;
 
     private String colorCode;
 
+    /** 颜色原文（工厂方言） */
+    private String colorText;
+
     private String materialCode;
+
+    /** 材质原文（工厂方言） */
+    private String materialText;
 
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String materialMix;

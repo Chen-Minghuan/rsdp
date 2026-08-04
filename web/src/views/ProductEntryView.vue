@@ -212,7 +212,7 @@ async function loadCategoryDicts() {
 }
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
-const MAX_FILE_COUNT = 20
+const MAX_FILE_COUNT = 8
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml']
 
 function isImageFile(file: File): boolean {
@@ -382,7 +382,7 @@ function formatPrice(ocr?: OcrResult): string {
           :default-upload="false"
           v-model:file-list="fileList"
           accept="image/*"
-          :max="20"
+          :max="8"
           multiple
         >
           <n-button>选择产品图片</n-button>
@@ -544,7 +544,14 @@ function formatPrice(ocr?: OcrResult): string {
             >
               <n-descriptions bordered :column="2" size="small">
                 <n-descriptions-item label="产品名称">
-                  {{ getOcr(task)?.productName || '-' }}
+                  <template v-if="getOcr(task)?.productName">
+                    {{ getOcr(task)?.productName }}
+                  </template>
+                  <template v-else-if="task.result?.productName">
+                    {{ task.result.productName }}
+                    <n-tag size="tiny" type="info" style="margin-left: 4px;">按品类</n-tag>
+                  </template>
+                  <template v-else>-</template>
                 </n-descriptions-item>
                 <n-descriptions-item label="型号">
                   {{ getOcr(task)?.modelNumber || '-' }}

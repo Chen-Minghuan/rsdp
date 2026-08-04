@@ -53,6 +53,9 @@ class FavoriteExportServiceTest {
     @Mock
     private FavoriteFolderMapper favoriteFolderMapper;
 
+    @Mock
+    private com.rsdp.security.datascope.DataScopeHelper dataScopeHelper;
+
     @InjectMocks
     private FavoriteExportService favoriteExportService;
 
@@ -136,6 +139,7 @@ class FavoriteExportServiceTest {
         factory.setFactoryCode("F001");
         factory.setFactoryName("测试工厂");
         when(factoryMasterMapper.selectBatchIds(anyList())).thenReturn(List.of(factory));
+        when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
 
         try (var ignored = mockStatic(SecurityOperatorContext.class)) {
             when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");

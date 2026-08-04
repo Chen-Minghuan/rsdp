@@ -158,4 +158,12 @@ class ExcelImportRowServiceTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getBatchId()).isEqualTo("BATCH-001");
     }
+
+    @Test
+    void deleteByBatch_shouldDeleteAllRowsOfBatch() {
+        // V18：done 批次重新导入前整体清理上一轮行级记录
+        rowService.deleteByBatch("BATCH-001");
+
+        verify(rowMapper, times(1)).deleteByBatchId("BATCH-001");
+    }
 }

@@ -145,37 +145,37 @@ public class OrderInviteService {
      */
     public String resolveOrderIdFromToken(String token) {
         if (token == null || token.isBlank()) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         String[] parts = token.split("\\.");
         if (parts.length != 2) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         String payload;
         try {
             payload = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
         } catch (IllegalArgumentException e) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         String[] seg = payload.split("\\.");
         if (seg.length != 3) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         byte[] expected = hmac(payload);
         byte[] actual;
         try {
             actual = Base64.getUrlDecoder().decode(parts[1]);
         } catch (IllegalArgumentException e) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         if (!MessageDigest.isEqual(expected, actual)) {
-            throw new BusinessException("邀请链接签名无效");
+            throw new BusinessException("无效的邀请链接");
         }
         long expireAtEpoch;
         try {
             expireAtEpoch = Long.parseLong(seg[1]);
         } catch (NumberFormatException e) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         if (Instant.now().getEpochSecond() > expireAtEpoch) {
             throw new BusinessException("邀请链接已过期");
@@ -191,21 +191,21 @@ public class OrderInviteService {
      */
     private DesignOrder verifyAndLoad(String token) {
         if (token == null || token.isBlank()) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         String[] parts = token.split("\\.");
         if (parts.length != 2) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         String payload;
         try {
             payload = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
         } catch (IllegalArgumentException e) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         String[] seg = payload.split("\\.");
         if (seg.length != 3) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         // 签名常量时间比对，防时序攻击
         byte[] expected = hmac(payload);
@@ -213,26 +213,26 @@ public class OrderInviteService {
         try {
             actual = Base64.getUrlDecoder().decode(parts[1]);
         } catch (IllegalArgumentException e) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         if (!MessageDigest.isEqual(expected, actual)) {
-            throw new BusinessException("邀请链接签名无效");
+            throw new BusinessException("无效的邀请链接");
         }
         long expireAtEpoch;
         try {
             expireAtEpoch = Long.parseLong(seg[1]);
         } catch (NumberFormatException e) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         if (Instant.now().getEpochSecond() > expireAtEpoch) {
             throw new BusinessException("邀请链接已过期，请联系设计师重新生成");
         }
         DesignOrder order = designOrderMapper.selectById(seg[0]);
         if (order == null) {
-            throw new BusinessException("邀请链接无效");
+            throw new BusinessException("无效的邀请链接");
         }
         if (order.getInviteTokenHash() == null || !sha256Hex(token).equals(order.getInviteTokenHash())) {
-            throw new BusinessException("邀请链接已失效，请联系设计师重新生成");
+            throw new BusinessException("无效的邀请链接");
         }
         return order;
     }

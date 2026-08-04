@@ -115,6 +115,9 @@ services:
     depends_on:
       - server
 
+  # 注意：nginx.conf 强制 HTTPS，启动前必须先生成证书：
+  #   scripts/gen-dev-cert.sh        （开发自签名）
+  # 或将正式 CA 证书放置为 deploy/nginx/ssl/server.crt 与 server.key
   nginx:
     image: nginx:1.27-alpine
     container_name: rsdp-nginx

@@ -41,6 +41,8 @@ public class RspuVariantService {
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
     private final DataScopeHelper dataScopeHelper;
+    private final DictAliasService dictAliasService;
+    private final DictUnresolvedService dictUnresolvedService;
 
     /**
      * 为指定 RSPU 创建变体。
@@ -72,9 +74,12 @@ public class RspuVariantService {
         variant.setDisplayName(request.getDisplayName().trim());
         variant.setVariantCode(request.getVariantCode());
         variant.setSizeCode(request.getSizeCode());
+        variant.setSizeText(request.getSizeText());
         variant.setDimensions(request.getDimensions());
         variant.setColorCode(request.getColorCode());
+        variant.setColorText(request.getColorText());
         variant.setMaterialCode(request.getMaterialCode());
+        variant.setMaterialText(request.getMaterialText());
         variant.setMaterialMix(toJson(request.getMaterialMix()));
         variant.setReferencePriceBand(request.getReferencePriceBand());
         variant.setProductLevel(request.getProductLevel());
@@ -101,27 +106,33 @@ public class RspuVariantService {
     /**
      * 校验同一 RSPU 下不存在相同尺寸/颜色/材质组合的启用中变体。
      *
+     * <p>V19 起判重采用"码或原文"语义（与 uk_variant_attrs 唯一索引一致）：
+     * 比较 COALESCE(code, text) 有效值，有码按码、无码按工厂原文。</p>
+     *
      * @param rspuId  RSPU ID
      * @param request 变体创建请求
      */
     private void assertNoDuplicateDimensions(String rspuId, RspuVariantCreateRequest request) {
-        QueryWrapper<RspuVariant> wrapper = new QueryWrapper<RspuVariant>()
-            .eq("rspu_id", rspuId);
-        applyNullableEq(wrapper, "size_code", request.getSizeCode());
-        applyNullableEq(wrapper, "color_code", request.getColorCode());
-        applyNullableEq(wrapper, "material_code", request.getMaterialCode());
-        Long count = variantMapper.selectCount(wrapper);
-        if (count != null && count > 0) {
+        String effectiveSize = effectiveOf(request.getSizeCode(), request.getSizeText());
+        String effectiveColor = effectiveOf(request.getColorCode(), request.getColorText());
+        String effectiveMaterial = effectiveOf(request.getMaterialCode(), request.getMaterialText());
+        List<RspuVariant> existing = variantMapper.selectList(
+            new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId));
+        boolean duplicate = existing.stream().anyMatch(v ->
+            effectiveSize.equals(effectiveOf(v.getSizeCode(), v.getSizeText()))
+                && effectiveColor.equals(effectiveOf(v.getColorCode(), v.getColorText()))
+                && effectiveMaterial.equals(effectiveOf(v.getMaterialCode(), v.getMaterialText())));
+        if (duplicate) {
             throw new BusinessException("相同尺寸/颜色/材质的变体已存在");
         }
     }
 
-    private void applyNullableEq(QueryWrapper<RspuVariant> wrapper, String column, String value) {
-        if (value == null) {
-            wrapper.isNull(column);
-        } else {
-            wrapper.eq(column, value);
+    /** 有效判重值：码优先，无码取原文，均无则为空串（与唯一索引 COALESCE 语义一致）。 */
+    private String effectiveOf(String code, String text) {
+        if (StringUtils.hasText(code)) {
+            return code.trim();
         }
+        return StringUtils.hasText(text) ? text.trim() : "";
     }
 
     /**
@@ -243,10 +254,62 @@ public class RspuVariantService {
         throw new BusinessException("变体编码冲突，请重试: " + rspuId);
     }
 
+    /**
+     * 解析变体三码（尺寸/颜色/材质）。
+     *
+     * <p>V19 起"原文为主、码为辅"：先查字典别名（dict_alias）再查字典码，
+     * 未识别的值不再报错——码置空、原文迁入对应 *_text 字段保留，并采集到
+     * dict_unresolved_value 待治理。产品等级等受控词表仍严格校验（见调用处）。</p>
+     */
     private void validateVariantCodes(RspuVariantCreateRequest request) {
-        validateDictCode("size", request.getSizeCode(), "尺寸码");
-        validateDictCode("color", request.getColorCode(), "颜色码");
-        validateDictCode("material", request.getMaterialCode(), "材质码");
+        resolveOrDowngrade("size", request.getSizeCode(), request::setSizeCode, request::setSizeText, request.getSizeText());
+        resolveOrDowngrade("color", request.getColorCode(), request::setColorCode, request::setColorText, request.getColorText());
+        resolveOrDowngrade("material", request.getMaterialCode(), request::setMaterialCode, request::setMaterialText, request.getMaterialText());
+    }
+
+    /**
+     * 单字段"码或原文"解析：别名 → 字典码 → 字典名，全部未命中则降级为原文。
+     */
+    private void resolveOrDowngrade(String dictType, String input,
+                                    java.util.function.Consumer<String> codeSetter,
+                                    java.util.function.Consumer<String> textSetter,
+                                    String existingText) {
+        if (!StringUtils.hasText(input)) {
+            return;
+        }
+        String trimmed = input.trim();
+        String resolved = resolveToDictCode(dictType, trimmed);
+        if (resolved != null) {
+            codeSetter.accept(resolved);
+        } else {
+            codeSetter.accept(null);
+            if (!StringUtils.hasText(existingText)) {
+                textSetter.accept(trimmed);
+            }
+            dictUnresolvedService.record(dictType, trimmed, null, SecurityOperatorContext.currentUsername());
+        }
+    }
+
+    /**
+     * 尽力将输入归一为字典码：别名 → 字典码（忽略大小写）→ 字典名；未命中返回 null。
+     */
+    private String resolveToDictCode(String dictType, String input) {
+        String byAlias = dictAliasService.resolveAlias(dictType, input);
+        if (StringUtils.hasText(byAlias)) {
+            return byAlias;
+        }
+        List<com.rsdp.entity.CategoryDict> dicts = dictService.listByType(dictType);
+        for (com.rsdp.entity.CategoryDict d : dicts) {
+            if (input.equalsIgnoreCase(d.getDictCode())) {
+                return d.getDictCode();
+            }
+        }
+        for (com.rsdp.entity.CategoryDict d : dicts) {
+            if (StringUtils.hasText(d.getDictName()) && input.equals(d.getDictName())) {
+                return d.getDictCode();
+            }
+        }
+        return null;
     }
 
     private void validateDictCode(String dictType, String code, String label) {
@@ -267,9 +330,12 @@ public class RspuVariantService {
         response.setDisplayName(variant.getDisplayName());
         response.setVariantCode(variant.getVariantCode());
         response.setSizeCode(variant.getSizeCode());
+        response.setSizeText(variant.getSizeText());
         response.setDimensions(variant.getDimensions());
         response.setColorCode(variant.getColorCode());
+        response.setColorText(variant.getColorText());
         response.setMaterialCode(variant.getMaterialCode());
+        response.setMaterialText(variant.getMaterialText());
         response.setMaterialMix(parseJsonList(variant.getMaterialMix()));
         response.setReferencePriceBand(variant.getReferencePriceBand());
         response.setProductLevel(variant.getProductLevel());

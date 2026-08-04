@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -38,12 +39,16 @@ public class ExcelAiImportController {
 
     /**
      * 上传 Excel 并预览 AI 识别的字段映射。
+     *
+     * @param file       Excel 文件
+     * @param sheetIndex 待解析的工作表索引（可选，默认 0；多 Sheet 文件逐一导入用）
      */
     @PostMapping("/preview")
     @PreAuthorize("hasAuthority('product:import')")
     public Result<ExcelAiMappingResponse> preview(
-        @RequestPart("file") MultipartFile file) {
-        return Result.ok(excelAiImportService.previewMapping(file));
+        @RequestPart("file") MultipartFile file,
+        @RequestParam(value = "sheetIndex", required = false, defaultValue = "0") int sheetIndex) {
+        return Result.ok(excelAiImportService.previewMapping(file, sheetIndex));
     }
 
     /**
@@ -53,6 +58,7 @@ public class ExcelAiImportController {
     @PreAuthorize("hasAuthority('product:import')")
     public Result<ExcelAiImportResult> importExcel(
         @RequestBody @Valid ExcelAiMappingRequest request) {
+        excelAiImportService.getAccessibleBatch(request.getBatchId());
         return Result.ok(excelAiImportService.confirmAndImport(request));
     }
 
@@ -63,6 +69,7 @@ public class ExcelAiImportController {
     @PreAuthorize("hasAuthority('product:import')")
     public Result<ExcelAiImportStatusResponse> getStatus(
         @PathVariable @NotBlank String batchId) {
+        excelAiImportService.getAccessibleBatch(batchId);
         return Result.ok(excelAiImportService.getStatus(batchId));
     }
 
@@ -73,6 +80,7 @@ public class ExcelAiImportController {
     @PreAuthorize("hasAuthority('product:import')")
     public Result<List<ExcelImportRow>> listRows(
         @PathVariable @NotBlank String batchId) {
+        excelAiImportService.getAccessibleBatch(batchId);
         return Result.ok(excelImportRowService.listByBatch(batchId));
     }
 }

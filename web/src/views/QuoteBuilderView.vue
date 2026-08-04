@@ -158,25 +158,34 @@ async function loadData() {
       originalScheme.value = scheme
       schemeName.value = scheme.schemeName
       ids = scheme.items.map(item => item.rspuId)
-      // 预先回填用户上次选择的 RSKU 和数量
+      // 预先回填用户上次选择的 RSKU 和数量；同一 (RSPU, RSKU) 出现多次时合并数量
       scheme.items.forEach(item => {
-        selectedRskuMap[item.rspuId] = item.rskuId
-        quantityMap[item.rspuId] = item.quantity ?? 1
+        const key = item.rspuId
+        if (selectedRskuMap[key] && selectedRskuMap[key] !== item.rskuId) {
+          // RSKU 不同无法合并，按最后一次出现的选择与数量处理
+          quantityMap[key] = 0
+        }
+        selectedRskuMap[key] = item.rskuId
+        quantityMap[key] = (quantityMap[key] ?? 0) + (item.quantity ?? 1)
       })
     } else {
       ids = rspuIds.value
       if (uniqueRawCount.value > MAX_ITEMS) {
         errorMessage.value = `URL 中产品数量超过 ${MAX_ITEMS}，已自动截断前 ${MAX_ITEMS} 个`
       }
-      // 回填 AI 空间搭配推荐的 RSKU 与数量（如 RoomSchemeView 传入）
+      // 回填 AI 空间搭配推荐的 RSKU 与数量（如 RoomSchemeView 传入）；同一 (RSPU, RSKU) 合并数量
       rawRspuIds.value.forEach((id, index) => {
+        const key = id
         const rskuId = rawSelectedRskuIds.value[index]
         if (rskuId) {
-          selectedRskuMap[id] = rskuId
+          if (selectedRskuMap[key] && selectedRskuMap[key] !== rskuId) {
+            quantityMap[key] = 0
+          }
+          selectedRskuMap[key] = rskuId
         }
         const quantity = rawQuantities.value[index]
         if (quantity != null) {
-          quantityMap[id] = quantity
+          quantityMap[key] = (quantityMap[key] ?? 0) + quantity
         }
       })
     }
@@ -366,7 +375,14 @@ const quoteColumns: DataTableColumns<QuoteItem> = [
       return formatPrice(row.factoryPrice)
     }
   },
-  { title: '数量', key: 'quantity', width: 80 },
+  {
+    title: '数量',
+    key: 'quantity',
+    width: 80,
+    render(row: QuoteItem) {
+      return row.quantity ?? '-'
+    }
+  },
   {
     title: '小计',
     key: 'subtotal',
@@ -558,12 +574,15 @@ onBeforeRouteUpdate((to) => {
               :single-line="false"
             />
 
-            <n-descriptions bordered :column="4" label-placement="left" style="margin-top: 16px;">
+            <n-descriptions bordered :column="5" label-placement="left" style="margin-top: 16px;">
               <n-descriptions-item label="总价">
                 ¥{{ (quoteResult.summary.totalPrice ?? 0).toFixed(2) }}
               </n-descriptions-item>
               <n-descriptions-item label="项数">
                 {{ quoteResult.summary.itemCount }}
+              </n-descriptions-item>
+              <n-descriptions-item label="总数量">
+                {{ quoteResult.summary.totalQuantity }}
               </n-descriptions-item>
               <n-descriptions-item label="涉及工厂">
                 {{ quoteResult.summary.factoryCount }} 家

@@ -46,6 +46,7 @@ const detail = ref<Scheme | null>(null)
 
 // 选用模板
 const showApply = ref(false)
+const applyTemplate = ref<SchemeSummary | null>(null)
 const applyProjectId = ref<string | null>(null)
 const applySchemeName = ref('')
 const applying = ref(false)
@@ -107,10 +108,13 @@ async function openDetail(template: SchemeSummary) {
   }
 }
 
-async function openApply() {
+async function openApply(template?: SchemeSummary) {
+  const target = template ?? detail.value
+  if (!target) return
+  applyTemplate.value = target
   showApply.value = true
   applyProjectId.value = null
-  applySchemeName.value = detail.value ? `${detail.value.schemeName}（套用）` : ''
+  applySchemeName.value = `${target.schemeName}（套用）`
   try {
     const result = await listProjects({ page: 1, size: 100 })
     projects.value = result.rows
@@ -124,10 +128,10 @@ async function handleApply() {
     message.warning('请选择目标项目')
     return
   }
-  if (!detail.value) return
+  if (!applyTemplate.value) return
   applying.value = true
   try {
-    const result = await copyFromTemplate(detail.value.schemeId, {
+    const result = await copyFromTemplate(applyTemplate.value.schemeId, {
       projectId: applyProjectId.value,
       schemeName: applySchemeName.value.trim() || undefined
     })
@@ -219,6 +223,15 @@ const itemColumns = [
                       {{ tag }}
                     </n-tag>
                   </n-space>
+                  <n-button
+                    v-if="canUseTemplate"
+                    size="small"
+                    type="primary"
+                    style="margin-top: 12px;"
+                    @click.stop="openApply(template)"
+                  >
+                    使用模板
+                  </n-button>
                 </n-card>
               </n-grid-item>
             </n-grid>
@@ -249,7 +262,7 @@ const itemColumns = [
             <span style="color: var(--rsdp-text-secondary);">
               共 {{ detail.itemCount }} 件 · 合计 {{ formatPrice(detail.totalPrice) }}
             </span>
-            <n-button v-if="canUseTemplate" type="primary" @click="openApply">选用模板</n-button>
+            <n-button v-if="canUseTemplate" type="primary" @click="() => openApply()">选用模板</n-button>
           </n-space>
         </template>
       </n-spin>

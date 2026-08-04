@@ -11,7 +11,7 @@ import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
-import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -37,7 +37,9 @@ public class PermissionService {
     public Set<String> getPermissionsByUserId(String userId) {
         List<Long> roleIds = sysUserRoleMapper.selectRoleIdsByUserId(userId);
         if (roleIds.isEmpty()) {
-            return Collections.emptySet();
+            // 注意：缓存值需为非 final 具体类型（Redis 序列化器按 NON_FINAL 写类型信息），
+            // 不能返回 Collections.emptySet()，否则反序列化后类型错乱导致调用方 ClassCastException
+            return new HashSet<>();
         }
 
         List<Long> permissionIds = sysRolePermissionMapper.selectList(
@@ -45,7 +47,7 @@ public class PermissionService {
         ).stream().map(SysRolePermission::getPermissionId).distinct().toList();
 
         if (permissionIds.isEmpty()) {
-            return Collections.emptySet();
+            return new HashSet<>();
         }
 
         return sysPermissionMapper.selectBatchIds(permissionIds).stream()

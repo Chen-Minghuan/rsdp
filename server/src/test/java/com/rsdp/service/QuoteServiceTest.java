@@ -58,6 +58,7 @@ class QuoteServiceTest {
     @Test
     void generateQuote_shouldReturnQuoteWithSummary() {
         when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+        when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
 
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-001");
@@ -149,6 +150,7 @@ class QuoteServiceTest {
     @Test
     void generateQuote_shouldMergeDuplicateRskuQuantities() {
         when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+        when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
 
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-001");
@@ -182,6 +184,7 @@ class QuoteServiceTest {
     @Test
     void generateQuote_shouldDefaultNullOrZeroQuantityToOne() {
         when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+        when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
 
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-001");

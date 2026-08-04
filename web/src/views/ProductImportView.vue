@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NCard,
@@ -18,11 +18,21 @@ import type { ProductImportResult, ProductImportFailure } from '@/types/product'
 const router = useRouter()
 
 const fileList = ref<UploadFileInfo[]>([])
-const selectedFile = ref<File | null>(null)
+// selectedFile 从 fileList 派生：naive-ui 删除文件时 onChange 会以 status='removed' 的被删文件再次触发，
+// 若直接取 options.file 会让已删除的文件「复活」，导致误导入
+const selectedFile = computed(() => fileList.value[0]?.file ?? null)
 const updateIfExists = ref(false)
 const importing = ref(false)
 const errorMessage = ref('')
 const result = ref<ProductImportResult | null>(null)
+
+/** 后端 ProductImportService 限制 10MB */
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+
+function isExcelFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  return name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv')
+}
 
 const failureColumns: DataTableColumns<ProductImportFailure> = [
   { title: '行号', key: 'rowIndex', width: 80 },
@@ -33,17 +43,29 @@ const failureColumns: DataTableColumns<ProductImportFailure> = [
 
 function handleFileChange(options: { file: UploadFileInfo, fileList: UploadFileInfo[] }) {
   fileList.value = options.fileList
-  selectedFile.value = options.file.file || null
 }
 
-function handleRemove() {
-  selectedFile.value = null
-  fileList.value = []
+/** 超时/网络异常时导入可能仍在后台进行，提示用户不要重复提交 */
+function toImportErrorMessage(e: unknown): string {
+  const message = e instanceof Error ? e.message : ''
+  if (message.includes('timeout') || message.includes('Network Error')) {
+    return '导入请求超时或网络异常：导入可能仍在进行，请勿重复提交，可稍后刷新页面查看结果'
+  }
+  return message || '导入失败'
 }
 
 async function handleImport() {
-  if (!selectedFile.value) {
+  const file = selectedFile.value
+  if (!file) {
     errorMessage.value = '请选择 Excel 文件'
+    return
+  }
+  if (!isExcelFile(file)) {
+    errorMessage.value = '仅支持 .xlsx / .xls / .csv 文件'
+    return
+  }
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    errorMessage.value = 'Excel 文件大小不能超过 10MB'
     return
   }
 
@@ -52,9 +74,9 @@ async function handleImport() {
   result.value = null
 
   try {
-    result.value = await importProducts(selectedFile.value, updateIfExists.value)
+    result.value = await importProducts(file, updateIfExists.value)
   } catch (e) {
-    errorMessage.value = e instanceof Error ? e.message : '导入失败'
+    errorMessage.value = toImportErrorMessage(e)
   } finally {
     importing.value = false
   }
@@ -97,7 +119,6 @@ async function handleDownloadTemplate() {
             :max="1"
             :default-upload="false"
             @change="handleFileChange"
-            @remove="handleRemove"
           >
             <n-button>{{ selectedFile ? '已选择文件' : '选择 Excel' }}</n-button>
           </n-upload>

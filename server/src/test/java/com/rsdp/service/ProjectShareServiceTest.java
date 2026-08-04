@@ -103,7 +103,7 @@ class ProjectShareServiceTest {
 
         assertThatThrownBy(() -> projectShareService.getSharedProject("PROJ-1"))
             .isInstanceOf(ResourceNotFoundException.class)
-            .hasMessageContaining("不存在或已关闭");
+            .hasMessageContaining("未开启分享");
     }
 
     @Test

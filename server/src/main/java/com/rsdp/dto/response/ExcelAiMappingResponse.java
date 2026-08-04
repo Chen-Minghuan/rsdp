@@ -42,4 +42,19 @@ public class ExcelAiMappingResponse {
      * 识别出的价格列列表（如「价格-A级布」）。
      */
     private List<PriceColumnInfo> priceColumns = new ArrayList<>();
+
+    /**
+     * 品类原始值 → 字典码的映射建议（中文品名归一，供用户在确认页编辑）。
+     */
+    private List<CategoryMappingItem> categoryMappings = new ArrayList<>();
+
+    /**
+     * 本次预览解析的工作表索引（回显，多 Sheet 文件用）。
+     */
+    private int sheetIndex;
+
+    /**
+     * 工作簿全部工作表列表（多 Sheet 文件供用户切换预览）。
+     */
+    private List<ExcelSheetInfo> sheets = new ArrayList<>();
 }

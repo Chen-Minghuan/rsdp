@@ -111,7 +111,7 @@ class OrderInviteServiceTest {
 
         assertThatThrownBy(() -> inviteService.getInviteView(forged))
             .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("签名无效");
+            .hasMessageContaining("无效的邀请链接");
     }
 
     @Test
@@ -171,6 +171,6 @@ class OrderInviteServiceTest {
 
         assertThatThrownBy(() -> inviteService.getInviteView(first.getToken()))
             .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("已失效");
+            .hasMessageContaining("无效的邀请链接");
     }
 }

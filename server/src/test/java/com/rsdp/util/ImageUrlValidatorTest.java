@@ -100,6 +100,31 @@ class ImageUrlValidatorTest {
     }
 
     @Test
+    void shouldRejectAdditionalReservedIpv4Ranges() {
+        // 0.0.0.0/8 整段（JDK 仅识别 0.0.0.0 单个地址）
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("0.1.2.3")).isFalse();
+        // 100.64.0.0/10 (CGNAT, RFC 6598)
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("100.64.0.1")).isFalse();
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("100.127.255.254")).isFalse();
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("100.63.255.255")).isTrue();
+        // 192.0.0.0/24 (IETF 协议分配, RFC 6890)
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("192.0.0.1")).isFalse();
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("192.0.1.1")).isTrue();
+        // 198.18.0.0/15 (基准测试, RFC 2544)
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("198.18.0.1")).isFalse();
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("198.19.255.255")).isFalse();
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("198.17.0.1")).isTrue();
+        // 240.0.0.0/4 (保留段，含广播地址)
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("240.0.0.1")).isFalse();
+        assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("255.255.255.255")).isFalse();
+        // isAllowed 同步生效（IP 字面量不触发真实 DNS 查询，可离线运行）
+        assertThat(ImageUrlValidator.isAllowed("http://100.64.0.1/image.jpg", Set.of())).isFalse();
+        assertThat(ImageUrlValidator.isAllowed("http://198.18.0.1/image.jpg", Set.of())).isFalse();
+        assertThat(ImageUrlValidator.isAllowed("http://240.0.0.1/image.jpg", Set.of())).isFalse();
+        assertThat(ImageUrlValidator.isAllowed("http://0.1.2.3/image.jpg", Set.of())).isFalse();
+    }
+
+    @Test
     void shouldRecheckAllResolvedAddressesAgainstRebinding() {
         // DNS rebinding 复检：解析结果为内网/保留地址即拒绝
         assertThat(ImageUrlValidator.areAllResolvedAddressesPublic("localhost")).isFalse();

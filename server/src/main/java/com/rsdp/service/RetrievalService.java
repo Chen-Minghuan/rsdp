@@ -134,9 +134,8 @@ public class RetrievalService {
         if (request.getCategoryCode() != null && !request.getCategoryCode().isBlank()) {
             conditions.add(Map.of("category_code", request.getCategoryCode().trim()));
         }
-        if (request.getPositioningLabel() != null && !request.getPositioningLabel().isBlank()) {
-            conditions.add(Map.of("positioning_label", request.getPositioningLabel().trim()));
-        }
+        // 风格/定位不在 ChromaDB 层硬过滤，避免 code/name 不一致导致空结果；
+        // 偏好通过重排阶段的风格匹配加成体现（matchesAnyStyle）。
 
         if (conditions.size() == 1) {
             return conditions.get(0);

@@ -26,8 +26,12 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -53,6 +57,12 @@ class RspuVariantServiceTest {
 
     @Mock
     private DataScopeHelper dataScopeHelper;
+
+    @Mock
+    private com.rsdp.service.DictAliasService dictAliasService;
+
+    @Mock
+    private com.rsdp.service.DictUnresolvedService dictUnresolvedService;
 
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -217,7 +227,12 @@ class RspuVariantServiceTest {
         rspu.setStatus("active");
         when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
         when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
-        when(variantMapper.selectCount(any())).thenReturn(1L);
+        // 应用层"码或原文"判重：已有同材质码变体
+        RspuVariant existing = new RspuVariant();
+        existing.setVariantId("V-EXIST");
+        existing.setRspuId(rspuId);
+        existing.setMaterialCode("LI");
+        when(variantMapper.selectList(any())).thenReturn(List.of(existing));
 
         RspuVariantCreateRequest request = new RspuVariantCreateRequest();
         request.setDisplayName("重复维度变体");
@@ -244,6 +259,73 @@ class RspuVariantServiceTest {
         RspuVariantCreateRequest request = new RspuVariantCreateRequest();
         request.setDisplayName("并发重复维度");
         request.setMaterialCode("LI");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+            () -> variantService.createVariant(rspuId, request));
+        assertEquals("相同尺寸/颜色/材质的变体已存在", ex.getMessage());
+    }
+
+    @Test
+    void createVariant_unknownMaterialCode_shouldDowngradeToText() {
+        // V19：材质码未识别不再报错——码置空、原文保留到 materialText，并采集待治理
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(variantCodeMapper.allocateSequence(rspuId)).thenReturn(1L);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+        when(dictAliasService.resolveAlias(eq("material"), anyString())).thenReturn(null);
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("A级布版本");
+        request.setMaterialCode("A级布");
+
+        RspuVariantResponse response = variantService.createVariant(rspuId, request);
+
+        assertNull(response.getMaterialCode());
+        assertEquals("A级布", response.getMaterialText());
+        verify(dictUnresolvedService).record(eq("material"), eq("A级布"), isNull(), any());
+    }
+
+    @Test
+    void createVariant_aliasHit_shouldResolveToDictCode() {
+        // V19：dict_alias 别名命中时自动归一为字典码，不产生原文与采集
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(variantCodeMapper.allocateSequence(rspuId)).thenReturn(1L);
+        when(dictAliasService.resolveAlias("material", "头层牛皮")).thenReturn("LI");
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("真皮版");
+        request.setMaterialCode("头层牛皮");
+
+        RspuVariantResponse response = variantService.createVariant(rspuId, request);
+
+        assertEquals("LI", response.getMaterialCode());
+        assertNull(response.getMaterialText());
+        verify(dictUnresolvedService, never()).record(any(), any(), any(), any());
+    }
+
+    @Test
+    void createVariant_shouldThrow_whenDuplicateByText() {
+        // V19：判重采用"码或原文"语义——已有变体 materialText=A级布，新变体同原文应判重
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+        when(dictAliasService.resolveAlias(eq("material"), anyString())).thenReturn(null);
+        RspuVariant existing = new RspuVariant();
+        existing.setVariantId("V-EXIST");
+        existing.setRspuId(rspuId);
+        existing.setMaterialText("A级布");
+        when(variantMapper.selectList(any())).thenReturn(List.of(existing));
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("又一个A级布");
+        request.setMaterialCode("A级布");
 
         BusinessException ex = assertThrows(BusinessException.class,
             () -> variantService.createVariant(rspuId, request));

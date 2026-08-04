@@ -74,8 +74,8 @@ class AiMatchingServiceTest {
         Field field = AiMatchingService.class.getDeclaredField("objectMapper");
         field.setAccessible(true);
         field.set(aiMatchingService, objectMapper);
-
         lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+        lenient().when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
     }
 
     @Test

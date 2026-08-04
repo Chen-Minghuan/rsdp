@@ -20,7 +20,12 @@ public class RspuMaster {
     private String categoryCode;
     private String categoryPath;
     private String positioningLabel;
+    /** 产品名称（AI OCR 提取 / Excel 导入品名；纯图无文字时为空） */
     private String productName;
+    /** 长文本描述原文（Excel 导入的材质解析/功能配置/配置说明等） */
+    private String description;
+    /** 零售参考价（销售价/含税价等，不加密） */
+    private java.math.BigDecimal retailPrice;
 
     @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
