@@ -196,7 +196,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
-        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
@@ -223,7 +223,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
-        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
@@ -250,7 +250,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
         when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
-        when(dictResolverService.resolveCodesByNames("material", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
         when(dictResolverService.resolveNameByCode("category", "FS")).thenReturn("座椅");
 
         AiLabels labels = new AiLabels();
