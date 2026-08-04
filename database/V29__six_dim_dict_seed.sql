@@ -1,4 +1,4 @@
--- V24：六维标签字典体系（阶段 P0 数据基础）
+-- V29：六维标签字典体系（阶段 P0 数据基础）
 -- 依据：docs/08-roadmap/六维标签体系完善方案.md 附录 A（v2.1）
 -- 本文件由 scripts/generate_six_dim_dict_seed.js 生成，请勿手工编辑枚举种子段。
 --
@@ -19,7 +19,7 @@
 
 -- ==================== 步骤 0：category_dict 增加 remark 列 + 品类字典补种 ====================
 ALTER TABLE category_dict ADD COLUMN IF NOT EXISTS remark TEXT;
-COMMENT ON COLUMN category_dict.remark IS '备注说明；六维字典存视觉判别要点（一句话锚点），供 AI prompt 注入与识别后归一使用（V24）';
+COMMENT ON COLUMN category_dict.remark IS '备注说明；六维字典存视觉判别要点（一句话锚点），供 AI prompt 注入与识别后归一使用（V29）';
 
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'DT', '餐桌', 7),

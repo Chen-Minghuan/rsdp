@@ -1,5 +1,5 @@
 -- ============================================================================
--- V17 迁移：rspu_master.external_code 部分唯一索引
+-- V24 迁移：rspu_master.external_code 部分唯一索引
 -- ============================================================================
 -- 背景：rspu_master.external_code 此前只有普通索引 idx_rspu_external_code，
 --       并发 Excel 导入（人工导入 ProductImportService / AI 导入 ExcelAiImportService）

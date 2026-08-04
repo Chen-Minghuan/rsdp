@@ -2,7 +2,7 @@
 // 六维标签字典种子生成器
 // 数据源：docs/08-roadmap/六维标签体系完善方案.md 附录 A（v2.1）
 // 产出：
-//   1. database/V24__six_dim_dict_seed.sql（整体重写：步骤0 品类补种 + 步骤1 存量规范化 + 步骤2 全量枚举种子）
+//   1. database/V29__six_dim_dict_seed.sql（整体重写：步骤0 品类补种 + 步骤1 存量规范化 + 步骤2 全量枚举种子）
 //   2. database/V1__seed_data.sql / database/reset_db.sql 中 SIX_DIM_DICT_SEED 标记区间内的种子块
 // 编码规则：dict_code = {品类码}-{中文名}；dict_name = 中文名；aliases/remark 随行内联。
 // E 维度（表面材质）不建独立枚举，统一引用 material/fabric 字典（方案步骤 3）。
@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const V24_FILE = path.join(ROOT, 'database', 'V24__six_dim_dict_seed.sql');
+const V29_FILE = path.join(ROOT, 'database', 'V29__six_dim_dict_seed.sql');
 const SEED_FILES = [
   path.join(ROOT, 'database', 'V1__seed_data.sql'),
   path.join(ROOT, 'database', 'reset_db.sql'),
@@ -554,8 +554,8 @@ function buildSeedBlock() {
   return { block: lines.join('\n').trimEnd() + '\n', total };
 }
 
-// V24 静态头部（步骤 0 品类补种 + 步骤 1 存量规范化 + remark 列）
-const V24_HEADER = `-- V24：六维标签字典体系（阶段 P0 数据基础）
+// V29 静态头部（步骤 0 品类补种 + 步骤 1 存量规范化 + remark 列）
+const V29_HEADER = `-- V29：六维标签字典体系（阶段 P0 数据基础）
 -- 依据：docs/08-roadmap/六维标签体系完善方案.md 附录 A（v2.1）
 -- 本文件由 scripts/generate_six_dim_dict_seed.js 生成，请勿手工编辑枚举种子段。
 --
@@ -576,7 +576,7 @@ const V24_HEADER = `-- V24：六维标签字典体系（阶段 P0 数据基础�
 
 -- ==================== 步骤 0：category_dict 增加 remark 列 + 品类字典补种 ====================
 ALTER TABLE category_dict ADD COLUMN IF NOT EXISTS remark TEXT;
-COMMENT ON COLUMN category_dict.remark IS '备注说明；六维字典存视觉判别要点（一句话锚点），供 AI prompt 注入与识别后归一使用（V24）';
+COMMENT ON COLUMN category_dict.remark IS '备注说明；六维字典存视觉判别要点（一句话锚点），供 AI prompt 注入与识别后归一使用（V29）';
 
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'DT', '餐桌', 7),
@@ -621,8 +621,8 @@ WHERE dict_type = 'six_dim_B' AND dict_code = 'FS-无靠背';
 function main() {
   const { block, total } = buildSeedBlock();
 
-  // 1. 重写 V24
-  fs.writeFileSync(V24_FILE, V24_HEADER + '\n' + block, 'utf8');
+  // 1. 重写 V29
+  fs.writeFileSync(V29_FILE, V29_HEADER + '\n' + block, 'utf8');
 
   // 2. 替换 V1__seed_data.sql / reset_db.sql 标记区间
   const marked = MARK_BEGIN + '\n' + block + MARK_END;
@@ -638,7 +638,7 @@ function main() {
   }
 
   console.log(`已生成六维字典种子 ${total} 条（9 品类 × 5 维度，E 维度不建枚举）`);
-  console.log(`  - ${path.relative(ROOT, V24_FILE)}（整体重写）`);
+  console.log(`  - ${path.relative(ROOT, V29_FILE)}（整体重写）`);
   for (const f of SEED_FILES) console.log(`  - ${path.relative(ROOT, f)}（标记区间替换）`);
 }
 

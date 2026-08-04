@@ -565,7 +565,7 @@ GET    /api/v1/dicts/{dictType}?all=false
        #           room_type, quote_confidence, review_status, factory_level, product_status 等
        # all=true 时返回含停用项的全部条目（字典管理中心使用）；默认仅启用项
        # Response: [{ dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases, remark }]
-       # remark: 备注说明；六维字典为视觉判别要点（AI prompt 锚点，V24 起透传）
+       # remark: 备注说明；六维字典为视觉判别要点（AI prompt 锚点，V29 起透传）
 
 POST   /api/v1/dicts
        # 创建新的字典项（V23 起允许扩展全部业务标签类字典：material/fabric/style/scene/
@@ -576,7 +576,7 @@ POST   /api/v1/dicts
        # Response: { dictCode, dictName, dictNameEn, parentCode, sortOrder, status, aliases, remark }
        # 注意：
        # 1. 普通类型 dictCode 仅支持字母和数字（≤32），服务端自动归一化为大写；
-       #    six_dim_* 类型遵循 V24 编码规范 {品类码}-{中文名}（如 SF-宽厚扶手，≤64），
+       #    six_dim_* 类型遵循 V29 编码规范 {品类码}-{中文名}（如 SF-宽厚扶手，≤64），
        #    品类码前缀归一为大写、中文名部分保持原样。
        # 2. 同一类型下 dictCode 重复会返回 400 "字典项已存在"。
        # 3. 创建成功后自动清除 dicts 缓存，前端可立即看到新选项。
@@ -595,7 +595,7 @@ PATCH  /api/v1/dicts/{dictType}/{dictCode}/status   # 权限 dict:update（V23 �
        # 历史数据的名称解析（resolveNameByCode）不受影响
        # Request:  { status: "active" | "disabled" }
 
-GET    /api/v1/dicts/six-dim-schema                 # 六维标签维度定义（V25 新增，登录可读）
+GET    /api/v1/dicts/six-dim-schema                 # 六维标签维度定义（V30 新增，登录可读）
        # Query: categoryCode: string (可选; 不传返回全部品类定义列表,
        #        传则返回该品类定义, 未知品类回退 GENERIC)
        # Response: { categoryCode, categoryName,
@@ -604,7 +604,7 @@ GET    /api/v1/dicts/six-dim-schema                 # 六维标签维度定义�
        # 说明: 前端六维展示/筛选/编辑的运行时数据源（sixDimLabels.ts 带缓存拉取），
        #       数据落 six_dim_schema 表，替代原前后端静态双写
 
-PUT    /api/v1/dicts/six-dim-schema/{categoryCode}/{dimKey}   # 权限 dict:update（V25 新增）
+PUT    /api/v1/dicts/six-dim-schema/{categoryCode}/{dimKey}   # 权限 dict:update（V30 新增）
        # 更新六维维度定义（字典管理中心"维度定义"维护入口）
        # Request:  { label: string (必填, ≤64), description: string (可选, ≤255) }
        # Response: 更新后的该品类六维定义（结构同 GET 单品类响应）
