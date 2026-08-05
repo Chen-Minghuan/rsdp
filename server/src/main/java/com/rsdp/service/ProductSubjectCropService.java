@@ -47,12 +47,12 @@ public class ProductSubjectCropService {
     @Value("${rsdp.ai.subject-crop.keep-original:true}")
     private boolean keepOriginal;
 
-    /** bbox 面积下限（相对全图），低于则视为误检不裁剪 */
-    @Value("${rsdp.ai.subject-crop.min-area-ratio:0.10}")
+    /** bbox 面积下限（相对全图），低于则视为误检不裁剪（默认 0.02：整页型录截图中完整产品可能只占几个百分点） */
+    @Value("${rsdp.ai.subject-crop.min-area-ratio:0.02}")
     private double minAreaRatio;
 
-    /** bbox 面积上限（相对全图），高于则说明图本身已是纯产品图，无需裁剪 */
-    @Value("${rsdp.ai.subject-crop.max-area-ratio:0.95}")
+    /** bbox 面积上限（相对全图），高于则说明图本身已是纯产品图，无需裁剪（默认 0.98，收窄组合图漏裁窗口） */
+    @Value("${rsdp.ai.subject-crop.max-area-ratio:0.98}")
     private double maxAreaRatio;
 
     /** 裁剪后是否再做一次 AI 完整性校验（不完整时加大框重裁或回退原图） */

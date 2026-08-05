@@ -131,6 +131,38 @@ class VisionServiceTest {
     }
 
     @Test
+    void recognizeImage_shouldTolerateArrayValuedSixDimTag() throws Exception {
+        // 实测案例：AI 偶发把六维 E 维返回为数组 ["实木","布艺"]，
+        // Map<String,String> 反序列化会抛 MismatchedInputException 导致整个识别判失败
+        String aiJson = """
+            {
+              "style": "侘寂",
+              "sixDimTags": {
+                "A": "一字型",
+                "E": ["实木", "布艺"],
+                "F": "饱满蓬松软包"
+              },
+              "confidence": "high",
+              "ocr": {"productName": "扶摇沙发", "dimensionText": "2380*840*910/2600*840*910"}
+            }
+            """;
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        AiLabels labels = visionService.recognizeImage(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(labels.getStyle()).isEqualTo("侘寂");
+        assertThat(labels.getSixDimTags())
+            .containsEntry("A", "一字型")
+            .containsEntry("E", "实木/布艺")
+            .containsEntry("F", "饱满蓬松软包");
+        assertThat(labels.getOcr().getProductName()).isEqualTo("扶摇沙发");
+    }
+
+    @Test
     void recognizeImage_shouldThrowWhenApiReturnsEmpty() throws Exception {
         stubFor(post(urlEqualTo("/chat/completions"))
             .willReturn(aResponse()

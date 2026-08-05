@@ -143,4 +143,48 @@ class RspuCodeServiceTest {
             .isInstanceOf(com.rsdp.exception.BusinessException.class)
             .hasMessageContaining("流水号已超过最大值");
     }
+
+    @Test
+    void inferSizeCode_shouldDegradeToNearestExistingCode_whenInferredNotInDict() {
+        // 字典只有 M/L：AI 推断 X（≥1800mm）应降级为 L，而非让编码生成整体失败
+        when(dictService.listByType("size")).thenReturn(List.of(createDict("M"), createDict("L")));
+        com.rsdp.dto.AiLabels labels = labelsWithDimensions(2000, 900, 800);
+
+        String sizeCode = rspuCodeService.inferSizeCode(labels);
+
+        assertThat(sizeCode).isEqualTo("L");
+    }
+
+    @Test
+    void inferSizeCode_shouldReturnInferredCode_whenExistsInDict() {
+        when(dictService.listByType("size")).thenReturn(List.of(createDict("M"), createDict("L")));
+        com.rsdp.dto.AiLabels labels = labelsWithDimensions(1500, 900, 800);
+
+        String sizeCode = rspuCodeService.inferSizeCode(labels);
+
+        assertThat(sizeCode).isEqualTo("L");
+    }
+
+    @Test
+    void inferSizeCode_shouldReturnNull_whenNoDegradableCodeInDict() {
+        // 字典里只有非等级码（如 SINGLE）：无等级码可降级，返回 null 走"存疑"路径
+        when(dictService.listByType("size")).thenReturn(List.of(createDict("SINGLE")));
+        com.rsdp.dto.AiLabels labels = labelsWithDimensions(2000, 900, 800);
+
+        String sizeCode = rspuCodeService.inferSizeCode(labels);
+
+        assertThat(sizeCode).isNull();
+    }
+
+    private com.rsdp.dto.AiLabels labelsWithDimensions(int w, int d, int h) {
+        com.rsdp.dto.Dimensions dims = new com.rsdp.dto.Dimensions();
+        dims.setW(w);
+        dims.setD(d);
+        dims.setH(h);
+        com.rsdp.dto.OcrResult ocr = new com.rsdp.dto.OcrResult();
+        ocr.setDimensions(dims);
+        com.rsdp.dto.AiLabels labels = new com.rsdp.dto.AiLabels();
+        labels.setOcr(ocr);
+        return labels;
+    }
 }

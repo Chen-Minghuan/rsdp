@@ -18,11 +18,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
@@ -170,10 +172,56 @@ public class VisionService {
      */
     private AiLabels parseLabels(String json) {
         try {
-            return objectMapper.readValue(json, AiLabels.class);
+            return objectMapper.readValue(normalizeSixDimTagsJson(json), AiLabels.class);
         } catch (IOException e) {
             log.error("解析 AI 识别结果失败，json={}", json, e);
             throw new ExternalServiceException("解析 AI 识别结果失败", e);
+        }
+    }
+
+    /**
+     * 六维标签容错归一：AI 偶发把某维返回为数组（如 "E": ["实木","布艺"]），
+     * 而 AiLabels.sixDimTags 是 Map&lt;String,String&gt;，直接反序列化会抛
+     * MismatchedInputException 导致整个识别结果判失败。此处把数组值合并为
+     * "/" 分隔的字符串（空数组归一为 null），其余内容原样保留。
+     *
+     * @param json AI 原始返回
+     * @return 归一后的 JSON；解析失败时原样返回（由后续反序列化报错）
+     */
+    static String normalizeSixDimTagsJson(String json) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = new ObjectMapper().readTree(json);
+            com.fasterxml.jackson.databind.JsonNode tags = root.path("sixDimTags");
+            if (!tags.isObject()) {
+                return json;
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode tagObj =
+                (com.fasterxml.jackson.databind.node.ObjectNode) tags;
+            List<String> fieldNames = new ArrayList<>();
+            tagObj.fieldNames().forEachRemaining(fieldNames::add);
+            boolean changed = false;
+            for (String field : fieldNames) {
+                com.fasterxml.jackson.databind.JsonNode value = tagObj.get(field);
+                if (value == null || !value.isArray()) {
+                    continue;
+                }
+                List<String> parts = new ArrayList<>();
+                value.forEach(node -> {
+                    if (node.isTextual() && StringUtils.hasText(node.asText())) {
+                        parts.add(node.asText().trim());
+                    }
+                });
+                if (parts.isEmpty()) {
+                    tagObj.putNull(field);
+                } else {
+                    tagObj.put(field, String.join("/", parts));
+                }
+                changed = true;
+            }
+            return changed ? root.toString() : json;
+        } catch (Exception e) {
+            log.warn("六维标签 JSON 归一失败，按原文继续：{}", e.getMessage());
+            return json;
         }
     }
 
@@ -541,10 +589,12 @@ public class VisionService {
 
     /**
      * 单图产品主体检测提示词。
-     * 要求 AI 完整包围图中最主要的家具产品（所有部件不可切断），排除搭配品、装饰、文字等干扰。
+     * 要求 AI 完整包围图中最完整的家具产品（所有部件不可切断），排除搭配品、装饰、文字等干扰。
+     * 选择标准是"完整度最高"而非"面积最大"：多个产品并存时，优先选部件完整可见、未被画面边缘
+     * 切断、遮挡最少的那个，即使它不是图中最大的产品。
      */
     private static final String SUBJECT_DETECTION_SYSTEM_PROMPT = """
-        你是家具产品图片分析专家。请找出图片中最主要的家具产品（面积最大、视觉主体），
+        你是家具产品图片分析专家。请找出图片中最完整的家具产品（完整度最高、而非面积最大），
         输出其完整包围框（bbox）。bbox 必须完整包含产品的所有部件，
         宁可多带少量背景边距，也绝不可切断产品的任何部分；
         但不得包含搭配产品、装饰品、绿植、文字、水印。
@@ -552,14 +602,16 @@ public class VisionService {
         """;
 
     private static final String SUBJECT_DETECTION_USER_PROMPT = """
-        请分析这张图片，找出图中最主要的家具产品，输出它的完整包围框。
+        请分析这张图片，找出图中最完整的家具产品，输出它的完整包围框。
 
         bbox 使用相对于图片宽高的千分比整数坐标（0 ~ 1000）：
         [x1, y1, x2, y2] = [左上角 x, 左上角 y, 右下角 x, 右下角 y]
 
         bbox 规则（必须严格遵守）：
-        - 只框最主要的那个家具产品；图片中有多个产品/搭配品时，只选视觉主体（通常是最大、最居中的那个）
-        - 必须完整包含产品的所有部件：腿、脚、扶手、靠背、装饰性突出物，一个都不能少
+        - 只框一个家具产品；图片中有多个产品/搭配品时，选择"完整度最高"的那个：
+          所有部件（腿、脚、扶手、靠背、装饰性突出物）完整可见、未被画面边缘切断、被遮挡最少
+        - 严禁仅凭面积大小选择：最大的产品若被切断/遮挡严重，应改选更完整的那个
+        - 必须完整包含所选产品的所有部件，一个都不能少
         - 常见错误（严禁出现）：切断椅腿/沙发脚、截掉靠背顶部、漏掉扶手、把产品的任何部件框在框外
         - 框内允许带少量背景边距，宁可略大也绝不可切断产品的任何部分
         - 不得包含搭配产品、装饰品、绿植、地毯、文字、水印
