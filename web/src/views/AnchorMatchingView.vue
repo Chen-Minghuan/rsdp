@@ -9,10 +9,10 @@ import {
   NAlert,
   NEmpty,
   NSpin,
-  NImage,
   NDivider,
   NTag
 } from 'naive-ui'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { recommendByAnchor } from '@/api/matching'
 import type { AnchorMatchingResponse, AiSchemeItem } from '@/types/matching'
 
@@ -105,15 +105,11 @@ function navigateToDetail(item: AiSchemeItem) {
               @click="navigateToDetail(item)"
             >
               <n-space align="start">
-                <n-image
-                  v-if="item.primaryImageUrl"
+                <HoverZoomImage
                   :src="item.primaryImageUrl"
-                  width="120"
-                  height="120"
-                  object-fit="cover"
-                  style="border-radius: 4px;"
+                  :width="120"
+                  :height="120"
                 />
-                <n-empty v-else description="无图" style="width: 120px; height: 120px;" />
 
                 <n-space vertical>
                   <div>

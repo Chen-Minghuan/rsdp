@@ -10,11 +10,11 @@ import {
   NDatePicker,
   NButton,
   NDataTable,
-  NImage,
   type DataTableColumns
 } from 'naive-ui'
 import type { EChartsOption } from 'echarts'
 import PageContainer from '@/components/PageContainer.vue'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { useEcharts } from '@/composables/useEcharts'
 import {
   getOrderStatisticsByProduct,
@@ -90,16 +90,12 @@ const productColumns: DataTableColumns<OrderProductStat> = [
     key: 'imageId',
     width: 72,
     render: row =>
-      row.imageId
-        ? h(NImage, {
-            src: `/api/v1/images/${row.imageId}`,
-            width: 48,
-            height: 48,
-            objectFit: 'cover',
-            previewDisabled: true,
-            style: 'border-radius: 4px;'
-          })
-        : h('span', { style: 'color: #999; font-size: 12px;' }, '暂无')
+      h(HoverZoomImage, {
+        src: row.imageId ? `/api/v1/images/${row.imageId}` : null,
+        width: 48,
+        height: 48,
+        previewDisabled: true
+      })
   },
   {
     title: '产品名称',

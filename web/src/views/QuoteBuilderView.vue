@@ -12,7 +12,6 @@ import {
   NDataTable,
   NSelect,
   NInputNumber,
-  NImage,
   NTag,
   NEmpty,
   NDivider,
@@ -22,6 +21,7 @@ import {
   NInput,
   type DataTableColumns
 } from 'naive-ui'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { getProductDetail } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
 import { generateQuote, exportQuote } from '@/api/quote'
@@ -499,13 +499,10 @@ onBeforeRouteUpdate((to) => {
           >
             <n-space align="center" justify="space-between">
               <n-space align="center">
-                <n-image
-                  v-if="product.images && product.images.length > 0"
-                  :src="`/api/v1/images/${product.images[0].imageId}`"
-                  width="80"
-                  height="80"
-                  object-fit="cover"
-                  style="border-radius: 4px;"
+                <HoverZoomImage
+                  :src="product.images && product.images.length > 0 ? `/api/v1/images/${product.images[0].imageId}` : null"
+                  :width="80"
+                  :height="80"
                 />
                 <n-select
                   v-model:value="selectedRskuMap[product.rspu.rspuId]"

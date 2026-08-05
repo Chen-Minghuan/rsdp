@@ -10,7 +10,6 @@ import {
   NForm,
   NFormItemGi,
   NGrid,
-  NImage,
   NInput,
   NModal,
   NPagination,
@@ -36,7 +35,8 @@ import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS, ROLES, IMAGE_FALLBACK_SRC } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
 import type { DictItem } from '@/types/dict'
@@ -472,33 +472,7 @@ const columns: DataTableColumns<ProductSummary> = [
     key: 'productInfo',
     width: 220,
     render(row) {
-      const image = row.primaryImageUrl
-        ? h(NImage, {
-            src: row.primaryImageUrl,
-            fallbackSrc: IMAGE_FALLBACK_SRC,
-            width: 50,
-            height: 50,
-            objectFit: 'cover',
-            style: 'border-radius: 4px; flex-shrink: 0;'
-          })
-        : h(
-            'div',
-            {
-              style: {
-                width: '50px',
-                height: '50px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: '4px',
-                background: '#f0f0f0',
-                color: '#999',
-                fontSize: '12px',
-                flexShrink: 0
-              }
-            },
-            '暂无'
-          )
+      const image = h(HoverZoomImage, { src: row.primaryImageUrl, width: 50, height: 50 })
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
         image,
         h(

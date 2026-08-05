@@ -20,9 +20,9 @@ import {
   NGrid,
   NGridItem,
   NDivider,
-  NImage,
   type DataTableColumns
 } from 'naive-ui'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import {
   getFactory,
   listRskuByFactory,
@@ -439,14 +439,11 @@ function FactoryImages(props: { value?: string }) {
     NSpace,
     { size: 8 },
     {
-      default: () => items.map((item, index) =>
-        h(NImage, {
+      default: () => items.map((item) =>
+        h(HoverZoomImage, {
           src: item,
           width: 120,
-          height: 90,
-          objectFit: 'cover',
-          fallbackSrc: '',
-          alt: `工厂图片 ${index + 1}`
+          height: 90
         })
       )
     }

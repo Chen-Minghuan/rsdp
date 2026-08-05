@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { NButton, NEmpty, NImage, NTag } from 'naive-ui'
+import { NButton, NEmpty, NTag } from 'naive-ui'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import type { RelatedProduct } from '@/types/product'
-import { IMAGE_FALLBACK_SRC } from '@/utils/constants'
 
 /**
  * 产品详情「搭配关系」页签：官方搭配 + 适配来源，两个分组卡片式陈列。
@@ -64,17 +64,13 @@ function handleDelete(relationId: string, event: MouseEvent) {
           class="relation-card"
           @click="emit('open-product', item.targetRspuId)"
         >
-          <n-image
-            v-if="item.targetImageUrl"
+          <HoverZoomImage
             :src="item.targetImageUrl"
-            :fallback-src="IMAGE_FALLBACK_SRC"
-            width="72"
-            height="72"
-            object-fit="cover"
-            style="border-radius: var(--rsdp-radius); flex-shrink: 0;"
+            :width="72"
+            :height="72"
+            radius="var(--rsdp-radius)"
             preview-disabled
           />
-          <div v-else class="relation-card-placeholder">暂无图</div>
           <div class="relation-card-body">
             <div class="relation-card-name">{{ item.targetDisplayName || item.targetRspuId }}</div>
             <div class="relation-card-category">{{ item.targetCategoryPath || '-' }}</div>
@@ -118,17 +114,13 @@ function handleDelete(relationId: string, event: MouseEvent) {
           class="relation-card"
           @click="emit('open-product', item.targetRspuId)"
         >
-          <n-image
-            v-if="item.targetImageUrl"
+          <HoverZoomImage
             :src="item.targetImageUrl"
-            :fallback-src="IMAGE_FALLBACK_SRC"
-            width="72"
-            height="72"
-            object-fit="cover"
-            style="border-radius: var(--rsdp-radius); flex-shrink: 0;"
+            :width="72"
+            :height="72"
+            radius="var(--rsdp-radius)"
             preview-disabled
           />
-          <div v-else class="relation-card-placeholder">暂无图</div>
           <div class="relation-card-body">
             <div class="relation-card-name">{{ item.targetDisplayName || item.targetRspuId }}</div>
             <div class="relation-card-category">{{ item.targetCategoryPath || '-' }}</div>
@@ -191,19 +183,6 @@ function handleDelete(relationId: string, event: MouseEvent) {
 
 .relation-card:hover {
   box-shadow: var(--rsdp-shadow-card);
-}
-
-.relation-card-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 72px;
-  height: 72px;
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
-  background: var(--rsdp-serve-bg);
-  border-radius: var(--rsdp-radius);
 }
 
 .relation-card-body {
