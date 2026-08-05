@@ -64,6 +64,7 @@ public class RskuImportService {
     private final DictService dictService;
     private final AuditLogService auditLogService;
     private final PriceHistoryMapper priceHistoryMapper;
+    private final RskuCodeService rskuCodeService;
     private final DataScopeHelper dataScopeHelper;
     private final PlatformTransactionManager transactionManager;
 
@@ -112,17 +113,18 @@ public class RskuImportService {
             rowIndex++;
             // 先归一化（trim + 字典码归一），保证数据权限校验与预加载 map 查找使用 trim 后的编码
             normalizeRow(row, productLevels, quoteConfidenceLevels);
-            if (!dataScopeHelper.canAccessRskuFactory(row.getFactoryCode())) {
-                result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "无权为该工厂导入报价"));
-                continue;
-            }
             String key = row.getFactoryCode() + "|" + row.getVariantId();
             RskuSupply existing = existingMap.get(key);
             // 更新模式且已存在报价时允许价格留空（留空表示不更新价格）
             boolean allowEmptyPrice = updateIfExists && existing != null;
+            // 先做行必填/格式校验，再做数据权限校验：必填缺失的行应报具体校验错误而非权限错误
             String error = validateRow(row, factoryMap, rspuMap, variantMap, capableLevelsMap, productLevels, quoteConfidenceLevels, allowEmptyPrice);
             if (error != null) {
                 result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), error));
+                continue;
+            }
+            if (!dataScopeHelper.canAccessRskuFactory(row.getFactoryCode())) {
+                result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "无权为该工厂导入报价"));
                 continue;
             }
 
@@ -146,7 +148,7 @@ public class RskuImportService {
                     }
                 } else {
                     transactionTemplate.execute(status -> {
-                        insertSingleRsku(buildRskuSupply(row, productLevel));
+                        insertSingleRsku(buildRskuSupply(row, productLevel, variantMap.get(row.getVariantId())));
                         return null;
                     });
                     result.setSuccessCount(result.getSuccessCount() + 1);
@@ -487,7 +489,7 @@ public class RskuImportService {
         return null;
     }
 
-    private RskuSupply buildRskuSupply(RskuImportRow row, String productLevel) {
+    private RskuSupply buildRskuSupply(RskuImportRow row, String productLevel, RspuVariant variant) {
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId(IdGenerator.rskuId());
         rsku.setRspuId(row.getRspuId().trim());
@@ -507,9 +509,40 @@ public class RskuImportService {
         rsku.setQuoteConfidence(trim(row.getQuoteConfidence()));
         rsku.setReviewStatus("待复核");
         rsku.setPriceUpdated(LocalDate.now());
+        // ADR-007：普通 Excel 导入也是 RSKU 发号入口，插入前生成业务编码
+        rsku.setRskuCode(assignRskuCode(rsku.getRskuId(), row, variant));
         rsku.setCreatedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
         return rsku;
+    }
+
+    /**
+     * 为导入的 RSKU 生成业务编码。
+     *
+     * <p>材质码优先取导入行，缺失时回退变体材质码（与单条新增 {@link RskuService} 口径一致）。
+     * 所属 RSPU 无 rspu_code 或发号失败时不阻断导入：记行级告警日志，rsku_code 留空继续导入，
+     * 后续可通过存量补码迁移补齐（ADR-007 第八章）。</p>
+     *
+     * @param rskuId  已生成的 RSKU ID（尚未持久化，{@link RskuCodeService#assignCode} 仅返回编码不写库）
+     * @param row     导入行
+     * @param variant 关联变体
+     * @return 业务编码；发号不可用时为 null
+     */
+    private String assignRskuCode(String rskuId, RskuImportRow row, RspuVariant variant) {
+        String materialCode = StringUtils.hasText(row.getMaterialCode()) ? row.getMaterialCode()
+            : (variant != null ? variant.getMaterialCode() : null);
+        if (!StringUtils.hasText(materialCode)) {
+            log.warn("RSKU 业务编码发号跳过（材质码为空），rsku_code 留空继续导入，rspuId={}, factory={}",
+                row.getRspuId(), row.getFactoryCode());
+            return null;
+        }
+        try {
+            return rskuCodeService.assignCode(rskuId, row.getRspuId(), row.getFactoryCode(), materialCode);
+        } catch (Exception e) {
+            log.warn("RSKU 业务编码发号失败，rsku_code 留空继续导入，rspuId={}, factory={}: {}",
+                row.getRspuId(), row.getFactoryCode(), e.getMessage());
+            return null;
+        }
     }
 
     private BigDecimal updateExistingRsku(RskuSupply existing, RskuImportRow row, String productLevel) {

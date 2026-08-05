@@ -39,7 +39,15 @@ public class AuditLogService {
     private final AuditLogWriter auditLogWriter;
     private final ObjectMapper objectMapper;
 
-    private static final Set<String> PRICE_FIELDS = Set.of("factoryPrice", "oldPrice", "newPrice");
+    /**
+     * AES 加密的价格类字段（审计快照中以密文写入，与数据库 EncryptTypeHandler 存储口径一致）。
+     * 覆盖：rsku_supply/scheme_item.factoryPrice、price_history.oldPrice/newPrice、
+     * design_order_item.originalPrice/finalPrice/adjustPrice、design_order.originalTotalPrice/finalTotalPrice。
+     */
+    private static final Set<String> PRICE_FIELDS = Set.of(
+        "factoryPrice", "oldPrice", "newPrice",
+        "originalPrice", "finalPrice", "adjustPrice",
+        "originalTotalPrice", "finalTotalPrice");
     /** 密码类敏感字段（大小写不敏感），审计快照统一替换为 "***"，禁止哈希落库。 */
     private static final Set<String> PASSWORD_FIELDS = Set.of("passwordhash", "password");
     /** 密码字段脱敏占位值。 */

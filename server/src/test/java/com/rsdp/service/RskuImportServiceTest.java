@@ -88,6 +88,9 @@ class RskuImportServiceTest {
     private PriceHistoryMapper priceHistoryMapper;
 
     @Mock
+    private RskuCodeService rskuCodeService;
+
+    @Mock
     private PlatformTransactionManager transactionManager;
 
     @InjectMocks
@@ -911,6 +914,120 @@ class RskuImportServiceTest {
         ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
         verify(rskuSupplyMapper).insert(captor.capture());
         assertThat(captor.getValue().getQuoteConfidence()).isEqualTo("prm");
+    }
+
+    @Test
+    void importRskus_shouldAssignRskuCodeOnInsert() throws Exception {
+        // Given：导入行无材质编码列，发号材质码回退变体材质码（ADR-007：普通 Excel 导入也是发号入口）
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        variant.setMaterialCode("PE");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        when(rskuCodeService.assignCode(any(), eq("RSPU-001"), eq("F001"), eq("PE")))
+            .thenReturn("FS-MC-001-M-F001-PE-001");
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001,1500"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then：插入的 RSKU 带有发号服务生成的业务编码
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getRskuCode()).isEqualTo("FS-MC-001-M-F001-PE-001");
+    }
+
+    @Test
+    void importRskus_assignCodeFails_shouldContinueWithBlankRskuCode() throws Exception {
+        // Given：发号服务抛异常（如 RSPU 尚未生成业务编码），按策略不阻断导入、rsku_code 留空
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setProductLevel("S");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-001");
+        variant.setRspuId("RSPU-001");
+        variant.setProductLevel("S");
+        variant.setMaterialCode("PE");
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of(variant));
+
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        when(rskuCodeService.assignCode(any(), any(), any(), any()))
+            .thenThrow(new BusinessException("RSPU 尚未生成业务编码，无法生成 RSKU 编码: RSPU-001"));
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,F001,VAR-001,1500"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then：行仍导入成功，rsku_code 留空
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getRskuCode()).isNull();
+    }
+
+    @Test
+    void importRskus_emptyFactoryCode_shouldReportRequiredErrorBeforePermissionCheck() throws Exception {
+        // Given：数据权限校验一律拒绝；工厂编码为空的行应先命中必填校验，而非误报权限错误
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        // 行必填校验先于数据权限校验：空工厂编码行不走到这两个 stub，标 lenient 避免严格模式误报
+        lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(false);
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of());
+        lenient().when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of());
+        when(rspuVariantMapper.selectBatchIds(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+
+        byte[] excelBytes = buildExcelWithRows(List.of(
+            header(),
+            "RSPU-001,,VAR-001,1500"
+        ));
+        MockMultipartFile file = new MockMultipartFile("file", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // When
+        RskuImportResult result = rskuImportService.importRskus(file, false);
+
+        // Then
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("工厂编码 不能为空");
+        verify(rskuSupplyMapper, never()).insert(any(RskuSupply.class));
     }
 
     private byte[] buildExcelWithRows(List<String> csvRows) throws Exception {
