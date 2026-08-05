@@ -54,10 +54,12 @@ rsdp:
       enabled: true
       # 裁剪成功后是否将原图另存为 original 类型图片资产（可追溯/可恢复）
       keep-original: true
-      # bbox 面积占全图比例下限，低于则视为误检不裁剪
-      min-area-ratio: 0.15
-      # bbox 面积占全图比例上限，高于则说明图已是纯产品图不裁剪
-      max-area-ratio: 0.95
+      # bbox 面积占全图比例下限，低于则视为误检不裁剪（0.02：整页型录截图中完整产品可能只占几个百分点）
+      min-area-ratio: 0.02
+      # bbox 面积占全图比例上限，高于则说明图已是纯产品图不裁剪（0.98：收窄组合图漏裁窗口）
+      max-area-ratio: 0.98
+      # 裁剪后再做一次 AI 完整性校验，不完整时加大框重裁或回退原图
+      verify-crop: true
     # 多模态 embedding 模型，用于以图搜图
     embedding-model: multimodal-embedding-v1
     embedding-base-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding
