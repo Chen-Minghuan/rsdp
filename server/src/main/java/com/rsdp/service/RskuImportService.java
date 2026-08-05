@@ -98,12 +98,14 @@ public class RskuImportService {
         Map<String, List<String>> capableLevelsMap = preloadCapableLevels(factoryMap);
         List<CategoryDict> productLevels = dictService.listByType("factory_level");
         List<CategoryDict> quoteConfidenceLevels = dictService.listByType("quote_confidence");
+        List<CategoryDict> materials = dictService.listByType("material");
         if (productLevels == null) {
             productLevels = List.of();
         }
         if (quoteConfidenceLevels == null) {
             quoteConfidenceLevels = List.of();
         }
+        List<CategoryDict> finalMaterials = materials != null ? materials : List.of();
 
         Set<String> processedKeys = new HashSet<>();
         TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
@@ -147,8 +149,15 @@ public class RskuImportService {
                         result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "该工厂对该变体已有报价，已跳过"));
                     }
                 } else {
+                    // 在独立事务外构造 RSKU（含业务编码发号），避免 REQUIRED 事务内的 RuntimeException
+                    // 把 TransactionTemplate 事务标记为 rollback-only。
+                    String rspuCode = rspuMap.get(row.getRspuId()) != null
+                        ? rspuMap.get(row.getRspuId()).getRspuCode()
+                        : null;
+                    RskuSupply rsku = buildRskuSupply(row, productLevel, rspuCode, finalMaterials,
+                        variantMap.get(row.getVariantId()));
                     transactionTemplate.execute(status -> {
-                        insertSingleRsku(buildRskuSupply(row, productLevel, variantMap.get(row.getVariantId())));
+                        insertSingleRsku(rsku);
                         return null;
                     });
                     result.setSuccessCount(result.getSuccessCount() + 1);
@@ -468,6 +477,19 @@ public class RskuImportService {
         return prefixMatched != null ? prefixMatched : trimmed;
     }
 
+    private boolean isValidDictCode(String code, List<CategoryDict> dicts) {
+        if (!StringUtils.hasText(code)) {
+            return false;
+        }
+        String trimmed = code.trim();
+        for (CategoryDict d : dicts) {
+            if (trimmed.equalsIgnoreCase(d.getDictCode())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean isValidProductLevel(String level, List<CategoryDict> productLevels) {
         if (!StringUtils.hasText(level)) {
             return false;
@@ -489,7 +511,8 @@ public class RskuImportService {
         return null;
     }
 
-    private RskuSupply buildRskuSupply(RskuImportRow row, String productLevel, RspuVariant variant) {
+    private RskuSupply buildRskuSupply(RskuImportRow row, String productLevel, String rspuCode,
+                                       List<CategoryDict> materials, RspuVariant variant) {
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId(IdGenerator.rskuId());
         rsku.setRspuId(row.getRspuId().trim());
@@ -510,7 +533,7 @@ public class RskuImportService {
         rsku.setReviewStatus("待复核");
         rsku.setPriceUpdated(LocalDate.now());
         // ADR-007：普通 Excel 导入也是 RSKU 发号入口，插入前生成业务编码
-        rsku.setRskuCode(assignRskuCode(rsku.getRskuId(), row, variant));
+        rsku.setRskuCode(assignRskuCode(rsku.getRskuId(), row, rspuCode, materials, variant));
         rsku.setCreatedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
         return rsku;
@@ -520,20 +543,35 @@ public class RskuImportService {
      * 为导入的 RSKU 生成业务编码。
      *
      * <p>材质码优先取导入行，缺失时回退变体材质码（与单条新增 {@link RskuService} 口径一致）。
-     * 所属 RSPU 无 rspu_code 或发号失败时不阻断导入：记行级告警日志，rsku_code 留空继续导入，
-     * 后续可通过存量补码迁移补齐（ADR-007 第八章）。</p>
+     * 所属 RSPU 无 rspu_code 或材质码未归一时跳过发号：记行级告警日志，rsku_code 留空继续导入，
+     * 后续可通过存量补码迁移补齐（ADR-007 第八章）。
+     * 不再 try/catch assignCode 的 BusinessException，因为 REQUIRED 事务内的 RuntimeException 会把外层
+     * TransactionTemplate 事务标记为 rollback-only，导致 commit 时抛出 UnexpectedRollbackException。</p>
      *
      * @param rskuId  已生成的 RSKU ID（尚未持久化，{@link RskuCodeService#assignCode} 仅返回编码不写库）
      * @param row     导入行
+     * @param rspuCode 所属 RSPU 业务编码（为空时跳过发号）
+     * @param materials 材质字典列表
      * @param variant 关联变体
      * @return 业务编码；发号不可用时为 null
      */
-    private String assignRskuCode(String rskuId, RskuImportRow row, RspuVariant variant) {
+    private String assignRskuCode(String rskuId, RskuImportRow row, String rspuCode,
+                                  List<CategoryDict> materials, RspuVariant variant) {
         String materialCode = StringUtils.hasText(row.getMaterialCode()) ? row.getMaterialCode()
             : (variant != null ? variant.getMaterialCode() : null);
+        if (!StringUtils.hasText(rspuCode)) {
+            log.warn("RSKU 业务编码发号跳过（所属 RSPU 无 rspu_code），rsku_code 留空继续导入，rspuId={}, factory={}",
+                row.getRspuId(), row.getFactoryCode());
+            return null;
+        }
         if (!StringUtils.hasText(materialCode)) {
             log.warn("RSKU 业务编码发号跳过（材质码为空），rsku_code 留空继续导入，rspuId={}, factory={}",
                 row.getRspuId(), row.getFactoryCode());
+            return null;
+        }
+        if (!isValidDictCode(materialCode, materials)) {
+            log.warn("RSKU 业务编码发号跳过（材质码未归一），rsku_code 留空继续导入，rspuId={}, factory={}, material={}",
+                row.getRspuId(), row.getFactoryCode(), materialCode);
             return null;
         }
         try {

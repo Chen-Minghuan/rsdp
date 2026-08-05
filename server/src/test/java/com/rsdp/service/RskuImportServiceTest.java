@@ -120,6 +120,14 @@ class RskuImportServiceTest {
         return List.of(high, mid, low);
     }
 
+    private List<CategoryDict> materialDicts() {
+        CategoryDict pe = new CategoryDict();
+        pe.setDictType("material");
+        pe.setDictCode("PE");
+        pe.setDictName("皮");
+        return List.of(pe);
+    }
+
     private String header() {
         return "RSPU编码,工厂编码,变体编码,出厂价,工厂SKU,材质说明,交期（天）,最小起订量,质保年限,发货地,差异备注,报价置信度,产品等级";
     }
@@ -921,11 +929,13 @@ class RskuImportServiceTest {
         // Given：导入行无材质编码列，发号材质码回退变体材质码（ADR-007：普通 Excel 导入也是发号入口）
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(dictService.listByType("material")).thenReturn(materialDicts());
         when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
         rspu.setProductLevel("S");
+        rspu.setRspuCode("FS-MC-001-M");
         when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
 
         FactoryMaster factory = new FactoryMaster();
@@ -961,14 +971,16 @@ class RskuImportServiceTest {
 
     @Test
     void importRskus_assignCodeFails_shouldContinueWithBlankRskuCode() throws Exception {
-        // Given：发号服务抛异常（如 RSPU 尚未生成业务编码），按策略不阻断导入、rsku_code 留空
+        // Given：发号服务抛异常，按策略不阻断导入、rsku_code 留空
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
         when(dictService.listByType("quote_confidence")).thenReturn(quoteConfidenceDicts());
+        when(dictService.listByType("material")).thenReturn(materialDicts());
         when(factoryService.batchListCapableLevels(List.of("F001"))).thenReturn(Map.of("F001", List.of("S")));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
         rspu.setProductLevel("S");
+        rspu.setRspuCode("FS-MC-001-M");
         when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(rspu));
 
         FactoryMaster factory = new FactoryMaster();

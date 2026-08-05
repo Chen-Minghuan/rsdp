@@ -490,15 +490,20 @@ public class ProductImportService {
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
-        // 业务编码生成失败不阻断整行导入：rspu_code 留空、记行级警告，与 AI 识别路径语义对齐
+        // 业务编码生成失败不阻断整行导入：风格/职级码无效时跳过发号（rspu_code 留空、记行级警告），
+        // 与 AI 识别路径语义对齐；不再 try/catch assignCode 的 BusinessException，
+        // 因为 REQUIRED 事务内的 RuntimeException 会把外层事务标记为 rollback-only，
+        // 导致 commit 时 UnexpectedRollbackException 并被二次 rollback 抛出“Transaction is already completed”。
         String sizeCode = resolveImportSizeCode(row.getSizeCode(), dictCache.get("size"));
-        try {
-            rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
-        } catch (BusinessException e) {
-            log.warn("导入生成 RSPU 业务编码失败（rspu_code 留空，不阻断导入），rspuId={}，原因={}",
-                rspuId, e.getMessage());
+        String positioningLabel = rspu.getPositioningLabel();
+        if (isValidDictCode(positioningLabel, dictCache.get("style"))) {
+            rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), positioningLabel, sizeCode);
+        } else if (StringUtils.hasText(row.getPositioningLabel())) {
+            // 仅当用户显式提供了风格/职级但未能归一时才提示；缺失时兜底为「待识别」是已知行为，不冗余告警
+            log.warn("导入生成 RSPU 业务编码跳过（风格/职级码未归一，rspu_code 留空，不阻断导入），rspuId={}，positioningLabel={}",
+                rspuId, positioningLabel);
             result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
-                "业务编码生成失败（rspu_code 留空）: " + e.getMessage()));
+                "业务编码生成跳过（rspu_code 留空）: 风格/职级码未识别: " + positioningLabel));
         }
 
         return rspu;

@@ -227,18 +227,21 @@ public final class ExcelHeaderNormalizer {
      *
      * <p>工厂报价单常在中文表头下紧跟一行英文对照：该行应视为表头的一部分跳过，
      * 不能与中文行做父子合并（避免拼出「类别-SORT」），也不能进数据区。
-     * 与中文材质子表头（A级布/半皮，仍走父子合并）的区分点：整行以 ASCII 字母为主。</p>
+     * 区分数据行的关键约束：
+     * - 候选行不能有中文字符；
+     * - 候选行不能包含阿拉伯数字（避免型号/编码/尺寸值被误判）；
+     * - 非空单元格应是字母或常见标点/空格构成的短表头词，且过半数列与中文表头位置对应。</p>
      *
      * @param row       候选英文副表头行
      * @param headerRow 已确认的中文表头行（用于列位置对齐校验）
-     * @return 整行以 ASCII 为主且大部分列与表头行位置对应时为 true
+     * @return 满足英文对照副表头特征时为 true
      */
     public static boolean looksLikeEnglishMirrorRow(Map<Integer, String> row, Map<Integer, String> headerRow) {
         if (row == null || row.isEmpty()) {
             return false;
         }
         int nonEmpty = 0;
-        int asciiDominated = 0;
+        int asciiHeaderLike = 0;
         int aligned = 0;
         for (Map.Entry<Integer, String> entry : row.entrySet()) {
             String value = entry.getValue();
@@ -246,15 +249,15 @@ public final class ExcelHeaderNormalizer {
                 continue;
             }
             nonEmpty++;
-            if (isAsciiLetterDominated(value.trim())) {
-                asciiDominated++;
+            if (isAsciiHeaderLike(value.trim())) {
+                asciiHeaderLike++;
             }
             if (headerRow != null && StringUtils.hasText(headerRow.get(entry.getKey()))) {
                 aligned++;
             }
         }
-        // 整行以 ASCII 为主（过半）且大部分列与中文表头列一一对应
-        return nonEmpty >= 2 && asciiDominated * 2 > nonEmpty && aligned * 2 >= nonEmpty;
+        // 英文副表头行：过半非空单元格符合表头词特征，且大部分列与中文表头列一一对应
+        return nonEmpty >= 2 && asciiHeaderLike * 2 > nonEmpty && aligned * 2 >= nonEmpty;
     }
 
     /**
@@ -295,6 +298,26 @@ public final class ExcelHeaderNormalizer {
         }
         for (char c : text.toCharArray()) {
             if (c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 判断文本是否像英文表头词：无中文、无数字、至少含一个字母。
+     *
+     * <p>用于英文对照副表头识别，避免型号、尺寸、URL 等数据行被误判为表头。</p>
+     */
+    private static boolean isAsciiHeaderLike(String text) {
+        if (!StringUtils.hasText(text) || containsChinese(text)) {
+            return false;
+        }
+        if (containsDigit(text)) {
+            return false;
+        }
+        for (char c : text.toCharArray()) {
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
                 return true;
             }
         }

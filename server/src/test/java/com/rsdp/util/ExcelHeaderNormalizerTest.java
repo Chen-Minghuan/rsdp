@@ -208,6 +208,55 @@ class ExcelHeaderNormalizerTest {
     }
 
     @Test
+    void looksLikeEnglishMirrorRow_shouldNotMisjudgeDataRowWithCodes() {
+        // 回归：AI 导入测试数据首行（型号含数字、品类/风格为 ASCII 码）曾被误判为英文副表头，
+        // 导致首行数据被跳过、501 行文件按 500 行放行。
+        Map<Integer, String> cnHeader = new LinkedHashMap<>();
+        cnHeader.put(0, "型号");
+        cnHeader.put(1, "品名");
+        cnHeader.put(2, "品类");
+        cnHeader.put(3, "风格");
+        cnHeader.put(4, "主色");
+        cnHeader.put(5, "材质");
+        cnHeader.put(6, "场景");
+        cnHeader.put(7, "等级");
+        cnHeader.put(8, "保修年限");
+        cnHeader.put(9, "价格带");
+        cnHeader.put(10, "尺寸码");
+        cnHeader.put(11, "颜色码");
+        cnHeader.put(12, "材质码");
+        cnHeader.put(13, "尺寸");
+        cnHeader.put(14, "箱率");
+        cnHeader.put(15, "发货仓库");
+        cnHeader.put(16, "出厂价");
+        cnHeader.put(17, "主图URL");
+
+        Map<Integer, String> dataRow = new LinkedHashMap<>();
+        dataRow.put(0, "AI-169095-0001");
+        dataRow.put(1, "AI产品-1");
+        dataRow.put(2, "FS");
+        dataRow.put(3, "MC");
+        dataRow.put(4, "米色");
+        dataRow.put(5, "A级布");
+        dataRow.put(6, "客厅");
+        dataRow.put(7, "A级");
+        dataRow.put(8, "3");
+        dataRow.put(9, "mid");
+        dataRow.put(10, "M");
+        dataRow.put(11, "BG");
+        dataRow.put(12, "FB");
+        dataRow.put(13, "2000*900*800mm");
+        dataRow.put(14, "20");
+        dataRow.put(15, "TEST");
+        dataRow.put(16, "1500");
+        dataRow.put(17, "https://picsum.photos/200/200");
+
+        org.junit.jupiter.api.Assertions.assertFalse(
+            ExcelHeaderNormalizer.looksLikeEnglishMirrorRow(dataRow, cnHeader),
+            "含数字型号/价格/尺寸的数据行不应被误判为英文副表头");
+    }
+
+    @Test
     void countHeaderKeywordHits_shouldDistinguishHeaderFromTitle() {
         Map<Integer, String> header = new LinkedHashMap<>();
         header.put(0, "NO");
