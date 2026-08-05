@@ -559,6 +559,91 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void confirmAndImport_shouldPropagateDescriptionWithinMergedImageGroup() throws IOException {
+        // 真实工厂报价单排版：一张组合图纵向覆盖 茶桌/主椅/方凳/汇总行 四行，
+        // 「材质解析」写在主椅行，汇总行（一桌四椅）又带茶炉/赠品补充描述。
+        // 期望：三个独立 RSPU 都拿到完整拼接描述；汇总行不建产品但描述不被丢弃。
+        byte[] excelBytes = createExcelWithMergedImageAndSplitDescription();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"图片\":null,\"类别\":\"categoryCode\",\"型号\":\"externalCode\",\"尺寸\":\"dimensions\",\"材质解析\":\"description\",\"出厂价\":\"retailPrice\"},\"categoryGuess\":\"DT\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithMergedImageAndSplitDescription()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "DT", "餐桌")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+
+        List<RspuMaster> insertedRspus = new ArrayList<>();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-" + rspu.getExternalCode());
+            insertedRspus.add(rspu);
+            return 1;
+        });
+
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-DEFAULT");
+        lenient().when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("DT");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertNotNull(result);
+        assertEquals(4, result.getTotalRows(), "原始数据行应包含 3 行产品 + 1 行组合汇总");
+        assertEquals(3, result.getSuccessCount(), "应创建 3 个独立 RSPU");
+        assertEquals(0, result.getFailedCount());
+
+        // 汇总行未建 RSPU
+        verify(rspuMapper, times(3)).insert(any(RspuMaster.class));
+
+        // 三个 RSPU 都包含完整描述（主椅行 + 汇总行拼接）
+        String expectedPart1 = "面板：实木多层板贴烟熏色木皮+乌金石茶盘";
+        String expectedPart2 = "茶炉：全自动隐藏式养生炉";
+        assertEquals(3, insertedRspus.size());
+        for (RspuMaster rspu : insertedRspus) {
+            String description = rspu.getDescription();
+            assertNotNull(description, "RSPU " + rspu.getExternalCode() + " 应有描述");
+            assertTrue(description.contains(expectedPart1),
+                "RSPU " + rspu.getExternalCode() + " 应包含主椅行描述");
+            assertTrue(description.contains(expectedPart2),
+                "RSPU " + rspu.getExternalCode() + " 应包含汇总行补充描述");
+        }
+    }
+
+    @Test
     void confirmAndImport_shouldInferPriceParentHeaderSpan() throws IOException {
         byte[] excelBytes = createExcelWithPriceParentSpan();
         MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
@@ -1860,6 +1945,63 @@ class ExcelAiImportServiceTest {
                 List.of("FS", "休闲椅 A", "中古风")
             );
             com.alibaba.excel.EasyExcel.write(out).sheet("Sheet1").doWrite(data);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithMergedImageAndSplitDescription() {
+        // 图片列（col0）合并覆盖 4 行；描述拆在主椅行（row2）与汇总行（row4）
+        byte[] pngBytes = createPng(0xFFAA00);
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("图片 PICTURE");
+            header.createCell(1).setCellValue("类别");
+            header.createCell(2).setCellValue("型号");
+            header.createCell(3).setCellValue("尺寸");
+            header.createCell(4).setCellValue("材质解析");
+            header.createCell(5).setCellValue("出厂价");
+
+            var row1 = sheet.createRow(1);
+            row1.createCell(1).setCellValue("DT");
+            row1.createCell(2).setCellValue("WG-26602");
+            row1.createCell(3).setCellValue("2600*800*750");
+            row1.createCell(5).setCellValue(5800);
+
+            var row2 = sheet.createRow(2);
+            row2.createCell(1).setCellValue("DT");
+            row2.createCell(2).setCellValue("WG-26303");
+            row2.createCell(3).setCellValue("660*650*830");
+            row2.createCell(4).setCellValue("面板：实木多层板贴烟熏色木皮+乌金石茶盘\n右向柜子：实木多层板贴烟熏色木皮\n脚架：实木多层板贴烟熏色木皮");
+            row2.createCell(5).setCellValue(730);
+
+            var row3 = sheet.createRow(3);
+            row3.createCell(1).setCellValue("DT");
+            row3.createCell(2).setCellValue("WG-26305");
+            row3.createCell(3).setCellValue("590*530*760");
+            row3.createCell(5).setCellValue(556);
+
+            var row4 = sheet.createRow(4);
+            row4.createCell(1).setCellValue("一桌四椅");
+            row4.createCell(4).setCellValue("茶炉：全自动隐藏式养生炉\n赠品：臻品高档茶具、茶渣桶等");
+            row4.createCell(5).setCellValue(8198);
+
+            // 合并图片列单元格（col0，行 1~4），模拟组合图覆盖全部成员行+汇总行
+            sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(1, 4, 0, 0));
+
+            var helper = workbook.getCreationHelper();
+            var drawing = sheet.createDrawingPatriarch();
+            var anchor = helper.createClientAnchor();
+            anchor.setRow1(1);
+            anchor.setCol1(0);
+            anchor.setRow2(5);
+            anchor.setCol2(1);
+            drawing.createPicture(anchor, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+
+            workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {
             throw new RuntimeException(e);

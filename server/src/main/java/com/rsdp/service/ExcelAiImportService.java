@@ -51,8 +51,10 @@ import com.rsdp.util.ImageUrlValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.openxml4j.opc.OPCPackage;
+import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.util.XMLHelper;
 import org.apache.poi.xssf.eventusermodel.XSSFReader;
 import org.springframework.beans.factory.annotation.Value;
@@ -80,6 +82,7 @@ import java.net.URLConnection;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -361,13 +364,17 @@ public class ExcelAiImportService {
         // 型号/品名列向下填充（纵向合并单元格语义，模块行继承上行型号）
         forwardFillKeyColumns(rawDataRows, mapping);
 
-        List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
-        List<PriceColumnInfo> selectedPriceColumns = resolveSelectedPriceColumns(priceColumns, request);
-
         // 从 storage 读取原始 Excel，提取内嵌图片并重建数据行物理布局（图片锚点行/列对齐用）
         EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(batch);
         Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages = embeddedImagesResult.images();
         PhysicalLayout physicalLayout = loadPhysicalLayout(batch);
+
+        // 按图片列合并单元格分组，把组内分散的描述/材质解析聚合到每个成员行
+        propagateGroupFields(rawDataRows, mapping, physicalLayout);
+
+        List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
+        List<PriceColumnInfo> selectedPriceColumns = resolveSelectedPriceColumns(priceColumns, request);
+
         // 工作表名（品类线索）：优先取物理布局重建结果，失败时无 sheet 名兜底
         String sheetName = physicalLayout != null ? physicalLayout.sheetName() : null;
 
@@ -1020,7 +1027,8 @@ public class ExcelAiImportService {
      *
      * <p>此类行若按普通产品导入，会生成无尺寸、无材质、无独立型号的「假产品」。
      * 识别特征：类别列值为组合/套餐名（含「一桌」「组合」「套餐」「套装」「搭配」或「+」），
-     * 且缺少尺寸、材质解析、材质标签等产品细节字段。</p>
+     * 且缺少尺寸、尺寸码、材质码等可独立建产品的标识字段。
+     * 注意：汇总行可能携带整组补充描述/材质标签，不应仅因存在描述就视为真实产品。</p>
      *
      * @param dataRow 数据行（表头 → 值）
      * @param mapping 确认后的字段映射（表头 → 标准字段）
@@ -1041,14 +1049,15 @@ public class ExcelAiImportService {
         if (!isComboName) {
             return false;
         }
-        // 组合汇总行通常只有价格/件数，没有产品细节；
-        // 若同时存在尺寸/材质/描述等细节，则视为真实产品，不跳过。
+        // 组合汇总行通常只有价格/件数/描述补充，没有具体产品细节；
+        // 判断核心是「缺少可独立建产品的标识」：尺寸、尺寸码、材质码。
+        // 描述/材质标签可能作为整组补充说明分散在汇总行，不应因存在描述就视为真实产品。
         String dimensions = getMappedCellValue(dataRow, mapping, "dimensions");
-        String description = getMappedCellValue(dataRow, mapping, "description");
-        String materialTags = getMappedCellValue(dataRow, mapping, "materialTags");
+        String sizeCode = getMappedCellValue(dataRow, mapping, "sizeCode");
+        String materialCode = getMappedCellValue(dataRow, mapping, "materialCode");
         return !StringUtils.hasText(dimensions)
-            && !StringUtils.hasText(description)
-            && !StringUtils.hasText(materialTags);
+            && !StringUtils.hasText(sizeCode)
+            && !StringUtils.hasText(materialCode);
     }
 
     /**
@@ -1096,7 +1105,8 @@ public class ExcelAiImportService {
             .filter(e -> {
                 String field = e.getValue();
                 return field != null && (field.contains("externalCode") || field.contains("productName")
-                    || field.contains("categoryCode"));
+                    || field.contains("categoryCode") || field.contains("description")
+                    || field.contains("materialTags"));
             })
             .map(Map.Entry::getKey)
             .toList();
@@ -1120,6 +1130,100 @@ public class ExcelAiImportService {
                 }
             }
         }
+    }
+
+    /**
+     * 按图片列合并单元格分组，聚合组内描述/材质并回写到组内每一行。
+     *
+     * <p>工厂报价单里一张组合图常纵向覆盖 茶桌/主椅/方凳 多行，而「材质解析」只写在其中一行、
+     * 甚至写在汇总行（如「一桌四椅」）。本方法把同一图片合并组内的非空 description/materialTags
+     * 收集起来（去重、按出现顺序拼接），再写回组内每个成员行，保证每个独立 RSPU 都拿到完整描述。</p>
+     *
+     * @param dataRows       数据行列表（就地修改）
+     * @param mapping        确认后的字段映射（表头 → 标准字段）
+     * @param physicalLayout 物理布局（含图片合并组）
+     */
+    private void propagateGroupFields(List<Map<String, String>> dataRows, Map<String, String> mapping,
+                                      PhysicalLayout physicalLayout) {
+        if (physicalLayout == null || physicalLayout.imageMergedGroups().isEmpty()) {
+            return;
+        }
+        String descriptionHeader = mapping.entrySet().stream()
+            .filter(e -> "description".equals(e.getValue()))
+            .map(Map.Entry::getKey)
+            .findFirst()
+            .orElse(null);
+        String materialTagsHeader = mapping.entrySet().stream()
+            .filter(e -> "materialTags".equals(e.getValue()))
+            .map(Map.Entry::getKey)
+            .findFirst()
+            .orElse(null);
+        if (descriptionHeader == null && materialTagsHeader == null) {
+            return;
+        }
+
+        // 建立物理行号 -> 逻辑数据行索引的映射（dataRowPhysicalIndexes 与 dataRows 顺序一一对应）
+        Map<Integer, Integer> physicalToLogical = new LinkedHashMap<>();
+        for (int i = 0; i < dataRows.size() && i < physicalLayout.dataRowPhysicalIndexes().size(); i++) {
+            Map<String, String> row = dataRows.get(i);
+            if (isRepeatedHeaderRow(row)) {
+                continue;
+            }
+            physicalToLogical.put(physicalLayout.dataRowPhysicalIndexes().get(i), i);
+        }
+
+        for (RowRange group : physicalLayout.imageMergedGroups()) {
+            List<String> descriptions = new ArrayList<>();
+            List<String> materials = new ArrayList<>();
+            List<Integer> logicalIndexes = new ArrayList<>();
+            for (int physicalRow = group.startRow(); physicalRow <= group.endRow(); physicalRow++) {
+                Integer logicalIndex = physicalToLogical.get(physicalRow);
+                if (logicalIndex == null) {
+                    continue;
+                }
+                logicalIndexes.add(logicalIndex);
+                Map<String, String> row = dataRows.get(logicalIndex);
+                collectIfPresent(row, descriptionHeader, descriptions);
+                collectIfPresent(row, materialTagsHeader, materials);
+            }
+            if (logicalIndexes.isEmpty()) {
+                continue;
+            }
+            String mergedDescription = joinUnique(descriptions, "\n");
+            String mergedMaterial = joinUnique(materials, ",");
+            for (int logicalIndex : logicalIndexes) {
+                Map<String, String> row = dataRows.get(logicalIndex);
+                if (descriptionHeader != null && StringUtils.hasText(mergedDescription)) {
+                    row.put(descriptionHeader, mergedDescription);
+                }
+                if (materialTagsHeader != null && StringUtils.hasText(mergedMaterial)) {
+                    row.put(materialTagsHeader, mergedMaterial);
+                }
+            }
+        }
+    }
+
+    private void collectIfPresent(Map<String, String> row, String header, List<String> collector) {
+        if (header == null) {
+            return;
+        }
+        String value = row.get(header);
+        if (StringUtils.hasText(value)) {
+            collector.add(value.trim());
+        }
+    }
+
+    private String joinUnique(List<String> parts, String delimiter) {
+        Set<String> seen = new LinkedHashSet<>();
+        for (String part : parts) {
+            for (String token : part.split(delimiter.equals("\n") ? "\\r?\\n" : delimiter)) {
+                String trimmed = token.trim();
+                if (StringUtils.hasText(trimmed)) {
+                    seen.add(trimmed);
+                }
+            }
+        }
+        return String.join(delimiter, seen);
     }
 
     private Map<String, String> sanitizeMapping(Map<String, String> mapping) {
@@ -1491,10 +1595,60 @@ public class ExcelAiImportService {
                     }
                 }
             }
-            return new PhysicalLayout(indexes, imageColumns, minCol, maxCol, resolveSheetName(bytes, sheetIndex));
+            // 图片列合并单元格分组：用于把跨多行的组合图所覆盖行的描述/材质聚合到组内每一行
+            List<RowRange> imageMergedGroups = collectImageMergedGroups(bytes, sheetIndex, imageColumns);
+            return new PhysicalLayout(indexes, imageColumns, minCol, maxCol, imageMergedGroups,
+                resolveSheetName(bytes, sheetIndex));
         } catch (Exception e) {
             log.warn("重建数据行物理布局失败，batchId={}", batch.getBatchId(), e);
             return null;
+        }
+    }
+
+    /**
+     * 收集图片列上的合并单元格所覆盖的物理行范围。
+     *
+     * <p>工厂报价单常见组合图（如「一桌四椅」）跨多行锚定，覆盖 茶桌/主椅/方凳 等成员行。
+     * 通过识别这些合并区域，可把组内分散的描述/材质解析聚合后共享给每个成员行。</p>
+     *
+     * @param fileBytes    原始 Excel 字节
+     * @param sheetIndex   工作表索引
+     * @param imageColumns 图片列物理列索引集合
+     * @return 图片合并组物理行范围列表（已按起始行排序、去重）
+     */
+    private List<RowRange> collectImageMergedGroups(byte[] fileBytes, int sheetIndex,
+                                                    Set<Integer> imageColumns) {
+        if (imageColumns.isEmpty()) {
+            return List.of();
+        }
+        try (InputStream stream = new ByteArrayInputStream(fileBytes);
+             Workbook workbook = WorkbookFactory.create(stream)) {
+            if (sheetIndex < 0 || sheetIndex >= workbook.getNumberOfSheets()) {
+                return List.of();
+            }
+            Sheet sheet = workbook.getSheetAt(sheetIndex);
+            List<RowRange> groups = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (int i = 0; i < sheet.getNumMergedRegions(); i++) {
+                CellRangeAddress region = sheet.getMergedRegion(i);
+                if (!imageColumns.contains(region.getFirstColumn())) {
+                    continue;
+                }
+                int start = region.getFirstRow();
+                int end = region.getLastRow();
+                if (start < 0 || end < start) {
+                    continue;
+                }
+                String key = start + "-" + end;
+                if (seen.add(key)) {
+                    groups.add(new RowRange(start, end));
+                }
+            }
+            groups.sort(Comparator.comparingInt(RowRange::startRow));
+            return groups;
+        } catch (Exception e) {
+            log.warn("收集图片列合并区域失败，sheetIndex={}", sheetIndex, e);
+            return List.of();
         }
     }
 
@@ -3286,7 +3440,17 @@ public class ExcelAiImportService {
      * @param sheetName              批次工作表名（品类线索，不可得为 null）
      */
     private record PhysicalLayout(List<Integer> dataRowPhysicalIndexes, Set<Integer> imageColumns,
-                                  int minDataColumn, int maxDataColumn, String sheetName) {
+                                  int minDataColumn, int maxDataColumn, List<RowRange> imageMergedGroups,
+                                  String sheetName) {
+    }
+
+    /**
+     * 物理行范围（0-based，含 start/end）。
+     *
+     * @param startRow 起始物理行
+     * @param endRow   结束物理行
+     */
+    private record RowRange(int startRow, int endRow) {
     }
 
     private record DownloadedImage(String source, byte[] bytes, String contentType, boolean primary,
