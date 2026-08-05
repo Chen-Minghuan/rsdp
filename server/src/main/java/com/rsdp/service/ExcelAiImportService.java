@@ -50,9 +50,13 @@ import com.rsdp.util.ExcelImageExtractor;
 import com.rsdp.util.ImageUrlValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.openxml4j.opc.OPCPackage;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.apache.poi.util.XMLHelper;
+import org.apache.poi.xssf.eventusermodel.XSSFReader;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
@@ -61,6 +65,10 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
+import org.xml.sax.Attributes;
+import org.xml.sax.InputSource;
+import org.xml.sax.XMLReader;
+import org.xml.sax.helpers.DefaultHandler;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -584,6 +592,12 @@ public class ExcelAiImportService {
             EasyExcel.read(stream, new ReadListener<Map<Integer, String>>() {
                 @Override
                 public void invoke(Map<Integer, String> row, AnalysisContext context) {
+                    // 行数上限流式控制：超限即中断解析，不把超限文件全量读入内存。
+                    // 阈值预留标题/表头余量（MAX_TITLE_SCAN_ROWS + 双行表头），合法文件不受影响，
+                    // 精确判定仍由调用方按表头布局复核
+                    if (rows.size() >= MAX_ROWS + MAX_TITLE_SCAN_ROWS + 2) {
+                        throw new RowLimitExceededException();
+                    }
                     Integer rowIndex = context.readRowHolder().getRowIndex();
                     rows.add(new IndexedRow(rowIndex != null ? rowIndex : rows.size(), row));
                 }
@@ -593,10 +607,33 @@ public class ExcelAiImportService {
                 }
             }).sheet(sheetIndex).headRowNumber(0).doRead();
         } catch (Exception e) {
+            if (isRowLimitExceeded(e)) {
+                throw new BusinessException("单次导入不能超过 " + MAX_ROWS + " 行数据");
+            }
             log.error("解析 Excel 失败", e);
             throw new BusinessException("解析 Excel 失败，请检查文件格式");
         }
         return rows;
+    }
+
+    /** 行数超限中断解析的标记异常（流式上限控制用，见 parseExcelRaw）。 */
+    private static final class RowLimitExceededException extends RuntimeException {
+    }
+
+    /**
+     * 沿异常链查找行数超限标记（EasyExcel 可能将监听器异常包装后抛出）。
+     *
+     * @param e 解析异常
+     * @return true 表示因行数超限中断
+     */
+    private boolean isRowLimitExceeded(Throwable e) {
+        while (e != null) {
+            if (e instanceof RowLimitExceededException) {
+                return true;
+            }
+            e = e.getCause();
+        }
+        return false;
     }
 
     /**
@@ -729,11 +766,20 @@ public class ExcelAiImportService {
     /**
      * 枚举工作簿全部工作表（名称 + 近似行数）。CSV 等非 Excel 内容回退单工作表。
      *
+     * <p>xlsx 走 OPCPackage + XSSFReader 只读枚举（不触发 XSSF 全量加载整个工作簿）；
+     * .xls 二进制保留 WorkbookFactory 方式（文件量小）。</p>
+     *
      * @param fileBytes  文件字节
      * @param fileName   原始文件名（日志用）
      * @return 工作表列表（至少含一个元素）
      */
     private List<ExcelSheetInfo> listSheets(byte[] fileBytes, String fileName) {
+        if (isXlsxContent(fileBytes)) {
+            List<ExcelSheetInfo> sheets = listXlsxSheets(fileBytes, fileName);
+            if (sheets != null) {
+                return sheets;
+            }
+        }
         try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(fileBytes))) {
             List<ExcelSheetInfo> sheets = new ArrayList<>();
             for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
@@ -747,6 +793,65 @@ public class ExcelAiImportService {
             log.debug("枚举工作表失败（按单工作表处理），file={}", fileName, e);
             return List.of(new ExcelSheetInfo(0, "Sheet1", 0));
         }
+    }
+
+    /**
+     * 按 ZIP 魔数（PK）判断是否为 xlsx 内容。
+     *
+     * @param fileBytes 文件字节
+     * @return true 表示 xlsx（ZIP 容器）
+     */
+    private boolean isXlsxContent(byte[] fileBytes) {
+        return fileBytes != null && fileBytes.length >= 2 && fileBytes[0] == 'P' && fileBytes[1] == 'K';
+    }
+
+    /**
+     * 用 OPCPackage + XSSFReader 只读枚举 xlsx 工作表：名称直接读取，
+     * 行数用 SAX 流式统计 sheet XML 的 row 元素，不做 XSSF 全量加载。
+     * 失败返回 null，由调用方回退 WorkbookFactory 方式。
+     *
+     * @param fileBytes 文件字节
+     * @param fileName  原始文件名（日志用）
+     * @return 工作表列表；解析失败为 null
+     */
+    private List<ExcelSheetInfo> listXlsxSheets(byte[] fileBytes, String fileName) {
+        List<ExcelSheetInfo> sheets = new ArrayList<>();
+        try (OPCPackage pkg = OPCPackage.open(new ByteArrayInputStream(fileBytes))) {
+            XSSFReader reader = new XSSFReader(pkg);
+            XSSFReader.SheetIterator sheetIterator = (XSSFReader.SheetIterator) reader.getSheetsData();
+            int index = 0;
+            while (sheetIterator.hasNext()) {
+                try (InputStream sheetStream = sheetIterator.next()) {
+                    sheets.add(new ExcelSheetInfo(index++, sheetIterator.getSheetName(),
+                        countSheetRows(sheetStream)));
+                }
+            }
+            return sheets.isEmpty() ? List.of(new ExcelSheetInfo(0, "Sheet1", 0)) : sheets;
+        } catch (Exception e) {
+            log.debug("XSSFReader 枚举工作表失败（回退 WorkbookFactory），file={}", fileName, e);
+            return null;
+        }
+    }
+
+    /**
+     * SAX 流式统计 sheet XML 中的 row 元素数（近似物理行数，与 lastRowNum+1 同为上限口径）。
+     *
+     * @param sheetStream sheet XML 输入流
+     * @return row 元素数
+     */
+    private int countSheetRows(InputStream sheetStream) throws Exception {
+        XMLReader parser = XMLHelper.newXMLReader();
+        int[] rowCount = {0};
+        parser.setContentHandler(new DefaultHandler() {
+            @Override
+            public void startElement(String uri, String localName, String qName, Attributes attributes) {
+                if ("row".equals(localName) || "row".equals(qName)) {
+                    rowCount[0]++;
+                }
+            }
+        });
+        parser.parse(new InputSource(sheetStream));
+        return rowCount[0];
     }
 
     private ProcessedMapping postProcessMapping(Map<String, String> aiMapping,
@@ -1477,6 +1582,12 @@ public class ExcelAiImportService {
             if (e instanceof BusinessException be) {
                 throw be;
             }
+            // 唯一索引冲突（V24 external_code、V12 uk_variant_attrs 等）转用户可读文案，
+            // 不把英文 SQL 原文抛给前端
+            if (e instanceof DataIntegrityViolationException) {
+                log.warn("Excel AI 导入触发数据库唯一约束冲突，rowIndex={}", rowIndex, e);
+                throw new BusinessException("外部编码或变体属性组合与已有数据冲突，请检查是否重复导入");
+            }
             throw new BusinessException("系统异常: " + e.getMessage());
         }
     }
@@ -1584,7 +1695,7 @@ public class ExcelAiImportService {
                 createdNewRspu = false;
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
-                rspuId = createRspu(row, dictCache);
+                rspuId = createRspu(row, dictCache, rowIssues);
                 saveStylesAndScenes(rspuId, row, dictCache);
                 createdNewRspu = true;
             }
@@ -2216,7 +2327,8 @@ public class ExcelAiImportService {
             return false;
         }
         String v = value.trim().toLowerCase();
-        return v.startsWith("http://") || v.startsWith("https://") || v.startsWith("ftp://");
+        // 与 ImageUrlValidator 白名单口径一致：仅放行 http/https
+        return v.startsWith("http://") || v.startsWith("https://");
     }
 
     private DownloadedImage downloadImage(String url, boolean primary) {
@@ -2305,14 +2417,18 @@ public class ExcelAiImportService {
         return result;
     }
 
-    private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
+    private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
+                              List<String> rowIssues) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
         rspu.setExternalCode(trim(row.getExternalCode()));
-        // 品名落 RSPU 产品名称（变体 displayName 保持不变，互不影响）
-        rspu.setProductName(trim(row.getVariantDisplayName()));
+        // 品名落 RSPU 产品名称：productName 优先，缺失时回退变体显示名（复合「型号品名」列场景）
+        String productName = StringUtils.hasText(row.getProductName())
+            ? row.getProductName()
+            : row.getVariantDisplayName();
+        rspu.setProductName(trim(productName));
         rspu.setDescription(trim(row.getDescription()));
         rspu.setRetailPrice(row.getRetailPrice());
         rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
@@ -2322,7 +2438,6 @@ public class ExcelAiImportService {
         rspu.setPositioningLabel(StringUtils.hasText(primaryStyleName)
             ? normalizeDictCode(primaryStyleName, dictCache.get("style"))
             : "待识别");
-        rspu.setProductName(trim(row.getProductName()));
         rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
         rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
@@ -2342,12 +2457,34 @@ public class ExcelAiImportService {
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
-        String sizeCode = StringUtils.hasText(row.getSizeCode())
-            ? normalizeDictCode(row.getSizeCode(), dictCache.get("size"))
-            : null;
-        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+        // 业务编码生成失败不阻断整行导入：rspu_code 留空、记行级警告，与 AI 识别路径语义对齐
+        String sizeCode = resolveImportSizeCode(row.getSizeCode(), dictCache.get("size"));
+        try {
+            rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+        } catch (BusinessException e) {
+            log.warn("导入生成 RSPU 业务编码失败（rspu_code 留空，不阻断导入），rspuId={}，原因={}",
+                rspuId, e.getMessage());
+            rowIssues.add("业务编码生成失败（rspu_code 留空）: " + e.getMessage());
+        }
 
         return rspuId;
+    }
+
+    /**
+     * 解析导入用尺寸码：归一后命中字典则用之；缺失或未归一时按 ADR-007 回退默认 X。
+     *
+     * @param rawSizeCode Excel 行内尺寸码原文（可空）
+     * @param sizeDict    尺寸字典
+     * @return 有效尺寸码（兜底 X）
+     */
+    private String resolveImportSizeCode(String rawSizeCode, List<CategoryDict> sizeDict) {
+        if (StringUtils.hasText(rawSizeCode)) {
+            String normalized = normalizeDictCode(rawSizeCode, sizeDict);
+            if (normalized != null && sizeDict.stream().anyMatch(d -> normalized.equalsIgnoreCase(d.getDictCode()))) {
+                return normalized;
+            }
+        }
+        return "X";
     }
 
     private String createVariantIfNeeded(String rspuId, ProductImportRow row,
@@ -2497,22 +2634,39 @@ public class ExcelAiImportService {
                         request.getDefaultLeadTimeDays());
 
                 // 创建变体：同 RSPU 下"码或原文"组合相同的变体直接复用（如归组的连续模块行），
-                // 避免变体属性组合唯一索引冲突导致整行回滚丢价格
-                String variantId = findExistingVariantId(rspuId, null, null, null, null, materialCode, materialText);
+                // 避免变体属性组合唯一索引冲突导致整行回滚丢价格；
+                // 价格列变体携带行级已解析的尺寸/颜色（三码容错解析已在 prepareRow 完成）
+                String rowSizeCode = StringUtils.hasText(baseRow.getSizeCode()) ? baseRow.getSizeCode() : null;
+                String rowColorCode = StringUtils.hasText(baseRow.getColorCode()) ? baseRow.getColorCode() : null;
+                String variantId = findExistingVariantId(rspuId, rowSizeCode, baseRow.getSizeText(),
+                    rowColorCode, baseRow.getColorText(), materialCode, materialText);
                 if (variantId == null) {
                     RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
                     variantRequest.setDisplayName(StringUtils.hasText(materialName) ? materialName : "默认变体");
+                    variantRequest.setSizeCode(rowSizeCode);
+                    variantRequest.setSizeText(baseRow.getSizeText());
+                    variantRequest.setColorCode(rowColorCode);
+                    variantRequest.setColorText(baseRow.getColorText());
                     variantRequest.setMaterialCode(materialCode);
                     variantRequest.setMaterialText(materialText);
                     variantRequest.setReferencePriceBand(resolvePriceBand(price));
-                    variantRequest.setProductLevel(baseRow.getProductLevel());
-                    var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
-                    if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
-                        log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
-                        rowIssues.add("创建变体失败: " + priceColumn.getHeader());
+                    variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
+                        ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
+                        : null);
+                    try {
+                        var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
+                        if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
+                            log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
+                            rowIssues.add("创建变体失败: " + priceColumn.getHeader());
+                            continue;
+                        }
+                        variantId = variantResponse.getVariantId();
+                    } catch (BusinessException e) {
+                        // 变体创建失败（唯一索引冲突/字典校验等）仅跳过当前价格列，不回滚整行丢全部报价
+                        log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader(), e);
+                        rowIssues.add("创建变体失败: " + priceColumn.getHeader() + " - " + e.getMessage());
                         continue;
                     }
-                    variantId = variantResponse.getVariantId();
                 }
                 if (firstVariantId == null) {
                     firstVariantId = variantId;
@@ -2532,7 +2686,9 @@ public class ExcelAiImportService {
                     rskuRequest.setMoq(moq);
                     rskuRequest.setShippingFrom(shippingFrom);
                     rskuRequest.setShippingWarehouseId(shippingWarehouseId);
-                    rskuRequest.setProductLevel(baseRow.getProductLevel());
+                    rskuRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
+                        ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
+                        : null);
                     try {
                         String rskuId = rskuService.upsertRsku(rskuRequest);
                         if (StringUtils.hasText(rskuId)) {
@@ -2610,6 +2766,9 @@ public class ExcelAiImportService {
     /**
      * updateIfExists=true 时复用已有 RSPU：以本行数据更新可变字段并记审计日志。
      *
+     * <p>仅显式有值的字段才覆盖已有数据，空单元格不清空已有内容，
+     * 与 {@link ProductImportService} 更新模式的「空单元格不覆盖」设计对齐。</p>
+     *
      * @param rspu      已有 RSPU 实体
      * @param row       本行数据
      * @param dictCache 字典缓存
@@ -2617,8 +2776,12 @@ public class ExcelAiImportService {
     private void updateExistingRspu(RspuMaster rspu, ProductImportRow row,
                                     Map<String, List<CategoryDict>> dictCache) {
         RspuMaster oldSnapshot = snapshotRspu(rspu);
-        if (StringUtils.hasText(row.getVariantDisplayName())) {
-            rspu.setProductName(row.getVariantDisplayName().trim());
+        // 品名取值与 createRspu 一致：productName 优先，缺失时回退变体显示名
+        String productName = StringUtils.hasText(row.getProductName())
+            ? row.getProductName()
+            : row.getVariantDisplayName();
+        if (StringUtils.hasText(productName)) {
+            rspu.setProductName(productName.trim());
         }
         // description/retailPrice 只补空缺：人工已填的内容不被 Excel 导入覆盖
         if (!StringUtils.hasText(rspu.getDescription()) && StringUtils.hasText(row.getDescription())) {
@@ -2633,18 +2796,30 @@ public class ExcelAiImportService {
         if (StringUtils.hasText(primaryStyleName)) {
             rspu.setPositioningLabel(normalizeDictCode(primaryStyleName, dictCache.get("style")));
         }
-        rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
-        rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
-        rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
-        rspu.setSixDimTags(trim(row.getSixDimTags()));
-        rspu.setReferencePriceBand(StringUtils.hasText(row.getReferencePriceBand())
-            ? row.getReferencePriceBand().trim().toLowerCase()
-            : null);
-        rspu.setProductLevel(StringUtils.hasText(row.getProductLevel())
-            ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
-            : null);
-        rspu.setWarrantyYears(row.getWarrantyYears());
-        rspu.setKeySpecs(trim(row.getKeySpecs()));
+        if (StringUtils.hasText(row.getColorPrimaryName())) {
+            rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
+        }
+        if (StringUtils.hasText(row.getMaterialTags())) {
+            rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
+        }
+        if (StringUtils.hasText(row.getSceneTags())) {
+            rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
+        }
+        if (StringUtils.hasText(row.getSixDimTags())) {
+            rspu.setSixDimTags(trim(row.getSixDimTags()));
+        }
+        if (StringUtils.hasText(row.getReferencePriceBand())) {
+            rspu.setReferencePriceBand(row.getReferencePriceBand().trim().toLowerCase());
+        }
+        if (StringUtils.hasText(row.getProductLevel())) {
+            rspu.setProductLevel(normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level")));
+        }
+        if (row.getWarrantyYears() != null) {
+            rspu.setWarrantyYears(row.getWarrantyYears());
+        }
+        if (StringUtils.hasText(row.getKeySpecs())) {
+            rspu.setKeySpecs(trim(row.getKeySpecs()));
+        }
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
         auditLogService.logUpdate("rspu_master", rspu.getRspuId(), oldSnapshot, rspu,
