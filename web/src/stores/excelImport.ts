@@ -311,11 +311,15 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   /** 批次仍在 importing 时展示的中间态标记（结果尚未就绪，正在轮询批次状态） */
   const batchRecovering = ref(false)
   let batchPollTimeoutId: ReturnType<typeof setTimeout> | null = null
+  /** 批次状态恢复轮询代际令牌：stopBatchPolling/重新发起时递增，防止在途响应复活已清空的结果页 */
+  let batchPollGeneration = 0
   /** 批次状态恢复轮询的最长等待时间：超过后提示用户稍后自行查看 */
   const BATCH_RECOVER_TIMEOUT_MS = 5 * 60 * 1000
   const BATCH_RECOVER_POLL_INTERVAL_MS = 3000
 
   function stopBatchPolling() {
+    // 递增代际令牌，作废在途的批次状态查询（响应返回后校验令牌，不再重建结果页）
+    batchPollGeneration++
     if (batchPollTimeoutId) {
       clearTimeout(batchPollTimeoutId)
       batchPollTimeoutId = null
@@ -351,12 +355,17 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    * 直到 done/failed 再恢复结果页；超过阈值则提示用户稍后到任务中心查看。
    */
   function startBatchStatusPolling(batchId: string, startedAt = Date.now()) {
+    const gen = ++batchPollGeneration
     batchRecovering.value = true
     currentStep.value = 3
     batchPollTimeoutId = setTimeout(async () => {
       batchPollTimeoutId = null
       try {
         const status = await getExcelAiImportStatus(batchId)
+        // 令牌已作废说明期间发生了 stopBatchPolling（如用户点了「重新导入」），不再重建结果页
+        if (gen !== batchPollGeneration) {
+          return
+        }
         if (status.status === 'importing') {
           if (Date.now() - startedAt >= BATCH_RECOVER_TIMEOUT_MS) {
             batchRecovering.value = false
@@ -369,6 +378,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         batchRecovering.value = false
         recoverFromBatchStatus(status)
       } catch {
+        // 令牌已作废说明期间发生了 stopBatchPolling，不再重试
+        if (gen !== batchPollGeneration) {
+          return
+        }
         // 单次查询失败不算终态，继续按节奏重试直至超时
         if (Date.now() - startedAt >= BATCH_RECOVER_TIMEOUT_MS) {
           batchRecovering.value = false

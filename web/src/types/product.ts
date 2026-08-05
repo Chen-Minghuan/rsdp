@@ -509,3 +509,25 @@ export interface ExcelAiImportStatus {
   createdAt: string
   updatedAt: string
 }
+
+/**
+ * Excel AI 辅助导入行级明细（后端 excel_import_row 表）。
+ */
+export interface ExcelImportRow {
+  rowId: number
+  batchId: string
+  /** Excel 原始行号（表头为 1 起算） */
+  excelRowNumber: number
+  /** 行类型（product 等） */
+  rowType: string
+  /** 原始行数据（JSON 字符串） */
+  rawData?: string
+  /** 行处理状态机：pending → success / failed / skipped */
+  status: string
+  /** 生成的 RSPU 主键（成功行） */
+  generatedRspuId?: string
+  /** 失败/跳过原因（skipped 行复用此字段记录跳过原因） */
+  failureReason?: string
+  /** 失败阶段（解析/建 RSPU/建变体等） */
+  failureStage?: string
+}

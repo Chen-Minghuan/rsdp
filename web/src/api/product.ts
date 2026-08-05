@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, FactoryProductEntryResult, ManualProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SceneImportResult, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SceneImportResult, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -284,6 +284,16 @@ export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signa
 export async function getExcelAiImportStatus(batchId: string): Promise<ExcelAiImportStatus> {
   const { data: result } = await apiClient.get<ApiResult<ExcelAiImportStatus>>(
     `/v1/products/excel-ai-import/${batchId}`
+  )
+  return result.data
+}
+
+/**
+ * 查询 Excel AI 辅助导入批次的行级明细（每行状态/原始值/失败或跳过原因）。
+ */
+export async function getExcelAiImportRows(batchId: string): Promise<ExcelImportRow[]> {
+  const { data: result } = await apiClient.get<ApiResult<ExcelImportRow[]>>(
+    `/v1/products/excel-ai-import/${batchId}/rows`
   )
   return result.data
 }

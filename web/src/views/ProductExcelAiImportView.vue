@@ -4,10 +4,11 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { NSelect, NTag, type DataTableColumns } from 'naive-ui'
 import { listDicts } from '@/api/dict'
+import { getExcelAiImportRows } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
-import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode } from '@/types/product'
+import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow } from '@/types/product'
 
 const router = useRouter()
 
@@ -72,8 +73,8 @@ const priceRoleOptions: { label: string; value: PriceColumnImportMode }[] = [
   { label: '不导入', value: 'none' }
 ]
 
-/** 批次已执行过导入（可能超时后重试触发）时，提示用户可刷新查看结果 */
-const isDuplicateImportError = computed(() => errorMessage.value.includes('重复导入'))
+/** 批次正在 importing（恢复查询也失败时）提示用户可刷新查看结果；后端报文为「批次正在导入中，请稍后重试」 */
+const isDuplicateImportError = computed(() => errorMessage.value.includes('正在导入中'))
 
 async function loadCategoryDicts() {
   try {
@@ -240,6 +241,79 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
     key: 'reason'
   }
 ]
+
+/** 行级明细弹窗状态 */
+const showRowDetailModal = ref(false)
+const rowDetailLoading = ref(false)
+const rowDetailError = ref('')
+const rowDetails = ref<ExcelImportRow[]>([])
+
+/** 行状态分组（失败/跳过/成功/处理中），只展示有数据的分组 */
+const groupedRowDetails = computed(() => {
+  const groups = [
+    { status: 'failed', label: '失败', tagType: 'error' as const },
+    { status: 'skipped', label: '跳过', tagType: 'warning' as const },
+    { status: 'success', label: '成功', tagType: 'success' as const },
+    { status: 'pending', label: '处理中', tagType: 'info' as const }
+  ]
+  return groups
+    .map(g => ({ ...g, rows: rowDetails.value.filter(r => r.status === g.status) }))
+    .filter(g => g.rows.length > 0)
+})
+
+/**
+ * 打开行级明细弹窗并加载当前批次的逐行记录（含跳过/失败原因）。
+ */
+async function openRowDetails() {
+  const batchId = importResult.value?.batchId
+  if (!batchId) return
+  showRowDetailModal.value = true
+  rowDetailLoading.value = true
+  rowDetailError.value = ''
+  rowDetails.value = []
+  try {
+    rowDetails.value = await getExcelAiImportRows(batchId)
+  } catch (e) {
+    rowDetailError.value = e instanceof Error ? e.message : '行级明细加载失败'
+  } finally {
+    rowDetailLoading.value = false
+  }
+}
+
+/** 原始值预览：rawData 为 JSON 字符串，提取前几个非空字段 */
+function rowRawSummary(row: ExcelImportRow): string {
+  if (!row.rawData) return '-'
+  try {
+    const obj = JSON.parse(row.rawData) as Record<string, unknown>
+    const summary = Object.entries(obj)
+      .filter(([, v]) => v !== null && v !== undefined && v !== '')
+      .slice(0, 4)
+      .map(([k, v]) => `${k}: ${String(v)}`)
+      .join('；')
+    return summary || '-'
+  } catch {
+    return row.rawData.slice(0, 80)
+  }
+}
+
+const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
+  {
+    title: '行号',
+    key: 'excelRowNumber',
+    width: 70
+  },
+  {
+    title: '原始值',
+    key: 'rawData',
+    render: (row) => rowRawSummary(row)
+  },
+  {
+    title: '原因',
+    key: 'failureReason',
+    width: 260,
+    render: (row) => row.failureReason || '-'
+  }
+]
 </script>
 
 <template>
@@ -261,7 +335,7 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
     <n-card v-if="currentStep === 1" title="上传 Excel 产品目录">
       <n-space vertical :size="16">
         <p style="color: #666;">
-          支持 .xlsx / .xls / .csv（最大 500MB）。系统会自动识别表头语义，并提取 Excel 内嵌图片作为主图。
+          支持 .xlsx / .xls / .csv（最大 500MB，单次最多 500 行数据）。系统会自动识别表头语义，并提取 Excel 内嵌图片作为主图。
         </p>
         <n-upload
           v-model:file-list="fileList"
@@ -439,9 +513,14 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
         />
       </template>
 
-      <n-button style="margin-top: 16px;" @click="clearAll">
-        重新导入
-      </n-button>
+      <n-space style="margin-top: 16px;">
+        <n-button @click="clearAll">
+          重新导入
+        </n-button>
+        <n-button :loading="rowDetailLoading" @click="openRowDetails">
+          查看行级明细
+        </n-button>
+      </n-space>
     </n-card>
 
     <!-- 识别任务 -->
@@ -487,5 +566,38 @@ const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
         </n-space>
       </n-spin>
     </n-card>
+
+    <!-- 行级明细弹窗：按状态分组展示逐行结果，失败/跳过行显示原因 -->
+    <n-modal
+      v-model:show="showRowDetailModal"
+      preset="card"
+      title="行级明细"
+      style="width: 760px;"
+    >
+      <n-spin :show="rowDetailLoading">
+        <n-alert v-if="rowDetailError" type="error" :bordered="false">
+          {{ rowDetailError }}
+        </n-alert>
+        <n-space v-else vertical :size="16">
+          <div v-for="group in groupedRowDetails" :key="group.status">
+            <n-space align="center" style="margin-bottom: 8px;">
+              <n-tag size="small" :type="group.tagType">{{ group.label }}</n-tag>
+              <span style="color: #999; font-size: 12px;">{{ group.rows.length }} 行</span>
+            </n-space>
+            <n-data-table
+              :columns="rowDetailColumns"
+              :data="group.rows"
+              size="small"
+              :bordered="true"
+              :single-line="false"
+              :max-height="320"
+            />
+          </div>
+          <n-alert v-if="groupedRowDetails.length === 0 && !rowDetailLoading" type="info" :bordered="false">
+            本批次无行级记录
+          </n-alert>
+        </n-space>
+      </n-spin>
+    </n-modal>
   </n-space>
 </template>

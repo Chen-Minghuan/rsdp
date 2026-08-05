@@ -91,13 +91,14 @@ async function pollOnce() {
 async function pollTask(taskItem: TaskItem, signal?: AbortSignal) {
   try {
     const status = await getTaskStatus(taskItem.taskId, signal)
+    taskItem.pollError = ''
     taskItem.status = status.status
     taskItem.progress = status.progress
     taskItem.errorMessage = status.errorMessage
   } catch (e) {
     if (axios.isCancel(e)) return
-    taskItem.status = 'failed'
-    taskItem.errorMessage = e instanceof Error ? e.message : '轮询失败'
+    // 轮询失败只记录到独立字段展示「进度查询异常」，不覆盖任务真实状态（后端任务可能实际成功）
+    taskItem.pollError = e instanceof Error ? e.message : '进度查询失败'
   }
 }
 
@@ -130,6 +131,10 @@ async function handleStartImport() {
   const file = selectedFile.value
   if (!file) {
     errorMessage.value = '请先选择场景照片'
+    return
+  }
+  if (!file.type.startsWith('image/')) {
+    errorMessage.value = '仅支持图片文件（JPG/PNG/WebP 等）'
     return
   }
   if (file.size > MAX_FILE_SIZE_BYTES) {
@@ -200,11 +205,22 @@ function goToProduct(rspuId?: string) {
   if (rspuId) router.push(`/products/${rspuId}`)
 }
 
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (uploading.value || pendingTaskCount.value > 0) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
 onMounted(() => {
   loadCategoryDicts()
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 onUnmounted(() => {
+  // 组件级状态不跨页面存活：离开即停止轮询并取消在途上传；
+  // beforeunload 已在上方拦截误触返回/刷新
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   stopPolling()
   if (uploadAbortController) uploadAbortController.abort()
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
@@ -308,6 +324,9 @@ onUnmounted(() => {
                 </n-space>
                 <n-alert v-if="taskOf(product)?.errorMessage" type="error" size="small" :bordered="false">
                   {{ taskOf(product)?.errorMessage }}
+                </n-alert>
+                <n-alert v-if="taskOf(product)?.pollError" type="warning" size="small" :bordered="false">
+                  进度查询异常：{{ taskOf(product)?.pollError }}（不影响后台识别，稍后自动恢复）
                 </n-alert>
               </template>
             </n-space>
