@@ -156,8 +156,11 @@ public class SecurityConfig {
 
                 // 产品更新/删除
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_UPDATE)
+                // 回收站：彻底删除仅 ADMIN（物理删除不可恢复），恢复走 product:delete 权限
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/products/*/permanent").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_DELETE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/batch-delete").hasAuthority(Permissions.PRODUCT_DELETE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/restore").hasAuthority(Permissions.PRODUCT_DELETE)
 
                 // 工厂写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/factories").hasAuthority(Permissions.FACTORY_CREATE)

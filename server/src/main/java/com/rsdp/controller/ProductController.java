@@ -200,4 +200,28 @@ public class ProductController {
     public Result<ProductBatchDeleteResponse> batchDelete(@Valid @RequestBody ProductBatchDeleteRequest request) {
         return Result.ok(productQueryService.batchDeleteProducts(request.getRspuIds()));
     }
+
+    /**
+     * 从回收站恢复产品（连带恢复级联软删的变体/报价/图片/搭配关系）。
+     *
+     * @param rspuId RSPU ID
+     * @return 空结果
+     */
+    @PostMapping("/{rspuId}/restore")
+    public Result<Void> restore(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
+        productQueryService.restoreProduct(rspuId);
+        return Result.ok();
+    }
+
+    /**
+     * 彻底删除回收站中的产品（物理删除 + 清理存储文件与残留向量，仅 ADMIN）。
+     *
+     * @param rspuId RSPU ID
+     * @return 空结果
+     */
+    @DeleteMapping("/{rspuId}/permanent")
+    public Result<Void> permanentDelete(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
+        productQueryService.permanentDeleteProduct(rspuId);
+        return Result.ok();
+    }
 }

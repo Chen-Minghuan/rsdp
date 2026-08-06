@@ -102,6 +102,24 @@ export async function deleteProduct(rspuId: string): Promise<void> {
 }
 
 /**
+ * 从回收站恢复产品（连带恢复级联软删的变体/报价/图片/搭配关系）。
+ *
+ * @param rspuId RSPU ID
+ */
+export async function restoreProduct(rspuId: string): Promise<void> {
+  await apiClient.post<ApiResult<void>>(`/v1/products/${rspuId}/restore`)
+}
+
+/**
+ * 彻底删除回收站中的产品（物理删除 + 清理存储文件，仅 ADMIN，不可恢复）。
+ *
+ * @param rspuId RSPU ID
+ */
+export async function permanentDeleteProduct(rspuId: string): Promise<void> {
+  await apiClient.delete<ApiResult<void>>(`/v1/products/${rspuId}/permanent`)
+}
+
+/**
  * 批量软删除结果。
  */
 export interface ProductBatchDeleteResult {

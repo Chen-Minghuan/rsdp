@@ -178,7 +178,21 @@ PUT    /api/v1/products/{rspuId}
 DELETE /api/v1/products/{rspuId}
        # 软删除（已实现）
        # Response: void
-       # 说明：仅设置 rspu_master.deleted_at，数据库中保留数据；已关联的 RSKU / 变体 / 关系不级联删除
+       # 说明：rspu_master 软删（deleted_at），变体/RSKU/图片/搭配关系（双向）级联软删，风格/场景关联物理删除；
+       #       ChromaDB 向量经 RspuDeletedEvent 事务提交后异步清理；其他工厂已关联时拒绝删除
+
+POST   /api/v1/products/{rspuId}/restore
+       # 回收站恢复（已实现，需 product:delete 权限）
+       # Response: void
+       # 说明：主表 + 变体/RSKU/图片/搭配关系级联恢复（清 deleted_at）；
+       #       风格/场景关联删除时已物理清除无法恢复，需重新识别或补充；未删除的产品返回 400
+
+DELETE /api/v1/products/{rspuId}/permanent
+       # 彻底删除（已实现，仅 ADMIN 角色）
+       # Response: void
+       # 说明：仅回收站中（已软删）的产品可彻底删除；物理删除主表与全部关联行（含工厂映射/风格匹配/收藏条目），
+       #       事务提交后清理存储图片文件并幂等清理残留向量；订单/方案明细为快照语义保留；
+       #       产品被方案明细（scheme_item）引用时拒绝彻底删除（返回 400 并提示引用数），需先处理相关方案
 
 GET    /api/v1/products/import-template
        # 下载产品批量导入 Excel 模板（已实现）
