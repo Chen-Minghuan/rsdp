@@ -2,11 +2,11 @@
 import { ref, computed, h, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { NSelect, NTag, NInput, type DataTableColumns } from 'naive-ui'
+import { NSelect, NTag, NInput, NUpload, NButton, NSpace, type DataTableColumns, type UploadFileInfo } from 'naive-ui'
 import { VxeTable, VxeColumn } from 'vxe-table'
 import 'vxe-table/lib/style.css'
 import { listDicts } from '@/api/dict'
-import { getExcelAiImportRows, getExcelAiPreviewRowImages } from '@/api/product'
+import { getExcelAiImportRows, getExcelAiPreviewRowImages, getExcelAiPreviewImageUrl } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
@@ -33,6 +33,7 @@ const {
   previewData,
   previewEdits,
   skippedRows,
+  rowImageOverrides,
   sheets,
   currentSheetIndex,
   currentSheetName,
@@ -43,7 +44,7 @@ const {
   pendingTaskCount,
   batchRecovering
 } = storeToRefs(store)
-const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue } = store
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue, uploadRowImage, setRowImageOverridesLocal, removeRowImage } = store
 
 const STANDARD_FIELDS = [
   { label: '（不映射）', value: '' },
@@ -181,6 +182,51 @@ function getRowImages(row: Record<string, unknown>): PreviewRowImage[] {
     ...meta,
     thumbnailBase64: loaded[idx]?.thumbnailBase64 ?? meta.thumbnailBase64
   }))
+}
+
+/** 复制图片的源行 rowIndex */
+const copiedImageRowIndex = ref<number | null>(null)
+
+async function handleUploadRowImage(rowIndex: number, file: File) {
+  const batchId = mappingResponse.value?.batchId
+  if (!batchId) return
+  try {
+    await uploadRowImage(batchId, rowIndex, file)
+  } catch (e) {
+    console.error('上传行图片失败', e)
+  }
+}
+
+function onBeforeUploadRowImage(rowIndex: number, data: { file: UploadFileInfo }) {
+  handleUploadRowImage(rowIndex, data.file.file as File)
+  return false
+}
+
+async function handleDeleteRowImage(rowIndex: number, tempImageKey: string) {
+  const batchId = mappingResponse.value?.batchId
+  if (!batchId) return
+  try {
+    await removeRowImage(batchId, rowIndex, tempImageKey)
+  } catch (e) {
+    console.error('删除行图片失败', e)
+  }
+}
+
+function handleCopyRowImages(rowIndex: number) {
+  copiedImageRowIndex.value = rowIndex
+}
+
+async function handlePasteRowImages(targetRowIndex: number) {
+  const sourceRowIndex = copiedImageRowIndex.value
+  const batchId = mappingResponse.value?.batchId
+  if (sourceRowIndex == null || !batchId) return
+  const sourceKeys = [...(rowImageOverrides.value[sourceRowIndex] ?? [])]
+  if (sourceKeys.length === 0) return
+  try {
+    await setRowImageOverridesLocal(batchId, targetRowIndex, sourceKeys)
+  } catch (e) {
+    console.error('粘贴行图片失败', e)
+  }
 }
 
 const mappingColumns = computed<DataTableColumns<{ header: string; value: string }>>(() => [
@@ -637,9 +683,6 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
               按列填充
             </n-button>
           </n-space>
-          <p style="color: #999; font-size: 12px; margin: 0;">
-            按列填充：把所选列中所有空单元格设为默认值；已有值的单元格不会被覆盖。
-          </p>
 
           <vxe-table
             ref="cleanTableRef"
@@ -663,29 +706,67 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
                 />
               </template>
             </vxe-column>
-            <vxe-column title="图片" width="120" fixed="left">
+            <vxe-column title="图片" width="300" fixed="left">
               <template #default="{ row }">
-                <div
-                  v-if="Array.isArray(row.__images__) && row.__images__.length > 0"
-                  style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;"
-                >
-                  <template v-for="(img, idx) in getRowImages(row)" :key="idx">
-                    <img
-                      v-if="img.thumbnailBase64"
-                      :src="img.thumbnailBase64"
-                      :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '')"
-                      style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid #eee;"
-                      @click="previewImage(img.thumbnailBase64)"
-                    />
-                    <div
-                      v-else
-                      style="width: 48px; height: 48px; border-radius: 4px; border: 1px dashed #ccc; display: flex; align-items: center; justify-content: center; color: #999; font-size: 10px;"
+                <div style="display: flex; flex-direction: column; gap: 8px; padding: 4px 0;">
+                  <div style="display: flex; gap: 6px; flex-wrap: wrap; min-height: 48px; align-items: center;">
+                    <template v-if="(rowImageOverrides[Number(row.__rowIndex__)] ?? []).length > 0 || (row.__images__ as PreviewRowImage[] | undefined)?.length">
+                      <div
+                        v-for="key in rowImageOverrides[Number(row.__rowIndex__)] ?? []"
+                        :key="key"
+                        style="position: relative;"
+                      >
+                        <img
+                          :src="getExcelAiPreviewImageUrl(mappingResponse!.batchId, key)"
+                          title="用户覆盖图片"
+                          style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 2px solid #52c41a;"
+                          @click="previewImage(getExcelAiPreviewImageUrl(mappingResponse!.batchId, key))"
+                        >
+                        <n-button
+                          size="tiny"
+                          circle
+                          style="position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; padding: 0;"
+                          @click.stop="handleDeleteRowImage(Number(row.__rowIndex__), key)"
+                        >
+                          ×
+                        </n-button>
+                      </div>
+                      <template v-for="(img, idx) in getRowImages(row)" :key="`excel-${idx}`">
+                        <img
+                          v-if="img.thumbnailBase64"
+                          :src="img.thumbnailBase64"
+                          :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '')"
+                          style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid #999;"
+                          @click="previewImage(img.thumbnailBase64)"
+                        >
+                        <div
+                          v-else
+                          style="width: 48px; height: 48px; border-radius: 4px; border: 1px dashed #ccc; display: flex; align-items: center; justify-content: center; color: #999; font-size: 10px;"
+                        >
+                          加载中
+                        </div>
+                      </template>
+                    </template>
+                    <span v-else style="color: #999; font-size: 12px;">无图</span>
+                  </div>
+                  <n-space size="small">
+                    <n-upload :show-file-list="false" :on-before-upload="(data) => onBeforeUploadRowImage(Number(row.__rowIndex__), data)">
+                      <n-button size="tiny" type="primary">
+                        上传
+                      </n-button>
+                    </n-upload>
+                    <n-button size="tiny" @click="handleCopyRowImages(Number(row.__rowIndex__))">
+                      复制
+                    </n-button>
+                    <n-button
+                      size="tiny"
+                      :disabled="copiedImageRowIndex == null"
+                      @click="handlePasteRowImages(Number(row.__rowIndex__))"
                     >
-                      加载中
-                    </div>
-                  </template>
+                      粘贴
+                    </n-button>
+                  </n-space>
                 </div>
-                <span v-else style="color: #999; font-size: 12px;">无图</span>
               </template>
             </vxe-column>
             <vxe-column

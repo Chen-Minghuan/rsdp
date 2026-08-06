@@ -308,6 +308,53 @@ export async function getExcelAiPreviewRowImages(
 }
 
 /**
+ * Excel AI 辅助导入：上传本地图片作为某行的覆盖图片。
+ *
+ * @param batchId 预览批次号
+ * @param file    图片文件
+ */
+export async function uploadExcelAiPreviewImage(
+  batchId: string,
+  file: File
+): Promise<string> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data: result } = await uploadClient.post<ApiResult<string>>(
+    `/v1/products/excel-ai-import/${batchId}/preview-images`,
+    formData
+  )
+  return result.data
+}
+
+/**
+ * Excel AI 辅助导入：读取数据清洗阶段上传的临时图片 URL。
+ *
+ * @param batchId      预览批次号
+ * @param tempImageKey 临时图片 key
+ */
+export function getExcelAiPreviewImageUrl(batchId: string, tempImageKey: string): string {
+  return `/api/v1/products/excel-ai-import/${batchId}/preview-images/${tempImageKey}`
+}
+
+/**
+ * Excel AI 辅助导入：设置某行的用户覆盖图片列表。
+ *
+ * @param batchId       预览批次号
+ * @param rowIndex      Excel 展示行号（1-based）
+ * @param tempImageKeys 临时图片 key 列表
+ */
+export async function setExcelAiRowImageOverrides(
+  batchId: string,
+  rowIndex: number,
+  tempImageKeys: string[]
+): Promise<void> {
+  await apiClient.put<ApiResult<void>>(
+    `/v1/products/excel-ai-import/${batchId}/rows/${rowIndex}/images`,
+    { tempImageKeys }
+  )
+}
+
+/**
  * 查询 Excel AI 辅助导入批次状态。
  */
 export async function getExcelAiImportStatus(batchId: string): Promise<ExcelAiImportStatus> {

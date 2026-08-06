@@ -575,6 +575,8 @@ export interface PreviewDataRow {
   mappedFieldByHeader: Record<string, string | null>
   /** 该行在 Excel 中的内嵌图片缩略图 */
   images: PreviewRowImage[]
+  /** 用户在数据清洗页覆盖到该行的临时图片 key 列表 */
+  overrideImageAssetIds?: string[]
 }
 
 /**

@@ -66,6 +66,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -127,6 +128,8 @@ public class ExcelAiImportService {
     private static final int MAX_CATEGORY_SUGGESTIONS = 50;
     /** 预览阶段懒加载缩略图的原图临时缓存目录前缀 */
     private static final String PREVIEW_IMAGE_CACHE_DIR = "rsdp-preview-images";
+    /** 数据清洗页用户上传的临时图片存储前缀（导入成功后应清理） */
+    private static final String PREVIEW_UPLOAD_IMAGE_PREFIX = "preview-images";
     /** 标题行扫描上限：公司标题行一般不超过 10 行 */
     private static final int MAX_TITLE_SCAN_ROWS = 10;
     /** 真表头行关键词密度阈值：含 ≥2 个表头关键词的行视为表头行 */
@@ -424,7 +427,9 @@ public class ExcelAiImportService {
         String categoryGuess = batch.getCategoryHint();
 
         // 重新导入（done 批次）前清理上一轮行级结果记录：整体删除比逐行覆盖简单安全，
-        // 行记录会按同一批物理行号重建（pending 批次无旧记录，删除为空操作）
+        // 行记录会按同一批物理行号重建（pending 批次无旧记录，删除为空操作）。
+        // 先备份用户在数据清洗页编辑的行级图片覆盖，删除重建后恢复。
+        Map<Integer, List<String>> preservedOverrideImages = preserveRowOverrideImages(batch.getBatchId());
         excelImportRowService.deleteByBatch(batch.getBatchId());
 
         // 型号/品名列向下填充（纵向合并单元格语义，模块行继承上行型号）
@@ -525,6 +530,11 @@ public class ExcelAiImportService {
                     .map(PriceColumnInfo::getHeader).toList();
                 importRowId = excelImportRowService.initRow(batch.getBatchId(), displayRowIndex, "product", dataRow, null,
                     mappedFields, selectedPriceHeaders);
+                // 恢复数据清洗页编辑的行级图片覆盖
+                List<String> preservedImages = preservedOverrideImages.get(displayRowIndex);
+                if (preservedImages != null && !preservedImages.isEmpty()) {
+                    excelImportRowService.updateImageOverrides(importRowId, preservedImages);
+                }
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
                     selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
                     currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId());
@@ -593,6 +603,12 @@ public class ExcelAiImportService {
         updateBatchResult(batch, request, result);
         // 别名自学习：用户确认的品类映射写回别名库，后续导入直接命中，不再调 AI
         learnCategoryAliases(request);
+        // 导入完成：清理数据清洗阶段上传的临时图片文件（失败不影响导入结果）
+        try {
+            cleanPreviewUploadImages(batch.getBatchId(), preservedOverrideImages);
+        } catch (Exception e) {
+            log.warn("清理预览上传临时图片失败，batchId={}", batch.getBatchId(), e);
+        }
         return result;
     }
 
@@ -691,6 +707,9 @@ public class ExcelAiImportService {
         int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
         Set<Integer> imageColumns = physicalLayout != null ? physicalLayout.imageColumns() : Collections.emptySet();
 
+        // 加载用户在数据清洗页对该批次各行设置的覆盖图片（临时图片 key 列表）
+        Map<Integer, List<String>> rowOverrideImages = loadRowOverrideImages(batchId);
+
         List<PreviewDataRow> rows = new ArrayList<>();
         for (int i = 0; i < rawDataRows.size(); i++) {
             Map<String, String> rawRow = rawDataRows.get(i);
@@ -708,10 +727,43 @@ public class ExcelAiImportService {
             row.setMappedFieldByHeader(mappedFieldByHeader);
             row.setImages(buildPreviewRowImages(batch.getBatchId(), displayRowIndex, sheetIndex, headers, imageColumns,
                 embeddedImagesResult.images()));
+            row.setOverrideImageAssetIds(rowOverrideImages.getOrDefault(displayRowIndex, List.of()));
             rows.add(row);
         }
         response.setRows(rows);
         return response;
+    }
+
+    private Map<Integer, List<String>> loadRowOverrideImages(String batchId) {
+        return parseRowOverrideImages(batchId, false);
+    }
+
+    /**
+     * 备份批次下所有行级覆盖图片（重新初始化行记录前调用）。
+     */
+    private Map<Integer, List<String>> preserveRowOverrideImages(String batchId) {
+        return parseRowOverrideImages(batchId, true);
+    }
+
+    private Map<Integer, List<String>> parseRowOverrideImages(String batchId, boolean logOnEmpty) {
+        Map<Integer, List<String>> result = new HashMap<>();
+        try {
+            List<ExcelImportRow> rows = excelImportRowService.listByBatch(batchId);
+            for (ExcelImportRow importRow : rows) {
+                if (!StringUtils.hasText(importRow.getOverrideImageAssetIds())) {
+                    continue;
+                }
+                List<String> keys = objectMapper.readValue(importRow.getOverrideImageAssetIds(),
+                    new TypeReference<List<String>>() {
+                    });
+                if (keys != null && !keys.isEmpty() && importRow.getExcelRowNumber() != null) {
+                    result.put(importRow.getExcelRowNumber(), keys);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("解析行覆盖图片失败，batchId={}", batchId, e);
+        }
+        return result;
     }
 
     /**
@@ -779,6 +831,111 @@ public class ExcelAiImportService {
             result.add(previewImage);
         }
         return result;
+    }
+
+    /**
+     * 上传本地图片作为某行的覆盖图片（数据清洗阶段）。
+     *
+     * <p>图片保存到临时路径 {@code preview-images/{batchId}/{tempImageKey}.{ext}}，
+     * 导入成功后再由导入流程统一迁移到正式 {@code images/} 路径并登记 image_assets。</p>
+     *
+     * @param batchId 导入批次 ID
+     * @param file    上传的图片文件
+     * @return 临时图片 key，前端用它作为 overrideImageAssetIds 的元素
+     */
+    public String uploadPreviewImage(String batchId, MultipartFile file) {
+        getAccessibleBatch(batchId);
+        if (file == null || file.isEmpty()) {
+            throw new BusinessException("上传图片不能为空");
+        }
+        String extension = resolveExtension(file.getContentType());
+        String tempImageKey = IdGenerator.imageId();
+        String objectKey = previewUploadObjectKey(batchId, tempImageKey, extension);
+        try {
+            storageService.store(file.getInputStream(), objectKey, file.getSize(), file.getContentType());
+        } catch (IOException e) {
+            log.error("上传预览图片失败，batchId={}", batchId, e);
+            throw new BusinessException("上传预览图片失败: " + e.getMessage());
+        }
+        return tempImageKey;
+    }
+
+    /**
+     * 读取数据清洗阶段上传的临时图片字节。
+     */
+    public byte[] loadPreviewImage(String batchId, String tempImageKey) {
+        getAccessibleBatch(batchId);
+        if (!StringUtils.hasText(tempImageKey)) {
+            return null;
+        }
+        // 临时图片扩展名在存储时已规范化为 web 格式；按 key 反查文件
+        for (String ext : List.of("jpeg", "png", "gif", "webp")) {
+            String objectKey = previewUploadObjectKey(batchId, tempImageKey, ext);
+            try (InputStream in = storageService.get(objectKey)) {
+                return in.readAllBytes();
+            } catch (IOException e) {
+                // 该扩展名不存在，继续尝试下一个
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 设置某行的用户覆盖图片列表。
+     *
+     * @param batchId        导入批次 ID
+     * @param rowIndex       Excel 展示行号（1-based）
+     * @param tempImageKeys  临时图片 key 列表；null/空表示清空覆盖
+     */
+    @Transactional
+    public void setRowImageOverrides(String batchId, int rowIndex, List<String> tempImageKeys) {
+        getAccessibleBatch(batchId);
+        ExcelImportRow row = excelImportRowService.findByBatchAndRowNumber(batchId, rowIndex);
+        if (row == null) {
+            throw new BusinessException("导入行不存在: batchId=" + batchId + ", rowIndex=" + rowIndex);
+        }
+        List<String> effective = tempImageKeys == null ? List.of()
+            : tempImageKeys.stream().filter(StringUtils::hasText).distinct().toList();
+        excelImportRowService.updateImageOverrides(row.getRowId(), effective);
+    }
+
+    private String previewUploadObjectKey(String batchId, String tempImageKey, String extension) {
+        return PREVIEW_UPLOAD_IMAGE_PREFIX + "/" + sanitizeFileName(batchId) + "/"
+            + sanitizeFileName(tempImageKey) + "." + normalizeImageFormat(extension);
+    }
+
+    /**
+     * 清理数据清洗阶段上传的临时图片文件。
+     */
+    private void cleanPreviewUploadImages(String batchId, Map<Integer, List<String>> overrideImages) {
+        if (overrideImages == null || overrideImages.isEmpty()) {
+            return;
+        }
+        Set<String> keys = overrideImages.values().stream()
+            .flatMap(List::stream)
+            .collect(Collectors.toSet());
+        for (String key : keys) {
+            for (String ext : List.of("jpeg", "png", "gif", "webp")) {
+                String objectKey = previewUploadObjectKey(batchId, key, ext);
+                try {
+                    storageService.delete(objectKey);
+                } catch (IOException e) {
+                    log.warn("删除预览上传临时图片失败，objectKey={}", objectKey, e);
+                }
+            }
+        }
+    }
+
+    private String toJsonList(List<String> list) {
+        if (list == null || list.isEmpty()) {
+            return "[]";
+        }
+        try {
+            return objectMapper.writeValueAsString(list);
+        } catch (Exception e) {
+            log.warn("序列化字符串列表失败", e);
+            return "[]";
+        }
     }
 
     private byte[] readBatchFileBytes(ExcelImportBatch batch) {
@@ -2386,9 +2543,15 @@ public class ExcelAiImportService {
             row.setRetailPrice(extractSalesRetailPrice(dataRow, priceColumns, rowIndex, rowIssues));
         }
         List<DownloadedImage> images = new ArrayList<>();
-        images.addAll(downloadUrlImages(row, rowIndex));
-        images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex, physicalLayout,
-            sheetIndex, rowIssues));
+        // 数据清洗页用户覆盖图片优先级最高；有覆盖时跳过 Excel 内嵌图与 URL 图
+        List<DownloadedImage> overrideImages = loadOverrideImages(batchId, importRowId, rowIndex, rowIssues);
+        if (!overrideImages.isEmpty()) {
+            images.addAll(overrideImages);
+        } else {
+            images.addAll(downloadUrlImages(row, rowIndex));
+            images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex, physicalLayout,
+                sheetIndex, rowIssues));
+        }
 
         // 同型号连续行归入上一产品的 RSPU（规格模块共享产品主图，不再创建独立产品）
         String groupKey = trim(row.getExternalCode());
@@ -3107,6 +3270,66 @@ public class ExcelAiImportService {
             log.warn("下载图片失败: {}", url, e);
             return null;
         }
+    }
+
+    /**
+     * 加载用户在数据清洗页覆盖到当前行的图片（临时存储）。
+     *
+     * <p>覆盖图片统一视为产品级图片，第一张设为主图候选；导入流程后续会把它迁移到
+     * 正式 {@code images/} 路径并登记/更新 image_assets。</p>
+     */
+    private List<DownloadedImage> loadOverrideImages(String batchId, Long importRowId, int rowIndex,
+                                                     List<String> rowIssues) {
+        if (importRowId == null || !StringUtils.hasText(batchId)) {
+            return List.of();
+        }
+        ExcelImportRow importRow = excelImportRowService.findById(importRowId);
+        if (importRow == null || !StringUtils.hasText(importRow.getOverrideImageAssetIds())) {
+            return List.of();
+        }
+        List<String> tempImageKeys;
+        try {
+            tempImageKeys = objectMapper.readValue(importRow.getOverrideImageAssetIds(), new TypeReference<List<String>>() {
+            });
+        } catch (Exception e) {
+            log.warn("解析行覆盖图片失败，rowId={}", importRowId, e);
+            return List.of();
+        }
+        if (tempImageKeys == null || tempImageKeys.isEmpty()) {
+            return List.of();
+        }
+        List<DownloadedImage> result = new ArrayList<>();
+        boolean primaryAssigned = false;
+        for (String key : tempImageKeys) {
+            byte[] bytes = loadPreviewImage(batchId, key);
+            if (bytes == null || bytes.length == 0) {
+                log.warn("第 {} 行覆盖图片临时文件缺失，tempImageKey={}", rowIndex, key);
+                rowIssues.add("覆盖图片临时文件缺失: " + key);
+                continue;
+            }
+            String contentType = guessContentTypeFromPreviewImage(batchId, key);
+            result.add(new DownloadedImage("override://" + key, bytes, contentType, !primaryAssigned, false,
+                hashBytes(bytes)));
+            primaryAssigned = true;
+        }
+        return result;
+    }
+
+    private String guessContentTypeFromPreviewImage(String batchId, String tempImageKey) {
+        for (String ext : List.of("jpeg", "png", "gif", "webp")) {
+            String objectKey = previewUploadObjectKey(batchId, tempImageKey, ext);
+            try (InputStream ignored = storageService.get(objectKey)) {
+                return switch (ext) {
+                    case "png" -> "image/png";
+                    case "gif" -> "image/gif";
+                    case "webp" -> "image/webp";
+                    default -> "image/jpeg";
+                };
+            } catch (IOException e) {
+                // 尝试下一个扩展名
+            }
+        }
+        return "image/jpeg";
     }
 
     private List<DownloadedImage> extractEmbeddedImagesForRow(

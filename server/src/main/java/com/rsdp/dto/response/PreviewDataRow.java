@@ -38,6 +38,12 @@ public class PreviewDataRow {
     private List<PreviewRowImage> images = new ArrayList<>();
 
     /**
+     * 用户在数据清洗页编辑后覆盖到该行的图片 asset ID 列表。
+     * 导入时优先于 {@link #images} 对应的 Excel 内嵌图片。
+     */
+    private List<String> overrideImageAssetIds = new ArrayList<>();
+
+    /**
      * 预览行图片信息。
      */
     @Data

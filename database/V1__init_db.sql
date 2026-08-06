@@ -532,6 +532,7 @@ CREATE TABLE IF NOT EXISTS excel_import_row (
     failure_stage VARCHAR(32),                     -- 在哪个阶段失败
     extracted_image_count INTEGER DEFAULT 0,       -- 提取到的图片数量
     image_asset_ids JSONB,                         -- ["IMG-001", "IMG-002"]
+    override_image_asset_ids JSONB,                -- 用户在数据清洗页编辑后的图片 asset ID 列表（V31）
     ai_task_id VARCHAR(64),                        -- 关联的异步AI识别任务
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,

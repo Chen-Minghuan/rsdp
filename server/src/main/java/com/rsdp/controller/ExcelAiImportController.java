@@ -15,11 +15,16 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 
 import java.util.List;
+import java.util.Map;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -113,5 +118,69 @@ public class ExcelAiImportController {
         @PathVariable int rowIndex) {
         excelAiImportService.getAccessibleBatch(batchId);
         return Result.ok(excelAiImportService.getPreviewRowImages(batchId, rowIndex));
+    }
+
+    /**
+     * 上传本地图片作为某行的覆盖图片（数据清洗阶段）。
+     *
+     * @param batchId 导入批次 ID
+     * @param file    图片文件
+     * @return 临时图片 key
+     */
+    @PostMapping("/{batchId}/preview-images")
+    @PreAuthorize("hasAuthority('product:import')")
+    public Result<String> uploadPreviewImage(
+        @PathVariable @NotBlank String batchId,
+        @RequestPart("file") MultipartFile file) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        return Result.ok(excelAiImportService.uploadPreviewImage(batchId, file));
+    }
+
+    /**
+     * 读取数据清洗阶段上传的临时图片。
+     *
+     * @param batchId      导入批次 ID
+     * @param tempImageKey 临时图片 key
+     */
+    @GetMapping("/{batchId}/preview-images/{tempImageKey}")
+    @PreAuthorize("hasAuthority('product:import')")
+    public ResponseEntity<byte[]> getPreviewImage(
+        @PathVariable @NotBlank String batchId,
+        @PathVariable @NotBlank String tempImageKey) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        byte[] bytes = excelAiImportService.loadPreviewImage(batchId, tempImageKey);
+        if (bytes == null || bytes.length == 0) {
+            return ResponseEntity.notFound().build();
+        }
+        String contentType = MediaType.IMAGE_JPEG_VALUE;
+        if (tempImageKey.toLowerCase().endsWith(".png")) {
+            contentType = MediaType.IMAGE_PNG_VALUE;
+        } else if (tempImageKey.toLowerCase().endsWith(".gif")) {
+            contentType = MediaType.IMAGE_GIF_VALUE;
+        } else if (tempImageKey.toLowerCase().endsWith(".webp")) {
+            contentType = "image/webp";
+        }
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_TYPE, contentType)
+            .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + tempImageKey + "\"")
+            .body(bytes);
+    }
+
+    /**
+     * 设置某行的用户覆盖图片列表（覆盖 Excel 内嵌图片）。
+     *
+     * @param batchId  导入批次 ID
+     * @param rowIndex Excel 展示行号（1-based）
+     * @param request  临时图片 key 列表
+     */
+    @PutMapping("/{batchId}/rows/{rowIndex}/images")
+    @PreAuthorize("hasAuthority('product:import')")
+    public Result<Void> setRowImageOverrides(
+        @PathVariable @NotBlank String batchId,
+        @PathVariable int rowIndex,
+        @RequestBody Map<String, List<String>> request) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        excelAiImportService.setRowImageOverrides(batchId, rowIndex, request.get("tempImageKeys"));
+        return Result.ok();
     }
 }

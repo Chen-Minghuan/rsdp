@@ -620,6 +620,7 @@ CREATE TABLE IF NOT EXISTS excel_import_row (
     failure_stage VARCHAR(32),
     extracted_image_count INTEGER DEFAULT 0,
     image_asset_ids JSONB,
+    override_image_asset_ids JSONB,
     ai_task_id VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,

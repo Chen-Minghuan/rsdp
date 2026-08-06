@@ -155,6 +155,48 @@ public class ExcelImportRowService {
     }
 
     /**
+     * 按批次 + Excel 行号查询唯一行记录。
+     *
+     * @param batchId        批次 ID
+     * @param excelRowNumber Excel 物理行号（1-based）
+     * @return 行记录；不存在时为 null
+     */
+    public ExcelImportRow findByBatchAndRowNumber(String batchId, int excelRowNumber) {
+        List<ExcelImportRow> rows = rowMapper.selectByBatchId(batchId);
+        return rows.stream()
+            .filter(r -> r.getExcelRowNumber() != null && r.getExcelRowNumber() == excelRowNumber)
+            .findFirst()
+            .orElse(null);
+    }
+
+    /**
+     * 按主键查询行记录。
+     */
+    public ExcelImportRow findById(Long rowId) {
+        if (rowId == null) {
+            return null;
+        }
+        return rowMapper.selectById(rowId);
+    }
+
+    /**
+     * 更新行级用户覆盖图片列表。
+     *
+     * @param rowId            行记录 ID
+     * @param imageAssetIds    用户指定的图片 asset ID 列表；null/空表示清空覆盖
+     */
+    @Transactional
+    public void updateImageOverrides(Long rowId, List<String> imageAssetIds) {
+        ExcelImportRow row = rowMapper.selectById(rowId);
+        if (row == null) {
+            return;
+        }
+        row.setOverrideImageAssetIds(toJson(imageAssetIds));
+        row.setUpdatedAt(LocalDateTime.now());
+        rowMapper.updateById(row);
+    }
+
+    /**
      * 查询批次下所有行记录。
      */
     public List<ExcelImportRow> listByBatch(String batchId) {

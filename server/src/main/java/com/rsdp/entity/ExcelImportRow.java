@@ -52,6 +52,9 @@ public class ExcelImportRow {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String imageAssetIds;
 
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String overrideImageAssetIds;
+
     private String aiTaskId;
 
     private LocalDateTime createdAt;

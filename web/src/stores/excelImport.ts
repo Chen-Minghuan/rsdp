@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios from 'axios'
 import type { UploadFileInfo } from 'naive-ui'
-import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData } from '@/api/product'
+import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import type { TaskItem } from '@/types/task'
 import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataRow, PreviewEdit } from '@/types/product'
@@ -45,6 +45,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const previewEdits = ref<Record<string, PreviewEdit>>({})
   /** 用户在数据清洗页标记跳过的 Excel 物理行号（1-based） */
   const skippedRows = ref<Set<number>>(new Set())
+  /** 用户在数据清洗页对每行图片的覆盖：rowIndex → 临时图片 key 列表 */
+  const rowImageOverrides = ref<Record<number, string[]>>({})
 
   const selectedFile = computed(() => {
     const item = fileList.value[0]
@@ -213,6 +215,13 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     previewData.value = response.rows
     previewEdits.value = {}
     skippedRows.value = new Set()
+    const overrides: Record<number, string[]> = {}
+    for (const row of response.rows) {
+      if (row.overrideImageAssetIds && row.overrideImageAssetIds.length > 0) {
+        overrides[row.rowIndex] = row.overrideImageAssetIds
+      }
+    }
+    rowImageOverrides.value = overrides
   }
 
   /**
@@ -247,6 +256,66 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    */
   function isSkippedRow(rowIndex: number): boolean {
     return skippedRows.value.has(rowIndex)
+  }
+
+  /**
+   * 获取某行的用户覆盖图片 key 列表（编辑后未保存到后端）。
+   */
+  function getRowImageOverrides(rowIndex: number): string[] {
+    return rowImageOverrides.value[rowIndex] ?? []
+  }
+
+  /**
+   * 上传本地图片并追加到某行覆盖图片列表。
+   *
+   * @param batchId  预览批次号
+   * @param rowIndex Excel 物理行号（1-based）
+   * @param file     图片文件
+   * @return 临时图片 key
+   */
+  async function uploadRowImage(batchId: string, rowIndex: number, file: File): Promise<string> {
+    const tempImageKey = await uploadExcelAiPreviewImage(batchId, file)
+    const next = { ...rowImageOverrides.value }
+    next[rowIndex] = [...(next[rowIndex] ?? []), tempImageKey]
+    rowImageOverrides.value = next
+    await saveRowImageOverrides(batchId, rowIndex)
+    return tempImageKey
+  }
+
+  /**
+   * 设置某行的覆盖图片列表（用于粘贴、删除后的覆盖）。
+   *
+   * @param batchId  预览批次号
+   * @param rowIndex Excel 物理行号（1-based）
+   * @param keys     临时图片 key 列表
+   */
+  async function setRowImageOverridesLocal(batchId: string, rowIndex: number, keys: string[]) {
+    const next = { ...rowImageOverrides.value }
+    if (keys.length === 0) {
+      delete next[rowIndex]
+    } else {
+      next[rowIndex] = keys
+    }
+    rowImageOverrides.value = next
+    await saveRowImageOverrides(batchId, rowIndex)
+  }
+
+  /**
+   * 从某行移除一张覆盖图片。
+   *
+   * @param batchId      预览批次号
+   * @param rowIndex     Excel 物理行号（1-based）
+   * @param tempImageKey 要移除的临时图片 key
+   */
+  async function removeRowImage(batchId: string, rowIndex: number, tempImageKey: string) {
+    const current = rowImageOverrides.value[rowIndex] ?? []
+    const next = current.filter(k => k !== tempImageKey)
+    await setRowImageOverridesLocal(batchId, rowIndex, next)
+  }
+
+  async function saveRowImageOverrides(batchId: string, rowIndex: number) {
+    const keys = rowImageOverrides.value[rowIndex] ?? []
+    await setExcelAiRowImageOverrides(batchId, rowIndex, keys)
   }
 
   /**
@@ -557,6 +626,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     previewData,
     previewEdits,
     skippedRows,
+    rowImageOverrides,
     hasSelectedFile,
     pendingTaskCount,
     batchRecovering,
@@ -571,6 +641,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     isSkippedRow,
     fillDefaultValue,
     getPreviewCellValue,
+    getRowImageOverrides,
+    uploadRowImage,
+    setRowImageOverridesLocal,
+    removeRowImage,
     clearAll,
     ensurePolling,
     stopPolling

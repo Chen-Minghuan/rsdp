@@ -288,6 +288,7 @@ POST   /api/v1/products/excel-ai-import/import
        #     defaultMoq: number             // 默认最小起订量
        #     updateIfExists: boolean        // externalCode 已存在时：true 复用并更新已有 RSPU，false（默认）跳过该行
        #     categoryMapping: { [rawValue: string]: string }  // 用户确认的品类映射（原始值 → 字典码），行级解析最高优先；导入后写回别名库
+       #     previewEdits: [{ rowIndex: number, header: string, value: string|null }]  // 数据清洗阶段对原始单元格的编辑；按 rowIndex + header 定位覆盖，优先级高于 forward fill
        #   }
        # Response: {
        #   batchId: string,
@@ -331,6 +332,26 @@ POST   /api/v1/products/excel-ai-import/import
        #   - 当指定 defaultFactoryCode 时，会为每个 RSPU 创建 RSPU-工厂关联（rspu_factory_mapping），
        #     并标记为主供工厂；同时每个价格列生成的 RSKU 会写入工厂报价、发货地、MOQ、动态交期
        #   - 每行 Excel 数据会写入 excel_import_row，记录原始值、处理阶段、生成实体 ID 与失败原因
+       #   - previewEdits：导入前全量预览（数据清洗）阶段用户对原始单元格的编辑；
+       #     后端在 forwardFillKeyColumns 之后应用，按 rowIndex + header 覆盖对应单元格；
+       #     找不到的行/列仅记日志跳过，不阻断导入
+
+GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
+       # Excel AI 导入前全量预览（数据清洗用，已实现）
+       # Response: {
+       #   batchId: string,
+       #   totalRows: number,
+       #   headers: string[],                          // 原始表头列表（按列顺序，不含内部字段）
+       #   rows: [{
+       #     rowIndex: number,                         // Excel 物理行号（1-based）
+       #     rawValues: { [header: string]: string },  // 原始表头 → 单元格值
+       #     mappedFieldByHeader: { [header: string]: string|null }  // 原始表头 → 系统字段（未映射为 null）
+       #   }]
+       # }
+       # 说明：
+       #   - 以原始表头为视角返回全量数据行，避免复合映射列（如「型号品名」同时映射到
+       #     externalCode 与 productName）在编辑时产生歧义
+       #   - 前端数据清洗页的编辑以 (rowIndex, header) 为键，通过 previewEdits 在 import 接口回传
 
 GET    /api/v1/products/excel-ai-import/{batchId}
        # 查询 Excel AI 导入批次状态（已实现）
