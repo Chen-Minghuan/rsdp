@@ -7,6 +7,55 @@ export interface ApiOptions {
 }
 
 /**
+ * 一图多产品区域检测：AI 检测图内每个产品的位置框、预估品类与产品旁说明文字。
+ *
+ * @param file 单张产品图片
+ * @returns 检测到的产品区域列表
+ */
+export async function detectProductRegions(file: File): Promise<RegionProduct[]> {
+  const formData = new FormData()
+  formData.append('image', file)
+  const { data: result } = await uploadClient.post<ApiResult<RegionProduct[]>>(
+    '/v1/products/entry/detect-regions',
+    formData
+  )
+  return result.data
+}
+
+/**
+ * 按选中的产品区域拆分建档：每个区域裁剪后独立创建产品与识别任务。
+ *
+ * @param file 原图（与 detectProductRegions 同一张）
+ * @param regions 选中的产品区域
+ * @returns 每个区域的录入结果（与传入顺序一致）
+ */
+export async function entryByRegions(file: File, regions: RegionSelection[]): Promise<ProductEntryResult[]> {
+  const formData = new FormData()
+  formData.append('image', file)
+  formData.append('regions', JSON.stringify({ regions }))
+  const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult[]>>(
+    '/v1/products/entry/by-regions',
+    formData
+  )
+  return result.data
+}
+
+/** 图内检测到的单个产品区域。 */
+export interface RegionProduct {
+  bbox: { x: number; y: number; width: number; height: number }
+  estimatedCategory: string | null
+  nearbyText: { productName?: string | null; dimensionText?: string | null } | null
+}
+
+/** 拆分导入的单个区域选择。 */
+export interface RegionSelection {
+  bbox: { x: number; y: number; width: number; height: number }
+  categoryCode?: string
+  productName?: string
+  dimensionText?: string
+}
+
+/**
  * 新品录入：上传多张产品图片。
  *
  * @param files 图片文件列表，第一张作为主图

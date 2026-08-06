@@ -16,6 +16,7 @@ import com.rsdp.util.ContentHashes;
 import com.rsdp.util.ImageUploadValidator;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.ManualProductEntryRequest;
+import com.rsdp.dto.request.RegionEntryRequest;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.OcrResult;
@@ -29,6 +30,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDateTime;
@@ -62,6 +64,7 @@ public class ProductService {
     private final RspuCodeService rspuCodeService;
     private final RskuCodeService rskuCodeService;
     private final ProductSubjectCropService subjectCropService;
+    private final VisionService visionService;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
     private String maxFileSize;
@@ -441,6 +444,8 @@ public class ProductService {
         if (imageStream == null) {
             throw new BusinessException("图片流不能为空");
         }
+        // 读入字节：一次读取同时用于内容哈希（V31）与存储，避免流二次消费
+        byte[] imageBytes = imageStream.readAllBytes();
 
         String rspuId = IdGenerator.rspuId();
         String taskId = IdGenerator.taskId();
@@ -464,7 +469,8 @@ public class ProductService {
 
         String extension = getExtension(filename);
         String objectKey = "images/" + imageId + "." + extension;
-        String storagePath = storageService.store(imageStream, objectKey, size, "image/" + extension);
+        String storagePath = storageService.store(new ByteArrayInputStream(imageBytes), objectKey,
+            imageBytes.length, "image/" + extension);
         registerStorageRollbackCleanup(List.of(storagePath));
 
         ImageAssets imageAsset = new ImageAssets();
@@ -474,8 +480,9 @@ public class ProductService {
         imageAsset.setStoragePath(storagePath);
         imageAsset.setPrimary(true);
         imageAsset.setAiProcessed(false);
-        imageAsset.setFileSize(size);
+        imageAsset.setFileSize((long) imageBytes.length);
         imageAsset.setFormat(extension);
+        imageAsset.setContentHash(ContentHashes.sha256Hex(imageBytes));
         imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
         imageAsset.setCreatedAt(LocalDateTime.now());
         imageAssetsMapper.insert(imageAsset);
@@ -513,6 +520,74 @@ public class ProductService {
             "imageIds", List.of(imageId),
             "message", "任务已创建，正在后台识别中"
         );
+    }
+
+    /**
+     * 一图多产品区域检测：AI 在单张图片中检测每个产品的位置框、预估品类与产品旁说明文字。
+     *
+     * @param imageBytes 图片字节
+     * @return 检测到的产品区域列表（可能为空）
+     */
+    public List<com.rsdp.dto.DocumentProductRegion.PageProduct> detectRegionsInImage(byte[] imageBytes) {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new BusinessException("图片内容为空");
+        }
+        List<com.rsdp.dto.DocumentProductRegion> pages = visionService.detectPageRegions(
+            List.of(new ByteArrayInputStream(imageBytes)), null);
+        if (pages == null || pages.isEmpty() || pages.get(0).getProducts() == null) {
+            return List.of();
+        }
+        return pages.get(0).getProducts();
+    }
+
+    /**
+     * 按选中的产品区域拆分建档：每个区域裁剪后独立走完整录入流程
+     * （各自 RSPU + 异步 AI 识别；区域已裁剪，异步管线跳过二次主体检测）。
+     *
+     * @param imageBytes 原图字节
+     * @param regions    选中的产品区域
+     * @return 每个区域的录入结果（taskId/rspuId/imageIds，与传入顺序一致）
+     * @throws IOException 图片解码或裁剪失败
+     */
+    public List<Map<String, Object>> createEntriesFromRegions(byte[] imageBytes,
+                                                              List<RegionEntryRequest.RegionSelection> regions) throws IOException {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new BusinessException("图片内容为空");
+        }
+        if (regions == null || regions.isEmpty()) {
+            throw new BusinessException("请至少选择一个产品区域");
+        }
+        java.awt.image.BufferedImage source = javax.imageio.ImageIO.read(new ByteArrayInputStream(imageBytes));
+        if (source == null) {
+            throw new BusinessException("图片解码失败");
+        }
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (int i = 0; i < regions.size(); i++) {
+            RegionEntryRequest.RegionSelection region = regions.get(i);
+            byte[] cropped;
+            try {
+                cropped = com.rsdp.util.ImageCropper.cropToJpeg(source, region.bbox(), 0.9f);
+            } catch (Exception e) {
+                throw new BusinessException("第 " + (i + 1) + " 个产品区域裁剪失败: " + e.getMessage());
+            }
+
+            // 区域检测提取的品名/尺寸文字作为 pageOcr 随任务传递，异步识别时合并进 OCR
+            com.rsdp.dto.OcrResult pageOcr = null;
+            if (StringUtils.hasText(region.productName()) || StringUtils.hasText(region.dimensionText())) {
+                pageOcr = new com.rsdp.dto.OcrResult();
+                pageOcr.setProductName(region.productName());
+                pageOcr.setDimensionText(region.dimensionText());
+            }
+
+            String filename = "region-" + (i + 1) + ".jpg";
+            Map<String, Object> entry = createEntryFromStream(
+                new ByteArrayInputStream(cropped), filename, cropped.length,
+                region.categoryCode(), pageOcr);
+            results.add(entry);
+            log.info("区域拆分建档：第 {} 个区域（品类 {}）→ rspuId={}", i + 1, region.categoryCode(), entry.get("rspuId"));
+        }
+        return results;
     }
 
     private void validateFactoryEntryOwnership(String factoryCode) {

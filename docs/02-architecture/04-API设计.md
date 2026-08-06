@@ -65,6 +65,20 @@ POST   /api/v1/products/entry
        # 查重：图片 SHA-256 命中已有图片时返回 400 并注明对应产品（2026-08-06）；
        #      AI 识别后与库内产品向量相似度 ≥0.95 时新品标记"存疑-疑似同款"
 
+POST   /api/v1/products/entry/detect-regions
+       # 一图多产品区域检测（已实现，product:create）
+       # Request:  multipart/form-data；image: File（单张）
+       # Response: [{ bbox: {x,y,width,height}, estimatedCategory, nearbyText: {productName, dimensionText} }]
+       # 说明：复用 PDF 页面级检测；bbox 为相对坐标 0~1
+
+POST   /api/v1/products/entry/by-regions
+       # 按选中区域拆分建档（已实现，product:create）
+       # Request:  multipart/form-data；image: File（与 detect-regions 同一张）；
+       #           regions: JSON 字符串 { regions: [{ bbox, categoryCode?, productName?, dimensionText? }] }
+       # Response: [{ taskId, rspuId, imageIds, message }]（与传入顺序一致）
+       # 说明：每个区域裁剪后独立建档走完整识别链路（区域已裁剪，异步跳过二次主体检测；
+       #      productName/dimensionText 作为 pageOcr 随任务合并进识别 OCR）
+
 POST   /api/v1/products/factory-entry
        # 工厂单条录入（原子创建 RSPU + 默认变体 + 图片 + 首条 RSKU）
        # Request: multipart/form-data

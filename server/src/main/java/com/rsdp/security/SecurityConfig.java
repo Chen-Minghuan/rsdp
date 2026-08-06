@@ -132,6 +132,8 @@ public class SecurityConfig {
 
                 // 产品录入与批量导入
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/entry/detect-regions").hasAuthority(Permissions.PRODUCT_CREATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/entry/by-regions").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/factory-entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/manual-entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)

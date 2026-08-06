@@ -51,6 +51,7 @@ public class ProductController {
     private final ProductService productService;
     private final ProductQueryService productQueryService;
     private final ImageUploadValidator imageUploadValidator;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /**
      * 新品录入，支持为一个 RSPU 上传多张图片。
@@ -68,6 +69,41 @@ public class ProductController {
         validateImages(images);
         Map<String, Object> result = productService.createEntry(images, categoryCode, force);
         return Result.ok(result);
+    }
+
+    /**
+     * 一图多产品区域检测：AI 检测图内每个产品的位置框、预估品类与产品旁说明文字。
+     *
+     * @param image 单张产品图片
+     * @return 检测到的产品区域列表
+     * @throws IOException 文件读取失败
+     */
+    @PostMapping("/entry/detect-regions")
+    public Result<List<com.rsdp.dto.DocumentProductRegion.PageProduct>> detectRegions(
+        @RequestParam("image") MultipartFile image) throws IOException {
+        imageUploadValidator.validate(image, MAX_IMAGE_SIZE_BYTES);
+        return Result.ok(productService.detectRegionsInImage(image.getBytes()));
+    }
+
+    /**
+     * 按选中的产品区域拆分建档：每个区域裁剪后独立创建产品与异步识别任务。
+     *
+     * @param image       原图（与 detect-regions 同一张）
+     * @param regionsJson 选中的产品区域 JSON（RegionEntryRequest 结构）
+     * @return 每个区域的录入结果（与传入顺序一致）
+     * @throws IOException 文件读取或裁剪失败
+     */
+    @PostMapping("/entry/by-regions")
+    public Result<List<Map<String, Object>>> entryByRegions(
+        @RequestParam("image") MultipartFile image,
+        @RequestParam("regions") String regionsJson) throws IOException {
+        imageUploadValidator.validate(image, MAX_IMAGE_SIZE_BYTES);
+        com.rsdp.dto.request.RegionEntryRequest request = objectMapper.readValue(
+            regionsJson, com.rsdp.dto.request.RegionEntryRequest.class);
+        if (request.regions() == null || request.regions().isEmpty()) {
+            throw new com.rsdp.exception.BusinessException("请至少选择一个产品区域");
+        }
+        return Result.ok(productService.createEntriesFromRegions(image.getBytes(), request.regions()));
     }
 
     private void validateImages(List<MultipartFile> images) {
