@@ -128,6 +128,8 @@ public class RspuCodeService {
         if (max <= 0) {
             return null;
         }
+        // 阈值按 mm 设计，OCR 尺寸可能带 cm/m/inch 单位，先统一换算为 mm 再比较
+        max = Math.round(max * unitToMmFactor(dims.getUnit()));
         String inferred;
         if (max < SIZE_SMALL_THRESHOLD) {
             inferred = "S";
@@ -144,6 +146,19 @@ public class RspuCodeService {
     /** 尺寸码等级（用于降级距离比较；非等级码如 SINGLE/DOUBLE 不参与）。 */
     private static final java.util.Map<String, Integer> SIZE_GRADE_RANK = java.util.Map.of(
         "S", 0, "M", 1, "L", 2, "X", 3);
+
+    /** 尺寸单位转 mm 的换算系数；空值/未知单位按 mm 处理（OCR 默认单位即 mm）。 */
+    private static double unitToMmFactor(String unit) {
+        if (unit == null) {
+            return 1.0;
+        }
+        return switch (unit.trim().toLowerCase()) {
+            case "cm", "厘米" -> 10.0;
+            case "m", "米" -> 1000.0;
+            case "inch", "英寸" -> 25.4;
+            default -> 1.0;
+        };
+    }
 
     /**
      * 推断码不在尺寸字典时降级为等级最接近且存在的码（并列时取较小档）。

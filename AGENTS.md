@@ -278,10 +278,7 @@ make clean
   - `V12__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体，原 V7 改号）
   - `V13__member_module.sql`：用户中心企业团队完整版（company/member_group/invite_record + sys_user 企业归属/邀请码/认证设计师）
   - `V14__favorite_template.sql`：收藏夹两级模型（favorite_folder + user_favorite.folder_id）+ 模板标签实体（template_tag）
-  - `V15__platform_cms.sql`：官网 CMS 五表（platform_banner/case/content/custom_dict/customized）+ 协议/客服内容种子
-  - `V16__order_enhance.sql`：订单增强（design_order_item.adjust_price 行级改价 AES + design_order.contract_file_id 合同文件）
-  - `V17__scheme_item_sort.sql`：方案明细 sort_order 存量回填（拖拽排序前置，数据迁移）
-  - `V18__project_share.sql`：项目画布分享（project.share_enabled / share_expire_at）
+  - ~~V15~V18~~：官网 CMS 五表 / 订单增强 / 方案明细 sort_order / 项目分享——**内容已并入 `V1__init_db.sql`，无独立文件**（新环境无需单独执行；保留版本号占用避免重号）
   - `V19__order_idempotency.sql`：订单幂等键与去重
   - `V20__business_code.sql`：RSPU/RSKU 业务编码（rspu_code / rsku_code / rsku_code_counter）
   - `V21__rspu_product_name.sql`：RSPU 商品名称（rspu_master.product_name，产品库列表展示）

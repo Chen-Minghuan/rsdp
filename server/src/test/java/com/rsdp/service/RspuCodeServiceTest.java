@@ -177,14 +177,33 @@ class RspuCodeServiceTest {
     }
 
     private com.rsdp.dto.AiLabels labelsWithDimensions(int w, int d, int h) {
+        return labelsWithDimensions(w, d, h, null);
+    }
+
+    private com.rsdp.dto.AiLabels labelsWithDimensions(int w, int d, int h, String unit) {
         com.rsdp.dto.Dimensions dims = new com.rsdp.dto.Dimensions();
         dims.setW(w);
         dims.setD(d);
         dims.setH(h);
+        dims.setUnit(unit);
         com.rsdp.dto.OcrResult ocr = new com.rsdp.dto.OcrResult();
         ocr.setDimensions(dims);
         com.rsdp.dto.AiLabels labels = new com.rsdp.dto.AiLabels();
         labels.setOcr(ocr);
         return labels;
+    }
+
+    @Test
+    void inferSizeCode_shouldConvertCmToMmBeforeThreshold() {
+        when(dictService.listByType("size")).thenReturn(List.of(createDict("S"), createDict("M"), createDict("L")));
+        // 80cm = 800mm → M；不换算会被误判为 S（实测案例：80×38×40cm 电视柜）
+        assertThat(rspuCodeService.inferSizeCode(labelsWithDimensions(80, 38, 40, "cm"))).isEqualTo("M");
+    }
+
+    @Test
+    void inferSizeCode_shouldConvertMeterToMmBeforeThreshold() {
+        when(dictService.listByType("size")).thenReturn(List.of(createDict("L"), createDict("X")));
+        // 2m = 2000mm → X
+        assertThat(rspuCodeService.inferSizeCode(labelsWithDimensions(2, 1, 1, "m"))).isEqualTo("X");
     }
 }
