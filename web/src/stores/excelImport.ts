@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios from 'axios'
 import type { UploadFileInfo } from 'naive-ui'
-import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides } from '@/api/product'
+import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides, cloneExcelAiRowImages } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import type { TaskItem } from '@/types/task'
 import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataRow, PreviewEdit } from '@/types/product'
@@ -311,6 +311,26 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     const current = rowImageOverrides.value[rowIndex] ?? []
     const next = current.filter(k => k !== tempImageKey)
     await setRowImageOverridesLocal(batchId, rowIndex, next)
+  }
+
+  /**
+   * 将源行的全部图片克隆到目标行的覆盖图列表。
+   *
+   * @param batchId        预览批次号
+   * @param sourceRowIndex 源行号（1-based）
+   * @param targetRowIndex 目标行号（1-based）
+   * @return 目标行最终生效的覆盖图 key 列表
+   */
+  async function cloneRowImages(batchId: string, sourceRowIndex: number, targetRowIndex: number): Promise<string[]> {
+    const keys = await cloneExcelAiRowImages(batchId, sourceRowIndex, targetRowIndex)
+    const next = { ...rowImageOverrides.value }
+    if (keys.length === 0) {
+      delete next[targetRowIndex]
+    } else {
+      next[targetRowIndex] = keys
+    }
+    rowImageOverrides.value = next
+    return keys
   }
 
   async function saveRowImageOverrides(batchId: string, rowIndex: number) {
@@ -645,6 +665,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     uploadRowImage,
     setRowImageOverridesLocal,
     removeRowImage,
+    cloneRowImages,
     clearAll,
     ensurePolling,
     stopPolling

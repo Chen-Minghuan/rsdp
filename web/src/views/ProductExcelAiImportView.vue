@@ -44,7 +44,7 @@ const {
   pendingTaskCount,
   batchRecovering
 } = storeToRefs(store)
-const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue, uploadRowImage, setRowImageOverridesLocal, removeRowImage } = store
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue, uploadRowImage, removeRowImage, cloneRowImages } = store
 
 const STANDARD_FIELDS = [
   { label: '（不映射）', value: '' },
@@ -219,14 +219,19 @@ function handleCopyRowImages(rowIndex: number) {
 async function handlePasteRowImages(targetRowIndex: number) {
   const sourceRowIndex = copiedImageRowIndex.value
   const batchId = mappingResponse.value?.batchId
-  if (sourceRowIndex == null || !batchId) return
-  const sourceKeys = [...(rowImageOverrides.value[sourceRowIndex] ?? [])]
-  if (sourceKeys.length === 0) return
+  if (sourceRowIndex == null || !batchId || sourceRowIndex === targetRowIndex) return
   try {
-    await setRowImageOverridesLocal(batchId, targetRowIndex, sourceKeys)
+    await cloneRowImages(batchId, sourceRowIndex, targetRowIndex)
   } catch (e) {
     console.error('粘贴行图片失败', e)
   }
+}
+
+function hasRowImages(row: Record<string, unknown>): boolean {
+  const rowIndex = Number(row.__rowIndex__)
+  const overrideCount = (rowImageOverrides.value[rowIndex] ?? []).length
+  const embeddedCount = (row.__images__ as PreviewRowImage[] | undefined)?.length ?? 0
+  return overrideCount > 0 || embeddedCount > 0
 }
 
 const mappingColumns = computed<DataTableColumns<{ header: string; value: string }>>(() => [
@@ -428,6 +433,9 @@ function cleanRowStyle({ row }: { row: Record<string, unknown> }) {
   const rowIndex = Number(row.__rowIndex__)
   if (skippedRows.value.has(rowIndex)) {
     return { backgroundColor: '#fff1f0', textDecoration: 'line-through', color: '#999' }
+  }
+  if (copiedImageRowIndex.value != null && copiedImageRowIndex.value === rowIndex) {
+    return { backgroundColor: '#e6f7ff' }
   }
   return {}
 }
@@ -735,8 +743,8 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
                         <img
                           v-if="img.thumbnailBase64"
                           :src="img.thumbnailBase64"
-                          :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '')"
-                          style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid #999;"
+                          :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '') + (rowImageOverrides[Number(row.__rowIndex__)]?.length ? '；导入时将被覆盖图替换' : '')"
+                          :style="{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', border: '1px solid #999', opacity: rowImageOverrides[Number(row.__rowIndex__)]?.length ? 0.4 : 1 }"
                           @click="previewImage(img.thumbnailBase64)"
                         >
                         <div
@@ -755,7 +763,11 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
                         上传
                       </n-button>
                     </n-upload>
-                    <n-button size="tiny" @click="handleCopyRowImages(Number(row.__rowIndex__))">
+                    <n-button
+                      size="tiny"
+                      :disabled="!hasRowImages(row)"
+                      @click="handleCopyRowImages(Number(row.__rowIndex__))"
+                    >
                       复制
                     </n-button>
                     <n-button

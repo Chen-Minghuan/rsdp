@@ -355,6 +355,24 @@ export async function setExcelAiRowImageOverrides(
 }
 
 /**
+ * Excel AI 辅助导入：将源行的全部图片克隆到目标行的覆盖图列表。
+ *
+ * @param batchId        预览批次号
+ * @param sourceRowIndex 源行号（1-based）
+ * @param targetRowIndex 目标行号（1-based）
+ */
+export async function cloneExcelAiRowImages(
+  batchId: string,
+  sourceRowIndex: number,
+  targetRowIndex: number
+): Promise<string[]> {
+  const { data: result } = await apiClient.post<ApiResult<string[]>>(
+    `/v1/products/excel-ai-import/${batchId}/rows/${sourceRowIndex}/clone-images-to/${targetRowIndex}`
+  )
+  return result.data
+}
+
+/**
  * 查询 Excel AI 辅助导入批次状态。
  */
 export async function getExcelAiImportStatus(batchId: string): Promise<ExcelAiImportStatus> {

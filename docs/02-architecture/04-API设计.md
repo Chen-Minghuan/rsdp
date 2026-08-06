@@ -353,6 +353,12 @@ GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
        #     externalCode 与 productName）在编辑时产生歧义
        #   - 前端数据清洗页的编辑以 (rowIndex, header) 为键，通过 previewEdits 在 import 接口回传
 
+POST   /api/v1/products/excel-ai-import/{batchId}/rows/{sourceRowIndex}/clone-images-to/{targetRowIndex}
+       # 数据清洗：将源行的全部图片克隆到目标行的覆盖图列表（已实现）
+       # 说明：
+       #   - 源行的用户覆盖图 key 直接复用；Excel 内嵌图会读取预览缓存原图并写入临时上传存储
+       #   - 返回目标行最终生效的覆盖图 key 列表；导入时以覆盖图优先
+
 GET    /api/v1/products/excel-ai-import/{batchId}
        # 查询 Excel AI 导入批次状态（已实现）
        # Response: {

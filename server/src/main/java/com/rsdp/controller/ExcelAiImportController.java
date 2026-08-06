@@ -183,4 +183,21 @@ public class ExcelAiImportController {
         excelAiImportService.setRowImageOverrides(batchId, rowIndex, request.get("tempImageKeys"));
         return Result.ok();
     }
+
+    /**
+     * 将源行的全部图片（用户覆盖图 + Excel 内嵌图）克隆到目标行的覆盖图列表。
+     *
+     * @param batchId        导入批次 ID
+     * @param sourceRowIndex 源行号（1-based）
+     * @param targetRowIndex 目标行号（1-based）
+     */
+    @PostMapping("/{batchId}/rows/{sourceRowIndex}/clone-images-to/{targetRowIndex}")
+    @PreAuthorize("hasAuthority('product:import')")
+    public Result<List<String>> cloneRowImages(
+        @PathVariable @NotBlank String batchId,
+        @PathVariable int sourceRowIndex,
+        @PathVariable int targetRowIndex) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        return Result.ok(excelAiImportService.cloneRowImages(batchId, sourceRowIndex, targetRowIndex));
+    }
 }

@@ -899,6 +899,64 @@ public class ExcelAiImportService {
         excelImportRowService.updateImageOverrides(row.getRowId(), effective);
     }
 
+    /**
+     * 将源行的全部图片（用户覆盖图 + Excel 内嵌图）克隆到目标行的覆盖图列表。
+     *
+     * <p>Excel 内嵌图会先从预览缓存读取原图字节，再写入预览上传临时存储并生成新的 key，
+     * 保证目标行拥有独立的覆盖图副本。</p>
+     *
+     * @param batchId        导入批次 ID
+     * @param sourceRowIndex 源行号（1-based）
+     * @param targetRowIndex 目标行号（1-based）
+     * @return 目标行最终生效的覆盖图 key 列表
+     */
+    @Transactional
+    public List<String> cloneRowImages(String batchId, int sourceRowIndex, int targetRowIndex) {
+        getAccessibleBatch(batchId);
+        if (sourceRowIndex < 1 || targetRowIndex < 1) {
+            throw new BusinessException("行号必须大于 0");
+        }
+        ExcelImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
+        List<String> clonedKeys = new ArrayList<>();
+
+        // 1. 复用源行的用户覆盖图 key（同一 batch 内的临时文件可直接引用）
+        Map<Integer, List<String>> overrideImages = loadRowOverrideImages(batchId);
+        List<String> sourceOverrides = overrideImages.getOrDefault(sourceRowIndex, List.of());
+        clonedKeys.addAll(sourceOverrides);
+
+        // 2. 把源行的 Excel 内嵌图原图写入临时上传存储，生成新的覆盖图 key
+        List<PreviewRowImageRef> embeddedRefs = listCachedPreviewImages(batchId, sheetIndex, sourceRowIndex - 1);
+        for (PreviewRowImageRef ref : embeddedRefs) {
+            byte[] bytes = loadCachedPreviewImage(batchId, ref.imageKey());
+            if (bytes == null || bytes.length == 0) {
+                continue;
+            }
+            String newKey = IdGenerator.imageId();
+            String extension = normalizeImageFormat(ref.extension());
+            String objectKey = previewUploadObjectKey(batchId, newKey, extension);
+            String contentType = switch (extension.toLowerCase()) {
+                case "png" -> "image/png";
+                case "gif" -> "image/gif";
+                case "webp" -> "image/webp";
+                default -> "image/jpeg";
+            };
+            try {
+                storageService.store(new ByteArrayInputStream(bytes), objectKey, bytes.length, contentType);
+                clonedKeys.add(newKey);
+            } catch (IOException e) {
+                log.warn("克隆行图片失败，batchId={}, sourceRow={}, imageKey={}", batchId, sourceRowIndex, ref.imageKey(), e);
+            }
+        }
+
+        List<String> effective = clonedKeys.stream().filter(StringUtils::hasText).distinct().toList();
+        setRowImageOverrides(batchId, targetRowIndex, effective);
+        return effective;
+    }
+
     private String previewUploadObjectKey(String batchId, String tempImageKey, String extension) {
         return PREVIEW_UPLOAD_IMAGE_PREFIX + "/" + sanitizeFileName(batchId) + "/"
             + sanitizeFileName(tempImageKey) + "." + normalizeImageFormat(extension);
