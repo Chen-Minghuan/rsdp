@@ -64,6 +64,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -4150,27 +4151,29 @@ class ExcelAiImportServiceTest {
         byte[] imageBytes = createJpegBytes(10, 10);
         Files.write(cacheFile, imageBytes);
 
-        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
-            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
-            List<String> result = excelAiImportService.cloneRowImages(batchId, 2, 5);
-            assertEquals(1, result.size());
-            assertTrue(result.get(0).startsWith("IMG-"));
+        try {
+            try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+                when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+                List<String> result = excelAiImportService.cloneRowImages(batchId, 2, 5);
+                assertEquals(1, result.size());
+                assertTrue(result.get(0).startsWith("IMG-"));
+            }
+
+            // 验证写入 preview-upload 临时存储，objectKey 包含 batchId 且扩展名为 jpeg
+            verify(storageService).store(
+                any(ByteArrayInputStream.class),
+                argThat((String objectKey) ->
+                    objectKey.startsWith("preview-images/" + batchId + "/") && objectKey.endsWith(".jpeg")),
+                eq((long) imageBytes.length),
+                eq("image/jpeg")
+            );
+            verify(excelImportRowService).updateImageOverrides(eq(2L), argThat(keys ->
+                keys != null && keys.size() == 1 && keys.get(0).startsWith("IMG-")));
+        } finally {
+            // 断言失败时也要清理临时缓存，避免污染后续测试
+            Files.deleteIfExists(cacheFile);
+            Files.deleteIfExists(cacheDir);
         }
-
-        // 验证写入 preview-upload 临时存储，objectKey 包含 batchId 且扩展名为 jpeg
-        verify(storageService).store(
-            any(ByteArrayInputStream.class),
-            org.mockito.ArgumentMatchers.argThat((String objectKey) ->
-                objectKey.startsWith("preview-images/" + batchId + "/") && objectKey.endsWith(".jpeg")),
-            eq((long) imageBytes.length),
-            eq("image/jpeg")
-        );
-        verify(excelImportRowService).updateImageOverrides(eq(2L), org.mockito.ArgumentMatchers.argThat(keys ->
-            keys != null && keys.size() == 1 && keys.get(0).startsWith("IMG-")));
-
-        // 清理临时缓存
-        Files.deleteIfExists(cacheFile);
-        Files.deleteIfExists(cacheDir);
     }
 
     private byte[] createJpegBytes(int width, int height) throws IOException {
