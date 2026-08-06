@@ -26,6 +26,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.IdGenerator;
 
 /**
@@ -110,6 +111,26 @@ public class AsyncTaskProcessor {
             if (croppedImage.isPresent()) {
                 imageBytes = croppedImage.get();
                 subjectCropped = true;
+            }
+        }
+
+        // 品类自动判定：录入时用户未选品类（系统兜底 FS）时，用原图（含品名/规格文字版面）
+        // 轻量判定品类并纠正——后续六维 schema、风格匹配、业务编码都按正确品类执行。
+        // 判定失败不影响主流程，沿用兜底品类。
+        if (isCategoryAutoDetectTask(taskId)) {
+            try {
+                String detected = visionService.classifyCategory(new ByteArrayInputStream(originalImageBytes));
+                if (StringUtils.hasText(detected) && !detected.equalsIgnoreCase(categoryCode) && rspu != null) {
+                    String previous = categoryCode;
+                    rspu.setCategoryCode(detected);
+                    rspu.setCategoryPath(CategoryPaths.resolve(detected));
+                    rspu.setUpdatedAt(LocalDateTime.now());
+                    rspuMapper.updateById(rspu);
+                    categoryCode = detected;
+                    log.info("AI 品类判定纠正品类：{} → {}，rspuId={}", previous, detected, rspuId);
+                }
+            } catch (Exception e) {
+                log.warn("品类自动判定失败，沿用兜底品类，taskId={}", taskId, e);
             }
         }
 
@@ -227,6 +248,24 @@ public class AsyncTaskProcessor {
             return source != null && "document_import".equals(source.asText());
         } catch (Exception e) {
             log.warn("解析任务 source 失败，按普通录入处理，taskId={}", taskId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 判断任务是否需要 AI 自动判定品类（录入时用户未选品类，系统在 input_data 打了标记）。
+     */
+    private boolean isCategoryAutoDetectTask(String taskId) {
+        try {
+            AsyncTask task = asyncTaskMapper.selectById(taskId);
+            if (task == null || !StringUtils.hasText(task.getInputData())) {
+                return false;
+            }
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
+            com.fasterxml.jackson.databind.JsonNode flag = root.get("categoryAutoDetect");
+            return flag != null && flag.asBoolean(false);
+        } catch (Exception e) {
+            log.warn("解析任务 categoryAutoDetect 失败，跳过品类判定，taskId={}", taskId, e);
             return false;
         }
     }

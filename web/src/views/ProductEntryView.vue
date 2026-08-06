@@ -393,7 +393,7 @@ function formatPrice(ocr?: OcrResult): string {
           <n-select
             v-model:value="categoryCode"
             :options="categoryOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="选择品类（默认座椅）"
+            placeholder="选择品类（留空由 AI 自动识别）"
             clearable
             style="width: 180px;"
           />

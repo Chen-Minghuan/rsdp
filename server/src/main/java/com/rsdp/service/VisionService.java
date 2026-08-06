@@ -588,6 +588,94 @@ public class VisionService {
     }
 
     /**
+     * 品类判定提示词：录入时用户未指定品类时，用原图（含品名/规格文字版面）判定品类。
+     */
+    private static final String CATEGORY_CLASSIFY_SYSTEM_PROMPT = """
+        你是家具品类分类专家。根据图片判断产品所属品类；图片中可能带有产品名称、型号、
+        规格等文字版面，文字信息（如品名明确写了品类名）优先于外观猜测。
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    private static final String CATEGORY_CLASSIFY_USER_PROMPT = """
+        请判断图中家具产品的品类。
+        品类码必须从以下枚举中精确选择一个：
+        %s
+
+        输出格式：{"categoryCode": "FC"}
+        实在无法判断时输出 {"categoryCode": null}
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    /**
+     * 轻量品类判定（best-effort）：从品类字典枚举中为图片选择一个品类码。
+     *
+     * <p>仅返回字典中真实存在的码；Mock 模式、字典为空、AI 异常、输出无法解析或
+     * 输出码不在字典中时一律返回 null，由调用方回退默认品类，绝不影响录入主流程。</p>
+     *
+     * @param imageStream 图片流（建议传未裁剪的原图，文字版面对判定帮助最大）
+     * @return 品类码（如 FC）；无法判定时返回 null
+     */
+    public String classifyCategory(InputStream imageStream) {
+        try (imageStream) {
+            byte[] imageBytes = imageStream.readAllBytes();
+            if (imageBytes.length == 0) {
+                return null;
+            }
+            if (mockEnabled) {
+                log.info("AI Mock 已启用，跳过品类判定");
+                return null;
+            }
+            String enumText = buildCategoryEnumText();
+            if (!StringUtils.hasText(enumText)) {
+                return null;
+            }
+
+            String base64 = Base64.getEncoder().encodeToString(imageBytes);
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", CATEGORY_CLASSIFY_SYSTEM_PROMPT),
+                    OpenAiChatMessage.vision("user", CATEGORY_CLASSIFY_USER_PROMPT.formatted(enumText), base64)
+                ))
+                .temperature(0.1)
+                .maxTokens(128)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+                .build();
+
+            String json = executeChat(request, "品类判定");
+            return parseCategoryCode(json);
+        } catch (Exception e) {
+            log.warn("品类判定失败，返回 null：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 解析品类判定结果；码不在字典中时返回 null（防 AI 编造枚举外的码）。 */
+    private String parseCategoryCode(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            Map<?, ?> map = objectMapper.readValue(json, Map.class);
+            Object code = map.get("categoryCode");
+            if (!(code instanceof String text) || text.isBlank()) {
+                return null;
+            }
+            String normalized = text.trim().toUpperCase();
+            boolean exists = dictService.listByType("category").stream()
+                .anyMatch(d -> normalized.equalsIgnoreCase(d.getDictCode()));
+            if (!exists) {
+                log.warn("AI 判定的品类码不在字典中，忽略: {}", normalized);
+                return null;
+            }
+            return normalized;
+        } catch (Exception e) {
+            log.warn("解析品类判定结果失败，json={}", json, e);
+            return null;
+        }
+    }
+
+    /**
      * 单图产品主体检测提示词。
      * 要求 AI 完整包围图中最完整的家具产品（所有部件不可切断），排除搭配品、装饰、文字等干扰。
      * 选择标准是"完整度最高"而非"面积最大"：多个产品并存时，优先选部件完整可见、未被画面边缘

@@ -152,7 +152,8 @@ public class ProductService {
 
         registerStorageRollbackCleanup(storedObjectKeys);
 
-        // 创建异步任务（仅针对主图做 AI 识别）
+        // 创建异步任务（仅针对主图做 AI 识别）；用户未选品类时打标记，异步阶段先 AI 判定品类再识别
+        boolean categoryAutoDetect = (categoryCode == null || categoryCode.isBlank());
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);
         task.setTaskType("product_entry");
@@ -163,7 +164,8 @@ public class ProductService {
             "rspuId", rspuId,
             "imageId", primaryImageId,
             "objectKey", primaryObjectKey,
-            "originalFilename", primaryImage.getOriginalFilename()
+            "originalFilename", primaryImage.getOriginalFilename(),
+            "categoryAutoDetect", categoryAutoDetect
         )));
         task.setCreatedBy(SecurityOperatorContext.currentUsername());
         task.setCreatedAt(LocalDateTime.now());

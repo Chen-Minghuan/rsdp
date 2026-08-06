@@ -163,6 +163,57 @@ class VisionServiceTest {
     }
 
     @Test
+    void classifyCategory_shouldReturnDictCode() throws Exception {
+        stubCategoryDict("FS", "SF", "FC");
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"categoryCode\":\"FC\"}"))));
+
+        String code = visionService.classifyCategory(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(code).isEqualTo("FC");
+    }
+
+    @Test
+    void classifyCategory_shouldReturnNull_whenCodeNotInDict() throws Exception {
+        stubCategoryDict("FS", "SF", "FC");
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"categoryCode\":\"XX\"}"))));
+
+        assertThat(visionService.classifyCategory(new ByteArrayInputStream("fake-image".getBytes()))).isNull();
+    }
+
+    @Test
+    void classifyCategory_shouldReturnNull_whenAiCannotDecide() throws Exception {
+        stubCategoryDict("FS");
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"categoryCode\":null}"))));
+
+        assertThat(visionService.classifyCategory(new ByteArrayInputStream("fake-image".getBytes()))).isNull();
+    }
+
+    private void stubCategoryDict(String... codes) {
+        List<CategoryDict> dicts = java.util.Arrays.stream(codes)
+            .map(code -> {
+                CategoryDict d = new CategoryDict();
+                d.setDictType("category");
+                d.setDictCode(code);
+                d.setDictName(code);
+                return d;
+            })
+            .toList();
+        when(dictService.listByType("category")).thenReturn(dicts);
+    }
+
+    @Test
     void recognizeImage_shouldThrowWhenApiReturnsEmpty() throws Exception {
         stubFor(post(urlEqualTo("/chat/completions"))
             .willReturn(aResponse()
