@@ -242,6 +242,7 @@ POST   /api/v1/products/excel-ai-import/preview
        #   priceColumns: [{ header: string, materialName: string, suggestedField: string,
        #                    role: "factory"|"sales" }],   // 出厂价/工厂价/EXW→factory；销售价/含税价/零售价/市场价→sales；其余默认 factory
        #   categoryMappings: [{ rawValue: string, suggestedCode: string, source: "dict"|"alias"|"ai"|"none" }],
+       #   unmappedColumns: [{ header: string, sampleValues: string[] }], // 未被 AI 映射的列（含最多 3 个非空样例值），供用户忽略或手动映射
        #   categoryGuess: string,
        #   notes: string,
        #   sheetIndex: number,                            // 回显本次解析的工作表
@@ -280,7 +281,7 @@ POST   /api/v1/products/excel-ai-import/import
        #     selectedPriceColumns: string[], // 要导入的价格列 header 列表；缺省/null 导入全部，显式空数组 [] 表示不选任何价格列（只建 RSPU/变体/图片，不建 RSKU）；旧契约兼容，全部视为 factory 角色
        #     priceColumnSelections: [{ header: string, role: "factory"|"sales" }], // 价格列选择+角色；与 selectedPriceColumns 同时存在时以本字段为准
        #                                            // role=factory 建变体+RSKU；role=sales 不建变体/RSKU，价格写 RSPU retail_price（只补空缺）
-       #     defaultFactoryCode: string,    // 默认工厂编码，用于生成 RSKU 与 RSPU-工厂映射
+       #     defaultFactoryCode: string,    // 默认工厂编码，用于生成 RSKU 与 RSPU-工厂映射；存在 factory 角色价格列时必填，否则抛 400「存在出厂价价格列，必须填写默认工厂编码」
        #     shippingWarehouseId: string,   // 默认发货仓库 ID（关联 factory_warehouse）
        #     defaultShippingFrom: string,   // 默认发货地（冗余显示字段）
        #     defaultLeadTimeDays: number,   // 默认基础交期天数；优先级：Excel 行级交期列 > 工厂交期规则 > 本默认值

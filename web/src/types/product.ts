@@ -436,6 +436,11 @@ export interface CategoryMappingItem {
 /**
  * Excel AI 辅助导入字段映射预览响应。
  */
+export interface UnmappedColumnInfo {
+  header: string
+  sampleValues: string[]
+}
+
 export interface ExcelAiMappingResponse {
   batchId: string
   headers: string[]
@@ -443,6 +448,8 @@ export interface ExcelAiMappingResponse {
   previewRows: Record<string, string>[]
   priceColumns: PriceColumnInfo[]
   categoryMappings?: CategoryMappingItem[]
+  /** 未被映射到系统字段的列（含样例值），供用户选择忽略或手动映射 */
+  unmappedColumns?: UnmappedColumnInfo[]
   /** 本次预览的工作表索引（回显） */
   sheetIndex?: number
   /** 文件内全部工作表列表；多 sheet 时前端展示切换器 */

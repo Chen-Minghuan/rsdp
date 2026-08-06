@@ -49,6 +49,11 @@ public class ExcelAiMappingResponse {
     private List<CategoryMappingItem> categoryMappings = new ArrayList<>();
 
     /**
+     * 未被 AI 映射到系统字段的列清单（表头 + 样例值），供用户决定是否忽略或手动映射。
+     */
+    private List<UnmappedColumnInfo> unmappedColumns = new ArrayList<>();
+
+    /**
      * 本次预览解析的工作表索引（回显，多 Sheet 文件用）。
      */
     private int sheetIndex;

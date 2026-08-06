@@ -8,7 +8,7 @@ import { getExcelAiImportRows } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
-import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow } from '@/types/product'
+import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow, UnmappedColumnInfo } from '@/types/product'
 
 const router = useRouter()
 
@@ -230,6 +230,32 @@ const categoryMappingColumns = computed<DataTableColumns<CategoryMappingItem>>((
   }
 ])
 
+const unmappedColumnsColumns = computed<DataTableColumns<UnmappedColumnInfo>>(() => [
+  {
+    title: 'Excel 原始表头',
+    key: 'header'
+  },
+  {
+    title: '样例值',
+    key: 'sampleValues',
+    render: (row) => row.sampleValues.slice(0, 2).join(' / ') || '-'
+  },
+  {
+    title: '映射到系统字段',
+    key: 'action',
+    render: (row) => {
+      return h(NSelect, {
+        value: confirmedMapping.value[row.header] ?? '',
+        options: STANDARD_FIELDS,
+        style: 'width: 260px;',
+        onUpdateValue: (value: string) => {
+          confirmedMapping.value[row.header] = value
+        }
+      })
+    }
+  }
+])
+
 const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
   {
     title: '行号',
@@ -408,6 +434,18 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             :bordered="true"
             :single-line="false"
           />
+
+          <n-card v-if="mappingResponse?.unmappedColumns && mappingResponse.unmappedColumns.length > 0" title="未映射列（工厂自定义列）" size="small">
+            <n-alert type="warning" :show-icon="false" style="margin-bottom: 12px;">
+              以下列未被 AI 自动识别为系统字段。你可以选择忽略，或手动映射到标准字段；不处理时这些列的数据将不会入库。
+            </n-alert>
+            <n-data-table
+              :columns="unmappedColumnsColumns"
+              :data="mappingResponse.unmappedColumns"
+              :bordered="true"
+              :single-line="false"
+            />
+          </n-card>
 
           <n-card v-if="mappingResponse?.categoryMappings && mappingResponse.categoryMappings.length > 0" title="品类名归一" size="small">
             <n-alert type="info" :show-icon="false" style="margin-bottom: 12px;">

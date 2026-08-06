@@ -20,6 +20,7 @@ import com.rsdp.dto.response.ExcelAiMappingResponse;
 import com.rsdp.dto.response.CategoryMappingItem;
 import com.rsdp.dto.response.ExcelSheetInfo;
 import com.rsdp.dto.response.PriceColumnInfo;
+import com.rsdp.dto.response.UnmappedColumnInfo;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ExcelImportBatch;
@@ -1438,11 +1439,58 @@ public class ExcelAiImportService {
                 new TypeReference<List<Map<String, String>>>() {
                 });
             response.setPreviewRows(previewRows.subList(0, Math.min(previewRows.size(), PREVIEW_ROW_COUNT)));
+            response.setUnmappedColumns(buildUnmappedColumns(headerMap, mappingResult, previewRows));
         } catch (Exception e) {
             log.warn("解析预览行失败，batchId={}", batch.getBatchId(), e);
             response.setPreviewRows(new ArrayList<>());
+            response.setUnmappedColumns(new ArrayList<>());
         }
         return response;
+    }
+
+    /**
+     * 构建未映射列清单：所有非空表头中，未被建议映射且未被识别为价格列的列。
+     *
+     * @param headerMap     原始表头映射（物理列索引 → 表头）
+     * @param mappingResult AI 映射结果
+     * @param previewRows   原始数据行（表头 → 值）
+     * @return 未映射列信息列表（按列顺序）
+     */
+    private List<UnmappedColumnInfo> buildUnmappedColumns(Map<Integer, String> headerMap,
+                                                          AiMappingResult mappingResult,
+                                                          List<Map<String, String>> previewRows) {
+        Set<String> mappedHeaders = new HashSet<>(mappingResult.mapping.keySet());
+        for (PriceColumnInfo priceColumn : mappingResult.priceColumns) {
+            if (StringUtils.hasText(priceColumn.getHeader())) {
+                mappedHeaders.add(priceColumn.getHeader());
+            }
+        }
+
+        List<UnmappedColumnInfo> result = new ArrayList<>();
+        int sampleLimit = 3;
+        for (String header : headerMap.values()) {
+            if (!StringUtils.hasText(header) || mappedHeaders.contains(header)) {
+                continue;
+            }
+            UnmappedColumnInfo info = new UnmappedColumnInfo();
+            info.setHeader(header);
+            List<String> samples = new ArrayList<>();
+            for (Map<String, String> row : previewRows) {
+                String value = row.get(header);
+                if (StringUtils.hasText(value)) {
+                    String trimmed = value.trim();
+                    if (!samples.contains(trimmed)) {
+                        samples.add(trimmed);
+                        if (samples.size() >= sampleLimit) {
+                            break;
+                        }
+                    }
+                }
+            }
+            info.setSampleValues(samples);
+            result.add(info);
+        }
+        return result;
     }
 
     private List<Map<String, String>> loadRawDataRows(ExcelImportBatch batch) {

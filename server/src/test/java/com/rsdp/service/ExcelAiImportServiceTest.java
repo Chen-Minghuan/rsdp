@@ -6,6 +6,7 @@ import com.rsdp.dto.response.ExcelAiImportResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
 import com.rsdp.dto.response.PriceColumnInfo;
+import com.rsdp.dto.response.UnmappedColumnInfo;
 import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ExcelImportBatch;
@@ -418,6 +419,65 @@ class ExcelAiImportServiceTest {
             assertTrue(!response.getSuggestedMapping().containsKey("产品图样")
                     || response.getSuggestedMapping().get("产品图样") == null,
                 "内嵌图片列不应被映射为 URL 字段");
+        }
+    }
+
+    @Test
+    void previewMapping_shouldReturnUnmappedColumns() throws IOException {
+        byte[] excelBytes = createExcelWithUnmappedColumns();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // AI 只映射了型号品名和尺寸，工厂自定义列（面料支数/汇率/柜型）应进入未映射清单
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"尺寸\":\"dimensions\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            batch.setBatchId("BATCH-TEST");
+            return 1;
+        });
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            ExcelAiMappingResponse response = excelAiImportService.previewMapping(file);
+
+            assertNotNull(response);
+            List<String> unmappedHeaders = response.getUnmappedColumns().stream()
+                .map(UnmappedColumnInfo::getHeader).toList();
+            assertTrue(unmappedHeaders.contains("内部批号"), "未映射列应包含内部批号: " + unmappedHeaders);
+            assertTrue(unmappedHeaders.contains("汇率"), "未映射列应包含汇率: " + unmappedHeaders);
+            assertTrue(unmappedHeaders.contains("柜型"), "未映射列应包含柜型: " + unmappedHeaders);
+            assertTrue(response.getUnmappedColumns().stream()
+                    .anyMatch(c -> "内部批号".equals(c.getHeader())
+                        && c.getSampleValues().contains("BATCH-2026-001")),
+                "未映射列应附带非空样例值");
+        }
+    }
+
+    @Test
+    void previewMapping_shouldReturnEmptyUnmappedColumnsWhenAllMapped() throws IOException {
+        byte[] excelBytes = createExcelWithVariantNameColumn();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"规格/模块\":\"variantDisplayName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            batch.setBatchId("BATCH-TEST");
+            return 1;
+        });
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            ExcelAiMappingResponse response = excelAiImportService.previewMapping(file);
+
+            assertNotNull(response);
+            assertTrue(response.getUnmappedColumns().isEmpty(), "全部列已映射时不应存在未映射列");
         }
     }
 
@@ -2375,6 +2435,29 @@ class ExcelAiImportServiceTest {
             var data = sheet.createRow(1);
             data.createCell(0).setCellValue("MJ-S96 休闲椅A");
             data.createCell(1).setCellValue("模块A");
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithUnmappedColumns() {
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("型号品名");
+            header.createCell(1).setCellValue("尺寸");
+            header.createCell(2).setCellValue("内部批号");
+            header.createCell(3).setCellValue("汇率");
+            header.createCell(4).setCellValue("柜型");
+            var data = sheet.createRow(1);
+            data.createCell(0).setCellValue("ABC-001 休闲椅A");
+            data.createCell(1).setCellValue("800*900*1000mm");
+            data.createCell(2).setCellValue("BATCH-2026-001");
+            data.createCell(3).setCellValue("7.2");
+            data.createCell(4).setCellValue("20GP");
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {
