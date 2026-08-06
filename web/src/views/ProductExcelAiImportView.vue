@@ -691,7 +691,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             :scroll-y="{ enabled: true, gt: 0 }"
             :scroll-x="{ enabled: true, gt: 0 }"
             :edit-config="{ trigger: 'dblclick', mode: 'cell' }"
-            :row-config="{ keyField: '__rowIndex__' }"
+            :row-config="{ keyField: '__rowIndex__', height: 102 }"
             :row-style="cleanRowStyle"
             border
             show-overflow
