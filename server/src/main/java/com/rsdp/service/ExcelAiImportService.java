@@ -302,6 +302,14 @@ public class ExcelAiImportService {
         if (mapping == null || mapping.isEmpty()) {
             throw new BusinessException("字段映射不能为空");
         }
+        // 出厂价价格列生成 RSKU 必须依赖默认工厂编码；静默跳过会导致「空心成功」（RSPU+变体建成却无报价）
+        List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
+        List<PriceColumnInfo> selectedPriceColumns = resolveSelectedPriceColumns(priceColumns, request);
+        boolean hasFactoryPriceColumn = selectedPriceColumns.stream()
+            .anyMatch(p -> !PRICE_ROLE_SALES.equals(roleOf(p)));
+        if (hasFactoryPriceColumn && !StringUtils.hasText(request.getDefaultFactoryCode())) {
+            throw new BusinessException("存在出厂价价格列，必须填写默认工厂编码");
+        }
         // 原子抢占导入权，防止并发重复导入（替代先查状态再判断的 check-then-act 竞态）；
         // pending / done 均可抢占（done 批次支持「以更新模式重新导入」），importing 拒绝
         if (batchMapper.claimForImport(batch.getBatchId()) == 0) {
@@ -417,7 +425,22 @@ public class ExcelAiImportService {
             try {
                 // 行级记录与失败明细统一使用 Excel 物理行号（+1 转 1-based 展示口径）；
                 // 物理行号单调递增，不撞 (batch_id, excel_row_number) 唯一约束（P2-4）
-                importRowId = excelImportRowService.initRow(batch.getBatchId(), displayRowIndex, "product", dataRow, null);
+                Map<String, String> mappedFields = new HashMap<>();
+                for (Map.Entry<String, String> entry : mapping.entrySet()) {
+                    String fields = entry.getValue();
+                    if (StringUtils.hasText(fields)) {
+                        String value = dataRow.get(entry.getKey());
+                        for (String field : fields.split(",")) {
+                            if (StringUtils.hasText(field)) {
+                                mappedFields.put(field.trim(), value);
+                            }
+                        }
+                    }
+                }
+                List<String> selectedPriceHeaders = selectedPriceColumns.stream()
+                    .map(PriceColumnInfo::getHeader).toList();
+                importRowId = excelImportRowService.initRow(batch.getBatchId(), displayRowIndex, "product", dataRow, null,
+                    mappedFields, selectedPriceHeaders);
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
                     selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
                     currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId());

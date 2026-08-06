@@ -40,12 +40,33 @@ public class ExcelImportRowService {
     @Transactional
     public Long initRow(String batchId, int excelRowNumber, String rowType,
                         Map<String, String> rawData, Long parentRowId) {
+        return initRow(batchId, excelRowNumber, rowType, rawData, parentRowId, null, null);
+    }
+
+    /**
+     * 初始化一行导入记录，并同时记录 AI 映射字段与选中的价格列。
+     *
+     * @param batchId             批次 ID
+     * @param excelRowNumber      Excel 行号
+     * @param rowType             行类型
+     * @param rawData             原始数据
+     * @param parentRowId         父行 ID
+     * @param mappedFields        表头 → 系统字段的映射（可选）
+     * @param selectedPriceColumns 选中的价格列原始表头列表（可选）
+     * @return 行记录 ID
+     */
+    @Transactional
+    public Long initRow(String batchId, int excelRowNumber, String rowType,
+                        Map<String, String> rawData, Long parentRowId,
+                        Map<String, String> mappedFields, List<String> selectedPriceColumns) {
         ExcelImportRow row = new ExcelImportRow();
         row.setBatchId(batchId);
         row.setExcelRowNumber(excelRowNumber);
         row.setRowType(rowType);
         row.setParentRowId(parentRowId);
         row.setRawData(toJson(rawData));
+        row.setMappedFields(toJson(mappedFields));
+        row.setSelectedPriceColumns(toJson(selectedPriceColumns));
         row.setStatus("pending");
         row.setCreatedAt(LocalDateTime.now());
         rowMapper.insert(row);

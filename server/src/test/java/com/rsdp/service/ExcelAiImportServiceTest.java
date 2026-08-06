@@ -543,6 +543,7 @@ class ExcelAiImportServiceTest {
         request.setBatchId(preview.getBatchId());
         request.setMapping(preview.getSuggestedMapping());
         request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
 
         ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
 
@@ -1898,6 +1899,7 @@ class ExcelAiImportServiceTest {
         request.setBatchId(preview.getBatchId());
         request.setMapping(preview.getSuggestedMapping());
         request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
@@ -2689,7 +2691,7 @@ class ExcelAiImportServiceTest {
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         // 双行表头场景数据行物理行号为 2（0-based），initRow 应收到展示口径 3
-        verify(excelImportRowService).initRow(anyString(), eq(3), eq("product"), anyMap(), any());
+        verify(excelImportRowService).initRow(anyString(), eq(3), eq("product"), anyMap(), any(), anyMap(), any());
     }
 
     @Test
@@ -2851,6 +2853,69 @@ class ExcelAiImportServiceTest {
         assertEquals(all, m.invoke(excelAiImportService, all, null), "null 应兜底全选");
         assertEquals(List.of(), m.invoke(excelAiImportService, all, List.of()), "显式空数组应返回空");
         assertEquals(List.of(p1), m.invoke(excelAiImportService, all, List.of("价格-A级布")));
+    }
+
+    @Test
+    void confirmAndImport_shouldRejectFactoryPriceColumnsWithoutDefaultFactoryCode() throws IOException {
+        // 存在出厂价价格列但未填写默认工厂编码时，应前置校验失败并给出明确提示，
+        // 避免「RSPU+变体建成、RSKU 却未创建」的空心成功。
+        ExcelImportBatch savedBatch = prepareCategoryBatch(createExcelWithMultiPriceColumns(),
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"产品尺寸\":\"dimensions\",\"材质说明\":\"materialTags\",\"价格-A级布\":\"__PRICE__:A级布\",\"价格-AA级布\":\"__PRICE__:AA级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of(
+            "型号品名 ITEM NO/DESCRIPTION", "externalCode,productName",
+            "产品尺寸(厘米) SIZE（CM）", "dimensions",
+            "材质说明 SIZE", "materialTags"));
+        request.setCategoryHint("FS");
+        // 故意不设置 defaultFactoryCode
+
+        BusinessException e = assertThrows(BusinessException.class,
+            () -> excelAiImportService.confirmAndImport(request));
+        assertTrue(e.getMessage().contains("默认工厂编码"), "异常信息: " + e.getMessage());
+    }
+
+    @Test
+    void confirmAndImport_shouldRecordMappingAndSelectedPriceColumnsInRow() throws IOException {
+        // 行级记录应同时保存映射字段与选中的价格列，供结果页「查看行级明细」排查。
+        ExcelImportBatch savedBatch = prepareCategoryBatch(createExcelWithMultiPriceColumns(),
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"产品尺寸\":\"dimensions\",\"材质说明\":\"materialTags\",\"价格-A级布\":\"__PRICE__:A级布\",\"价格-AA级布\":\"__PRICE__:AA级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithMultiPriceColumns()));
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponseA = new RspuVariantResponse();
+        variantResponseA.setVariantId("V-A");
+        RspuVariantResponse variantResponseAA = new RspuVariantResponse();
+        variantResponseAA.setVariantId("V-AA");
+        when(rspuVariantService.createVariant(anyString(), any()))
+            .thenReturn(variantResponseA, variantResponseAA);
+        when(rskuService.upsertRsku(any())).thenReturn("RSKU-1", "RSKU-2");
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of(
+            "型号品名 ITEM NO/DESCRIPTION", "externalCode,productName",
+            "产品尺寸(厘米) SIZE（CM）", "dimensions",
+            "材质说明 SIZE", "materialTags"));
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+
+        excelAiImportService.confirmAndImport(request);
+
+        ArgumentCaptor<Map<String, String>> mappedFieldsCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<List<String>> selectedPriceColumnsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(excelImportRowService).initRow(anyString(), anyInt(), eq("product"), anyMap(), any(),
+            mappedFieldsCaptor.capture(), selectedPriceColumnsCaptor.capture());
+        assertTrue(mappedFieldsCaptor.getValue().containsKey("externalCode"));
+        assertTrue(mappedFieldsCaptor.getValue().containsKey("productName"));
+        assertEquals(List.of("价格（PRICE）-A级布", "价格（PRICE）-AA级布"),
+            selectedPriceColumnsCaptor.getValue());
     }
 
     @Test
