@@ -2,7 +2,7 @@
 import { ref, computed, h, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { NSelect, NTag, NInput, NUpload, NButton, NSpace, type DataTableColumns, type UploadFileInfo } from 'naive-ui'
+import { NSelect, NTag, NInput, NUpload, NButton, NSpace, useMessage, type DataTableColumns, type UploadFileInfo } from 'naive-ui'
 import { VxeTable, VxeColumn } from 'vxe-table'
 import 'vxe-table/lib/style.css'
 import { listDicts } from '@/api/dict'
@@ -13,6 +13,7 @@ import type { DictItem } from '@/types/dict'
 import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow, UnmappedColumnInfo, PreviewRowImage } from '@/types/product'
 
 const router = useRouter()
+const message = useMessage()
 
 // 导入向导状态在 Pinia 中，切换页面后返回进度不丢失；
 // 上传/导入请求与识别轮询由 store 驱动，组件卸载不影响流程进行
@@ -192,7 +193,10 @@ async function handleUploadRowImage(rowIndex: number, file: File) {
   if (!batchId) return
   try {
     await uploadRowImage(batchId, rowIndex, file)
+    message.success('图片已上传')
   } catch (e) {
+    const msg = e instanceof Error ? e.message : '上传行图片失败'
+    message.error(msg)
     console.error('上传行图片失败', e)
   }
 }
@@ -208,6 +212,8 @@ async function handleDeleteRowImage(rowIndex: number, tempImageKey: string) {
   try {
     await removeRowImage(batchId, rowIndex, tempImageKey)
   } catch (e) {
+    const msg = e instanceof Error ? e.message : '删除行图片失败'
+    message.error(msg)
     console.error('删除行图片失败', e)
   }
 }
@@ -222,14 +228,16 @@ async function handlePasteRowImages(targetRowIndex: number) {
   if (sourceRowIndex == null || !batchId || sourceRowIndex === targetRowIndex) return
   try {
     await cloneRowImages(batchId, sourceRowIndex, targetRowIndex)
+    message.success('图片已粘贴')
   } catch (e) {
+    const msg = e instanceof Error ? e.message : '粘贴行图片失败'
+    message.error(msg)
     console.error('粘贴行图片失败', e)
   }
 }
 
 function hasRowImages(row: Record<string, unknown>): boolean {
-  const rowIndex = Number(row.__rowIndex__)
-  const overrideCount = (rowImageOverrides.value[rowIndex] ?? []).length
+  const overrideCount = (row.__overrideKeys__ as string[] | undefined)?.length ?? 0
   const embeddedCount = (row.__images__ as PreviewRowImage[] | undefined)?.length ?? 0
   return overrideCount > 0 || embeddedCount > 0
 }
@@ -373,10 +381,13 @@ const cleanHeaders = computed(() => {
 
 /** 把 PreviewDataRow 转换成 VxeTable 行数据，带内部行号字段与图片 */
 const cleanTableData = computed(() => {
+  const overrides = rowImageOverrides.value
   return previewData.value.map(row => {
-    const record: Record<string, string | number | PreviewRowImage[]> = {
+    const record: Record<string, string | number | PreviewRowImage[] | string[]> = {
       __rowIndex__: row.rowIndex,
-      __images__: row.images ?? []
+      __images__: row.images ?? [],
+      // 把覆盖图 key 嵌入行数据，让 VxeTable 在复制/粘贴/删除图片后立刻重新渲染该行。
+      __overrideKeys__: overrides[row.rowIndex] ?? []
     }
     for (const header of cleanHeaders.value) {
       const value = getPreviewCellValue(row, header)
@@ -718,9 +729,9 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
               <template #default="{ row }">
                 <div style="display: flex; flex-direction: column; gap: 8px; padding: 4px 0;">
                   <div style="display: flex; gap: 6px; flex-wrap: wrap; min-height: 48px; align-items: center;">
-                    <template v-if="(rowImageOverrides[Number(row.__rowIndex__)] ?? []).length > 0 || (row.__images__ as PreviewRowImage[] | undefined)?.length">
+                    <template v-if="(row.__overrideKeys__ as string[] | undefined)?.length || (row.__images__ as PreviewRowImage[] | undefined)?.length">
                       <div
-                        v-for="key in rowImageOverrides[Number(row.__rowIndex__)] ?? []"
+                        v-for="key in row.__overrideKeys__ as string[]"
                         :key="key"
                         style="position: relative;"
                       >
@@ -743,8 +754,8 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
                         <img
                           v-if="img.thumbnailBase64"
                           :src="img.thumbnailBase64"
-                          :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '') + (rowImageOverrides[Number(row.__rowIndex__)]?.length ? '；导入时将被覆盖图替换' : '')"
-                          :style="{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', border: '1px solid #999', opacity: rowImageOverrides[Number(row.__rowIndex__)]?.length ? 0.4 : 1 }"
+                          :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '') + ((row.__overrideKeys__ as string[] | undefined)?.length ? '；导入时将被覆盖图替换' : '')"
+                          :style="{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', border: '1px solid #999', opacity: (row.__overrideKeys__ as string[] | undefined)?.length ? 0.4 : 1 }"
                           @click="previewImage(img.thumbnailBase64)"
                         >
                         <div

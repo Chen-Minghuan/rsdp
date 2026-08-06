@@ -891,19 +891,28 @@ public class ExcelAiImportService {
     public void setRowImageOverrides(String batchId, int rowIndex, List<String> tempImageKeys) {
         getAccessibleBatch(batchId);
         ExcelImportRow row = excelImportRowService.findByBatchAndRowNumber(batchId, rowIndex);
+        Long rowId;
         if (row == null) {
+            // 数据清洗阶段（导入前）ExcelImportRow 尚未创建，需要占位行来持久化覆盖图。
+            // 导入主流程开始时会整体删除重建行记录，并通过 preserveRowOverrideImages 恢复覆盖图。
+            rowId = excelImportRowService.createPreviewPlaceholderRow(batchId, rowIndex);
+        } else {
+            rowId = row.getRowId();
+        }
+        if (rowId == null) {
             throw new BusinessException("导入行不存在: batchId=" + batchId + ", rowIndex=" + rowIndex);
         }
         List<String> effective = tempImageKeys == null ? List.of()
             : tempImageKeys.stream().filter(StringUtils::hasText).distinct().toList();
-        excelImportRowService.updateImageOverrides(row.getRowId(), effective);
+        excelImportRowService.updateImageOverrides(rowId, effective);
     }
 
     /**
      * 将源行的全部图片（用户覆盖图 + Excel 内嵌图）克隆到目标行的覆盖图列表。
      *
      * <p>Excel 内嵌图会先从预览缓存读取原图字节，再写入预览上传临时存储并生成新的 key，
-     * 保证目标行拥有独立的覆盖图副本。</p>
+     * 保证目标行拥有独立的覆盖图副本。若缓存缺失（如长时间未操作被清理），会回退到重新解析
+     * 原始 Excel 文件读取该行的内嵌图。</p>
      *
      * @param batchId        导入批次 ID
      * @param sourceRowIndex 源行号（1-based）
@@ -916,45 +925,87 @@ public class ExcelAiImportService {
         if (sourceRowIndex < 1 || targetRowIndex < 1) {
             throw new BusinessException("行号必须大于 0");
         }
+        if (sourceRowIndex == targetRowIndex) {
+            throw new BusinessException("源行与目标行不能相同");
+        }
         ExcelImportBatch batch = batchMapper.selectById(batchId);
         if (batch == null) {
             throw new BusinessException("导入批次不存在: " + batchId);
         }
         int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
+        int sourcePhysicalRow = sourceRowIndex - 1;
         List<String> clonedKeys = new ArrayList<>();
 
         // 1. 复用源行的用户覆盖图 key（同一 batch 内的临时文件可直接引用）
         Map<Integer, List<String>> overrideImages = loadRowOverrideImages(batchId);
         List<String> sourceOverrides = overrideImages.getOrDefault(sourceRowIndex, List.of());
         clonedKeys.addAll(sourceOverrides);
+        log.info("复制行图片开始，batchId={}, sourceRow={}, targetRow={}, sourceOverrides={}, hasEmbeddedCache={}",
+            batchId, sourceRowIndex, targetRowIndex, sourceOverrides.size(),
+            !listCachedPreviewImages(batchId, sheetIndex, sourcePhysicalRow).isEmpty());
 
         // 2. 把源行的 Excel 内嵌图原图写入临时上传存储，生成新的覆盖图 key
-        List<PreviewRowImageRef> embeddedRefs = listCachedPreviewImages(batchId, sheetIndex, sourceRowIndex - 1);
+        List<PreviewRowImageRef> embeddedRefs = listCachedPreviewImages(batchId, sheetIndex, sourcePhysicalRow);
+        boolean cacheHit = !embeddedRefs.isEmpty();
         for (PreviewRowImageRef ref : embeddedRefs) {
             byte[] bytes = loadCachedPreviewImage(batchId, ref.imageKey());
             if (bytes == null || bytes.length == 0) {
+                log.warn("复制行图片缓存读取为空，batchId={}, sourceRow={}, imageKey={}", batchId, sourceRowIndex, ref.imageKey());
                 continue;
             }
-            String newKey = IdGenerator.imageId();
-            String extension = normalizeImageFormat(ref.extension());
-            String objectKey = previewUploadObjectKey(batchId, newKey, extension);
-            String contentType = switch (extension.toLowerCase()) {
-                case "png" -> "image/png";
-                case "gif" -> "image/gif";
-                case "webp" -> "image/webp";
-                default -> "image/jpeg";
-            };
-            try {
-                storageService.store(new ByteArrayInputStream(bytes), objectKey, bytes.length, contentType);
+            String newKey = storeClonedPreviewImage(batchId, bytes, ref.extension());
+            if (newKey != null) {
                 clonedKeys.add(newKey);
-            } catch (IOException e) {
-                log.warn("克隆行图片失败，batchId={}, sourceRow={}, imageKey={}", batchId, sourceRowIndex, ref.imageKey(), e);
+            }
+        }
+
+        // 3. 缓存缺失时回退：直接解析原始 Excel 读取该行内嵌图
+        if (!cacheHit) {
+            log.info("复制行图片缓存未命中，回退解析 Excel，batchId={}, sourceRow={}", batchId, sourceRowIndex);
+            byte[] fileBytes = readBatchFileBytes(batch);
+            if (fileBytes != null && fileBytes.length > 0) {
+                EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(fileBytes, batch.getFileName(), batchId);
+                String key = sheetIndex + "," + sourcePhysicalRow;
+                List<ExcelImageExtractor.EmbeddedImage> rowImages = embeddedImagesResult.images().getOrDefault(key, List.of());
+                for (ExcelImageExtractor.EmbeddedImage img : rowImages) {
+                    if (isUnsupportedWebImageFormat(img.extension())) {
+                        continue;
+                    }
+                    String newKey = storeClonedPreviewImage(batchId, img.bytes(), img.extension());
+                    if (newKey != null) {
+                        clonedKeys.add(newKey);
+                    }
+                }
             }
         }
 
         List<String> effective = clonedKeys.stream().filter(StringUtils::hasText).distinct().toList();
         setRowImageOverrides(batchId, targetRowIndex, effective);
+        log.info("复制行图片完成，batchId={}, sourceRow={}, targetRow={}, clonedCount={}",
+            batchId, sourceRowIndex, targetRowIndex, effective.size());
         return effective;
+    }
+
+    /**
+     * 把图片字节写入预览上传临时存储，返回新的临时图片 key；失败时返回 null。
+     */
+    private String storeClonedPreviewImage(String batchId, byte[] bytes, String extension) {
+        String newKey = IdGenerator.imageId();
+        String normalizedExt = normalizeImageFormat(extension);
+        String objectKey = previewUploadObjectKey(batchId, newKey, normalizedExt);
+        String contentType = switch (normalizedExt.toLowerCase()) {
+            case "png" -> "image/png";
+            case "gif" -> "image/gif";
+            case "webp" -> "image/webp";
+            default -> "image/jpeg";
+        };
+        try {
+            storageService.store(new ByteArrayInputStream(bytes), objectKey, bytes.length, contentType);
+            return newKey;
+        } catch (IOException e) {
+            log.warn("克隆行图片写入存储失败，batchId={}, objectKey={}", batchId, objectKey, e);
+            return null;
+        }
     }
 
     private String previewUploadObjectKey(String batchId, String tempImageKey, String extension) {
@@ -1144,8 +1195,29 @@ public class ExcelAiImportService {
         } catch (Exception e) {
             log.warn("列取预览图片缓存失败，batchId={}", batchId, e);
         }
-        result.sort(Comparator.comparing(PreviewRowImageRef::imageKey));
+        // 按 imageKey 中的 sheetIndex,physicalRowIndex,colIndex,imageIndex 做数值排序，
+        // 避免字典序导致 "10" < "2"，从而保证缩略图/克隆顺序与 buildPreviewRowImages 一致。
+        result.sort(Comparator.comparing(PreviewRowImageRef::imageKey, ExcelAiImportService::compareImageKeys));
         return result;
+    }
+
+    /**
+     * 比较两个预览图片 key 的数值顺序。
+     *
+     * <p>key 格式为 {@code sheetIndex,physicalRowIndex,colIndex,imageIndex}，
+     * 必须按整数逐段比较；单纯字符串比较会出现 "10" < "2" 的错误。</p>
+     */
+    static int compareImageKeys(String k1, String k2) {
+        String[] p1 = k1.split(",");
+        String[] p2 = k2.split(",");
+        int len = Math.min(p1.length, p2.length);
+        for (int i = 0; i < len; i++) {
+            int cmp = Integer.compare(Integer.parseInt(p1[i]), Integer.parseInt(p2[i]));
+            if (cmp != 0) {
+                return cmp;
+            }
+        }
+        return Integer.compare(p1.length, p2.length);
     }
 
     private Path previewImageCacheDir(String batchId) {

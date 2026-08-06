@@ -606,7 +606,7 @@ CREATE TABLE IF NOT EXISTS excel_import_row (
     row_id BIGSERIAL PRIMARY KEY,
     batch_id VARCHAR(64) NOT NULL,
     excel_row_number INTEGER NOT NULL,
-    row_type VARCHAR(16) NOT NULL,
+    row_type VARCHAR(32) NOT NULL,
     parent_row_id BIGINT,
     raw_data JSONB NOT NULL,
     mapped_fields JSONB,

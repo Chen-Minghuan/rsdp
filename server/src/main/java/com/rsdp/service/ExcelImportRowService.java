@@ -155,6 +155,29 @@ public class ExcelImportRowService {
     }
 
     /**
+     * 创建一条仅用于在数据清洗阶段保存图片覆盖的占位行。
+     *
+     * <p>导入主流程开始时会先删除该批次全部行记录并重建，届时会通过
+     * {@link #updateImageOverrides} 把覆盖图恢复到新的正式行记录中。</p>
+     *
+     * @param batchId        批次 ID
+     * @param excelRowNumber Excel 物理行号（1-based）
+     * @return 新建行记录 ID
+     */
+    @Transactional
+    public Long createPreviewPlaceholderRow(String batchId, int excelRowNumber) {
+        ExcelImportRow row = new ExcelImportRow();
+        row.setBatchId(batchId);
+        row.setExcelRowNumber(excelRowNumber);
+        row.setRowType("preview_placeholder");
+        row.setRawData("{}");
+        row.setStatus("pending");
+        row.setCreatedAt(LocalDateTime.now());
+        rowMapper.insert(row);
+        return row.getRowId();
+    }
+
+    /**
      * 按批次 + Excel 行号查询唯一行记录。
      *
      * @param batchId        批次 ID
@@ -162,11 +185,7 @@ public class ExcelImportRowService {
      * @return 行记录；不存在时为 null
      */
     public ExcelImportRow findByBatchAndRowNumber(String batchId, int excelRowNumber) {
-        List<ExcelImportRow> rows = rowMapper.selectByBatchId(batchId);
-        return rows.stream()
-            .filter(r -> r.getExcelRowNumber() != null && r.getExcelRowNumber() == excelRowNumber)
-            .findFirst()
-            .orElse(null);
+        return rowMapper.selectByBatchIdAndRowNumber(batchId, excelRowNumber);
     }
 
     /**

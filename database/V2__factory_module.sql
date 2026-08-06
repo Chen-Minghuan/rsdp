@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS excel_import_row (
     row_id BIGSERIAL PRIMARY KEY,
     batch_id VARCHAR(64) NOT NULL,
     excel_row_number INTEGER NOT NULL,             -- Excel中的原始行号
-    row_type VARCHAR(16) NOT NULL,                 -- product/module/header/unknown
+    row_type VARCHAR(32) NOT NULL,                 -- product/module/header/unknown/preview_placeholder
     parent_row_id BIGINT,                          -- 模块行关联到产品型号行
 
     raw_data JSONB NOT NULL,                       -- 原始数据快照

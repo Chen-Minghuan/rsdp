@@ -13,6 +13,7 @@ import com.rsdp.dto.response.UnmappedColumnInfo;
 import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ExcelImportBatch;
+import com.rsdp.entity.ExcelImportRow;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
@@ -43,6 +44,9 @@ import org.springframework.transaction.TransactionStatus;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -4057,6 +4061,123 @@ class ExcelAiImportServiceTest {
             return out.toByteArray();
         } catch (IOException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void compareImageKeys_shouldSortNumericallyByComponents() {
+        // 字典序会把 "0,1,10,0" 排在 "0,1,2,0" 前面，但数值序应相反
+        assertTrue(ExcelAiImportService.compareImageKeys("0,1,2,0", "0,1,10,0") < 0);
+        assertTrue(ExcelAiImportService.compareImageKeys("0,1,10,0", "0,1,2,0") > 0);
+        assertEquals(0, ExcelAiImportService.compareImageKeys("0,1,2,0", "0,1,2,0"));
+
+        // 同一列内按 imageIndex 排序
+        assertTrue(ExcelAiImportService.compareImageKeys("0,1,5,0", "0,1,5,1") < 0);
+
+        // sheet/行 不同也能正确比较
+        assertTrue(ExcelAiImportService.compareImageKeys("0,2,1,0", "1,1,1,0") < 0);
+        assertTrue(ExcelAiImportService.compareImageKeys("0,1,1,0", "0,2,1,0") < 0);
+    }
+
+    @Test
+    void setRowImageOverrides_shouldCreatePreviewPlaceholderRowWhenRowNotExists() {
+        // P0：数据清洗阶段（导入前）ExcelImportRow 尚未创建，设置覆盖图时应自动创建占位行
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-TEST");
+        batch.setCreatedBy("user-1");
+        when(batchMapper.selectById("BATCH-TEST")).thenReturn(batch);
+
+        when(excelImportRowService.findByBatchAndRowNumber("BATCH-TEST", 5)).thenReturn(null);
+        when(excelImportRowService.createPreviewPlaceholderRow("BATCH-TEST", 5)).thenReturn(999L);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            excelAiImportService.setRowImageOverrides("BATCH-TEST", 5, List.of("IMG-1", "IMG-2"));
+        }
+
+        verify(excelImportRowService).createPreviewPlaceholderRow("BATCH-TEST", 5);
+        verify(excelImportRowService).updateImageOverrides(999L, List.of("IMG-1", "IMG-2"));
+    }
+
+    @Test
+    void cloneRowImages_shouldCreatePreviewPlaceholderRowForTargetWhenRowNotExists() {
+        // P0：复制粘贴的目标行在导入前不存在时，应自动创建占位行并写入覆盖图
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-TEST");
+        batch.setCreatedBy("user-1");
+        when(batchMapper.selectById("BATCH-TEST")).thenReturn(batch);
+
+        ExcelImportRow sourceRow = new ExcelImportRow();
+        sourceRow.setRowId(1L);
+        sourceRow.setBatchId("BATCH-TEST");
+        sourceRow.setExcelRowNumber(2);
+        sourceRow.setOverrideImageAssetIds("[\"IMG-SRC-1\"]");
+
+        when(excelImportRowService.listByBatch("BATCH-TEST")).thenReturn(List.of(sourceRow));
+        when(excelImportRowService.findByBatchAndRowNumber("BATCH-TEST", 5)).thenReturn(null);
+        when(excelImportRowService.createPreviewPlaceholderRow("BATCH-TEST", 5)).thenReturn(2L);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            List<String> result = excelAiImportService.cloneRowImages("BATCH-TEST", 2, 5);
+            assertEquals(List.of("IMG-SRC-1"), result);
+        }
+
+        verify(excelImportRowService).createPreviewPlaceholderRow("BATCH-TEST", 5);
+        verify(excelImportRowService).updateImageOverrides(2L, List.of("IMG-SRC-1"));
+    }
+
+    @Test
+    void cloneRowImages_shouldCloneEmbeddedImageFromCacheAndStoreToPreviewUpload() throws IOException {
+        // P0：复制粘贴应能把源行的 Excel 内嵌图从预览缓存克隆到 preview-upload 临时存储，
+        // 并为目标行生成新的覆盖图 key。
+        String batchId = "BATCH-CLONE-CACHE";
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId(batchId);
+        batch.setCreatedBy("user-1");
+        batch.setFileName("test.xlsx");
+        batch.setSheetIndex(0);
+        when(batchMapper.selectById(batchId)).thenReturn(batch);
+
+        when(excelImportRowService.listByBatch(batchId)).thenReturn(List.of());
+        when(excelImportRowService.findByBatchAndRowNumber(batchId, 5)).thenReturn(null);
+        when(excelImportRowService.createPreviewPlaceholderRow(batchId, 5)).thenReturn(2L);
+
+        // 构造预览缓存：源行 sourceRowIndex=2 对应 physicalRow=1，列 2，第 0 张图
+        Path cacheDir = Paths.get(System.getProperty("java.io.tmpdir"), "rsdp-preview-images", batchId);
+        Files.createDirectories(cacheDir);
+        Path cacheFile = cacheDir.resolve("0,1,2,0.jpeg");
+        byte[] imageBytes = createJpegBytes(10, 10);
+        Files.write(cacheFile, imageBytes);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            List<String> result = excelAiImportService.cloneRowImages(batchId, 2, 5);
+            assertEquals(1, result.size());
+            assertTrue(result.get(0).startsWith("IMG-"));
+        }
+
+        // 验证写入 preview-upload 临时存储，objectKey 包含 batchId 且扩展名为 jpeg
+        verify(storageService).store(
+            any(ByteArrayInputStream.class),
+            org.mockito.ArgumentMatchers.argThat((String objectKey) ->
+                objectKey.startsWith("preview-images/" + batchId + "/") && objectKey.endsWith(".jpeg")),
+            eq((long) imageBytes.length),
+            eq("image/jpeg")
+        );
+        verify(excelImportRowService).updateImageOverrides(eq(2L), org.mockito.ArgumentMatchers.argThat(keys ->
+            keys != null && keys.size() == 1 && keys.get(0).startsWith("IMG-")));
+
+        // 清理临时缓存
+        Files.deleteIfExists(cacheFile);
+        Files.deleteIfExists(cacheDir);
+    }
+
+    private byte[] createJpegBytes(int width, int height) throws IOException {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        try (var out = new java.io.ByteArrayOutputStream()) {
+            ImageIO.write(image, "jpeg", out);
+            return out.toByteArray();
         }
     }
 
