@@ -2993,6 +2993,8 @@ public class ExcelAiImportService {
             imageAsset.setAiProcessed(false);
             imageAsset.setFileSize(stored.size());
             imageAsset.setFormat(stored.extension());
+            // 内容哈希落库（V31）：StoredImage.contentHash 为组内去重时已算好的 SHA-256
+            imageAsset.setContentHash(stored.contentHash());
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);

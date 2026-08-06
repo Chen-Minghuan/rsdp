@@ -57,14 +57,16 @@ public class ProductController {
      *
      * @param images       产品图片列表，第一张为主图
      * @param categoryCode 品类码，如 FS/DT/CB；为空时默认 FS
+     * @param force        强制导入：跳过图片内容查重（用户确认"仍然导入"时传 true）
      * @return 任务信息
      * @throws IOException 文件保存失败
      */
     @PostMapping("/entry")
     public Result<Map<String, Object>> entry(@RequestParam("images") List<MultipartFile> images,
-                                             @RequestParam(value = "categoryCode", required = false) String categoryCode) throws IOException {
+                                             @RequestParam(value = "categoryCode", required = false) String categoryCode,
+                                             @RequestParam(value = "force", defaultValue = "false") boolean force) throws IOException {
         validateImages(images);
-        Map<String, Object> result = productService.createEntry(images, categoryCode);
+        Map<String, Object> result = productService.createEntry(images, categoryCode, force);
         return Result.ok(result);
     }
 

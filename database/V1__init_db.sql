@@ -361,6 +361,7 @@ CREATE TABLE IF NOT EXISTS image_assets (
     is_primary BOOLEAN DEFAULT FALSE,
     ai_processed BOOLEAN DEFAULT FALSE,
     quality_score DECIMAL(5, 4),
+    content_hash VARCHAR(64),                        -- 图片内容 SHA-256（录入查重，V31）
     uploaded_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP,
@@ -664,6 +665,7 @@ CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_variant ON image_assets(variant_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_primary ON image_assets(rspu_id, is_primary);
 CREATE INDEX IF NOT EXISTS idx_image_rsku ON image_assets(rsku_id);
+CREATE INDEX IF NOT EXISTS idx_image_content_hash ON image_assets(content_hash);
 
 -- AI 识别索引
 CREATE INDEX IF NOT EXISTS idx_ai_image ON ai_recognition(image_id, recognition_type);

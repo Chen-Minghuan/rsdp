@@ -193,6 +193,7 @@ public class ProductSubjectCropService {
                 original.setStoragePath(objectKey);
                 original.setPrimary(false);
                 original.setAiProcessed(false);
+                original.setContentHash(primary.getContentHash());
                 original.setFileSize((long) originalBytes.length);
                 original.setFormat(extensionOf(objectKey));
                 original.setUploadedBy(operator);

@@ -47,4 +47,13 @@ public interface ImageAssetsMapper extends BaseMapper<ImageAssets> {
      */
     @Delete("DELETE FROM image_assets WHERE rspu_id = #{rspuId}")
     int physicalDeleteByRspuId(String rspuId);
+
+    /**
+     * 按内容哈希查询未软删的图片资产（录入查重：同一张图是否已入库）。
+     *
+     * @param contentHash SHA-256 哈希
+     * @return 匹配的第一条记录，无则 null
+     */
+    @Select("SELECT * FROM image_assets WHERE content_hash = #{contentHash} AND deleted_at IS NULL LIMIT 1")
+    ImageAssets selectByContentHash(String contentHash);
 }

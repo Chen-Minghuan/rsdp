@@ -12,13 +12,17 @@ export interface ApiOptions {
  * @param files 图片文件列表，第一张作为主图
  * @param categoryCode 品类码，如 FS/DT/CB
  * @param signal 可选的 AbortSignal，用于取消请求
+ * @param force 跳过图片内容查重（用户确认"仍然导入"时传 true）
  * @returns 任务信息
  */
-export async function uploadProductImages(files: File[], categoryCode?: string, signal?: AbortSignal): Promise<ProductEntryResult> {
+export async function uploadProductImages(files: File[], categoryCode?: string, signal?: AbortSignal, force?: boolean): Promise<ProductEntryResult> {
   const formData = new FormData()
   files.forEach(file => formData.append('images', file))
   if (categoryCode) {
     formData.append('categoryCode', categoryCode)
+  }
+  if (force) {
+    formData.append('force', 'true')
   }
 
   const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult>>(

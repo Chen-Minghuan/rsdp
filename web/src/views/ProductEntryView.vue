@@ -15,6 +15,7 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NSelect,
+  useDialog,
   useMessage,
   type UploadFileInfo
 } from 'naive-ui'
@@ -28,6 +29,7 @@ import { getSixDimSchema } from '@/utils/sixDimLabels'
 
 const router = useRouter()
 const message = useMessage()
+const dialog = useDialog()
 
 const TASKS_STORAGE_KEY = 'rsdp:product-entry:tasks'
 
@@ -250,44 +252,73 @@ async function handleStartUpload() {
   uploadAbortController = new AbortController()
 
   try {
-    const result = await uploadProductImages(
-      files,
-      categoryCode.value ?? undefined,
-      uploadAbortController.signal
-    )
-
-    const newTask: TaskItem = {
-      taskId: result.taskId,
-      rspuId: result.rspuId,
-      fileName: files.length === 1 ? files[0].name : `${files[0].name} 等 ${files.length} 张`,
-      imageIds: result.imageIds,
-      status: 'pending',
-      progress: 0,
-      result: {},
-      errorMessage: ''
-    }
-
-    // 新任务放到列表前面，方便看最新追加的
-    taskList.value.unshift(newTask)
-    saveTasks()
-
-    // 清空已选文件，允许继续选择下一批
-    fileList.value = []
-
-    // 立即轮询一次，然后开启定时轮询
-    await pollAllTasks()
-    saveTasks()
-    ensurePolling()
+    await doUpload(false)
   } catch (e) {
     if (axios.isCancel(e)) {
       errorMessage.value = '上传已取消'
     } else {
-      errorMessage.value = e instanceof Error ? e.message : '上传失败'
+      const msg = e instanceof Error ? e.message : '上传失败'
+      // 图片内容查重命中：提示已录入产品，用户可选择"仍然导入"强制继续
+      if (msg.includes('已录入过')) {
+        dialog.warning({
+          title: '发现重复图片',
+          content: msg,
+          positiveText: '仍然导入',
+          negativeText: '取消',
+          onPositiveClick: async () => {
+            uploading.value = true
+            try {
+              await doUpload(true)
+            } catch (retryError) {
+              errorMessage.value = retryError instanceof Error ? retryError.message : '上传失败'
+            } finally {
+              uploading.value = false
+              uploadAbortController = null
+            }
+          }
+        })
+      } else {
+        errorMessage.value = msg
+      }
     }
   } finally {
     uploading.value = false
     uploadAbortController = null
   }
+}
+
+/** 执行实际上传（force=true 跳过后端图片内容查重）。 */
+async function doUpload(force: boolean) {
+  const files = selectedFiles.value
+  const result = await uploadProductImages(
+    files,
+    categoryCode.value ?? undefined,
+    uploadAbortController?.signal,
+    force
+  )
+
+  const newTask: TaskItem = {
+    taskId: result.taskId,
+    rspuId: result.rspuId,
+    fileName: files.length === 1 ? files[0].name : `${files[0].name} 等 ${files.length} 张`,
+    imageIds: result.imageIds,
+    status: 'pending',
+    progress: 0,
+    result: {},
+    errorMessage: ''
+  }
+
+  // 新任务放到列表前面，方便看最新追加的
+  taskList.value.unshift(newTask)
+  saveTasks()
+
+  // 清空已选文件，允许继续选择下一批
+  fileList.value = []
+
+  // 立即轮询一次，然后开启定时轮询
+  await pollAllTasks()
+  saveTasks()
+  ensurePolling()
 }
 
 function clearAll() {

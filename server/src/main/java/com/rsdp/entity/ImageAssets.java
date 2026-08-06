@@ -30,6 +30,8 @@ public class ImageAssets {
 
     private Boolean aiProcessed;
     private BigDecimal qualityScore;
+    /** 图片内容 SHA-256 哈希（录入查重用，V31） */
+    private String contentHash;
     private String uploadedBy;
     private LocalDateTime createdAt;
 

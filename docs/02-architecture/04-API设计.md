@@ -58,9 +58,12 @@ POST   /api/v1/products/entry
        # Request:  multipart/form-data
        #   images: File[] (必填, 第一张为主图, 其余为非主图/detail, 单张 ≤20MB)
        #   categoryCode: string (可选, 如 FS/DT/CB, 默认 FS)
+       #   force: boolean (可选, 默认 false；true 跳过图片内容查重——用户确认"仍然导入"时使用)
        # Response: { taskId, rspuId, imageIds: string[], message }
        # 说明：AI 识别完成后会自动写入 rspu_style / rspu_scene 关联表，
        #      positioning_label 保存风格码（如 MC），material_tags 保存材质码（如 WO）
+       # 查重：图片 SHA-256 命中已有图片时返回 400 并注明对应产品（2026-08-06）；
+       #      AI 识别后与库内产品向量相似度 ≥0.95 时新品标记"存疑-疑似同款"
 
 POST   /api/v1/products/factory-entry
        # 工厂单条录入（原子创建 RSPU + 默认变体 + 图片 + 首条 RSKU）

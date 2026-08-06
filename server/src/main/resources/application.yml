@@ -65,6 +65,10 @@ rsdp:
     embedding-base-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding
     embedding-timeout-seconds: 30
     embedding-max-retries: 2
+  # 重复导入检测
+  dedup:
+    # 同款检测：向量相似度阈值（0~1），录入新品与库内产品相似度超过该值时标记"存疑-疑似同款"
+    similar-threshold: 0.95
   chromadb:
     base-url: ${CHROMADB_URL:http://localhost:8000}
     collection: rsdp_products

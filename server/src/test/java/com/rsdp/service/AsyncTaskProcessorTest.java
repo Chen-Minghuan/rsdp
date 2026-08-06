@@ -350,6 +350,87 @@ class AsyncTaskProcessorTest {
     }
 
     @Test
+    void processProductEntry_shouldFlagDuplicateSuspectWhenSimilarVectorFound() throws Exception {
+        // Given：库内存在向量相似度超阈值的其他产品
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+        when(storageService.get(objectKey)).thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("侘寂");
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f});
+
+        RspuMaster current = new RspuMaster();
+        current.setRspuId(rspuId);
+        current.setCategoryCode("FS");
+        current.setReviewStatus("待复核");
+        RspuMaster dup = new RspuMaster();
+        dup.setRspuId("RSPU-DUP01");
+        dup.setRspuCode("FS-WJ-001-M");
+        dup.setProductName("扶摇沙发");
+        when(rspuMapper.selectById(rspuId)).thenReturn(current);
+        when(rspuMapper.selectById("RSPU-DUP01")).thenReturn(dup);
+        when(persistenceService.getRspu(rspuId)).thenReturn(current);
+
+        java.lang.reflect.Field thresholdField = AsyncTaskProcessor.class.getDeclaredField("duplicateSimilarThreshold");
+        thresholdField.setAccessible(true);
+        thresholdField.set(asyncTaskProcessor, 0.95);
+
+        // 距离 0.06 → 相似度 0.97 ≥ 0.95
+        Map<String, Object> raw = Map.of(
+            "ids", List.of(List.of("IMG-OTHER")),
+            "distances", List.of(List.of(0.06)),
+            "metadatas", List.of(List.of(Map.of("rspu_id", "RSPU-DUP01"))));
+        when(chromaDbClient.query(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
+            .thenReturn(new ChromaDbClient.QueryResult(raw));
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then：标记"存疑-疑似同款"，注明命中产品与相似度
+        ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getReviewStatus()).isEqualTo("存疑");
+        assertThat(captor.getValue().getReviewComment()).contains("疑似").contains("FS-WJ-001-M").contains("97%");
+    }
+
+    @Test
+    void processProductEntry_shouldNotFlagDuplicateWhenBelowThreshold() throws Exception {
+        // Given：库内最相似产品相似度低于阈值（距离 0.5 → 相似度 0.75 < 0.95）
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
+        when(storageService.get(objectKey)).thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("侘寂");
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
+
+        RspuMaster current = new RspuMaster();
+        current.setRspuId(rspuId);
+        current.setCategoryCode("FS");
+        current.setReviewStatus("待复核");
+        when(rspuMapper.selectById(rspuId)).thenReturn(current);
+        when(persistenceService.getRspu(rspuId)).thenReturn(current);
+
+        java.lang.reflect.Field thresholdField = AsyncTaskProcessor.class.getDeclaredField("duplicateSimilarThreshold");
+        thresholdField.setAccessible(true);
+        thresholdField.set(asyncTaskProcessor, 0.95);
+
+        Map<String, Object> raw = Map.of(
+            "ids", List.of(List.of("IMG-OTHER")),
+            "distances", List.of(List.of(0.5)),
+            "metadatas", List.of(List.of(Map.of("rspu_id", "RSPU-OTHER"))));
+        when(chromaDbClient.query(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
+            .thenReturn(new ChromaDbClient.QueryResult(raw));
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then：不更新复核状态
+        verify(rspuMapper, org.mockito.Mockito.never()).updateById(any(RspuMaster.class));
+    }
+
+    @Test
     void processProductEntry_shouldMergePageOcrIntoLabels() throws Exception {
         // Given：任务 input_data 含页面级 OCR 文字（文档导入场景）
         AsyncTask task = new AsyncTask();

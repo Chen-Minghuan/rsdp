@@ -114,6 +114,53 @@ class ProductServiceTest {
     }
 
     @Test
+    void createEntry_shouldRejectDuplicateImageByContentHash() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        // 库内已有同内容图片（对应已有产品）
+        ImageAssets dup = new ImageAssets();
+        dup.setImageId("IMG-DUP");
+        dup.setRspuId("RSPU-DUP");
+        when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(dup);
+        RspuMaster dupRspu = new RspuMaster();
+        dupRspu.setRspuId("RSPU-DUP");
+        dupRspu.setProductName("扶摇沙发");
+        dupRspu.setRspuCode("FS-WJ-001-M");
+        when(rspuMapper.selectById("RSPU-DUP")).thenReturn(dupRspu);
+
+        assertThatThrownBy(() -> productService.createEntry(List.of(image), null))
+            .isInstanceOf(com.rsdp.exception.BusinessException.class)
+            .hasMessageContaining("已录入过")
+            .hasMessageContaining("扶摇沙发")
+            .hasMessageContaining("FS-WJ-001-M");
+        verify(rspuMapper, org.mockito.Mockito.never()).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void createEntry_withForce_shouldSkipDuplicateCheck() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        ImageAssets dup = new ImageAssets();
+        dup.setImageId("IMG-DUP");
+        dup.setRspuId("RSPU-DUP");
+        lenient().when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(dup);
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
+
+        Map<String, Object> result = productService.createEntry(List.of(image), null, true);
+
+        assertThat(result).containsKeys("taskId", "rspuId");
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        // 落库的图片资产应携带内容哈希
+        ArgumentCaptor<List<ImageAssets>> imageCaptor = ArgumentCaptor.forClass(List.class);
+        verify(imageAssetsMapper).insertBatch(imageCaptor.capture());
+        assertThat(imageCaptor.getValue().get(0).getContentHash()).isNotBlank();
+    }
+
+    @Test
     void createEntry_shouldCreateDraftAndTriggerAsyncTask() throws Exception {
         MockMultipartFile image = new MockMultipartFile(
             "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
