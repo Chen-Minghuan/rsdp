@@ -5,6 +5,8 @@ import com.rsdp.dto.request.ExcelAiMappingRequest;
 import com.rsdp.dto.response.ExcelAiImportResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
+import com.rsdp.dto.response.ExcelAiPreviewDataResponse;
+import com.rsdp.dto.response.PreviewDataRow;
 import com.rsdp.entity.ExcelImportRow;
 import com.rsdp.service.ExcelAiImportService;
 import com.rsdp.service.ExcelImportRowService;
@@ -74,6 +76,17 @@ public class ExcelAiImportController {
     }
 
     /**
+     * 查询导入批次全量预览数据（导入前数据清洗用）。
+     */
+    @GetMapping("/{batchId}/preview-data")
+    @PreAuthorize("hasAuthority('product:import')")
+    public Result<ExcelAiPreviewDataResponse> getPreviewData(
+        @PathVariable @NotBlank String batchId) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        return Result.ok(excelAiImportService.getPreviewData(batchId));
+    }
+
+    /**
      * 查询导入批次下所有行级记录。
      */
     @GetMapping("/{batchId}/rows")
@@ -82,5 +95,23 @@ public class ExcelAiImportController {
         @PathVariable @NotBlank String batchId) {
         excelAiImportService.getAccessibleBatch(batchId);
         return Result.ok(excelImportRowService.listByBatch(batchId));
+    }
+
+    /**
+     * 懒加载指定预览行的内嵌图片缩略图（Base64 data URL）。
+     *
+     * <p>全量预览接口只返回图片元数据，前端按行进入可视区域时再调用本接口，
+     * 避免大文件因一次性生成全部缩略图而超时。</p>
+     *
+     * @param batchId  导入批次 ID
+     * @param rowIndex Excel 展示行号（1-based）
+     */
+    @GetMapping("/{batchId}/preview-data/rows/{rowIndex}/images")
+    @PreAuthorize("hasAuthority('product:import')")
+    public Result<List<PreviewDataRow.PreviewRowImage>> getPreviewRowImages(
+        @PathVariable @NotBlank String batchId,
+        @PathVariable int rowIndex) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        return Result.ok(excelAiImportService.getPreviewRowImages(batchId, rowIndex));
     }
 }

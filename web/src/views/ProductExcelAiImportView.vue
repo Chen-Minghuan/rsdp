@@ -2,13 +2,15 @@
 import { ref, computed, h, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { NSelect, NTag, type DataTableColumns } from 'naive-ui'
+import { NSelect, NTag, NInput, type DataTableColumns } from 'naive-ui'
+import { VxeTable, VxeColumn } from 'vxe-table'
+import 'vxe-table/lib/style.css'
 import { listDicts } from '@/api/dict'
-import { getExcelAiImportRows } from '@/api/product'
+import { getExcelAiImportRows, getExcelAiPreviewRowImages } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
-import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow, UnmappedColumnInfo } from '@/types/product'
+import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow, UnmappedColumnInfo, PreviewRowImage } from '@/types/product'
 
 const router = useRouter()
 
@@ -28,6 +30,9 @@ const {
   importResult,
   taskList,
   priceColumnRoles,
+  previewData,
+  previewEdits,
+  skippedRows,
   sheets,
   currentSheetIndex,
   currentSheetName,
@@ -38,7 +43,7 @@ const {
   pendingTaskCount,
   batchRecovering
 } = storeToRefs(store)
-const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll } = store
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue } = store
 
 const STANDARD_FIELDS = [
   { label: '（不映射）', value: '' },
@@ -137,6 +142,45 @@ function statusTagType(status: TaskItem['status']) {
 
 function goToProduct(rspuId: string) {
   router.push(`/products/${rspuId}`)
+}
+
+/** 已懒加载的缩略图缓存：rowIndex -> PreviewRowImage[] */
+const loadedThumbnails = ref<Map<number, PreviewRowImage[]>>(new Map())
+/** 正在加载缩略图的行，防止重复请求 */
+const loadingThumbnails = ref<Set<number>>(new Set())
+
+async function loadRowThumbnails(rowIndex: number, batchId: string) {
+  if (loadedThumbnails.value.has(rowIndex) || loadingThumbnails.value.has(rowIndex)) {
+    return
+  }
+  loadingThumbnails.value.add(rowIndex)
+  try {
+    const images = await getExcelAiPreviewRowImages(batchId, rowIndex)
+    loadedThumbnails.value.set(rowIndex, images)
+  } catch (e) {
+    console.error(`加载第 ${rowIndex} 行缩略图失败`, e)
+  } finally {
+    loadingThumbnails.value.delete(rowIndex)
+  }
+}
+
+function getRowImages(row: Record<string, unknown>): PreviewRowImage[] {
+  const rowIndex = Number(row.__rowIndex__)
+  const metaImages = (row.__images__ as PreviewRowImage[] | undefined) ?? []
+  const loaded = loadedThumbnails.value.get(rowIndex)
+  if (!loaded) {
+    // 触发懒加载（组件渲染时调用，VxeTable 虚拟滚动保证仅可视行执行）
+    const batchId = mappingResponse.value?.batchId
+    if (batchId && metaImages.length > 0) {
+      loadRowThumbnails(rowIndex, batchId)
+    }
+    return metaImages
+  }
+  // 把已加载的 Base64 合并回元数据，保持 columnHeader/primaryCandidate 等信息
+  return metaImages.map((meta, idx) => ({
+    ...meta,
+    thumbnailBase64: loaded[idx]?.thumbnailBase64 ?? meta.thumbnailBase64
+  }))
 }
 
 const mappingColumns = computed<DataTableColumns<{ header: string; value: string }>>(() => [
@@ -256,6 +300,92 @@ const unmappedColumnsColumns = computed<DataTableColumns<UnmappedColumnInfo>>(()
   }
 ])
 
+// ===== 数据清洗（步骤 3） =====
+const cleanTableRef = ref<InstanceType<typeof VxeTable> | null>(null)
+const cleanFillHeader = ref<string | null>(null)
+const cleanFillValue = ref('')
+
+/** 图片预览弹窗状态 */
+const imagePreviewVisible = ref(false)
+const imagePreviewSrc = ref('')
+
+function previewImage(src: string) {
+  imagePreviewSrc.value = src
+  imagePreviewVisible.value = true
+}
+
+/** 数据清洗表格列：过滤掉内部字段 __rowIndex__ */
+const cleanHeaders = computed(() => {
+  if (previewData.value.length === 0) return []
+  return Object.keys(previewData.value[0].rawValues)
+})
+
+/** 把 PreviewDataRow 转换成 VxeTable 行数据，带内部行号字段与图片 */
+const cleanTableData = computed(() => {
+  return previewData.value.map(row => {
+    const record: Record<string, string | number | PreviewRowImage[]> = {
+      __rowIndex__: row.rowIndex,
+      __images__: row.images ?? []
+    }
+    for (const header of cleanHeaders.value) {
+      const value = getPreviewCellValue(row, header)
+      record[header] = value ?? ''
+    }
+    return record
+  })
+})
+
+/** 列标题：未映射列只显示原始表头；已映射列追加系统字段名 */
+function cleanColumnTitle(header: string): string {
+  const mapped = previewData.value[0]?.mappedFieldByHeader[header]
+  if (mapped) {
+    const fieldLabel = STANDARD_FIELDS.find(f => f.value === mapped)?.label ?? mapped
+    return `${header} → ${fieldLabel}`
+  }
+  return header
+}
+
+/**
+ * 单元格编辑关闭后，把变更写回 store 的 previewEdits。
+ * 若值与原始值相同，则移除编辑项。
+ */
+function onCleanEditClosed({ row, column }: { row: Record<string, unknown>; column: { field: string } }) {
+  const rowIndex = Number(row.__rowIndex__)
+  const header = column.field
+  const newValue = String(row[header] ?? '')
+  const originalRow = previewData.value.find(r => r.rowIndex === rowIndex)
+  const originalValue = originalRow ? (originalRow.rawValues[header] ?? '') : ''
+  if (newValue === originalValue) {
+    // 与原始值一致时移除编辑缓存
+    const key = `${rowIndex}:${header}`
+    if (previewEdits.value[key]) {
+      const rest = { ...previewEdits.value }
+      delete rest[key]
+      previewEdits.value = rest
+    }
+  } else {
+    updatePreviewEdit(rowIndex, header, newValue)
+  }
+}
+
+/** 应用按列填充默认值 */
+function applyCleanFill() {
+  const header = cleanFillHeader.value
+  const value = cleanFillValue.value
+  if (!header || value === '') return
+  fillDefaultValue(header, value)
+  cleanFillValue.value = ''
+}
+
+/** 被跳过行的视觉样式 */
+function cleanRowStyle({ row }: { row: Record<string, unknown> }) {
+  const rowIndex = Number(row.__rowIndex__)
+  if (skippedRows.value.has(rowIndex)) {
+    return { backgroundColor: '#fff1f0', textDecoration: 'line-through', color: '#999' }
+  }
+  return {}
+}
+
 const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
   {
     title: '行号',
@@ -347,6 +477,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
     <n-steps :current="currentStep" status="process">
       <n-step title="上传 Excel" description="选择产品目录文件" />
       <n-step title="确认字段映射" description="AI 识别结果，可手动调整" />
+      <n-step title="数据清洗" description="预览并编辑原始数据" />
       <n-step title="执行导入" description="生成 RSPU 并异步识别" />
     </n-steps>
 
@@ -459,48 +590,175 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             />
           </n-card>
 
-          <n-card v-if="mappingResponse?.priceColumns && mappingResponse.priceColumns.length > 0" title="价格列（每列将创建一个变体 + RSKU）" size="small">
-            <n-space vertical :size="12">
-              <n-alert type="info" :show-icon="false">
-                出厂价 = 生成工厂报价（RSKU）；销售价 = 仅记录为产品参考零售价；不导入 = 跳过该价格列。
-              </n-alert>
-              <n-space
-                v-for="col in mappingResponse.priceColumns"
-                :key="col.header"
-                align="center"
-                justify="space-between"
-              >
-                <span>{{ col.header }}（材质：{{ col.materialName || '未知' }}）</span>
-                <n-select
-                  :value="priceColumnRoles[col.header] ?? 'factory'"
-                  :options="priceRoleOptions"
-                  style="width: 260px;"
-                  @update:value="(value: PriceColumnImportMode) => priceColumnRoles[col.header] = value"
-                />
-              </n-space>
-
-              <n-space>
-                <n-input v-model:value="defaultFactoryCode" placeholder="默认工厂编码" style="width: 160px;" />
-                <n-input v-model:value="defaultShippingFrom" placeholder="默认发货地" style="width: 160px;" />
-                <n-input-number v-model:value="defaultMoq" placeholder="默认 MOQ" :min="1" style="width: 120px;" />
-              </n-space>
-            </n-space>
-          </n-card>
-
           <n-space>
             <n-button @click="currentStep = 1">
               上一步
             </n-button>
-            <n-button type="primary" :loading="uploading" @click="handleImport">
-              开始导入
+            <n-button type="primary" :loading="uploading" @click="handleGoToCleanStep">
+              下一步：数据清洗
             </n-button>
           </n-space>
         </n-space>
       </n-spin>
     </n-card>
 
-    <!-- 步骤 3：结果 -->
-    <n-card v-if="currentStep === 3 && batchRecovering" title="导入进行中">
+    <!-- 步骤 3：数据清洗 -->
+    <n-card v-if="currentStep === 3" title="数据清洗（原始表头视角）">
+      <n-spin :show="uploading">
+        <n-space vertical :size="16">
+          <n-alert type="info" :show-icon="false">
+            以下按 Excel 原始表头展示全部数据行，可直接双击单元格编辑。编辑仅影响本次导入，不会修改原始文件。
+          </n-alert>
+
+          <n-space align="center">
+            <n-tag v-if="skippedRows.size > 0" type="warning">
+              已跳过 {{ skippedRows.size }} 行，导入时不会录入
+            </n-tag>
+            <n-tag v-else type="default">
+              未标记跳过行
+            </n-tag>
+          </n-space>
+
+          <n-space>
+            <n-select
+              v-model:value="cleanFillHeader"
+              placeholder="选择要填充的列"
+              :options="cleanHeaders.map(h => ({ label: cleanColumnTitle(h), value: h }))"
+              clearable
+              style="width: 220px;"
+            />
+            <n-input
+              v-model:value="cleanFillValue"
+              placeholder="默认值"
+              style="width: 200px;"
+              @keydown.enter="applyCleanFill"
+            />
+            <n-button :disabled="!cleanFillHeader || cleanFillValue === ''" @click="applyCleanFill">
+              按列填充
+            </n-button>
+          </n-space>
+          <p style="color: #999; font-size: 12px; margin: 0;">
+            按列填充：把所选列中所有空单元格设为默认值；已有值的单元格不会被覆盖。
+          </p>
+
+          <vxe-table
+            ref="cleanTableRef"
+            :data="cleanTableData"
+            height="520"
+            :scroll-y="{ enabled: true, gt: 0 }"
+            :scroll-x="{ enabled: true, gt: 0 }"
+            :edit-config="{ trigger: 'dblclick', mode: 'cell' }"
+            :row-config="{ keyField: '__rowIndex__' }"
+            :row-style="cleanRowStyle"
+            border
+            show-overflow
+            @edit-closed="onCleanEditClosed"
+          >
+            <vxe-column type="seq" title="行号" width="70" fixed="left" />
+            <vxe-column title="跳过" width="70" fixed="left">
+              <template #default="{ row }">
+                <n-checkbox
+                  :checked="skippedRows.has(Number(row.__rowIndex__))"
+                  @update:checked="toggleSkipRow(Number(row.__rowIndex__))"
+                />
+              </template>
+            </vxe-column>
+            <vxe-column title="图片" width="120" fixed="left">
+              <template #default="{ row }">
+                <div
+                  v-if="Array.isArray(row.__images__) && row.__images__.length > 0"
+                  style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;"
+                >
+                  <template v-for="(img, idx) in getRowImages(row)" :key="idx">
+                    <img
+                      v-if="img.thumbnailBase64"
+                      :src="img.thumbnailBase64"
+                      :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '')"
+                      style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 1px solid #eee;"
+                      @click="previewImage(img.thumbnailBase64)"
+                    />
+                    <div
+                      v-else
+                      style="width: 48px; height: 48px; border-radius: 4px; border: 1px dashed #ccc; display: flex; align-items: center; justify-content: center; color: #999; font-size: 10px;"
+                    >
+                      加载中
+                    </div>
+                  </template>
+                </div>
+                <span v-else style="color: #999; font-size: 12px;">无图</span>
+              </template>
+            </vxe-column>
+            <vxe-column
+              v-for="header in cleanHeaders"
+              :key="header"
+              :field="header"
+              :title="cleanColumnTitle(header)"
+              min-width="140"
+              :edit-render="{ name: 'input' }"
+            />
+          </vxe-table>
+
+          <n-space>
+            <n-button @click="currentStep = 2">
+              上一步
+            </n-button>
+            <n-button type="primary" @click="currentStep = 4">
+              下一步：确认导入
+            </n-button>
+          </n-space>
+        </n-space>
+      </n-spin>
+    </n-card>
+
+    <!-- 步骤 4：价格/工厂配置与导入 -->
+    <n-card v-if="currentStep === 4 && !importResult && !batchRecovering" title="价格与工厂配置">
+      <n-space vertical :size="16">
+        <n-alert type="info" :show-icon="false">
+          确认价格列角色与默认工厂信息，然后点击「开始导入」。
+        </n-alert>
+
+        <n-card v-if="mappingResponse?.priceColumns && mappingResponse.priceColumns.length > 0" title="价格列（每列将创建一个变体 + RSKU）" size="small">
+          <n-space vertical :size="12">
+            <n-alert type="info" :show-icon="false">
+              出厂价 = 生成工厂报价（RSKU）；销售价 = 仅记录为产品参考零售价；不导入 = 跳过该价格列。
+            </n-alert>
+            <n-space
+              v-for="col in mappingResponse.priceColumns"
+              :key="col.header"
+              align="center"
+              justify="space-between"
+            >
+              <span>{{ col.header }}（材质：{{ col.materialName || '未知' }}）</span>
+              <n-select
+                :value="priceColumnRoles[col.header] ?? 'factory'"
+                :options="priceRoleOptions"
+                style="width: 260px;"
+                @update:value="(value: PriceColumnImportMode) => priceColumnRoles[col.header] = value"
+              />
+            </n-space>
+          </n-space>
+        </n-card>
+
+        <n-card title="默认工厂信息" size="small">
+          <n-space>
+            <n-input v-model:value="defaultFactoryCode" placeholder="默认工厂编码" style="width: 160px;" />
+            <n-input v-model:value="defaultShippingFrom" placeholder="默认发货地" style="width: 160px;" />
+            <n-input-number v-model:value="defaultMoq" placeholder="默认 MOQ" :min="1" style="width: 120px;" />
+          </n-space>
+        </n-card>
+
+        <n-space>
+          <n-button @click="currentStep = 3">
+            上一步
+          </n-button>
+          <n-button type="primary" :loading="uploading" @click="handleImport">
+            开始导入
+          </n-button>
+        </n-space>
+      </n-space>
+    </n-card>
+
+    <n-card v-if="currentStep === 4 && batchRecovering" title="导入进行中">
       <n-spin :show="true" description="正在查询批次导入进度…">
         <n-alert type="info" :show-icon="true">
           导入请求超时，但批次仍在后台导入中。正在等待结果，完成后将自动展示，请勿重复提交。
@@ -508,7 +766,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
       </n-spin>
     </n-card>
 
-    <n-card v-if="currentStep === 3 && importResult" title="导入结果">
+    <n-card v-if="currentStep === 4 && importResult" title="导入结果">
       <n-descriptions bordered :columns="3">
         <n-descriptions-item label="批次号">{{ importResult.batchId }}</n-descriptions-item>
         <n-descriptions-item v-if="currentSheetName" label="工作表">{{ currentSheetName }}</n-descriptions-item>
@@ -604,6 +862,16 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
         </n-space>
       </n-spin>
     </n-card>
+
+    <!-- 图片预览弹窗 -->
+    <n-modal
+      v-model:show="imagePreviewVisible"
+      preset="card"
+      title="图片预览"
+      style="width: 680px;"
+    >
+      <img :src="imagePreviewSrc" style="width: 100%; border-radius: 8px;">
+    </n-modal>
 
     <!-- 行级明细弹窗：按状态分组展示逐行结果，失败/跳过行显示原因 -->
     <n-modal

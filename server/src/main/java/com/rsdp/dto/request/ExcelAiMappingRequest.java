@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -85,4 +86,16 @@ public class ExcelAiMappingRequest {
      * 行级品类解析时优先级最高；导入完成后写回别名库自学习。
      */
     private Map<String, String> categoryMapping = new HashMap<>();
+
+    /**
+     * 用户在「导入前全量预览」中对原始单元格的编辑项。
+     * 后端在导入前按 rowIndex + header 定位并覆盖原始数据行对应值。
+     */
+    private List<PreviewEdit> previewEdits = new ArrayList<>();
+
+    /**
+     * 用户在「导入前全量预览」中标记为跳过的 Excel 物理行号（1-based）。
+     * 这些行不会进入后续导入流程，也不计入总行数。
+     */
+    private List<Integer> skipRows = new ArrayList<>();
 }

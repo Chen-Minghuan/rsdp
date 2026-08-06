@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SceneImportResult, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SceneImportResult, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -274,6 +274,35 @@ export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signa
     '/v1/products/excel-ai-import/import',
     request,
     { signal }
+  )
+  return result.data
+}
+
+/**
+ * Excel AI 辅助导入：获取导入前全量预览数据（含原始表头与映射关系）。
+ *
+ * @param batchId 预览批次号
+ */
+export async function getExcelAiPreviewData(batchId: string): Promise<ExcelAiPreviewDataResponse> {
+  // 预览接口只返回轻量图片元数据，缩略图按行懒加载，超时保持默认即可
+  const { data: result } = await apiClient.get<ApiResult<ExcelAiPreviewDataResponse>>(
+    `/v1/products/excel-ai-import/${batchId}/preview-data`
+  )
+  return result.data
+}
+
+/**
+ * Excel AI 辅助导入：懒加载指定预览行的内嵌图片缩略图。
+ *
+ * @param batchId  预览批次号
+ * @param rowIndex Excel 展示行号（1-based）
+ */
+export async function getExcelAiPreviewRowImages(
+  batchId: string,
+  rowIndex: number
+): Promise<PreviewRowImage[]> {
+  const { data: result } = await apiClient.get<ApiResult<PreviewRowImage[]>>(
+    `/v1/products/excel-ai-import/${batchId}/preview-data/rows/${rowIndex}/images`
   )
   return result.data
 }

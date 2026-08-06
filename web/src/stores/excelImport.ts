@@ -2,10 +2,10 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios from 'axios'
 import type { UploadFileInfo } from 'naive-ui'
-import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus } from '@/api/product'
+import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import type { TaskItem } from '@/types/task'
-import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, PriceColumnImportMode, PriceColumnRole, SheetInfo } from '@/types/product'
+import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataRow, PreviewEdit } from '@/types/product'
 
 /**
  * Excel AI 导入向导状态（跨路由保持）。
@@ -38,6 +38,13 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const defaultFactoryCode = ref<string>('')
   const defaultShippingFrom = ref<string>('')
   const defaultMoq = ref<number | null>(1)
+
+  /** 导入前全量预览数据（原始表头视角） */
+  const previewData = ref<PreviewDataRow[]>([])
+  /** 用户对预览数据的编辑项：以 rowIndex + header 为键 */
+  const previewEdits = ref<Record<string, PreviewEdit>>({})
+  /** 用户在数据清洗页标记跳过的 Excel 物理行号（1-based） */
+  const skippedRows = ref<Set<number>>(new Set())
 
   const selectedFile = computed(() => {
     const item = fileList.value[0]
@@ -183,6 +190,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         (result.priceColumns || []).map(p => [p.header, p.role ?? 'factory'])
       )
       selectedPriceColumns.value = (result.priceColumns || []).map(p => p.header)
+      // 加载全量预览数据并清空上次编辑
+      await loadPreviewData(result.batchId)
       currentStep.value = 2
     } catch (e) {
       if (axios.isCancel(e)) {
@@ -194,6 +203,76 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       uploading.value = false
       uploadAbortController = null
     }
+  }
+
+  /**
+   * 加载导入前全量预览数据，并清空已有编辑缓存。
+   */
+  async function loadPreviewData(batchId: string) {
+    const response = await getExcelAiPreviewData(batchId)
+    previewData.value = response.rows
+    previewEdits.value = {}
+    skippedRows.value = new Set()
+  }
+
+  /**
+   * 更新单个单元格的编辑项。
+   *
+   * @param rowIndex Excel 物理行号（1-based）
+   * @param header 原始表头
+   * @param value 修改后的值；null 表示清空
+   */
+  function updatePreviewEdit(rowIndex: number, header: string, value: string | null) {
+    const key = `${rowIndex}:${header}`
+    previewEdits.value[key] = { rowIndex, header, value }
+  }
+
+  /**
+   * 切换某行的跳过状态。
+   *
+   * @param rowIndex Excel 物理行号（1-based）
+   */
+  function toggleSkipRow(rowIndex: number) {
+    const next = new Set(skippedRows.value)
+    if (next.has(rowIndex)) {
+      next.delete(rowIndex)
+    } else {
+      next.add(rowIndex)
+    }
+    skippedRows.value = next
+  }
+
+  /**
+   * 判断某行是否被标记为跳过。
+   */
+  function isSkippedRow(rowIndex: number): boolean {
+    return skippedRows.value.has(rowIndex)
+  }
+
+  /**
+   * 按列批量填充默认值：把指定表头列所有空单元格设为默认值。
+   *
+   * @param header 原始表头
+   * @param defaultValue 默认值
+   */
+  function fillDefaultValue(header: string, defaultValue: string) {
+    for (const row of previewData.value) {
+      const current = getPreviewCellValue(row, header)
+      if (current === '' || current == null) {
+        updatePreviewEdit(row.rowIndex, header, defaultValue)
+      }
+    }
+  }
+
+  /**
+   * 获取单元格当前应展示的值：优先取用户编辑，否则取原始值。
+   */
+  function getPreviewCellValue(row: PreviewDataRow, header: string): string | null {
+    const edit = previewEdits.value[`${row.rowIndex}:${header}`]
+    if (edit) {
+      return edit.value
+    }
+    return row.rawValues[header] ?? null
   }
 
   async function handleImport() {
@@ -246,11 +325,13 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         defaultShippingFrom: defaultShippingFrom.value || undefined,
         defaultMoq: defaultMoq.value ?? undefined,
         selectedPriceColumns: selectedPriceColumns.value,
-        priceColumnSelections
+        priceColumnSelections,
+        previewEdits: Object.values(previewEdits.value),
+        skipRows: Array.from(skippedRows.value)
       }, uploadAbortController.signal)
 
       importResult.value = result
-      currentStep.value = 3
+      currentStep.value = 4
 
       // 同批次可能重复 confirm（如更新模式重新导入），先清空旧任务列表再重建
       taskList.value = []
@@ -281,6 +362,14 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   async function handleReimportWithUpdate() {
     updateIfExists.value = true
     await handleImport()
+  }
+
+  /**
+   * 从字段映射页进入数据清洗页（步骤 3）。
+   * 调用前已保证 previewData 已加载。
+   */
+  function handleGoToCleanStep() {
+    currentStep.value = 3
   }
 
   /**
@@ -346,7 +435,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     }
     taskList.value = []
     buildTaskList(importResult.value)
-    currentStep.value = 3
+    currentStep.value = 4
     ensurePolling()
   }
 
@@ -357,7 +446,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   function startBatchStatusPolling(batchId: string, startedAt = Date.now()) {
     const gen = ++batchPollGeneration
     batchRecovering.value = true
-    currentStep.value = 3
+    currentStep.value = 4
     batchPollTimeoutId = setTimeout(async () => {
       batchPollTimeoutId = null
       try {
@@ -430,6 +519,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultFactoryCode.value = ''
     defaultShippingFrom.value = ''
     defaultMoq.value = 1
+    previewData.value = []
+    previewEdits.value = {}
+    skippedRows.value = new Set()
     importResult.value = null
     taskList.value = []
     currentStep.value = 1
@@ -462,6 +554,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultFactoryCode,
     defaultShippingFrom,
     defaultMoq,
+    previewData,
+    previewEdits,
+    skippedRows,
     hasSelectedFile,
     pendingTaskCount,
     batchRecovering,
@@ -469,6 +564,13 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     handleSwitchSheet,
     handleImport,
     handleReimportWithUpdate,
+    handleGoToCleanStep,
+    loadPreviewData,
+    updatePreviewEdit,
+    toggleSkipRow,
+    isSkippedRow,
+    fillDefaultValue,
+    getPreviewCellValue,
     clearAll,
     ensurePolling,
     stopPolling
