@@ -809,6 +809,11 @@ public class ProductQueryService {
                 ? request.getProductName().trim()
                 : null);
         }
+        if (request.getDescription() != null) {
+            rspu.setDescription(StringUtils.hasText(request.getDescription())
+                ? request.getDescription().trim()
+                : null);
+        }
         if (request.getColorPrimaryHsv() != null) {
             rspu.setColorPrimaryHsv(writeJson(request.getColorPrimaryHsv()));
         }

@@ -588,6 +588,7 @@ function openEditModal() {
   const r = detail.value.rspu
   editForm.value = {
     productName: r.productName,
+    description: r.description,
     positioningLabel: r.positioningLabel,
     styleCodes: detail.value.styleCodes?.length
       ? [...detail.value.styleCodes]
@@ -633,6 +634,7 @@ async function handleUpdateProduct() {
 
   const request: ProductUpdateRequest = {
     productName: editForm.value.productName,
+    description: editForm.value.description,
     positioningLabel: editForm.value.styleCodes[0],
     styleCodes: editForm.value.styleCodes,
     colorPrimaryName: editForm.value.colorPrimaryName,
@@ -1462,6 +1464,14 @@ onBeforeRouteUpdate((to, from) => {
       <n-form label-placement="left" label-width="100">
         <n-form-item label="商品名称">
           <n-input v-model:value="editForm.productName" placeholder="如：兰卡三人位沙发" maxlength="256" />
+        </n-form-item>
+        <n-form-item label="产品描述">
+          <n-input
+            v-model:value="editForm.description"
+            type="textarea"
+            placeholder="如材质解析、配置说明等，支持多行文本"
+            :autosize="{ minRows: 3, maxRows: 8 }"
+          />
         </n-form-item>
         <n-form-item label="风格/定位" required>
           <n-select

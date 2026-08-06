@@ -210,6 +210,8 @@ export interface ProductDetail {
     positioningLabel: string
     /** 商品名称 */
     productName?: string
+    /** 长文本描述原文（材质解析/功能配置/配置说明等） */
+    description?: string
     sixDimTags: Record<string, string>
     colorPrimaryName: string
     colorPrimaryHsv: number[]
@@ -294,6 +296,8 @@ export interface ProductUpdateRequest {
   positioningLabel?: string
   /** 商品名称 */
   productName?: string
+  /** 长文本描述原文（材质解析/功能配置/配置说明等） */
+  description?: string
   /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel */
   styleCodes?: string[]
   colorPrimaryName?: string
