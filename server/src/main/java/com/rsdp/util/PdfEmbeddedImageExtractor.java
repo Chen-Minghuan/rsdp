@@ -147,7 +147,9 @@ public final class PdfEmbeddedImageExtractor {
                 return;
             }
             try {
-                images.add(downscaleIfNeeded(image.getImage()));
+                // 还原页面显示方向：CTM 可能带 90°/270° 旋转或镜像，原始位图是存储方向
+                images.add(downscaleIfNeeded(
+                    PdfImageOrientationCorrector.restoreDisplayOrientation(image.getImage(), ctm)));
             } catch (OutOfMemoryError e) {
                 log.error("嵌入图解码内存不足，跳过该图（{}x{}）", image.getWidth(), image.getHeight());
             } catch (Exception e) {

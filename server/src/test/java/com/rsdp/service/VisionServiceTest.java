@@ -448,7 +448,7 @@ class VisionServiceTest {
     void detectPageRegions_shouldParseCompleteJson() throws Exception {
         String aiJson = """
             [
-              {"pageType": "product", "products": [{"bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5}, "estimatedCategory": "SF"}]},
+              {"pageType": "product", "products": [{"bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5}, "estimatedCategory": "SF", "imageKind": "scene"}]},
               {"pageType": "cover", "products": []}
             ]
             """;
@@ -470,6 +470,7 @@ class VisionServiceTest {
         assertThat(regions.get(0).getPageType()).isEqualTo("product");
         assertThat(regions.get(0).getProducts()).hasSize(1);
         assertThat(regions.get(0).getProducts().get(0).getEstimatedCategory()).isEqualTo("SF");
+        assertThat(regions.get(0).getProducts().get(0).getImageKind()).isEqualTo("scene");
         assertThat(regions.get(1).getPageType()).isEqualTo("cover");
     }
 

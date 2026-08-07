@@ -492,6 +492,13 @@ public class VisionService {
         - 产品图几乎占满整页时，给出接近整页的框是允许的
         - 坐标必须满足 0<=x、0<=y、x+w<=1、y+h<=1
 
+        imageKind 规则（每个产品必须标注）：
+        - standalone：单品图——白底或纯色/摄影棚背景的产品拍摄图，画面主体只有产品本身
+        - scene：场景图/效果图——产品置于房间、展厅等真实或渲染环境中，画面含墙面、地面、
+          窗帘、装饰品等环境元素。场景图整图视为一个 scene 对象，框住整张场景图即可，
+          禁止把场景内的单个产品单独框出
+        - 无法确定时填 standalone
+
         nearbyText 规则（每个产品都要尽力提取，实在没有对应文字时输出 null）：
         - 只提取紧邻该产品图、明显描述该产品的文字，不要把其他产品或页眉页脚的文字混入
         - productName: 产品名称/品名；modelNumber: 型号/货号；dimensionText: 尺寸原文（如 2450×900×850mm）
@@ -510,6 +517,7 @@ public class VisionService {
               {
                 "bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.5},
                 "estimatedCategory": "SF",
+                "imageKind": "standalone",
                 "nearbyText": {
                   "productName": "兰卡沙发",
                   "modelNumber": "LK-2450",
@@ -939,6 +947,8 @@ public class VisionService {
                     pp.setBbox(parseBoundingBox(pm.get("bbox")));
                     Object category = pm.get("estimatedCategory");
                     pp.setEstimatedCategory(category != null ? category.toString() : null);
+                    Object imageKind = pm.get("imageKind");
+                    pp.setImageKind(imageKind != null ? imageKind.toString() : null);
                     pp.setNearbyText(parseNearbyText(pm.get("nearbyText")));
                     pageProducts.add(pp);
                 }

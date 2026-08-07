@@ -6,6 +6,7 @@ import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.dto.response.DocumentImportFailure;
 import com.rsdp.dto.response.DocumentImportResult;
 import com.rsdp.exception.BusinessException;
+import com.rsdp.util.ImageBackgroundAnalyzer;
 import com.rsdp.util.ImageWhitespaceTrimmer;
 import com.rsdp.util.PdfEmbeddedImageExtractor;
 import com.rsdp.util.PdfFileValidator;
@@ -190,21 +191,50 @@ public class PdfImportService {
      * <p>决策规则：页面含大面积嵌入图且数量不少于 AI 检出的有效产品时，
      * 直接使用嵌入原图（零渲染损失、天然完整）；否则走 AI bbox 裁剪路径
      * （bbox 先经 {@link ProductBoxRefiner} 清洗去重）。</p>
+     *
+     * <p>场景图（效果图）不建产品档案：AI 标记 imageKind=scene 的产品框直接剔除；
+     * 嵌入图经 {@link ImageBackgroundAnalyzer} 边框带规则判别，疑似场景图同样剔除，
+     * 剔除后嵌入图数量不足时自动回落 AI bbox 裁剪路径。</p>
      */
     private List<ProductSource> buildProductSources(DocumentProductRegion region,
                                                     List<BufferedImage> embeddedImages,
                                                     int pageWidth, int pageHeight) {
-        List<ProductBoxRefiner.Refined<DocumentProductRegion.PageProduct>> refined =
+        List<ProductBoxRefiner.Refined<DocumentProductRegion.PageProduct>> refined = new ArrayList<>(
             ProductBoxRefiner.refineAll(region.getProducts(),
-                DocumentProductRegion.PageProduct::getBbox, pageWidth, pageHeight);
+                DocumentProductRegion.PageProduct::getBbox, pageWidth, pageHeight));
+        // 场景图中的产品不建档：剔除 AI 标记为 scene 的框
+        int sceneBoxCount = 0;
+        for (int i = refined.size() - 1; i >= 0; i--) {
+            if (isSceneImage(refined.get(i).source())) {
+                refined.remove(i);
+                sceneBoxCount++;
+            }
+        }
+        if (sceneBoxCount > 0) {
+            log.info("剔除场景图产品框 {} 个，pageIndex={}", sceneBoxCount, region.getPageIndex());
+        }
 
-        if (embeddedImages != null && !embeddedImages.isEmpty() && embeddedImages.size() >= refined.size()) {
-            List<ProductSource> sources = new ArrayList<>(embeddedImages.size());
-            for (int i = 0; i < embeddedImages.size(); i++) {
+        // 嵌入图同样过滤疑似场景图（场景大图天然满足面积/像素阈值，需内容判别兜底）
+        List<BufferedImage> standaloneEmbedded = null;
+        if (embeddedImages != null && !embeddedImages.isEmpty()) {
+            standaloneEmbedded = new ArrayList<>(embeddedImages.size());
+            for (BufferedImage embedded : embeddedImages) {
+                if (ImageBackgroundAnalyzer.looksLikeSceneImage(embedded)) {
+                    log.info("剔除疑似场景嵌入图，pageIndex={}", region.getPageIndex());
+                } else {
+                    standaloneEmbedded.add(embedded);
+                }
+            }
+        }
+
+        if (standaloneEmbedded != null && !standaloneEmbedded.isEmpty()
+            && standaloneEmbedded.size() >= refined.size()) {
+            List<ProductSource> sources = new ArrayList<>(standaloneEmbedded.size());
+            for (int i = 0; i < standaloneEmbedded.size(); i++) {
                 // 品类与文字按检出顺序映射，嵌入图多于 AI 产品时映射不到则交给 hint 兜底
                 String category = i < refined.size() ? refined.get(i).source().getEstimatedCategory() : null;
                 OcrResult nearbyText = i < refined.size() ? refined.get(i).source().getNearbyText() : null;
-                sources.add(new ProductSource(category, null, embeddedImages.get(i), nearbyText));
+                sources.add(new ProductSource(category, null, standaloneEmbedded.get(i), nearbyText));
             }
             return sources;
         }
@@ -215,6 +245,13 @@ public class PdfImportService {
                 r.source().getNearbyText()));
         }
         return sources;
+    }
+
+    /**
+     * AI 是否把该产品图标记为场景图（imageKind=scene）。为 null 按单品图处理（兼容旧结果）。
+     */
+    private static boolean isSceneImage(DocumentProductRegion.PageProduct product) {
+        return "scene".equalsIgnoreCase(product.getImageKind());
     }
 
     /**
