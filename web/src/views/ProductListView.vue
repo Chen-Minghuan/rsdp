@@ -169,6 +169,8 @@ const factoryOptions = computed(() => [
 const isReadOnlyFullCatalog = computed(() => viewMode.value === 'full' && !isPlatformStaff.value && isFactoryAdmin.value)
 
 const batchDeleting = ref(false)
+const batchRestoring = ref(false)
+const batchPurging = ref(false)
 
 async function toggleFullCatalog(value: boolean) {
   if (savingPreference.value) return
@@ -448,10 +450,21 @@ const deletableSelectedKeys = computed(() => {
     .map((row) => row.rspuId)
 })
 
+/** 回收站中已勾选且有权恢复的行（恢复权限与回收一致：product:delete + 数据归属） */
+const restorableSelectedKeys = computed(() => {
+  if (!isRecycledTab.value) return [] as string[]
+  return deletableSelectedKeys.value
+})
+
+/** 回收站中已勾选且可彻底删除的行（仅 ADMIN，物理删除不做行级归属过滤） */
+const purgeableSelectedKeys = computed(() => {
+  if (!isRecycledTab.value || !userStore.isAdmin) return [] as string[]
+  return selectedRowKeys.value
+})
+
 const columns: DataTableColumns<ProductSummary> = [
   {
-    type: 'selection',
-    disabled: () => isRecycledTab.value
+    type: 'selection'
   },
   {
     type: 'expand',
@@ -830,6 +843,66 @@ function handleBatchDelete() {
   })
 }
 
+function handleBatchRestore() {
+  const ids = restorableSelectedKeys.value
+  if (ids.length === 0 || batchRestoring.value) return
+  const skippedCount = selectedRowKeys.value.length - ids.length
+  dialog.info({
+    title: '批量恢复确认',
+    content: skippedCount > 0
+      ? `确定要恢复选中的 ${ids.length} 个产品吗？（另有 ${skippedCount} 个无权限恢复，将被跳过）变体/报价/图片/搭配关系将一并恢复。`
+      : `确定要恢复选中的 ${ids.length} 个产品吗？变体/报价/图片/搭配关系将一并恢复（风格、场景关联删除时已清除，需重新识别或补充）。`,
+    positiveText: '确认恢复',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchRestoring.value = true
+      try {
+        const results = await Promise.allSettled(ids.map(id => restoreProduct(id)))
+        const failedIds = ids.filter((_, i) => results[i].status === 'rejected')
+        if (failedIds.length === 0) {
+          message.success(`已恢复 ${ids.length} 个产品`)
+          selectedRowKeys.value = []
+        } else {
+          // 部分失败：保留失败项勾选，便于核对后重试
+          selectedRowKeys.value = failedIds
+          message.warning(`恢复完成：成功 ${ids.length - failedIds.length} 个，失败 ${failedIds.length} 个`)
+        }
+        refreshAll()
+      } finally {
+        batchRestoring.value = false
+      }
+    }
+  })
+}
+
+function handleBatchPurge() {
+  const ids = purgeableSelectedKeys.value
+  if (ids.length === 0 || batchPurging.value) return
+  dialog.error({
+    title: '批量彻底删除确认',
+    content: `彻底删除选中的 ${ids.length} 个产品将物理删除全部数据与图片文件，不可恢复！确定继续吗？`,
+    positiveText: '彻底删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchPurging.value = true
+      try {
+        const results = await Promise.allSettled(ids.map(id => permanentDeleteProduct(id)))
+        const failedIds = ids.filter((_, i) => results[i].status === 'rejected')
+        if (failedIds.length === 0) {
+          message.success(`已彻底删除 ${ids.length} 个产品`)
+          selectedRowKeys.value = []
+        } else {
+          selectedRowKeys.value = failedIds
+          message.warning(`彻底删除完成：成功 ${ids.length - failedIds.length} 个，失败 ${failedIds.length} 个`)
+        }
+        refreshAll()
+      } finally {
+        batchPurging.value = false
+      }
+    }
+  })
+}
+
 onMounted(async () => {
   if (!userStore.userInfo) {
     await userStore.fetchUserInfo()
@@ -970,6 +1043,24 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
             <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
             <n-button type="primary" secondary @click="handleBuildQuote">生成报价单</n-button>
           </template>
+        </n-space>
+        <n-space v-else style="margin-bottom: 4px;">
+          <n-button
+            v-if="restorableSelectedKeys.length > 0"
+            type="primary"
+            :loading="batchRestoring"
+            @click="handleBatchRestore"
+          >
+            批量恢复（{{ restorableSelectedKeys.length }}）
+          </n-button>
+          <n-button
+            v-if="purgeableSelectedKeys.length > 0"
+            type="error"
+            :loading="batchPurging"
+            @click="handleBatchPurge"
+          >
+            批量彻底删除（{{ purgeableSelectedKeys.length }}）
+          </n-button>
         </n-space>
 
         <!-- 状态页签 -->
