@@ -717,10 +717,11 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             :scroll-y="{ enabled: true, gt: 0 }"
             :scroll-x="{ enabled: true, gt: 0 }"
             :edit-config="{ trigger: 'dblclick', mode: 'cell' }"
-            :row-config="{ keyField: '__rowIndex__', height: 102 }"
+            :row-config="{ keyField: '__rowIndex__' }"
+            :cell-config="{ height: 102 }"
             :row-style="cleanRowStyle"
             border
-            show-overflow
+            show-overflow="title"
             @edit-closed="onCleanEditClosed"
           >
             <vxe-column type="seq" title="行号" width="70" fixed="left" />
