@@ -1,5 +1,7 @@
 package com.rsdp.controller;
 
+import com.rsdp.dto.response.ExcelAiPreviewDataResponse;
+import com.rsdp.dto.response.PreviewDataRow;
 import com.rsdp.entity.ExcelImportRow;
 import com.rsdp.exception.ForbiddenException;
 import com.rsdp.exception.GlobalExceptionHandler;
@@ -129,5 +131,30 @@ class ExcelAiImportControllerTest {
             .andExpect(jsonPath("$.code").value(200));
 
         verify(excelAiImportService, times(1)).previewMapping(any(), eq(0));
+    }
+
+    @Test
+    void getPreviewData_shouldReturnPreviewData() throws Exception {
+        PreviewDataRow row = new PreviewDataRow();
+        row.setRowIndex(2);
+        row.setRawValues(java.util.Map.of("品类", "FS", "名称", "休闲椅 A"));
+        row.setMappedFieldByHeader(java.util.Map.of("品类", "categoryCode", "名称", "productName"));
+
+        ExcelAiPreviewDataResponse response = new ExcelAiPreviewDataResponse();
+        response.setBatchId("BATCH-001");
+        response.setTotalRows(1);
+        response.setHeaders(java.util.List.of("品类", "名称"));
+        response.setRows(java.util.List.of(row));
+
+        when(excelAiImportService.getPreviewData("BATCH-001")).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/products/excel-ai-import/BATCH-001/preview-data"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.totalRows").value(1))
+            .andExpect(jsonPath("$.data.rows[0].rawValues.品类").value("FS"))
+            .andExpect(jsonPath("$.data.rows[0].mappedFieldByHeader.名称").value("productName"));
+
+        verify(excelAiImportService, times(1)).getPreviewData("BATCH-001");
     }
 }

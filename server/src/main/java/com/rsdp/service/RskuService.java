@@ -209,7 +209,7 @@ public class RskuService {
      * @param request 报价请求
      * @return 已存在或新建的 RSKU ID
      */
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public String upsertRsku(RskuCreateRequest request) {
         RskuSupply existing = rskuSupplyMapper.selectOne(new QueryWrapper<RskuSupply>()
             .eq("rspu_id", request.getRspuId())

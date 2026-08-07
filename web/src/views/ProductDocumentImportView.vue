@@ -208,6 +208,14 @@ const failureColumns: DataTableColumns<DocumentImportFailure> = [
             >
               {{ task.errorMessage }}
             </n-alert>
+            <n-alert
+              v-if="task.pollError"
+              type="warning"
+              :show-icon="false"
+              style="margin-top: 8px;"
+            >
+              进度查询异常：{{ task.pollError }}（不影响后台识别，稍后自动恢复）
+            </n-alert>
           </div>
         </n-space>
       </n-spin>

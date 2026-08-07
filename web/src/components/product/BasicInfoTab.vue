@@ -200,6 +200,15 @@ const primaryColorCss = computed(() => {
       </n-descriptions>
     </section>
 
+    <section v-if="rspu.description" class="info-group">
+      <h3 class="info-group-title">产品描述</h3>
+      <n-descriptions bordered :column="1" label-placement="left" size="small">
+        <n-descriptions-item label="材质解析/配置说明">
+          <pre class="description-pre">{{ rspu.description }}</pre>
+        </n-descriptions-item>
+      </n-descriptions>
+    </section>
+
     <section class="info-group">
       <h3 class="info-group-title">关键规格</h3>
       <n-descriptions v-if="keySpecPairs" bordered :column="2" label-placement="left" size="small">
@@ -264,5 +273,14 @@ const primaryColorCss = computed(() => {
 
 .empty-text {
   color: var(--rsdp-text-secondary);
+}
+
+.description-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.8;
+  font-family: inherit;
+  color: var(--rsdp-text);
 }
 </style>

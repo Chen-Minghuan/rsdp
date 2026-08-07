@@ -40,12 +40,33 @@ public class ExcelImportRowService {
     @Transactional
     public Long initRow(String batchId, int excelRowNumber, String rowType,
                         Map<String, String> rawData, Long parentRowId) {
+        return initRow(batchId, excelRowNumber, rowType, rawData, parentRowId, null, null);
+    }
+
+    /**
+     * 初始化一行导入记录，并同时记录 AI 映射字段与选中的价格列。
+     *
+     * @param batchId             批次 ID
+     * @param excelRowNumber      Excel 行号
+     * @param rowType             行类型
+     * @param rawData             原始数据
+     * @param parentRowId         父行 ID
+     * @param mappedFields        表头 → 系统字段的映射（可选）
+     * @param selectedPriceColumns 选中的价格列原始表头列表（可选）
+     * @return 行记录 ID
+     */
+    @Transactional
+    public Long initRow(String batchId, int excelRowNumber, String rowType,
+                        Map<String, String> rawData, Long parentRowId,
+                        Map<String, String> mappedFields, List<String> selectedPriceColumns) {
         ExcelImportRow row = new ExcelImportRow();
         row.setBatchId(batchId);
         row.setExcelRowNumber(excelRowNumber);
         row.setRowType(rowType);
         row.setParentRowId(parentRowId);
         row.setRawData(toJson(rawData));
+        row.setMappedFields(toJson(mappedFields));
+        row.setSelectedPriceColumns(toJson(selectedPriceColumns));
         row.setStatus("pending");
         row.setCreatedAt(LocalDateTime.now());
         rowMapper.insert(row);
@@ -129,6 +150,67 @@ public class ExcelImportRowService {
         }
         row.setStatus("skipped");
         row.setFailureReason(reason);
+        row.setUpdatedAt(LocalDateTime.now());
+        rowMapper.updateById(row);
+    }
+
+    /**
+     * 创建一条仅用于在数据清洗阶段保存图片覆盖的占位行。
+     *
+     * <p>导入主流程开始时会先删除该批次全部行记录并重建，届时会通过
+     * {@link #updateImageOverrides} 把覆盖图恢复到新的正式行记录中。</p>
+     *
+     * @param batchId        批次 ID
+     * @param excelRowNumber Excel 物理行号（1-based）
+     * @return 新建行记录 ID
+     */
+    @Transactional
+    public Long createPreviewPlaceholderRow(String batchId, int excelRowNumber) {
+        ExcelImportRow row = new ExcelImportRow();
+        row.setBatchId(batchId);
+        row.setExcelRowNumber(excelRowNumber);
+        row.setRowType("preview_placeholder");
+        row.setRawData("{}");
+        row.setStatus("pending");
+        row.setCreatedAt(LocalDateTime.now());
+        rowMapper.insert(row);
+        return row.getRowId();
+    }
+
+    /**
+     * 按批次 + Excel 行号查询唯一行记录。
+     *
+     * @param batchId        批次 ID
+     * @param excelRowNumber Excel 物理行号（1-based）
+     * @return 行记录；不存在时为 null
+     */
+    public ExcelImportRow findByBatchAndRowNumber(String batchId, int excelRowNumber) {
+        return rowMapper.selectByBatchIdAndRowNumber(batchId, excelRowNumber);
+    }
+
+    /**
+     * 按主键查询行记录。
+     */
+    public ExcelImportRow findById(Long rowId) {
+        if (rowId == null) {
+            return null;
+        }
+        return rowMapper.selectById(rowId);
+    }
+
+    /**
+     * 更新行级用户覆盖图片列表。
+     *
+     * @param rowId            行记录 ID
+     * @param imageAssetIds    用户指定的图片 asset ID 列表；null/空表示清空覆盖
+     */
+    @Transactional
+    public void updateImageOverrides(Long rowId, List<String> imageAssetIds) {
+        ExcelImportRow row = rowMapper.selectById(rowId);
+        if (row == null) {
+            return;
+        }
+        row.setOverrideImageAssetIds(toJson(imageAssetIds));
         row.setUpdatedAt(LocalDateTime.now());
         rowMapper.updateById(row);
     }

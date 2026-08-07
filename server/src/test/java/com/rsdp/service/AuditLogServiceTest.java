@@ -2,8 +2,11 @@ package com.rsdp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AuditLog;
+import com.rsdp.entity.DesignOrderItem;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.SysUser;
+import com.rsdp.util.AesEncryptionUtil;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -11,6 +14,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import javax.crypto.spec.SecretKeySpec;
+import java.lang.reflect.Field;
+import java.math.BigDecimal;
+import java.security.SecureRandom;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,6 +35,16 @@ class AuditLogServiceTest {
     private AuditLogWriter auditLogWriter;
 
     private AuditLogService auditLogService;
+
+    @BeforeAll
+    static void setUpAesKey() throws Exception {
+        // 价格字段脱敏依赖 AES 密钥；纯单元测试无 Spring 容器，参照 AesEncryptionUtilTest 反射注入
+        byte[] key = new byte[32];
+        new SecureRandom().nextBytes(key);
+        Field field = AesEncryptionUtil.class.getDeclaredField("secretKey");
+        field.setAccessible(true);
+        field.set(null, new SecretKeySpec(key, "AES"));
+    }
 
     @BeforeEach
     void setUp() {
@@ -122,5 +140,52 @@ class AuditLogServiceTest {
         assertThat(log.getOldValue()).containsEntry("Password", "***");
         assertThat(log.getOldValue().toString()).doesNotContain("plain-secret");
         assertThat(log.getNewValue().toString()).contains("***").doesNotContain("$2a$10$nestedHash");
+    }
+
+    @Test
+    void logUpdate_shouldEncryptOrderItemPriceFieldsInSnapshot() {
+        DesignOrderItem item = new DesignOrderItem();
+        item.setId(1L);
+        item.setOrderId("ORDER-001");
+        item.setOriginalPrice(new BigDecimal("1000.00"));
+        item.setFinalPrice(new BigDecimal("880.00"));
+        item.setAdjustPrice(new BigDecimal("850.00"));
+
+        auditLogService.logUpdate("design_order_item", "1", null, item, "admin");
+
+        ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogWriter, times(1)).write(captor.capture());
+
+        Map<String, Object> newValue = captor.getValue().getNewValue();
+        for (String fieldName : List.of("originalPrice", "finalPrice", "adjustPrice")) {
+            assertThat(newValue.get(fieldName)).isInstanceOf(String.class);
+        }
+        assertThat((String) newValue.get("originalPrice")).isNotEqualTo("1000.00");
+        assertThat(AesEncryptionUtil.decrypt((String) newValue.get("originalPrice")))
+            .isEqualByComparingTo(new BigDecimal("1000.00"));
+        assertThat(AesEncryptionUtil.decrypt((String) newValue.get("finalPrice")))
+            .isEqualByComparingTo(new BigDecimal("880.00"));
+        assertThat(AesEncryptionUtil.decrypt((String) newValue.get("adjustPrice")))
+            .isEqualByComparingTo(new BigDecimal("850.00"));
+    }
+
+    @Test
+    void logUpdate_shouldEncryptOrderTotalPriceFieldsInSnapshot() {
+        Map<String, Object> newOrder = Map.of(
+            "originalTotalPrice", new BigDecimal("5000.00"),
+            "finalTotalPrice", new BigDecimal("4500.00"));
+
+        auditLogService.logUpdate("design_order", "ORDER-001", null, newOrder, "admin");
+
+        ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
+        verify(auditLogWriter, times(1)).write(captor.capture());
+
+        Map<String, Object> newValue = captor.getValue().getNewValue();
+        assertThat(newValue.get("originalTotalPrice")).isInstanceOf(String.class);
+        assertThat(newValue.get("finalTotalPrice")).isInstanceOf(String.class);
+        assertThat(AesEncryptionUtil.decrypt((String) newValue.get("originalTotalPrice")))
+            .isEqualByComparingTo(new BigDecimal("5000.00"));
+        assertThat(AesEncryptionUtil.decrypt((String) newValue.get("finalTotalPrice")))
+            .isEqualByComparingTo(new BigDecimal("4500.00"));
     }
 }

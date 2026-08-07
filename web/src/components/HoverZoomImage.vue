@@ -36,7 +36,7 @@ const props = withDefaults(defineProps<{
 const FIXED_FALLBACK_HEIGHT = 50
 
 const thumbStyle = computed(() =>
-  `border-radius: ${props.radius}; flex-shrink: 0; cursor: zoom-in; display: block;`
+  `border-radius: ${props.radius}; flex-shrink: 0; cursor: ${props.previewDisabled ? 'default' : 'zoom-in'}; display: block;`
     + (props.fluid ? ' width: 100%;' + (props.height != null ? '' : ' height: 100%;') : '')
 )
 
@@ -58,7 +58,10 @@ const placeholderStyle = computed(() => ({
 }))
 
 function onPreviewError(e: Event) {
-  ;(e.target as HTMLImageElement).src = IMAGE_FALLBACK_SRC
+  const img = e.target as HTMLImageElement
+  // fallback 本身加载失败时不再重复赋值，避免极端情况下 error 事件循环
+  if (img.src === IMAGE_FALLBACK_SRC) return
+  img.src = IMAGE_FALLBACK_SRC
 }
 </script>
 

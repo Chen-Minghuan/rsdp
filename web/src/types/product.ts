@@ -210,6 +210,8 @@ export interface ProductDetail {
     positioningLabel: string
     /** 商品名称 */
     productName?: string
+    /** 长文本描述原文（材质解析/功能配置/配置说明等） */
+    description?: string
     sixDimTags: Record<string, string>
     colorPrimaryName: string
     colorPrimaryHsv: number[]
@@ -294,6 +296,8 @@ export interface ProductUpdateRequest {
   positioningLabel?: string
   /** 商品名称 */
   productName?: string
+  /** 长文本描述原文（材质解析/功能配置/配置说明等） */
+  description?: string
   /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel */
   styleCodes?: string[]
   colorPrimaryName?: string
@@ -407,6 +411,11 @@ export interface CategoryMappingItem {
 /**
  * Excel AI 辅助导入字段映射预览响应。
  */
+export interface UnmappedColumnInfo {
+  header: string
+  sampleValues: string[]
+}
+
 export interface ExcelAiMappingResponse {
   batchId: string
   headers: string[]
@@ -414,6 +423,8 @@ export interface ExcelAiMappingResponse {
   previewRows: Record<string, string>[]
   priceColumns: PriceColumnInfo[]
   categoryMappings?: CategoryMappingItem[]
+  /** 未被映射到系统字段的列（含样例值），供用户选择忽略或手动映射 */
+  unmappedColumns?: UnmappedColumnInfo[]
   /** 本次预览的工作表索引（回显） */
   sheetIndex?: number
   /** 文件内全部工作表列表；多 sheet 时前端展示切换器 */
@@ -438,6 +449,10 @@ export interface ExcelAiMappingRequest {
   selectedPriceColumns?: string[]
   /** 价格列角色选择（优先于 selectedPriceColumns；「不导入」的列不进数组）。空数组=不选，缺省=全部按 factory */
   priceColumnSelections?: PriceColumnSelection[]
+  /** 用户在「导入前全量预览」中对原始单元格的编辑项 */
+  previewEdits?: PreviewEdit[]
+  /** 用户在「导入前全量预览」中标记跳过的 Excel 物理行号（1-based） */
+  skipRows?: number[]
 }
 
 /**
@@ -483,4 +498,86 @@ export interface ExcelAiImportStatus {
   failures: ExcelAiImportFailure[]
   createdAt: string
   updatedAt: string
+}
+
+/**
+ * Excel AI 辅助导入行级明细（后端 excel_import_row 表）。
+ */
+export interface ExcelImportRow {
+  rowId: number
+  batchId: string
+  /** Excel 原始行号（表头为 1 起算） */
+  excelRowNumber: number
+  /** 行类型（product 等） */
+  rowType: string
+  /** 原始行数据（JSON 字符串） */
+  rawData?: string
+  /** 行处理状态机：pending → success / failed / skipped */
+  status: string
+  /** 生成的 RSPU 主键（成功行） */
+  generatedRspuId?: string
+  /** 失败/跳过原因（skipped 行复用此字段记录跳过原因） */
+  failureReason?: string
+  /** 失败阶段（解析/建 RSPU/建变体等） */
+  failureStage?: string
+}
+
+/**
+ * Excel AI 导入前全量预览中的单行数据。
+ *
+ * 以原始表头为视角展示，避免复合映射列（如「型号品名」同时映射到
+ * externalCode 与 productName）编辑时产生歧义。
+ */
+export interface PreviewRowImage {
+  /** 图片唯一键，格式 sheetIndex,physicalRowIndex,colIndex,imageIndex */
+  imageKey: string
+  /** 图片所在原始表头列 */
+  columnHeader: string
+  /** Base64 缩略图，可直接用于 img src；getPreviewData 返回时可能为 null */
+  thumbnailBase64?: string | null
+  /** 是否为主图候选（通常为产品图样列） */
+  primaryCandidate: boolean
+  /** 原始图片大小（字节） */
+  byteSize?: number
+}
+
+export interface PreviewDataRow {
+  /** Excel 物理行号（1-based），与导入失败明细中的 rowIndex 口径一致 */
+  rowIndex: number
+  /** 原始表头 → 单元格值（按列顺序） */
+  rawValues: Record<string, string>
+  /** 原始表头 → 系统字段（用于 UI 展示映射关系；未映射列为 null） */
+  mappedFieldByHeader: Record<string, string | null>
+  /** 该行在 Excel 中的内嵌图片缩略图 */
+  images: PreviewRowImage[]
+  /** 用户在数据清洗页覆盖到该行的临时图片 key 列表 */
+  overrideImageAssetIds?: string[]
+}
+
+/**
+ * Excel AI 导入前全量预览响应。
+ */
+export interface ExcelAiPreviewDataResponse {
+  /** 导入批次号 */
+  batchId: string
+  /** 总行数 */
+  totalRows: number
+  /** 原始表头列表（按列顺序） */
+  headers: string[]
+  /** 全量数据行 */
+  rows: PreviewDataRow[]
+}
+
+/**
+ * Excel AI 导入前全量预览中的单元格编辑项。
+ *
+ * 以原始表头为定位键，后端直接应用到原始数据行对应值。
+ */
+export interface PreviewEdit {
+  /** Excel 物理行号（1-based） */
+  rowIndex: number
+  /** 原始表头 */
+  header: string
+  /** 修改后的单元格值；null 表示清空 */
+  value: string | null
 }

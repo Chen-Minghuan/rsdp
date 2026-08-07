@@ -200,6 +200,7 @@ const pendingTaskCount = computed(
 let pollTimeoutId: ReturnType<typeof setTimeout> | null = null
 let pollAbortController: AbortController | null = null
 let uploadAbortController: AbortController | null = null
+let viewUnmounted = false
 
 function saveTasks() {
   try {
@@ -243,7 +244,8 @@ function stopPolling() {
 }
 
 function ensurePolling() {
-  if (pollTimeoutId) return
+  // 首轮请求在途期间 pollTimeoutId 为 null，必须同时检查 pollAbortController，否则会起第二条轮询链
+  if (pollTimeoutId || pollAbortController) return
   pollOnce()
 }
 
@@ -365,7 +367,11 @@ async function handleStartUpload() {
           positiveText: '仍然导入',
           negativeText: '取消',
           onPositiveClick: async () => {
+            // 弹窗回调执行时 handleStartUpload 的 finally 已把 controller 置 null，
+            // 必须重建，否则重试请求无法取消；页面已卸载则不再重试（避免轮询链无人停止）
+            if (viewUnmounted) return
             uploading.value = true
+            uploadAbortController = new AbortController()
             try {
               await doUpload(true)
             } catch (retryError) {
@@ -442,6 +448,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  viewUnmounted = true
   stopPolling()
   uploadAbortController?.abort()
   window.removeEventListener('beforeunload', handleBeforeUnload)

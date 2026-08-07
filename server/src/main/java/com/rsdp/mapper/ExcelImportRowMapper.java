@@ -16,6 +16,17 @@ public interface ExcelImportRowMapper extends BaseMapper<ExcelImportRow> {
     List<ExcelImportRow> selectByBatchId(@Param("batchId") String batchId);
 
     /**
+     * 按批次 + Excel 行号查询唯一行记录。
+     *
+     * @param batchId        批次 ID
+     * @param excelRowNumber Excel 物理行号（1-based）
+     * @return 行记录；不存在时为 null
+     */
+    @Select("SELECT * FROM excel_import_row WHERE batch_id = #{batchId} AND excel_row_number = #{excelRowNumber} LIMIT 1")
+    ExcelImportRow selectByBatchIdAndRowNumber(@Param("batchId") String batchId,
+                                               @Param("excelRowNumber") int excelRowNumber);
+
+    /**
      * 删除批次下全部行级记录（done 批次重新导入前清理上一轮结果）。
      *
      * @param batchId 批次 ID

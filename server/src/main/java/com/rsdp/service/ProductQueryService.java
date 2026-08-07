@@ -793,6 +793,7 @@ public class ProductQueryService {
         if (existing == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
+        dataScopeHelper.assertCanAccessRspu(rspuId);
         if (existing.getDeletedAt() == null) {
             throw new BusinessException("产品未被删除，无需恢复: " + rspuId);
         }
@@ -930,6 +931,11 @@ public class ProductQueryService {
         if (request.getProductName() != null) {
             rspu.setProductName(StringUtils.hasText(request.getProductName())
                 ? request.getProductName().trim()
+                : null);
+        }
+        if (request.getDescription() != null) {
+            rspu.setDescription(StringUtils.hasText(request.getDescription())
+                ? request.getDescription().trim()
                 : null);
         }
         if (request.getColorPrimaryHsv() != null) {

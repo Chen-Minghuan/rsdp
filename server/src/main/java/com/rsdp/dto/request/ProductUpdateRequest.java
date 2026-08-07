@@ -22,6 +22,10 @@ public class ProductUpdateRequest {
     @Size(max = 256)
     private String productName;
 
+    /** 长文本描述原文（材质解析/功能配置/配置说明等）。 */
+    @Size(max = 4000)
+    private String description;
+
     /** 风格字典码列表（多风格），第一个为主风格；提供时优先于 positioningLabel。 */
     private List<String> styleCodes;
 

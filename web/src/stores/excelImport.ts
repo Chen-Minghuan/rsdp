@@ -2,10 +2,10 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios from 'axios'
 import type { UploadFileInfo } from 'naive-ui'
-import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus } from '@/api/product'
+import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides, cloneExcelAiRowImages } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import type { TaskItem } from '@/types/task'
-import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, PriceColumnImportMode, PriceColumnRole, SheetInfo } from '@/types/product'
+import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataRow, PreviewEdit } from '@/types/product'
 
 /**
  * Excel AI 导入向导状态（跨路由保持）。
@@ -38,6 +38,15 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const defaultFactoryCode = ref<string>('')
   const defaultShippingFrom = ref<string>('')
   const defaultMoq = ref<number | null>(1)
+
+  /** 导入前全量预览数据（原始表头视角） */
+  const previewData = ref<PreviewDataRow[]>([])
+  /** 用户对预览数据的编辑项：以 rowIndex + header 为键 */
+  const previewEdits = ref<Record<string, PreviewEdit>>({})
+  /** 用户在数据清洗页标记跳过的 Excel 物理行号（1-based） */
+  const skippedRows = ref<Set<number>>(new Set())
+  /** 用户在数据清洗页对每行图片的覆盖：rowIndex → 临时图片 key 列表 */
+  const rowImageOverrides = ref<Record<number, string[]>>({})
 
   const selectedFile = computed(() => {
     const item = fileList.value[0]
@@ -183,6 +192,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         (result.priceColumns || []).map(p => [p.header, p.role ?? 'factory'])
       )
       selectedPriceColumns.value = (result.priceColumns || []).map(p => p.header)
+      // 加载全量预览数据并清空上次编辑
+      await loadPreviewData(result.batchId)
       currentStep.value = 2
     } catch (e) {
       if (axios.isCancel(e)) {
@@ -194,6 +205,180 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       uploading.value = false
       uploadAbortController = null
     }
+  }
+
+  /**
+   * 加载导入前全量预览数据，并清空已有编辑缓存。
+   */
+  async function loadPreviewData(batchId: string) {
+    const response = await getExcelAiPreviewData(batchId)
+    previewData.value = response.rows
+    previewEdits.value = {}
+    skippedRows.value = new Set()
+    const overrides: Record<number, string[]> = {}
+    for (const row of response.rows) {
+      if (row.overrideImageAssetIds && row.overrideImageAssetIds.length > 0) {
+        overrides[row.rowIndex] = row.overrideImageAssetIds
+      }
+    }
+    rowImageOverrides.value = overrides
+  }
+
+  /**
+   * 更新单个单元格的编辑项。
+   *
+   * @param rowIndex Excel 物理行号（1-based）
+   * @param header 原始表头
+   * @param value 修改后的值；null 表示清空
+   */
+  function updatePreviewEdit(rowIndex: number, header: string, value: string | null) {
+    const key = `${rowIndex}:${header}`
+    previewEdits.value[key] = { rowIndex, header, value }
+  }
+
+  /**
+   * 切换某行的跳过状态。
+   *
+   * @param rowIndex Excel 物理行号（1-based）
+   */
+  function toggleSkipRow(rowIndex: number) {
+    const next = new Set(skippedRows.value)
+    if (next.has(rowIndex)) {
+      next.delete(rowIndex)
+    } else {
+      next.add(rowIndex)
+    }
+    skippedRows.value = next
+  }
+
+  /**
+   * 判断某行是否被标记为跳过。
+   */
+  function isSkippedRow(rowIndex: number): boolean {
+    return skippedRows.value.has(rowIndex)
+  }
+
+  /**
+   * 获取某行的用户覆盖图片 key 列表（编辑后未保存到后端）。
+   */
+  function getRowImageOverrides(rowIndex: number): string[] {
+    return rowImageOverrides.value[rowIndex] ?? []
+  }
+
+  /**
+   * 行级覆盖图保存串行链：同一行的上传/粘贴/删除串行执行，
+   * 避免并发 PUT 全量列表时后完成的请求用旧快照覆盖先完成的（lost update）。
+   */
+  const rowImageSaveChains = new Map<number, Promise<unknown>>()
+
+  function enqueueRowImageSave(rowIndex: number, task: () => Promise<void>): Promise<void> {
+    const chained = (rowImageSaveChains.get(rowIndex) ?? Promise.resolve()).then(task)
+    // 链上任务失败不阻断后续任务，错误由调用方各自的 catch 处理
+    rowImageSaveChains.set(rowIndex, chained.catch(() => {}))
+    return chained
+  }
+
+  /**
+   * 上传本地图片并追加到某行覆盖图片列表。
+   *
+   * @param batchId  预览批次号
+   * @param rowIndex Excel 物理行号（1-based）
+   * @param file     图片文件
+   * @return 临时图片 key
+   */
+  async function uploadRowImage(batchId: string, rowIndex: number, file: File): Promise<string> {
+    const tempImageKey = await uploadExcelAiPreviewImage(batchId, file)
+    await enqueueRowImageSave(rowIndex, async () => {
+      const next = { ...rowImageOverrides.value }
+      next[rowIndex] = [...(next[rowIndex] ?? []), tempImageKey]
+      rowImageOverrides.value = next
+      await saveRowImageOverrides(batchId, rowIndex)
+    })
+    return tempImageKey
+  }
+
+  /**
+   * 设置某行的覆盖图片列表（用于粘贴、删除后的覆盖）。
+   *
+   * @param batchId  预览批次号
+   * @param rowIndex Excel 物理行号（1-based）
+   * @param keys     临时图片 key 列表
+   */
+  async function setRowImageOverridesLocal(batchId: string, rowIndex: number, keys: string[]) {
+    await enqueueRowImageSave(rowIndex, async () => {
+      const next = { ...rowImageOverrides.value }
+      if (keys.length === 0) {
+        delete next[rowIndex]
+      } else {
+        next[rowIndex] = keys
+      }
+      rowImageOverrides.value = next
+      await saveRowImageOverrides(batchId, rowIndex)
+    })
+  }
+
+  /**
+   * 从某行移除一张覆盖图片。
+   *
+   * @param batchId      预览批次号
+   * @param rowIndex     Excel 物理行号（1-based）
+   * @param tempImageKey 要移除的临时图片 key
+   */
+  async function removeRowImage(batchId: string, rowIndex: number, tempImageKey: string) {
+    const current = rowImageOverrides.value[rowIndex] ?? []
+    const next = current.filter(k => k !== tempImageKey)
+    await setRowImageOverridesLocal(batchId, rowIndex, next)
+  }
+
+  /**
+   * 将源行的全部图片克隆到目标行的覆盖图列表。
+   *
+   * @param batchId        预览批次号
+   * @param sourceRowIndex 源行号（1-based）
+   * @param targetRowIndex 目标行号（1-based）
+   * @return 目标行最终生效的覆盖图 key 列表
+   */
+  async function cloneRowImages(batchId: string, sourceRowIndex: number, targetRowIndex: number): Promise<string[]> {
+    const keys = await cloneExcelAiRowImages(batchId, sourceRowIndex, targetRowIndex)
+    const next = { ...rowImageOverrides.value }
+    if (keys.length === 0) {
+      delete next[targetRowIndex]
+    } else {
+      next[targetRowIndex] = keys
+    }
+    rowImageOverrides.value = next
+    return keys
+  }
+
+  async function saveRowImageOverrides(batchId: string, rowIndex: number) {
+    const keys = rowImageOverrides.value[rowIndex] ?? []
+    await setExcelAiRowImageOverrides(batchId, rowIndex, keys)
+  }
+
+  /**
+   * 按列批量填充默认值：把指定表头列所有空单元格设为默认值。
+   *
+   * @param header 原始表头
+   * @param defaultValue 默认值
+   */
+  function fillDefaultValue(header: string, defaultValue: string) {
+    for (const row of previewData.value) {
+      const current = getPreviewCellValue(row, header)
+      if (current === '' || current == null) {
+        updatePreviewEdit(row.rowIndex, header, defaultValue)
+      }
+    }
+  }
+
+  /**
+   * 获取单元格当前应展示的值：优先取用户编辑，否则取原始值。
+   */
+  function getPreviewCellValue(row: PreviewDataRow, header: string): string | null {
+    const edit = previewEdits.value[`${row.rowIndex}:${header}`]
+    if (edit) {
+      return edit.value
+    }
+    return row.rawValues[header] ?? null
   }
 
   async function handleImport() {
@@ -246,11 +431,13 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         defaultShippingFrom: defaultShippingFrom.value || undefined,
         defaultMoq: defaultMoq.value ?? undefined,
         selectedPriceColumns: selectedPriceColumns.value,
-        priceColumnSelections
+        priceColumnSelections,
+        previewEdits: Object.values(previewEdits.value),
+        skipRows: Array.from(skippedRows.value)
       }, uploadAbortController.signal)
 
       importResult.value = result
-      currentStep.value = 3
+      currentStep.value = 4
 
       // 同批次可能重复 confirm（如更新模式重新导入），先清空旧任务列表再重建
       taskList.value = []
@@ -284,6 +471,14 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   }
 
   /**
+   * 从字段映射页进入数据清洗页（步骤 3）。
+   * 调用前已保证 previewData 已加载。
+   */
+  function handleGoToCleanStep() {
+    currentStep.value = 3
+  }
+
+  /**
    * 根据导入结果构建识别任务列表。
    * 优先使用后端的 tasks 配对（taskId ↔ rspuId），缺失时回退旧的索引配对逻辑。
    * taskId 为 null 的 RSPU 没有识别任务（如无图片），不进入轮询列表。
@@ -311,11 +506,15 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   /** 批次仍在 importing 时展示的中间态标记（结果尚未就绪，正在轮询批次状态） */
   const batchRecovering = ref(false)
   let batchPollTimeoutId: ReturnType<typeof setTimeout> | null = null
+  /** 批次状态恢复轮询代际令牌：stopBatchPolling/重新发起时递增，防止在途响应复活已清空的结果页 */
+  let batchPollGeneration = 0
   /** 批次状态恢复轮询的最长等待时间：超过后提示用户稍后自行查看 */
   const BATCH_RECOVER_TIMEOUT_MS = 5 * 60 * 1000
   const BATCH_RECOVER_POLL_INTERVAL_MS = 3000
 
   function stopBatchPolling() {
+    // 递增代际令牌，作废在途的批次状态查询（响应返回后校验令牌，不再重建结果页）
+    batchPollGeneration++
     if (batchPollTimeoutId) {
       clearTimeout(batchPollTimeoutId)
       batchPollTimeoutId = null
@@ -342,7 +541,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     }
     taskList.value = []
     buildTaskList(importResult.value)
-    currentStep.value = 3
+    currentStep.value = 4
     ensurePolling()
   }
 
@@ -351,12 +550,17 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    * 直到 done/failed 再恢复结果页；超过阈值则提示用户稍后到任务中心查看。
    */
   function startBatchStatusPolling(batchId: string, startedAt = Date.now()) {
+    const gen = ++batchPollGeneration
     batchRecovering.value = true
-    currentStep.value = 3
+    currentStep.value = 4
     batchPollTimeoutId = setTimeout(async () => {
       batchPollTimeoutId = null
       try {
         const status = await getExcelAiImportStatus(batchId)
+        // 令牌已作废说明期间发生了 stopBatchPolling（如用户点了「重新导入」），不再重建结果页
+        if (gen !== batchPollGeneration) {
+          return
+        }
         if (status.status === 'importing') {
           if (Date.now() - startedAt >= BATCH_RECOVER_TIMEOUT_MS) {
             batchRecovering.value = false
@@ -369,6 +573,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         batchRecovering.value = false
         recoverFromBatchStatus(status)
       } catch {
+        // 令牌已作废说明期间发生了 stopBatchPolling，不再重试
+        if (gen !== batchPollGeneration) {
+          return
+        }
         // 单次查询失败不算终态，继续按节奏重试直至超时
         if (Date.now() - startedAt >= BATCH_RECOVER_TIMEOUT_MS) {
           batchRecovering.value = false
@@ -417,6 +625,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultFactoryCode.value = ''
     defaultShippingFrom.value = ''
     defaultMoq.value = 1
+    previewData.value = []
+    previewEdits.value = {}
+    skippedRows.value = new Set()
+    rowImageOverrides.value = {}
     importResult.value = null
     taskList.value = []
     currentStep.value = 1
@@ -449,6 +661,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultFactoryCode,
     defaultShippingFrom,
     defaultMoq,
+    previewData,
+    previewEdits,
+    skippedRows,
+    rowImageOverrides,
     hasSelectedFile,
     pendingTaskCount,
     batchRecovering,
@@ -456,6 +672,18 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     handleSwitchSheet,
     handleImport,
     handleReimportWithUpdate,
+    handleGoToCleanStep,
+    loadPreviewData,
+    updatePreviewEdit,
+    toggleSkipRow,
+    isSkippedRow,
+    fillDefaultValue,
+    getPreviewCellValue,
+    getRowImageOverrides,
+    uploadRowImage,
+    setRowImageOverridesLocal,
+    removeRowImage,
+    cloneRowImages,
     clearAll,
     ensurePolling,
     stopPolling

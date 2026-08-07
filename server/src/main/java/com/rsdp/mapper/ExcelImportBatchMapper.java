@@ -6,6 +6,8 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
+
 @Mapper
 public interface ExcelImportBatchMapper extends BaseMapper<ExcelImportBatch> {
 
@@ -35,4 +37,17 @@ public interface ExcelImportBatchMapper extends BaseMapper<ExcelImportBatch> {
     @Update("UPDATE excel_import_batch SET status = 'pending', updated_at = now()"
         + " WHERE batch_id = #{batchId} AND status = 'importing'")
     int resetToPending(@Param("batchId") String batchId);
+
+    /**
+     * 收割超时 importing 批次：状态停留在 importing 且长时间未更新，视为导入线程已消亡
+     * （如 JVM 崩溃/重启），复位为 pending 允许用户重试。
+     *
+     * <p>updated_at 为 NULL 的历史批次无从判断进入时间，一并收割。</p>
+     *
+     * @param threshold 超时阈值（updated_at 早于此时间视为超时）
+     * @return 复位行数
+     */
+    @Update("UPDATE excel_import_batch SET status = 'pending', updated_at = now()"
+        + " WHERE status = 'importing' AND (updated_at IS NULL OR updated_at < #{threshold})")
+    int reapStaleImporting(@Param("threshold") LocalDateTime threshold);
 }

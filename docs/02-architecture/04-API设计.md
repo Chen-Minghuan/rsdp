@@ -265,6 +265,7 @@ POST   /api/v1/products/excel-ai-import/preview
        #   priceColumns: [{ header: string, materialName: string, suggestedField: string,
        #                    role: "factory"|"sales" }],   // 出厂价/工厂价/EXW→factory；销售价/含税价/零售价/市场价→sales；其余默认 factory
        #   categoryMappings: [{ rawValue: string, suggestedCode: string, source: "dict"|"alias"|"ai"|"none" }],
+       #   unmappedColumns: [{ header: string, sampleValues: string[] }], // 未被 AI 映射的列（含最多 3 个非空样例值），供用户忽略或手动映射
        #   categoryGuess: string,
        #   notes: string,
        #   sheetIndex: number,                            // 回显本次解析的工作表
@@ -303,13 +304,14 @@ POST   /api/v1/products/excel-ai-import/import
        #     selectedPriceColumns: string[], // 要导入的价格列 header 列表；缺省/null 导入全部，显式空数组 [] 表示不选任何价格列（只建 RSPU/变体/图片，不建 RSKU）；旧契约兼容，全部视为 factory 角色
        #     priceColumnSelections: [{ header: string, role: "factory"|"sales" }], // 价格列选择+角色；与 selectedPriceColumns 同时存在时以本字段为准
        #                                            // role=factory 建变体+RSKU；role=sales 不建变体/RSKU，价格写 RSPU retail_price（只补空缺）
-       #     defaultFactoryCode: string,    // 默认工厂编码，用于生成 RSKU 与 RSPU-工厂映射
+       #     defaultFactoryCode: string,    // 默认工厂编码，用于生成 RSKU 与 RSPU-工厂映射；存在 factory 角色价格列时必填，否则抛 400「存在出厂价价格列，必须填写默认工厂编码」
        #     shippingWarehouseId: string,   // 默认发货仓库 ID（关联 factory_warehouse）
        #     defaultShippingFrom: string,   // 默认发货地（冗余显示字段）
        #     defaultLeadTimeDays: number,   // 默认基础交期天数；优先级：Excel 行级交期列 > 工厂交期规则 > 本默认值
        #     defaultMoq: number             // 默认最小起订量
        #     updateIfExists: boolean        // externalCode 已存在时：true 复用并更新已有 RSPU，false（默认）跳过该行
        #     categoryMapping: { [rawValue: string]: string }  // 用户确认的品类映射（原始值 → 字典码），行级解析最高优先；导入后写回别名库
+       #     previewEdits: [{ rowIndex: number, header: string, value: string|null }]  // 数据清洗阶段对原始单元格的编辑；按 rowIndex + header 定位覆盖，优先级高于 forward fill
        #   }
        # Response: {
        #   batchId: string,
@@ -353,6 +355,32 @@ POST   /api/v1/products/excel-ai-import/import
        #   - 当指定 defaultFactoryCode 时，会为每个 RSPU 创建 RSPU-工厂关联（rspu_factory_mapping），
        #     并标记为主供工厂；同时每个价格列生成的 RSKU 会写入工厂报价、发货地、MOQ、动态交期
        #   - 每行 Excel 数据会写入 excel_import_row，记录原始值、处理阶段、生成实体 ID 与失败原因
+       #   - previewEdits：导入前全量预览（数据清洗）阶段用户对原始单元格的编辑；
+       #     后端在 forwardFillKeyColumns 之后应用，按 rowIndex + header 覆盖对应单元格；
+       #     找不到的行/列仅记日志跳过，不阻断导入
+
+GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
+       # Excel AI 导入前全量预览（数据清洗用，已实现）
+       # Response: {
+       #   batchId: string,
+       #   totalRows: number,
+       #   headers: string[],                          // 原始表头列表（按列顺序，不含内部字段）
+       #   rows: [{
+       #     rowIndex: number,                         // Excel 物理行号（1-based）
+       #     rawValues: { [header: string]: string },  // 原始表头 → 单元格值
+       #     mappedFieldByHeader: { [header: string]: string|null }  // 原始表头 → 系统字段（未映射为 null）
+       #   }]
+       # }
+       # 说明：
+       #   - 以原始表头为视角返回全量数据行，避免复合映射列（如「型号品名」同时映射到
+       #     externalCode 与 productName）在编辑时产生歧义
+       #   - 前端数据清洗页的编辑以 (rowIndex, header) 为键，通过 previewEdits 在 import 接口回传
+
+POST   /api/v1/products/excel-ai-import/{batchId}/rows/{sourceRowIndex}/clone-images-to/{targetRowIndex}
+       # 数据清洗：将源行的全部图片克隆到目标行的覆盖图列表（已实现）
+       # 说明：
+       #   - 源行的用户覆盖图 key 直接复用；Excel 内嵌图会读取预览缓存原图并写入临时上传存储
+       #   - 返回目标行最终生效的覆盖图 key 列表；导入时以覆盖图优先
 
 GET    /api/v1/products/excel-ai-import/{batchId}
        # 查询 Excel AI 导入批次状态（已实现）

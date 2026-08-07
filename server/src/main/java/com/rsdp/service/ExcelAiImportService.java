@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.BeanUtils;
 import com.rsdp.dto.excel.ProductImportRow;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
+import com.rsdp.dto.request.PreviewEdit;
 import com.rsdp.dto.request.PriceColumnSelection;
 import com.rsdp.dto.request.RspuFactoryMappingRequest;
 import com.rsdp.dto.request.RskuCreateRequest;
@@ -17,9 +18,12 @@ import com.rsdp.dto.response.ExcelAiImportFailure;
 import com.rsdp.dto.response.ExcelAiImportResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
+import com.rsdp.dto.response.ExcelAiPreviewDataResponse;
+import com.rsdp.dto.response.PreviewDataRow;
 import com.rsdp.dto.response.CategoryMappingItem;
 import com.rsdp.dto.response.ExcelSheetInfo;
 import com.rsdp.dto.response.PriceColumnInfo;
+import com.rsdp.dto.response.UnmappedColumnInfo;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ExcelImportBatch;
@@ -51,31 +55,50 @@ import com.rsdp.util.ImageUrlValidator;
 import com.rsdp.util.SizeSpecParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.openxml4j.opc.OPCPackage;
+import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.util.XMLHelper;
+import org.apache.poi.xssf.eventusermodel.XSSFReader;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
+import org.xml.sax.Attributes;
+import org.xml.sax.InputSource;
+import org.xml.sax.XMLReader;
+import org.xml.sax.helpers.DefaultHandler;
 
+import java.awt.Image;
 import javax.imageio.ImageIO;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.awt.image.BufferedImage;
 import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Objects;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -84,6 +107,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import jakarta.annotation.PostConstruct;
 
 import com.rsdp.util.IdGenerator;
 
@@ -103,6 +128,10 @@ public class ExcelAiImportService {
     private static final int MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
     private static final int PREVIEW_ROW_COUNT = 5;
     private static final int MAX_CATEGORY_SUGGESTIONS = 50;
+    /** 预览阶段懒加载缩略图的原图临时缓存目录前缀 */
+    private static final String PREVIEW_IMAGE_CACHE_DIR = "rsdp-preview-images";
+    /** 数据清洗页用户上传的临时图片存储前缀（导入成功后应清理） */
+    private static final String PREVIEW_UPLOAD_IMAGE_PREFIX = "preview-images";
     /** 标题行扫描上限：公司标题行一般不超过 10 行 */
     private static final int MAX_TITLE_SCAN_ROWS = 10;
     /** 真表头行关键词密度阈值：含 ≥2 个表头关键词的行视为表头行 */
@@ -111,6 +140,45 @@ public class ExcelAiImportService {
     private static final String PRICE_ROLE_FACTORY = "factory";
     /** 价格列角色：销售价（写 RSPU 零售参考价，不建变体/RSKU） */
     private static final String PRICE_ROLE_SALES = "sales";
+
+    /**
+     * 启动时清理超过 2 小时的预览图片临时缓存，避免磁盘堆积。
+     */
+    @PostConstruct
+    public void cleanStalePreviewImageCache() {
+        try {
+            Path baseDir = Paths.get(System.getProperty("java.io.tmpdir"), PREVIEW_IMAGE_CACHE_DIR);
+            if (!Files.exists(baseDir)) {
+                return;
+            }
+            long cutoff = System.currentTimeMillis() - 2 * 60 * 60 * 1000L;
+            try (var stream = Files.list(baseDir)) {
+                stream.forEach(dir -> {
+                    try {
+                        if (Files.isDirectory(dir) && Files.getLastModifiedTime(dir).toMillis() < cutoff) {
+                            deleteDirectory(dir);
+                        }
+                    } catch (Exception e) {
+                        log.warn("清理预览图片缓存目录失败: {}", dir, e);
+                    }
+                });
+            }
+        } catch (Exception e) {
+            log.warn("启动清理预览图片缓存失败", e);
+        }
+    }
+
+    private void deleteDirectory(Path dir) throws IOException {
+        try (var stream = Files.walk(dir)) {
+            stream.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.delete(path);
+                } catch (Exception e) {
+                    log.warn("删除缓存文件失败: {}", path, e);
+                }
+            });
+        }
+    }
 
     private static final String MAPPING_SYSTEM_PROMPT = """
         你是家具产品目录结构化专家。用户上传的是工厂报价单 Excel，表头可能包含中英双语、括号单位、多行父子表头。
@@ -242,6 +310,8 @@ public class ExcelAiImportService {
             ? rawValues.subList(headerLayout.headerStartIndex(), headerLayout.dataStartIndex())
             : List.of(rawValues.get(headerLayout.headerStartIndex()));
         List<Map<Integer, String>> dataRows = rawValues.subList(headerLayout.dataStartIndex(), rawRows.size());
+        List<Integer> dataRowPhysicalIndexes = rawRows.subList(headerLayout.dataStartIndex(), rawRows.size())
+            .stream().map(IndexedRow::physicalRowIndex).toList();
 
         // 同名表头自动加消歧后缀（如两个「价格」→「价格」「价格#2」），
         // 避免以表头为 key 时同名列互相覆盖、前一列数据静默丢失（P2-11）
@@ -267,7 +337,7 @@ public class ExcelAiImportService {
 
         String storagePath = storeOriginalFile(fileBytes, file.getOriginalFilename());
         ExcelImportBatch batch = saveBatch(file.getOriginalFilename(), storagePath, mappingResult,
-            mergedHeaders, dataRows, sheetIndex);
+            mergedHeaders, dataRows, dataRowPhysicalIndexes, sheetIndex);
 
         ExcelAiMappingResponse response = buildMappingResponse(batch, mergedHeaders, mappingResult);
         response.setSheetIndex(sheetIndex);
@@ -294,6 +364,14 @@ public class ExcelAiImportService {
         Map<String, String> mapping = sanitizeMapping(request.getMapping());
         if (mapping == null || mapping.isEmpty()) {
             throw new BusinessException("字段映射不能为空");
+        }
+        // 出厂价价格列生成 RSKU 必须依赖默认工厂编码；静默跳过会导致「空心成功」（RSPU+变体建成却无报价）
+        List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
+        List<PriceColumnInfo> selectedPriceColumns = resolveSelectedPriceColumns(priceColumns, request);
+        boolean hasFactoryPriceColumn = selectedPriceColumns.stream()
+            .anyMatch(p -> !PRICE_ROLE_SALES.equals(roleOf(p)));
+        if (hasFactoryPriceColumn && !StringUtils.hasText(request.getDefaultFactoryCode())) {
+            throw new BusinessException("存在出厂价价格列，必须填写默认工厂编码");
         }
         // 原子抢占导入权，防止并发重复导入（替代先查状态再判断的 check-then-act 竞态）；
         // pending / done 均可抢占（done 批次支持「以更新模式重新导入」），importing 拒绝
@@ -351,19 +429,51 @@ public class ExcelAiImportService {
         String categoryGuess = batch.getCategoryHint();
 
         // 重新导入（done 批次）前清理上一轮行级结果记录：整体删除比逐行覆盖简单安全，
-        // 行记录会按同一批物理行号重建（pending 批次无旧记录，删除为空操作）
+        // 行记录会按同一批物理行号重建（pending 批次无旧记录，删除为空操作）。
+        // 先备份用户在数据清洗页编辑的行级图片覆盖，删除重建后恢复。
+        Map<Integer, List<String>> preservedOverrideImages = preserveRowOverrideImages(batch.getBatchId());
         excelImportRowService.deleteByBatch(batch.getBatchId());
 
         // 型号/品名列向下填充（纵向合并单元格语义，模块行继承上行型号）
         forwardFillKeyColumns(rawDataRows, mapping);
 
-        List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
-        List<PriceColumnInfo> selectedPriceColumns = resolveSelectedPriceColumns(priceColumns, request);
+        // 应用用户在「导入前全量预览」中的单元格编辑；编辑优先级高于 forward fill
+        applyPreviewEdits(rawDataRows, request.getPreviewEdits());
 
         // 从 storage 读取原始 Excel，提取内嵌图片并重建数据行物理布局（图片锚点行/列对齐用）
         EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(batch);
         Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages = embeddedImagesResult.images();
         PhysicalLayout physicalLayout = loadPhysicalLayout(batch);
+
+        // 按图片列合并单元格分组，把组内分散的描述/材质解析聚合到每个成员行
+        propagateGroupFields(rawDataRows, mapping, physicalLayout);
+
+        // 应用用户在「导入前全量预览」中标记的跳过行（1-based 物理行号）。
+        // 在 propagateGroupFields 之后过滤，确保组内字段聚合不受跳过行影响。
+        if (request.getSkipRows() != null && !request.getSkipRows().isEmpty()) {
+            Set<Integer> skipRowSet = new HashSet<>(request.getSkipRows());
+            List<Map<String, String>> filteredRows = new ArrayList<>();
+            List<Integer> filteredPhysicalIndexes = new ArrayList<>();
+            for (int i = 0; i < rawDataRows.size(); i++) {
+                Map<String, String> row = rawDataRows.get(i);
+                String rowIndexStr = row.get("__rowIndex__");
+                int displayRowIndex = StringUtils.hasText(rowIndexStr) ? Integer.parseInt(rowIndexStr) : (i + 2);
+                if (!skipRowSet.contains(displayRowIndex)) {
+                    filteredRows.add(row);
+                    if (physicalLayout != null && i < physicalLayout.dataRowPhysicalIndexes().size()) {
+                        filteredPhysicalIndexes.add(physicalLayout.dataRowPhysicalIndexes().get(i));
+                    }
+                }
+            }
+            rawDataRows = filteredRows;
+            physicalLayout = new PhysicalLayout(filteredPhysicalIndexes, physicalLayout.imageColumns(),
+                physicalLayout.minDataColumn(), physicalLayout.maxDataColumn(),
+                physicalLayout.imageMergedGroups(), physicalLayout.sheetName());
+        }
+
+        List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
+        List<PriceColumnInfo> selectedPriceColumns = resolveSelectedPriceColumns(priceColumns, request);
+
         // 工作表名（品类线索）：优先取物理布局重建结果，失败时无 sheet 名兜底
         String sheetName = physicalLayout != null ? physicalLayout.sheetName() : null;
 
@@ -406,7 +516,27 @@ public class ExcelAiImportService {
             try {
                 // 行级记录与失败明细统一使用 Excel 物理行号（+1 转 1-based 展示口径）；
                 // 物理行号单调递增，不撞 (batch_id, excel_row_number) 唯一约束（P2-4）
-                importRowId = excelImportRowService.initRow(batch.getBatchId(), displayRowIndex, "product", dataRow, null);
+                Map<String, String> mappedFields = new HashMap<>();
+                for (Map.Entry<String, String> entry : mapping.entrySet()) {
+                    String fields = entry.getValue();
+                    if (StringUtils.hasText(fields)) {
+                        String value = dataRow.get(entry.getKey());
+                        for (String field : fields.split(",")) {
+                            if (StringUtils.hasText(field)) {
+                                mappedFields.put(field.trim(), value);
+                            }
+                        }
+                    }
+                }
+                List<String> selectedPriceHeaders = selectedPriceColumns.stream()
+                    .map(PriceColumnInfo::getHeader).toList();
+                importRowId = excelImportRowService.initRow(batch.getBatchId(), displayRowIndex, "product", dataRow, null,
+                    mappedFields, selectedPriceHeaders);
+                // 恢复数据清洗页编辑的行级图片覆盖
+                List<String> preservedImages = preservedOverrideImages.get(displayRowIndex);
+                if (preservedImages != null && !preservedImages.isEmpty()) {
+                    excelImportRowService.updateImageOverrides(importRowId, preservedImages);
+                }
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
                     selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
                     currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId());
@@ -475,6 +605,12 @@ public class ExcelAiImportService {
         updateBatchResult(batch, request, result);
         // 别名自学习：用户确认的品类映射写回别名库，后续导入直接命中，不再调 AI
         learnCategoryAliases(request);
+        // 导入完成：清理数据清洗阶段上传的临时图片文件（失败不影响导入结果）
+        try {
+            cleanPreviewUploadImages(batch.getBatchId(), preservedOverrideImages);
+        } catch (Exception e) {
+            log.warn("清理预览上传临时图片失败，batchId={}", batch.getBatchId(), e);
+        }
         return result;
     }
 
@@ -523,6 +659,646 @@ public class ExcelAiImportService {
         response.setTasks(tasks);
         response.setSkippedCount(skippedCount);
         return response;
+    }
+
+    /**
+     * 查询导入批次的全量预览数据（导入前数据清洗用）。
+     *
+     * @param batchId 批次 ID
+     * @return 全量预览数据
+     */
+    public ExcelAiPreviewDataResponse getPreviewData(String batchId) {
+        ExcelImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        ExcelAiPreviewDataResponse response = new ExcelAiPreviewDataResponse();
+        response.setBatchId(batchId);
+
+        List<Map<String, String>> rawDataRows = loadRawDataRows(batch);
+        response.setTotalRows(rawDataRows.size());
+        if (rawDataRows.isEmpty()) {
+            response.setHeaders(new ArrayList<>());
+            response.setRows(new ArrayList<>());
+            return response;
+        }
+
+        Map<String, String> mapping = loadColumnMapping(batch);
+        List<String> headers = new ArrayList<>();
+        if (!rawDataRows.isEmpty()) {
+            for (String key : rawDataRows.get(0).keySet()) {
+                if ("__rowIndex__".equals(key)) {
+                    continue;
+                }
+                headers.add(key);
+            }
+        }
+        response.setHeaders(headers);
+
+        // 预览阶段同时需要图片与物理布局：一次性读取文件字节，避免重复从 storage 拉取/解析（P2-XX）
+        byte[] fileBytes = null;
+        if (StringUtils.hasText(batch.getStoragePath())) {
+            try (InputStream in = storageService.get(batch.getStoragePath())) {
+                fileBytes = in.readAllBytes();
+            } catch (Exception e) {
+                log.warn("预览读取批次文件失败，batchId={}", batch.getBatchId(), e);
+            }
+        }
+        EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(fileBytes, batch.getFileName(), batch.getBatchId());
+        PhysicalLayout physicalLayout = loadPhysicalLayout(fileBytes, batch);
+        int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
+        Set<Integer> imageColumns = physicalLayout != null ? physicalLayout.imageColumns() : Collections.emptySet();
+
+        // 加载用户在数据清洗页对该批次各行设置的覆盖图片（临时图片 key 列表）
+        Map<Integer, List<String>> rowOverrideImages = loadRowOverrideImages(batchId);
+
+        List<PreviewDataRow> rows = new ArrayList<>();
+        for (int i = 0; i < rawDataRows.size(); i++) {
+            Map<String, String> rawRow = rawDataRows.get(i);
+            PreviewDataRow row = new PreviewDataRow();
+            String rowIndexStr = rawRow.getOrDefault("__rowIndex__", "");
+            int displayRowIndex = StringUtils.hasText(rowIndexStr) ? Integer.parseInt(rowIndexStr) : (i + 2);
+            row.setRowIndex(displayRowIndex);
+            Map<String, String> rawValues = new LinkedHashMap<>();
+            Map<String, String> mappedFieldByHeader = new LinkedHashMap<>();
+            for (String header : headers) {
+                rawValues.put(header, rawRow.getOrDefault(header, ""));
+                mappedFieldByHeader.put(header, mapping.get(header));
+            }
+            row.setRawValues(rawValues);
+            row.setMappedFieldByHeader(mappedFieldByHeader);
+            row.setImages(buildPreviewRowImages(batch.getBatchId(), displayRowIndex, sheetIndex, headers, imageColumns,
+                embeddedImagesResult.images()));
+            row.setOverrideImageAssetIds(rowOverrideImages.getOrDefault(displayRowIndex, List.of()));
+            rows.add(row);
+        }
+        response.setRows(rows);
+        return response;
+    }
+
+    private Map<Integer, List<String>> loadRowOverrideImages(String batchId) {
+        return parseRowOverrideImages(batchId, false);
+    }
+
+    /**
+     * 备份批次下所有行级覆盖图片（重新初始化行记录前调用）。
+     */
+    private Map<Integer, List<String>> preserveRowOverrideImages(String batchId) {
+        return parseRowOverrideImages(batchId, true);
+    }
+
+    private Map<Integer, List<String>> parseRowOverrideImages(String batchId, boolean logOnEmpty) {
+        Map<Integer, List<String>> result = new HashMap<>();
+        try {
+            List<ExcelImportRow> rows = excelImportRowService.listByBatch(batchId);
+            for (ExcelImportRow importRow : rows) {
+                if (!StringUtils.hasText(importRow.getOverrideImageAssetIds())) {
+                    continue;
+                }
+                List<String> keys = objectMapper.readValue(importRow.getOverrideImageAssetIds(),
+                    new TypeReference<List<String>>() {
+                    });
+                if (keys != null && !keys.isEmpty() && importRow.getExcelRowNumber() != null) {
+                    result.put(importRow.getExcelRowNumber(), keys);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("解析行覆盖图片失败，batchId={}", batchId, e);
+        }
+        return result;
+    }
+
+    /**
+     * 懒加载某一行预览图片的 Base64 缩略图。
+     *
+     * <p>与 {@link #getPreviewData} 解耦：全量预览只返回轻量图片元数据，
+     * 前端按行进入可视区域时再调用本接口生成缩略图，避免大文件预览超时。</p>
+     *
+     * @param batchId  导入批次 ID
+     * @param rowIndex Excel 展示行号（1-based）
+     * @return 该行图片缩略图列表（仅填充 imageKey/thumbnailBase64/byteSize）
+     */
+    public List<PreviewDataRow.PreviewRowImage> getPreviewRowImages(String batchId, int rowIndex) {
+        ExcelImportBatch batch = getAccessibleBatch(batchId);
+        if (rowIndex < 1) {
+            return List.of();
+        }
+        int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
+
+        // 优先从 getPreviewData 阶段写入的本地临时文件缓存读取原图，
+        // 避免每个按行请求都重新解析整个 Excel（大文件并发时会导致 OOM）。
+        List<PreviewRowImageRef> refs = listCachedPreviewImages(batchId, sheetIndex, rowIndex - 1);
+        if (refs.isEmpty()) {
+            // 缓存未命中：可能是缓存过期或 getPreviewData 失败，回退到重新解析 Excel（仅当前行）
+            byte[] fileBytes = readBatchFileBytes(batch);
+            if (fileBytes == null || fileBytes.length == 0) {
+                return List.of();
+            }
+            EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(fileBytes, batch.getFileName(), batchId);
+            String key = sheetIndex + "," + (rowIndex - 1);
+            List<ExcelImageExtractor.EmbeddedImage> rowImages = embeddedImagesResult.images().getOrDefault(key, List.of());
+            List<PreviewDataRow.PreviewRowImage> result = new ArrayList<>();
+            for (int i = 0; i < rowImages.size(); i++) {
+                ExcelImageExtractor.EmbeddedImage img = rowImages.get(i);
+                if (isUnsupportedWebImageFormat(img.extension())) {
+                    continue;
+                }
+                String thumbnail = createThumbnailBase64(img.bytes(), img.extension(), 120, 120);
+                if (!StringUtils.hasText(thumbnail)) {
+                    continue;
+                }
+                PreviewDataRow.PreviewRowImage previewImage = new PreviewDataRow.PreviewRowImage();
+                previewImage.setImageKey(buildPreviewImageKey(sheetIndex, rowIndex - 1, img.colIndex(), i));
+                previewImage.setThumbnailBase64(thumbnail);
+                previewImage.setByteSize(img.bytes().length);
+                result.add(previewImage);
+            }
+            return result;
+        }
+
+        List<PreviewDataRow.PreviewRowImage> result = new ArrayList<>();
+        for (PreviewRowImageRef ref : refs) {
+            byte[] bytes = loadCachedPreviewImage(batchId, ref.imageKey());
+            if (bytes == null || bytes.length == 0) {
+                continue;
+            }
+            String thumbnail = createThumbnailBase64(bytes, ref.extension(), 120, 120);
+            if (!StringUtils.hasText(thumbnail)) {
+                continue;
+            }
+            PreviewDataRow.PreviewRowImage previewImage = new PreviewDataRow.PreviewRowImage();
+            previewImage.setImageKey(ref.imageKey());
+            previewImage.setThumbnailBase64(thumbnail);
+            previewImage.setByteSize(bytes.length);
+            result.add(previewImage);
+        }
+        return result;
+    }
+
+    /**
+     * 上传本地图片作为某行的覆盖图片（数据清洗阶段）。
+     *
+     * <p>图片保存到临时路径 {@code preview-images/{batchId}/{tempImageKey}.{ext}}，
+     * 导入成功后再由导入流程统一迁移到正式 {@code images/} 路径并登记 image_assets。</p>
+     *
+     * @param batchId 导入批次 ID
+     * @param file    上传的图片文件
+     * @return 临时图片 key，前端用它作为 overrideImageAssetIds 的元素
+     */
+    public String uploadPreviewImage(String batchId, MultipartFile file) {
+        getAccessibleBatch(batchId);
+        if (file == null || file.isEmpty()) {
+            throw new BusinessException("上传图片不能为空");
+        }
+        String extension = resolveExtension(file.getContentType());
+        String tempImageKey = IdGenerator.imageId();
+        String objectKey = previewUploadObjectKey(batchId, tempImageKey, extension);
+        try {
+            storageService.store(file.getInputStream(), objectKey, file.getSize(), file.getContentType());
+        } catch (IOException e) {
+            log.error("上传预览图片失败，batchId={}", batchId, e);
+            throw new BusinessException("上传预览图片失败: " + e.getMessage());
+        }
+        return tempImageKey;
+    }
+
+    /**
+     * 读取数据清洗阶段上传的临时图片字节。
+     */
+    public byte[] loadPreviewImage(String batchId, String tempImageKey) {
+        getAccessibleBatch(batchId);
+        if (!StringUtils.hasText(tempImageKey)) {
+            return null;
+        }
+        // 临时图片扩展名在存储时已规范化为 web 格式；按 key 反查文件
+        for (String ext : List.of("jpeg", "png", "gif", "webp")) {
+            String objectKey = previewUploadObjectKey(batchId, tempImageKey, ext);
+            try (InputStream in = storageService.get(objectKey)) {
+                return in.readAllBytes();
+            } catch (IOException e) {
+                // 该扩展名不存在，继续尝试下一个
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 设置某行的用户覆盖图片列表。
+     *
+     * @param batchId        导入批次 ID
+     * @param rowIndex       Excel 展示行号（1-based）
+     * @param tempImageKeys  临时图片 key 列表；null/空表示清空覆盖
+     */
+    @Transactional
+    public void setRowImageOverrides(String batchId, int rowIndex, List<String> tempImageKeys) {
+        getAccessibleBatch(batchId);
+        ExcelImportRow row = excelImportRowService.findByBatchAndRowNumber(batchId, rowIndex);
+        Long rowId;
+        if (row == null) {
+            // 数据清洗阶段（导入前）ExcelImportRow 尚未创建，需要占位行来持久化覆盖图。
+            // 导入主流程开始时会整体删除重建行记录，并通过 preserveRowOverrideImages 恢复覆盖图。
+            rowId = excelImportRowService.createPreviewPlaceholderRow(batchId, rowIndex);
+        } else {
+            rowId = row.getRowId();
+        }
+        if (rowId == null) {
+            throw new BusinessException("导入行不存在: batchId=" + batchId + ", rowIndex=" + rowIndex);
+        }
+        List<String> effective = tempImageKeys == null ? List.of()
+            : tempImageKeys.stream().filter(StringUtils::hasText).distinct().toList();
+        excelImportRowService.updateImageOverrides(rowId, effective);
+    }
+
+    /**
+     * 将源行的全部图片（用户覆盖图 + Excel 内嵌图）克隆到目标行的覆盖图列表。
+     *
+     * <p>Excel 内嵌图会先从预览缓存读取原图字节，再写入预览上传临时存储并生成新的 key，
+     * 保证目标行拥有独立的覆盖图副本。若缓存缺失（如长时间未操作被清理），会回退到重新解析
+     * 原始 Excel 文件读取该行的内嵌图。</p>
+     *
+     * @param batchId        导入批次 ID
+     * @param sourceRowIndex 源行号（1-based）
+     * @param targetRowIndex 目标行号（1-based）
+     * @return 目标行最终生效的覆盖图 key 列表
+     */
+    @Transactional
+    public List<String> cloneRowImages(String batchId, int sourceRowIndex, int targetRowIndex) {
+        getAccessibleBatch(batchId);
+        if (sourceRowIndex < 1 || targetRowIndex < 1) {
+            throw new BusinessException("行号必须大于 0");
+        }
+        if (sourceRowIndex == targetRowIndex) {
+            throw new BusinessException("源行与目标行不能相同");
+        }
+        ExcelImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
+        int sourcePhysicalRow = sourceRowIndex - 1;
+        List<String> clonedKeys = new ArrayList<>();
+
+        // 1. 复用源行的用户覆盖图 key（同一 batch 内的临时文件可直接引用）
+        Map<Integer, List<String>> overrideImages = loadRowOverrideImages(batchId);
+        List<String> sourceOverrides = overrideImages.getOrDefault(sourceRowIndex, List.of());
+        clonedKeys.addAll(sourceOverrides);
+        log.info("复制行图片开始，batchId={}, sourceRow={}, targetRow={}, sourceOverrides={}, hasEmbeddedCache={}",
+            batchId, sourceRowIndex, targetRowIndex, sourceOverrides.size(),
+            !listCachedPreviewImages(batchId, sheetIndex, sourcePhysicalRow).isEmpty());
+
+        // 2. 把源行的 Excel 内嵌图原图写入临时上传存储，生成新的覆盖图 key
+        List<PreviewRowImageRef> embeddedRefs = listCachedPreviewImages(batchId, sheetIndex, sourcePhysicalRow);
+        boolean cacheHit = !embeddedRefs.isEmpty();
+        for (PreviewRowImageRef ref : embeddedRefs) {
+            byte[] bytes = loadCachedPreviewImage(batchId, ref.imageKey());
+            if (bytes == null || bytes.length == 0) {
+                log.warn("复制行图片缓存读取为空，batchId={}, sourceRow={}, imageKey={}", batchId, sourceRowIndex, ref.imageKey());
+                continue;
+            }
+            String newKey = storeClonedPreviewImage(batchId, bytes, ref.extension());
+            if (newKey != null) {
+                clonedKeys.add(newKey);
+            }
+        }
+
+        // 3. 缓存缺失时回退：直接解析原始 Excel 读取该行内嵌图
+        if (!cacheHit) {
+            log.info("复制行图片缓存未命中，回退解析 Excel，batchId={}, sourceRow={}", batchId, sourceRowIndex);
+            byte[] fileBytes = readBatchFileBytes(batch);
+            if (fileBytes != null && fileBytes.length > 0) {
+                EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(fileBytes, batch.getFileName(), batchId);
+                String key = sheetIndex + "," + sourcePhysicalRow;
+                List<ExcelImageExtractor.EmbeddedImage> rowImages = embeddedImagesResult.images().getOrDefault(key, List.of());
+                for (ExcelImageExtractor.EmbeddedImage img : rowImages) {
+                    if (isUnsupportedWebImageFormat(img.extension())) {
+                        continue;
+                    }
+                    String newKey = storeClonedPreviewImage(batchId, img.bytes(), img.extension());
+                    if (newKey != null) {
+                        clonedKeys.add(newKey);
+                    }
+                }
+            }
+        }
+
+        List<String> effective = clonedKeys.stream().filter(StringUtils::hasText).distinct().toList();
+        setRowImageOverrides(batchId, targetRowIndex, effective);
+        log.info("复制行图片完成，batchId={}, sourceRow={}, targetRow={}, clonedCount={}",
+            batchId, sourceRowIndex, targetRowIndex, effective.size());
+        return effective;
+    }
+
+    /**
+     * 把图片字节写入预览上传临时存储，返回新的临时图片 key；失败时返回 null。
+     */
+    private String storeClonedPreviewImage(String batchId, byte[] bytes, String extension) {
+        String newKey = IdGenerator.imageId();
+        String normalizedExt = normalizeImageFormat(extension);
+        String objectKey = previewUploadObjectKey(batchId, newKey, normalizedExt);
+        String contentType = switch (normalizedExt.toLowerCase()) {
+            case "png" -> "image/png";
+            case "gif" -> "image/gif";
+            case "webp" -> "image/webp";
+            default -> "image/jpeg";
+        };
+        try {
+            storageService.store(new ByteArrayInputStream(bytes), objectKey, bytes.length, contentType);
+            return newKey;
+        } catch (IOException e) {
+            log.warn("克隆行图片写入存储失败，batchId={}, objectKey={}", batchId, objectKey, e);
+            return null;
+        }
+    }
+
+    private String previewUploadObjectKey(String batchId, String tempImageKey, String extension) {
+        return PREVIEW_UPLOAD_IMAGE_PREFIX + "/" + sanitizeFileName(batchId) + "/"
+            + sanitizeFileName(tempImageKey) + "." + normalizeImageFormat(extension);
+    }
+
+    /**
+     * 清理数据清洗阶段上传的临时图片文件。
+     */
+    private void cleanPreviewUploadImages(String batchId, Map<Integer, List<String>> overrideImages) {
+        if (overrideImages == null || overrideImages.isEmpty()) {
+            return;
+        }
+        Set<String> keys = overrideImages.values().stream()
+            .flatMap(List::stream)
+            .collect(Collectors.toSet());
+        for (String key : keys) {
+            for (String ext : List.of("jpeg", "png", "gif", "webp")) {
+                String objectKey = previewUploadObjectKey(batchId, key, ext);
+                try {
+                    storageService.delete(objectKey);
+                } catch (IOException e) {
+                    log.warn("删除预览上传临时图片失败，objectKey={}", objectKey, e);
+                }
+            }
+        }
+    }
+
+    private String toJsonList(List<String> list) {
+        if (list == null || list.isEmpty()) {
+            return "[]";
+        }
+        try {
+            return objectMapper.writeValueAsString(list);
+        } catch (Exception e) {
+            log.warn("序列化字符串列表失败", e);
+            return "[]";
+        }
+    }
+
+    private byte[] readBatchFileBytes(ExcelImportBatch batch) {
+        if (!StringUtils.hasText(batch.getStoragePath())) {
+            return null;
+        }
+        try (InputStream in = storageService.get(batch.getStoragePath())) {
+            return in.readAllBytes();
+        } catch (Exception e) {
+            log.warn("读取批次文件失败，batchId={}", batch.getBatchId(), e);
+            return null;
+        }
+    }
+
+    private Map<String, String> loadColumnMapping(ExcelImportBatch batch) {
+        if (!StringUtils.hasText(batch.getColumnMapping())) {
+            return new HashMap<>();
+        }
+        try {
+            return objectMapper.readValue(batch.getColumnMapping(), new TypeReference<Map<String, String>>() {
+            });
+        } catch (Exception e) {
+            log.warn("解析批次字段映射失败，batchId={}", batch.getBatchId(), e);
+            return new HashMap<>();
+        }
+    }
+
+    /**
+     * 为预览行构建内嵌图片元数据，并把原图字节写入本地临时文件缓存，
+     * 供按行懒加载缩略图时直接读取，避免每次请求都重新解析整个 Excel。
+     *
+     * @param batchId          导入批次 ID
+     * @param displayRowIndex  展示行号（1-based）
+     * @param sheetIndex       工作表索引
+     * @param headers          原始表头列表（按物理列顺序）
+     * @param imageColumns     图片列物理索引集合
+     * @param embeddedImages   Excel 内嵌图片（key = sheetIndex,physicalRowIndex）
+     * @return 该行图片元数据列表
+     */
+    private List<PreviewDataRow.PreviewRowImage> buildPreviewRowImages(String batchId, int displayRowIndex, int sheetIndex,
+                                                                       List<String> headers, Set<Integer> imageColumns,
+                                                                       Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages) {
+        List<PreviewDataRow.PreviewRowImage> result = new ArrayList<>();
+        if (embeddedImages == null || embeddedImages.isEmpty()) {
+            return result;
+        }
+        // displayRowIndex 是 1-based，embeddedImages key 使用 0-based 物理行号
+        int physicalRowIndex = displayRowIndex - 1;
+        String key = sheetIndex + "," + physicalRowIndex;
+        List<ExcelImageExtractor.EmbeddedImage> rowImages = embeddedImages.get(key);
+        if (rowImages == null || rowImages.isEmpty()) {
+            return result;
+        }
+        for (int i = 0; i < rowImages.size(); i++) {
+            ExcelImageExtractor.EmbeddedImage img = rowImages.get(i);
+            if (isUnsupportedWebImageFormat(img.extension())) {
+                continue;
+            }
+            String imageKey = buildPreviewImageKey(sheetIndex, physicalRowIndex, img.colIndex(), i);
+            cachePreviewImage(batchId, imageKey, img.extension(), img.bytes());
+            PreviewDataRow.PreviewRowImage previewImage = new PreviewDataRow.PreviewRowImage();
+            previewImage.setImageKey(imageKey);
+            String header = img.colIndex() >= 0 && img.colIndex() < headers.size()
+                ? headers.get(img.colIndex())
+                : "图片";
+            previewImage.setColumnHeader(header);
+            previewImage.setPrimaryCandidate(imageColumns.contains(img.colIndex()));
+            previewImage.setByteSize(img.bytes().length);
+            result.add(previewImage);
+        }
+        return result;
+    }
+
+    private String buildPreviewImageKey(int sheetIndex, int physicalRowIndex, int colIndex, int imageIndex) {
+        return sheetIndex + "," + physicalRowIndex + "," + colIndex + "," + imageIndex;
+    }
+
+    /**
+     * 预览图片临时文件引用（用于按 sheet/行 列取缓存）。
+     */
+    private record PreviewRowImageRef(String imageKey, String extension) {
+    }
+
+    /**
+     * 把预览阶段提取出的原图字节写入本地临时文件缓存。
+     */
+    private void cachePreviewImage(String batchId, String imageKey, String extension, byte[] bytes) {
+        if (!StringUtils.hasText(batchId) || !StringUtils.hasText(imageKey) || bytes == null || bytes.length == 0) {
+            return;
+        }
+        try {
+            Path dir = previewImageCacheDir(batchId);
+            Files.createDirectories(dir);
+            String ext = normalizeImageFormat(extension);
+            Path file = dir.resolve(sanitizeFileName(imageKey) + "." + ext);
+            Files.write(file, bytes);
+        } catch (Exception e) {
+            log.warn("写入预览图片缓存失败，batchId={}, imageKey={}", batchId, imageKey, e);
+        }
+    }
+
+    /**
+     * 从本地临时文件缓存读取原图字节。
+     */
+    private byte[] loadCachedPreviewImage(String batchId, String imageKey) {
+        if (!StringUtils.hasText(batchId) || !StringUtils.hasText(imageKey)) {
+            return null;
+        }
+        try {
+            Path dir = previewImageCacheDir(batchId);
+            String baseName = sanitizeFileName(imageKey);
+            // 缓存文件扩展名在写入时已规范化为 web 格式
+            for (String ext : List.of("png", "jpeg", "gif", "webp")) {
+                Path file = dir.resolve(baseName + "." + ext);
+                if (Files.exists(file)) {
+                    return Files.readAllBytes(file);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取预览图片缓存失败，batchId={}, imageKey={}", batchId, imageKey, e);
+        }
+        return null;
+    }
+
+    /**
+     * 列出指定 sheet + 物理行在本地缓存中的所有图片引用。
+     */
+    private List<PreviewRowImageRef> listCachedPreviewImages(String batchId, int sheetIndex, int physicalRowIndex) {
+        if (!StringUtils.hasText(batchId)) {
+            return List.of();
+        }
+        String prefix = sheetIndex + "," + physicalRowIndex + ",";
+        Path dir = previewImageCacheDir(batchId);
+        if (!Files.exists(dir)) {
+            return List.of();
+        }
+        List<PreviewRowImageRef> result = new ArrayList<>();
+        try (var stream = Files.list(dir)) {
+            stream.forEach(file -> {
+                String name = file.getFileName().toString();
+                if (!name.startsWith(prefix) || !name.contains(".")) {
+                    return;
+                }
+                String key = name.substring(0, name.lastIndexOf('.'));
+                String ext = name.substring(name.lastIndexOf('.') + 1);
+                result.add(new PreviewRowImageRef(key, ext));
+            });
+        } catch (Exception e) {
+            log.warn("列取预览图片缓存失败，batchId={}", batchId, e);
+        }
+        // 按 imageKey 中的 sheetIndex,physicalRowIndex,colIndex,imageIndex 做数值排序，
+        // 避免字典序导致 "10" < "2"，从而保证缩略图/克隆顺序与 buildPreviewRowImages 一致。
+        result.sort(Comparator.comparing(PreviewRowImageRef::imageKey, ExcelAiImportService::compareImageKeys));
+        return result;
+    }
+
+    /**
+     * 比较两个预览图片 key 的数值顺序。
+     *
+     * <p>key 格式为 {@code sheetIndex,physicalRowIndex,colIndex,imageIndex}，
+     * 必须按整数逐段比较；单纯字符串比较会出现 "10" < "2" 的错误。</p>
+     */
+    static int compareImageKeys(String k1, String k2) {
+        String[] p1 = k1.split(",");
+        String[] p2 = k2.split(",");
+        int len = Math.min(p1.length, p2.length);
+        for (int i = 0; i < len; i++) {
+            int cmp = Integer.compare(Integer.parseInt(p1[i]), Integer.parseInt(p2[i]));
+            if (cmp != 0) {
+                return cmp;
+            }
+        }
+        return Integer.compare(p1.length, p2.length);
+    }
+
+    private Path previewImageCacheDir(String batchId) {
+        return Paths.get(System.getProperty("java.io.tmpdir"), PREVIEW_IMAGE_CACHE_DIR, sanitizeFileName(batchId));
+    }
+
+    private String sanitizeFileName(String name) {
+        if (name == null) {
+            return "unknown";
+        }
+        return name.replaceAll("[^a-zA-Z0-9,\\-_]", "_");
+    }
+
+    private String extensionFromImageKey(String imageKey) {
+        if (!StringUtils.hasText(imageKey)) {
+            return "png";
+        }
+        // imageKey 本身不含扩展名，按缓存写入规则反查文件
+        return "jpeg";
+    }
+
+    /**
+     * 生成 Base64 缩略图 data URL；若图片本身已小于目标尺寸则直接转 Base64。
+     */
+    private String createThumbnailBase64(byte[] imageBytes, String extension, int maxWidth, int maxHeight) {
+        try (ByteArrayInputStream in = new ByteArrayInputStream(imageBytes)) {
+            BufferedImage original = ImageIO.read(in);
+            if (original == null) {
+                return null;
+            }
+            int w = original.getWidth();
+            int h = original.getHeight();
+            double scale = Math.min((double) maxWidth / w, (double) maxHeight / h);
+            String fmt = normalizeImageFormat(extension);
+            if (scale >= 1.0) {
+                return toBase64DataUrl(imageBytes, fmt);
+            }
+            int newW = Math.max(1, (int) (w * scale));
+            int newH = Math.max(1, (int) (h * scale));
+            BufferedImage thumb = new BufferedImage(newW, newH, BufferedImage.TYPE_INT_RGB);
+            thumb.createGraphics().drawImage(original.getScaledInstance(newW, newH, Image.SCALE_SMOOTH), 0, 0, null);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ImageIO.write(thumb, fmt, out);
+            return toBase64DataUrl(out.toByteArray(), fmt);
+        } catch (Exception e) {
+            log.warn("生成预览缩略图失败，extension={}", extension, e);
+            return null;
+        }
+    }
+
+    private String toBase64DataUrl(byte[] bytes, String format) {
+        String mime = switch (format.toLowerCase()) {
+            case "jpg", "jpeg" -> "image/jpeg";
+            case "png" -> "image/png";
+            case "webp" -> "image/webp";
+            case "gif" -> "image/gif";
+            default -> "image/png";
+        };
+        return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
+    }
+
+    private String normalizeImageFormat(String extension) {
+        if (!StringUtils.hasText(extension)) {
+            return "png";
+        }
+        String ext = extension.startsWith(".") ? extension.substring(1) : extension;
+        ext = ext.toLowerCase();
+        return switch (ext) {
+            case "jpg", "jpeg", "png", "webp", "gif" -> ext.equals("jpg") ? "jpeg" : ext;
+            default -> "png";
+        };
+    }
+
+    private boolean isUnsupportedWebImageFormat(String extension) {
+        if (!StringUtils.hasText(extension)) {
+            return false;
+        }
+        String ext = extension.startsWith(".") ? extension.substring(1) : extension;
+        return Set.of("emf", "wmf", "tiff", "tif").contains(ext.toLowerCase());
     }
 
     /**
@@ -588,6 +1364,12 @@ public class ExcelAiImportService {
             EasyExcel.read(stream, new ReadListener<Map<Integer, String>>() {
                 @Override
                 public void invoke(Map<Integer, String> row, AnalysisContext context) {
+                    // 行数上限流式控制：超限即中断解析，不把超限文件全量读入内存。
+                    // 阈值预留标题/表头余量（MAX_TITLE_SCAN_ROWS + 双行表头），合法文件不受影响，
+                    // 精确判定仍由调用方按表头布局复核
+                    if (rows.size() >= MAX_ROWS + MAX_TITLE_SCAN_ROWS + 2) {
+                        throw new RowLimitExceededException();
+                    }
                     Integer rowIndex = context.readRowHolder().getRowIndex();
                     rows.add(new IndexedRow(rowIndex != null ? rowIndex : rows.size(), row));
                 }
@@ -597,10 +1379,33 @@ public class ExcelAiImportService {
                 }
             }).sheet(sheetIndex).headRowNumber(0).doRead();
         } catch (Exception e) {
+            if (isRowLimitExceeded(e)) {
+                throw new BusinessException("单次导入不能超过 " + MAX_ROWS + " 行数据");
+            }
             log.error("解析 Excel 失败", e);
             throw new BusinessException("解析 Excel 失败，请检查文件格式");
         }
         return rows;
+    }
+
+    /** 行数超限中断解析的标记异常（流式上限控制用，见 parseExcelRaw）。 */
+    private static final class RowLimitExceededException extends RuntimeException {
+    }
+
+    /**
+     * 沿异常链查找行数超限标记（EasyExcel 可能将监听器异常包装后抛出）。
+     *
+     * @param e 解析异常
+     * @return true 表示因行数超限中断
+     */
+    private boolean isRowLimitExceeded(Throwable e) {
+        while (e != null) {
+            if (e instanceof RowLimitExceededException) {
+                return true;
+            }
+            e = e.getCause();
+        }
+        return false;
     }
 
     /**
@@ -733,11 +1538,20 @@ public class ExcelAiImportService {
     /**
      * 枚举工作簿全部工作表（名称 + 近似行数）。CSV 等非 Excel 内容回退单工作表。
      *
+     * <p>xlsx 走 OPCPackage + XSSFReader 只读枚举（不触发 XSSF 全量加载整个工作簿）；
+     * .xls 二进制保留 WorkbookFactory 方式（文件量小）。</p>
+     *
      * @param fileBytes  文件字节
      * @param fileName   原始文件名（日志用）
      * @return 工作表列表（至少含一个元素）
      */
     private List<ExcelSheetInfo> listSheets(byte[] fileBytes, String fileName) {
+        if (isXlsxContent(fileBytes)) {
+            List<ExcelSheetInfo> sheets = listXlsxSheets(fileBytes, fileName);
+            if (sheets != null) {
+                return sheets;
+            }
+        }
         try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(fileBytes))) {
             List<ExcelSheetInfo> sheets = new ArrayList<>();
             for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
@@ -751,6 +1565,65 @@ public class ExcelAiImportService {
             log.debug("枚举工作表失败（按单工作表处理），file={}", fileName, e);
             return List.of(new ExcelSheetInfo(0, "Sheet1", 0));
         }
+    }
+
+    /**
+     * 按 ZIP 魔数（PK）判断是否为 xlsx 内容。
+     *
+     * @param fileBytes 文件字节
+     * @return true 表示 xlsx（ZIP 容器）
+     */
+    private boolean isXlsxContent(byte[] fileBytes) {
+        return fileBytes != null && fileBytes.length >= 2 && fileBytes[0] == 'P' && fileBytes[1] == 'K';
+    }
+
+    /**
+     * 用 OPCPackage + XSSFReader 只读枚举 xlsx 工作表：名称直接读取，
+     * 行数用 SAX 流式统计 sheet XML 的 row 元素，不做 XSSF 全量加载。
+     * 失败返回 null，由调用方回退 WorkbookFactory 方式。
+     *
+     * @param fileBytes 文件字节
+     * @param fileName  原始文件名（日志用）
+     * @return 工作表列表；解析失败为 null
+     */
+    private List<ExcelSheetInfo> listXlsxSheets(byte[] fileBytes, String fileName) {
+        List<ExcelSheetInfo> sheets = new ArrayList<>();
+        try (OPCPackage pkg = OPCPackage.open(new ByteArrayInputStream(fileBytes))) {
+            XSSFReader reader = new XSSFReader(pkg);
+            XSSFReader.SheetIterator sheetIterator = (XSSFReader.SheetIterator) reader.getSheetsData();
+            int index = 0;
+            while (sheetIterator.hasNext()) {
+                try (InputStream sheetStream = sheetIterator.next()) {
+                    sheets.add(new ExcelSheetInfo(index++, sheetIterator.getSheetName(),
+                        countSheetRows(sheetStream)));
+                }
+            }
+            return sheets.isEmpty() ? List.of(new ExcelSheetInfo(0, "Sheet1", 0)) : sheets;
+        } catch (Exception e) {
+            log.debug("XSSFReader 枚举工作表失败（回退 WorkbookFactory），file={}", fileName, e);
+            return null;
+        }
+    }
+
+    /**
+     * SAX 流式统计 sheet XML 中的 row 元素数（近似物理行数，与 lastRowNum+1 同为上限口径）。
+     *
+     * @param sheetStream sheet XML 输入流
+     * @return row 元素数
+     */
+    private int countSheetRows(InputStream sheetStream) throws Exception {
+        XMLReader parser = XMLHelper.newXMLReader();
+        int[] rowCount = {0};
+        parser.setContentHandler(new DefaultHandler() {
+            @Override
+            public void startElement(String uri, String localName, String qName, Attributes attributes) {
+                if ("row".equals(localName) || "row".equals(qName)) {
+                    rowCount[0]++;
+                }
+            }
+        });
+        parser.parse(new InputSource(sheetStream));
+        return rowCount[0];
     }
 
     private ProcessedMapping postProcessMapping(Map<String, String> aiMapping,
@@ -919,7 +1792,8 @@ public class ExcelAiImportService {
      *
      * <p>此类行若按普通产品导入，会生成无尺寸、无材质、无独立型号的「假产品」。
      * 识别特征：类别列值为组合/套餐名（含「一桌」「组合」「套餐」「套装」「搭配」或「+」），
-     * 且缺少尺寸、材质解析、材质标签等产品细节字段。</p>
+     * 且缺少尺寸、尺寸码、材质码等可独立建产品的标识字段。
+     * 注意：汇总行可能携带整组补充描述/材质标签，不应仅因存在描述就视为真实产品。</p>
      *
      * @param dataRow 数据行（表头 → 值）
      * @param mapping 确认后的字段映射（表头 → 标准字段）
@@ -940,14 +1814,15 @@ public class ExcelAiImportService {
         if (!isComboName) {
             return false;
         }
-        // 组合汇总行通常只有价格/件数，没有产品细节；
-        // 若同时存在尺寸/材质/描述等细节，则视为真实产品，不跳过。
+        // 组合汇总行通常只有价格/件数/描述补充，没有具体产品细节；
+        // 判断核心是「缺少可独立建产品的标识」：尺寸、尺寸码、材质码。
+        // 描述/材质标签可能作为整组补充说明分散在汇总行，不应因存在描述就视为真实产品。
         String dimensions = getMappedCellValue(dataRow, mapping, "dimensions");
-        String description = getMappedCellValue(dataRow, mapping, "description");
-        String materialTags = getMappedCellValue(dataRow, mapping, "materialTags");
+        String sizeCode = getMappedCellValue(dataRow, mapping, "sizeCode");
+        String materialCode = getMappedCellValue(dataRow, mapping, "materialCode");
         return !StringUtils.hasText(dimensions)
-            && !StringUtils.hasText(description)
-            && !StringUtils.hasText(materialTags);
+            && !StringUtils.hasText(sizeCode)
+            && !StringUtils.hasText(materialCode);
     }
 
     /**
@@ -995,7 +1870,8 @@ public class ExcelAiImportService {
             .filter(e -> {
                 String field = e.getValue();
                 return field != null && (field.contains("externalCode") || field.contains("productName")
-                    || field.contains("categoryCode"));
+                    || field.contains("categoryCode") || field.contains("description")
+                    || field.contains("materialTags"));
             })
             .map(Map.Entry::getKey)
             .toList();
@@ -1019,6 +1895,137 @@ public class ExcelAiImportService {
                 }
             }
         }
+    }
+
+    /**
+     * 应用用户在「导入前全量预览」中对原始单元格的编辑。
+     *
+     * <p>以原始表头为定位键，按 rowIndex 找到对应数据行后直接覆盖；找不到的行/列仅记日志跳过，
+     * 不阻断导入。编辑优先级高于 forward fill。</p>
+     *
+     * @param dataRows     数据行列表（就地修改）
+     * @param previewEdits 用户编辑项
+     */
+    private void applyPreviewEdits(List<Map<String, String>> dataRows, List<PreviewEdit> previewEdits) {
+        if (previewEdits == null || previewEdits.isEmpty()) {
+            return;
+        }
+        Map<Integer, Map<String, String>> rowByIndex = new LinkedHashMap<>();
+        for (Map<String, String> row : dataRows) {
+            String rowIndexStr = row.get("__rowIndex__");
+            if (StringUtils.hasText(rowIndexStr)) {
+                try {
+                    rowByIndex.put(Integer.parseInt(rowIndexStr), row);
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        for (PreviewEdit edit : previewEdits) {
+            Map<String, String> row = rowByIndex.get(edit.getRowIndex());
+            if (row == null) {
+                log.warn("previewEdit 目标行不存在，rowIndex={}", edit.getRowIndex());
+                continue;
+            }
+            if (!row.containsKey(edit.getHeader())) {
+                log.warn("previewEdit 目标列不存在，rowIndex={}, header={}", edit.getRowIndex(), edit.getHeader());
+                continue;
+            }
+            row.put(edit.getHeader(), edit.getValue());
+        }
+    }
+
+    /**
+     * 按图片列合并单元格分组，聚合组内描述/材质并回写到组内每一行。
+     *
+     * <p>工厂报价单里一张组合图常纵向覆盖 茶桌/主椅/方凳 多行，而「材质解析」只写在其中一行、
+     * 甚至写在汇总行（如「一桌四椅」）。本方法把同一图片合并组内的非空 description/materialTags
+     * 收集起来（去重、按出现顺序拼接），再写回组内每个成员行，保证每个独立 RSPU 都拿到完整描述。</p>
+     *
+     * @param dataRows       数据行列表（就地修改）
+     * @param mapping        确认后的字段映射（表头 → 标准字段）
+     * @param physicalLayout 物理布局（含图片合并组）
+     */
+    private void propagateGroupFields(List<Map<String, String>> dataRows, Map<String, String> mapping,
+                                      PhysicalLayout physicalLayout) {
+        if (physicalLayout == null || physicalLayout.imageMergedGroups().isEmpty()) {
+            return;
+        }
+        String descriptionHeader = mapping.entrySet().stream()
+            .filter(e -> "description".equals(e.getValue()))
+            .map(Map.Entry::getKey)
+            .findFirst()
+            .orElse(null);
+        String materialTagsHeader = mapping.entrySet().stream()
+            .filter(e -> "materialTags".equals(e.getValue()))
+            .map(Map.Entry::getKey)
+            .findFirst()
+            .orElse(null);
+        if (descriptionHeader == null && materialTagsHeader == null) {
+            return;
+        }
+
+        // 建立物理行号 -> 逻辑数据行索引的映射（dataRowPhysicalIndexes 与 dataRows 顺序一一对应）
+        Map<Integer, Integer> physicalToLogical = new LinkedHashMap<>();
+        for (int i = 0; i < dataRows.size() && i < physicalLayout.dataRowPhysicalIndexes().size(); i++) {
+            Map<String, String> row = dataRows.get(i);
+            if (isRepeatedHeaderRow(row)) {
+                continue;
+            }
+            physicalToLogical.put(physicalLayout.dataRowPhysicalIndexes().get(i), i);
+        }
+
+        for (RowRange group : physicalLayout.imageMergedGroups()) {
+            List<String> descriptions = new ArrayList<>();
+            List<String> materials = new ArrayList<>();
+            List<Integer> logicalIndexes = new ArrayList<>();
+            for (int physicalRow = group.startRow(); physicalRow <= group.endRow(); physicalRow++) {
+                Integer logicalIndex = physicalToLogical.get(physicalRow);
+                if (logicalIndex == null) {
+                    continue;
+                }
+                logicalIndexes.add(logicalIndex);
+                Map<String, String> row = dataRows.get(logicalIndex);
+                collectIfPresent(row, descriptionHeader, descriptions);
+                collectIfPresent(row, materialTagsHeader, materials);
+            }
+            if (logicalIndexes.isEmpty()) {
+                continue;
+            }
+            String mergedDescription = joinUnique(descriptions, "\n");
+            String mergedMaterial = joinUnique(materials, ",");
+            for (int logicalIndex : logicalIndexes) {
+                Map<String, String> row = dataRows.get(logicalIndex);
+                if (descriptionHeader != null && StringUtils.hasText(mergedDescription)) {
+                    row.put(descriptionHeader, mergedDescription);
+                }
+                if (materialTagsHeader != null && StringUtils.hasText(mergedMaterial)) {
+                    row.put(materialTagsHeader, mergedMaterial);
+                }
+            }
+        }
+    }
+
+    private void collectIfPresent(Map<String, String> row, String header, List<String> collector) {
+        if (header == null) {
+            return;
+        }
+        String value = row.get(header);
+        if (StringUtils.hasText(value)) {
+            collector.add(value.trim());
+        }
+    }
+
+    private String joinUnique(List<String> parts, String delimiter) {
+        Set<String> seen = new LinkedHashSet<>();
+        for (String part : parts) {
+            for (String token : part.split(delimiter.equals("\n") ? "\\r?\\n" : delimiter)) {
+                String trimmed = token.trim();
+                if (StringUtils.hasText(trimmed)) {
+                    seen.add(trimmed);
+                }
+            }
+        }
+        return String.join(delimiter, seen);
     }
 
     private Map<String, String> sanitizeMapping(Map<String, String> mapping) {
@@ -1133,7 +2140,7 @@ public class ExcelAiImportService {
 
     private ExcelImportBatch saveBatch(String fileName, String storagePath, AiMappingResult mappingResult,
                                        Map<Integer, String> headerMap, List<Map<Integer, String>> dataRows,
-                                       int sheetIndex) {
+                                       List<Integer> dataRowPhysicalIndexes, int sheetIndex) {
         ExcelImportBatch batch = new ExcelImportBatch();
         batch.setBatchId(IdGenerator.batchId());
         batch.setFileName(fileName);
@@ -1157,9 +2164,13 @@ public class ExcelAiImportService {
         try {
             batch.setColumnMapping(objectMapper.writeValueAsString(mappingResult.mapping));
             batch.setPriceColumns(objectMapper.writeValueAsString(mappingResult.priceColumns));
-            List<Map<String, String>> keyedRows = dataRows.stream()
-                .map(row -> convertRowToKeyMap(row, headerMap))
-                .toList();
+            List<Map<String, String>> keyedRows = new ArrayList<>();
+            for (int i = 0; i < dataRows.size(); i++) {
+                Map<String, String> keyedRow = convertRowToKeyMap(dataRows.get(i), headerMap);
+                int physicalIndex = dataRowPhysicalIndexes.get(i);
+                keyedRow.put("__rowIndex__", String.valueOf(physicalIndex + 1));
+                keyedRows.add(keyedRow);
+            }
             batch.setPreviewRows(objectMapper.writeValueAsString(keyedRows));
             batch.setFailures("[]");
         } catch (Exception e) {
@@ -1211,11 +2222,58 @@ public class ExcelAiImportService {
                 new TypeReference<List<Map<String, String>>>() {
                 });
             response.setPreviewRows(previewRows.subList(0, Math.min(previewRows.size(), PREVIEW_ROW_COUNT)));
+            response.setUnmappedColumns(buildUnmappedColumns(headerMap, mappingResult, previewRows));
         } catch (Exception e) {
             log.warn("解析预览行失败，batchId={}", batch.getBatchId(), e);
             response.setPreviewRows(new ArrayList<>());
+            response.setUnmappedColumns(new ArrayList<>());
         }
         return response;
+    }
+
+    /**
+     * 构建未映射列清单：所有非空表头中，未被建议映射且未被识别为价格列的列。
+     *
+     * @param headerMap     原始表头映射（物理列索引 → 表头）
+     * @param mappingResult AI 映射结果
+     * @param previewRows   原始数据行（表头 → 值）
+     * @return 未映射列信息列表（按列顺序）
+     */
+    private List<UnmappedColumnInfo> buildUnmappedColumns(Map<Integer, String> headerMap,
+                                                          AiMappingResult mappingResult,
+                                                          List<Map<String, String>> previewRows) {
+        Set<String> mappedHeaders = new HashSet<>(mappingResult.mapping.keySet());
+        for (PriceColumnInfo priceColumn : mappingResult.priceColumns) {
+            if (StringUtils.hasText(priceColumn.getHeader())) {
+                mappedHeaders.add(priceColumn.getHeader());
+            }
+        }
+
+        List<UnmappedColumnInfo> result = new ArrayList<>();
+        int sampleLimit = 3;
+        for (String header : headerMap.values()) {
+            if (!StringUtils.hasText(header) || mappedHeaders.contains(header)) {
+                continue;
+            }
+            UnmappedColumnInfo info = new UnmappedColumnInfo();
+            info.setHeader(header);
+            List<String> samples = new ArrayList<>();
+            for (Map<String, String> row : previewRows) {
+                String value = row.get(header);
+                if (StringUtils.hasText(value)) {
+                    String trimmed = value.trim();
+                    if (!samples.contains(trimmed)) {
+                        samples.add(trimmed);
+                        if (samples.size() >= sampleLimit) {
+                            break;
+                        }
+                    }
+                }
+            }
+            info.setSampleValues(samples);
+            result.add(info);
+        }
+        return result;
     }
 
     private List<Map<String, String>> loadRawDataRows(ExcelImportBatch batch) {
@@ -1307,19 +2365,33 @@ public class ExcelAiImportService {
             return new EmbeddedImagesResult(Collections.emptyMap(), false, null, null);
         }
         try (InputStream in = storageService.get(batch.getStoragePath())) {
-            byte[] bytes = in.readAllBytes();
+            return loadEmbeddedImages(in.readAllBytes(), batch.getFileName(), batch.getBatchId());
+        } catch (Exception e) {
+            log.warn("提取 Excel 内嵌图片失败，batchId={}", batch.getBatchId(), e);
+            return new EmbeddedImagesResult(Collections.emptyMap(), false, null, e.getMessage());
+        }
+    }
+
+    /**
+     * 从已加载的文件字节中提取内嵌图片，避免重复读取 storage（预览接口复用）。
+     */
+    private EmbeddedImagesResult loadEmbeddedImages(byte[] fileBytes, String fileName, String batchId) {
+        if (fileBytes == null || fileBytes.length == 0) {
+            return new EmbeddedImagesResult(Collections.emptyMap(), false, null, null);
+        }
+        try {
             // CSV 无内嵌图片概念：直接返回空结果，不走 POI 解析，
             // 避免每个 CSV 批次都产生一条虚假的「图片提取失败」批次级失败明细（P2-9）
-            if (isCsvContent(bytes, batch.getFileName())) {
+            if (isCsvContent(fileBytes, fileName)) {
                 return new EmbeddedImagesResult(Collections.emptyMap(), false, null, null);
             }
             long maxBytes = (long) maxTotalImageMb * 1024 * 1024;
             ExcelImageExtractor.ExtractionResult extraction =
-                ExcelImageExtractor.extractWithLimit(new MultipartFileAdapter(bytes, batch.getFileName()), maxBytes);
+                ExcelImageExtractor.extractWithLimit(new MultipartFileAdapter(fileBytes, fileName), maxBytes);
             return new EmbeddedImagesResult(extraction.images(), extraction.truncated(),
                 extraction.truncationReason(), null);
         } catch (Exception e) {
-            log.warn("提取 Excel 内嵌图片失败，batchId={}", batch.getBatchId(), e);
+            log.warn("提取 Excel 内嵌图片失败，batchId={}", batchId, e);
             return new EmbeddedImagesResult(Collections.emptyMap(), false, null, e.getMessage());
         }
     }
@@ -1364,10 +2436,24 @@ public class ExcelAiImportService {
         if (!StringUtils.hasText(batch.getStoragePath())) {
             return null;
         }
-        int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
         try (InputStream in = storageService.get(batch.getStoragePath())) {
-            byte[] bytes = in.readAllBytes();
-            List<IndexedRow> rawRows = parseExcelRaw(bytes, sheetIndex);
+            return loadPhysicalLayout(in.readAllBytes(), batch);
+        } catch (Exception e) {
+            log.warn("重建数据行物理布局失败，batchId={}", batch.getBatchId(), e);
+            return null;
+        }
+    }
+
+    /**
+     * 从已加载的文件字节中重建物理布局，避免重复读取 storage（预览接口复用）。
+     */
+    private PhysicalLayout loadPhysicalLayout(byte[] fileBytes, ExcelImportBatch batch) {
+        if (fileBytes == null || fileBytes.length == 0) {
+            return null;
+        }
+        int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
+        try {
+            List<IndexedRow> rawRows = parseExcelRaw(fileBytes, sheetIndex);
             List<Map<Integer, String>> rawValues = valuesOf(rawRows);
             HeaderLayout headerLayout = detectHeaderLayout(rawValues);
             List<Integer> indexes = new ArrayList<>();
@@ -1391,10 +2477,60 @@ public class ExcelAiImportService {
                     }
                 }
             }
-            return new PhysicalLayout(indexes, imageColumns, minCol, maxCol, resolveSheetName(bytes, sheetIndex));
+            // 图片列合并单元格分组：用于把跨多行的组合图所覆盖行的描述/材质聚合到组内每一行
+            List<RowRange> imageMergedGroups = collectImageMergedGroups(fileBytes, sheetIndex, imageColumns);
+            return new PhysicalLayout(indexes, imageColumns, minCol, maxCol, imageMergedGroups,
+                resolveSheetName(fileBytes, sheetIndex));
         } catch (Exception e) {
             log.warn("重建数据行物理布局失败，batchId={}", batch.getBatchId(), e);
             return null;
+        }
+    }
+
+    /**
+     * 收集图片列上的合并单元格所覆盖的物理行范围。
+     *
+     * <p>工厂报价单常见组合图（如「一桌四椅」）跨多行锚定，覆盖 茶桌/主椅/方凳 等成员行。
+     * 通过识别这些合并区域，可把组内分散的描述/材质解析聚合后共享给每个成员行。</p>
+     *
+     * @param fileBytes    原始 Excel 字节
+     * @param sheetIndex   工作表索引
+     * @param imageColumns 图片列物理列索引集合
+     * @return 图片合并组物理行范围列表（已按起始行排序、去重）
+     */
+    private List<RowRange> collectImageMergedGroups(byte[] fileBytes, int sheetIndex,
+                                                    Set<Integer> imageColumns) {
+        if (imageColumns.isEmpty()) {
+            return List.of();
+        }
+        try (InputStream stream = new ByteArrayInputStream(fileBytes);
+             Workbook workbook = WorkbookFactory.create(stream)) {
+            if (sheetIndex < 0 || sheetIndex >= workbook.getNumberOfSheets()) {
+                return List.of();
+            }
+            Sheet sheet = workbook.getSheetAt(sheetIndex);
+            List<RowRange> groups = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (int i = 0; i < sheet.getNumMergedRegions(); i++) {
+                CellRangeAddress region = sheet.getMergedRegion(i);
+                if (!imageColumns.contains(region.getFirstColumn())) {
+                    continue;
+                }
+                int start = region.getFirstRow();
+                int end = region.getLastRow();
+                if (start < 0 || end < start) {
+                    continue;
+                }
+                String key = start + "-" + end;
+                if (seen.add(key)) {
+                    groups.add(new RowRange(start, end));
+                }
+            }
+            groups.sort(Comparator.comparingInt(RowRange::startRow));
+            return groups;
+        } catch (Exception e) {
+            log.warn("收集图片列合并区域失败，sheetIndex={}", sheetIndex, e);
+            return List.of();
         }
     }
 
@@ -1482,6 +2618,12 @@ public class ExcelAiImportService {
             if (e instanceof BusinessException be) {
                 throw be;
             }
+            // 唯一索引冲突（V24 external_code、V12 uk_variant_attrs 等）转用户可读文案，
+            // 不把英文 SQL 原文抛给前端
+            if (e instanceof DataIntegrityViolationException) {
+                log.warn("Excel AI 导入触发数据库唯一约束冲突，rowIndex={}", rowIndex, e);
+                throw new BusinessException("外部编码或变体属性组合与已有数据冲突，请检查是否重复导入");
+            }
             throw new BusinessException("系统异常: " + e.getMessage());
         }
     }
@@ -1534,9 +2676,15 @@ public class ExcelAiImportService {
             row.setRetailPrice(extractSalesRetailPrice(dataRow, priceColumns, rowIndex, rowIssues));
         }
         List<DownloadedImage> images = new ArrayList<>();
-        images.addAll(downloadUrlImages(row, rowIndex));
-        images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex, physicalLayout,
-            sheetIndex, rowIssues));
+        // 数据清洗页用户覆盖图片优先级最高；有覆盖时跳过 Excel 内嵌图与 URL 图
+        List<DownloadedImage> overrideImages = loadOverrideImages(batchId, importRowId, rowIndex, rowIssues);
+        if (!overrideImages.isEmpty()) {
+            images.addAll(overrideImages);
+        } else {
+            images.addAll(downloadUrlImages(row, rowIndex));
+            images.addAll(extractEmbeddedImagesForRow(embeddedImages, rowIndex, physicalRowIndex, physicalLayout,
+                sheetIndex, rowIssues));
+        }
 
         // 同型号连续行归入上一产品的 RSPU（规格模块共享产品主图，不再创建独立产品）
         String groupKey = trim(row.getExternalCode());
@@ -1589,7 +2737,7 @@ public class ExcelAiImportService {
                 createdNewRspu = false;
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
-                rspuId = createRspu(row, dictCache);
+                rspuId = createRspu(row, dictCache, rowIssues);
                 saveStylesAndScenes(rspuId, row, dictCache);
                 createdNewRspu = true;
             }
@@ -2222,7 +3370,8 @@ public class ExcelAiImportService {
             return false;
         }
         String v = value.trim().toLowerCase();
-        return v.startsWith("http://") || v.startsWith("https://") || v.startsWith("ftp://");
+        // 与 ImageUrlValidator 白名单口径一致：仅放行 http/https
+        return v.startsWith("http://") || v.startsWith("https://");
     }
 
     private DownloadedImage downloadImage(String url, boolean primary) {
@@ -2255,6 +3404,66 @@ public class ExcelAiImportService {
             log.warn("下载图片失败: {}", url, e);
             return null;
         }
+    }
+
+    /**
+     * 加载用户在数据清洗页覆盖到当前行的图片（临时存储）。
+     *
+     * <p>覆盖图片统一视为产品级图片，第一张设为主图候选；导入流程后续会把它迁移到
+     * 正式 {@code images/} 路径并登记/更新 image_assets。</p>
+     */
+    private List<DownloadedImage> loadOverrideImages(String batchId, Long importRowId, int rowIndex,
+                                                     List<String> rowIssues) {
+        if (importRowId == null || !StringUtils.hasText(batchId)) {
+            return List.of();
+        }
+        ExcelImportRow importRow = excelImportRowService.findById(importRowId);
+        if (importRow == null || !StringUtils.hasText(importRow.getOverrideImageAssetIds())) {
+            return List.of();
+        }
+        List<String> tempImageKeys;
+        try {
+            tempImageKeys = objectMapper.readValue(importRow.getOverrideImageAssetIds(), new TypeReference<List<String>>() {
+            });
+        } catch (Exception e) {
+            log.warn("解析行覆盖图片失败，rowId={}", importRowId, e);
+            return List.of();
+        }
+        if (tempImageKeys == null || tempImageKeys.isEmpty()) {
+            return List.of();
+        }
+        List<DownloadedImage> result = new ArrayList<>();
+        boolean primaryAssigned = false;
+        for (String key : tempImageKeys) {
+            byte[] bytes = loadPreviewImage(batchId, key);
+            if (bytes == null || bytes.length == 0) {
+                log.warn("第 {} 行覆盖图片临时文件缺失，tempImageKey={}", rowIndex, key);
+                rowIssues.add("覆盖图片临时文件缺失: " + key);
+                continue;
+            }
+            String contentType = guessContentTypeFromPreviewImage(batchId, key);
+            result.add(new DownloadedImage("override://" + key, bytes, contentType, !primaryAssigned, false,
+                hashBytes(bytes)));
+            primaryAssigned = true;
+        }
+        return result;
+    }
+
+    private String guessContentTypeFromPreviewImage(String batchId, String tempImageKey) {
+        for (String ext : List.of("jpeg", "png", "gif", "webp")) {
+            String objectKey = previewUploadObjectKey(batchId, tempImageKey, ext);
+            try (InputStream ignored = storageService.get(objectKey)) {
+                return switch (ext) {
+                    case "png" -> "image/png";
+                    case "gif" -> "image/gif";
+                    case "webp" -> "image/webp";
+                    default -> "image/jpeg";
+                };
+            } catch (IOException e) {
+                // 尝试下一个扩展名
+            }
+        }
+        return "image/jpeg";
     }
 
     private List<DownloadedImage> extractEmbeddedImagesForRow(
@@ -2337,24 +3546,28 @@ public class ExcelAiImportService {
         }
     }
 
-    private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
+    private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
+                              List<String> rowIssues) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
         rspu.setExternalCode(trim(row.getExternalCode()));
-        // 品名落 RSPU 产品名称（变体 displayName 保持不变，互不影响）
-        rspu.setProductName(trim(row.getVariantDisplayName()));
+        // 品名落 RSPU 产品名称：productName 优先，缺失时回退变体显示名（复合「型号品名」列场景）
+        String productName = StringUtils.hasText(row.getProductName())
+            ? row.getProductName()
+            : row.getVariantDisplayName();
+        rspu.setProductName(trim(productName));
         rspu.setDescription(trim(row.getDescription()));
         rspu.setRetailPrice(row.getRetailPrice());
         rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
         rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
         // 多风格时主字段存第一个风格（主风格），其余进 rspu_style 辅风格
         String primaryStyleName = splitCsv(row.getPositioningLabel()).stream().findFirst().orElse(null);
-        rspu.setPositioningLabel(StringUtils.hasText(primaryStyleName)
-            ? normalizeDictCode(primaryStyleName, dictCache.get("style"))
-            : "待识别");
-        rspu.setProductName(trim(row.getProductName()));
+        boolean styleMissing = !StringUtils.hasText(primaryStyleName);
+        rspu.setPositioningLabel(styleMissing
+            ? "待识别"
+            : normalizeDictCode(primaryStyleName, dictCache.get("style")));
         rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
         rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
@@ -2374,12 +3587,39 @@ public class ExcelAiImportService {
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
-        String sizeCode = StringUtils.hasText(row.getSizeCode())
-            ? normalizeDictCode(row.getSizeCode(), dictCache.get("size"))
-            : null;
-        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+        // 业务编码生成失败不阻断整行导入：风格/职级码无效时跳过发号（rspu_code 留空、记行级警告），
+        // 与 AI 识别路径语义对齐；不再 try/catch assignCode 的 BusinessException，
+        // 因为 REQUIRED 事务内的 RuntimeException 会把外层事务标记为 rollback-only，
+        // 导致 commit 时 UnexpectedRollbackException 并被二次 rollback 抛出“Transaction is already completed”。
+        String sizeCode = resolveImportSizeCode(row.getSizeCode(), dictCache.get("size"));
+        String positioningLabel = rspu.getPositioningLabel();
+        if (isValidDictCode(positioningLabel, dictCache.get("style"))) {
+            rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), positioningLabel, sizeCode);
+        } else if (!styleMissing) {
+            // 仅当用户显式提供了风格/职级但未能归一时才提示；缺失时兜底为「待识别」是已知行为，不冗余告警
+            log.warn("导入生成 RSPU 业务编码跳过（风格/职级码未归一，rspu_code 留空，不阻断导入），rspuId={}，positioningLabel={}",
+                rspuId, positioningLabel);
+            rowIssues.add("业务编码生成跳过（rspu_code 留空）: 风格/职级码未识别: " + positioningLabel);
+        }
 
         return rspuId;
+    }
+
+    /**
+     * 解析导入用尺寸码：归一后命中字典则用之；缺失或未归一时按 ADR-007 回退默认 X。
+     *
+     * @param rawSizeCode Excel 行内尺寸码原文（可空）
+     * @param sizeDict    尺寸字典
+     * @return 有效尺寸码（兜底 X）
+     */
+    private String resolveImportSizeCode(String rawSizeCode, List<CategoryDict> sizeDict) {
+        if (StringUtils.hasText(rawSizeCode)) {
+            String normalized = normalizeDictCode(rawSizeCode, sizeDict);
+            if (normalized != null && sizeDict.stream().anyMatch(d -> normalized.equalsIgnoreCase(d.getDictCode()))) {
+                return normalized;
+            }
+        }
+        return "X";
     }
 
     private String createVariantIfNeeded(String rspuId, ProductImportRow row,
@@ -2557,22 +3797,33 @@ public class ExcelAiImportService {
 
                 // 按尺寸规格展开：多尺寸时同一价格列对每个尺寸各建/复用一个变体并挂 RSKU
                 for (SizeSpecParser.SizeSpec spec : specLoop) {
-                    String specSizeText = spec != null ? spec.sizeText() : null;
+                    // 多尺寸展开时尺寸码不参与（避免所有规格塌缩为同一变体），与 createVariantIfNeeded 语义一致
+                    String rowSizeCode = spec == null && StringUtils.hasText(baseRow.getSizeCode())
+                        ? baseRow.getSizeCode() : null;
+                    String rowColorCode = StringUtils.hasText(baseRow.getColorCode())
+                        ? baseRow.getColorCode() : null;
+                    String specSizeText = spec != null ? spec.sizeText() : baseRow.getSizeText();
                     String specDimensionsJson = toDimensionsJson(spec);
 
                     // 创建变体：同 RSPU 下"码或原文"组合相同的变体直接复用（如归组的连续模块行），
-                    // 避免变体属性组合唯一索引冲突导致整行回滚丢价格
-                    String variantId = findExistingVariantId(rspuId, null, specSizeText, null, null,
-                        materialCode, materialText);
+                    // 避免变体属性组合唯一索引冲突导致整行回滚丢价格；
+                    // 价格列变体携带行级已解析的尺寸/颜色（三码容错解析已在 prepareRow 完成）
+                    String variantId = findExistingVariantId(rspuId, rowSizeCode, specSizeText,
+                        rowColorCode, baseRow.getColorText(), materialCode, materialText);
                     if (variantId == null) {
                         RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
                         variantRequest.setDisplayName(buildVariantDisplayName(specSizeText, materialName));
+                        variantRequest.setSizeCode(rowSizeCode);
                         variantRequest.setSizeText(specSizeText);
                         variantRequest.setDimensions(specDimensionsJson);
+                        variantRequest.setColorCode(rowColorCode);
+                        variantRequest.setColorText(baseRow.getColorText());
                         variantRequest.setMaterialCode(materialCode);
                         variantRequest.setMaterialText(materialText);
                         variantRequest.setReferencePriceBand(resolvePriceBand(price));
-                        variantRequest.setProductLevel(baseRow.getProductLevel());
+                        variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
+                            ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
+                            : null);
                         var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
                         if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
                             log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
@@ -2599,14 +3850,17 @@ public class ExcelAiImportService {
                         rskuRequest.setMoq(moq);
                         rskuRequest.setShippingFrom(shippingFrom);
                         rskuRequest.setShippingWarehouseId(shippingWarehouseId);
-                        rskuRequest.setProductLevel(baseRow.getProductLevel());
+                        rskuRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
+                            ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
+                            : null);
                         try {
                             String rskuId = rskuService.upsertRsku(rskuRequest);
                             if (StringUtils.hasText(rskuId)) {
                                 rskuIds.add(rskuId);
                             }
-                        } catch (Exception e) {
-                            // 不再静默吞掉：记入批次失败明细，让用户感知报价未入库
+                        } catch (BusinessException e) {
+                            // upsertRsku 已配置 noRollbackFor = BusinessException，
+                            // 捕获业务异常后仅跳过当前价格列，不影响同一行其他价格列/变体提交
                             log.warn("为价格列创建/更新 RSKU 失败，header={}", priceColumn.getHeader(), e);
                             rowIssues.add("工厂报价失败: " + priceColumn.getHeader() + " - " + e.getMessage());
                         }
@@ -2712,6 +3966,9 @@ public class ExcelAiImportService {
     /**
      * updateIfExists=true 时复用已有 RSPU：以本行数据更新可变字段并记审计日志。
      *
+     * <p>仅显式有值的字段才覆盖已有数据，空单元格不清空已有内容，
+     * 与 {@link ProductImportService} 更新模式的「空单元格不覆盖」设计对齐。</p>
+     *
      * @param rspu      已有 RSPU 实体
      * @param row       本行数据
      * @param dictCache 字典缓存
@@ -2719,8 +3976,12 @@ public class ExcelAiImportService {
     private void updateExistingRspu(RspuMaster rspu, ProductImportRow row,
                                     Map<String, List<CategoryDict>> dictCache) {
         RspuMaster oldSnapshot = snapshotRspu(rspu);
-        if (StringUtils.hasText(row.getVariantDisplayName())) {
-            rspu.setProductName(row.getVariantDisplayName().trim());
+        // 品名取值与 createRspu 一致：productName 优先，缺失时回退变体显示名
+        String productName = StringUtils.hasText(row.getProductName())
+            ? row.getProductName()
+            : row.getVariantDisplayName();
+        if (StringUtils.hasText(productName)) {
+            rspu.setProductName(productName.trim());
         }
         // description/retailPrice 只补空缺：人工已填的内容不被 Excel 导入覆盖
         if (!StringUtils.hasText(rspu.getDescription()) && StringUtils.hasText(row.getDescription())) {
@@ -2735,18 +3996,30 @@ public class ExcelAiImportService {
         if (StringUtils.hasText(primaryStyleName)) {
             rspu.setPositioningLabel(normalizeDictCode(primaryStyleName, dictCache.get("style")));
         }
-        rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
-        rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
-        rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
-        rspu.setSixDimTags(trim(row.getSixDimTags()));
-        rspu.setReferencePriceBand(StringUtils.hasText(row.getReferencePriceBand())
-            ? row.getReferencePriceBand().trim().toLowerCase()
-            : null);
-        rspu.setProductLevel(StringUtils.hasText(row.getProductLevel())
-            ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
-            : null);
-        rspu.setWarrantyYears(row.getWarrantyYears());
-        rspu.setKeySpecs(trim(row.getKeySpecs()));
+        if (StringUtils.hasText(row.getColorPrimaryName())) {
+            rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
+        }
+        if (StringUtils.hasText(row.getMaterialTags())) {
+            rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
+        }
+        if (StringUtils.hasText(row.getSceneTags())) {
+            rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
+        }
+        if (StringUtils.hasText(row.getSixDimTags())) {
+            rspu.setSixDimTags(trim(row.getSixDimTags()));
+        }
+        if (StringUtils.hasText(row.getReferencePriceBand())) {
+            rspu.setReferencePriceBand(row.getReferencePriceBand().trim().toLowerCase());
+        }
+        if (StringUtils.hasText(row.getProductLevel())) {
+            rspu.setProductLevel(normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level")));
+        }
+        if (row.getWarrantyYears() != null) {
+            rspu.setWarrantyYears(row.getWarrantyYears());
+        }
+        if (StringUtils.hasText(row.getKeySpecs())) {
+            rspu.setKeySpecs(trim(row.getKeySpecs()));
+        }
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
         auditLogService.logUpdate("rspu_master", rspu.getRspuId(), oldSnapshot, rspu,
@@ -3217,7 +4490,17 @@ public class ExcelAiImportService {
      * @param sheetName              批次工作表名（品类线索，不可得为 null）
      */
     private record PhysicalLayout(List<Integer> dataRowPhysicalIndexes, Set<Integer> imageColumns,
-                                  int minDataColumn, int maxDataColumn, String sheetName) {
+                                  int minDataColumn, int maxDataColumn, List<RowRange> imageMergedGroups,
+                                  String sheetName) {
+    }
+
+    /**
+     * 物理行范围（0-based，含 start/end）。
+     *
+     * @param startRow 起始物理行
+     * @param endRow   结束物理行
+     */
+    private record RowRange(int startRow, int endRow) {
     }
 
     private record DownloadedImage(String source, byte[] bytes, String contentType, boolean primary,

@@ -36,8 +36,12 @@ export const useDocumentImportStore = defineStore('documentImport', () => {
   let pollTimeoutId: ReturnType<typeof setTimeout> | null = null
   let pollAbortController: AbortController | null = null
   let uploadAbortController: AbortController | null = null
+  /** 轮询代际令牌：每次 stopPolling/ensurePolling 递增，防止被 abort 的旧轮询链在 finally 中重排 setTimeout 形成双链 */
+  let pollGeneration = 0
 
   function stopPolling() {
+    // 递增代际令牌，作废旧轮询链（即使其 finally 稍后才执行也不会再重排）
+    pollGeneration++
     if (pollTimeoutId) {
       clearTimeout(pollTimeoutId)
       pollTimeoutId = null
@@ -49,15 +53,15 @@ export const useDocumentImportStore = defineStore('documentImport', () => {
   }
 
   function ensurePolling() {
-    if (pollTimeoutId) return
-    pollOnce()
+    if (pollTimeoutId || pollAbortController) return
+    const gen = ++pollGeneration
+    pollOnce(gen)
   }
 
-  async function pollOnce() {
-    if (pendingTaskCount.value === 0) {
-      pollTimeoutId = null
-      return
-    }
+  async function pollOnce(gen: number) {
+    if (pollAbortController) return
+    pollTimeoutId = null
+    if (pendingTaskCount.value === 0) return
 
     pollAbortController = new AbortController()
     const signal = pollAbortController.signal
@@ -66,9 +70,9 @@ export const useDocumentImportStore = defineStore('documentImport', () => {
       await pollAllTasks(signal)
     } finally {
       pollAbortController = null
-
-      if (pendingTaskCount.value > 0 && !signal.aborted) {
-        pollTimeoutId = setTimeout(pollOnce, 1500)
+      // 令牌已作废说明期间发生了 stopPolling/ensurePolling，由新链接管，不再重排
+      if (gen === pollGeneration && pendingTaskCount.value > 0) {
+        pollTimeoutId = setTimeout(() => pollOnce(gen), 1500)
       } else {
         pollTimeoutId = null
       }
@@ -85,6 +89,7 @@ export const useDocumentImportStore = defineStore('documentImport', () => {
   async function pollTask(taskItem: TaskItem, signal?: AbortSignal) {
     try {
       const status = await getTaskStatus(taskItem.taskId, signal)
+      taskItem.pollError = ''
       taskItem.status = status.status
       taskItem.progress = status.progress
       taskItem.result = status.result
@@ -95,8 +100,8 @@ export const useDocumentImportStore = defineStore('documentImport', () => {
       if (axios.isCancel(e)) {
         return
       }
-      taskItem.status = 'failed'
-      taskItem.errorMessage = e instanceof Error ? e.message : '轮询失败'
+      // 轮询失败只记录到独立字段展示「进度查询异常」，不覆盖任务真实状态（后端任务可能实际成功）
+      taskItem.pollError = e instanceof Error ? e.message : '进度查询失败'
     }
   }
 

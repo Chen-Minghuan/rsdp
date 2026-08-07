@@ -242,6 +242,21 @@ class ProductImportServiceTest {
     }
 
     @Test
+    void importProducts_shouldPersistDescription() {
+        ProductImportRow row = createValidRow();
+        row.setDescription("材质解析：橡木框架\n填充：高密度海绵");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(insertedRspus).hasSize(1);
+        assertThat(insertedRspus.get(0).getDescription()).isEqualTo("材质解析：橡木框架\n填充：高密度海绵");
+    }
+
+    @Test
     void importProducts_shouldCreateRspuWithVariant() {
         ProductImportRow row = createValidRow();
         row.setVariantDisplayName("标准版");
@@ -491,6 +506,7 @@ class ProductImportServiceTest {
         existing.setWarrantyYears(3);
         existing.setKeySpecs("{\"frame\":\"oak\"}");
         existing.setProductName("旧品名");
+        existing.setDescription("旧描述\n第二行");
         when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
 
         // When
@@ -511,6 +527,7 @@ class ProductImportServiceTest {
         assertThat(saved.getWarrantyYears()).isEqualTo(3);
         assertThat(saved.getKeySpecs()).isEqualTo("{\"frame\":\"oak\"}");
         assertThat(saved.getProductName()).isEqualTo("旧品名");
+        assertThat(saved.getDescription()).isEqualTo("旧描述\n第二行");
         // 行内定位标签/场景标签留空时跳过风格与场景关联的 delete+重建
         verify(rspuStyleMapper, never()).delete(any());
         verify(rspuSceneMapper, never()).delete(any());

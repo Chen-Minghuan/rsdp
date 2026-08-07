@@ -88,7 +88,8 @@ public class ProductImportRow {
     @ExcelProperty("交期天数")
     private Integer leadTimeDays;
 
-    /** 长文本描述原文（材质解析/功能配置/配置说明等列原文） */
+    @ExcelProperty("描述/配置说明")
+    /** 长文本描述原文（对应模板表头「描述/配置说明」） */
     private String description;
 
     /** 尺寸文字原文（dimensions 标准字段值，可能含多规格写法，供 SizeSpecParser 展开变体） */

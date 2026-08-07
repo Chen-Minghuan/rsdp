@@ -441,7 +441,7 @@ public class ProductImportService {
             updateStyles(existing.getRspuId(), row.getPositioningLabel(), dictCache.get("style"));
             updateScenes(existing.getRspuId(), splitCsv(row.getSceneTags()));
         } else {
-            rspu = createRspu(row, dictCache);
+            rspu = createRspu(row, dictCache, result, rowIndex);
             saveStyles(rspu.getRspuId(), row.getPositioningLabel(), splitCsv(row.getMaterialTags()), dictCache.get("style"));
             saveScenes(rspu.getRspuId(), splitCsv(row.getSceneTags()));
         }
@@ -477,7 +477,8 @@ public class ProductImportService {
         return byRspuId != null ? byRspuId : byExternalCode;
     }
 
-    private RspuMaster createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
+    private RspuMaster createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
+                                  ProductImportResult result, int rowIndex) {
         String rspuId = IdGenerator.rspuId();
         RspuMaster rspu = buildRspuFromRow(new RspuMaster(), row, dictCache);
         rspu.setRspuId(rspuId);
@@ -489,12 +490,40 @@ public class ProductImportService {
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
-        String sizeCode = StringUtils.hasText(row.getSizeCode())
-            ? normalizeDictCode(row.getSizeCode(), dictCache.get("size"))
-            : null;
-        rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+        // 业务编码生成失败不阻断整行导入：风格/职级码无效时跳过发号（rspu_code 留空、记行级警告），
+        // 与 AI 识别路径语义对齐；不再 try/catch assignCode 的 BusinessException，
+        // 因为 REQUIRED 事务内的 RuntimeException 会把外层事务标记为 rollback-only，
+        // 导致 commit 时 UnexpectedRollbackException 并被二次 rollback 抛出“Transaction is already completed”。
+        String sizeCode = resolveImportSizeCode(row.getSizeCode(), dictCache.get("size"));
+        String positioningLabel = rspu.getPositioningLabel();
+        if (isValidDictCode(positioningLabel, dictCache.get("style"))) {
+            rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), positioningLabel, sizeCode);
+        } else if (StringUtils.hasText(row.getPositioningLabel())) {
+            // 仅当用户显式提供了风格/职级但未能归一时才提示；缺失时兜底为「待识别」是已知行为，不冗余告警
+            log.warn("导入生成 RSPU 业务编码跳过（风格/职级码未归一，rspu_code 留空，不阻断导入），rspuId={}，positioningLabel={}",
+                rspuId, positioningLabel);
+            result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                "业务编码生成跳过（rspu_code 留空）: 风格/职级码未识别: " + positioningLabel));
+        }
 
         return rspu;
+    }
+
+    /**
+     * 解析导入用尺寸码：归一后命中字典则用之；缺失或未归一时按 ADR-007 回退默认 X。
+     *
+     * @param rawSizeCode Excel 行内尺寸码原文（可空）
+     * @param sizeDict    尺寸字典
+     * @return 有效尺寸码（兜底 X）
+     */
+    private String resolveImportSizeCode(String rawSizeCode, List<CategoryDict> sizeDict) {
+        if (StringUtils.hasText(rawSizeCode)) {
+            String normalized = normalizeDictCode(rawSizeCode, sizeDict);
+            if (normalized != null && sizeDict.stream().anyMatch(d -> normalized.equalsIgnoreCase(d.getDictCode()))) {
+                return normalized;
+            }
+        }
+        return "X";
     }
 
     private RspuMaster updateRspu(RspuMaster rspu, ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
