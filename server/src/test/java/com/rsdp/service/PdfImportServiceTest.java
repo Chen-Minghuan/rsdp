@@ -62,7 +62,7 @@ class PdfImportServiceTest {
         DocumentProductRegion productPage = new DocumentProductRegion();
         productPage.setPageType("product");
         productPage.setProducts(List.of(
-            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null)
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null, null)
         ));
         DocumentProductRegion coverPage = new DocumentProductRegion();
         coverPage.setPageType("cover");
@@ -91,7 +91,7 @@ class PdfImportServiceTest {
         DocumentProductRegion productPage = new DocumentProductRegion();
         productPage.setPageType("product");
         productPage.setProducts(List.of(
-            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), null, null)
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), null, null, null)
         ));
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
@@ -116,7 +116,7 @@ class PdfImportServiceTest {
         DocumentProductRegion productPage = new DocumentProductRegion();
         productPage.setPageType("product");
         productPage.setProducts(List.of(
-            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", nearbyText)
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", nearbyText, null)
         ));
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
@@ -160,7 +160,7 @@ class PdfImportServiceTest {
         DocumentProductRegion productPage = new DocumentProductRegion();
         productPage.setPageType("product");
         productPage.setProducts(List.of(
-            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null)
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null, null)
         ));
 
         // 批检测整体失败 → 整页降级 unknown；单页重试时恢复为产品页
@@ -200,6 +200,53 @@ class PdfImportServiceTest {
         assertThat(result.getRspuIds()).containsExactly("RSPU-TEST04");
     }
 
+    @Test
+    void importPdf_shouldSkipSceneImageKindProducts() throws IOException {
+        // AI 标记 imageKind=scene 的场景图产品框不建档，同页单品图照常录入
+        byte[] pdfBytes = createPdfBytes(1);
+        MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", pdfBytes);
+
+        DocumentProductRegion productPage = new DocumentProductRegion();
+        productPage.setPageType("product");
+        productPage.setProducts(List.of(
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null, "standalone"),
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.5, 0.5, 0.4, 0.4), "SF", null, "scene")
+        ));
+
+        when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+            .thenReturn(Map.of("rspuId", "RSPU-TEST05", "taskId", "TASK-TEST05"));
+
+        DocumentImportResult result = pdfImportService.importPdf(file, null);
+
+        assertThat(result.getTotalProducts()).isEqualTo(1);
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getRspuIds()).containsExactly("RSPU-TEST05");
+    }
+
+    @Test
+    void importPdf_shouldSkipSceneEmbeddedImageAndFallbackToAiCrop() throws IOException {
+        // 嵌入大图边框带杂乱（疑似场景图）→ 剔除后嵌入图数量不足，回落 AI bbox 裁剪路径
+        byte[] pdfBytes = createPdfWithSceneLikeEmbeddedImage();
+        MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", pdfBytes);
+
+        DocumentProductRegion productPage = new DocumentProductRegion();
+        productPage.setPageType("product");
+        productPage.setProducts(List.of(
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null, "standalone")
+        ));
+
+        when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+            .thenReturn(Map.of("rspuId", "RSPU-TEST06", "taskId", "TASK-TEST06"));
+
+        DocumentImportResult result = pdfImportService.importPdf(file, null);
+
+        assertThat(result.getTotalProducts()).isEqualTo(1);
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getRspuIds()).containsExactly("RSPU-TEST06");
+    }
+
     private void setField(String name, Object value) throws Exception {
         Field field = PdfImportService.class.getDeclaredField(name);
         field.setAccessible(true);
@@ -223,11 +270,14 @@ class PdfImportServiceTest {
                 new org.apache.pdfbox.pdmodel.PDPage(org.apache.pdfbox.pdmodel.common.PDRectangle.A4);
             document.addPage(page);
 
+            // 白底 + 中心产品色块：模拟单品图嵌入（边框带近白，不会被场景规则误杀）
             java.awt.image.BufferedImage image =
                 new java.awt.image.BufferedImage(300, 400, java.awt.image.BufferedImage.TYPE_INT_RGB);
             java.awt.Graphics2D g = image.createGraphics();
-            g.setColor(new java.awt.Color(60, 120, 180));
+            g.setColor(java.awt.Color.WHITE);
             g.fillRect(0, 0, 300, 400);
+            g.setColor(new java.awt.Color(60, 120, 180));
+            g.fillRect(60, 100, 180, 200);
             g.dispose();
 
             org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject pdImage =
@@ -235,6 +285,37 @@ class PdfImportServiceTest {
             try (org.apache.pdfbox.pdmodel.PDPageContentStream contentStream =
                      new org.apache.pdfbox.pdmodel.PDPageContentStream(document, page)) {
                 // 绘制尺寸 400x600 点，面积占比约 48%，满足大图阈值
+                contentStream.drawImage(pdImage, 50, 100, 400, 600);
+            }
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private byte[] createPdfWithSceneLikeEmbeddedImage() throws IOException {
+        try (PDDocument document = new PDDocument()) {
+            org.apache.pdfbox.pdmodel.PDPage page =
+                new org.apache.pdfbox.pdmodel.PDPage(org.apache.pdfbox.pdmodel.common.PDRectangle.A4);
+            document.addPage(page);
+
+            // 上墙下地 + 杂色家具：边框带亮度方差大，触发场景图规则
+            java.awt.image.BufferedImage image =
+                new java.awt.image.BufferedImage(300, 400, java.awt.image.BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D g = image.createGraphics();
+            g.setColor(new java.awt.Color(210, 200, 180));
+            g.fillRect(0, 0, 300, 200);
+            g.setColor(new java.awt.Color(70, 50, 35));
+            g.fillRect(0, 200, 300, 200);
+            g.setColor(new java.awt.Color(40, 90, 60));
+            g.fillRect(100, 150, 100, 120);
+            g.dispose();
+
+            org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject pdImage =
+                org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory.createFromImage(document, image);
+            try (org.apache.pdfbox.pdmodel.PDPageContentStream contentStream =
+                     new org.apache.pdfbox.pdmodel.PDPageContentStream(document, page)) {
                 contentStream.drawImage(pdImage, 50, 100, 400, 600);
             }
 

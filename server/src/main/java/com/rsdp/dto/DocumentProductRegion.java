@@ -62,5 +62,12 @@ public class DocumentProductRegion {
          * 裁剪产品图时不含这些文字，此处作为该产品 OCR 的补充来源。
          */
         private OcrResult nearbyText;
+
+        /**
+         * 产品图类型：standalone（单品图：白底/纯色背景产品拍摄图）/ scene（场景图：
+         * 产品在房间/使用场景中）。为 null 时按 standalone 处理（兼容旧结果）。
+         * 场景图不建产品档案。
+         */
+        private String imageKind;
     }
 }
