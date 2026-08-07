@@ -24,8 +24,10 @@ import com.rsdp.entity.RspuRelation;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RspuVariant;
+import com.rsdp.entity.RspuFactoryMapping;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.SysUser;
+import com.rsdp.entity.UserFavorite;
 import com.rsdp.event.RspuDeletedEvent;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
@@ -33,6 +35,8 @@ import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.FactoryProductCapabilityMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.ProductStyleMatchMapper;
+import com.rsdp.mapper.ProductPurgeMapper;
+import com.rsdp.mapper.RspuFactoryMappingMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RspuSceneMapper;
@@ -40,12 +44,16 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SysUserMapper;
+import com.rsdp.mapper.UserFavoriteMapper;
+import com.rsdp.service.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
@@ -88,6 +96,10 @@ public class ProductQueryService {
     private final SysUserMapper sysUserMapper;
     private final DataScopeHelper dataScopeHelper;
     private final PlatformTransactionManager transactionManager;
+    private final RspuFactoryMappingMapper rspuFactoryMappingMapper;
+    private final UserFavoriteMapper userFavoriteMapper;
+    private final StorageService storageService;
+    private final ProductPurgeMapper productPurgeMapper;
 
     /**
      * 分页查询产品列表。
@@ -764,6 +776,117 @@ public class ProductQueryService {
             .and(w -> w.eq("anchor_rspu_id", rspuId).or().eq("related_rspu_id", rspuId)));
         rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
         rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
+    }
+
+    /**
+     * 从回收站恢复产品（连带恢复级联软删的变体/报价/图片/搭配关系）。
+     *
+     * <p>注意：风格、场景关联在删除时已物理清除，无法恢复——恢复后需重新触发
+     * AI 识别或手工补充。图片文件本体与 ChromaDB 向量在软删时已清理/保留情况
+     * 不变（向量已清，恢复后如需以图搜图可走向量回填）。</p>
+     *
+     * @param rspuId RSPU ID
+     */
+    @Transactional
+    public void restoreProduct(String rspuId) {
+        RspuMaster existing = rspuMapper.selectAnyById(rspuId);
+        if (existing == null) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+        if (existing.getDeletedAt() == null) {
+            throw new BusinessException("产品未被删除，无需恢复: " + rspuId);
+        }
+
+        rspuMapper.restoreById(rspuId);
+        rspuVariantMapper.restoreByRspuId(rspuId);
+        rskuSupplyMapper.restoreByRspuId(rspuId);
+        imageAssetsMapper.restoreByRspuId(rspuId);
+        rspuRelationMapper.restoreByRspuId(rspuId);
+
+        auditLogService.logUpdate("rspu_master", rspuId, existing,
+            Map.of("action", "restore_from_recycle_bin"), SecurityOperatorContext.currentUsername());
+        log.info("产品已从回收站恢复，rspuId={}", rspuId);
+    }
+
+    /**
+     * 彻底删除回收站中的产品：物理删除主表与全部关联行，
+     * 事务提交后清理存储文件与 ChromaDB 残留向量（幂等补刀）。
+     *
+     * <p>仅限已软删除（回收站中）的产品；正常产品须先软删除。风格/场景关联、
+     * 工厂映射、风格匹配结果、收藏条目一并物理清除；订单/方案明细为快照语义保留。</p>
+     *
+     * @param rspuId RSPU ID
+     */
+    @Transactional
+    public void permanentDeleteProduct(String rspuId) {
+        RspuMaster existing = rspuMapper.selectAnyById(rspuId);
+        if (existing == null) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+        if (existing.getDeletedAt() == null) {
+            throw new BusinessException("仅回收站中的产品可彻底删除，请先执行删除: " + rspuId);
+        }
+
+        // 先收集图片（含软删）的存储对象键与向量 ID，供提交后清理
+        List<ImageAssets> images = imageAssetsMapper.selectAnyByRspuId(rspuId);
+        List<String> objectKeys = images.stream()
+            .map(ImageAssets::getStoragePath).filter(StringUtils::hasText).toList();
+        List<String> imageIds = images.stream().map(ImageAssets::getImageId).toList();
+
+        // 方案明细是业务凭证，被引用时禁止彻底删除（含软删引用——外键不看 deleted_at）
+        long schemeRefs = productPurgeMapper.countSchemeItemRefs(rspuId);
+        if (schemeRefs > 0) {
+            throw new BusinessException("产品仍被 " + schemeRefs + " 个方案明细引用，无法彻底删除；请先删除相关方案: " + rspuId);
+        }
+
+        // 按外键依赖顺序物理删除关联行（风格/场景关联在软删时已清除，此处幂等补刀）：
+        // ① 导入历史置空引用（保留导入记录本身）
+        productPurgeMapper.nullifyImportRowRspuRefs(rspuId);
+        productPurgeMapper.nullifyImportRowVariantRefs(rspuId);
+        // ② AI 识别记录（解除对 image_assets 的引用）
+        productPurgeMapper.deleteAiRecognitions(rspuId);
+        // ③ 无实体的弱引用表
+        productPurgeMapper.deleteMatchingFeedback(rspuId);
+        productPurgeMapper.deleteCollectionItems(rspuId);
+        productPurgeMapper.deleteSchemeCandidates(rspuId);
+        productPurgeMapper.deletePriceColumnMappings(rspuId);
+        // ④ 变体/RSKU 的子表
+        productPurgeMapper.deleteFactoryVariantCapacity(rspuId);
+        productPurgeMapper.deletePriceHistory(rspuId);
+        // ⑤ 图片（引用 RSKU/变体）→ RSKU（引用变体）→ 变体
+        imageAssetsMapper.physicalDeleteByRspuId(rspuId);
+        rskuSupplyMapper.physicalDeleteByRspuId(rspuId);
+        rspuVariantMapper.physicalDeleteByRspuId(rspuId);
+        // ⑥ RSPU 的其余直接子表
+        rspuRelationMapper.physicalDeleteByRspuId(rspuId);
+        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
+        productStyleMatchMapper.delete(new QueryWrapper<com.rsdp.entity.ProductStyleMatch>().eq("rspu_id", rspuId));
+        rspuFactoryMappingMapper.delete(new QueryWrapper<RspuFactoryMapping>().eq("rspu_id", rspuId));
+        userFavoriteMapper.delete(new QueryWrapper<UserFavorite>().eq("rspu_id", rspuId));
+        productPurgeMapper.deleteVariantCodeCounter(rspuId);
+        // ⑦ 主表
+        rspuMapper.physicalDeleteById(rspuId);
+
+        auditLogService.logDelete("rspu_master", rspuId, existing, SecurityOperatorContext.currentUsername());
+        log.info("产品已彻底删除（物理），rspuId={}，清理图片文件 {} 个", rspuId, objectKeys.size());
+
+        // 事务提交后清理外部资源：存储文件逐个删（失败仅记日志），向量走既有删除事件
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    for (String objectKey : objectKeys) {
+                        try {
+                            storageService.delete(objectKey);
+                        } catch (Exception e) {
+                            log.warn("彻底删除：清理图片文件失败，objectKey={}", objectKey, e);
+                        }
+                    }
+                }
+            });
+        }
+        eventPublisher.publishEvent(new RspuDeletedEvent(rspuId, imageIds));
     }
 
     /**

@@ -15,11 +15,12 @@ public final class CategoryPaths {
     /**
      * 根据品类编码解析品类路径（JSON 数组字符串）。
      *
-     * @param categoryCode 品类编码（如 SF、TB、OF）
+     * @param categoryCode 品类编码（如 FS、SF、FC）
      * @return 品类路径 JSON 字符串；未知编码默认返回单椅路径
      */
     public static String resolve(String categoryCode) {
         return switch (categoryCode) {
+            case "FS" -> "[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]";
             case "SF" -> "[\"家具\",\"沙发\"]";
             case "TB" -> "[\"家具\",\"茶几\"]";
             case "FC" -> "[\"家具\",\"柜类\"]";
@@ -27,6 +28,7 @@ public final class CategoryPaths {
             case "DT" -> "[\"家具\",\"桌子\"]";
             case "CB" -> "[\"家具\",\"柜子\"]";
             case "BD" -> "[\"家具\",\"床\"]";
+            case "LT" -> "[\"家具\",\"灯具\"]";
             case "OF" -> "[\"办公家具\"]";
             default -> "[\"家具\",\"座椅\",\"休闲椅\",\"单椅\"]";
         };

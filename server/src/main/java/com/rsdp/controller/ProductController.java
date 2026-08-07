@@ -51,21 +51,59 @@ public class ProductController {
     private final ProductService productService;
     private final ProductQueryService productQueryService;
     private final ImageUploadValidator imageUploadValidator;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /**
      * 新品录入，支持为一个 RSPU 上传多张图片。
      *
      * @param images       产品图片列表，第一张为主图
      * @param categoryCode 品类码，如 FS/DT/CB；为空时默认 FS
+     * @param force        强制导入：跳过图片内容查重（用户确认"仍然导入"时传 true）
      * @return 任务信息
      * @throws IOException 文件保存失败
      */
     @PostMapping("/entry")
     public Result<Map<String, Object>> entry(@RequestParam("images") List<MultipartFile> images,
-                                             @RequestParam(value = "categoryCode", required = false) String categoryCode) throws IOException {
+                                             @RequestParam(value = "categoryCode", required = false) String categoryCode,
+                                             @RequestParam(value = "force", defaultValue = "false") boolean force) throws IOException {
         validateImages(images);
-        Map<String, Object> result = productService.createEntry(images, categoryCode);
+        Map<String, Object> result = productService.createEntry(images, categoryCode, force);
         return Result.ok(result);
+    }
+
+    /**
+     * 一图多产品区域检测：AI 检测图内每个产品的位置框、预估品类与产品旁说明文字。
+     *
+     * @param image 单张产品图片
+     * @return 检测到的产品区域列表
+     * @throws IOException 文件读取失败
+     */
+    @PostMapping("/entry/detect-regions")
+    public Result<List<com.rsdp.dto.DocumentProductRegion.PageProduct>> detectRegions(
+        @RequestParam("image") MultipartFile image) throws IOException {
+        imageUploadValidator.validate(image, MAX_IMAGE_SIZE_BYTES);
+        return Result.ok(productService.detectRegionsInImage(image.getBytes()));
+    }
+
+    /**
+     * 按选中的产品区域拆分建档：每个区域裁剪后独立创建产品与异步识别任务。
+     *
+     * @param image       原图（与 detect-regions 同一张）
+     * @param regionsJson 选中的产品区域 JSON（RegionEntryRequest 结构）
+     * @return 每个区域的录入结果（与传入顺序一致）
+     * @throws IOException 文件读取或裁剪失败
+     */
+    @PostMapping("/entry/by-regions")
+    public Result<List<Map<String, Object>>> entryByRegions(
+        @RequestParam("image") MultipartFile image,
+        @RequestParam("regions") String regionsJson) throws IOException {
+        imageUploadValidator.validate(image, MAX_IMAGE_SIZE_BYTES);
+        com.rsdp.dto.request.RegionEntryRequest request = objectMapper.readValue(
+            regionsJson, com.rsdp.dto.request.RegionEntryRequest.class);
+        if (request.regions() == null || request.regions().isEmpty()) {
+            throw new com.rsdp.exception.BusinessException("请至少选择一个产品区域");
+        }
+        return Result.ok(productService.createEntriesFromRegions(image.getBytes(), request.regions()));
     }
 
     private void validateImages(List<MultipartFile> images) {
@@ -199,5 +237,29 @@ public class ProductController {
     @PostMapping("/batch-delete")
     public Result<ProductBatchDeleteResponse> batchDelete(@Valid @RequestBody ProductBatchDeleteRequest request) {
         return Result.ok(productQueryService.batchDeleteProducts(request.getRspuIds()));
+    }
+
+    /**
+     * 从回收站恢复产品（连带恢复级联软删的变体/报价/图片/搭配关系）。
+     *
+     * @param rspuId RSPU ID
+     * @return 空结果
+     */
+    @PostMapping("/{rspuId}/restore")
+    public Result<Void> restore(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
+        productQueryService.restoreProduct(rspuId);
+        return Result.ok();
+    }
+
+    /**
+     * 彻底删除回收站中的产品（物理删除 + 清理存储文件与残留向量，仅 ADMIN）。
+     *
+     * @param rspuId RSPU ID
+     * @return 空结果
+     */
+    @DeleteMapping("/{rspuId}/permanent")
+    public Result<Void> permanentDelete(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
+        productQueryService.permanentDeleteProduct(rspuId);
+        return Result.ok();
     }
 }

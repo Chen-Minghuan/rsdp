@@ -15,10 +15,15 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NSelect,
+  NModal,
+  NCheckbox,
+  NInput,
+  useDialog,
   useMessage,
   type UploadFileInfo
 } from 'naive-ui'
-import { uploadProductImages, updateProduct } from '@/api/product'
+import { uploadProductImages, updateProduct, detectProductRegions, entryByRegions } from '@/api/product'
+import type { RegionProduct, RegionSelection } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import { listDicts } from '@/api/dict'
 import type { TaskItem } from '@/types/task'
@@ -28,6 +33,7 @@ import { getSixDimSchema } from '@/utils/sixDimLabels'
 
 const router = useRouter()
 const message = useMessage()
+const dialog = useDialog()
 
 const TASKS_STORAGE_KEY = 'rsdp:product-entry:tasks'
 
@@ -88,6 +94,101 @@ async function handleSixDimChange(task: TaskItem, dimKey: string, value: string 
 const selectedFiles = computed(() =>
   fileList.value.map(item => item.file).filter((f): f is File => f !== null)
 )
+
+// ---------- 一图多产品拆分导入 ----------
+/** 拆分确认弹窗可见性。 */
+const splitVisible = ref(false)
+/** 区域检测中。 */
+const splitDetecting = ref(false)
+/** 拆分提交中。 */
+const splitSubmitting = ref(false)
+/** 原图本地预览 URL。 */
+const splitImageUrl = ref('')
+/** 检测到的产品区域（含勾选/可编辑品名与品类）。 */
+const splitRegions = ref<Array<RegionProduct & { checked: boolean; productName: string; categoryCode: string | null }>>([])
+
+/** 检测图内多个产品区域并打开确认弹窗。 */
+async function handleDetectRegions() {
+  const file = selectedFiles.value[0]
+  if (!file) return
+  splitDetecting.value = true
+  try {
+    const regions = await detectProductRegions(file)
+    if (!regions || regions.length === 0) {
+      message.warning('未检测到可拆分的产品区域，可直接整图录入')
+      return
+    }
+    if (regions.length === 1) {
+      message.info('图中只检测到 1 个产品，建议直接整图录入')
+    }
+    splitImageUrl.value = URL.createObjectURL(file)
+    splitRegions.value = regions.map(r => ({
+      ...r,
+      checked: true,
+      productName: r.nearbyText?.productName ?? '',
+      categoryCode: r.estimatedCategory ?? null
+    }))
+    splitVisible.value = true
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '区域检测失败')
+  } finally {
+    splitDetecting.value = false
+  }
+}
+
+/** 确认拆分：每个勾选区域独立裁剪建档。 */
+async function handleSplitSubmit() {
+  const file = selectedFiles.value[0]
+  if (!file) return
+  const chosen = splitRegions.value.filter(r => r.checked)
+  if (chosen.length === 0) {
+    message.warning('请至少勾选一个产品区域')
+    return
+  }
+  splitSubmitting.value = true
+  try {
+    const selections: RegionSelection[] = chosen.map(r => ({
+      bbox: r.bbox,
+      categoryCode: r.categoryCode ?? undefined,
+      productName: r.productName || undefined,
+      dimensionText: r.nearbyText?.dimensionText ?? undefined
+    }))
+    const results = await entryByRegions(file, selections)
+    results.forEach((result, i) => {
+      taskList.value.unshift({
+        taskId: result.taskId,
+        rspuId: result.rspuId,
+        fileName: `拆分区域 ${i + 1}：${chosen[i].productName || '未命名'}`,
+        imageIds: result.imageIds,
+        status: 'pending',
+        progress: 0,
+        result: {},
+        errorMessage: ''
+      })
+    })
+    saveTasks()
+    closeSplit()
+    fileList.value = []
+    message.success(`已按 ${results.length} 个区域创建录入任务`)
+    await pollAllTasks()
+    saveTasks()
+    ensurePolling()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '拆分导入失败')
+  } finally {
+    splitSubmitting.value = false
+  }
+}
+
+/** 关闭拆分弹窗并释放预览 URL。 */
+function closeSplit() {
+  splitVisible.value = false
+  if (splitImageUrl.value) {
+    URL.revokeObjectURL(splitImageUrl.value)
+    splitImageUrl.value = ''
+  }
+  splitRegions.value = []
+}
 
 const hasSelectedFiles = computed(() => selectedFiles.value.length > 0)
 const hasTasks = computed(() => taskList.value.length > 0)
@@ -250,44 +351,73 @@ async function handleStartUpload() {
   uploadAbortController = new AbortController()
 
   try {
-    const result = await uploadProductImages(
-      files,
-      categoryCode.value ?? undefined,
-      uploadAbortController.signal
-    )
-
-    const newTask: TaskItem = {
-      taskId: result.taskId,
-      rspuId: result.rspuId,
-      fileName: files.length === 1 ? files[0].name : `${files[0].name} 等 ${files.length} 张`,
-      imageIds: result.imageIds,
-      status: 'pending',
-      progress: 0,
-      result: {},
-      errorMessage: ''
-    }
-
-    // 新任务放到列表前面，方便看最新追加的
-    taskList.value.unshift(newTask)
-    saveTasks()
-
-    // 清空已选文件，允许继续选择下一批
-    fileList.value = []
-
-    // 立即轮询一次，然后开启定时轮询
-    await pollAllTasks()
-    saveTasks()
-    ensurePolling()
+    await doUpload(false)
   } catch (e) {
     if (axios.isCancel(e)) {
       errorMessage.value = '上传已取消'
     } else {
-      errorMessage.value = e instanceof Error ? e.message : '上传失败'
+      const msg = e instanceof Error ? e.message : '上传失败'
+      // 图片内容查重命中：提示已录入产品，用户可选择"仍然导入"强制继续
+      if (msg.includes('已录入过')) {
+        dialog.warning({
+          title: '发现重复图片',
+          content: msg,
+          positiveText: '仍然导入',
+          negativeText: '取消',
+          onPositiveClick: async () => {
+            uploading.value = true
+            try {
+              await doUpload(true)
+            } catch (retryError) {
+              errorMessage.value = retryError instanceof Error ? retryError.message : '上传失败'
+            } finally {
+              uploading.value = false
+              uploadAbortController = null
+            }
+          }
+        })
+      } else {
+        errorMessage.value = msg
+      }
     }
   } finally {
     uploading.value = false
     uploadAbortController = null
   }
+}
+
+/** 执行实际上传（force=true 跳过后端图片内容查重）。 */
+async function doUpload(force: boolean) {
+  const files = selectedFiles.value
+  const result = await uploadProductImages(
+    files,
+    categoryCode.value ?? undefined,
+    uploadAbortController?.signal,
+    force
+  )
+
+  const newTask: TaskItem = {
+    taskId: result.taskId,
+    rspuId: result.rspuId,
+    fileName: files.length === 1 ? files[0].name : `${files[0].name} 等 ${files.length} 张`,
+    imageIds: result.imageIds,
+    status: 'pending',
+    progress: 0,
+    result: {},
+    errorMessage: ''
+  }
+
+  // 新任务放到列表前面，方便看最新追加的
+  taskList.value.unshift(newTask)
+  saveTasks()
+
+  // 清空已选文件，允许继续选择下一批
+  fileList.value = []
+
+  // 立即轮询一次，然后开启定时轮询
+  await pollAllTasks()
+  saveTasks()
+  ensurePolling()
 }
 
 function clearAll() {
@@ -393,7 +523,7 @@ function formatPrice(ocr?: OcrResult): string {
           <n-select
             v-model:value="categoryCode"
             :options="categoryOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="选择品类（默认座椅）"
+            placeholder="选择品类（留空由 AI 自动识别）"
             clearable
             style="width: 180px;"
           />
@@ -404,6 +534,14 @@ function formatPrice(ocr?: OcrResult): string {
             @click="handleStartUpload"
           >
             开始识别
+          </n-button>
+          <n-button
+            v-if="selectedFiles.length === 1"
+            :loading="splitDetecting"
+            :disabled="uploading"
+            @click="handleDetectRegions"
+          >
+            拆分图内多产品
           </n-button>
         </n-space>
 
@@ -592,10 +730,124 @@ function formatPrice(ocr?: OcrResult): string {
         </n-card>
       </n-space>
     </n-card>
+
+    <!-- 一图多产品拆分确认弹窗 -->
+    <n-modal v-model:show="splitVisible" preset="card" title="拆分图内多产品" style="width: 900px;" @after-leave="closeSplit">
+      <div class="split-layout">
+        <div class="split-image-wrap">
+          <img :src="splitImageUrl" class="split-image" alt="原图">
+          <div
+            v-for="(r, i) in splitRegions"
+            :key="i"
+            class="split-box"
+            :class="{ unchecked: !r.checked }"
+            :style="{
+              left: r.bbox.x * 100 + '%',
+              top: r.bbox.y * 100 + '%',
+              width: r.bbox.width * 100 + '%',
+              height: r.bbox.height * 100 + '%'
+            }"
+          >
+            <span class="split-box-label">{{ i + 1 }}</span>
+          </div>
+        </div>
+        <div class="split-list">
+          <div v-for="(r, i) in splitRegions" :key="i" class="split-item">
+            <n-checkbox v-model:checked="r.checked" style="flex-shrink: 0;">
+              产品 {{ i + 1 }}
+            </n-checkbox>
+            <n-input v-model:value="r.productName" size="small" placeholder="产品名（可选）" style="flex: 1;" />
+            <n-select
+              v-model:value="r.categoryCode"
+              :options="categoryOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="品类"
+              clearable
+              size="small"
+              style="width: 130px; flex-shrink: 0;"
+            />
+          </div>
+          <n-alert type="info" :show-icon="true" style="margin-top: 8px;">
+            每个勾选的区域将独立裁剪并创建自己的产品（各自识别、各自编码）。
+          </n-alert>
+        </div>
+      </div>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="closeSplit">取消</n-button>
+          <n-button type="primary" :loading="splitSubmitting" @click="handleSplitSubmit">
+            确认拆分导入（{{ splitRegions.filter(r => r.checked).length }} 个产品）
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </n-space>
 </template>
 
 <style scoped>
+.split-layout {
+  display: flex;
+  gap: 16px;
+}
+
+.split-image-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: #f5f5f5;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.split-image {
+  display: block;
+  width: 100%;
+}
+
+.split-box {
+  position: absolute;
+  border: 2px solid #2080f0;
+  border-radius: 4px;
+  background: rgba(32, 128, 240, 0.08);
+}
+
+.split-box.unchecked {
+  border-color: #c0c4cc;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.split-box-label {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #2080f0;
+  color: #fff;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.split-box.unchecked .split-box-label {
+  background: #c0c4cc;
+}
+
+.split-list {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.split-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .six-dim-edit-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

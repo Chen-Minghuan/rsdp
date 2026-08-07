@@ -10,7 +10,6 @@ import {
   NEmpty,
   NForm,
   NFormItem,
-  NImage,
   NInput,
   NInputNumber,
   NModal,
@@ -25,6 +24,7 @@ import {
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import {
   adjustOrderItemPrice,
   createOrderInvite,
@@ -287,9 +287,11 @@ const itemColumns: DataTableColumns<OrderItem> = [
     key: 'imageId',
     width: 80,
     render: row =>
-      row.imageId
-        ? h(NImage, { src: `/api/v1/images/${row.imageId}`, width: 56, height: 56, objectFit: 'cover' })
-        : '-'
+      h(HoverZoomImage, {
+        src: row.imageId ? `/api/v1/images/${row.imageId}` : null,
+        width: 56,
+        height: 56
+      })
   },
   { title: '产品名称', key: 'productName', render: row => row.productName || '-' },
   { title: '型号', key: 'model', width: 120, render: row => row.model || '-' },

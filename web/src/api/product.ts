@@ -1,9 +1,58 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SceneImportResult, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
   signal?: AbortSignal
+}
+
+/**
+ * 一图多产品区域检测：AI 检测图内每个产品的位置框、预估品类与产品旁说明文字。
+ *
+ * @param file 单张产品图片
+ * @returns 检测到的产品区域列表
+ */
+export async function detectProductRegions(file: File): Promise<RegionProduct[]> {
+  const formData = new FormData()
+  formData.append('image', file)
+  const { data: result } = await uploadClient.post<ApiResult<RegionProduct[]>>(
+    '/v1/products/entry/detect-regions',
+    formData
+  )
+  return result.data
+}
+
+/**
+ * 按选中的产品区域拆分建档：每个区域裁剪后独立创建产品与识别任务。
+ *
+ * @param file 原图（与 detectProductRegions 同一张）
+ * @param regions 选中的产品区域
+ * @returns 每个区域的录入结果（与传入顺序一致）
+ */
+export async function entryByRegions(file: File, regions: RegionSelection[]): Promise<ProductEntryResult[]> {
+  const formData = new FormData()
+  formData.append('image', file)
+  formData.append('regions', JSON.stringify({ regions }))
+  const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult[]>>(
+    '/v1/products/entry/by-regions',
+    formData
+  )
+  return result.data
+}
+
+/** 图内检测到的单个产品区域。 */
+export interface RegionProduct {
+  bbox: { x: number; y: number; width: number; height: number }
+  estimatedCategory: string | null
+  nearbyText: { productName?: string | null; dimensionText?: string | null } | null
+}
+
+/** 拆分导入的单个区域选择。 */
+export interface RegionSelection {
+  bbox: { x: number; y: number; width: number; height: number }
+  categoryCode?: string
+  productName?: string
+  dimensionText?: string
 }
 
 /**
@@ -12,13 +61,17 @@ export interface ApiOptions {
  * @param files 图片文件列表，第一张作为主图
  * @param categoryCode 品类码，如 FS/DT/CB
  * @param signal 可选的 AbortSignal，用于取消请求
+ * @param force 跳过图片内容查重（用户确认"仍然导入"时传 true）
  * @returns 任务信息
  */
-export async function uploadProductImages(files: File[], categoryCode?: string, signal?: AbortSignal): Promise<ProductEntryResult> {
+export async function uploadProductImages(files: File[], categoryCode?: string, signal?: AbortSignal, force?: boolean): Promise<ProductEntryResult> {
   const formData = new FormData()
   files.forEach(file => formData.append('images', file))
   if (categoryCode) {
     formData.append('categoryCode', categoryCode)
+  }
+  if (force) {
+    formData.append('force', 'true')
   }
 
   const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult>>(
@@ -99,6 +152,24 @@ export async function updateProduct(rspuId: string, request: ProductUpdateReques
  */
 export async function deleteProduct(rspuId: string): Promise<void> {
   await apiClient.delete<ApiResult<void>>(`/v1/products/${rspuId}`)
+}
+
+/**
+ * 从回收站恢复产品（连带恢复级联软删的变体/报价/图片/搭配关系）。
+ *
+ * @param rspuId RSPU ID
+ */
+export async function restoreProduct(rspuId: string): Promise<void> {
+  await apiClient.post<ApiResult<void>>(`/v1/products/${rspuId}/restore`)
+}
+
+/**
+ * 彻底删除回收站中的产品（物理删除 + 清理存储文件，仅 ADMIN，不可恢复）。
+ *
+ * @param rspuId RSPU ID
+ */
+export async function permanentDeleteProduct(rspuId: string): Promise<void> {
+  await apiClient.delete<ApiResult<void>>(`/v1/products/${rspuId}/permanent`)
 }
 
 /**
@@ -215,29 +286,6 @@ export async function importProductsFromDocument(file: File, categoryHint?: stri
 
   const { data: result } = await uploadClient.post<ApiResult<DocumentImportResult>>(
     '/v1/products/document-import',
-    formData,
-    { signal }
-  )
-  return result.data
-}
-
-/**
- * 场景图拆分录入：上传一张室内场景照片，AI 检测家具单品并逐件建档。
- *
- * @param file 场景照片
- * @param categoryHint 品类提示，可为空（AI 检测品类优先，其次提示，兜底 FS）
- * @param signal 可选的 AbortSignal，用于取消请求
- * @returns 批次结果（含逐件明细）
- */
-export async function importSceneProducts(file: File, categoryHint?: string, signal?: AbortSignal): Promise<SceneImportResult> {
-  const formData = new FormData()
-  formData.append('file', file)
-  if (categoryHint) {
-    formData.append('categoryHint', categoryHint)
-  }
-
-  const { data: result } = await uploadClient.post<ApiResult<SceneImportResult>>(
-    '/v1/products/scene-import',
     formData,
     { signal }
   )

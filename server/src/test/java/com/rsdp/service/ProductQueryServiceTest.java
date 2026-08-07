@@ -53,6 +53,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -131,6 +132,18 @@ class ProductQueryServiceTest {
 
     @Mock
     private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    @Mock
+    private com.rsdp.mapper.RspuFactoryMappingMapper rspuFactoryMappingMapper;
+
+    @Mock
+    private com.rsdp.mapper.UserFavoriteMapper userFavoriteMapper;
+
+    @Mock
+    private com.rsdp.service.storage.StorageService storageService;
+
+    @Mock
+    private com.rsdp.mapper.ProductPurgeMapper productPurgeMapper;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -629,6 +642,111 @@ class ProductQueryServiceTest {
 
         assertThatThrownBy(() -> productQueryService.deleteProduct("RSPU-NOTEXIST"))
             .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void restoreProduct_shouldRestoreCascadeSoftDeletedRows() {
+        RspuMaster deleted = new RspuMaster();
+        deleted.setRspuId("RSPU-DEL01");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        when(rspuMapper.selectAnyById("RSPU-DEL01")).thenReturn(deleted);
+
+        productQueryService.restoreProduct("RSPU-DEL01");
+
+        verify(rspuMapper).restoreById("RSPU-DEL01");
+        verify(rspuVariantMapper).restoreByRspuId("RSPU-DEL01");
+        verify(rskuSupplyMapper).restoreByRspuId("RSPU-DEL01");
+        verify(imageAssetsMapper).restoreByRspuId("RSPU-DEL01");
+        verify(rspuRelationMapper).restoreByRspuId("RSPU-DEL01");
+        verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-DEL01"), any(), any(), any());
+    }
+
+    @Test
+    void restoreProduct_shouldRejectWhenNotDeleted() {
+        RspuMaster active = new RspuMaster();
+        active.setRspuId("RSPU-ACT01");
+        when(rspuMapper.selectAnyById("RSPU-ACT01")).thenReturn(active);
+
+        assertThatThrownBy(() -> productQueryService.restoreProduct("RSPU-ACT01"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无需恢复");
+    }
+
+    @Test
+    void restoreProduct_shouldThrowWhenNotFound() {
+        when(rspuMapper.selectAnyById("RSPU-NOTEXIST")).thenReturn(null);
+
+        assertThatThrownBy(() -> productQueryService.restoreProduct("RSPU-NOTEXIST"))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void permanentDeleteProduct_shouldPhysicallyDeleteAndPublishEvent() {
+        RspuMaster deleted = new RspuMaster();
+        deleted.setRspuId("RSPU-DEL01");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        ImageAssets image = new ImageAssets();
+        image.setImageId("IMG-01");
+        image.setStoragePath("images/IMG-01.jpg");
+        when(rspuMapper.selectAnyById("RSPU-DEL01")).thenReturn(deleted);
+        when(imageAssetsMapper.selectAnyByRspuId("RSPU-DEL01")).thenReturn(List.of(image));
+        when(productPurgeMapper.countSchemeItemRefs("RSPU-DEL01")).thenReturn(0L);
+
+        productQueryService.permanentDeleteProduct("RSPU-DEL01");
+
+        // 外键依赖顺序：导入引用置空 → AI 识别 → 弱引用表 → 变体/RSKU 子表 → 图片/RSKU/变体 → 主表
+        verify(productPurgeMapper).nullifyImportRowRspuRefs("RSPU-DEL01");
+        verify(productPurgeMapper).nullifyImportRowVariantRefs("RSPU-DEL01");
+        verify(productPurgeMapper).deleteAiRecognitions("RSPU-DEL01");
+        verify(productPurgeMapper).deleteMatchingFeedback("RSPU-DEL01");
+        verify(productPurgeMapper).deleteCollectionItems("RSPU-DEL01");
+        verify(productPurgeMapper).deleteSchemeCandidates("RSPU-DEL01");
+        verify(productPurgeMapper).deletePriceColumnMappings("RSPU-DEL01");
+        verify(productPurgeMapper).deleteFactoryVariantCapacity("RSPU-DEL01");
+        verify(productPurgeMapper).deletePriceHistory("RSPU-DEL01");
+        verify(productPurgeMapper).deleteVariantCodeCounter("RSPU-DEL01");
+        verify(imageAssetsMapper).physicalDeleteByRspuId("RSPU-DEL01");
+        verify(rskuSupplyMapper).physicalDeleteByRspuId("RSPU-DEL01");
+        verify(rspuVariantMapper).physicalDeleteByRspuId("RSPU-DEL01");
+        verify(rspuRelationMapper).physicalDeleteByRspuId("RSPU-DEL01");
+        verify(rspuStyleMapper).delete(any());
+        verify(rspuSceneMapper).delete(any());
+        verify(productStyleMatchMapper).delete(any());
+        verify(rspuFactoryMappingMapper).delete(any());
+        verify(userFavoriteMapper).delete(any());
+        verify(rspuMapper).physicalDeleteById("RSPU-DEL01");
+        verify(auditLogService).logDelete(eq("rspu_master"), eq("RSPU-DEL01"), any(), any());
+        // 向量清理走既有删除事件（幂等补刀）；存储文件删除挂在事务 afterCommit，单测无活跃事务不触发
+        ArgumentCaptor<RspuDeletedEvent> eventCaptor = ArgumentCaptor.forClass(RspuDeletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getImageIds()).containsExactly("IMG-01");
+    }
+
+    @Test
+    void permanentDeleteProduct_shouldRejectWhenReferencedBySchemeItems() {
+        RspuMaster deleted = new RspuMaster();
+        deleted.setRspuId("RSPU-DEL01");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        when(rspuMapper.selectAnyById("RSPU-DEL01")).thenReturn(deleted);
+        when(imageAssetsMapper.selectAnyByRspuId("RSPU-DEL01")).thenReturn(List.of());
+        when(productPurgeMapper.countSchemeItemRefs("RSPU-DEL01")).thenReturn(2L);
+
+        assertThatThrownBy(() -> productQueryService.permanentDeleteProduct("RSPU-DEL01"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("方案明细引用");
+        // 任何物理删除都不应发生
+        verify(rspuMapper, never()).physicalDeleteById(any());
+    }
+
+    @Test
+    void permanentDeleteProduct_shouldRejectWhenNotInRecycleBin() {
+        RspuMaster active = new RspuMaster();
+        active.setRspuId("RSPU-ACT01");
+        when(rspuMapper.selectAnyById("RSPU-ACT01")).thenReturn(active);
+
+        assertThatThrownBy(() -> productQueryService.permanentDeleteProduct("RSPU-ACT01"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("仅回收站");
     }
 
     @Test

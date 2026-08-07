@@ -10,7 +10,6 @@ import {
   NForm,
   NFormItemGi,
   NGrid,
-  NImage,
   NInput,
   NModal,
   NPagination,
@@ -29,6 +28,8 @@ import {
   getProductStatusCounts,
   updateProductStatus,
   deleteProduct,
+  restoreProduct,
+  permanentDeleteProduct,
   batchDeleteProducts
 } from '@/api/product'
 import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
@@ -36,7 +37,8 @@ import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
 import { useUserStore } from '@/stores/user'
-import { PERMISSIONS, ROLES, IMAGE_FALLBACK_SRC } from '@/utils/constants'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
 import type { DictItem } from '@/types/dict'
@@ -472,33 +474,7 @@ const columns: DataTableColumns<ProductSummary> = [
     key: 'productInfo',
     width: 220,
     render(row) {
-      const image = row.primaryImageUrl
-        ? h(NImage, {
-            src: row.primaryImageUrl,
-            fallbackSrc: IMAGE_FALLBACK_SRC,
-            width: 50,
-            height: 50,
-            objectFit: 'cover',
-            style: 'border-radius: 4px; flex-shrink: 0;'
-          })
-        : h(
-            'div',
-            {
-              style: {
-                width: '50px',
-                height: '50px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: '4px',
-                background: '#f0f0f0',
-                color: '#999',
-                fontSize: '12px',
-                flexShrink: 0
-              }
-            },
-            '暂无'
-          )
+      const image = h(HoverZoomImage, { src: row.primaryImageUrl, width: 50, height: 50 })
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
         image,
         h(
@@ -644,6 +620,26 @@ const columns: DataTableColumns<ProductSummary> = [
             )
           )
         }
+      } else {
+        // 回收站：恢复（product:delete 权限）+ 彻底删除（仅 ADMIN）
+        if (canDeleteProduct.value) {
+          buttons.push(
+            h(
+              NButton,
+              { text: true, type: 'primary', size: 'small', onClick: () => handleRestore(row) },
+              { default: () => '恢复' }
+            )
+          )
+        }
+        if (userStore.isAdmin) {
+          buttons.push(
+            h(
+              NButton,
+              { text: true, type: 'error', size: 'small', onClick: () => handlePermanentDelete(row) },
+              { default: () => '彻底删除' }
+            )
+          )
+        }
       }
       return h(NSpace, { size: 4 }, { default: () => buttons })
     }
@@ -683,6 +679,42 @@ function handleRecycle(row: ProductSummary) {
         refreshAll()
       } catch (e) {
         message.error(e instanceof Error ? e.message : '回收失败')
+      }
+    }
+  })
+}
+
+function handleRestore(row: ProductSummary) {
+  dialog.info({
+    title: '确认恢复',
+    content: `确定要恢复商品「${row.productName || formatCategoryPath(row.categoryPath)}」吗？变体/报价/图片/搭配关系将一并恢复（风格、场景关联删除时已清除，需重新识别或补充）。`,
+    positiveText: '确认恢复',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await restoreProduct(row.rspuId)
+        message.success('已恢复')
+        refreshAll()
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '恢复失败')
+      }
+    }
+  })
+}
+
+function handlePermanentDelete(row: ProductSummary) {
+  dialog.error({
+    title: '确认彻底删除',
+    content: `彻底删除商品「${row.productName || formatCategoryPath(row.categoryPath)}」将物理删除全部数据与图片文件，不可恢复！确定继续吗？`,
+    positiveText: '彻底删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await permanentDeleteProduct(row.rspuId)
+        message.success('已彻底删除')
+        refreshAll()
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '彻底删除失败')
       }
     }
   })

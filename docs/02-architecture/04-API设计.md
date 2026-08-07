@@ -58,9 +58,26 @@ POST   /api/v1/products/entry
        # Request:  multipart/form-data
        #   images: File[] (必填, 第一张为主图, 其余为非主图/detail, 单张 ≤20MB)
        #   categoryCode: string (可选, 如 FS/DT/CB, 默认 FS)
+       #   force: boolean (可选, 默认 false；true 跳过图片内容查重——用户确认"仍然导入"时使用)
        # Response: { taskId, rspuId, imageIds: string[], message }
        # 说明：AI 识别完成后会自动写入 rspu_style / rspu_scene 关联表，
        #      positioning_label 保存风格码（如 MC），material_tags 保存材质码（如 WO）
+       # 查重：图片 SHA-256 命中已有图片时返回 400 并注明对应产品（2026-08-06）；
+       #      AI 识别后与库内产品向量相似度 ≥0.95 时新品标记"存疑-疑似同款"
+
+POST   /api/v1/products/entry/detect-regions
+       # 一图多产品区域检测（已实现，product:create）
+       # Request:  multipart/form-data；image: File（单张）
+       # Response: [{ bbox: {x,y,width,height}, estimatedCategory, nearbyText: {productName, dimensionText} }]
+       # 说明：复用 PDF 页面级检测；bbox 为相对坐标 0~1
+
+POST   /api/v1/products/entry/by-regions
+       # 按选中区域拆分建档（已实现，product:create）
+       # Request:  multipart/form-data；image: File（与 detect-regions 同一张）；
+       #           regions: JSON 字符串 { regions: [{ bbox, categoryCode?, productName?, dimensionText? }] }
+       # Response: [{ taskId, rspuId, imageIds, message }]（与传入顺序一致）
+       # 说明：每个区域裁剪后独立建档走完整识别链路（区域已裁剪，异步跳过二次主体检测；
+       #      productName/dimensionText 作为 pageOcr 随任务合并进识别 OCR）
 
 POST   /api/v1/products/factory-entry
        # 工厂单条录入（原子创建 RSPU + 默认变体 + 图片 + 首条 RSKU）
@@ -178,7 +195,21 @@ PUT    /api/v1/products/{rspuId}
 DELETE /api/v1/products/{rspuId}
        # 软删除（已实现）
        # Response: void
-       # 说明：仅设置 rspu_master.deleted_at，数据库中保留数据；已关联的 RSKU / 变体 / 关系不级联删除
+       # 说明：rspu_master 软删（deleted_at），变体/RSKU/图片/搭配关系（双向）级联软删，风格/场景关联物理删除；
+       #       ChromaDB 向量经 RspuDeletedEvent 事务提交后异步清理；其他工厂已关联时拒绝删除
+
+POST   /api/v1/products/{rspuId}/restore
+       # 回收站恢复（已实现，需 product:delete 权限）
+       # Response: void
+       # 说明：主表 + 变体/RSKU/图片/搭配关系级联恢复（清 deleted_at）；
+       #       风格/场景关联删除时已物理清除无法恢复，需重新识别或补充；未删除的产品返回 400
+
+DELETE /api/v1/products/{rspuId}/permanent
+       # 彻底删除（已实现，仅 ADMIN 角色）
+       # Response: void
+       # 说明：仅回收站中（已软删）的产品可彻底删除；物理删除主表与全部关联行（含工厂映射/风格匹配/收藏条目），
+       #       事务提交后清理存储图片文件并幂等清理残留向量；订单/方案明细为快照语义保留；
+       #       产品被方案明细（scheme_item）引用时拒绝彻底删除（返回 400 并提示引用数），需先处理相关方案
 
 GET    /api/v1/products/import-template
        # 下载产品批量导入 Excel 模板（已实现）
@@ -199,14 +230,6 @@ POST   /api/v1/products/import
        #   - 一行对应一个 RSPU 及其可选默认变体
        #   - 按 RSPU ID → 外部编码顺序匹配已有产品
        #   - 图片 URL 仅支持 http/https，下载失败只记录失败明细，不影响产品数据写入
-
-POST   /api/v1/products/scene-import
-       # 场景图拆分录入（2026-07-22 已实现）：一张室内场景照片 → AI 检测家具单品 → 逐件裁剪建档
-       # FormData: file（场景照片，≤10MB）、categoryHint?（品类提示；AI 检测品类优先，其次提示，兜底 FS）
-       # 权限：product:create；检测上限 12 件（rsdp.scene-import.max-products）
-       # 每件独立创建 RSPU + 异步 AI 识别任务；单件失败不阻断其他件
-       # Response: { batchId, totalProducts, successCount, failedCount,
-       #             products: [{ bbox, categoryCode, label, status, rspuId, taskId, imageId, error }] }
 
 POST   /api/v1/products/document-import
        # PDF 产品目录批量导入（已实现）

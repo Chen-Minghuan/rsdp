@@ -131,6 +131,89 @@ class VisionServiceTest {
     }
 
     @Test
+    void recognizeImage_shouldTolerateArrayValuedSixDimTag() throws Exception {
+        // 实测案例：AI 偶发把六维 E 维返回为数组 ["实木","布艺"]，
+        // Map<String,String> 反序列化会抛 MismatchedInputException 导致整个识别判失败
+        String aiJson = """
+            {
+              "style": "侘寂",
+              "sixDimTags": {
+                "A": "一字型",
+                "E": ["实木", "布艺"],
+                "F": "饱满蓬松软包"
+              },
+              "confidence": "high",
+              "ocr": {"productName": "扶摇沙发", "dimensionText": "2380*840*910/2600*840*910"}
+            }
+            """;
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        AiLabels labels = visionService.recognizeImage(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(labels.getStyle()).isEqualTo("侘寂");
+        assertThat(labels.getSixDimTags())
+            .containsEntry("A", "一字型")
+            .containsEntry("E", "实木/布艺")
+            .containsEntry("F", "饱满蓬松软包");
+        assertThat(labels.getOcr().getProductName()).isEqualTo("扶摇沙发");
+    }
+
+    @Test
+    void classifyCategory_shouldReturnDictCode() throws Exception {
+        stubCategoryDict("FS", "SF", "FC");
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"categoryCode\":\"FC\"}"))));
+
+        String code = visionService.classifyCategory(new ByteArrayInputStream("fake-image".getBytes()));
+
+        assertThat(code).isEqualTo("FC");
+    }
+
+    @Test
+    void classifyCategory_shouldReturnNull_whenCodeNotInDict() throws Exception {
+        stubCategoryDict("FS", "SF", "FC");
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"categoryCode\":\"XX\"}"))));
+
+        assertThat(visionService.classifyCategory(new ByteArrayInputStream("fake-image".getBytes()))).isNull();
+    }
+
+    @Test
+    void classifyCategory_shouldReturnNull_whenAiCannotDecide() throws Exception {
+        stubCategoryDict("FS");
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"categoryCode\":null}"))));
+
+        assertThat(visionService.classifyCategory(new ByteArrayInputStream("fake-image".getBytes()))).isNull();
+    }
+
+    private void stubCategoryDict(String... codes) {
+        List<CategoryDict> dicts = java.util.Arrays.stream(codes)
+            .map(code -> {
+                CategoryDict d = new CategoryDict();
+                d.setDictType("category");
+                d.setDictCode(code);
+                d.setDictName(code);
+                return d;
+            })
+            .toList();
+        when(dictService.listByType("category")).thenReturn(dicts);
+    }
+
+    @Test
     void recognizeImage_shouldThrowWhenApiReturnsEmpty() throws Exception {
         stubFor(post(urlEqualTo("/chat/completions"))
             .willReturn(aResponse()
@@ -158,6 +241,46 @@ class VisionServiceTest {
         verify(postRequestedFor(urlEqualTo("/chat/completions"))
             .withRequestBody(matchingJsonPath("$.response_format.type", equalTo("json_object")))
             .withRequestBody(matchingJsonPath("$.max_tokens", equalTo("4096"))));
+    }
+
+    @Test
+    void recognizeImage_dualImage_shouldSendTwoImagesWithRoleNote() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"style\":\"中古风\",\"ocr\":{\"productName\":\"昌迪加尔餐椅\"}}"))));
+
+        AiLabels labels = visionService.recognizeImage(
+            new ByteArrayInputStream("cropped-image".getBytes()),
+            "original-image".getBytes(),
+            "FS");
+
+        assertThat(labels.getOcr().getProductName()).isEqualTo("昌迪加尔餐椅");
+        // 双图模式：content 前两段为图片（裁剪图 + 原图），末段文本含分工说明
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[0].type", equalTo("image_url")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[1].type", equalTo("image_url")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[2].type", equalTo("text")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[2].text", containing("原始上传图"))));
+    }
+
+    @Test
+    void recognizeImage_dualImageWithoutOriginal_shouldFallBackToSingleImage() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"style\":\"中古风\"}"))));
+
+        visionService.recognizeImage(
+            new ByteArrayInputStream("fake-image".getBytes()), null, "FS");
+
+        // 无原图时退化为单图：content 仅 1 图 1 文
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[0].type", equalTo("image_url")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[1].type", equalTo("text"))));
     }
 
     @Test
@@ -374,106 +497,6 @@ class VisionServiceTest {
         assertThat(regions).hasSize(2);
         assertThat(regions.get(0).getPageType()).isEqualTo("product");
         assertThat(regions.get(1).getPageType()).isEqualTo("unknown");
-    }
-
-    @Test
-    void detectSceneProducts_shouldParseProductsAndSendJsonObjectFormat() throws Exception {
-        String aiJson = """
-            {
-              "products": [
-                {"bbox": {"x": 0.05, "y": 0.35, "width": 0.5, "height": 0.55}, "estimatedCategory": "SF", "label": "三人位沙发"},
-                {"bbox": {"x": 0.6, "y": 0.4, "width": 0.3, "height": 0.4}, "estimatedCategory": "TB", "label": "茶几"}
-              ]
-            }
-            """;
-
-        stubFor(post(urlEqualTo("/chat/completions"))
-            .willReturn(aResponse()
-                .withStatus(200)
-                .withHeader("Content-Type", "application/json")
-                .withBody(buildChatCompletionResponseBody(aiJson))));
-
-        var products = visionService.detectSceneProducts(new ByteArrayInputStream("fake-scene".getBytes()), 12);
-
-        assertThat(products).hasSize(2);
-        assertThat(products.get(0).getEstimatedCategory()).isEqualTo("SF");
-        assertThat(products.get(0).getBbox().getWidth()).isEqualTo(0.5);
-        assertThat(products.get(0).getLabel()).isEqualTo("三人位沙发");
-
-        verify(postRequestedFor(urlEqualTo("/chat/completions"))
-            .withRequestBody(matchingJsonPath("$.response_format.type", equalTo("json_object")))
-            .withRequestBody(matchingJsonPath("$.max_tokens", equalTo("4096"))));
-    }
-
-    @Test
-    void detectSceneProducts_shouldDropInvalidBboxAndReturnEmptyWhenNoProducts() throws Exception {
-        // 一条 bbox 越界（x+width>1）被丢弃，一条合法保留
-        String aiJson = """
-            {
-              "products": [
-                {"bbox": {"x": 0.8, "y": 0.1, "width": 0.5, "height": 0.3}, "estimatedCategory": "SF"},
-                {"bbox": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.3}, "estimatedCategory": "FS", "label": "休闲椅"}
-              ]
-            }
-            """;
-
-        stubFor(post(urlEqualTo("/chat/completions"))
-            .willReturn(aResponse()
-                .withStatus(200)
-                .withHeader("Content-Type", "application/json")
-                .withBody(buildChatCompletionResponseBody(aiJson))));
-
-        var products = visionService.detectSceneProducts(new ByteArrayInputStream("fake-scene".getBytes()), 12);
-
-        assertThat(products).hasSize(1);
-        assertThat(products.get(0).getEstimatedCategory()).isEqualTo("FS");
-
-        // 无家具场景：返回空列表而非报错
-        stubFor(post(urlEqualTo("/chat/completions"))
-            .willReturn(aResponse()
-                .withStatus(200)
-                .withHeader("Content-Type", "application/json")
-                .withBody(buildChatCompletionResponseBody("{\"products\": []}"))));
-
-        var empty = visionService.detectSceneProducts(new ByteArrayInputStream("fake-scene".getBytes()), 12);
-        assertThat(empty).isEmpty();
-    }
-
-    @Test
-    void refineSceneProduct_shouldParseRefinedBbox() throws Exception {
-        String aiJson = """
-            {
-              "isSingleFurniture": true,
-              "bbox": {"x": 0.05, "y": 0.1, "width": 0.85, "height": 0.8},
-              "estimatedCategory": "SF",
-              "label": "三人位沙发"
-            }
-            """;
-        stubFor(post(urlEqualTo("/chat/completions"))
-            .willReturn(aResponse()
-                .withStatus(200)
-                .withHeader("Content-Type", "application/json")
-                .withBody(buildChatCompletionResponseBody(aiJson))));
-
-        var refined = visionService.refineSceneProduct(new ByteArrayInputStream("fake-crop".getBytes()));
-
-        assertThat(refined).isNotNull();
-        assertThat(refined.getEstimatedCategory()).isEqualTo("SF");
-        assertThat(refined.getLabel()).isEqualTo("三人位沙发");
-        assertThat(refined.getBbox().getWidth()).isEqualTo(0.85);
-    }
-
-    @Test
-    void refineSceneProduct_shouldReturnNullWhenNotSingleFurniture() throws Exception {
-        stubFor(post(urlEqualTo("/chat/completions"))
-            .willReturn(aResponse()
-                .withStatus(200)
-                .withHeader("Content-Type", "application/json")
-                .withBody(buildChatCompletionResponseBody("{\"isSingleFurniture\": false}"))));
-
-        var refined = visionService.refineSceneProduct(new ByteArrayInputStream("fake-crop".getBytes()));
-
-        assertThat(refined).isNull();
     }
 
     @Test

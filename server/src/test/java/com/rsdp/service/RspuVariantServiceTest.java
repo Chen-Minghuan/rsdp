@@ -16,9 +16,11 @@ import com.rsdp.security.datascope.DataScopeHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -330,5 +332,71 @@ class RspuVariantServiceTest {
         BusinessException ex = assertThrows(BusinessException.class,
             () -> variantService.createVariant(rspuId, request));
         assertEquals("相同尺寸/颜色/材质的变体已存在", ex.getMessage());
+    }
+
+    @Test
+    void initializeDefaultVariant_shouldExpandMultiSizeDimensionText() {
+        // OCR 尺寸文字明确写了 3 组尺寸 → 展开建 3 个尺寸变体
+        ReflectionTestUtils.setField(variantService, "objectMapper", objectMapper);
+        when(variantMapper.selectList(any())).thenReturn(Collections.emptyList());
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-MS");
+        when(rspuMapper.selectById("RSPU-MS")).thenReturn(rspu);
+        when(variantCodeMapper.allocateSequence("RSPU-MS")).thenReturn(1L, 2L, 3L);
+
+        String firstId = variantService.initializeDefaultVariant("RSPU-MS",
+            labelsWithDimensionText("2380*840*910/2600*840*910/2800*840*910"));
+
+        assertEquals("RSPU-MS-V001", firstId);
+        ArgumentCaptor<RspuVariant> captor = ArgumentCaptor.forClass(RspuVariant.class);
+        verify(variantMapper, org.mockito.Mockito.times(3)).insert(captor.capture());
+        List<RspuVariant> variants = captor.getAllValues();
+        assertEquals("2380*840*910", variants.get(0).getSizeText());
+        assertEquals("2380*840*910", variants.get(0).getDisplayName());
+        assertNull(variants.get(0).getVariantCode());
+        assertNotNull(variants.get(0).getDimensions());
+        assertEquals("2800*840*910", variants.get(2).getSizeText());
+    }
+
+    @Test
+    void initializeDefaultVariant_shouldCreateSingleDefault_whenSingleSize() {
+        ReflectionTestUtils.setField(variantService, "objectMapper", objectMapper);
+        when(variantMapper.selectList(any())).thenReturn(Collections.emptyList());
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-SS");
+        when(rspuMapper.selectById("RSPU-SS")).thenReturn(rspu);
+        when(variantCodeMapper.allocateSequence("RSPU-SS")).thenReturn(1L);
+
+        String variantId = variantService.initializeDefaultVariant("RSPU-SS",
+            labelsWithDimensionText("2380*840*910mm", 2380, 840, 910));
+
+        assertEquals("RSPU-SS-V001", variantId);
+        ArgumentCaptor<RspuVariant> captor = ArgumentCaptor.forClass(RspuVariant.class);
+        verify(variantMapper).insert(captor.capture());
+        RspuVariant saved = captor.getValue();
+        assertEquals("默认变体", saved.getDisplayName());
+        assertEquals("M", saved.getVariantCode());
+        assertNull(saved.getSizeText());
+        assertNotNull(saved.getDimensions());
+    }
+
+    private com.rsdp.dto.AiLabels labelsWithDimensionText(String dimensionText) {
+        return labelsWithDimensionText(dimensionText, null, null, null);
+    }
+
+    private com.rsdp.dto.AiLabels labelsWithDimensionText(String dimensionText,
+                                                          Integer w, Integer d, Integer h) {
+        com.rsdp.dto.OcrResult ocr = new com.rsdp.dto.OcrResult();
+        ocr.setDimensionText(dimensionText);
+        if (w != null) {
+            com.rsdp.dto.Dimensions dims = new com.rsdp.dto.Dimensions();
+            dims.setW(w);
+            dims.setD(d);
+            dims.setH(h);
+            ocr.setDimensions(dims);
+        }
+        com.rsdp.dto.AiLabels labels = new com.rsdp.dto.AiLabels();
+        labels.setOcr(ocr);
+        return labels;
     }
 }

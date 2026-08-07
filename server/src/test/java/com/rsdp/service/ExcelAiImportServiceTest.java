@@ -401,6 +401,88 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void confirmAndImport_shouldExpandMultiSizeTextIntoSizeVariants() throws IOException {
+        byte[] excelBytes = createExcelWithMultiSizeAndPriceColumns();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"产品尺寸\":\"dimensions\",\"价格-A级布\":\"__PRICE__:A级布\",\"价格-AA级布\":\"__PRICE__:AA级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithMultiSizeAndPriceColumns()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-TEST");
+            return 1;
+        });
+
+        when(rspuVariantService.createVariant(anyString(), any())).thenAnswer(inv -> {
+            RspuVariantResponse response = new RspuVariantResponse();
+            response.setVariantId("V-" + java.util.UUID.randomUUID());
+            return response;
+        });
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+        request.setSelectedPriceColumns(preview.getPriceColumns().stream()
+            .map(PriceColumnInfo::getHeader).toList());
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertNotNull(result);
+        assertEquals(1, result.getSuccessCount());
+
+        // 2 个尺寸 × 2 个材质价格列 = 4 个变体 + 4 条 RSKU
+        ArgumentCaptor<com.rsdp.dto.request.RspuVariantCreateRequest> variantCaptor =
+            ArgumentCaptor.forClass(com.rsdp.dto.request.RspuVariantCreateRequest.class);
+        verify(rspuVariantService, times(4)).createVariant(anyString(), variantCaptor.capture());
+        verify(rskuService, times(4)).upsertRsku(any());
+
+        List<com.rsdp.dto.request.RspuVariantCreateRequest> requests = variantCaptor.getAllValues();
+        // 每个尺寸×材质组合各出现一次，sizeText 正确、displayName 为"尺寸-材质"
+        assertTrue(requests.stream().anyMatch(r -> "1.8m".equals(r.getSizeText())
+            && "1.8m-A级布".equals(r.getDisplayName())));
+        assertTrue(requests.stream().anyMatch(r -> "2.0m".equals(r.getSizeText())
+            && "2.0m-AA级布".equals(r.getDisplayName())));
+        // 行级行为不变：材质码未识别时降级为原文
+        assertTrue(requests.stream().allMatch(r -> r.getMaterialText() != null));
+    }
+
+    @Test
     void previewMapping_shouldFilterImageColumnMapping() throws IOException {
         byte[] excelBytes = createExcelWithImageColumn();
         MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
@@ -2326,8 +2408,13 @@ class ExcelAiImportServiceTest {
 
     private byte[] createPng(int rgb) {
         try (var out = new java.io.ByteArrayOutputStream()) {
-            var image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
-            image.setRGB(0, 0, rgb);
+            // 240×240：超过导入链路"升主图最小 200px"门槛，保证夹具图片具备主图资格
+            var image = new BufferedImage(240, 240, BufferedImage.TYPE_INT_RGB);
+            for (int y = 0; y < 240; y++) {
+                for (int x = 0; x < 240; x++) {
+                    image.setRGB(x, y, rgb);
+                }
+            }
             ImageIO.write(image, "png", out);
             return out.toByteArray();
         } catch (IOException e) {
@@ -2453,6 +2540,31 @@ class ExcelAiImportServiceTest {
             data.createCell(2).setCellValue("A级布/实木框架");
             data.createCell(3).setCellValue("1999");
             data.createCell(4).setCellValue("2399");
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithMultiSizeAndPriceColumns() {
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header1 = sheet.createRow(0);
+            header1.createCell(0).setCellValue("型号品名 ITEM NO/DESCRIPTION");
+            header1.createCell(1).setCellValue("产品尺寸(厘米) SIZE（CM）");
+            header1.createCell(2).setCellValue("价格（PRICE）");
+            header1.createCell(3).setCellValue("价格（PRICE）");
+            var header2 = sheet.createRow(1);
+            header2.createCell(2).setCellValue("A级布");
+            header2.createCell(3).setCellValue("AA级布");
+            var data = sheet.createRow(2);
+            data.createCell(0).setCellValue("ABC-002 沙发B");
+            // 尺寸文字明确写了两个规格 → 应展开为 2 个尺寸变体
+            data.createCell(1).setCellValue("1.8m/2.0m");
+            data.createCell(2).setCellValue("3999");
+            data.createCell(3).setCellValue("4599");
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {

@@ -52,6 +52,7 @@ import com.rsdp.util.ExcelFileValidator;
 import com.rsdp.util.ExcelHeaderNormalizer;
 import com.rsdp.util.ExcelImageExtractor;
 import com.rsdp.util.ImageUrlValidator;
+import com.rsdp.util.SizeSpecParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.openxml4j.opc.OPCPackage;
@@ -78,11 +79,13 @@ import org.xml.sax.XMLReader;
 import org.xml.sax.helpers.DefaultHandler;
 
 import java.awt.Image;
-import java.awt.image.BufferedImage;
+import javax.imageio.ImageIO;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.awt.image.BufferedImage;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -106,7 +109,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import jakarta.annotation.PostConstruct;
-import javax.imageio.ImageIO;
 
 import com.rsdp.util.IdGenerator;
 
@@ -203,7 +205,7 @@ public class ExcelAiImportService {
         - materialCode（材质码，仅限字典码如 WO/PE/FA；对应：材质码、面料码、MATERIAL CODE。材质名称/说明请映射 materialTags）
         - dimensions（尺寸文字，如 800*900*1000mm；对应：尺寸、产品尺寸、规格（数值尺寸）、SIZE CM、DIMENSIONS）
         - leadTimeDays（交期天数，数字，单位天；对应：交期、货期、生产周期、交货期、PRODUCTION CYCLE、LEAD TIME）
-        - description（长文本描述/配置说明原文，原样保留不加工；对应：材质解析、材质说明、功能配置、配置说明、DISPOSE）
+        - description（长文本描述/配置说明原文，原样保留不加工；对应：材质解析、材质说明、功能配置、配置说明、备注、备注说明、说明、产品说明、DISPOSE）
         - retailPrice（零售参考价，数字；对应：销售价、含税价、零售价、市场价）
 
         复合表头处理规则：
@@ -2080,6 +2082,7 @@ public class ExcelAiImportService {
         // 长文本描述类表头：原文写 rspu_master.description；
         // 必须先于「材质」宽匹配，否则「材质解析」会被截获为材质标签
         if (h.contains("材质解析") || h.contains("功能配置") || h.contains("配置说明")
+            || h.contains("备注") || h.contains("产品说明")
             || h.contains("dispose") || h.contains("描述")) {
             return "description";
         }
@@ -2832,6 +2835,7 @@ public class ExcelAiImportService {
         row.setCategoryCode(categoryCode);
 
         String dimensions = getValue(standardValues, "dimensions");
+        row.setDimensionsText(dimensions);
         if (StringUtils.hasText(dimensions) && !StringUtils.hasText(row.getKeySpecs())) {
             try {
                 row.setKeySpecs(objectMapper.writeValueAsString(Map.of("dimensions", dimensions)));
@@ -3498,7 +3502,9 @@ public class ExcelAiImportService {
                 // 锚定在图片列的图是产品主图候选（每行仅首个升主图）；
                 // 其他数据列（如规格/模块列）的图是模块样式示例图，归属本行变体
                 boolean inImageColumn = physicalLayout.imageColumns().contains(img.colIndex());
-                if (inImageColumn && !primaryAssigned) {
+                // 过小的内嵌图（图标/缩略图/装饰角标）不具升主图资格，降级为详情图，
+                // 避免小图被升主图后再被 AI 裁剪放大导致画质崩坏
+                if (inImageColumn && !primaryAssigned && !isTooSmallForPrimary(img.bytes())) {
                     primary = true;
                     primaryAssigned = true;
                 }
@@ -3514,6 +3520,30 @@ public class ExcelAiImportService {
                 img.bytes(), contentType, primary, variantLevel, hashBytes(img.bytes())));
         }
         return result;
+    }
+
+    /** 升主图的最小像素尺寸：小于该尺寸的内嵌图视为图标/缩略图，不具备主图资格 */
+    private static final int MIN_PRIMARY_IMAGE_PIXELS = 200;
+
+    /**
+     * 判断内嵌图是否过小、不具备升主图资格。
+     *
+     * <p>解码失败（格式异常等）时返回 false——不阻断原有挂接逻辑，由后续流程容错。</p>
+     *
+     * @param bytes 图片字节
+     * @return 宽或高小于 {@link #MIN_PRIMARY_IMAGE_PIXELS} 像素时返回 true
+     */
+    private boolean isTooSmallForPrimary(byte[] bytes) {
+        try {
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+            if (image == null) {
+                return false;
+            }
+            return image.getWidth() < MIN_PRIMARY_IMAGE_PIXELS || image.getHeight() < MIN_PRIMARY_IMAGE_PIXELS;
+        } catch (Exception e) {
+            log.debug("内嵌图尺寸探测失败，按原逻辑处理：{}", e.getMessage());
+            return false;
+        }
     }
 
     private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
@@ -3593,8 +3623,10 @@ public class ExcelAiImportService {
     }
 
     private String createVariantIfNeeded(String rspuId, ProductImportRow row,
-                                         Map<String, List<CategoryDict>> dictCache) {
-        boolean hasVariantInfo = StringUtils.hasText(row.getVariantDisplayName())
+                                         Map<String, List<CategoryDict>> dictCache,
+                                         SizeSpecParser.SizeSpec spec) {
+        boolean hasVariantInfo = spec != null
+            || StringUtils.hasText(row.getVariantDisplayName())
             || StringUtils.hasText(row.getSizeCode()) || StringUtils.hasText(row.getSizeText())
             || StringUtils.hasText(row.getColorCode()) || StringUtils.hasText(row.getColorText())
             || StringUtils.hasText(row.getMaterialCode()) || StringUtils.hasText(row.getMaterialText());
@@ -3603,15 +3635,28 @@ public class ExcelAiImportService {
             return null;
         }
 
-        String displayName = StringUtils.hasText(row.getVariantDisplayName())
-            ? row.getVariantDisplayName().trim()
-            : buildDefaultVariantName(row);
+        // 多尺寸展开时：尺寸以解析出的规格为准（行级尺寸码不参与，避免所有规格塌缩为同一变体）
+        String sizeCode = spec != null ? null
+            : (StringUtils.hasText(row.getSizeCode()) ? row.getSizeCode() : null);
+        String sizeText = spec != null ? spec.sizeText() : row.getSizeText();
+
+        String displayName;
+        if (spec != null) {
+            displayName = StringUtils.hasText(row.getVariantDisplayName())
+                ? row.getVariantDisplayName().trim() + "-" + spec.sizeText()
+                : spec.sizeText();
+        } else {
+            displayName = StringUtils.hasText(row.getVariantDisplayName())
+                ? row.getVariantDisplayName().trim()
+                : buildDefaultVariantName(row);
+        }
 
         // 行内三码已在 prepareRow 阶段完成"别名→字典"解析与降级：码直接用，原文走 *_text
         RspuVariantCreateRequest request = new RspuVariantCreateRequest();
         request.setDisplayName(displayName);
-        request.setSizeCode(StringUtils.hasText(row.getSizeCode()) ? row.getSizeCode() : null);
-        request.setSizeText(row.getSizeText());
+        request.setSizeCode(sizeCode);
+        request.setSizeText(sizeText);
+        request.setDimensions(toDimensionsJson(spec));
         request.setColorCode(StringUtils.hasText(row.getColorCode()) ? row.getColorCode() : null);
         request.setColorText(row.getColorText());
         request.setMaterialCode(StringUtils.hasText(row.getMaterialCode()) ? row.getMaterialCode() : null);
@@ -3698,6 +3743,18 @@ public class ExcelAiImportService {
 
         String firstVariantId = null;
         List<String> rskuIds = new ArrayList<>();
+        // 多尺寸文字展开：尺寸/备注文字明确写了 ≥2 个规格时，按"尺寸 × 材质价格列"展开变体；
+        // 未识别出多规格时 specLoop 为单元素 null，逐行走原逻辑，行为完全不变
+        List<SizeSpecParser.SizeSpec> parsedSpecs = SizeSpecParser.parse(
+            baseRow.getDimensionsText(), baseRow.getDescription());
+        boolean multiSize = parsedSpecs.size() >= 2;
+        List<SizeSpecParser.SizeSpec> specLoop = multiSize
+            ? parsedSpecs
+            : Collections.singletonList(null);
+        if (multiSize) {
+            log.info("识别到 {} 个尺寸规格，本行按尺寸展开创建变体：{}", parsedSpecs.size(),
+                parsedSpecs.stream().map(SizeSpecParser.SizeSpec::sizeText).toList());
+        }
         // sales 角色价格列不建变体/RSKU（价格值已在 processRow 写入 RSPU 零售参考价 retail_price）；
         // 只有 factory 角色价格列走变体 + RSKU 链路
         List<PriceColumnInfo> factoryPriceColumns = priceColumns == null ? List.of()
@@ -3738,73 +3795,119 @@ public class ExcelAiImportService {
                     : calculateLeadTime(factoryCode, categoryCode, materialGradeCode,
                         request.getDefaultLeadTimeDays());
 
-                // 创建变体：同 RSPU 下"码或原文"组合相同的变体直接复用（如归组的连续模块行），
-                // 避免变体属性组合唯一索引冲突导致整行回滚丢价格；
-                // 价格列变体携带行级已解析的尺寸/颜色（三码容错解析已在 prepareRow 完成）
-                String rowSizeCode = StringUtils.hasText(baseRow.getSizeCode()) ? baseRow.getSizeCode() : null;
-                String rowColorCode = StringUtils.hasText(baseRow.getColorCode()) ? baseRow.getColorCode() : null;
-                String variantId = findExistingVariantId(rspuId, rowSizeCode, baseRow.getSizeText(),
-                    rowColorCode, baseRow.getColorText(), materialCode, materialText);
-                if (variantId == null) {
-                    RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
-                    variantRequest.setDisplayName(StringUtils.hasText(materialName) ? materialName : "默认变体");
-                    variantRequest.setSizeCode(rowSizeCode);
-                    variantRequest.setSizeText(baseRow.getSizeText());
-                    variantRequest.setColorCode(rowColorCode);
-                    variantRequest.setColorText(baseRow.getColorText());
-                    variantRequest.setMaterialCode(materialCode);
-                    variantRequest.setMaterialText(materialText);
-                    variantRequest.setReferencePriceBand(resolvePriceBand(price));
-                    variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
-                        ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
-                        : null);
-                    var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
-                    if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
-                        throw new BusinessException("为价格列创建变体失败，header=" + priceColumn.getHeader());
-                    }
-                    variantId = variantResponse.getVariantId();
-                }
-                if (firstVariantId == null) {
-                    firstVariantId = variantId;
-                }
+                // 按尺寸规格展开：多尺寸时同一价格列对每个尺寸各建/复用一个变体并挂 RSKU
+                for (SizeSpecParser.SizeSpec spec : specLoop) {
+                    // 多尺寸展开时尺寸码不参与（避免所有规格塌缩为同一变体），与 createVariantIfNeeded 语义一致
+                    String rowSizeCode = spec == null && StringUtils.hasText(baseRow.getSizeCode())
+                        ? baseRow.getSizeCode() : null;
+                    String rowColorCode = StringUtils.hasText(baseRow.getColorCode())
+                        ? baseRow.getColorCode() : null;
+                    String specSizeText = spec != null ? spec.sizeText() : baseRow.getSizeText();
+                    String specDimensionsJson = toDimensionsJson(spec);
 
-                // 创建/更新 RSKU：按 (rspuId, variantId, factoryCode) upsert——
-                // 重复导入（updateIfExists）或同组模块行重复报价时更新价格而非撞唯一索引（P1-2）
-                if (factoryCode != null) {
-                    RskuCreateRequest rskuRequest = new RskuCreateRequest();
-                    rskuRequest.setRspuId(rspuId);
-                    rskuRequest.setVariantId(variantId);
-                    rskuRequest.setFactoryCode(factoryCode);
-                    rskuRequest.setFactoryPrice(price);
-                    rskuRequest.setMaterialCode(materialCode);
-                    rskuRequest.setMaterialDescription(materialName);
-                    rskuRequest.setLeadTimeDays(leadTimeDays);
-                    rskuRequest.setMoq(moq);
-                    rskuRequest.setShippingFrom(shippingFrom);
-                    rskuRequest.setShippingWarehouseId(shippingWarehouseId);
-                    rskuRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
-                        ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
-                        : null);
-                    try {
-                        String rskuId = rskuService.upsertRsku(rskuRequest);
-                        if (StringUtils.hasText(rskuId)) {
-                            rskuIds.add(rskuId);
+                    // 创建变体：同 RSPU 下"码或原文"组合相同的变体直接复用（如归组的连续模块行），
+                    // 避免变体属性组合唯一索引冲突导致整行回滚丢价格；
+                    // 价格列变体携带行级已解析的尺寸/颜色（三码容错解析已在 prepareRow 完成）
+                    String variantId = findExistingVariantId(rspuId, rowSizeCode, specSizeText,
+                        rowColorCode, baseRow.getColorText(), materialCode, materialText);
+                    if (variantId == null) {
+                        RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
+                        variantRequest.setDisplayName(buildVariantDisplayName(specSizeText, materialName));
+                        variantRequest.setSizeCode(rowSizeCode);
+                        variantRequest.setSizeText(specSizeText);
+                        variantRequest.setDimensions(specDimensionsJson);
+                        variantRequest.setColorCode(rowColorCode);
+                        variantRequest.setColorText(baseRow.getColorText());
+                        variantRequest.setMaterialCode(materialCode);
+                        variantRequest.setMaterialText(materialText);
+                        variantRequest.setReferencePriceBand(resolvePriceBand(price));
+                        variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
+                            ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
+                            : null);
+                        var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
+                        if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
+                            log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
+                            rowIssues.add("创建变体失败: " + priceColumn.getHeader());
+                            continue;
                         }
-                    } catch (BusinessException e) {
-                        // upsertRsku 已配置 noRollbackFor = BusinessException，
-                        // 捕获业务异常后仅跳过当前价格列，不影响同一行其他价格列/变体提交
-                        log.warn("为价格列创建/更新 RSKU 失败，header={}", priceColumn.getHeader(), e);
-                        rowIssues.add("工厂报价失败: " + priceColumn.getHeader() + " - " + e.getMessage());
+                        variantId = variantResponse.getVariantId();
+                    }
+                    if (firstVariantId == null) {
+                        firstVariantId = variantId;
+                    }
+
+                    // 创建/更新 RSKU：按 (rspuId, variantId, factoryCode) upsert——
+                    // 重复导入（updateIfExists）或同组模块行重复报价时更新价格而非撞唯一索引（P1-2）
+                    if (factoryCode != null) {
+                        RskuCreateRequest rskuRequest = new RskuCreateRequest();
+                        rskuRequest.setRspuId(rspuId);
+                        rskuRequest.setVariantId(variantId);
+                        rskuRequest.setFactoryCode(factoryCode);
+                        rskuRequest.setFactoryPrice(price);
+                        rskuRequest.setMaterialCode(materialCode);
+                        rskuRequest.setMaterialDescription(materialName);
+                        rskuRequest.setLeadTimeDays(leadTimeDays);
+                        rskuRequest.setMoq(moq);
+                        rskuRequest.setShippingFrom(shippingFrom);
+                        rskuRequest.setShippingWarehouseId(shippingWarehouseId);
+                        rskuRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
+                            ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
+                            : null);
+                        try {
+                            String rskuId = rskuService.upsertRsku(rskuRequest);
+                            if (StringUtils.hasText(rskuId)) {
+                                rskuIds.add(rskuId);
+                            }
+                        } catch (BusinessException e) {
+                            // upsertRsku 已配置 noRollbackFor = BusinessException，
+                            // 捕获业务异常后仅跳过当前价格列，不影响同一行其他价格列/变体提交
+                            log.warn("为价格列创建/更新 RSKU 失败，header={}", priceColumn.getHeader(), e);
+                            rowIssues.add("工厂报价失败: " + priceColumn.getHeader() + " - " + e.getMessage());
+                        }
                     }
                 }
             }
         } else {
-            // 没有价格列时，只创建默认变体（RSPU + 变体 + 图片，不建 RSKU）
-            String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache);
-            firstVariantId = variantId;
+            // 没有价格列时创建变体（RSPU + 变体 + 图片，不建 RSKU）：
+            // 识别到多尺寸规格时按尺寸各建一个变体，否则维持单默认变体
+            for (SizeSpecParser.SizeSpec spec : specLoop) {
+                String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache, spec);
+                if (firstVariantId == null) {
+                    firstVariantId = variantId;
+                }
+            }
         }
 
         return new VariantRskuOutcome(firstVariantId, rskuIds);
+    }
+
+    /** 变体显示名：尺寸+材质组合（"1.8m-真皮"），缺一则用有的部分，均无则为"默认变体"。 */
+    private String buildVariantDisplayName(String sizeText, String materialName) {
+        boolean hasSize = StringUtils.hasText(sizeText);
+        boolean hasMaterial = StringUtils.hasText(materialName);
+        if (hasSize && hasMaterial) {
+            return sizeText.trim() + "-" + materialName.trim();
+        }
+        if (hasSize) {
+            return sizeText.trim();
+        }
+        if (hasMaterial) {
+            return materialName.trim();
+        }
+        return "默认变体";
+    }
+
+    /** 尺寸规格的结构化三维转 JSON（无结构化信息或序列化失败时返回 null）。 */
+    private String toDimensionsJson(SizeSpecParser.SizeSpec spec) {
+        if (spec == null || spec.dimensions() == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(spec.dimensions());
+        } catch (Exception e) {
+            log.warn("序列化变体 dimensions 失败", e);
+            return null;
+        }
     }
 
     /**
@@ -4163,6 +4266,8 @@ public class ExcelAiImportService {
             imageAsset.setAiProcessed(false);
             imageAsset.setFileSize(stored.size());
             imageAsset.setFormat(stored.extension());
+            // 内容哈希落库（V31）：StoredImage.contentHash 为组内去重时已算好的 SHA-256
+            imageAsset.setContentHash(stored.contentHash());
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);

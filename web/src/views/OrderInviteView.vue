@@ -8,7 +8,6 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NEmpty,
-  NImage,
   NResult,
   NSpace,
   NSpin,
@@ -17,6 +16,7 @@ import {
   useMessage
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { confirmOrderInvite, getOrderInviteView } from '@/api/orderInvite'
 import { ORDER_STATUS_TEXT, type OrderInviteItem, type OrderInviteView } from '@/types/order'
 
@@ -83,14 +83,13 @@ const itemColumns: DataTableColumns<OrderInviteItem> = [
     key: 'imageId',
     width: 80,
     render: row =>
-      row.imageId
-        ? h(NImage, {
-            src: `/api/v1/images/${row.imageId}?inviteToken=${encodeURIComponent(token.value)}`,
-            width: 56,
-            height: 56,
-            objectFit: 'cover'
-          })
-        : '-'
+      h(HoverZoomImage, {
+        src: row.imageId
+          ? `/api/v1/images/${row.imageId}?inviteToken=${encodeURIComponent(token.value)}`
+          : null,
+        width: 56,
+        height: 56
+      })
   },
   { title: '产品名称', key: 'productName', render: row => row.productName || '-' },
   { title: '型号', key: 'model', width: 120, render: row => row.model || '-' },

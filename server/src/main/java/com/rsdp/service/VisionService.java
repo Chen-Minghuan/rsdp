@@ -11,7 +11,6 @@ import com.rsdp.dto.OpenAiChatMessage;
 import com.rsdp.dto.OpenAiChatRequest;
 import com.rsdp.dto.OpenAiChatResponse;
 import com.rsdp.dto.ProductBoundingBox;
-import com.rsdp.dto.SceneDetectedProduct;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.ExternalServiceException;
 import lombok.RequiredArgsConstructor;
@@ -19,10 +18,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.util.StringUtils;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
@@ -154,18 +156,134 @@ public class VisionService {
                 .build();
 
             String json = executeChat(request, "AI 识别");
-            try {
-                return objectMapper.readValue(json, AiLabels.class);
-            } catch (IOException e) {
-                log.error("解析 AI 识别结果失败，json={}", json, e);
-                throw new ExternalServiceException("解析 AI 识别结果失败", e);
-            }
+            return parseLabels(json);
 
         } catch (IOException e) {
             log.error("读取图片流失败", e);
             throw new ExternalServiceException("读取图片流失败", e);
         }
     }
+
+    /**
+     * 解析 AI 返回的 JSON 为识别标签。
+     *
+     * @param json AI 原始返回
+     * @return 识别标签
+     */
+    private AiLabels parseLabels(String json) {
+        try {
+            return objectMapper.readValue(normalizeSixDimTagsJson(json), AiLabels.class);
+        } catch (IOException e) {
+            log.error("解析 AI 识别结果失败，json={}", json, e);
+            throw new ExternalServiceException("解析 AI 识别结果失败", e);
+        }
+    }
+
+    /**
+     * 六维标签容错归一：AI 偶发把某维返回为数组（如 "E": ["实木","布艺"]），
+     * 而 AiLabels.sixDimTags 是 Map&lt;String,String&gt;，直接反序列化会抛
+     * MismatchedInputException 导致整个识别结果判失败。此处把数组值合并为
+     * "/" 分隔的字符串（空数组归一为 null），其余内容原样保留。
+     *
+     * @param json AI 原始返回
+     * @return 归一后的 JSON；解析失败时原样返回（由后续反序列化报错）
+     */
+    static String normalizeSixDimTagsJson(String json) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = new ObjectMapper().readTree(json);
+            com.fasterxml.jackson.databind.JsonNode tags = root.path("sixDimTags");
+            if (!tags.isObject()) {
+                return json;
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode tagObj =
+                (com.fasterxml.jackson.databind.node.ObjectNode) tags;
+            List<String> fieldNames = new ArrayList<>();
+            tagObj.fieldNames().forEachRemaining(fieldNames::add);
+            boolean changed = false;
+            for (String field : fieldNames) {
+                com.fasterxml.jackson.databind.JsonNode value = tagObj.get(field);
+                if (value == null || !value.isArray()) {
+                    continue;
+                }
+                List<String> parts = new ArrayList<>();
+                value.forEach(node -> {
+                    if (node.isTextual() && StringUtils.hasText(node.asText())) {
+                        parts.add(node.asText().trim());
+                    }
+                });
+                if (parts.isEmpty()) {
+                    tagObj.putNull(field);
+                } else {
+                    tagObj.put(field, String.join("/", parts));
+                }
+                changed = true;
+            }
+            return changed ? root.toString() : json;
+        } catch (Exception e) {
+            log.warn("六维标签 JSON 归一失败，按原文继续：{}", e.getMessage());
+            return json;
+        }
+    }
+
+    /**
+     * 识别图片（双图模式）：裁剪图负责形态识别，原图负责 OCR 文字提取。
+     *
+     * <p>主图智能裁剪会把原图中的文字版面（品名/型号/尺寸/价格等）裁掉，
+     * 单用裁剪图识别会导致 OCR 字段全空、产品名回退为品类名。
+     * 双图模式将两张图一并发送，由 prompt 分工：形态看裁剪图、文字看原图。</p>
+     *
+     * @param croppedImageStream 裁剪后的主体图输入流（方法内关闭）
+     * @param originalImageBytes 原始上传图字节（OCR 文字提取依据）；为空时退化为单图识别
+     * @param categoryCode       产品品类码，如 FS/TB/FC；为空时使用通用定义
+     * @return AI 识别标签
+     */
+    public AiLabels recognizeImage(InputStream croppedImageStream, byte[] originalImageBytes, String categoryCode) {
+        try (croppedImageStream) {
+            byte[] croppedBytes = croppedImageStream.readAllBytes();
+            if (croppedBytes.length == 0) {
+                throw new ExternalServiceException("图片流为空");
+            }
+            if (originalImageBytes == null || originalImageBytes.length == 0) {
+                return recognizeImage(new ByteArrayInputStream(croppedBytes), categoryCode);
+            }
+            if (mockEnabled) {
+                log.info("AI 识别 Mock 已启用，返回模拟识别结果");
+                return buildMockLabels();
+            }
+
+            String userPrompt = DUAL_IMAGE_NOTE + buildUserPrompt(categoryCode);
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", SYSTEM_PROMPT),
+                    OpenAiChatMessage.multiVision("user", userPrompt, List.of(
+                        Base64.getEncoder().encodeToString(croppedBytes),
+                        Base64.getEncoder().encodeToString(originalImageBytes)
+                    ))
+                ))
+                .temperature(0.3)
+                .maxTokens(4096)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+                .build();
+
+            String json = executeChat(request, "AI 识别（双图）");
+            return parseLabels(json);
+        } catch (IOException e) {
+            log.error("读取图片流失败", e);
+            throw new ExternalServiceException("读取图片流失败", e);
+        }
+    }
+
+    /**
+     * 双图识别说明（前缀注入用户提示词）：声明两张图的分工，防止 AI 用裁剪图硬猜文字。
+     */
+    private static final String DUAL_IMAGE_NOTE = """
+        本次提供两张图片：第一张是产品主体裁剪图，第二张是原始上传图。
+        - 风格、六维形态、颜色、场景等视觉特征以第一张裁剪图为准；
+        - OCR 文字信息（品名、型号、尺寸、价格、工厂等）优先从第二张原图中提取
+          （裁剪图可能已裁掉文字区域，严禁因裁剪图无文字就判定图上无文字）。
+
+        """;
 
     /**
      * 构造开发/测试环境使用的模拟 AI 识别结果。
@@ -456,199 +574,6 @@ public class VisionService {
         }
     }
 
-    /**
-     * 场景照片家具单品检测提示词。
-     * 要求 AI 在一张室内/空间场景照片中找出所有家具单品，输出位置框和品类。
-     */
-    private static final String SCENE_DETECTION_SYSTEM_PROMPT = """
-        你是家具场景分析专家。请分析用户提供的室内场景照片，找出其中的家具单品。
-        只输出 JSON，不要任何其他文字说明。
-        """;
-
-    private static final String SCENE_DETECTION_USER_PROMPT_TEMPLATE = """
-        请分析这张室内场景照片，找出照片中所有可以独立建档的家具单品（如沙发、座椅、茶几、柜类、吧椅、办公桌等）。
-
-        要求：
-        - 只检测家具主体；排除装饰品与杂物（花瓶、挂画、灯具、地毯、窗帘、靠枕、摆件等）
-        - 成套出现的同款式多件（如一组相同的餐椅）按一件整体框出即可
-        - bbox 必须紧贴家具的实际边缘（宁紧勿松）：家具主体应占框内面积 80%% 以上，
-          不要把周围的墙面、地面、天花板和相邻家具包含进来
-        - 一框一物：不同单品必须分别框出，禁止把相邻的不同家具合并为一个框，框与框之间不要重叠
-        - 按在画面中的显著程度排序，最多输出 %d 件
-
-        bbox 使用相对于图片宽高的比例坐标（0.0 ~ 1.0）：
-        {"x": 左上角 x, "y": 左上角 y, "width": 宽度, "height": 高度}
-
-        预估品类码必须从以下枚举中精确选择，无法判断时填 null：
-        %s
-
-        输出 JSON 对象：
-        {
-          "products": [
-            {"bbox": {"x": 0.05, "y": 0.35, "width": 0.5, "height": 0.55}, "estimatedCategory": "SF", "label": "三人位沙发"}
-          ]
-        }
-        没有检测到家具时输出 {"products": []}。只输出 JSON，不要任何其他文字说明。
-        """;
-
-    /**
-     * 检测场景照片中的家具单品区域。
-     *
-     * @param imageStream 场景照片输入流（方法内关闭）
-     * @param maxProducts 最多返回的产品数量
-     * @return 检测到的家具单品列表（按显著度排序），不会为 null
-     */
-    public List<SceneDetectedProduct> detectSceneProducts(InputStream imageStream, int maxProducts) {
-        try (imageStream) {
-            byte[] imageBytes = imageStream.readAllBytes();
-            if (imageBytes.length == 0) {
-                throw new ExternalServiceException("场景图片流为空");
-            }
-
-            String base64 = Base64.getEncoder().encodeToString(imageBytes);
-            String userPrompt = SCENE_DETECTION_USER_PROMPT_TEMPLATE.formatted(
-                maxProducts, buildCategoryEnumText());
-
-            OpenAiChatRequest request = OpenAiChatRequest.builder()
-                .model(model)
-                .messages(List.of(
-                    OpenAiChatMessage.text("system", SCENE_DETECTION_SYSTEM_PROMPT),
-                    OpenAiChatMessage.vision("user", userPrompt, base64)
-                ))
-                .temperature(0.2)
-                .maxTokens(4096)
-                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
-                .build();
-
-            String json = executeChat(request, "场景家具检测");
-            return parseSceneProducts(json);
-        } catch (IOException e) {
-            log.error("读取场景图片流失败", e);
-            throw new ExternalServiceException("读取场景图片流失败", e);
-        }
-    }
-
-    private List<SceneDetectedProduct> parseSceneProducts(String json) {
-        if (json == null || json.isBlank()) {
-            throw new ExternalServiceException("AI 场景检测返回为空");
-        }
-        try {
-            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(json);
-            com.fasterxml.jackson.databind.JsonNode products = root.path("products");
-            if (!products.isArray()) {
-                throw new ExternalServiceException("AI 场景检测返回缺少 products 数组");
-            }
-            List<SceneDetectedProduct> result = new java.util.ArrayList<>();
-            for (com.fasterxml.jackson.databind.JsonNode node : products) {
-                SceneDetectedProduct product = objectMapper.treeToValue(node, SceneDetectedProduct.class);
-                if (product.getBbox() != null && product.getBbox().isValid()) {
-                    result.add(product);
-                } else {
-                    log.warn("丢弃非法 bbox 的场景检测结果: {}", node);
-                }
-            }
-            return result;
-        } catch (ExternalServiceException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("解析 AI 场景检测结果失败，json={}", json, e);
-            throw new ExternalServiceException("解析 AI 场景检测结果失败", e);
-        }
-    }
-
-    /**
-     * 裁剪局部图二次精修提示词。
-     * 要求 AI 在一张粗裁剪的局部图中确认主产品并给出紧贴边缘的 bbox。
-     */
-    private static final String SCENE_REFINE_SYSTEM_PROMPT = """
-        你是家具产品定位专家。请分析用户提供的局部裁剪图，确认其中的家具主体并给出紧贴边缘的位置框。
-        只输出 JSON，不要任何其他文字说明。
-        """;
-
-    private static final String SCENE_REFINE_USER_PROMPT_TEMPLATE = """
-        这张图片是从一张室内场景照片中裁剪出的局部区域，预期其中包含一件家具单品。
-        请分析：
-        - 若图中确实以一件家具为主体：输出紧贴该家具实际边缘的 bbox（相对本图宽高的比例坐标 0.0 ~ 1.0，宁紧勿松）、品类码、简短名称
-        - 若图中没有明确的家具主体，或多件家具同等重要无法区分主体：输出 {"isSingleFurniture": false}
-
-        品类码必须从以下枚举中精确选择，无法判断时填 null：
-        %s
-
-        输出 JSON 对象：
-        {
-          "isSingleFurniture": true,
-          "bbox": {"x": 0.02, "y": 0.05, "width": 0.9, "height": 0.85},
-          "estimatedCategory": "SF",
-          "label": "三人位沙发"
-        }
-        只输出 JSON，不要任何其他文字说明。
-        """;
-
-    /**
-     * 对粗裁剪的局部图做二次 AI 精修：确认家具主体并给出紧贴边缘的 bbox。
-     *
-     * @param cropImageStream 局部裁剪图输入流（方法内关闭）
-     * @return 精修结果（bbox 为相对裁剪图的比例坐标）；图中无明确单一家具主体时返回 null
-     */
-    public SceneDetectedProduct refineSceneProduct(InputStream cropImageStream) {
-        try (cropImageStream) {
-            byte[] imageBytes = cropImageStream.readAllBytes();
-            if (imageBytes.length == 0) {
-                throw new ExternalServiceException("裁剪图片流为空");
-            }
-
-            String base64 = Base64.getEncoder().encodeToString(imageBytes);
-            String userPrompt = SCENE_REFINE_USER_PROMPT_TEMPLATE.formatted(buildCategoryEnumText());
-
-            OpenAiChatRequest request = OpenAiChatRequest.builder()
-                .model(model)
-                .messages(List.of(
-                    OpenAiChatMessage.text("system", SCENE_REFINE_SYSTEM_PROMPT),
-                    OpenAiChatMessage.vision("user", userPrompt, base64)
-                ))
-                .temperature(0.2)
-                .maxTokens(1024)
-                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
-                .build();
-
-            String json = executeChat(request, "场景产品精修");
-            return parseRefinedProduct(json);
-        } catch (IOException e) {
-            log.error("读取裁剪图片流失败", e);
-            throw new ExternalServiceException("读取裁剪图片流失败", e);
-        }
-    }
-
-    private SceneDetectedProduct parseRefinedProduct(String json) {
-        if (json == null || json.isBlank()) {
-            throw new ExternalServiceException("AI 产品精修返回为空");
-        }
-        try {
-            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(json);
-            if (!root.path("isSingleFurniture").asBoolean(false)) {
-                log.info("精修判定非单一家具主体，放弃精修");
-                return null;
-            }
-            com.fasterxml.jackson.databind.JsonNode bboxNode = root.path("bbox");
-            if (!bboxNode.isObject()) {
-                return null;
-            }
-            SceneDetectedProduct product = new SceneDetectedProduct();
-            product.setBbox(objectMapper.treeToValue(bboxNode, ProductBoundingBox.class));
-            product.setEstimatedCategory(root.path("estimatedCategory").isTextual()
-                ? root.path("estimatedCategory").asText() : null);
-            product.setLabel(root.path("label").isTextual() ? root.path("label").asText() : null);
-            if (product.getBbox() == null || !product.getBbox().isValid()) {
-                log.warn("精修返回非法 bbox，放弃精修: {}", bboxNode);
-                return null;
-            }
-            return product;
-        } catch (Exception e) {
-            log.error("解析 AI 产品精修结果失败，json={}", json, e);
-            throw new ExternalServiceException("解析 AI 产品精修结果失败", e);
-        }
-    }
-
     private String buildCategoryEnumText() {
         try {
             return dictService.listByType("category").stream()
@@ -663,11 +588,101 @@ public class VisionService {
     }
 
     /**
+     * 品类判定提示词：录入时用户未指定品类时，用原图（含品名/规格文字版面）判定品类。
+     */
+    private static final String CATEGORY_CLASSIFY_SYSTEM_PROMPT = """
+        你是家具品类分类专家。根据图片判断产品所属品类；图片中可能带有产品名称、型号、
+        规格等文字版面，文字信息（如品名明确写了品类名）优先于外观猜测。
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    private static final String CATEGORY_CLASSIFY_USER_PROMPT = """
+        请判断图中家具产品的品类。
+        品类码必须从以下枚举中精确选择一个：
+        %s
+
+        输出格式：{"categoryCode": "FC"}
+        实在无法判断时输出 {"categoryCode": null}
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    /**
+     * 轻量品类判定（best-effort）：从品类字典枚举中为图片选择一个品类码。
+     *
+     * <p>仅返回字典中真实存在的码；Mock 模式、字典为空、AI 异常、输出无法解析或
+     * 输出码不在字典中时一律返回 null，由调用方回退默认品类，绝不影响录入主流程。</p>
+     *
+     * @param imageStream 图片流（建议传未裁剪的原图，文字版面对判定帮助最大）
+     * @return 品类码（如 FC）；无法判定时返回 null
+     */
+    public String classifyCategory(InputStream imageStream) {
+        try (imageStream) {
+            byte[] imageBytes = imageStream.readAllBytes();
+            if (imageBytes.length == 0) {
+                return null;
+            }
+            if (mockEnabled) {
+                log.info("AI Mock 已启用，跳过品类判定");
+                return null;
+            }
+            String enumText = buildCategoryEnumText();
+            if (!StringUtils.hasText(enumText)) {
+                return null;
+            }
+
+            String base64 = Base64.getEncoder().encodeToString(imageBytes);
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", CATEGORY_CLASSIFY_SYSTEM_PROMPT),
+                    OpenAiChatMessage.vision("user", CATEGORY_CLASSIFY_USER_PROMPT.formatted(enumText), base64)
+                ))
+                .temperature(0.1)
+                .maxTokens(128)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+                .build();
+
+            String json = executeChat(request, "品类判定");
+            return parseCategoryCode(json);
+        } catch (Exception e) {
+            log.warn("品类判定失败，返回 null：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 解析品类判定结果；码不在字典中时返回 null（防 AI 编造枚举外的码）。 */
+    private String parseCategoryCode(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            Map<?, ?> map = objectMapper.readValue(json, Map.class);
+            Object code = map.get("categoryCode");
+            if (!(code instanceof String text) || text.isBlank()) {
+                return null;
+            }
+            String normalized = text.trim().toUpperCase();
+            boolean exists = dictService.listByType("category").stream()
+                .anyMatch(d -> normalized.equalsIgnoreCase(d.getDictCode()));
+            if (!exists) {
+                log.warn("AI 判定的品类码不在字典中，忽略: {}", normalized);
+                return null;
+            }
+            return normalized;
+        } catch (Exception e) {
+            log.warn("解析品类判定结果失败，json={}", json, e);
+            return null;
+        }
+    }
+
+    /**
      * 单图产品主体检测提示词。
-     * 要求 AI 完整包围图中最主要的家具产品（所有部件不可切断），排除搭配品、装饰、文字等干扰。
+     * 要求 AI 完整包围图中最完整的家具产品（所有部件不可切断），排除搭配品、装饰、文字等干扰。
+     * 选择标准是"完整度最高"而非"面积最大"：多个产品并存时，优先选部件完整可见、未被画面边缘
+     * 切断、遮挡最少的那个，即使它不是图中最大的产品。
      */
     private static final String SUBJECT_DETECTION_SYSTEM_PROMPT = """
-        你是家具产品图片分析专家。请找出图片中最主要的家具产品（面积最大、视觉主体），
+        你是家具产品图片分析专家。请找出图片中最完整的家具产品（完整度最高、而非面积最大），
         输出其完整包围框（bbox）。bbox 必须完整包含产品的所有部件，
         宁可多带少量背景边距，也绝不可切断产品的任何部分；
         但不得包含搭配产品、装饰品、绿植、文字、水印。
@@ -675,14 +690,16 @@ public class VisionService {
         """;
 
     private static final String SUBJECT_DETECTION_USER_PROMPT = """
-        请分析这张图片，找出图中最主要的家具产品，输出它的完整包围框。
+        请分析这张图片，找出图中最完整的家具产品，输出它的完整包围框。
 
         bbox 使用相对于图片宽高的千分比整数坐标（0 ~ 1000）：
         [x1, y1, x2, y2] = [左上角 x, 左上角 y, 右下角 x, 右下角 y]
 
         bbox 规则（必须严格遵守）：
-        - 只框最主要的那个家具产品；图片中有多个产品/搭配品时，只选视觉主体（通常是最大、最居中的那个）
-        - 必须完整包含产品的所有部件：腿、脚、扶手、靠背、装饰性突出物，一个都不能少
+        - 只框一个家具产品；图片中有多个产品/搭配品时，选择"完整度最高"的那个：
+          所有部件（腿、脚、扶手、靠背、装饰性突出物）完整可见、未被画面边缘切断、被遮挡最少
+        - 严禁仅凭面积大小选择：最大的产品若被切断/遮挡严重，应改选更完整的那个
+        - 必须完整包含所选产品的所有部件，一个都不能少
         - 常见错误（严禁出现）：切断椅腿/沙发脚、截掉靠背顶部、漏掉扶手、把产品的任何部件框在框外
         - 框内允许带少量背景边距，宁可略大也绝不可切断产品的任何部分
         - 不得包含搭配产品、装饰品、绿植、地毯、文字、水印

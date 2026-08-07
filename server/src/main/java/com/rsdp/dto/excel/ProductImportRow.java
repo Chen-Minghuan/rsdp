@@ -92,6 +92,9 @@ public class ProductImportRow {
     /** 长文本描述原文（对应模板表头「描述/配置说明」） */
     private String description;
 
+    /** 尺寸文字原文（dimensions 标准字段值，可能含多规格写法，供 SizeSpecParser 展开变体） */
+    private String dimensionsText;
+
     /** 零售参考价（销售价/含税价/零售价/市场价列或 sales 角色价格列） */
     private java.math.BigDecimal retailPrice;
 }

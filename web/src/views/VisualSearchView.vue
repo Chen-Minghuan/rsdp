@@ -18,6 +18,7 @@ import {
   NTooltip
 } from 'naive-ui'
 import type { UploadFileInfo } from 'naive-ui'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { searchSimilarProducts } from '@/api/retrieval'
 import { listDicts } from '@/api/dict'
 import type { SimilarProductResponse } from '@/types/retrieval'
@@ -213,14 +214,7 @@ onUnmounted(() => {
           <n-grid-item v-for="item in results" :key="item.rspuId">
             <n-card hoverable @click="goToDetail(item.rspuId)">
               <n-space vertical>
-                <n-image
-                  v-if="item.mainImageUrl"
-                  :src="item.mainImageUrl"
-                  height="160"
-                  object-fit="cover"
-                  style="width: 100%;"
-                />
-                <n-empty v-else description="无图片" />
+                <HoverZoomImage :src="item.mainImageUrl" fluid :height="160" preview-disabled />
 
                 <n-space justify="space-between" align="center">
                   <span class="rspu-id">{{ item.rspuId }}</span>

@@ -10,7 +10,6 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NDataTable,
-  NImage,
   NEmpty,
   NDivider,
   NModal,
@@ -25,6 +24,7 @@ import {
   useMessage,
   type DataTableColumns
 } from 'naive-ui'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { getSchemeDetail, generateQuoteFromScheme, setSchemeTemplate, copyFromTemplate, reorderSchemeItems } from '@/api/scheme'
 import { exportQuote } from '@/api/quote'
 import { createOrder } from '@/api/order'
@@ -290,15 +290,11 @@ const itemColumns: DataTableColumns<SchemeItem> = [
     key: 'image',
     width: 100,
     render(row: SchemeItem) {
-      return row.primaryImageUrl
-        ? h(NImage, {
-            src: row.primaryImageUrl,
-            width: 80,
-            height: 80,
-            objectFit: 'cover',
-            style: 'border-radius: 4px;'
-          })
-        : '-'
+      return h(HoverZoomImage, {
+        src: row.primaryImageUrl,
+        width: 80,
+        height: 80
+      })
     }
   },
   { title: 'RSPU', key: 'rspuId', width: 160 },
@@ -562,14 +558,13 @@ onBeforeRouteUpdate((to) => {
                       @dragover.prevent
                       @drop.prevent="onDropOnItem(item)"
                     >
-                      <n-image
-                        v-if="item.primaryImageUrl"
+                      <HoverZoomImage
                         :src="item.primaryImageUrl"
-                        object-fit="cover"
+                        :width="64"
+                        :height="64"
+                        radius="8px"
                         preview-disabled
-                        class="zone-item-img"
                       />
-                      <div v-else class="zone-item-img placeholder">无图</div>
                       <div class="zone-item-body">
                         <div class="zone-item-name" :title="item.rspuName || item.rspuId">
                           {{ item.rspuName || item.rspuId }}
@@ -784,23 +779,6 @@ onBeforeRouteUpdate((to) => {
   opacity: 0.5;
   border-color: var(--rsdp-primary);
   box-shadow: var(--rsdp-shadow-card);
-}
-
-.zone-item-img {
-  width: 64px;
-  height: 64px;
-  border-radius: 8px;
-  overflow: hidden;
-  flex-shrink: 0;
-  background: var(--rsdp-serve-bg);
-}
-
-.zone-item-img.placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
 }
 
 .zone-item-body {

@@ -15,6 +15,7 @@ import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
+import com.rsdp.util.SizeSpecParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -153,12 +154,14 @@ public class RspuVariantService {
     /**
      * 为 RSPU 初始化默认变体（供 AI 识别异步任务调用）。
      *
-     * <p>若该 RSPU 已存在变体，则直接返回；否则根据 AI 识别结果创建一个默认变体，
-     * 使后续批量绑定工厂报价时不必再手工创建变体。</p>
+     * <p>若该 RSPU 已存在变体，则直接返回；否则根据 AI 识别结果创建变体，
+     * 使后续批量绑定工厂报价时不必再手工创建变体。
+     * OCR 尺寸文字明确写了 ≥2 个规格时（如"2380*840*910/2600*840*910"、"1.8m/2.0m"），
+     * 按规格各建一个尺寸变体；单规格或未识别时维持创建 1 个默认变体。</p>
      *
      * @param rspuId RSPU ID
      * @param labels AI 识别结果
-     * @return 变体 ID（新建或已存在）
+     * @return 首个变体 ID（新建或已存在）
      */
     public String initializeDefaultVariant(String rspuId, AiLabels labels) {
         List<RspuVariant> existing = variantMapper.selectList(
@@ -174,24 +177,67 @@ public class RspuVariantService {
             return null;
         }
 
+        // 多尺寸文字展开：OCR 尺寸文字识别出 ≥2 个规格时按规格建变体
+        String dimensionText = labels != null && labels.getOcr() != null
+            ? labels.getOcr().getDimensionText() : null;
+        List<SizeSpecParser.SizeSpec> sizeSpecs = SizeSpecParser.parse(dimensionText);
+        if (sizeSpecs.size() >= 2) {
+            String firstVariantId = null;
+            for (SizeSpecParser.SizeSpec spec : sizeSpecs) {
+                String variantId = insertAiVariant(rspuId, spec.sizeText(), spec.sizeText(),
+                    toJson(spec.dimensions()), rspu.getProductLevel());
+                if (firstVariantId == null) {
+                    firstVariantId = variantId;
+                }
+            }
+            log.info("AI 识别到 {} 个尺寸规格，已展开创建尺寸变体，rspuId={}，规格={}",
+                sizeSpecs.size(), rspuId,
+                sizeSpecs.stream().map(SizeSpecParser.SizeSpec::sizeText).toList());
+            return firstVariantId;
+        }
+
+        String variantId = insertAiVariant(rspuId, "默认变体", null,
+            extractDimensionsJson(labels), rspu.getProductLevel());
+        if (variantId != null) {
+            log.info("AI 识别后为 RSPU 自动创建默认变体，rspuId={}，variantId={}", rspuId, variantId);
+        }
+        return variantId;
+    }
+
+    /** 插入一个 AI 识别变体（编码冲突时记警告返回 null，不阻断主流程）。 */
+    private String insertAiVariant(String rspuId, String displayName, String sizeText,
+                                   String dimensionsJson, String productLevel) {
         String variantId = generateVariantId(rspuId);
         RspuVariant variant = new RspuVariant();
         variant.setVariantId(variantId);
         variant.setRspuId(rspuId);
-        variant.setDisplayName("默认变体");
-        variant.setVariantCode("M");
-        variant.setDimensions(extractDimensionsJson(labels));
-        variant.setProductLevel(rspu.getProductLevel());
+        variant.setDisplayName(displayName);
+        // 单默认变体沿用历史编码 M；尺寸展开变体不写 variantCode（与 Excel 导入链路一致）
+        variant.setVariantCode(sizeText == null ? "M" : null);
+        variant.setSizeText(sizeText);
+        variant.setDimensions(dimensionsJson);
+        variant.setProductLevel(productLevel);
         variant.setStatus("active");
         variant.setCreatedAt(LocalDateTime.now());
         variant.setUpdatedAt(LocalDateTime.now());
 
         try {
             variantMapper.insert(variant);
-            log.info("AI 识别后为 RSPU 自动创建默认变体，rspuId={}，variantId={}", rspuId, variantId);
             return variantId;
         } catch (DataIntegrityViolationException e) {
-            log.warn("默认变体编码冲突，rspuId={}", rspuId, e);
+            log.warn("AI 变体编码冲突，rspuId={}，displayName={}", rspuId, displayName, e);
+            return null;
+        }
+    }
+
+    private String toJson(Dimensions dims) {
+        if (dims == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(dims);
+        } catch (Exception e) {
+            log.warn("序列化尺寸 JSON 失败", e);
             return null;
         }
     }

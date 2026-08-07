@@ -109,10 +109,12 @@ public class RspuCodeService {
      * 根据 AI 识别结果推断尺寸码。
      *
      * <p>优先使用 OCR 解析出的长宽高最大值，按阈值映射为 S/M/L/X；
-     * 无法推断时返回 null。</p>
+     * 推断结果不在尺寸字典中时，按等级距离降级为最接近且存在的码（如 X→L），
+     * 避免"推断出字典不存在的码 → 业务编码生成整体失败"；
+     * 无法推断或字典中无任何可降级码时返回 null。</p>
      *
      * @param labels AI 识别标签
-     * @return 尺寸码（S/M/L/X）或 null
+     * @return 尺寸码（字典中存在的 S/M/L/X 等）或 null
      */
     public String inferSizeCode(AiLabels labels) {
         if (labels == null || labels.getOcr() == null) {
@@ -126,15 +128,69 @@ public class RspuCodeService {
         if (max <= 0) {
             return null;
         }
+        // 阈值按 mm 设计，OCR 尺寸可能带 cm/m/inch 单位，先统一换算为 mm 再比较
+        max = Math.round(max * unitToMmFactor(dims.getUnit()));
+        String inferred;
         if (max < SIZE_SMALL_THRESHOLD) {
-            return "S";
+            inferred = "S";
         } else if (max < SIZE_MEDIUM_THRESHOLD) {
-            return "M";
+            inferred = "M";
         } else if (max < SIZE_LARGE_THRESHOLD) {
-            return "L";
+            inferred = "L";
         } else {
-            return "X";
+            inferred = "X";
         }
+        return degradeToExistingSizeCode(inferred);
+    }
+
+    /** 尺寸码等级（用于降级距离比较；非等级码如 SINGLE/DOUBLE 不参与）。 */
+    private static final java.util.Map<String, Integer> SIZE_GRADE_RANK = java.util.Map.of(
+        "S", 0, "M", 1, "L", 2, "X", 3);
+
+    /** 尺寸单位转 mm 的换算系数；空值/未知单位按 mm 处理（OCR 默认单位即 mm）。 */
+    private static double unitToMmFactor(String unit) {
+        if (unit == null) {
+            return 1.0;
+        }
+        return switch (unit.trim().toLowerCase()) {
+            case "cm", "厘米" -> 10.0;
+            case "m", "米" -> 1000.0;
+            case "inch", "英寸" -> 25.4;
+            default -> 1.0;
+        };
+    }
+
+    /**
+     * 推断码不在尺寸字典时降级为等级最接近且存在的码（并列时取较小档）。
+     * 字典为空时不做干预（维持原行为，由 generateNextCode 统一校验）。
+     */
+    private String degradeToExistingSizeCode(String inferred) {
+        List<CategoryDict> sizeDict = dictService.listByType("size");
+        if (sizeDict == null || sizeDict.isEmpty()) {
+            return inferred;
+        }
+        boolean exists = sizeDict.stream().anyMatch(d -> inferred.equals(d.getDictCode()));
+        if (exists) {
+            return inferred;
+        }
+        Integer inferredRank = SIZE_GRADE_RANK.get(inferred);
+        String degraded = sizeDict.stream()
+            .map(CategoryDict::getDictCode)
+            .filter(SIZE_GRADE_RANK::containsKey)
+            .min((a, b) -> {
+                int distA = Math.abs(SIZE_GRADE_RANK.get(a) - inferredRank);
+                int distB = Math.abs(SIZE_GRADE_RANK.get(b) - inferredRank);
+                if (distA != distB) {
+                    return Integer.compare(distA, distB);
+                }
+                // 距离相同取较小档（保守，避免夸大尺寸）
+                return Integer.compare(SIZE_GRADE_RANK.get(a), SIZE_GRADE_RANK.get(b));
+            })
+            .orElse(null);
+        if (degraded != null) {
+            log.info("推断尺寸码 {} 不在字典中，降级为最接近的 {} ", inferred, degraded);
+        }
+        return degraded;
     }
 
     private long maxDimension(Dimensions dims) {

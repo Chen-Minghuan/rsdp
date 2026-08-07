@@ -12,7 +12,6 @@ import {
   NButton,
   NSpace,
   NSelect,
-  NImage,
   NCheckbox,
   NEmpty,
   NSpin,
@@ -26,6 +25,7 @@ import {
   useMessage
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import {
   listFavorites,
   removeFavorite,
@@ -310,14 +310,7 @@ function formatTime(value?: string): string {
             <n-grid-item v-for="item in favorites" :key="item.favoriteId">
               <n-card hoverable class="favorite-card">
                 <div class="card-image" @click="router.push(`/products/${item.rspuId}`)">
-                  <n-image
-                    v-if="item.primaryImageUrl"
-                    :src="item.primaryImageUrl"
-                    object-fit="cover"
-                    preview-disabled
-                    class="card-image-inner"
-                  />
-                  <div v-else class="card-image-placeholder">暂无图片</div>
+                  <HoverZoomImage :src="item.primaryImageUrl" fluid preview-disabled />
                 </div>
                 <div class="card-body">
                   <div class="card-title" :title="item.productName || item.rspuId">
@@ -476,27 +469,6 @@ function formatTime(value?: string): string {
   aspect-ratio: 4 / 3;
   background: var(--rsdp-serve-bg);
   margin-bottom: 10px;
-}
-
-.card-image-inner {
-  width: 100%;
-  height: 100%;
-}
-
-.card-image-inner :deep(img) {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.card-image-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--rsdp-text-secondary);
-  font-size: 13px;
 }
 
 .card-title {

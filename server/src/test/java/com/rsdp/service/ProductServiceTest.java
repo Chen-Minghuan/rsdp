@@ -21,6 +21,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
@@ -74,6 +75,9 @@ class ProductServiceTest {
     @Mock
     private ProductSubjectCropService subjectCropService;
 
+    @Mock
+    private VisionService visionService;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -111,6 +115,53 @@ class ProductServiceTest {
         dict.setDictCode(dictCode);
         dict.setDictName(dictName);
         return dict;
+    }
+
+    @Test
+    void createEntry_shouldRejectDuplicateImageByContentHash() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        // 库内已有同内容图片（对应已有产品）
+        ImageAssets dup = new ImageAssets();
+        dup.setImageId("IMG-DUP");
+        dup.setRspuId("RSPU-DUP");
+        when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(dup);
+        RspuMaster dupRspu = new RspuMaster();
+        dupRspu.setRspuId("RSPU-DUP");
+        dupRspu.setProductName("扶摇沙发");
+        dupRspu.setRspuCode("FS-WJ-001-M");
+        when(rspuMapper.selectById("RSPU-DUP")).thenReturn(dupRspu);
+
+        assertThatThrownBy(() -> productService.createEntry(List.of(image), null))
+            .isInstanceOf(com.rsdp.exception.BusinessException.class)
+            .hasMessageContaining("已录入过")
+            .hasMessageContaining("扶摇沙发")
+            .hasMessageContaining("FS-WJ-001-M");
+        verify(rspuMapper, org.mockito.Mockito.never()).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void createEntry_withForce_shouldSkipDuplicateCheck() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        ImageAssets dup = new ImageAssets();
+        dup.setImageId("IMG-DUP");
+        dup.setRspuId("RSPU-DUP");
+        lenient().when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(dup);
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(), anyString())).thenReturn("images/IMG-XXX.jpg");
+
+        Map<String, Object> result = productService.createEntry(List.of(image), null, true);
+
+        assertThat(result).containsKeys("taskId", "rspuId");
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        // 落库的图片资产应携带内容哈希
+        ArgumentCaptor<List<ImageAssets>> imageCaptor = ArgumentCaptor.forClass(List.class);
+        verify(imageAssetsMapper).insertBatch(imageCaptor.capture());
+        assertThat(imageCaptor.getValue().get(0).getContentHash()).isNotBlank();
     }
 
     @Test
@@ -413,5 +464,84 @@ class ProductServiceTest {
         assertThatThrownBy(() -> productService.createManualEntry(request, null))
             .isInstanceOf(BusinessException.class);
         verify(rspuMapper, never()).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void detectRegionsInImage_shouldReturnProductsFromFirstPage() throws Exception {
+        com.rsdp.dto.DocumentProductRegion.PageProduct product = new com.rsdp.dto.DocumentProductRegion.PageProduct();
+        product.setEstimatedCategory("BD");
+        com.rsdp.dto.DocumentProductRegion page = new com.rsdp.dto.DocumentProductRegion();
+        page.setPageType("product");
+        page.setProducts(List.of(product));
+        when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(page));
+
+        List<com.rsdp.dto.DocumentProductRegion.PageProduct> regions =
+            productService.detectRegionsInImage("fake-image".getBytes());
+
+        assertThat(regions).hasSize(1);
+        assertThat(regions.get(0).getEstimatedCategory()).isEqualTo("BD");
+    }
+
+    @Test
+    void detectRegionsInImage_shouldReturnEmptyWhenNoProducts() {
+        when(visionService.detectPageRegions(any(), any())).thenReturn(List.of());
+
+        assertThat(productService.detectRegionsInImage("fake-image".getBytes())).isEmpty();
+    }
+
+    @Test
+    void createEntriesFromRegions_shouldCropAndCreateEntryPerRegion() throws Exception {
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("images/IMG-REGION.jpg");
+
+        byte[] png = createPngBytes(400, 200);
+        com.rsdp.dto.request.RegionEntryRequest.RegionSelection bed =
+            new com.rsdp.dto.request.RegionEntryRequest.RegionSelection(
+                new com.rsdp.dto.ProductBoundingBox(0.0, 0.0, 0.5, 1.0), "DT", "实木床", "2000*1800*900mm");
+        com.rsdp.dto.request.RegionEntryRequest.RegionSelection bench =
+            new com.rsdp.dto.request.RegionEntryRequest.RegionSelection(
+                new com.rsdp.dto.ProductBoundingBox(0.5, 0.0, 0.5, 1.0), "FS", "长凳", null);
+
+        List<Map<String, Object>> results = productService.createEntriesFromRegions(png, List.of(bed, bench));
+
+        // 每个区域独立建档：2 个 RSPU、2 张主图（含内容哈希）、2 个异步任务
+        assertThat(results).hasSize(2);
+        verify(rspuMapper, times(2)).insert(any(RspuMaster.class));
+        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper, times(2)).insert(imageCaptor.capture());
+        assertThat(imageCaptor.getAllValues()).allMatch(a -> a.getContentHash() != null && !a.getContentHash().isBlank());
+        // 两图区域不同 → 裁剪结果哈希不同
+        assertThat(imageCaptor.getAllValues().get(0).getContentHash())
+            .isNotEqualTo(imageCaptor.getAllValues().get(1).getContentHash());
+        verify(asyncTaskMapper, times(2)).insert(any(AsyncTask.class));
+        verify(asyncTaskProcessor, times(2))
+            .processProductEntry(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void createEntriesFromRegions_shouldRejectEmptyRegions() throws Exception {
+        byte[] png = createPngBytes(100, 100);
+        assertThatThrownBy(() -> productService.createEntriesFromRegions(png, List.of()))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("至少选择一个产品区域");
+    }
+
+    private byte[] createPngBytes(int width, int height) {
+        try (var out = new java.io.ByteArrayOutputStream()) {
+            var image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D g = image.createGraphics();
+            g.setColor(java.awt.Color.WHITE);
+            g.fillRect(0, 0, width, height);
+            // 左半红、右半蓝，保证两个区域裁剪结果不同
+            g.setColor(java.awt.Color.RED);
+            g.fillRect(0, 0, width / 2, height);
+            g.setColor(java.awt.Color.BLUE);
+            g.fillRect(width / 2, 0, width - width / 2, height);
+            g.dispose();
+            javax.imageio.ImageIO.write(image, "png", out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

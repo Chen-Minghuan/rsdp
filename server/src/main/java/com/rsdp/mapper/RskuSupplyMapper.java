@@ -2,8 +2,10 @@ package com.rsdp.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.rsdp.entity.RskuSupply;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -45,4 +47,22 @@ public interface RskuSupplyMapper extends BaseMapper<RskuSupply> {
      * @return 具备能力的 RSKU 列表
      */
     List<RskuSupply> selectCapableByRspuIds(@Param("rspuIds") List<String> rspuIds);
+
+    /**
+     * 恢复指定 RSPU 下被级联软删的 RSKU 报价（回收站还原用）。
+     *
+     * @param rspuId RSPU ID
+     * @return 影响行数
+     */
+    @Update("UPDATE rsku_supply SET deleted_at = NULL WHERE rspu_id = #{rspuId} AND deleted_at IS NOT NULL")
+    int restoreByRspuId(String rspuId);
+
+    /**
+     * 物理删除指定 RSPU 下的全部 RSKU 报价（回收站彻底删除用）。
+     *
+     * @param rspuId RSPU ID
+     * @return 影响行数
+     */
+    @Delete("DELETE FROM rsku_supply WHERE rspu_id = #{rspuId}")
+    int physicalDeleteByRspuId(String rspuId);
 }

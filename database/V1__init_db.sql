@@ -361,6 +361,7 @@ CREATE TABLE IF NOT EXISTS image_assets (
     is_primary BOOLEAN DEFAULT FALSE,
     ai_processed BOOLEAN DEFAULT FALSE,
     quality_score DECIMAL(5, 4),
+    content_hash VARCHAR(64),                        -- 图片内容 SHA-256（录入查重，V31）
     uploaded_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP,
@@ -532,7 +533,7 @@ CREATE TABLE IF NOT EXISTS excel_import_row (
     failure_stage VARCHAR(32),                     -- 在哪个阶段失败
     extracted_image_count INTEGER DEFAULT 0,       -- 提取到的图片数量
     image_asset_ids JSONB,                         -- ["IMG-001", "IMG-002"]
-    override_image_asset_ids JSONB,                -- 用户在数据清洗页编辑后的图片 asset ID 列表（V31）
+    override_image_asset_ids JSONB,                -- 用户在数据清洗页编辑后的图片 asset ID 列表（V33）
     ai_task_id VARCHAR(64),                        -- 关联的异步AI识别任务
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
@@ -665,6 +666,7 @@ CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_variant ON image_assets(variant_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_primary ON image_assets(rspu_id, is_primary);
 CREATE INDEX IF NOT EXISTS idx_image_rsku ON image_assets(rsku_id);
+CREATE INDEX IF NOT EXISTS idx_image_content_hash ON image_assets(content_hash);
 
 -- AI 识别索引
 CREATE INDEX IF NOT EXISTS idx_ai_image ON ai_recognition(image_id, recognition_type);

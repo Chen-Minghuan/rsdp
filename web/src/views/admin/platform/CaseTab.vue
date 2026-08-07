@@ -5,9 +5,10 @@
 import { ref, onMounted, h } from 'vue'
 import {
   NButton, NSpace, NDataTable, NSwitch, NModal, NForm, NFormItem,
-  NInput, NInputNumber, NSelect, NPopconfirm, NSpin, NImage, useMessage, type DataTableColumns
+  NInput, NInputNumber, NSelect, NPopconfirm, NSpin, useMessage, type DataTableColumns
 } from 'naive-ui'
 import CmsImageUpload from '@/components/CmsImageUpload.vue'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import {
   listPlatformCases, createPlatformCase, updatePlatformCase, deletePlatformCase
 } from '@/api/platform'
@@ -114,9 +115,12 @@ const columns: DataTableColumns<PlatformCase> = [
     key: 'coverImageId',
     width: 110,
     render: (row) =>
-      row.coverImageId
-        ? h(NImage, { src: `/api/v1/images/${row.coverImageId}`, width: 88, height: 52, objectFit: 'cover', style: 'border-radius: 6px;' })
-        : '—'
+      h(HoverZoomImage, {
+        src: row.coverImageId ? `/api/v1/images/${row.coverImageId}` : null,
+        width: 88,
+        height: 52,
+        radius: '6px'
+      })
   },
   { title: '标题', key: 'title', ellipsis: { tooltip: true } },
   { title: '排序', key: 'sortOrder', width: 70 },

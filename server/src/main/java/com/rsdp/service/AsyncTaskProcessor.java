@@ -26,6 +26,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.IdGenerator;
 
 /**
@@ -56,6 +57,10 @@ public class AsyncTaskProcessor {
 
     @Value("${rsdp.ai.max-image-size:20971520}")
     private long maxImageSize = 20 * 1024 * 1024;
+
+    /** 同款检测：向量相似度阈值（0~1），超过则标记"存疑-疑似同款" */
+    @Value("${rsdp.dedup.similar-threshold:0.95}")
+    private double duplicateSimilarThreshold;
 
     /**
      * 异步处理产品录入任务：AI 视觉识别并更新相关记录。
@@ -99,13 +104,37 @@ public class AsyncTaskProcessor {
         }
 
         // 主图智能裁剪：AI 识别产品主体并替换主图，识别失败时回退原图不影响流程。
-        // 命中时后续 AI 识别与向量计算均基于裁剪图，保证以图搜图语义一致。
+        // 命中时向量计算基于裁剪图（保证以图搜图语义一致）；
+        // AI 识别走双图模式（裁剪图看形态 + 原图提取 OCR 文字），避免裁剪裁掉品名/尺寸文字。
         // 文档导入（PDF/PPT）的图片已经过页面级主体裁剪，跳过二次检测。
+        byte[] originalImageBytes = imageBytes;
+        boolean subjectCropped = false;
         if (!isDocumentImportTask(taskId)) {
             Optional<byte[]> croppedImage = subjectCropService.cropAndReplacePrimary(
                 imageBytes, rspuId, null, imageId, objectKey);
             if (croppedImage.isPresent()) {
                 imageBytes = croppedImage.get();
+                subjectCropped = true;
+            }
+        }
+
+        // 品类自动判定：录入时用户未选品类（系统兜底 FS）时，用原图（含品名/规格文字版面）
+        // 轻量判定品类并纠正——后续六维 schema、风格匹配、业务编码都按正确品类执行。
+        // 判定失败不影响主流程，沿用兜底品类。
+        if (isCategoryAutoDetectTask(taskId)) {
+            try {
+                String detected = visionService.classifyCategory(new ByteArrayInputStream(originalImageBytes));
+                if (StringUtils.hasText(detected) && !detected.equalsIgnoreCase(categoryCode) && rspu != null) {
+                    String previous = categoryCode;
+                    rspu.setCategoryCode(detected);
+                    rspu.setCategoryPath(CategoryPaths.resolve(detected));
+                    rspu.setUpdatedAt(LocalDateTime.now());
+                    rspuMapper.updateById(rspu);
+                    categoryCode = detected;
+                    log.info("AI 品类判定纠正品类：{} → {}，rspuId={}", previous, detected, rspuId);
+                }
+            } catch (Exception e) {
+                log.warn("品类自动判定失败，沿用兜底品类，taskId={}", taskId, e);
             }
         }
 
@@ -115,7 +144,9 @@ public class AsyncTaskProcessor {
         boolean successSaved = false;
         try (InputStream imageStream = new ByteArrayInputStream(imageBytes)) {
             long aiStart = System.currentTimeMillis();
-            labels = visionService.recognizeImage(imageStream, categoryCode);
+            labels = subjectCropped
+                ? visionService.recognizeImage(imageStream, originalImageBytes, categoryCode)
+                : visionService.recognizeImage(imageStream, categoryCode);
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
             // 文档导入时，页面级检测提取的产品旁说明文字合并进 OCR（裁剪图不含这些文字）
@@ -139,6 +170,16 @@ public class AsyncTaskProcessor {
             String productName = persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
                 labels, processingTime, embedding);
             successSaved = true;
+
+            // 同款检测（写入向量前召回比对）：相似度超阈值时把新品标记"存疑-疑似同款"，
+            // 由人工裁决保留或删除——不硬拦截（同款不同工厂是合法场景）
+            if (embedding != null) {
+                try {
+                    flagDuplicateSuspect(rspuId, embedding);
+                } catch (Exception e) {
+                    log.warn("同款检测失败，跳过，rspuId={}", rspuId, e);
+                }
+            }
 
             // 以下为非关键步骤，失败仅降级为 partial_success，不影响已提交的识别结果
             String degradeError = null;
@@ -221,6 +262,24 @@ public class AsyncTaskProcessor {
             return source != null && "document_import".equals(source.asText());
         } catch (Exception e) {
             log.warn("解析任务 source 失败，按普通录入处理，taskId={}", taskId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 判断任务是否需要 AI 自动判定品类（录入时用户未选品类，系统在 input_data 打了标记）。
+     */
+    private boolean isCategoryAutoDetectTask(String taskId) {
+        try {
+            AsyncTask task = asyncTaskMapper.selectById(taskId);
+            if (task == null || !StringUtils.hasText(task.getInputData())) {
+                return false;
+            }
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
+            com.fasterxml.jackson.databind.JsonNode flag = root.get("categoryAutoDetect");
+            return flag != null && flag.asBoolean(false);
+        } catch (Exception e) {
+            log.warn("解析任务 categoryAutoDetect 失败，跳过品类判定，taskId={}", taskId, e);
             return false;
         }
     }
@@ -374,6 +433,57 @@ public class AsyncTaskProcessor {
 
     private boolean isTerminalStatus(String status) {
         return "done".equals(status) || "failed".equals(status) || "partial_success".equals(status);
+    }
+
+    /**
+     * 同款检测：用本次 embedding 在 ChromaDB 召回，找到其他 RSPU 且相似度超阈值时，
+     * 把当前产品标记为"存疑-疑似同款"（仅当仍为"待复核"，不覆盖人工/其他流程的复核结论）。
+     *
+     * @param rspuId    当前 RSPU ID
+     * @param embedding 本次主图向量
+     */
+    private void flagDuplicateSuspect(String rspuId, float[] embedding) {
+        ChromaDbClient.QueryResult result = chromaDbClient.query(embedding, 5, null);
+        if (result == null || result.getIds() == null || result.getIds().isEmpty()
+            || result.getDistances() == null || result.getDistances().isEmpty()
+            || result.getMetadatas() == null || result.getMetadatas().isEmpty()) {
+            return;
+        }
+        List<String> ids = result.getIds().get(0);
+        List<Double> distances = result.getDistances().get(0);
+        List<Map<String, Object>> metadatas = result.getMetadatas().get(0);
+        if (ids == null || distances == null || metadatas == null) {
+            return;
+        }
+        for (int i = 0; i < ids.size(); i++) {
+            Map<String, Object> meta = metadatas.get(i);
+            Object dupRspu = meta != null ? meta.get("rspu_id") : null;
+            if (dupRspu == null || rspuId.equals(dupRspu.toString())) {
+                continue;
+            }
+            // ChromaDB cosine distance [0,2] 映射相似度 [0,1]；结果按距离升序，低于阈值即终止
+            double similarity = Math.max(0.0, Math.min(1.0, 1.0 - distances.get(i) / 2.0));
+            if (similarity < duplicateSimilarThreshold) {
+                return;
+            }
+            RspuMaster current = rspuMapper.selectById(rspuId);
+            if (current == null || !"待复核".equals(current.getReviewStatus())) {
+                return;
+            }
+            RspuMaster dup = rspuMapper.selectById(dupRspu.toString());
+            String dupLabel = dup != null && StringUtils.hasText(dup.getRspuCode())
+                ? dup.getRspuCode() : dupRspu.toString();
+            String dupName = dup != null && StringUtils.hasText(dup.getProductName())
+                ? "「" + dup.getProductName() + "」" : "";
+            long percent = Math.round(similarity * 100);
+            current.setReviewStatus("存疑");
+            current.setReviewComment("疑似与 " + dupName + dupLabel + " 同款（向量相似度 "
+                + percent + "%），请确认是否重复录入");
+            current.setUpdatedAt(LocalDateTime.now());
+            rspuMapper.updateById(current);
+            log.info("疑似同款标记：rspuId={}，命中 {}，相似度 {}%", rspuId, dupLabel, percent);
+            return;
+        }
     }
 
     private boolean persistVector(String imageId, String rspuId, float[] embedding, int imageSize) {

@@ -12,9 +12,11 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
+import com.rsdp.util.ContentHashes;
 import com.rsdp.util.ImageUploadValidator;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.ManualProductEntryRequest;
+import com.rsdp.dto.request.RegionEntryRequest;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.OcrResult;
@@ -28,6 +30,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDateTime;
@@ -61,6 +64,7 @@ public class ProductService {
     private final RspuCodeService rspuCodeService;
     private final RskuCodeService rskuCodeService;
     private final ProductSubjectCropService subjectCropService;
+    private final VisionService visionService;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
     private String maxFileSize;
@@ -81,6 +85,20 @@ public class ProductService {
      */
     @Transactional
     public Map<String, Object> createEntry(List<MultipartFile> images, String categoryCode) throws IOException {
+        return createEntry(images, categoryCode, false);
+    }
+
+    /**
+     * 新品录入（带图片内容查重）。
+     *
+     * @param images       产品图片列表，第一张为主图
+     * @param categoryCode 品类码，如 FS/DT/CB；为空时默认 FS
+     * @param force        跳过图片内容查重（用户确认"仍然导入"时传 true）
+     * @return 包含 taskId、rspuId、imageIds 的映射
+     * @throws IOException 文件保存失败
+     */
+    @Transactional
+    public Map<String, Object> createEntry(List<MultipartFile> images, String categoryCode, boolean force) throws IOException {
         long start = System.currentTimeMillis();
 
         if (images == null || images.isEmpty()) {
@@ -92,11 +110,33 @@ public class ProductService {
             imageUploadValidator.validate(image, maxSize);
         }
 
+        // 图片内容哈希：录入查重 + 落库（V31）
+        List<String> contentHashes = new ArrayList<>();
+        for (MultipartFile image : images) {
+            contentHashes.add(ContentHashes.sha256Hex(image.getBytes()));
+        }
+
         String rspuId = IdGenerator.rspuId();
         String taskId = IdGenerator.taskId();
 
         String effectiveCategoryCode = (categoryCode == null || categoryCode.isBlank()) ? "FS" : categoryCode.trim().toUpperCase();
         validateCategoryCode(effectiveCategoryCode);
+
+        // 图片内容查重：同一文件已入库时拒绝（force 跳过），防重复导入产生重复产品
+        if (!force) {
+            for (int i = 0; i < images.size(); i++) {
+                String hash = contentHashes.get(i);
+                if (hash == null) {
+                    continue;
+                }
+                ImageAssets duplicate = imageAssetsMapper.selectByContentHash(hash);
+                if (duplicate != null) {
+                    throw new BusinessException("图片「" + images.get(i).getOriginalFilename()
+                        + "」已录入过，对应产品：" + describeDuplicateProduct(duplicate)
+                        + "。如确认是不同产品，请使用「仍然导入」");
+                }
+            }
+        }
 
         // 创建 RSPU 草稿
         RspuMaster rspu = new RspuMaster();
@@ -134,6 +174,7 @@ public class ProductService {
             imageAsset.setAiProcessed(false);
             imageAsset.setFileSize(image.getSize());
             imageAsset.setFormat(getExtension(image.getOriginalFilename()));
+            imageAsset.setContentHash(contentHashes.get(i));
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssets.add(imageAsset);
@@ -152,7 +193,8 @@ public class ProductService {
 
         registerStorageRollbackCleanup(storedObjectKeys);
 
-        // 创建异步任务（仅针对主图做 AI 识别）
+        // 创建异步任务（仅针对主图做 AI 识别）；用户未选品类时打标记，异步阶段先 AI 判定品类再识别
+        boolean categoryAutoDetect = (categoryCode == null || categoryCode.isBlank());
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);
         task.setTaskType("product_entry");
@@ -163,7 +205,8 @@ public class ProductService {
             "rspuId", rspuId,
             "imageId", primaryImageId,
             "objectKey", primaryObjectKey,
-            "originalFilename", primaryImage.getOriginalFilename()
+            "originalFilename", primaryImage.getOriginalFilename(),
+            "categoryAutoDetect", categoryAutoDetect
         )));
         task.setCreatedBy(SecurityOperatorContext.currentUsername());
         task.setCreatedAt(LocalDateTime.now());
@@ -401,6 +444,8 @@ public class ProductService {
         if (imageStream == null) {
             throw new BusinessException("图片流不能为空");
         }
+        // 读入字节：一次读取同时用于内容哈希（V31）与存储，避免流二次消费
+        byte[] imageBytes = imageStream.readAllBytes();
 
         String rspuId = IdGenerator.rspuId();
         String taskId = IdGenerator.taskId();
@@ -424,7 +469,8 @@ public class ProductService {
 
         String extension = getExtension(filename);
         String objectKey = "images/" + imageId + "." + extension;
-        String storagePath = storageService.store(imageStream, objectKey, size, "image/" + extension);
+        String storagePath = storageService.store(new ByteArrayInputStream(imageBytes), objectKey,
+            imageBytes.length, "image/" + extension);
         registerStorageRollbackCleanup(List.of(storagePath));
 
         ImageAssets imageAsset = new ImageAssets();
@@ -434,8 +480,9 @@ public class ProductService {
         imageAsset.setStoragePath(storagePath);
         imageAsset.setPrimary(true);
         imageAsset.setAiProcessed(false);
-        imageAsset.setFileSize(size);
+        imageAsset.setFileSize((long) imageBytes.length);
         imageAsset.setFormat(extension);
+        imageAsset.setContentHash(ContentHashes.sha256Hex(imageBytes));
         imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
         imageAsset.setCreatedAt(LocalDateTime.now());
         imageAssetsMapper.insert(imageAsset);
@@ -473,6 +520,74 @@ public class ProductService {
             "imageIds", List.of(imageId),
             "message", "任务已创建，正在后台识别中"
         );
+    }
+
+    /**
+     * 一图多产品区域检测：AI 在单张图片中检测每个产品的位置框、预估品类与产品旁说明文字。
+     *
+     * @param imageBytes 图片字节
+     * @return 检测到的产品区域列表（可能为空）
+     */
+    public List<com.rsdp.dto.DocumentProductRegion.PageProduct> detectRegionsInImage(byte[] imageBytes) {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new BusinessException("图片内容为空");
+        }
+        List<com.rsdp.dto.DocumentProductRegion> pages = visionService.detectPageRegions(
+            List.of(new ByteArrayInputStream(imageBytes)), null);
+        if (pages == null || pages.isEmpty() || pages.get(0).getProducts() == null) {
+            return List.of();
+        }
+        return pages.get(0).getProducts();
+    }
+
+    /**
+     * 按选中的产品区域拆分建档：每个区域裁剪后独立走完整录入流程
+     * （各自 RSPU + 异步 AI 识别；区域已裁剪，异步管线跳过二次主体检测）。
+     *
+     * @param imageBytes 原图字节
+     * @param regions    选中的产品区域
+     * @return 每个区域的录入结果（taskId/rspuId/imageIds，与传入顺序一致）
+     * @throws IOException 图片解码或裁剪失败
+     */
+    public List<Map<String, Object>> createEntriesFromRegions(byte[] imageBytes,
+                                                              List<RegionEntryRequest.RegionSelection> regions) throws IOException {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new BusinessException("图片内容为空");
+        }
+        if (regions == null || regions.isEmpty()) {
+            throw new BusinessException("请至少选择一个产品区域");
+        }
+        java.awt.image.BufferedImage source = javax.imageio.ImageIO.read(new ByteArrayInputStream(imageBytes));
+        if (source == null) {
+            throw new BusinessException("图片解码失败");
+        }
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (int i = 0; i < regions.size(); i++) {
+            RegionEntryRequest.RegionSelection region = regions.get(i);
+            byte[] cropped;
+            try {
+                cropped = com.rsdp.util.ImageCropper.cropToJpeg(source, region.bbox(), 0.9f);
+            } catch (Exception e) {
+                throw new BusinessException("第 " + (i + 1) + " 个产品区域裁剪失败: " + e.getMessage());
+            }
+
+            // 区域检测提取的品名/尺寸文字作为 pageOcr 随任务传递，异步识别时合并进 OCR
+            com.rsdp.dto.OcrResult pageOcr = null;
+            if (StringUtils.hasText(region.productName()) || StringUtils.hasText(region.dimensionText())) {
+                pageOcr = new com.rsdp.dto.OcrResult();
+                pageOcr.setProductName(region.productName());
+                pageOcr.setDimensionText(region.dimensionText());
+            }
+
+            String filename = "region-" + (i + 1) + ".jpg";
+            Map<String, Object> entry = createEntryFromStream(
+                new ByteArrayInputStream(cropped), filename, cropped.length,
+                region.categoryCode(), pageOcr);
+            results.add(entry);
+            log.info("区域拆分建档：第 {} 个区域（品类 {}）→ rspuId={}", i + 1, region.categoryCode(), entry.get("rspuId"));
+        }
+        return results;
     }
 
     private void validateFactoryEntryOwnership(String factoryCode) {
@@ -533,6 +648,25 @@ public class ProductService {
                 }
             }
         });
+    }
+
+    /**
+     * 描述图片查重命中的已有产品（品名 + 业务编码/RSPU ID），用于重复导入提示。
+     *
+     * @param duplicate 哈希命中的图片资产
+     * @return 产品描述文本
+     */
+    private String describeDuplicateProduct(ImageAssets duplicate) {
+        if (duplicate.getRspuId() == null) {
+            return "（图片 " + duplicate.getImageId() + "）";
+        }
+        RspuMaster rspu = rspuMapper.selectById(duplicate.getRspuId());
+        if (rspu == null) {
+            return "RSPU " + duplicate.getRspuId();
+        }
+        String name = StringUtils.hasText(rspu.getProductName()) ? rspu.getProductName() : rspu.getRspuId();
+        String code = StringUtils.hasText(rspu.getRspuCode()) ? "（" + rspu.getRspuCode() + "）" : "";
+        return "「" + name + "」" + code;
     }
 
     private void validateCategoryCode(String categoryCode) {
