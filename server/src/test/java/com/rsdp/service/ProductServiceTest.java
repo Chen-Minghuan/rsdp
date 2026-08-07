@@ -26,6 +26,10 @@ import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -94,6 +98,27 @@ class ProductServiceTest {
         setField("dictService", dictService);
         setField("rspuCodeService", rspuCodeService);
         setField("rskuCodeService", rskuCodeService);
+        setField("transactionManager", syncTransactionManager());
+    }
+
+    /** 同步事务桩：TransactionTemplate 直接在当前线程执行，不产生真实事务。 */
+    private static PlatformTransactionManager syncTransactionManager() {
+        return new PlatformTransactionManager() {
+            @Override
+            public TransactionStatus getTransaction(TransactionDefinition definition) {
+                return new SimpleTransactionStatus();
+            }
+
+            @Override
+            public void commit(TransactionStatus status) {
+                // 无真实事务，直接成功
+            }
+
+            @Override
+            public void rollback(TransactionStatus status) {
+                // 无真实事务，直接成功
+            }
+        };
     }
 
     private void setField(String name, Object value) throws Exception {

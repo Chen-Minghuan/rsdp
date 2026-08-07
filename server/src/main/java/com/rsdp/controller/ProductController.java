@@ -52,6 +52,7 @@ public class ProductController {
     private final ProductQueryService productQueryService;
     private final ImageUploadValidator imageUploadValidator;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final jakarta.validation.Validator validator;
 
     /**
      * 新品录入，支持为一个 RSPU 上传多张图片。
@@ -100,8 +101,14 @@ public class ProductController {
         imageUploadValidator.validate(image, MAX_IMAGE_SIZE_BYTES);
         com.rsdp.dto.request.RegionEntryRequest request = objectMapper.readValue(
             regionsJson, com.rsdp.dto.request.RegionEntryRequest.class);
-        if (request.regions() == null || request.regions().isEmpty()) {
-            throw new com.rsdp.exception.BusinessException("请至少选择一个产品区域");
+        // 手动 JSON 解析不触发 @Valid，这里显式走 Bean Validation（@NotEmpty/@NotNull/嵌套 @Valid）
+        var violations = validator.validate(request);
+        if (!violations.isEmpty()) {
+            String message = violations.stream()
+                .map(jakarta.validation.ConstraintViolation::getMessage)
+                .distinct()
+                .collect(java.util.stream.Collectors.joining("；"));
+            throw new com.rsdp.exception.BusinessException(message);
         }
         return Result.ok(productService.createEntriesFromRegions(image.getBytes(), request.regions()));
     }

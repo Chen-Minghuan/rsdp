@@ -27,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -65,6 +66,7 @@ public class ProductService {
     private final RskuCodeService rskuCodeService;
     private final ProductSubjectCropService subjectCropService;
     private final VisionService visionService;
+    private final org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
     private String maxFileSize;
@@ -562,15 +564,27 @@ public class ProductService {
             throw new BusinessException("图片解码失败");
         }
 
-        List<Map<String, Object>> results = new ArrayList<>();
+        // 先裁剪全部区域：任一区域裁剪失败时不产生任何建档，避免半成品
+        List<byte[]> croppedImages = new ArrayList<>();
         for (int i = 0; i < regions.size(); i++) {
-            RegionEntryRequest.RegionSelection region = regions.get(i);
-            byte[] cropped;
+            com.rsdp.dto.ProductBoundingBox bbox = regions.get(i).bbox();
+            if (bbox == null || !bbox.isValid()) {
+                throw new BusinessException("第 " + (i + 1) + " 个产品区域框无效（须在 0~1 相对坐标内且面积大于 0）");
+            }
             try {
-                cropped = com.rsdp.util.ImageCropper.cropToJpeg(source, region.bbox(), 0.9f);
+                croppedImages.add(com.rsdp.util.ImageCropper.cropToJpeg(source, bbox, 0.9f));
             } catch (Exception e) {
                 throw new BusinessException("第 " + (i + 1) + " 个产品区域裁剪失败: " + e.getMessage());
             }
+        }
+
+        // 逐区域独立事务建档（TransactionTemplate 代理 @Transactional 的 createEntryFromStream，
+        // 避免 this 自调用导致事务失效）：单区域失败回滚自身并清理已存文件，不影响已建档区域
+        TransactionTemplate regionTx = new TransactionTemplate(transactionManager);
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (int i = 0; i < regions.size(); i++) {
+            RegionEntryRequest.RegionSelection region = regions.get(i);
+            byte[] cropped = croppedImages.get(i);
 
             // 区域检测提取的品名/尺寸文字作为 pageOcr 随任务传递，异步识别时合并进 OCR
             com.rsdp.dto.OcrResult pageOcr = null;
@@ -581,9 +595,16 @@ public class ProductService {
             }
 
             String filename = "region-" + (i + 1) + ".jpg";
-            Map<String, Object> entry = createEntryFromStream(
-                new ByteArrayInputStream(cropped), filename, cropped.length,
-                region.categoryCode(), pageOcr);
+            int regionNo = i + 1;
+            com.rsdp.dto.OcrResult finalPageOcr = pageOcr;
+            Map<String, Object> entry = regionTx.execute(status -> {
+                try {
+                    return createEntryFromStream(new ByteArrayInputStream(cropped), filename, cropped.length,
+                        region.categoryCode(), finalPageOcr);
+                } catch (IOException e) {
+                    throw new BusinessException("第 " + regionNo + " 个产品区域建档失败: " + e.getMessage());
+                }
+            });
             results.add(entry);
             log.info("区域拆分建档：第 {} 个区域（品类 {}）→ rspuId={}", i + 1, region.categoryCode(), entry.get("rspuId"));
         }
