@@ -192,9 +192,10 @@ public class PdfImportService {
      * 直接使用嵌入原图（零渲染损失、天然完整）；否则走 AI bbox 裁剪路径
      * （bbox 先经 {@link ProductBoxRefiner} 清洗去重）。</p>
      *
-     * <p>场景图（效果图）不建产品档案：AI 标记 imageKind=scene 的产品框直接剔除；
-     * 嵌入图经 {@link ImageBackgroundAnalyzer} 边框带规则判别，疑似场景图同样剔除，
-     * 剔除后嵌入图数量不足时自动回落 AI bbox 裁剪路径。</p>
+     * <p>场景图（效果图）甄别：AI 标记 imageKind=scene 且无产品说明文字（nearbyText 为空）
+     * 的框视为场景中的点缀产品，直接剔除；场景中完整可见且带说明文字的产品保留，走 bbox
+     * 裁剪录入。嵌入图经 {@link ImageBackgroundAnalyzer} 边框带规则判别，疑似场景图不直取
+     * （场景照片不是干净的单品主图），由 AI bbox 路径按上述规则处理。</p>
      */
     private List<ProductSource> buildProductSources(DocumentProductRegion region,
                                                     List<BufferedImage> embeddedImages,
@@ -202,25 +203,27 @@ public class PdfImportService {
         List<ProductBoxRefiner.Refined<DocumentProductRegion.PageProduct>> refined = new ArrayList<>(
             ProductBoxRefiner.refineAll(region.getProducts(),
                 DocumentProductRegion.PageProduct::getBbox, pageWidth, pageHeight));
-        // 场景图中的产品不建档：剔除 AI 标记为 scene 的框
+        // 剔除"场景中且无文字说明"的产品框；场景中完整且带说明文字的产品保留录入
         int sceneBoxCount = 0;
         for (int i = refined.size() - 1; i >= 0; i--) {
-            if (isSceneImage(refined.get(i).source())) {
+            DocumentProductRegion.PageProduct product = refined.get(i).source();
+            if (isSceneImage(product) && !hasProductText(product.getNearbyText())) {
                 refined.remove(i);
                 sceneBoxCount++;
             }
         }
         if (sceneBoxCount > 0) {
-            log.info("剔除场景图产品框 {} 个，pageIndex={}", sceneBoxCount, region.getPageIndex());
+            log.info("剔除场景中无说明文字的产品框 {} 个，pageIndex={}", sceneBoxCount, region.getPageIndex());
         }
 
-        // 嵌入图同样过滤疑似场景图（场景大图天然满足面积/像素阈值，需内容判别兜底）
+        // 疑似场景图的嵌入图不直取（场景照片不是干净的单品主图）：
+        // 场景中完整且带说明文字的产品由上方保留的 AI bbox 框裁剪录入
         List<BufferedImage> standaloneEmbedded = null;
         if (embeddedImages != null && !embeddedImages.isEmpty()) {
             standaloneEmbedded = new ArrayList<>(embeddedImages.size());
             for (BufferedImage embedded : embeddedImages) {
                 if (ImageBackgroundAnalyzer.looksLikeSceneImage(embedded)) {
-                    log.info("剔除疑似场景嵌入图，pageIndex={}", region.getPageIndex());
+                    log.info("疑似场景嵌入图不直取，交 AI bbox 路径处理，pageIndex={}", region.getPageIndex());
                 } else {
                     standaloneEmbedded.add(embedded);
                 }
@@ -252,6 +255,26 @@ public class PdfImportService {
      */
     private static boolean isSceneImage(DocumentProductRegion.PageProduct product) {
         return "scene".equalsIgnoreCase(product.getImageKind());
+    }
+
+    /**
+     * 产品旁是否提取到任何说明文字（品名/型号/尺寸/价格/材质/原文任一项非空）。
+     * 场景图中的产品只有带说明文字时才值得建档——文字是"该场景产品在画册中正式售卖"的信号。
+     */
+    private static boolean hasProductText(OcrResult nearbyText) {
+        if (nearbyText == null) {
+            return false;
+        }
+        return isNotBlank(nearbyText.getProductName())
+            || isNotBlank(nearbyText.getModelNumber())
+            || isNotBlank(nearbyText.getDimensionText())
+            || isNotBlank(nearbyText.getPriceText())
+            || isNotBlank(nearbyText.getMaterialDescription())
+            || isNotBlank(nearbyText.getRawText());
+    }
+
+    private static boolean isNotBlank(String value) {
+        return value != null && !value.isBlank();
     }
 
     /**

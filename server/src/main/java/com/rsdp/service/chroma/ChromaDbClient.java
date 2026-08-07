@@ -54,10 +54,13 @@ public class ChromaDbClient {
             collectionIdCache.set(id);
             log.debug("ChromaDB 集合已存在: {} -> {}", collectionName, id);
             return id;
-        } catch (HttpClientErrorException.NotFound e) {
-            log.info("ChromaDB 集合不存在，正在创建: {}", collectionName);
-            return createCollection(collectionName);
         } catch (Exception e) {
+            // ChromaDB 0.6+ 查询不存在的集合返回 400 InvalidCollection（老版本为 404），
+            // 两者都应走自动创建而不是报错
+            if (isCollectionNotFound(e)) {
+                log.info("ChromaDB 集合不存在，正在创建: {}", collectionName);
+                return createCollection(collectionName);
+            }
             throw new ExternalServiceException("ChromaDB 查询集合失败: " + e.getMessage(), e);
         }
     }
@@ -65,6 +68,13 @@ public class ChromaDbClient {
     private String createCollection(String collectionName) {
         Map<String, Object> body = new HashMap<>();
         body.put("name", collectionName);
+        // ChromaDB 0.6+ 的 v2 API 只认 configuration 结构（legacy metadata hnsw:space 会被静默忽略，
+        // 实测退化为 l2）；保留 legacy metadata 仅为兼容旧版本服务端
+        body.put("configuration", Map.of(
+            "_type", "CollectionConfigurationInternal",
+            "hnsw_configuration", Map.of(
+                "_type", "HNSWConfigurationInternal",
+                "space", "cosine")));
         body.put("metadata", Map.of(
             "hnsw:space", "cosine",
             "dimension", properties.getDimension()));

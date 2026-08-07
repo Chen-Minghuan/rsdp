@@ -201,8 +201,8 @@ class PdfImportServiceTest {
     }
 
     @Test
-    void importPdf_shouldSkipSceneImageKindProducts() throws IOException {
-        // AI 标记 imageKind=scene 的场景图产品框不建档，同页单品图照常录入
+    void importPdf_shouldSkipSceneProductsWithoutText() throws IOException {
+        // AI 标记 imageKind=scene 且无说明文字的场景点缀产品不建档，同页单品图照常录入
         byte[] pdfBytes = createPdfBytes(1);
         MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", pdfBytes);
 
@@ -222,6 +222,33 @@ class PdfImportServiceTest {
         assertThat(result.getTotalProducts()).isEqualTo(1);
         assertThat(result.getSuccessCount()).isEqualTo(1);
         assertThat(result.getRspuIds()).containsExactly("RSPU-TEST05");
+    }
+
+    @Test
+    void importPdf_shouldKeepSceneProductsWithText() throws IOException {
+        // 场景中完整可见且带说明文字（nearbyText）的产品保留，照常裁剪录入
+        byte[] pdfBytes = createPdfBytes(1);
+        MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", pdfBytes);
+
+        OcrResult sceneText = new OcrResult();
+        sceneText.setProductName("云朵沙发");
+        sceneText.setDimensionText("2200×950×860mm");
+
+        DocumentProductRegion productPage = new DocumentProductRegion();
+        productPage.setPageType("product");
+        productPage.setProducts(List.of(
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null, "standalone"),
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.5, 0.5, 0.4, 0.4), "SF", sceneText, "scene")
+        ));
+
+        when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+            .thenReturn(Map.of("rspuId", "RSPU-TEST07", "taskId", "TASK-TEST07"));
+
+        DocumentImportResult result = pdfImportService.importPdf(file, null);
+
+        assertThat(result.getTotalProducts()).isEqualTo(2);
+        assertThat(result.getSuccessCount()).isEqualTo(2);
     }
 
     @Test

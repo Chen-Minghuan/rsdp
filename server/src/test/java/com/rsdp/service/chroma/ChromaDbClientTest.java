@@ -193,6 +193,31 @@ class ChromaDbClientTest {
     }
 
     @Test
+    void upsert_shouldCreateCollectionWhenGetReturns400InvalidCollection() {
+        // ChromaDB 0.6+ 查询不存在的集合返回 400 InvalidCollection（老版本为 404），同样应自动创建
+        stubFor(get(urlEqualTo(COLLECTIONS + "/rsdp_products"))
+            .willReturn(aResponse()
+                .withStatus(400)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"error\":\"InvalidCollection\",\"message\":\"Collection rsdp_products does not exist.\"}")));
+        stubFor(post(urlEqualTo(COLLECTIONS))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"id\":\"col-new\"}")));
+        stubFor(post(urlEqualTo(COLLECTIONS + "/col-new/upsert"))
+            .willReturn(aResponse().withStatus(200)));
+
+        upsertOne();
+
+        verify(exactly(1), postRequestedFor(urlEqualTo(COLLECTIONS))
+            .withRequestBody(com.github.tomakehurst.wiremock.client.WireMock.matchingJsonPath(
+                "$.configuration.hnsw_configuration.space",
+                com.github.tomakehurst.wiremock.client.WireMock.equalTo("cosine"))));
+        verify(exactly(1), postRequestedFor(urlEqualTo(COLLECTIONS + "/col-new/upsert")));
+    }
+
+    @Test
     void upsert_shouldThrowWhenGetCollectionFailsWithServerError() {
         // 集合查询返回 5xx：不是「不存在」，应抛出外部服务异常而不是尝试创建
         stubFor(get(urlEqualTo(COLLECTIONS + "/rsdp_products"))
