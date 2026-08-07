@@ -266,6 +266,19 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   }
 
   /**
+   * 行级覆盖图保存串行链：同一行的上传/粘贴/删除串行执行，
+   * 避免并发 PUT 全量列表时后完成的请求用旧快照覆盖先完成的（lost update）。
+   */
+  const rowImageSaveChains = new Map<number, Promise<unknown>>()
+
+  function enqueueRowImageSave(rowIndex: number, task: () => Promise<void>): Promise<void> {
+    const chained = (rowImageSaveChains.get(rowIndex) ?? Promise.resolve()).then(task)
+    // 链上任务失败不阻断后续任务，错误由调用方各自的 catch 处理
+    rowImageSaveChains.set(rowIndex, chained.catch(() => {}))
+    return chained
+  }
+
+  /**
    * 上传本地图片并追加到某行覆盖图片列表。
    *
    * @param batchId  预览批次号
@@ -275,10 +288,12 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    */
   async function uploadRowImage(batchId: string, rowIndex: number, file: File): Promise<string> {
     const tempImageKey = await uploadExcelAiPreviewImage(batchId, file)
-    const next = { ...rowImageOverrides.value }
-    next[rowIndex] = [...(next[rowIndex] ?? []), tempImageKey]
-    rowImageOverrides.value = next
-    await saveRowImageOverrides(batchId, rowIndex)
+    await enqueueRowImageSave(rowIndex, async () => {
+      const next = { ...rowImageOverrides.value }
+      next[rowIndex] = [...(next[rowIndex] ?? []), tempImageKey]
+      rowImageOverrides.value = next
+      await saveRowImageOverrides(batchId, rowIndex)
+    })
     return tempImageKey
   }
 
@@ -290,14 +305,16 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    * @param keys     临时图片 key 列表
    */
   async function setRowImageOverridesLocal(batchId: string, rowIndex: number, keys: string[]) {
-    const next = { ...rowImageOverrides.value }
-    if (keys.length === 0) {
-      delete next[rowIndex]
-    } else {
-      next[rowIndex] = keys
-    }
-    rowImageOverrides.value = next
-    await saveRowImageOverrides(batchId, rowIndex)
+    await enqueueRowImageSave(rowIndex, async () => {
+      const next = { ...rowImageOverrides.value }
+      if (keys.length === 0) {
+        delete next[rowIndex]
+      } else {
+        next[rowIndex] = keys
+      }
+      rowImageOverrides.value = next
+      await saveRowImageOverrides(batchId, rowIndex)
+    })
   }
 
   /**
@@ -611,6 +628,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     previewData.value = []
     previewEdits.value = {}
     skippedRows.value = new Set()
+    rowImageOverrides.value = {}
     importResult.value = null
     taskList.value = []
     currentStep.value = 1

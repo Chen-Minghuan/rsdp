@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, h, onMounted, onUnmounted } from 'vue'
+import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { NSelect, NTag, NInput, NUpload, NButton, NSpace, useMessage, type DataTableColumns, type UploadFileInfo } from 'naive-ui'
@@ -187,6 +187,13 @@ function getRowImages(row: Record<string, unknown>): PreviewRowImage[] {
 
 /** 复制图片的源行 rowIndex */
 const copiedImageRowIndex = ref<number | null>(null)
+
+// 批次切换（换文件/切换 sheet 重新 preview）后，按 rowIndex 缓存的缩略图与复制源行即失效，必须清空
+watch(() => mappingResponse.value?.batchId, () => {
+  loadedThumbnails.value = new Map()
+  loadingThumbnails.value = new Set()
+  copiedImageRowIndex.value = null
+})
 
 async function handleUploadRowImage(rowIndex: number, file: File) {
   const batchId = mappingResponse.value?.batchId
