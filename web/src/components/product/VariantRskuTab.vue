@@ -47,12 +47,36 @@ const variantColumns: DataTableColumns<RspuVariant> = [
     key: 'dimensions',
     width: 160,
     render(row: RspuVariant) {
-      return formatDimensions(row.dimensions)
+      // 结构化尺寸为空时回退尺寸原文（导入时工厂方言按原文保留在 sizeText）
+      const formatted = formatDimensions(row.dimensions)
+      return formatted !== '-' ? formatted : (row.sizeText || '-')
     }
   },
-  { title: '尺寸码', key: 'sizeCode', width: 90 },
-  { title: '颜色码', key: 'colorCode', width: 90 },
-  { title: '材质码', key: 'materialCode', width: 90 },
+  {
+    title: '尺寸码',
+    key: 'sizeCode',
+    width: 110,
+    render(row: RspuVariant) {
+      // "码或原文"语义：码未归一时展示原文，与 uk_variant_attrs 的 COALESCE 语义一致
+      return row.sizeCode || row.sizeText || '-'
+    }
+  },
+  {
+    title: '颜色码',
+    key: 'colorCode',
+    width: 110,
+    render(row: RspuVariant) {
+      return row.colorCode || row.colorText || '-'
+    }
+  },
+  {
+    title: '材质码',
+    key: 'materialCode',
+    width: 110,
+    render(row: RspuVariant) {
+      return row.materialCode || row.materialText || '-'
+    }
+  },
   {
     title: '材质配比',
     key: 'materialMix',
