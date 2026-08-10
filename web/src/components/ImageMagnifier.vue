@@ -16,12 +16,18 @@ const props = withDefaults(defineProps<{
   /** 放大面板边长（px） */
   panelSize?: number
   alt?: string
+  /** 流式尺寸（width/height 100% 撑满容器，用于卡片封面等自适应场景） */
+  fluid?: boolean
+  /** 点击图片打开全屏查看器（外层容器自带点击跳转时传 false，避免一次点击两个动作） */
+  clickViewer?: boolean
 }>(), {
   width: 280,
   height: 280,
   zoom: 2.5,
   panelSize: 340,
-  alt: ''
+  alt: '',
+  fluid: false,
+  clickViewer: true
 })
 
 const containerRef = ref<HTMLDivElement | null>(null)
@@ -42,6 +48,8 @@ const relY = ref(0)
 /** 实际显示的图片区域（contain 适配后，容器坐标系） */
 const dispW = ref(0)
 const dispH = ref(0)
+/** 放大面板是否放右侧（容器右侧空间不足时翻转到左，防止溢出视口） */
+const panelOnRight = ref(true)
 
 const lensSize = computed(() => Math.round(props.panelSize / props.zoom))
 
@@ -63,6 +71,8 @@ const lensStyle = computed(() => {
 const panelStyle = computed(() => ({
   width: `${props.panelSize}px`,
   height: `${props.panelSize}px`,
+  right: panelOnRight.value ? undefined : 'calc(100% + 12px)',
+  left: panelOnRight.value ? 'calc(100% + 12px)' : undefined,
   backgroundImage: `url("${displaySrc.value}")`,
   backgroundSize: `${dispW.value * props.zoom}px ${dispH.value * props.zoom}px`,
   backgroundPosition: `${-(relX.value * dispW.value * props.zoom - props.panelSize / 2)}px ${-(relY.value * dispH.value * props.zoom - props.panelSize / 2)}px`
@@ -95,6 +105,8 @@ function onMove(e: MouseEvent) {
     lensActive.value = false
     return
   }
+  // 右侧空间放不下放大面板时翻到左侧
+  panelOnRight.value = rect.right + 12 + props.panelSize <= window.innerWidth
   dispW.value = w
   dispH.value = h
   relX.value = (x - offX) / w
@@ -111,7 +123,7 @@ function onLeave() {
   <div
     ref="containerRef"
     class="magnifier"
-    :style="{ width: `${width}px`, height: `${height}px` }"
+    :style="fluid ? { width: '100%', height: '100%' } : { width: `${width}px`, height: `${height}px` }"
     @mousemove="onMove"
     @mouseleave="onLeave"
   >
@@ -119,10 +131,11 @@ function onLeave() {
       :src="displaySrc"
       :alt="alt"
       class="magnifier-img"
+      :class="{ 'magnifier-img--clickable': clickViewer }"
       draggable="false"
       @load="onLoad"
       @error="onError"
-      @click="showViewer = true"
+      @click="clickViewer && (showViewer = true)"
     >
     <div v-if="lensActive" class="magnifier-lens" :style="lensStyle" />
     <div v-if="lensActive" class="magnifier-panel" :style="panelStyle" />
@@ -147,8 +160,11 @@ function onLeave() {
   height: 100%;
   object-fit: contain;
   border-radius: var(--rsdp-radius);
-  cursor: zoom-in;
   user-select: none;
+}
+
+.magnifier-img--clickable {
+  cursor: zoom-in;
 }
 
 .magnifier-lens {
@@ -164,7 +180,6 @@ function onLeave() {
 .magnifier-panel {
   position: absolute;
   top: 0;
-  left: calc(100% + 12px);
   background-repeat: no-repeat;
   background-color: var(--rsdp-card-bg);
   border: 1px solid var(--rsdp-border);

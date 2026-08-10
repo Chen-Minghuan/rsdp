@@ -20,6 +20,8 @@ const props = withDefaults(defineProps<{
   radius?: string
   /** 流式宽度（width:100%，用于卡片封面等自适应容器） */
   fluid?: boolean
+  /** 缩略图 object-fit（卡片封面等需要完整展示的场景传 contain） */
+  objectFit?: 'fill' | 'contain' | 'cover' | 'none' | 'scale-down'
   /** 禁用点击预览（外层容器自带点击跳转时使用，避免一次点击两个动作） */
   previewDisabled?: boolean
 }>(), {
@@ -29,6 +31,7 @@ const props = withDefaults(defineProps<{
   previewMax: 400,
   radius: '4px',
   fluid: false,
+  objectFit: 'cover',
   previewDisabled: false
 })
 
@@ -73,8 +76,9 @@ function onPreviewError(e: Event) {
         :fallback-src="IMAGE_FALLBACK_SRC"
         :width="fluid ? undefined : width"
         :height="fluid ? height : (height ?? FIXED_FALLBACK_HEIGHT)"
-        object-fit="cover"
+        :object-fit="objectFit"
         :preview-disabled="previewDisabled"
+        :class="{ 'hover-zoom-image--fluid': fluid }"
         :style="thumbStyle"
       />
     </template>
@@ -82,3 +86,16 @@ function onPreviewError(e: Event) {
   </n-popover>
   <div v-else :style="placeholderStyle">暂无</div>
 </template>
+
+<style scoped>
+/*
+ * fluid 模式：NImage 根节点是 div.n-image（thumbStyle 的宽高作用在它上面），
+ * 内部 img 需显式填满，否则按原图自然尺寸渲染（卡片里会只显示原图左上角一块）。
+ * object-fit 由 NImage 的 objectFit prop 输出到 img style，此处不重复设置。
+ */
+.hover-zoom-image--fluid :deep(img) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+</style>

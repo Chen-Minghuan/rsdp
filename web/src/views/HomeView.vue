@@ -3,12 +3,14 @@ import { NButton, NCard, NCarousel, NGrid, NGridItem, NImage, NModal, NSpace, NS
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageContainer from '@/components/PageContainer.vue'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
+import ImageMagnifier from '@/components/ImageMagnifier.vue'
 import { listDicts } from '@/api/dict'
 import { getPublicHome, getPublicContent } from '@/api/platform'
 import { listProducts } from '@/api/product'
 import { useUserStore } from '@/stores/user'
 import { sanitizeHtml, isSafeExternalUrl } from '@/utils/htmlSanitizer'
-import { PERMISSIONS } from '@/utils/constants'
+import { IMAGE_FALLBACK_SRC, PERMISSIONS } from '@/utils/constants'
 import type { DictItem } from '@/types/dict'
 import type { PublicHomeBanner, PublicHomeCase, PublicHomeCustomized, PublicHomeData, PlatformContent } from '@/types/platform'
 import type { ProductSummary } from '@/types/product'
@@ -257,12 +259,12 @@ onMounted(async () => {
         <n-grid-item v-for="product in newProducts" :key="product.rspuId">
           <n-card hoverable class="product-card" @click="router.push(`/products/${product.rspuId}`)">
             <div class="product-image">
-              <n-image
+              <ImageMagnifier
                 v-if="product.primaryImageUrl"
                 :src="product.primaryImageUrl"
-                object-fit="contain"
-                preview-disabled
-                class="product-image-inner"
+                :fallback-src="IMAGE_FALLBACK_SRC"
+                fluid
+                :click-viewer="false"
               />
               <div v-else class="product-image-placeholder">暂无图片</div>
             </div>
@@ -282,12 +284,11 @@ onMounted(async () => {
         <n-grid-item v-for="item in cases" :key="item.caseId">
           <n-card hoverable class="case-card" @click="openCaseDetail(item)">
             <div class="case-image">
-              <n-image
+              <HoverZoomImage
                 v-if="item.coverImageUrl"
                 :src="item.coverImageUrl"
-                object-fit="cover"
+                fluid
                 preview-disabled
-                class="case-image-inner"
               />
               <div v-else class="product-image-placeholder">暂无图片</div>
             </div>
@@ -309,12 +310,11 @@ onMounted(async () => {
             @click="handleCustomizedClick(item)"
           >
             <div class="case-image">
-              <n-image
+              <HoverZoomImage
                 v-if="item.coverImageUrl"
                 :src="item.coverImageUrl"
-                object-fit="cover"
+                fluid
                 preview-disabled
-                class="case-image-inner"
               />
               <div v-else class="product-image-placeholder">定制服务</div>
             </div>
@@ -502,22 +502,9 @@ onMounted(async () => {
   margin-bottom: 10px;
 }
 
-.product-image-inner,
-.case-image-inner {
-  width: 100%;
-  height: 100%;
-}
-
-.product-image-inner :deep(img) {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.case-image-inner :deep(img) {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+/* 新品上架用放大镜组件：放大面板要溢出卡片显示，容器不能裁剪（图片圆角由组件内 img 自带） */
+.product-image {
+  overflow: visible;
 }
 
 .product-image-placeholder {
