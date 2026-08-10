@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RSDP 瑞时家居 · 用户端官网首页（暖调家居馆 × 宜家式排列）</title>
+<style>
+  :root{
+    /* ===== style-a 暖调家居馆 tokens ===== */
+    --bg:#faf7f2; --card:#ffffff; --ink:#2b2118; --ink2:#9c8b78; --line:#e8dfd2;
+    --accent:#8b5e3c; --accent-deep:#6f4a2e; --suppl:#f3eadf; --terra:#c2622b;
+    --radius:16px;
+    --font-serif:'Noto Serif SC','Songti SC','STSong','Georgia',serif;
+    --font-body:'Helvetica Neue','PingFang SC','Microsoft YaHei',sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);font-family:var(--font-body);color:var(--ink)}
+  a{text-decoration:none;color:inherit}
+  .wrap{max-width:1320px;margin:0 auto;padding:0 40px}
+
+  /* ===== 顶部工具条（宜家式） ===== */
+  .topbar{background:var(--accent-deep);color:#efe3d5;font-size:12px;letter-spacing:1px}
+  .topbar .wrap{display:flex;justify-content:space-between;padding:7px 40px}
+  .topbar a{opacity:.9}.topbar a:hover{opacity:1;text-decoration:underline}
+
+  /* ===== Header（宜家式：logo + 居中搜索 + 图标） ===== */
+  header{background:rgba(250,247,242,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50}
+  .hd{display:flex;align-items:center;gap:36px;padding:16px 0}
+  .brand{display:flex;align-items:baseline;gap:12px}
+  .brand-name{font-family:var(--font-serif);font-size:26px;font-weight:700;color:var(--accent-deep);letter-spacing:2px}
+  .brand-sub{font-size:11px;color:var(--ink2);letter-spacing:4px}
+  .search{flex:1;max-width:540px;display:flex;background:var(--suppl);border-radius:999px;padding:0 6px 0 22px;align-items:center;height:44px}
+  .search input{flex:1;border:none;background:transparent;outline:none;font-size:14px;color:var(--ink)}
+  .search input::placeholder{color:var(--ink2)}
+  .search button{border:none;background:var(--accent);color:#fff;border-radius:999px;padding:8px 20px;font-size:13px;cursor:pointer;letter-spacing:1px}
+  .search button:hover{background:var(--accent-deep)}
+  .hd-icons{display:flex;gap:22px;font-size:13px;color:var(--ink2)}
+  .hd-icons span{cursor:pointer;white-space:nowrap}.hd-icons span:hover{color:var(--accent-deep)}
+
+  /* ===== 主导航（宜家三轴 + AI 入口） ===== */
+  nav.main .wrap{display:flex;gap:34px;font-size:15px;font-weight:600}
+  nav.main a{padding:14px 2px;border-bottom:2px solid transparent;letter-spacing:1px}
+  nav.main a:hover{border-bottom-color:var(--accent);color:var(--accent-deep)}
+  nav.main a.sale{color:var(--terra)}
+  nav.main a.mega::after{content:"▾";margin-left:5px;font-size:11px;color:var(--ink2)}
+
+  /* ===== Hero（style-a 分割式，宜家第一屏位置） ===== */
+  .hero-sec{padding:32px 0 0}
+  .hero{display:grid;grid-template-columns:1.05fr 1fr;border-radius:24px;overflow:hidden;background:var(--card);box-shadow:0 8px 30px rgba(90,64,42,.08)}
+  .hero-text{padding:68px 56px;display:flex;flex-direction:column;justify-content:center}
+  .hero-kicker{font-size:13px;letter-spacing:6px;color:var(--accent);margin-bottom:20px}
+  .hero h1{font-family:var(--font-serif);font-size:42px;line-height:1.4;font-weight:700}
+  .hero h1 em{font-style:normal;color:var(--accent-deep)}
+  .hero p{margin-top:20px;font-size:15px;line-height:1.9;color:var(--ink2)}
+  .btns{margin-top:34px;display:flex;gap:14px}
+  .btn-a{background:var(--accent);color:#fff;border:none;padding:13px 32px;border-radius:999px;font-size:14px;cursor:pointer;letter-spacing:1px}
+  .btn-a:hover{background:var(--accent-deep)}
+  .btn-b{background:transparent;color:var(--accent-deep);border:1px solid var(--accent);padding:13px 32px;border-radius:999px;font-size:14px;cursor:pointer;letter-spacing:1px}
+  .hero-img img{width:100%;height:100%;object-fit:cover;display:block;min-height:380px}
+
+  /* ===== 区块通用 ===== */
+  .section{margin-top:56px}
+  .section-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:24px}
+  .section-title{font-family:var(--font-serif);font-size:24px;font-weight:700}
+  .section-more{font-size:13px;color:var(--accent);cursor:pointer;letter-spacing:1px}
+  .section-more:hover{text-decoration:underline}
+
+  /* ===== 必逛好物（宜家 3 色块 → 暖调色块） ===== */
+  .trio{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  .t-card{border-radius:var(--radius);padding:32px 28px;min-height:160px;display:flex;flex-direction:column;justify-content:flex-end;cursor:pointer;transition:transform .2s}
+  .t-card:hover{transform:translateY(-3px)}
+  .t-card h3{font-family:var(--font-serif);font-size:22px;letter-spacing:2px}
+  .t-card p{font-size:13px;opacity:.88;margin-top:8px}
+  .t-terra{background:var(--terra);color:#fff}
+  .t-deep{background:var(--accent-deep);color:#f3eadf}
+  .t-suppl{background:var(--suppl);color:var(--ink)}
+
+  /* ===== 服务 4 卡 ===== */
+  .svc{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+  .svc .s{background:var(--card);border-radius:var(--radius);padding:26px 24px;font-size:13px;color:var(--ink2);cursor:pointer;box-shadow:0 4px 18px rgba(90,64,42,.06)}
+  .svc .s:hover{box-shadow:0 8px 26px rgba(90,64,42,.12)}
+  .svc .s b{display:block;color:var(--ink);font-size:15px;margin:10px 0 6px;letter-spacing:1px}
+  .svc .ic{font-size:24px;color:var(--accent)}
+
+  /* ===== 房间探索 ===== */
+  .rooms{display:grid;grid-template-columns:repeat(5,1fr);gap:18px}
+  .room{position:relative;border-radius:var(--radius);overflow:hidden;cursor:pointer;background:var(--suppl)}
+  .room img{width:100%;height:150px;object-fit:cover;display:block;transition:transform .25s}
+  .room:hover img{transform:scale(1.05)}
+  .room span{position:absolute;left:12px;bottom:12px;background:rgba(255,255,255,.95);padding:6px 16px;border-radius:999px;font-size:13px;font-weight:600;letter-spacing:1px}
+
+  /* ===== PLP 商品卡（宜家排列 × 暖调皮肤） ===== */
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:24px}
+  .p-card{background:var(--card);border-radius:var(--radius);overflow:hidden;cursor:pointer;box-shadow:0 4px 18px rgba(90,64,42,.07);transition:transform .2s,box-shadow .2s}
+  .p-card:hover{transform:translateY(-4px);box-shadow:0 12px 32px rgba(90,64,42,.13)}
+  .p-img{position:relative;aspect-ratio:4/3;background:var(--suppl)}
+  .p-img img{width:100%;height:100%;object-fit:cover;display:block}
+  .tags{position:absolute;top:12px;left:12px;display:flex;gap:6px}
+  .tag{font-size:11px;font-weight:600;padding:3px 11px;border-radius:999px;color:#fff;letter-spacing:1px}
+  .tag.hot{background:var(--ink)}
+  .tag.new{background:var(--accent)}
+  .tag.end{background:var(--terra)}
+  .variants{position:absolute;bottom:12px;left:12px;font-size:11px;color:var(--ink2);background:rgba(255,255,255,.95);padding:3px 11px;border-radius:999px}
+  .p-body{padding:16px 18px 20px}
+  .p-name{font-family:var(--font-serif);font-size:16px;font-weight:600}
+  .p-desc{margin-top:6px;font-size:12px;color:var(--ink2);letter-spacing:1px}
+  /* 宜家价格三段式 × 暖调 */
+  .price{margin-top:10px;display:flex;align-items:baseline;gap:2px;width:fit-content;color:var(--accent-deep)}
+  .price.sale{background:var(--suppl);padding:3px 12px;border-radius:999px;color:var(--terra)}
+  .price .cur{font-size:12px;font-weight:700;align-self:flex-start;margin-top:4px}
+  .price .int{font-family:var(--font-serif);font-size:25px;font-weight:700;line-height:1}
+  .price .dec{font-size:12px;font-weight:700}
+  .price .old{font-size:12px;font-weight:400;color:var(--ink2);text-decoration:line-through;margin-left:10px;align-self:center}
+  .stars{font-size:12px;color:var(--ink2);margin-top:8px}
+  .stars b{color:var(--ink)}
+
+  /* ===== 灵感瀑布 ===== */
+  .insp{display:grid;grid-template-columns:2fr 1fr 1fr;gap:20px}
+  .i-card{position:relative;border-radius:var(--radius);overflow:hidden;cursor:pointer;background:var(--suppl)}
+  .i-card img{width:100%;height:100%;object-fit:cover;display:block;min-height:190px;transition:transform .3s}
+  .i-card:hover img{transform:scale(1.03)}
+  .i-card:first-child{grid-row:span 2}
+  .cap{position:absolute;left:16px;bottom:14px;background:rgba(255,255,255,.95);padding:7px 17px;border-radius:999px;font-size:13px;font-weight:600;letter-spacing:1px}
+
+  /* ===== 留资 CTA ===== */
+  .cta{margin-top:64px;background:var(--accent-deep);color:#f3eadf;text-align:center;padding:64px 0;border-radius:24px}
+  .cta h2{font-family:var(--font-serif);font-size:30px;font-weight:700;letter-spacing:3px}
+  .cta p{margin:16px 0 28px;color:#d9c8b4;font-size:15px;letter-spacing:1px}
+  .cta .btn-a{background:#fff;color:var(--accent-deep)}
+  .cta .btn-a:hover{background:var(--suppl)}
+
+  /* ===== Footer（宜家深色多列 × 深棕） ===== */
+  footer{margin-top:64px;background:#241a12;color:#b9a892;font-size:13px}
+  .ft{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:32px;padding:52px 0 36px}
+  .ft h4{color:#f3eadf;font-family:var(--font-serif);font-size:15px;margin-bottom:16px;letter-spacing:3px}
+  .ft a{display:block;padding:4px 0;opacity:.9}.ft a:hover{opacity:1;color:#fff;text-decoration:underline}
+  .f-brand{font-family:var(--font-serif);font-size:23px;font-weight:700;color:#f3eadf;letter-spacing:2px;margin-bottom:14px}
+  .copyright{border-top:1px solid rgba(255,255,255,.1);padding:18px 0;font-size:12px;opacity:.65;letter-spacing:1px;display:flex;justify-content:space-between}
+
+  .view-toggle{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;font-size:12px;background:var(--card)}
+  .view-toggle span{padding:5px 14px;cursor:pointer;color:var(--ink2)}
+  .view-toggle span.on{background:var(--accent);color:#fff}
+</style>
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <span>📍 中山 · 佛山 ｜ 预约到店体验</span>
+  <span><a href="#">对公业务</a>　<a href="#">设计服务</a>　<a href="#">下载APP</a></span>
+</div></div>
+
+<header>
+  <div class="wrap hd">
+    <div class="brand"><span class="brand-name">RSDP</span><span class="brand-sub">瑞时家居</span></div>
+    <div class="search">
+      <input placeholder="搜索商品、系列或空间灵感，试试「三人沙发」">
+      <button>搜索</button>
+    </div>
+    <div class="hd-icons"><span>🏬 门店</span><span>👤 登录/注册</span><span>♡ 心愿单</span><span>🛒 购物车</span></div>
+  </div>
+  <nav class="main"><div class="wrap">
+    <a href="products.html" class="mega">所有商品</a>
+    <a href="#" class="mega">房间</a>
+    <a href="#" class="sale">优惠活动</a>
+    <a href="#">设计和服务</a>
+    <a href="#">家居灵感</a>
+    <a href="#">新品</a>
+    <a href="#">AI 户型搭配</a>
+  </div></nav>
+</header>
+
+<div class="wrap">
+
+  <!-- Hero -->
+  <section class="hero-sec">
+    <div class="hero">
+      <div class="hero-text">
+        <div class="hero-kicker">整家搭配季 · WHOLE-HOME SEASON</div>
+        <h1>让<em>客厅</em>，<br>先一步变成家</h1>
+        <p>上传一张户型图，AI 自动识别空间尺寸，从产品库智能生成搭配方案，再由设计师免费复核。先见于客厅，所见即所得。</p>
+        <div class="btns"><button class="btn-a">立即体验 AI 搭配</button><button class="btn-b">浏览客厅灵感</button></div>
+      </div>
+      <div class="hero-img"><img src="assets/hero-living.png" alt="暖调客厅"></div>
+    </div>
+  </section>
+
+  <!-- 必逛好物 -->
+  <section class="section">
+    <div class="section-head"><div class="section-title">必逛好物</div><div class="section-more">查看全部 →</div></div>
+    <div class="trio">
+      <div class="t-card t-terra"><h3>大减价</h3><p>百余款商品 5 折起 · 即日至 8 月 31 日</p></div>
+      <div class="t-card t-deep"><h3>当季新品</h3><p>秋冬系列全新上市 · 探索新材质</p></div>
+      <div class="t-card t-suppl"><h3>更低价格</h3><p>同样的设计 · 更可持续的价格</p></div>
+    </div>
+  </section>
+
+  <!-- 服务卡 -->
+  <section class="section">
+    <div class="svc">
+      <div class="s"><div class="ic">🚚</div><b>送货服务</b>珠三角 48 小时达，全国物流可追踪</div>
+      <div class="s"><div class="ic">🔧</div><b>安装服务</b>专业师傅上门，安装完毕清理现场</div>
+      <div class="s"><div class="ic">↩️</div><b>退换保障</b>30 天无理由退换（定制款除外）</div>
+      <div class="s"><div class="ic">📐</div><b>免费设计</b>AI 户型搭配 + 设计师 1v1 复核</div>
+    </div>
+  </section>
+
+  <!-- 房间探索 -->
+  <section class="section">
+    <div class="section-head"><div class="section-title">从房间开始探索</div><div class="section-more">全部空间 →</div></div>
+    <div class="rooms">
+      <div class="room"><img src="assets/hero-living.png"><span>客厅</span></div>
+      <div class="room"><img src="assets/sofa.png"><span>卧室</span></div>
+      <div class="room"><img src="assets/tea-table.png"><span>书房</span></div>
+      <div class="room"><img src="assets/tv-cabinet.png"><span>餐厅</span></div>
+      <div class="room"><img src="assets/chair.png"><span>办公空间</span></div>
+    </div>
+  </section>
+
+  <!-- 新品上架（宜家 PLP 排列） -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-title">新品上架</div>
+      <span>
+        <span class="view-toggle"><span class="on">商品图</span><span>场景图</span></span>
+        　<a class="section-more" href="products.html">查看全部新品 →</a>
+      </span>
+    </div>
+    <div class="grid4">
+      <div class="p-card">
+        <div class="p-img"><div class="tags"><span class="tag hot">热卖</span></div><img src="assets/sofa.png"><span class="variants">+3 种颜色</span></div>
+        <div class="p-body"><div class="p-name">云朵三人位布艺沙发</div><div class="p-desc">现代简约 · 2200×950×880</div>
+          <div class="price sale"><span class="cur">¥</span><span class="int">4,680</span><span class="dec">.00</span><span class="old">¥5,200</span></div>
+          <div class="stars">★★★★☆ <b>4.6</b> (128)</div></div>
+      </div>
+      <div class="p-card">
+        <div class="p-img"><div class="tags"><span class="tag new">新品</span></div><img src="assets/tea-table.png"></div>
+        <div class="p-body"><div class="p-name">胡桃木圆形茶几</div><div class="p-desc">原木风 · Φ900×420</div>
+          <div class="price"><span class="cur">¥</span><span class="int">1,280</span><span class="dec">.00</span></div>
+          <div class="stars">★★★★★ <b>4.9</b> (36)</div></div>
+      </div>
+      <div class="p-card">
+        <div class="p-img"><img src="assets/tv-cabinet.png"><span class="variants">+2 种尺寸</span></div>
+        <div class="p-body"><div class="p-name">格栅门电视柜 2.2m</div><div class="p-desc">侘寂风 · 2200×400×520</div>
+          <div class="price"><span class="cur">¥</span><span class="int">2,150</span><span class="dec">.00</span></div>
+          <div class="stars">★★★★☆ <b>4.5</b> (74)</div></div>
+      </div>
+      <div class="p-card">
+        <div class="p-img"><div class="tags"><span class="tag end">即将下架</span></div><img src="assets/chair.png"></div>
+        <div class="p-body"><div class="p-name">羊羔绒休闲单椅</div><div class="p-desc">奶油风 · 780×820×750</div>
+          <div class="price sale"><span class="cur">¥</span><span class="int">960</span><span class="dec">.00</span><span class="old">¥1,180</span></div>
+          <div class="stars">★★★★☆ <b>4.7</b> (210)</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 家居灵感 -->
+  <section class="section">
+    <div class="section-head"><div class="section-title">家居灵感</div><div class="section-more">更多灵感 →</div></div>
+    <div class="insp">
+      <div class="i-card"><img src="assets/hero-living.png"><span class="cap">18㎡ 小客厅的三人位解法</span></div>
+      <div class="i-card"><img src="assets/tea-table.png"><span class="cap">圆桌派的温柔动线</span></div>
+      <div class="i-card"><img src="assets/chair.png"><span class="cap">一把椅子，一个阅读角</span></div>
+      <div class="i-card"><img src="assets/tv-cabinet.png"><span class="cap">电视墙的收纳美学</span></div>
+      <div class="i-card"><img src="assets/sofa.png"><span class="cap">米色系的层次感</span></div>
+    </div>
+  </section>
+
+  <!-- 留资 CTA -->
+  <section class="cta">
+    <h2>不知道从何开始？</h2>
+    <p>上传户型图，3 分钟生成你的专属客厅搭配方案，设计师免费复核。</p>
+    <button class="btn-a">免费获取搭配方案</button>
+  </section>
+</div>
+
+<footer><div class="wrap">
+  <div class="ft">
+    <div>
+      <div class="f-brand">RSDP 瑞时家居</div>
+      <p style="line-height:1.9;">为每一个家，提供买得起的<br>好设计与好品质。</p>
+    </div>
+    <div><h4>购物</h4><a href="products.html">所有商品</a><a href="#">按房间逛</a><a href="#">优惠活动</a><a href="#">新品</a></div>
+    <div><h4>服务</h4><a href="#">AI 户型搭配</a><a href="#">设计服务</a><a href="#">送货安装</a><a href="#">退换政策</a></div>
+    <div><h4>关于</h4><a href="#">品牌故事</a><a href="#">门店位置</a><a href="#">对公业务</a><a href="#">加入我们</a></div>
+    <div><h4>联系</h4><a href="#">在线客服</a><a href="#">400-888-XXXX</a><a href="#">商务合作</a></div>
+  </div>
+  <div class="copyright"><span>© 2026 RSDP 瑞时家居 · 粤ICP备XXXXXXXX号</span><span>隐私政策 · Cookie 设置</span></div>
+</div></footer>
+
+</body>
+</html>
