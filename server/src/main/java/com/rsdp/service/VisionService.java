@@ -466,9 +466,10 @@ public class VisionService {
      */
     private static final String PAGE_DETECTION_SYSTEM_PROMPT = """
         你是家具产品目录分析专家。请对用户提供的一系列 PDF 页面图片逐页分析，
-        判断每页类型并输出页面中每个产品的相对位置框（bbox）。
-        bbox 的准确度要求极高：必须紧贴产品主体边缘，宁可略大也不可切断产品，
-        但不得包含说明文字、页眉页脚等无关内容。
+        判断每页类型并输出页面中每个产品图的位置框（bbox）。
+        产品图在画册中通常是带白色或纯色底板的矩形图片，bbox 必须对齐该产品图
+        图块的矩形边缘（包含整块底板），宁可略大也不可切断产品的任何部分，
+        但不得包含说明文字、尺寸标注线、页眉页脚等无关内容。
         同时，每个产品图旁边通常配有品名、型号、尺寸、价格等说明文字，
         这些文字不属于产品图（不要框进 bbox），但必须完整提取到 nearbyText 中。
         只输出 JSON 数组，不要任何其他文字说明。
@@ -479,16 +480,24 @@ public class VisionService {
 
         对每一页，判断其类型并输出产品中每个产品的位置信息：
         - pageType: product（产品页）/ cover（封面）/ toc（目录）/ separator（分隔页）/ blank（空白页）/ unknown（未知）
-        - products: 当 pageType=product 时，列出该页中所有产品的位置框、预估品类码和产品旁的说明文字
+        - products: 当 pageType=product 时，列出该页中所有产品图的位置框、预估品类码和产品旁的说明文字
 
         bbox 使用相对于页面宽高的比例坐标（0.0 ~ 1.0）：
         {"x": 左上角 x, "y": 左上角 y, "w": 宽度, "h": 高度}
 
         bbox 规则（必须严格遵守）：
-        - 必须紧贴产品主体边缘，允许略微外扩，但绝不可切断产品的任何部分
-        - 不得包含产品名称、价格、参数说明等文字，不得包含页眉页脚和页边距
-        - 每个产品独立一个框：禁止把多个产品合并为一个框，也禁止把一个产品拆成多个框
-        - 页面中有多个产品时必须全部列出，不得遗漏；一个都没有时 products 输出空数组
+        - bbox 框住的是"产品图图块"：对齐产品图片的矩形边缘，包含图片的白色/纯色底板，
+          不要按产品轮廓贴身裁剪（底板白边后续会自动去除）
+        - 画册常见"产品图在下、品名/尺寸文字在上（或下）"的卡片版式：文字行不属于图块，
+          bbox 必须停在产品图的底边/顶边，不得把卡片上的文字行框进来
+        - 绝不可切断产品的任何部分，拿不准时宁可多包含一些底板
+        - 白色/浅色产品置于浅色背景上（低对比）时最容易框小：框必须包含产品的完整
+          外轮廓和底部阴影区，看不清边界时一律宁大勿小，严禁按可见边缘裁小
+          （框偏大后续会自动收边，框偏小会把产品切残）
+        - 不得包含产品名称、价格、参数说明等任何文字，不得包含尺寸标注线、装饰元素、
+          页眉页脚和页边距，不得包含相邻图片的任何部分
+        - 每个产品图独立一个框：禁止把多个产品图合并为一个框，也禁止把一个产品图拆成多个框
+        - 页面中有多个产品图时必须全部列出，不得遗漏；一个都没有时 products 输出空数组
         - 产品图几乎占满整页时，给出接近整页的框是允许的
         - 坐标必须满足 0<=x、0<=y、x+w<=1、y+h<=1
 
@@ -496,8 +505,8 @@ public class VisionService {
         - standalone：单品图——白底或纯色/摄影棚背景的产品拍摄图，画面主体只有产品本身
         - scene：场景图/效果图——产品置于房间、展厅等真实或渲染环境中，画面含墙面、地面、
           窗帘、装饰品等环境元素。场景中完整可见、且旁边配有该产品品名/型号/尺寸等说明文字的
-          产品，照常紧贴产品边缘框出、标注 scene 并提取 nearbyText；场景中没有对应说明文字的
-          产品不需要框出
+          产品，标注 scene 并提取 nearbyText，但 bbox 必须只框与说明文字对应的那一个产品的
+          局部区域，禁止把整张场景图作为一个产品框；场景中没有对应说明文字的产品不需要框出
         - 无法确定时填 standalone
 
         nearbyText 规则（每个产品都要尽力提取，实在没有对应文字时输出 null）：
@@ -945,7 +954,10 @@ public class VisionService {
             for (Object p : productList) {
                 if (p instanceof Map<?, ?> pm) {
                     DocumentProductRegion.PageProduct pp = new DocumentProductRegion.PageProduct();
-                    pp.setBbox(parseBoundingBox(pm.get("bbox")));
+                    pp.setBbox(parseBoundingBoxClamped(pm.get("bbox")));
+                    if (pp.getBbox() == null) {
+                        log.warn("产品 bbox 解析失败（模型未输出合法位置框），raw={}", pm.get("bbox"));
+                    }
                     Object category = pm.get("estimatedCategory");
                     pp.setEstimatedCategory(category != null ? category.toString() : null);
                     Object imageKind = pm.get("imageKind");
@@ -990,6 +1002,36 @@ public class VisionService {
             log.warn("解析 bbox 失败", e);
             return null;
         }
+    }
+
+    /**
+     * 解析页面检测返回的 bbox，越界坐标收敛到 [0,1] 页内而不是整框丢弃。
+     *
+     * <p>模型偶发给出超出页面的框（如 x=0.48、w=0.87，实测整批集体出现），
+     * 严格校验会把整批产品全部丢弃；页面检测路径宁可收敛后裁剪。
+     * 与 {@link #parseBoundingBox}（主体检测等严格场景）区分开。</p>
+     */
+    private ProductBoundingBox parseBoundingBoxClamped(Object raw) {
+        if (!(raw instanceof Map<?, ?> map)) {
+            return null;
+        }
+        try {
+            double x = clamp01(parseDoubleValue(map.get("x")));
+            double y = clamp01(parseDoubleValue(map.get("y")));
+            double w = clamp01(parseDoubleValue(map.get("w")));
+            double h = clamp01(parseDoubleValue(map.get("h")));
+            w = Math.min(w, 1.0 - x);
+            h = Math.min(h, 1.0 - y);
+            ProductBoundingBox bbox = new ProductBoundingBox(x, y, w, h);
+            return bbox.isValid() ? bbox : null;
+        } catch (Exception e) {
+            log.warn("解析 bbox 失败", e);
+            return null;
+        }
+    }
+
+    private static double clamp01(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
     }
 
     private double parseDoubleValue(Object value) {

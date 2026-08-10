@@ -26,6 +26,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -272,6 +274,140 @@ class PdfImportServiceTest {
         assertThat(result.getTotalProducts()).isEqualTo(1);
         assertThat(result.getSuccessCount()).isEqualTo(1);
         assertThat(result.getRspuIds()).containsExactly("RSPU-TEST06");
+    }
+
+    @Test
+    void importPdf_shouldRetryNullBBoxPageIndividually() throws IOException {
+        // 批检测返回 product 页但产品 bbox 全为 null（模型输出格式抖动）→ 单页重试恢复
+        byte[] pdfBytes = createPdfBytes(1);
+        MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", pdfBytes);
+
+        DocumentProductRegion brokenPage = new DocumentProductRegion();
+        brokenPage.setPageType("product");
+        brokenPage.setProducts(List.of(
+            new DocumentProductRegion.PageProduct(null, "SF", null, null)
+        ));
+        DocumentProductRegion recoveredPage = new DocumentProductRegion();
+        recoveredPage.setPageType("product");
+        recoveredPage.setProducts(List.of(
+            new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.1, 0.1, 0.4, 0.4), "SF", null, null)
+        ));
+
+        when(visionService.detectPageRegions(any(), any()))
+            .thenReturn(List.of(brokenPage))
+            .thenReturn(List.of(recoveredPage));
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+            .thenReturn(Map.of("rspuId", "RSPU-TEST08", "taskId", "TASK-TEST08"));
+
+        DocumentImportResult result = pdfImportService.importPdf(file, null);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getRspuIds()).containsExactly("RSPU-TEST08");
+        verify(visionService, times(2)).detectPageRegions(any(), any());
+    }
+
+    @Test
+    void expandBox_shouldExpandRelativeToBoxSize() {
+        // 相对 bbox 自身宽高的 5%：0.4 宽的框水平外扩 0.02，而不是相对整页的固定 0.03
+        ProductBoundingBox expanded =
+            PdfImportService.expandBox(new ProductBoundingBox(0.2, 0.2, 0.4, 0.4), 0.05);
+
+        assertThat(expanded.getX()).isCloseTo(0.18, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(expanded.getY()).isCloseTo(0.18, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(expanded.getWidth()).isCloseTo(0.44, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(expanded.getHeight()).isCloseTo(0.44, org.assertj.core.data.Offset.offset(1e-9));
+    }
+
+    @Test
+    void expandBox_shouldClampAtPageEdges() {
+        // 左上边缘：外扩后 x/y 钳制为 0，宽高不超过页面
+        ProductBoundingBox edge =
+            PdfImportService.expandBox(new ProductBoundingBox(0.0, 0.0, 0.5, 0.5), 0.05);
+        assertThat(edge.getX()).isEqualTo(0.0);
+        assertThat(edge.getY()).isEqualTo(0.0);
+        assertThat(edge.getWidth()).isCloseTo(0.55, org.assertj.core.data.Offset.offset(1e-9));
+
+        // 右下边缘：x+w 不超过 1
+        ProductBoundingBox far =
+            PdfImportService.expandBox(new ProductBoundingBox(0.9, 0.9, 0.1, 0.1), 0.05);
+        assertThat(far.getX() + far.getWidth()).isLessThanOrEqualTo(1.0);
+        assertThat(far.getY() + far.getHeight()).isLessThanOrEqualTo(1.0);
+    }
+
+    @Test
+    void recoverCutEdges_shouldRecoverContinuousProductBelowCore() {
+        // 核心框底边切进产品（abs 300），产品实际延伸到 abs 349，下方是隔断+说明文字
+        java.awt.image.BufferedImage page = createTestPage(400, 600, java.awt.Color.WHITE);
+        fillRectOnPage(page, 100, 100, 200, 250, new java.awt.Color(30, 60, 120));
+        for (int x = 100; x <= 170; x += 35) {
+            fillRectOnPage(page, x, 460, 25, 6, new java.awt.Color(40, 40, 40));
+        }
+        ProductBoundingBox core = new ProductBoundingBox(0.25, 1.0 / 6, 0.5, 1.0 / 3);
+
+        ProductBoundingBox recovered = PdfImportService.recoverCutEdges(page, core, java.util.List.of());
+
+        // 底边恢复到产品真实底部 abs 350（隔断前的最后一行内容），文字区不被并入
+        assertThat(recovered.getY() + recovered.getHeight())
+            .isCloseTo(350.0 / 600, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(recovered.getX()).isEqualTo(core.getX());
+        assertThat(recovered.getWidth()).isEqualTo(core.getWidth());
+    }
+
+    @Test
+    void recoverCutEdges_shouldNotExtendWhenEdgeIsBackground() {
+        // 核心框底边落在产品之外的空白区（框已包全产品）→ 无切断信号，原样返回
+        java.awt.image.BufferedImage page = createTestPage(400, 600, java.awt.Color.WHITE);
+        fillRectOnPage(page, 100, 100, 200, 200, new java.awt.Color(30, 60, 120));
+        ProductBoundingBox core = new ProductBoundingBox(0.25, 1.0 / 6, 0.5, 0.5);
+
+        ProductBoundingBox recovered = PdfImportService.recoverCutEdges(page, core, java.util.List.of());
+
+        assertThat(recovered.getY() + recovered.getHeight()).isEqualTo(1.0 / 6 + 0.5);
+    }
+
+    @Test
+    void recoverCutEdges_shouldStopBeforeSiblingBox() {
+        // 下方延伸撞上兄弟产品框（abs 350 起）→ 在兄弟框边界前停止，不侵占其区域
+        java.awt.image.BufferedImage page = createTestPage(400, 600, java.awt.Color.WHITE);
+        fillRectOnPage(page, 100, 100, 200, 400, new java.awt.Color(30, 60, 120));
+        ProductBoundingBox core = new ProductBoundingBox(0.25, 1.0 / 6, 0.5, 1.0 / 3);
+        ProductBoundingBox sibling = new ProductBoundingBox(0.25, 350.0 / 600, 0.5, 0.2);
+
+        ProductBoundingBox recovered = PdfImportService.recoverCutEdges(page, core, java.util.List.of(sibling));
+
+        assertThat(recovered.getY() + recovered.getHeight())
+            .isLessThanOrEqualTo(350.0 / 600 + 0.001);
+    }
+
+    @Test
+    void recoverCutEdges_shouldRecoverRightEdge() {
+        // 核心框右边切进产品（abs 300），产品向右延伸到 abs 349（在外延上限内）
+        java.awt.image.BufferedImage page = createTestPage(400, 600, java.awt.Color.WHITE);
+        fillRectOnPage(page, 100, 100, 250, 200, new java.awt.Color(30, 60, 120));
+        ProductBoundingBox core = new ProductBoundingBox(0.25, 1.0 / 6, 200.0 / 400, 200.0 / 600);
+
+        ProductBoundingBox recovered = PdfImportService.recoverCutEdges(page, core, java.util.List.of());
+
+        assertThat(recovered.getX() + recovered.getWidth())
+            .isCloseTo(350.0 / 400, org.assertj.core.data.Offset.offset(0.01));
+    }
+
+    private java.awt.image.BufferedImage createTestPage(int width, int height, java.awt.Color bg) {
+        java.awt.image.BufferedImage image =
+            new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = image.createGraphics();
+        g.setColor(bg);
+        g.fillRect(0, 0, width, height);
+        g.dispose();
+        return image;
+    }
+
+    private void fillRectOnPage(java.awt.image.BufferedImage image, int x, int y, int w, int h,
+                                java.awt.Color color) {
+        java.awt.Graphics2D g = image.createGraphics();
+        g.setColor(color);
+        g.fillRect(x, y, w, h);
+        g.dispose();
     }
 
     private void setField(String name, Object value) throws Exception {

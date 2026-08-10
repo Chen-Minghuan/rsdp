@@ -3,6 +3,7 @@ package com.rsdp.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.entity.CategoryDict;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -472,6 +473,34 @@ class VisionServiceTest {
         assertThat(regions.get(0).getProducts().get(0).getEstimatedCategory()).isEqualTo("SF");
         assertThat(regions.get(0).getProducts().get(0).getImageKind()).isEqualTo("scene");
         assertThat(regions.get(1).getPageType()).isEqualTo("cover");
+    }
+
+    @Test
+    void detectPageRegions_shouldClampOutOfBoundsBBox() throws Exception {
+        // 模型偶发给出超出页面的框（x=0.48、w=0.87 → x+w>1）：
+        // 应收敛到页内而不是整框丢弃（该失败模式曾导致整批产品丢失）
+        String aiJson = """
+            [
+              {"pageType": "product", "products": [{"bbox": {"x": 0.48, "y": 0.18, "w": 0.87, "h": 0.26}, "estimatedCategory": "SF"}]}
+            ]
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        List<InputStream> images = List.of(new ByteArrayInputStream("fake-page-1".getBytes()));
+
+        var regions = visionService.detectPageRegions(images, null);
+
+        assertThat(regions.get(0).getProducts()).hasSize(1);
+        ProductBoundingBox bbox = regions.get(0).getProducts().get(0).getBbox();
+        assertThat(bbox).isNotNull();
+        assertThat(bbox.isValid()).isTrue();
+        assertThat(bbox.getX() + bbox.getWidth()).isLessThanOrEqualTo(1.0);
+        assertThat(bbox.getWidth()).isCloseTo(0.52, org.assertj.core.data.Offset.offset(1e-6));
     }
 
     @Test
