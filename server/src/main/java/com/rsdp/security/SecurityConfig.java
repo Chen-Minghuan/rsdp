@@ -180,6 +180,9 @@ public class SecurityConfig {
                 // 运营统计接口（复用方案读权限）
                 .requestMatchers(HttpMethod.GET, "/api/v1/statistics/**").hasAuthority(Permissions.SCHEME_READ)
 
+                // 管理端工作台统计带（含留资/订单额等运营数据，限平台运营角色）
+                .requestMatchers(HttpMethod.GET, "/api/v1/dashboard/**").hasAnyRole("ADMIN", "EDITOR")
+
                 // 系统配置：读取需订单读权限，修改仅 ADMIN
                 .requestMatchers(HttpMethod.GET, "/api/v1/configs/**").hasAuthority(Permissions.ORDER_READ)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/configs/**").hasRole("ADMIN")

@@ -61,6 +61,7 @@ DROP TABLE IF EXISTS platform_case CASCADE;
 DROP TABLE IF EXISTS platform_content CASCADE;
 DROP TABLE IF EXISTS platform_custom_dict CASCADE;
 DROP TABLE IF EXISTS platform_customized CASCADE;
+DROP TABLE IF EXISTS platform_lead CASCADE;
 DROP TABLE IF EXISTS project CASCADE;
 DROP TABLE IF EXISTS design_order_item CASCADE;
 DROP TABLE IF EXISTS design_order CASCADE;
@@ -2590,6 +2591,23 @@ CREATE TABLE IF NOT EXISTS platform_customized (
     updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_platform_customized_status ON platform_customized(status, sort_order);
+
+-- 官网留资线索表（V34 并入）：用户端 CTA/表单/AI 搭配入口留资，管理端分配跟进
+CREATE TABLE IF NOT EXISTS platform_lead (
+    lead_id     VARCHAR(64) PRIMARY KEY,
+    name        VARCHAR(64)  NOT NULL,
+    phone       VARCHAR(32)  NOT NULL,
+    source      VARCHAR(32)  NOT NULL,
+    intent      TEXT,
+    budget      VARCHAR(32),
+    status      VARCHAR(16)  NOT NULL DEFAULT 'pending',
+    assignee    VARCHAR(64),
+    follow_log  JSONB,
+    created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_lead_status ON platform_lead(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_platform_lead_source ON platform_lead(source, created_at);
 
 -- 官网内容种子（V15 并入）：服务协议 + 客服咨询（占位文案，运营可在管理端修改）
 INSERT INTO platform_content (content_id, code, title, content_type, content) VALUES

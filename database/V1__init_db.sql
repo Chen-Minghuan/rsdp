@@ -1267,6 +1267,23 @@ CREATE TABLE IF NOT EXISTS platform_customized (
 );
 CREATE INDEX IF NOT EXISTS idx_platform_customized_status ON platform_customized(status, sort_order);
 
+-- 官网留资线索表（V34 并入）：用户端 CTA/表单/AI 搭配入口留资，管理端分配跟进
+CREATE TABLE IF NOT EXISTS platform_lead (
+    lead_id     VARCHAR(64) PRIMARY KEY,
+    name        VARCHAR(64)  NOT NULL,
+    phone       VARCHAR(32)  NOT NULL,
+    source      VARCHAR(32)  NOT NULL,
+    intent      TEXT,
+    budget      VARCHAR(32),
+    status      VARCHAR(16)  NOT NULL DEFAULT 'pending',
+    assignee    VARCHAR(64),
+    follow_log  JSONB,
+    created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_lead_status ON platform_lead(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_platform_lead_source ON platform_lead(source, created_at);
+
 -- 六维标签维度定义表（V30）：品类 × A-F 维度键 → 标签/说明，替代前后端双写
 CREATE TABLE IF NOT EXISTS six_dim_schema (
     id            BIGSERIAL PRIMARY KEY,

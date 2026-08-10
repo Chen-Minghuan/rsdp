@@ -1282,6 +1282,39 @@ GET    /api/v1/public/content/{code}
        # 按编码读取内容配置（仅 active；服务协议 platform_user_agreement /
        # 客服咨询 platform_consulting_service 等；不存在或停用 404）
        # Response: { contentId, code, title, contentType, content, status, ... }
+
+GET    /api/v1/public/products
+       # 公开商品分页列表（仅 status=active；红线：绝不包含 RSKU 工厂报价字段）
+       # Query: page=1&size=12（上限 50）&category=SF&seatCount=3&color=米白&material=布艺
+       #        &priceMin=1000&priceMax=5000&sort=newest|price_asc|price_desc
+       #        seatCount 匹配变体 dimensions JSONB 的 seat_count/seatCount 键；
+       #        价格区间为零售参考价 retail_price（不加密），非工厂报价
+       # Response: PageResult<{ rspuId, rspuCode, productName, categoryCode, categoryPath,
+       #            positioningLabel, colorPrimaryName, materialTags[], retailPrice,
+       #            primaryImageUrl, sceneImageUrl, variantCount, createdAt }>
+
+GET    /api/v1/public/scenes
+       # 空间入口列表：启用场景字典 + 每个空间一张代表图（该场景下最新在售产品主图，可空）
+       # Response: [{ sceneCode, sceneName, sceneNameEn, imageUrl }]
+
+GET    /api/v1/public/categories
+       # 类目两级树：category_dict 按 parent_code 组装（当前种子为单层，roots 即全部类目）
+       # Response: [{ dictCode, dictName, dictNameEn, sortOrder, children: [...] }]
+
+POST   /api/v1/public/leads
+       # 留资提交（V34 platform_lead；source 限 ai_match/site_form/design_booking，
+       # 非法来源 400；初始状态 pending；审计操作人记 anonymous）
+       # Request: { name*, phone*, source*, intent?, budget? }
+       # Response: { leadId, status }
+```
+
+### 管理端工作台统计带（GET 限 ADMIN/EDITOR）
+
+```
+GET    /api/v1/dashboard/summary
+       # 统计带聚合：RSPU 总数 / RSKU 总数 / AI 识别通过率（done/(done+failed)×100，无记录为 null）
+       # / 本月订单额（到手价合计，不含已取消订单；加密列 Java 内存求和）/ 今日留资数
+       # Response: { rspuTotal, rskuTotal, aiPassRate, monthOrderAmount, todayLeadCount }
 ```
 
 ### 设计师画像
