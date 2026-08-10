@@ -9,7 +9,6 @@ import {
   NAlert,
   NUpload,
   NSpin,
-  NTag,
   NProgress,
   NSelect,
   NDescriptions,
@@ -18,6 +17,7 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { useDocumentImportStore } from '@/stores/documentImport'
+import StatusPill from '@/components/StatusPill.vue'
 import { listDicts } from '@/api/dict'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
@@ -85,19 +85,6 @@ function statusText(status: TaskItem['status']) {
       return '失败'
     default:
       return '未知'
-  }
-}
-
-function statusTagType(status: TaskItem['status']) {
-  switch (status) {
-    case 'done':
-      return 'success'
-    case 'failed':
-      return 'error'
-    case 'partial_success':
-      return 'warning'
-    default:
-      return 'warning'
   }
 }
 
@@ -188,7 +175,7 @@ const failureColumns: DataTableColumns<DocumentImportFailure> = [
           >
             <n-space align="center" justify="space-between">
               <n-space align="center">
-                <n-tag :type="statusTagType(task.status)">{{ statusText(task.status) }}</n-tag>
+                <StatusPill :value="task.status" :label="statusText(task.status)" />
                 <span>{{ task.fileName }}</span>
               </n-space>
               <n-button

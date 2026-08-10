@@ -8,6 +8,7 @@ import 'vxe-table/lib/style.css'
 import { listDicts } from '@/api/dict'
 import { getExcelAiImportRows, getExcelAiPreviewRowImages, getExcelAiPreviewImageUrl } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
+import StatusPill from '@/components/StatusPill.vue'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
 import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow, UnmappedColumnInfo, PreviewRowImage } from '@/types/product'
@@ -126,19 +127,6 @@ function statusText(status: TaskItem['status']) {
       return '失败'
     default:
       return '未知'
-  }
-}
-
-function statusTagType(status: TaskItem['status']) {
-  switch (status) {
-    case 'done':
-      return 'success'
-    case 'failed':
-      return 'error'
-    case 'partial_success':
-      return 'warning'
-    default:
-      return 'warning'
   }
 }
 
@@ -479,10 +467,10 @@ const rowDetails = ref<ExcelImportRow[]>([])
 /** 行状态分组（失败/跳过/成功/处理中），只展示有数据的分组 */
 const groupedRowDetails = computed(() => {
   const groups = [
-    { status: 'failed', label: '失败', tagType: 'error' as const },
-    { status: 'skipped', label: '跳过', tagType: 'warning' as const },
-    { status: 'success', label: '成功', tagType: 'success' as const },
-    { status: 'pending', label: '处理中', tagType: 'info' as const }
+    { status: 'failed', label: '失败' },
+    { status: 'skipped', label: '跳过' },
+    { status: 'success', label: '成功' },
+    { status: 'pending', label: '处理中' }
   ]
   return groups
     .map(g => ({ ...g, rows: rowDetails.value.filter(r => r.status === g.status) }))
@@ -942,7 +930,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
           >
             <n-space align="center" justify="space-between">
               <n-space align="center">
-                <n-tag :type="statusTagType(task.status)">{{ statusText(task.status) }}</n-tag>
+                <StatusPill :value="task.status" :label="statusText(task.status)" />
                 <span>{{ task.fileName }}</span>
               </n-space>
               <n-button
@@ -999,7 +987,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
         <n-space v-else vertical :size="16">
           <div v-for="group in groupedRowDetails" :key="group.status">
             <n-space align="center" style="margin-bottom: 8px;">
-              <n-tag size="small" :type="group.tagType">{{ group.label }}</n-tag>
+              <StatusPill :value="group.status" :label="group.label" />
               <span style="color: #999; font-size: 12px;">{{ group.rows.length }} 行</span>
             </n-space>
             <n-data-table

@@ -13,23 +13,27 @@ const route = useRoute()
 const userStore = useUserStore()
 
 /**
- * Naive UI 全局主题覆盖，色值与 styles/tokens.css 保持一致。
+ * Naive UI 全局主题覆盖（style-b「现代极简工作台」），色值与 styles/tokens.css 保持一致。
  */
 const themeOverrides: GlobalThemeOverrides = {
   common: {
-    primaryColor: '#2453FC',
-    primaryColorHover: '#4A73FD',
-    primaryColorPressed: '#1B3FC4',
-    primaryColorSuppl: '#E8EDFF',
-    borderRadius: '8px',
+    primaryColor: '#1A1A1A',
+    primaryColorHover: '#333333',
+    primaryColorPressed: '#000000',
+    primaryColorSuppl: '#F0F0F0',
+    successColor: '#5B7163',
+    warningColor: '#C2622B',
+    errorColor: '#A1402F',
+    borderRadius: '6px',
     fontFamily:
-      '"Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif'
+      '"Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif',
+    fontFamilyMono: '"JetBrains Mono", "Consolas", "Courier New", monospace'
   },
   Card: {
-    borderRadius: '12px'
+    borderRadius: '6px'
   },
   Button: {
-    borderRadiusMedium: '8px'
+    borderRadiusMedium: '6px'
   }
 }
 

@@ -23,6 +23,7 @@ import {
   type UploadFileInfo
 } from 'naive-ui'
 import { uploadProductImages, updateProduct, detectProductRegions, entryByRegions } from '@/api/product'
+import StatusPill from '@/components/StatusPill.vue'
 import type { RegionProduct, RegionSelection } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import { listDicts } from '@/api/dict'
@@ -471,19 +472,6 @@ function statusText(status: TaskItem['status']) {
   }
 }
 
-function statusTagType(status: TaskItem['status']) {
-  switch (status) {
-    case 'done':
-      return 'success'
-    case 'failed':
-      return 'error'
-    case 'partial_success':
-      return 'warning'
-    default:
-      return 'warning'
-  }
-}
-
 function goToProduct(rspuId: string) {
   router.push(`/products/${rspuId}`)
 }
@@ -592,9 +580,7 @@ function formatPrice(ocr?: OcrResult): string {
                   </n-button>
                 </span>
               </n-space>
-              <n-tag :type="statusTagType(task.status)">
-                {{ statusText(task.status) }}
-              </n-tag>
+              <StatusPill :value="task.status" :label="statusText(task.status)" />
             </n-space>
 
             <n-progress

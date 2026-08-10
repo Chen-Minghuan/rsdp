@@ -9,7 +9,6 @@ import {
   NSpin,
   NDescriptions,
   NDescriptionsItem,
-  NTag,
   NModal,
   NForm,
   NFormItem,
@@ -20,6 +19,7 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { getRsku, listPriceHistory, updateRskuPrice, deleteRsku } from '@/api/rsku'
+import StatusPill from '@/components/StatusPill.vue'
 import { useUserStore } from '@/stores/user'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import { PERMISSIONS } from '@/utils/constants'
@@ -134,14 +134,7 @@ async function handleUpdatePrice() {
   }
 }
 
-function reviewStatusType(status: string) {
-  if (status === '已确认') return 'success'
-  if (status === '存疑') return 'error'
-  return 'warning'
-}
-
-function handleDeleteRsku() {
-  const currentRskuId = rskuId.value
+function handleDeleteRsku() {  const currentRskuId = rskuId.value
   const currentRspuId = rspuId.value
   dialog.warning({
     title: '确认删除报价',
@@ -246,9 +239,7 @@ onBeforeRouteUpdate((to) => {
               {{ rsku.quoteConfidence || '-' }}
             </n-descriptions-item>
             <n-descriptions-item label="复核状态">
-              <n-tag :type="reviewStatusType(rsku.reviewStatus)" size="small">
-                {{ rsku.reviewStatus }}
-              </n-tag>
+              <StatusPill :value="rsku.reviewStatus" />
             </n-descriptions-item>
             <n-descriptions-item label="价格更新日期">
               {{ rsku.priceUpdated || '-' }}

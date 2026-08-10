@@ -23,6 +23,7 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
+import StatusPill from '@/components/StatusPill.vue'
 import {
   getFactory,
   listRskuByFactory,
@@ -131,12 +132,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
     key: 'reviewStatus',
     width: 100,
     render(row: Rsku) {
-      const type = row.reviewStatus === '已确认'
-        ? 'success'
-        : row.reviewStatus === '存疑'
-          ? 'error'
-          : 'warning'
-      return h(NTag, { type, size: 'small' }, { default: () => row.reviewStatus })
+      return h(StatusPill, { value: row.reviewStatus })
     }
   }
 ]

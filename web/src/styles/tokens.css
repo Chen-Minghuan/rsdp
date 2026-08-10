@@ -1,42 +1,50 @@
 /**
- * RSDP 设计系统 token。
+ * RSDP 设计系统 token（style-b「现代极简工作台」）。
  *
- * 参考 rooom 用户端视觉（docs/08-roadmap/RSDP-rooom整合实现方案.md 第 1.4 节），
- * 以 CSS 变量形式落地品牌色、中性色、字体与尺寸规范。
+ * 视觉目标参照 docs/09-design/admin.html 与《RSDP管理端工作台设计文档》第二章：
+ * 灰白底、黑白为主、功能色仅出现在状态上、编码/价格等数字信息等宽字体。
  * Naive UI 组件主题通过 App.vue 的 themeOverrides 消费同名色值，两边需保持一致。
  */
 
 :root {
-  /* ========== 品牌色 ========== */
-  --rsdp-primary: #2453fc;
-  --rsdp-primary-hover: #4a73fd;
-  --rsdp-primary-pressed: #1b3fc4;
-  --rsdp-primary-suppl: #e8edff;
+  /* ========== 品牌色（墨即主色） ========== */
+  --rsdp-primary: #1a1a1a;
+  --rsdp-primary-hover: #333333;
+  --rsdp-primary-pressed: #000000;
+  --rsdp-primary-suppl: #f0f0f0;
 
   /* ========== 中性色 ========== */
-  --rsdp-bg: #fafafa;
+  --rsdp-bg: #f7f7f7;
   --rsdp-card-bg: #ffffff;
   --rsdp-serve-bg: #f6f7f9;
   --rsdp-menu-bg: #eaeaea;
-  --rsdp-text: #243443;
-  --rsdp-text-secondary: #999999;
-  --rsdp-border: #d9d9d9;
+  --rsdp-text: #1a1a1a;
+  --rsdp-text-secondary: #767676;
+  --rsdp-border: #e3e3e3;
 
-  /* ========== 语义色 ========== */
-  --rsdp-price: #ff0000;
-  --rsdp-success: #18a058;
-  --rsdp-warning: #f0a020;
-  --rsdp-error: #d03050;
+  /* ========== 语义色（style-b：赭石=待处理 / 绿灰=已完成 / 朱砂=存疑失败） ========== */
+  --rsdp-price: #1a1a1a;
+  --rsdp-success: #5b7163;
+  --rsdp-warning: #c2622b;
+  --rsdp-error: #a1402f;
   --rsdp-mask: rgba(0, 0, 0, 0.6);
 
+  /* ========== 状态 Pill 底色（与 StatusPill 组件一致） ========== */
+  --rsdp-success-bg: #e8efe9;
+  --rsdp-warning-bg: #f7e9df;
+  --rsdp-error-bg: #f5e4e1;
+  --rsdp-info-bg: #f0f0f0;
+
   /* ========== 字体 ========== */
-  /* 展示字体用于首页 Hero 等大标题；Gloock 未授权时回退 Georgia 衬线 */
-  --rsdp-font-display: 'Gloock', 'Georgia', 'Times New Roman', serif;
+  /* 展示字体用于首页 Hero 等大标题；Noto Serif SC 保证中文衬线生效 */
+  --rsdp-font-display: 'Noto Serif SC', 'Songti SC', 'STSong', 'Georgia', 'Times New Roman', serif;
   --rsdp-font-body: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', Arial, sans-serif;
+  /* 数据字体：编码、价格、耗时、统计数字等宽展示 */
+  --rsdp-font-mono: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
 
   /* ========== 圆角 ========== */
-  --rsdp-radius: 8px;
+  --rsdp-radius: 6px;
   --rsdp-radius-lg: 12px;
 
   /* ========== 间距与布局 ========== */
@@ -45,12 +53,17 @@
   --rsdp-header-height: 56px;
 
   /* ========== 阴影 ========== */
-  --rsdp-shadow-card: 0 1px 3px rgba(36, 52, 67, 0.08);
-  --rsdp-shadow-popup: 0 4px 16px rgba(36, 52, 67, 0.12);
+  --rsdp-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --rsdp-shadow-popup: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 
-/* ========== 暗色模式（预留，本期不启用切换器） ========== */
-html.dark {
+/* ========== 工具类 ========== */
+/* 编码、价格、耗时、统计数字等宽展示（style-b 数据字体） */
+.rsdp-mono {
+  font-family: var(--rsdp-font-mono);
+}
+
+/* ========== 暗色模式（预留，本期不启用切换器） ========== */html.dark {
   --rsdp-bg: #14181c;
   --rsdp-card-bg: #1e242b;
   --rsdp-serve-bg: #1a1f26;

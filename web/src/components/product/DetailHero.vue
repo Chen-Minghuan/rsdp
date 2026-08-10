@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { NCard, NTag, NAlert } from 'naive-ui'
 import ImageMagnifier from '@/components/ImageMagnifier.vue'
+import StatusPill from '@/components/StatusPill.vue'
 import type { ProductDetail } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import { IMAGE_FALLBACK_SRC } from '@/utils/constants'
@@ -32,26 +33,10 @@ const styleTags = computed(() => {
   return codes.map(code => ({ code, name: resolveStyleName(code) }))
 })
 
-function statusTagType(status: string): 'success' | 'default' {
-  return status === 'active' ? 'success' : 'default'
-}
-
 function statusText(status: string): string {
   if (status === 'active') return '上架中'
   if (status === 'inactive') return '已下架'
   return status || '-'
-}
-
-function reviewTagType(status: string): 'success' | 'error' | 'warning' {
-  if (status === '已确认') return 'success'
-  if (status === '存疑') return 'error'
-  return 'warning'
-}
-
-function confidenceTagType(confidence: string): 'success' | 'warning' | 'default' {
-  if (confidence === 'high') return 'success'
-  if (confidence === 'mid') return 'warning'
-  return 'default'
 }
 
 const confidenceTextMap: Record<string, string> = {
@@ -101,11 +86,9 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
 
       <div class="hero-info">
         <div class="hero-tags">
-          <n-tag :type="statusTagType(rspu.status)" size="small">{{ statusText(rspu.status) }}</n-tag>
-          <n-tag :type="reviewTagType(rspu.reviewStatus)" size="small">{{ rspu.reviewStatus || '待复核' }}</n-tag>
-          <n-tag :type="confidenceTagType(rspu.aestheticsConfidence)" size="small">
-            {{ confidenceText(rspu.aestheticsConfidence) }}
-          </n-tag>
+          <StatusPill :value="rspu.status" :label="statusText(rspu.status)" />
+          <StatusPill :value="rspu.reviewStatus || '待复核'" />
+          <StatusPill :value="rspu.aestheticsConfidence" :label="confidenceText(rspu.aestheticsConfidence)" />
           <n-tag v-if="rspu.productLevel" type="info" size="small">{{ rspu.productLevel }} 级</n-tag>
         </div>
 
@@ -251,7 +234,8 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
 
 .hero-price {
   color: var(--rsdp-price);
-  font-weight: 600;
+  font-family: var(--rsdp-font-mono);
+  font-weight: 700;
 }
 
 .hero-review-comment {

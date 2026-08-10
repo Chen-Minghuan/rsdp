@@ -8,11 +8,11 @@ import {
   NRadioButton,
   NRadioGroup,
   NSpace,
-  NSpin,
-  NTag
+  NSpin
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
+import StatusPill from '@/components/StatusPill.vue'
 import { listOrders } from '@/api/order'
 import { ORDER_STATUS, ORDER_STATUS_TEXT, type Order } from '@/types/order'
 
@@ -70,21 +70,6 @@ function handlePageChange(value: number) {
   loadOrders()
 }
 
-function statusTagType(value: string): 'default' | 'info' | 'warning' | 'success' | 'error' {
-  switch (value) {
-    case ORDER_STATUS.CONFIRMED:
-      return 'info'
-    case ORDER_STATUS.PRODUCING:
-      return 'warning'
-    case ORDER_STATUS.COMPLETED:
-      return 'success'
-    case ORDER_STATUS.CANCELLED:
-      return 'error'
-    default:
-      return 'default'
-  }
-}
-
 function formatTime(value?: string): string {
   if (!value) return '-'
   return value.replace('T', ' ').slice(0, 16)
@@ -111,9 +96,8 @@ const columns: DataTableColumns<Order> = [
     key: 'status',
     width: 100,
     render: row => h(
-      NTag,
-      { size: 'small', type: statusTagType(row.status) },
-      { default: () => ORDER_STATUS_TEXT[row.status] ?? row.status }
+      StatusPill,
+      { value: row.status, label: ORDER_STATUS_TEXT[row.status] ?? row.status }
     )
   },
   { title: '明细数', key: 'itemCount', width: 90, render: row => row.itemCount ?? '-' },

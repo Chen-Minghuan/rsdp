@@ -8,10 +8,10 @@ import {
   NEmpty,
   NProgress,
   NSpace,
-  NTag,
   type DataTableColumns
 } from 'naive-ui'
 import type { ProductStyleMatch, RecognitionHistoryItem } from '@/types/product'
+import StatusPill from '@/components/StatusPill.vue'
 import { toKeyValuePairs, toRawText, type KeyValuePair } from '@/utils/jsonDisplay'
 
 /**
@@ -22,13 +22,6 @@ defineProps<{
   styleMatches: ProductStyleMatch[]
   recognitions: RecognitionHistoryItem[]
 }>()
-
-function confidenceTagType(confidence: string): 'success' | 'warning' | 'error' | 'default' {
-  if (confidence === 'high') return 'success'
-  if (confidence === 'mid') return 'warning'
-  if (confidence === 'low') return 'error'
-  return 'default'
-}
 
 function progressStatus(score: number): 'success' | 'warning' | 'error' {
   if (score >= 0.8) return 'success'
@@ -128,8 +121,7 @@ const recognitionColumns: DataTableColumns<RecognitionHistoryItem> = [
     key: 'confidence',
     width: 100,
     render(row: RecognitionHistoryItem) {
-      const type = row.confidence === 'high' ? 'success' : row.confidence === 'mid' ? 'warning' : 'default'
-      return h(NTag, { type, size: 'small' }, { default: () => row.confidence || '-' })
+      return h(StatusPill, { value: row.confidence })
     }
   },
   {
@@ -148,8 +140,7 @@ const recognitionColumns: DataTableColumns<RecognitionHistoryItem> = [
     key: 'status',
     width: 90,
     render(row: RecognitionHistoryItem) {
-      const type = row.status === 'done' ? 'success' : row.status === 'failed' ? 'error' : 'warning'
-      return h(NTag, { type, size: 'small' }, { default: () => row.status })
+      return h(StatusPill, { value: row.status })
     }
   },
   {
@@ -170,9 +161,7 @@ const recognitionColumns: DataTableColumns<RecognitionHistoryItem> = [
         <div v-for="match in styleMatches" :key="match.matchId" class="style-match">
           <div class="style-match-header">
             <span class="style-match-name">{{ match.styleName || match.styleCode || '-' }}</span>
-            <n-tag :type="confidenceTagType(match.confidence)" size="small">
-              置信度 {{ match.confidence || '-' }}
-            </n-tag>
+            <StatusPill :value="match.confidence" :label="`置信度 ${match.confidence || '-'}`" />
           </div>
           <div class="style-match-score">
             <n-progress

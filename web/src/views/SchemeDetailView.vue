@@ -376,7 +376,7 @@ const priceChangeColumns: DataTableColumns<PriceChange> = [
       const sign = diff > 0 ? '+' : ''
       return h(
         'span',
-        { style: `color: ${diff > 0 ? '#d03050' : '#18a058'}; font-weight: 500;` },
+        { style: `color: ${diff > 0 ? '#a1402f' : '#5b7163'}; font-weight: 500; font-family: var(--rsdp-font-mono);` },
         `${sign}¥${diff.toFixed(2)}`
       )
     }

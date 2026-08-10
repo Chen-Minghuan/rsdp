@@ -11,12 +11,12 @@ import {
   NResult,
   NSpace,
   NSpin,
-  NTag,
   useDialog,
   useMessage
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
+import StatusPill from '@/components/StatusPill.vue'
 import { confirmOrderInvite, getOrderInviteView } from '@/api/orderInvite'
 import { ORDER_STATUS_TEXT, type OrderInviteItem, type OrderInviteView } from '@/types/order'
 
@@ -114,8 +114,7 @@ onMounted(loadView)
         <n-card>
           <n-space align="center" justify="space-between">
             <h2 style="margin: 0;">订单确认单</h2>
-            <n-tag v-if="view.confirmed" type="success">已确认</n-tag>
-            <n-tag v-else type="warning">待确认</n-tag>
+            <StatusPill :value="view.confirmed ? '已确认' : '待确认'" />
           </n-space>
           <n-descriptions :column="2" label-placement="left" style="margin-top: 16px;">
             <n-descriptions-item label="订单编号">{{ view.orderNo }}</n-descriptions-item>
@@ -138,7 +137,7 @@ onMounted(loadView)
           <n-space justify="end" style="margin-top: 16px;">
             <span style="font-size: 16px;">
               合计（到手价）：
-              <strong style="color: #d03050; font-size: 20px;">
+              <strong style="color: var(--rsdp-price); font-size: 20px; font-family: var(--rsdp-font-mono); font-weight: 700;">
                 {{ formatPrice(view.finalTotalPrice) }}
               </strong>
             </span>

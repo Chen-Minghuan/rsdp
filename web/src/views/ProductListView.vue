@@ -39,6 +39,7 @@ import { getSixDimSchema } from '@/utils/sixDimLabels'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
+import StatusPill from '@/components/StatusPill.vue'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
 import type { DictItem } from '@/types/dict'
@@ -423,7 +424,10 @@ function renderExpand(row: ProductSummary) {
       }
     },
     [
-      item('复核状态', resolveDictName(reviewStatusOptions.value, row.reviewStatus)),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, [
+        h('span', { style: { fontWeight: 600, color: '#303133' } }, '复核状态:'),
+        h(StatusPill, { value: resolveDictName(reviewStatusOptions.value, row.reviewStatus) })
+      ]),
       item('风格', resolveDictName(styleOptions.value, row.positioningLabel), 'info'),
       item('产品等级', resolveDictName(levelOptions.value, row.productLevel)),
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, [
@@ -520,7 +524,17 @@ const columns: DataTableColumns<ProductSummary> = [
     width: 110,
     align: 'center',
     render(row) {
-      return h('span', { style: { fontWeight: 500, color: '#f5222d' } }, formatPrice(row.minFactoryPrice))
+      return h(
+        'span',
+        {
+          style: {
+            fontWeight: 700,
+            color: 'var(--rsdp-price)',
+            fontFamily: 'var(--rsdp-font-mono)'
+          }
+        },
+        formatPrice(row.minFactoryPrice)
+      )
     }
   },
   {
@@ -534,6 +548,7 @@ const columns: DataTableColumns<ProductSummary> = [
           text: true,
           type: 'primary',
           size: 'small',
+          style: { fontFamily: 'var(--rsdp-font-mono)' },
           onClick: () => router.push(`/products/${row.rspuId}`)
         },
         { default: () => row.rspuCode || '-' }
@@ -1186,12 +1201,12 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
 }
 
 .status-tab:hover {
-  color: var(--rsdp-primary, #2453fc);
+  color: var(--rsdp-primary, #1a1a1a);
 }
 
 .status-tab.active {
-  color: var(--rsdp-primary, #2453fc);
+  color: var(--rsdp-primary, #1a1a1a);
   font-weight: 600;
-  border-bottom-color: var(--rsdp-primary, #2453fc);
+  border-bottom-color: var(--rsdp-primary, #1a1a1a);
 }
 </style>

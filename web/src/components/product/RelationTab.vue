@@ -217,7 +217,8 @@ function handleDelete(relationId: string, event: MouseEvent) {
 
 .relation-card-price {
   font-size: 13px;
-  font-weight: 600;
+  font-family: var(--rsdp-font-mono);
+  font-weight: 700;
   color: var(--rsdp-price);
 }
 

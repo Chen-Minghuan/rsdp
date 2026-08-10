@@ -16,7 +16,6 @@ import {
   NPopconfirm,
   NSpace,
   NSpin,
-  NTag,
   NUpload,
   useDialog,
   useMessage,
@@ -25,6 +24,7 @@ import {
 import type { DataTableColumns } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
+import StatusPill from '@/components/StatusPill.vue'
 import {
   adjustOrderItemPrice,
   createOrderInvite,
@@ -88,21 +88,6 @@ async function loadDetail() {
     errorMessage.value = e instanceof Error ? e.message : '加载订单详情失败'
   } finally {
     loading.value = false
-  }
-}
-
-function statusTagType(value: string): 'default' | 'info' | 'warning' | 'success' | 'error' {
-  switch (value) {
-    case ORDER_STATUS.CONFIRMED:
-      return 'info'
-    case ORDER_STATUS.PRODUCING:
-      return 'warning'
-    case ORDER_STATUS.COMPLETED:
-      return 'success'
-    case ORDER_STATUS.CANCELLED:
-      return 'error'
-    default:
-      return 'default'
   }
 }
 
@@ -416,9 +401,7 @@ onMounted(loadDetail)
           <n-descriptions :column="3" label-placement="left" bordered>
             <n-descriptions-item label="订单编号">{{ order.orderNo }}</n-descriptions-item>
             <n-descriptions-item label="状态">
-              <n-tag size="small" :type="statusTagType(order.status ?? '')">
-                {{ statusText }}
-              </n-tag>
+              <StatusPill :value="order.status" :label="statusText" />
             </n-descriptions-item>
             <n-descriptions-item label="明细数">{{ order.itemCount ?? '-' }}</n-descriptions-item>
             <n-descriptions-item label="原价总额">{{ formatPrice(order.originalTotalPrice) }}</n-descriptions-item>

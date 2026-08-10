@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { h } from 'vue'
 import { NButton, NCard, NDataTable, NSpace, NTag, type DataTableColumns } from 'naive-ui'
+import StatusPill from '@/components/StatusPill.vue'
 import type { Rsku } from '@/types/rsku'
 import type { RspuVariant } from '@/types/variant'
 import { formatDimensions } from '@/utils/jsonDisplay'
@@ -168,12 +169,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
     key: 'reviewStatus',
     width: 100,
     render(row: Rsku) {
-      const type = row.reviewStatus === '已确认'
-        ? 'success'
-        : row.reviewStatus === '存疑'
-          ? 'error'
-          : 'warning'
-      return h(NTag, { type, size: 'small' }, { default: () => row.reviewStatus })
+      return h(StatusPill, { value: row.reviewStatus })
     }
   },
   {

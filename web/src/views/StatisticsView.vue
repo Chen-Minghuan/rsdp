@@ -11,8 +11,8 @@ import {
 } from '@/api/statistics'
 import type { StatisticsOverview, TrendItem, FactoryStat } from '@/types/statistics'
 
-const BRAND_BLUE = '#2453fc'
-const BRAND_RED = '#ff0000'
+const BRAND_INK = '#1a1a1a'
+const BRAND_TERRA = '#c2622b'
 const TEXT_SECONDARY = '#6b7280'
 
 const loading = ref(false)
@@ -54,7 +54,7 @@ const trendOption = computed(
           name: '方案金额',
           type: 'bar',
           data: trends.value.map(t => t.totalAmount),
-          itemStyle: { color: BRAND_BLUE, borderRadius: [4, 4, 0, 0] },
+          itemStyle: { color: BRAND_INK, borderRadius: [4, 4, 0, 0] },
           barMaxWidth: 36
         },
         {
@@ -63,7 +63,7 @@ const trendOption = computed(
           yAxisIndex: 1,
           data: trends.value.map(t => t.schemeCount),
           smooth: true,
-          itemStyle: { color: BRAND_RED },
+          itemStyle: { color: BRAND_TERRA },
           lineStyle: { width: 2 }
         }
       ]
@@ -91,7 +91,7 @@ const factoryOption = computed(
         {
           type: 'bar',
           data: [...factories.value].reverse().map(f => f.totalAmount),
-          itemStyle: { color: BRAND_BLUE, borderRadius: [0, 4, 4, 0] },
+          itemStyle: { color: BRAND_INK, borderRadius: [0, 4, 4, 0] },
           barMaxWidth: 24,
           label: {
             show: true,

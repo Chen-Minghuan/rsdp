@@ -325,7 +325,7 @@ const itemColumns = [
 }
 
 .tag-item.active {
-  background: var(--rsdp-primary-suppl, #e8edff);
+  background: var(--rsdp-primary-suppl, #f0f0f0);
   color: var(--rsdp-primary);
   font-weight: 600;
 }

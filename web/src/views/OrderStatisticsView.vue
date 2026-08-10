@@ -24,7 +24,7 @@ import {
 } from '@/api/orderStatistics'
 import type { OrderFactoryStat, OrderInviterStat, OrderProductStat } from '@/types/orderStatistics'
 
-const BRAND_BLUE = '#2453fc'
+const BRAND_INK = '#1a1a1a'
 const TEXT_SECONDARY = '#6b7280'
 const TOP_LIMIT = 10
 
@@ -69,7 +69,7 @@ const chartOption = computed(() => {
       {
         type: 'bar',
         data: [...source].reverse().map(r => r.value),
-        itemStyle: { color: BRAND_BLUE, borderRadius: [0, 4, 4, 0] },
+        itemStyle: { color: BRAND_INK, borderRadius: [0, 4, 4, 0] },
         barMaxWidth: 24,
         label: {
           show: true,
