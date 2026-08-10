@@ -1317,6 +1317,36 @@ GET    /api/v1/dashboard/summary
        # Response: { rspuTotal, rskuTotal, aiPassRate, monthOrderAmount, todayLeadCount }
 ```
 
+### 留资线索管理（管理端，限 ADMIN/EDITOR）
+
+```
+GET    /api/v1/leads
+       # 线索分页列表（手机号脱敏 phoneMasked）
+       # Query: status?（pending/contacted/done）&source?（ai_match/site_form/design_booking）&page=1&size=10（上限 100）
+       # Response: PageResult<{ leadId, name, phoneMasked, source, intent, budget,
+       #            status, assignee, followLogCount, createdAt }>
+
+GET    /api/v1/leads/source-stats
+       # 来源分布统计（导航「留资线索」角标同用 pending 字段）
+       # Response: { aiMatch, siteForm, designBooking, pending }
+
+GET    /api/v1/leads/assignees
+       # 跟进人候选：平台运营角色（ADMIN/EDITOR）的启用用户
+       # Response: [{ username, nickname }]
+
+PUT    /api/v1/leads/{leadId}/assign
+       # 分配跟进人（须为存在的启用用户，否则 400）
+       # Request: { assignee* }   # Response: 更新后的列表项
+
+POST   /api/v1/leads/{leadId}/follow-logs
+       # 追加跟进记录（follow_log JSONB 数组追加 {time, operator, content}）
+       # Request: { content*（≤500）}   # Response: 更新后的列表项
+
+PUT    /api/v1/leads/{leadId}/status
+       # 状态流转（仅允许向前 pending → contacted → done，倒退/越级 400）
+       # Request: { status*（pending/contacted/done）}   # Response: 更新后的列表项
+```
+
 ### 设计师画像
 
 ```

@@ -24,6 +24,8 @@ export interface NavItem {
   activeMatch?: NavActiveMatch
   /** prefix 匹配时需要排除的子路径（精确匹配） */
   activeExcludes?: string[]
+  /** 角标数据源（目前仅支持 'leadPending'：留资待跟进数） */
+  badgeKey?: 'leadPending'
 }
 
 /**
@@ -204,6 +206,19 @@ export const navGroups: NavGroup[] = [
         label: '工厂管理',
         path: '/factories',
         permission: PERMISSIONS.FACTORY_READ
+      }
+    ]
+  },
+  {
+    key: 'website',
+    label: '用户端官网',
+    items: [
+      {
+        key: 'leads',
+        label: '留资线索',
+        path: '/leads',
+        roles: [ROLES.ADMIN, ROLES.EDITOR],
+        badgeKey: 'leadPending'
       }
     ]
   },

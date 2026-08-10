@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.vue",
     "lint:fix": "eslint src --ext .ts,.vue --fix",
-    "type-check": "vue-tsc --noEmit"
+    "type-check": "vue-tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@vueuse/core": "^11.0.0",
@@ -35,6 +36,7 @@
     "typescript": "^5.7.0",
     "typescript-eslint": "8",
     "vite": "^6.0.0",
+    "vitest": "^2.1.9",
     "vue-tsc": "^2.2.0"
   },
   "pnpm": {

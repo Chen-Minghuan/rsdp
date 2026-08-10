@@ -1,0 +1,276 @@
+import { PERMISSIONS, ROLES } from '@/utils/constants'
+
+/**
+ * 路由表（独立文件，供 router 实例与路由测试共用，不含 history/守卫等运行时逻辑）。
+ */
+export const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/LoginView.vue'),
+    meta: { public: true, hideHeader: true }
+  },
+  {
+    path: '/s/:projectId',
+    name: 'ProjectShare',
+    component: () => import('@/views/ProjectShareView.vue'),
+    meta: { public: true, hideHeader: true }
+  },
+  {
+    path: '/invite/order/:token',
+    name: 'OrderInvite',
+    component: () => import('@/views/OrderInviteView.vue'),
+    meta: { public: true, hideHeader: true }
+  },
+  {
+    path: '/',
+    name: 'Home',
+    component: () => import('@/views/HomeView.vue'),
+    meta: { public: true }
+  },
+  {
+    path: '/entry',
+    name: 'ProductEntry',
+    component: () => import('@/views/ProductEntryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+  },
+  {
+    path: '/factory-entry',
+    name: 'ProductFactoryEntry',
+    component: () => import('@/views/ProductFactoryEntryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE], roles: [ROLES.FACTORY_ADMIN] }
+  },
+  {
+    path: '/products',
+    name: 'ProductList',
+    component: () => import('@/views/ProductListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
+    path: '/products/import',
+    name: 'ProductImport',
+    component: () => import('@/views/ProductImportView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
+  },
+  {
+    path: '/products/document-import',
+    name: 'ProductDocumentImport',
+    component: () => import('@/views/ProductDocumentImportView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
+  },
+  {
+    path: '/products/excel-ai-import',
+    name: 'ProductExcelAiImport',
+    component: () => import('@/views/ProductExcelAiImportView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
+  },
+  {
+    path: '/products/manual-entry',
+    name: 'ProductManualEntry',
+    component: () => import('@/views/ProductManualEntryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+  },
+  {
+    path: '/products/:rspuId',
+    name: 'ProductDetail',
+    component: () => import('@/views/ProductDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
+    path: '/favorites',
+    name: 'Favorites',
+    component: () => import('@/views/FavoritesView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
+    path: '/projects',
+    name: 'ProjectList',
+    component: () => import('@/views/ProjectListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PROJECT_READ] }
+  },
+  {
+    path: '/projects/:projectId',
+    name: 'ProjectDetail',
+    component: () => import('@/views/ProjectDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PROJECT_READ] }
+  },
+  {
+    path: '/orders',
+    name: 'OrderList',
+    component: () => import('@/views/OrderListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
+  },
+  {
+    // 静态路径优先于 /orders/:orderId 匹配，声明顺序保持在详情之前
+    path: '/orders/statistics',
+    name: 'OrderStatistics',
+    component: () => import('@/views/OrderStatisticsView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
+  },
+  {
+    path: '/orders/:orderId',
+    name: 'OrderDetail',
+    component: () => import('@/views/OrderDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.ORDER_READ] }
+  },
+  {
+    path: '/statistics',
+    name: 'Statistics',
+    component: () => import('@/views/StatisticsView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
+  },
+  {
+    path: '/factories',
+    name: 'FactoryList',
+    component: () => import('@/views/FactoryListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.FACTORY_READ] }
+  },
+  {
+    path: '/factories/:factoryCode',
+    name: 'FactoryDetail',
+    component: () => import('@/views/FactoryDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.FACTORY_READ] }
+  },
+  {
+    path: '/products/:rspuId/rsku/:rskuId',
+    name: 'RskuDetail',
+    component: () => import('@/views/RskuDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.RSKU_READ] }
+  },
+  {
+    path: '/quotes/build',
+    name: 'QuoteBuilder',
+    component: () => import('@/views/QuoteBuilderView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.QUOTE_GENERATE] }
+  },
+  {
+    path: '/schemes',
+    name: 'SchemeList',
+    component: () => import('@/views/SchemeListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
+  },
+  {
+    path: '/schemes/:schemeId',
+    name: 'SchemeDetail',
+    component: () => import('@/views/SchemeDetailView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
+  },
+  {
+    path: '/matching/room-scheme',
+    name: 'RoomScheme',
+    component: () => import('@/views/RoomSchemeView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
+    path: '/matching/anchor',
+    name: 'AnchorMatching',
+    component: () => import('@/views/AnchorMatchingView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
+    path: '/visual-search',
+    name: 'VisualSearch',
+    component: () => import('@/views/VisualSearchView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
+    path: '/rsku/import',
+    name: 'RskuImport',
+    component: () => import('@/views/RskuImportView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.RSKU_IMPORT] }
+  },
+  {
+    path: '/templates',
+    name: 'TemplateLibrary',
+    component: () => import('@/views/TemplateLibraryView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
+  },
+  {
+    path: '/admin/template-tags',
+    name: 'TemplateTagAdmin',
+    component: () => import('@/views/TemplateTagAdminView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
+  },
+  {
+    path: '/admin/platform',
+    name: 'PlatformCms',
+    component: () => import('@/views/admin/platform/PlatformCmsView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
+  },
+  {
+    path: '/leads',
+    name: 'LeadList',
+    component: () => import('@/views/LeadListView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.ADMIN, ROLES.EDITOR] }
+  },
+  {
+    path: '/dicts',
+    name: 'DictManagement',
+    component: () => import('@/views/DictManagementView.vue'),
+    // 字典读取与后端一致：登录即可访问；编辑交互（Step 3）再按 dict:update 收敛
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/admin/users',
+    name: 'UserManagement',
+    component: () => import('@/views/UserManagementView.vue'),
+    meta: { requiresAuth: true, roles: [ROLES.ADMIN] }
+  },
+  {
+    path: '/settings',
+    name: 'UserSettings',
+    component: () => import('@/views/UserSettingsView.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/user',
+    name: 'UserCenter',
+    component: () => import('@/views/user/UserCenterView.vue'),
+    redirect: '/user/info',
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: 'info',
+        name: 'UserInfo',
+        component: () => import('@/views/user/UserInfoView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: 'company',
+        name: 'UserCompany',
+        component: () => import('@/views/user/UserCompanyView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: 'member',
+        name: 'UserMember',
+        component: () => import('@/views/user/UserMemberView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: 'invitation',
+        name: 'UserInvitation',
+        component: () => import('@/views/user/UserInvitationView.vue'),
+        meta: { requiresAuth: true }
+      }
+    ]
+  },
+  {
+    path: '/403',
+    name: 'Forbidden',
+    component: () => import('@/views/ForbiddenView.vue'),
+    meta: { public: true }
+  },
+  {
+    path: '/404',
+    name: 'NotFound',
+    component: () => import('@/views/NotFoundView.vue'),
+    meta: { public: true }
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'CatchAll',
+    component: () => import('@/views/NotFoundView.vue'),
+    meta: { public: true }
+  }
+]

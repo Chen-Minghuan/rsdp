@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, NTag, NModal, NSpin, type GlobalThemeOverrides, type DropdownOption } from 'naive-ui'
+import { NConfigProvider, zhCN, dateZhCN, NLayout, NLayoutHeader, NButton, NSpace, NDialogProvider, NDropdown, NMessageProvider, NNotificationProvider, NTag, NModal, NSpin, NBadge, type GlobalThemeOverrides, type DropdownOption } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter, isNavigationFailure } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ROLES } from '@/utils/constants'
 import { navGroups, type NavGroup, type NavItem } from '@/config/navigation'
 import { getPublicContent } from '@/api/platform'
+import { getLeadSourceStats } from '@/api/lead'
 import { sanitizeHtml } from '@/utils/htmlSanitizer'
 
 const router = useRouter()
@@ -55,9 +56,29 @@ onMounted(async () => {
       userStore.clearUserInfo()
     }
   }
+  await loadLeadPendingCount()
 })
 
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+
+/** 留资待跟进数（导航「留资线索」角标，仅平台运营角色拉取）。 */
+const leadPendingCount = ref(0)
+
+async function loadLeadPendingCount() {
+  if (!userStore.hasAnyRole([ROLES.ADMIN, ROLES.EDITOR])) return
+  try {
+    const stats = await getLeadSourceStats()
+    leadPendingCount.value = stats.pending
+  } catch {
+    // 角标失败不影响导航
+  }
+}
+
+/** 导航项角标数（0 表示不显示）。 */
+function navBadgeCount(item: NavItem): number {
+  if (item.badgeKey === 'leadPending') return leadPendingCount.value
+  return 0
+}
 
 /** 导航项可见性：按配置中的权限/角色要求判定。 */
 function isItemVisible(item: NavItem): boolean {
@@ -158,6 +179,12 @@ async function openConsult() {
                 @click="navigate(group.items[0].path)"
               >
                 {{ group.label }}
+                <n-badge
+                  v-if="navBadgeCount(group.items[0]) > 0"
+                  :value="navBadgeCount(group.items[0])"
+                  :max="99"
+                  style="margin-left: 6px;"
+                />
               </n-button>
               <n-dropdown
                 v-else
