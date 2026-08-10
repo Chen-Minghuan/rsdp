@@ -134,7 +134,7 @@ public class AiRecognitionPersistenceService {
         // 产品名称：优先 AI OCR 提取；图上无文字时回退品类名（如「座椅」）；人工/Excel 已填不覆盖
         if (!StringUtils.hasText(rspu.getProductName())) {
             String ocrName = labels.getOcr() != null ? labels.getOcr().getProductName() : null;
-            if (StringUtils.hasText(ocrName)) {
+            if (StringUtils.hasText(ocrName) && !isUnidentifiedName(ocrName)) {
                 rspu.setProductName(ocrName);
             } else {
                 String categoryName = dictResolverService.resolveNameByCode("category", rspu.getCategoryCode());
@@ -251,6 +251,15 @@ public class AiRecognitionPersistenceService {
      */
     private boolean isBlankOrUnidentified(String value) {
         return !StringUtils.hasText(value) || "待识别".equals(value.trim());
+    }
+
+    /**
+     * AI 给出的"无名称"占位值（未知/待识别/unknown）不作为产品名称使用——
+     * 图上无文字时模型会返回这类占位，落入名称字段会覆盖掉后续回退品类名的机会。
+     */
+    private boolean isUnidentifiedName(String value) {
+        String v = value.trim();
+        return "未知".equals(v) || "待识别".equals(v) || "unknown".equalsIgnoreCase(v);
     }
 
     /**

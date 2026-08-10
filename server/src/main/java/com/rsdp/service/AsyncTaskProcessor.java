@@ -306,7 +306,8 @@ public class AsyncTaskProcessor {
      * 将页面级检测提取的产品旁说明文字合并进裁剪图 OCR 结果。
      *
      * <p>文档（PDF）导入时，品名/型号/尺寸/价格等文字排在产品图旁边，裁剪图 OCR 看不到；
-     * 页面级文字逐字段补缺（裁剪图 OCR 已识别出的字段不覆盖），rawText 拼接在前面。</p>
+     * 页面级文字逐字段补缺（裁剪图 OCR 已识别出的字段不覆盖），rawText 拼接在前面。
+     * 例外：品名以页面级文字为准（覆盖）——裁剪图不含文字，图像 OCR 的品名是模型猜测。</p>
      *
      * @param labels  AI 识别标签（原地修改）
      * @param pageOcr 页面级 OCR 文字，可为 null
@@ -320,7 +321,10 @@ public class AsyncTaskProcessor {
             labels.setOcr(pageOcr);
             return;
         }
-        if (!StringUtils.hasText(ocr.getProductName())) {
+        // 品名以页面级文字为准（覆盖而非补缺）：裁剪图刻意不含说明文字，
+        // 图像 OCR 的品名是模型看图猜测的描述性命名（如「三人位布艺沙发」甚至「未知」），
+        // 页面级品名来自真实说明文字，必须优先（实测「云沙发」被猜成「三人位布艺沙发」）
+        if (StringUtils.hasText(pageOcr.getProductName())) {
             ocr.setProductName(pageOcr.getProductName());
         }
         if (!StringUtils.hasText(ocr.getModelNumber())) {

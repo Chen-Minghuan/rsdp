@@ -444,7 +444,8 @@ class AsyncTaskProcessorTest {
         InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
         when(storageService.get(objectKey)).thenReturn(imageStream);
 
-        // 裁剪图 OCR 已识别出品名（不应被页面文字覆盖），型号/尺寸缺失（应由页面文字补缺）
+        // 页面级品名来自真实说明文字，优先于图像 OCR 的猜测性品名（覆盖）；
+        // 型号/尺寸图像 OCR 缺失，由页面文字补缺
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
         OcrResult cropOcr = new OcrResult();
@@ -469,7 +470,7 @@ class AsyncTaskProcessorTest {
             anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
             org.mockito.ArgumentMatchers.anyInt(), any());
         OcrResult merged = labelsCaptor.getValue().getOcr();
-        assertThat(merged.getProductName()).isEqualTo("裁剪图品名");
+        assertThat(merged.getProductName()).isEqualTo("页面品名");
         assertThat(merged.getModelNumber()).isEqualTo("LK-2450");
         assertThat(merged.getDimensionText()).isEqualTo("2450*900*850mm");
         assertThat(merged.getRawText()).isEqualTo("页面原始文字\n裁剪图文字");

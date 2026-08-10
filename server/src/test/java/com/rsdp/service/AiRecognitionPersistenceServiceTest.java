@@ -264,6 +264,34 @@ class AiRecognitionPersistenceServiceTest {
     }
 
     @Test
+    void saveSuccess_shouldFallbackProductNameWhenOcrReturnsUnidentified() {
+        // AI 返回占位名「未知」时视同无名称，回退品类名而不是把「未知」写进名称字段
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveNameByCode("category", "FS")).thenReturn("座椅");
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        com.rsdp.dto.OcrResult ocr = new com.rsdp.dto.OcrResult();
+        ocr.setProductName("未知");
+        labels.setOcr(ocr);
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        assertThat(rspu.getProductName()).isEqualTo("座椅");
+    }
+
+    @Test
     void saveSuccess_shouldFillUnidentifiedPositioningLabel() {
         // 「待识别」占位视为空缺，AI 识别结果应填充并写入风格关联
         RspuMaster rspu = new RspuMaster();
