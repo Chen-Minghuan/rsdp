@@ -105,6 +105,13 @@
 │   ├── tsconfig.json
 │   ├── package.json
 │   └── Dockerfile
+├── website/                       # 用户端官网（Nuxt 3 SSR，style-a 暖调家居馆）
+│   ├── assets/css/tokens.css      # style-a 设计 token（暖调，与管理端 tokens 不同体系）
+│   ├── components/                # PriceText/ProductCard/SiteHeader/SiteFooter 等（原生组件，不用 Naive UI）
+│   ├── composables/               # usePublicApi（/api/v1/public/** 封装 + 图片地址拼接）
+│   ├── pages/                     # index.vue 首页（11 区块）
+│   ├── types/                     # 公开接口类型
+│   └── nuxt.config.ts             # SSR + runtimeConfig.public.apiBase + Noto Serif SC CDN
 ├── deploy/                        # 部署配置
 │   ├── docker-compose.yml         # 全服务编排
 │   ├── .env.example               # 环境变量模板

@@ -1,0 +1,133 @@
+/**
+ * RSDP 用户端官网设计 tokens（style-a「暖调家居馆」）。
+ *
+ * 与 docs/09-design/RSDP用户端官网设计文档.md 第二章（2.1/2.2/2.3/2.4）完全一致；
+ * 规则：赭石仅促销、深棕仅结构两端、全站禁用 #2453FC 蓝与 #FF0000 纯红。
+ */
+
+:root {
+  /* ========== 基础色板 ========== */
+  --bg: #FAF7F2;        /* 页面主背景（米白） */
+  --card: #FFFFFF;      /* 卡片/面板背景 */
+  --suppl: #F3EADF;     /* 补充色（暖杏）：图片占位底、促销价底、搜索框底 */
+  --ink: #2B2118;       /* 主文字（深墨棕） */
+  --ink2: #9C8B78;      /* 次要文字（灰驼） */
+  --line: #E8DFD2;      /* 分割线、边框 */
+
+  /* ========== 品牌/功能色 ========== */
+  --accent: #8B5E3C;       /* 主品牌色（中棕）：主按钮、链接悬停、激活态、新品标签 */
+  --accent-deep: #6F4A2E;  /* 深品牌色（深棕）：logo、标题强调、深色区块底 */
+  --terra: #C2622B;        /* 功能强调色（赭石）：仅促销/优惠相关位置 */
+
+  /* ========== 字体 ========== */
+  --font-serif: 'Noto Serif SC', 'Songti SC', 'STSong', 'Georgia', serif;
+  --font-body: 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+
+  /* ========== 圆角 / 阴影 / 间距 ========== */
+  --radius: 16px;
+  --radius-lg: 24px;   /* Hero / CTA 容器 */
+  --radius-pill: 999px;
+  --shadow-card: 0 4px 18px rgba(90, 64, 42, .07);
+  --shadow-card-hover: 0 12px 32px rgba(90, 64, 42, .13);
+  --shadow-hero: 0 8px 30px rgba(90, 64, 42, .08);
+  --wrap-max: 1320px;
+  --wrap-padding: 40px;
+  --section-gap: 56px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  font-family: var(--font-body);
+  color: var(--ink);
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+.wrap {
+  max-width: var(--wrap-max);
+  margin: 0 auto;
+  padding: 0 var(--wrap-padding);
+}
+
+/* ========== 区块通用 ========== */
+.section {
+  margin-top: var(--section-gap);
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.section-title {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.section-more {
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+
+.section-more:hover {
+  text-decoration: underline;
+}
+
+/* ========== 按钮（胶囊） ========== */
+.btn-a {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 13px 32px;
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+
+.btn-a:hover {
+  background: var(--accent-deep);
+}
+
+.btn-b {
+  background: transparent;
+  color: var(--accent-deep);
+  border: 1px solid var(--accent);
+  padding: 13px 32px;
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+
+.btn-b:hover {
+  background: var(--suppl);
+}
+
+/* ========== 响应式（设计文档 8.1） ========== */
+@media (max-width: 1199px) {
+  :root {
+    --wrap-padding: 24px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --wrap-padding: 16px;
+    --section-gap: 40px;
+  }
+}
