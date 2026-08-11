@@ -314,6 +314,50 @@ class ProductQueryServiceTest {
     }
 
     @Test
+    void listProducts_hasImageFilters_shouldAppendExistsConditions() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setHasPrimaryImage(false);
+        request.setHasSceneImage(true);
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        // 无主图 → NOT EXISTS is_primary；有场景图 → EXISTS image_type='scene'
+        assertThat(sqlSegment).contains("NOT EXISTS");
+        assertThat(sqlSegment).contains("ia.is_primary = TRUE");
+        assertThat(sqlSegment).contains("ia.image_type = 'scene'");
+    }
+
+    @Test
+    void listProducts_withoutHasImageFilters_shouldNotAppendImageCondition() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).doesNotContain("image_assets");
+    }
+
+    @Test
     void listProducts_withoutSixDimFilters_shouldNotAppendSixDimCondition() {
         ProductListRequest request = new ProductListRequest();
         request.setPage(1L);

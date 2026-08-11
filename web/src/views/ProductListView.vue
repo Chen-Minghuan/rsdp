@@ -73,6 +73,18 @@ const styleCode = ref<string | null>(null)
 const sceneCode = ref<string | null>(null)
 const materialTag = ref<string | null>(null)
 const createdRange = ref<[number, number] | null>(null)
+// 图片资产筛选（服务 AI 搭配数据补齐：'true'=仅有 / 'false'=仅无 / null=不限）
+const hasPrimaryImage = ref<string | null>(null)
+const hasSceneImage = ref<string | null>(null)
+const imageAssetOptions = [
+  { label: '有', value: 'true' },
+  { label: '无', value: 'false' }
+]
+
+/** 三态字符串转布尔（null 不过滤）。 */
+function toTriBool(value: string | null): boolean | undefined {
+  return value === 'true' ? true : value === 'false' ? false : undefined
+}
 
 // ---------- 六维形态特征筛选（A/B/C/D/F，E 维不枚举不参与筛选） ----------
 const dimA = ref<string | null>(null)
@@ -124,6 +136,8 @@ const activeAdvancedCount = computed(
       sceneCode.value,
       materialTag.value,
       createdRange.value,
+      hasPrimaryImage.value,
+      hasSceneImage.value,
       dimA.value,
       dimB.value,
       dimC.value,
@@ -295,6 +309,8 @@ function buildParams(includeTab: boolean): import('@/types/product').ProductList
     dimC: dimC.value || undefined,
     dimD: dimD.value || undefined,
     dimF: dimF.value || undefined,
+    hasPrimaryImage: toTriBool(hasPrimaryImage.value),
+    hasSceneImage: toTriBool(hasSceneImage.value),
     statusTab: includeTab ? statusTab.value : undefined
   }
   if (isPlatformStaff.value) {
@@ -356,6 +372,8 @@ function handleReset() {
   sceneCode.value = null
   materialTag.value = null
   createdRange.value = null
+  hasPrimaryImage.value = null
+  hasSceneImage.value = null
   sixDimFilterKeys.forEach(k => {
     sixDimRefs[k].value = null
   })
@@ -936,7 +954,7 @@ onMounted(async () => {
 })
 
 // 下拉类筛选变化即刷新（文本输入与日期范围由「搜索」按钮触发）
-watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialTag, dimA, dimB, dimC, dimD, dimF, factoryCode], () => {
+watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialTag, hasPrimaryImage, hasSceneImage, dimA, dimB, dimC, dimD, dimF, factoryCode], () => {
   page.value = 1
   refreshAll()
 })
@@ -990,6 +1008,13 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
           </n-form-item-gi>
           <n-form-item-gi label="材质">
             <n-select v-model:value="materialTag" :options="materialOptions" placeholder="请选择" clearable />
+          </n-form-item-gi>
+          <!-- 图片资产筛选：补齐 AI 搭配数据（主图/场景图有无） -->
+          <n-form-item-gi label="主图">
+            <n-select v-model:value="hasPrimaryImage" :options="imageAssetOptions" placeholder="不限" clearable />
+          </n-form-item-gi>
+          <n-form-item-gi label="场景图">
+            <n-select v-model:value="hasSceneImage" :options="imageAssetOptions" placeholder="不限" clearable />
           </n-form-item-gi>
           <!-- 六维形态特征筛选：维度名与枚举项跟随已选品类（A/B/C/D/F） -->
           <n-form-item-gi

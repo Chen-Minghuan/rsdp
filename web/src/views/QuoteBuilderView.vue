@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, h } from 'vue'
 import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import {
   NCard,
@@ -365,14 +365,21 @@ function formatPrice(value: number | undefined): string {
 
 const quoteColumns: DataTableColumns<QuoteItem> = [
   { title: 'RSPU', key: 'rspuName' },
-  { title: 'RSKU ID', key: 'rskuId', width: 160 },
+  {
+    title: 'RSKU ID',
+    key: 'rskuId',
+    width: 160,
+    render(row: QuoteItem) {
+      return h('span', { class: 'rsdp-mono', style: { fontSize: '12px' } }, row.rskuId)
+    }
+  },
   { title: '工厂', key: 'factoryName' },
   {
     title: '出厂价',
     key: 'factoryPrice',
     width: 120,
     render(row: QuoteItem) {
-      return formatPrice(row.factoryPrice)
+      return h('span', { class: 'rsdp-mono' }, formatPrice(row.factoryPrice))
     }
   },
   {
@@ -388,7 +395,7 @@ const quoteColumns: DataTableColumns<QuoteItem> = [
     key: 'subtotal',
     width: 120,
     render(row: QuoteItem) {
-      return formatPrice(row.subtotal)
+      return h('span', { class: 'rsdp-mono' }, formatPrice(row.subtotal))
     }
   },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },

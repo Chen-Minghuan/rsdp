@@ -8,9 +8,10 @@ import ImageMagnifier from '@/components/ImageMagnifier.vue'
 import { listDicts } from '@/api/dict'
 import { getPublicHome, getPublicContent } from '@/api/platform'
 import { listProducts } from '@/api/product'
+import { getDashboardSummary, type DashboardSummary } from '@/api/dashboard'
 import { useUserStore } from '@/stores/user'
 import { sanitizeHtml, isSafeExternalUrl } from '@/utils/htmlSanitizer'
-import { IMAGE_FALLBACK_SRC, PERMISSIONS } from '@/utils/constants'
+import { IMAGE_FALLBACK_SRC, PERMISSIONS, ROLES } from '@/utils/constants'
 import type { DictItem } from '@/types/dict'
 import type { PublicHomeBanner, PublicHomeCase, PublicHomeCustomized, PublicHomeData, PlatformContent } from '@/types/platform'
 import type { ProductSummary } from '@/types/product'
@@ -21,6 +22,23 @@ const userStore = useUserStore()
 const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_CREATE))
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
 const canReadProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_READ))
+const isPlatformOperator = computed(() => userStore.hasAnyRole([ROLES.ADMIN, ROLES.EDITOR]))
+
+// 工作台统计带（仅平台运营角色可见，数据走 /dashboard/summary 聚合接口）
+const dashboardSummary = ref<DashboardSummary | null>(null)
+
+/** 统计带 5 格配置。 */
+const dashboardStats = computed(() => {
+  const s = dashboardSummary.value
+  if (!s) return []
+  return [
+    { label: '产品总数 RSPU', value: s.rspuTotal.toLocaleString('zh-CN') },
+    { label: '工厂报价 RSKU', value: s.rskuTotal.toLocaleString('zh-CN') },
+    { label: 'AI 识别通过率', value: s.aiPassRate != null ? `${s.aiPassRate}%` : '—' },
+    { label: '本月订单金额', value: `¥${Number(s.monthOrderAmount).toLocaleString('zh-CN')}` },
+    { label: '今日留资线索', value: String(s.todayLeadCount) }
+  ]
+})
 
 const styleDicts = ref<DictItem[]>([])
 const sceneDicts = ref<DictItem[]>([])
@@ -217,11 +235,27 @@ onMounted(async () => {
       console.error('加载新品上架失败', e)
     }
   }
+
+  if (isPlatformOperator.value) {
+    try {
+      dashboardSummary.value = await getDashboardSummary()
+    } catch (e) {
+      console.error('加载工作台统计失败', e)
+    }
+  }
 })
 </script>
 
 <template>
   <PageContainer>
+    <!-- 工作台统计带（仅 ADMIN/EDITOR，style-b 通栏分隔线式 + mono 数字） -->
+    <section v-if="dashboardStats.length" class="stats-band">
+      <div v-for="stat in dashboardStats" :key="stat.label" class="stat-cell">
+        <div class="stat-num">{{ stat.value }}</div>
+        <div class="stat-label">{{ stat.label }}</div>
+      </div>
+    </section>
+
     <!-- 轮播 Banner（CMS 驱动；无 Banner 时回退品牌 Hero） -->
     <section v-if="banners.length > 0" class="banner-section">
       <n-carousel autoplay draggable class="banner-carousel">
@@ -407,6 +441,38 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* 工作台统计带（style-b：通栏分隔线式，mono 大数字） */
+.stats-band {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  margin-bottom: 16px;
+}
+
+.stat-cell {
+  padding: 16px 22px;
+  border-right: 1px solid var(--rsdp-border);
+}
+
+.stat-cell:last-child {
+  border-right: none;
+}
+
+.stat-num {
+  font-family: var(--rsdp-font-mono);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--rsdp-text);
+}
+
+.stat-label {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+
 .banner-section {
   border-radius: var(--rsdp-radius-lg);
   overflow: hidden;

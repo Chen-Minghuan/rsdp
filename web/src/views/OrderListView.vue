@@ -87,7 +87,12 @@ const columns: DataTableColumns<Order> = [
     width: 180,
     render: row => h(
       NButton,
-      { text: true, type: 'primary', onClick: () => router.push(`/orders/${row.orderId}`) },
+      {
+        text: true,
+        type: 'primary',
+        style: { fontFamily: 'var(--rsdp-font-mono)' },
+        onClick: () => router.push(`/orders/${row.orderId}`)
+      },
       { default: () => row.orderNo }
     )
   },
@@ -105,7 +110,7 @@ const columns: DataTableColumns<Order> = [
     title: '到手价总额',
     key: 'finalTotalPrice',
     width: 130,
-    render: row => formatPrice(row.finalTotalPrice)
+    render: row => h('span', { class: 'rsdp-mono' }, formatPrice(row.finalTotalPrice))
   },
   { title: '收货地区', key: 'receiverArea', width: 140, render: row => row.receiverArea || '-' },
   {
@@ -114,7 +119,7 @@ const columns: DataTableColumns<Order> = [
     width: 100,
     render: row => (row.expectedLeadTime != null ? `${row.expectedLeadTime} 天` : '-')
   },
-  { title: '创建时间', key: 'createdAt', width: 150, render: row => formatTime(row.createdAt) },
+  { title: '创建时间', key: 'createdAt', width: 150, render: row => h('span', { class: 'rsdp-mono' }, formatTime(row.createdAt)) },
   {
     title: '操作',
     key: 'actions',

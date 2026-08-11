@@ -84,7 +84,7 @@ const columns: DataTableColumns<SchemeSummary> = [
     key: 'totalPrice',
     width: 140,
     render(row: SchemeSummary) {
-      return `¥${(row.totalPrice ?? 0).toFixed(2)}`
+      return h('span', { class: 'rsdp-mono' }, `¥${(row.totalPrice ?? 0).toFixed(2)}`)
     }
   },
   {
@@ -92,7 +92,7 @@ const columns: DataTableColumns<SchemeSummary> = [
     key: 'createdAt',
     width: 180,
     render(row: SchemeSummary) {
-      return formatDateTime(row.createdAt)
+      return h('span', { class: 'rsdp-mono' }, formatDateTime(row.createdAt))
     }
   },
   {

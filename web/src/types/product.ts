@@ -79,6 +79,10 @@ export interface ProductListParams {
   dimF?: string
   /** 状态页签 */
   statusTab?: SpuStatusTab
+  /** 主图资产筛选：true=仅有主图，false=仅无主图 */
+  hasPrimaryImage?: boolean
+  /** 场景图资产筛选：true=仅有场景图，false=仅无场景图 */
+  hasSceneImage?: boolean
 }
 
 /**

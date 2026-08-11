@@ -217,6 +217,8 @@ public class ProductQueryService {
             wrapper.le("created_at", LocalDate.parse(request.getCreatedTo().trim()).atTime(LocalTime.MAX));
         }
         applyStatusTab(wrapper, request.getStatusTab());
+        applyImageAssetFilter(wrapper, request.getHasPrimaryImage(), true);
+        applyImageAssetFilter(wrapper, request.getHasSceneImage(), false);
         if (StringUtils.hasText(request.getKeyword())) {
             String keyword = "%" + request.getKeyword().trim() + "%";
             wrapper.and(w -> w.like("category_path", keyword).or().like("rspu_id", keyword));
@@ -263,6 +265,28 @@ public class ProductQueryService {
         }
     }
 
+    /**
+     * 图片资产筛选：按主图/场景图存在性过滤（EXISTS / NOT EXISTS 子查询）。
+     *
+     * @param wrapper  查询构造器
+     * @param hasImage true=仅有该类图片，false=仅无该类图片，null 不过滤
+     * @param primary  true=主图（is_primary），false=场景图（image_type='scene'）
+     */
+    private void applyImageAssetFilter(QueryWrapper<RspuMaster> wrapper, Boolean hasImage, boolean primary) {
+        if (hasImage == null) {
+            return;
+        }
+        String condition = primary
+            ? "ia.is_primary = TRUE"
+            : "ia.image_type = 'scene'";
+        String subquery = "SELECT 1 FROM image_assets ia WHERE ia.rspu_id = rspu_master.rspu_id"
+            + " AND ia.deleted_at IS NULL AND " + condition;
+        if (hasImage) {
+            wrapper.exists(subquery);
+        } else {
+            wrapper.notExists(subquery);
+        }
+    }
     /**
      * 回收站分页查询（已软删除的 RSPU，绕过 @TableLogic 自动过滤）。
      * 已删除产品的 RSKU/图片多已级联软删，最低出厂价与工厂代码可能为空。

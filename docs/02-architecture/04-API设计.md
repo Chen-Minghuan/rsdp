@@ -136,7 +136,9 @@ GET    /api/v1/products
        #                 包含查询, 命中 GIN 索引; E 维表面材质不枚举不参与筛选),
        #        statusTab: "onSale"|"warehouse"|"soldOut"|"recycled" (可选, 商城状态页签;
        #                 onSale=status=active, warehouse=status!=active,
-       #                 soldOut=恒空, recycled=回收站即已软删除记录)
+       #                 soldOut=恒空, recycled=回收站即已软删除记录),
+       #        hasPrimaryImage / hasSceneImage: boolean (可选, 图片资产有无三态筛选,
+       #                 true=仅有主图/场景图, false=仅无, 缺省不过滤; 服务 AI 搭配数据补齐)
        # Response: { total, page, size, rows: [ProductSummary...] }
        # 说明：
        #   - positioningLabel / sceneCode / materialTag 均按字典码精确查询

@@ -63,6 +63,17 @@
   font-family: var(--rsdp-font-mono);
 }
 
+/* ========== style-b 卡片规则：边框代替阴影，hover 边框加深 ========== */
+.n-card {
+  border: 1px solid var(--rsdp-border);
+  box-shadow: none;
+  transition: border-color 0.2s;
+}
+
+.n-card:hover {
+  border-color: #b5b5b5;
+}
+
 /* ========== 暗色模式（预留，本期不启用切换器） ========== */html.dark {
   --rsdp-bg: #14181c;
   --rsdp-card-bg: #1e242b;

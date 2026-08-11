@@ -21,6 +21,7 @@ import {
   useMessage
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
+import DimsEditor from '@/components/DimsEditor.vue'
 import DetailHero from '@/components/product/DetailHero.vue'
 import BasicInfoTab from '@/components/product/BasicInfoTab.vue'
 import VariantRskuTab from '@/components/product/VariantRskuTab.vue'
@@ -1409,10 +1410,7 @@ onBeforeRouteUpdate((to, from) => {
           />
         </n-form-item>
         <n-form-item label="具体尺寸">
-          <n-input
-            v-model:value="variantForm.dimensions"
-            placeholder="{&quot;w&quot;:560,&quot;d&quot;:580,&quot;h&quot;:780,&quot;unit&quot;:&quot;mm&quot;}"
-          />
+          <DimsEditor v-model="variantForm.dimensions" />
         </n-form-item>
         <n-form-item label="颜色码">
           <n-select

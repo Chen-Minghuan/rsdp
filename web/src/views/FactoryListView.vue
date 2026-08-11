@@ -81,7 +81,14 @@ const levelSelectOptions = computed(() =>
 )
 
 const columns: DataTableColumns<Factory> = [
-  { title: '工厂代码', key: 'factoryCode', width: 120 },
+  {
+    title: '工厂代码',
+    key: 'factoryCode',
+    width: 120,
+    render(row: Factory) {
+      return h('span', { class: 'rsdp-mono' }, row.factoryCode)
+    }
+  },
   { title: '工厂名称', key: 'factoryName' },
   {
     title: '主等级',
