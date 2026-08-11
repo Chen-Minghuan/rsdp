@@ -1306,6 +1306,23 @@ POST   /api/v1/public/leads
        # 非法来源 400；初始状态 pending；审计操作人记 anonymous）
        # Request: { name*, phone*, source*, intent?, budget? }
        # Response: { leadId, status }
+
+POST   /api/v1/public/ai-match/analyze
+       # AI 户型图分析（multipart；file 为 jpg/png ≤10MB，走 ImageUploadValidator；
+       # hint 可选用户补充说明）。AI 识别空间 + 尺寸标注解析（mm/米两种写法，
+       # 解析成功 confidence=high 并给出 widthMm/depthMm/areaM2，否则 low）
+       # Form: file*, hint?
+       # Response: { rooms: [{ roomType, roomName, widthMm, depthMm, areaM2,
+       #            dimensionText, confidence }] }
+
+POST   /api/v1/public/ai-match/scheme
+       # AI 户型搭配方案（内部复用 AiMatchingService.generateRoomScheme，固定 LIVING 空间，
+       # 预算缺省 999999；红线：绝不透传 factoryCode/factoryName/factoryPrice/totalPrice，
+       # totalRetailPrice 为零售参考价 retail_price 求和）
+       # Request: { stylePreference?, budgetLimit?(≥0), widthMm?(≥1), depthMm?(≥1) }
+       # Response: { reasoning, totalRetailPrice,
+       #            items: [{ rspuId, productName, categoryPath, positioningLabel,
+       #            retailPrice, primaryImageUrl }] }
 ```
 
 ### 管理端工作台统计带（GET 限 ADMIN/EDITOR）

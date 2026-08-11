@@ -75,9 +75,9 @@ function toggleMenu(menu: 'categories' | 'rooms') {
       <nav class="main">
         <div class="wrap nav-inner">
           <div class="nav-item" @mouseenter="openMenu = 'categories'" @mouseleave="openMenu = ''">
-            <a href="#" class="mega" @click.prevent="toggleMenu('categories')">所有商品</a>
+            <a href="/products" class="mega" @click.prevent="toggleMenu('categories')">所有商品</a>
             <div v-if="openMenu === 'categories'" class="mega-panel">
-              <a v-for="cat in menuCategories" :key="cat.dictCode" class="mega-link" href="#">
+              <a v-for="cat in menuCategories" :key="cat.dictCode" class="mega-link" :href="`/products?category=${cat.dictCode}`">
                 {{ cat.dictName }}
                 <span v-if="cat.children.length" class="mega-sub">
                   {{ cat.children.map(c => c.dictName).join(' / ') }}
@@ -96,8 +96,8 @@ function toggleMenu(menu: 'categories' | 'rooms') {
           <a href="#" class="sale">优惠活动</a>
           <a href="#">设计和服务</a>
           <a href="#">家居灵感</a>
-          <a href="#">新品</a>
-          <a href="#">AI 户型搭配</a>
+          <a href="/products?sort=newest">新品</a>
+          <a href="/ai-match">AI 户型搭配</a>
         </div>
       </nav>
     </header>

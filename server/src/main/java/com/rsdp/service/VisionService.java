@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.Dimensions;
 import com.rsdp.dto.DocumentProductRegion;
+import com.rsdp.dto.FloorPlanDetectResult;
 import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.OpenAiChatMessage;
 import com.rsdp.dto.OpenAiChatRequest;
@@ -1042,6 +1043,114 @@ public class VisionService {
             return number.doubleValue();
         }
         return Double.parseDouble(value.toString());
+    }
+
+    /**
+     * 户型图空间识别提示词：识别户型平面图中的功能空间，输出 roomType/bbox/尺寸标注。
+     */
+    private static final String FLOOR_PLAN_SYSTEM_PROMPT = """
+        你是建筑户型图分析专家。请分析这张户型平面图，识别其中的各个功能空间。
+
+        只输出 JSON，不要任何其他文字。输出格式：
+        {
+          "rooms": [
+            {
+              "roomType": "living_room",
+              "bbox": {"x": 0.12, "y": 0.30, "w": 0.40, "h": 0.35},
+              "dimensionText": "4200×3800",
+              "label": "客厅"
+            }
+          ],
+          "scaleText": "1:50"
+        }
+
+        规则：
+        1. roomType 只能从以下枚举选择：living_room(客厅) / dining_room(餐厅) / bedroom(卧室) / kitchen(厨房) / bathroom(卫生间) / balcony(阳台) / study(书房) / hallway(过道) / other
+        2. bbox 为归一化坐标，x,y 为左上角，w,h 为宽高，取值范围 [0,1]，框要紧贴该空间的墙体边界
+        3. dimensionText 提取该空间内或附近标注的尺寸文字原文（如 "4200×3800"、"4.2m*3.8m"、"4200"），没有标注则为 null
+        4. 每个空间单独一个框，不得合并多个空间，不得遗漏闭合空间
+        5. 图上如有比例尺标注（如 "1:50"、"1:100"），提取到 scaleText，没有则为 null
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    private static final String FLOOR_PLAN_USER_PROMPT =
+        "请分析这张户型平面图，识别其中的各个功能空间并输出 JSON。";
+
+    /**
+     * 识别户型平面图中的功能空间。
+     *
+     * <p>解析容错沿用 PDF 链路成熟模式：去 markdown 围栏（executeChat 已处理）、
+     * bbox 越界收敛（{@link #parseBoundingBoxClamped}）、rooms 缺省返回空列表不抛错。</p>
+     *
+     * @param imageBytes 户型图片字节（jpg/png）
+     * @param hint       用户补充说明（如 "这是三室两厅"），可空
+     * @return 空间识别结果
+     */
+    public FloorPlanDetectResult detectFloorPlanRooms(byte[] imageBytes, String hint) {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new ExternalServiceException("户型图片为空");
+        }
+        String base64 = Base64.getEncoder().encodeToString(imageBytes);
+        String userPrompt = FLOOR_PLAN_USER_PROMPT;
+        if (StringUtils.hasText(hint)) {
+            userPrompt += "\n用户补充说明：" + hint.trim();
+        }
+
+        OpenAiChatRequest request = OpenAiChatRequest.builder()
+            .model(model)
+            .messages(List.of(
+                OpenAiChatMessage.text("system", FLOOR_PLAN_SYSTEM_PROMPT),
+                OpenAiChatMessage.multiVision("user", userPrompt, List.of(base64))
+            ))
+            .temperature(0.2)
+            .maxTokens(4096)
+            .build();
+
+        String json = executeChat(request, "户型图空间识别");
+        return parseFloorPlanRooms(json);
+    }
+
+    /**
+     * 解析户型图空间识别结果。JSON 解析失败抛 {@link ExternalServiceException}；
+     * rooms 缺失/为空时返回空列表，不抛错。
+     */
+    private FloorPlanDetectResult parseFloorPlanRooms(String json) {
+        try {
+            Map<?, ?> map = objectMapper.readValue(json, Map.class);
+            FloorPlanDetectResult result = new FloorPlanDetectResult();
+            Object scaleText = map.get("scaleText");
+            result.setScaleText(scaleText != null ? scaleText.toString() : null);
+
+            List<FloorPlanDetectResult.Room> rooms = new ArrayList<>();
+            Object rawRooms = map.get("rooms");
+            if (rawRooms instanceof List<?> roomList) {
+                for (Object r : roomList) {
+                    if (r instanceof Map<?, ?> rm) {
+                        FloorPlanDetectResult.Room room = new FloorPlanDetectResult.Room();
+                        room.setRoomType(toTextValue(rm.get("roomType")));
+                        room.setLabel(toTextValue(rm.get("label")));
+                        room.setDimensionText(toTextValue(rm.get("dimensionText")));
+                        ProductBoundingBox bbox = parseBoundingBoxClamped(rm.get("bbox"));
+                        if (bbox != null) {
+                            room.setX(bbox.getX());
+                            room.setY(bbox.getY());
+                            room.setW(bbox.getWidth());
+                            room.setH(bbox.getHeight());
+                        }
+                        rooms.add(room);
+                    }
+                }
+            }
+            result.setRooms(rooms);
+            return result;
+        } catch (Exception e) {
+            log.error("解析户型图空间识别结果失败，json={}", json, e);
+            throw new ExternalServiceException("解析 AI 识别结果失败", e);
+        }
+    }
+
+    private String toTextValue(Object value) {
+        return value != null ? value.toString() : null;
     }
 
     /**

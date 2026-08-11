@@ -644,4 +644,82 @@ class VisionServiceTest {
         verify(postRequestedFor(urlEqualTo("/chat/completions"))
             .withRequestBody(notMatching(".*必须从下列对应枚举中精确选择一项.*")));
     }
+
+    @Test
+    void detectFloorPlanRooms_shouldParseRoomsAndScaleText() throws Exception {
+        String aiJson = """
+            {
+              "rooms": [
+                {"roomType": "living_room", "bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.3}, "dimensionText": "4200×3800", "label": "客厅"},
+                {"roomType": "bedroom", "dimensionText": null, "label": "主卧"}
+              ],
+              "scaleText": "1:50"
+            }
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        var result = visionService.detectFloorPlanRooms("fake-plan".getBytes(), "三室两厅");
+
+        assertThat(result.getScaleText()).isEqualTo("1:50");
+        assertThat(result.getRooms()).hasSize(2);
+        var living = result.getRooms().get(0);
+        assertThat(living.getRoomType()).isEqualTo("living_room");
+        assertThat(living.getLabel()).isEqualTo("客厅");
+        assertThat(living.getDimensionText()).isEqualTo("4200×3800");
+        assertThat(living.getX()).isEqualTo(0.1);
+        assertThat(living.getW()).isEqualTo(0.4);
+        // bbox 缺失的空间坐标为 null，不整行丢弃
+        var bedroom = result.getRooms().get(1);
+        assertThat(bedroom.getRoomType()).isEqualTo("bedroom");
+        assertThat(bedroom.getX()).isNull();
+
+        // hint 应透传到 user prompt
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("三室两厅")));
+    }
+
+    @Test
+    void detectFloorPlanRooms_shouldClampOutOfBoundsBBox() throws Exception {
+        // bbox 越界收敛到图内，不整框丢弃（沿用 PDF 链路教训）
+        String aiJson = """
+            {
+              "rooms": [
+                {"roomType": "living_room", "bbox": {"x": 0.6, "y": 0.5, "w": 0.9, "h": 0.8}, "label": "客厅"}
+              ],
+              "scaleText": null
+            }
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        var result = visionService.detectFloorPlanRooms("fake-plan".getBytes(), null);
+
+        assertThat(result.getRooms()).hasSize(1);
+        var room = result.getRooms().get(0);
+        assertThat(room.getX() + room.getW()).isLessThanOrEqualTo(1.0);
+        assertThat(room.getY() + room.getH()).isLessThanOrEqualTo(1.0);
+        assertThat(room.getW()).isCloseTo(0.4, org.assertj.core.data.Offset.offset(1e-6));
+    }
+
+    @Test
+    void detectFloorPlanRooms_invalidJson_shouldThrowExternalServiceException() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("not-a-json"))));
+
+        assertThatThrownBy(() -> visionService.detectFloorPlanRooms("fake-plan".getBytes(), null))
+            .isInstanceOf(com.rsdp.exception.ExternalServiceException.class)
+            .hasMessageContaining("解析 AI 识别结果失败");
+    }
 }

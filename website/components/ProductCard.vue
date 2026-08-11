@@ -14,9 +14,17 @@ const props = withDefaults(defineProps<{
   rating?: number
   /** 评分人数 */
   ratingCount?: number
+  /** 对比开关开启时图区右上角显示 ⊕ 按钮 */
+  compareOn?: boolean
+  /** 当前已选中对比 */
+  compared?: boolean
 }>(), {
   viewMode: 'plain'
 })
+
+const emit = defineEmits<{
+  (e: 'toggle-compare', product: PublicProduct): void
+}>()
 
 const { imageUrl } = usePublicApi()
 
@@ -67,6 +75,16 @@ const stars = computed(() => {
       <div v-if="tags.length" class="tags">
         <span v-for="tag in tags" :key="tag.text" class="tag" :class="tag.cls">{{ tag.text }}</span>
       </div>
+      <button
+        v-if="compareOn"
+        type="button"
+        class="compare"
+        :class="{ on: compared }"
+        :aria-pressed="compared"
+        @click.stop="emit('toggle-compare', product)"
+      >
+        {{ compared ? '✓' : '⊕' }}
+      </button>
       <img
         v-if="displayImage"
         :src="displayImage"
@@ -148,6 +166,30 @@ const stars = computed(() => {
   background: rgba(255, 255, 255, .95);
   padding: 3px 11px;
   border-radius: var(--radius-pill);
+}
+
+.compare {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--accent-deep);
+  z-index: 2;
+  cursor: pointer;
+}
+
+.compare:hover,
+.compare.on {
+  background: var(--accent);
+  color: #fff;
 }
 
 .p-body {

@@ -96,8 +96,8 @@ const inspirations = computed<InspirationItem[]>(() =>
             <h1 v-else>让<em>客厅</em>，<br>先一步变成家</h1>
             <p>上传一张户型图，AI 自动识别空间尺寸，从产品库智能生成搭配方案，再由设计师免费复核。先见于客厅，所见即所得。</p>
             <div class="btns">
-              <a class="btn-a" href="#">立即体验 AI 搭配</a>
-              <a class="btn-b" href="#">浏览客厅灵感</a>
+              <a class="btn-a" href="/ai-match">立即体验 AI 搭配</a>
+              <a class="btn-b" href="#inspiration">浏览客厅灵感</a>
             </div>
           </div>
           <div class="hero-img">
@@ -138,7 +138,7 @@ const inspirations = computed<InspirationItem[]>(() =>
               <span :class="{ on: viewMode === 'plain' }" @click="viewMode = 'plain'">商品图</span>
               <span :class="{ on: viewMode === 'scene' }" @click="viewMode = 'scene'">场景图</span>
             </span>
-            　<a class="section-more" href="#">查看全部新品 →</a>
+            　<a class="section-more" href="/products?sort=newest">查看全部新品 →</a>
           </span>
         </div>
         <div class="grid4">
@@ -152,7 +152,7 @@ const inspirations = computed<InspirationItem[]>(() =>
       </section>
 
       <!-- 区块 8 · 家居灵感 -->
-      <section v-if="inspirations.length" class="section">
+      <section v-if="inspirations.length" id="inspiration" class="section">
         <div class="section-head">
           <div class="section-title">家居灵感</div>
           <div class="section-more">更多灵感 →</div>
