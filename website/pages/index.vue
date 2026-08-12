@@ -30,6 +30,9 @@ function parseContentItems<T>(resp: ContentResponse | null): T[] | null {
   }
 }
 
+// 官网暂下线展示的空间（字典保留，仅官网不展示）
+const HIDDEN_SCENE_CODES = new Set(['HOTEL'])
+
 const { data } = await useAsyncData('home-page', async () => {
   const [home, scenes, products, categories, trioContent, serviceContent] = await Promise.all([
     get<HomeResponse>('/api/v1/public/home'),
@@ -39,7 +42,9 @@ const { data } = await useAsyncData('home-page', async () => {
     get<ContentResponse>('/api/v1/public/content/home_trio_cards'),
     get<ContentResponse>('/api/v1/public/content/home_service_cards')
   ])
-  return { home, scenes, products, categories, trioContent, serviceContent }
+  // 数据源处过滤下线空间，SSR 水合 payload 也不再携带
+  const visibleScenes = (scenes ?? []).filter(s => !HIDDEN_SCENE_CODES.has(s.sceneCode))
+  return { home, scenes: visibleScenes, products, categories, trioContent, serviceContent }
 })
 
 // ---------- 区块 1+2：导航数据（Mega Menu） ----------

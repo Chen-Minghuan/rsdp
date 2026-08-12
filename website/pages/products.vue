@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { CategoryNode, PageResult, PublicProduct } from '~/types/api'
 
 /**
@@ -182,6 +182,25 @@ const activeChips = computed(() => {
 
 const openPanel = ref('')
 
+// 筛选条吸顶偏移 = 吸顶 Header 实际高度（衬线字体 CDN 加载会抖动高度，运行时实测而非硬编码）
+const filterBarTop = ref(113)
+
+function measureHeader() {
+  const header = document.querySelector('header')
+  if (header) {
+    filterBarTop.value = Math.round(header.getBoundingClientRect().height)
+  }
+}
+
+onMounted(() => {
+  measureHeader()
+  window.addEventListener('resize', measureHeader)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', measureHeader)
+})
+
 function togglePanel(name: string) {
   openPanel.value = openPanel.value === name ? '' : name
 }
@@ -255,7 +274,7 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
       </div>
 
       <!-- 吸顶筛选药丸条 -->
-      <div class="filter-bar">
+      <div class="filter-bar" :style="{ top: filterBarTop + 'px' }">
         <span class="pill-wrap">
           <span class="pill" :class="{ on: filters.sort !== 'newest' }" @click="togglePanel('sort')">
             价格排序<span class="caret">▾</span>
@@ -739,10 +758,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
 @media (max-width: 767px) {
   .grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  .filter-bar {
-    top: 0;
   }
 
   .compare-inner {

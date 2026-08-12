@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { CategoryNode, SceneItem } from '~/types/api'
 
 /**
@@ -42,22 +42,31 @@ const openMenu = ref<'' | 'categories' | 'rooms'>('')
 function toggleMenu(menu: 'categories' | 'rooms') {
   openMenu.value = openMenu.value === menu ? '' : menu
 }
+
+const route = useRoute()
+
+/** 主导航当前页高亮：/products?sort=newest → 新品；/products → 所有商品；/ai-match → AI 户型搭配。 */
+const activeNav = computed(() => {
+  if (route.path === '/ai-match') return 'ai-match'
+  if (route.path === '/products') return route.query.sort === 'newest' ? 'newest' : 'products'
+  return ''
+})
 </script>
 
 <template>
-  <div>
-    <!-- 区块 0 · 顶部工具条（纯文字，无图标） -->
-    <div class="topbar">
-      <div class="wrap topbar-inner">
-        <span>中山 ｜ 预约到店体验</span>
-        <span>
-          <a href="#">对公业务</a>　　<a href="#">设计服务</a>　　<a href="#">下载APP</a>
-        </span>
-      </div>
+  <!-- 区块 0 · 顶部工具条（纯文字，无图标）。注意：不能再包一层公共 div，
+       否则 header 的 sticky 包含块被限制在该 div 内导致吸顶失效 -->
+  <div class="topbar">
+    <div class="wrap topbar-inner">
+      <span>中山 ｜ 预约到店体验</span>
+      <span>
+        <a href="#">对公业务</a>　　<a href="#">设计服务</a>　　<a href="#">下载APP</a>
+      </span>
     </div>
+  </div>
 
-    <!-- 区块 1+2 · 吸顶 Header + 主导航 -->
-    <header>
+  <!-- 区块 1+2 · 吸顶 Header + 主导航 -->
+  <header>
       <div class="wrap hd">
         <a class="brand" href="/">
           <span class="brand-name">rooom.vip</span>
@@ -74,7 +83,7 @@ function toggleMenu(menu: 'categories' | 'rooms') {
       <nav class="main">
         <div class="wrap nav-inner">
           <div class="nav-item" @mouseenter="openMenu = 'categories'" @mouseleave="openMenu = ''">
-            <a href="/products" class="mega" @click.prevent="toggleMenu('categories')">所有商品</a>
+            <a href="/products" class="mega" :class="{ active: activeNav === 'products' }" @click.prevent="toggleMenu('categories')">所有商品</a>
             <div v-if="openMenu === 'categories'" class="mega-panel">
               <a v-for="cat in menuCategories" :key="cat.dictCode" class="mega-link" :href="`/products?category=${cat.dictCode}`">
                 {{ cat.dictName }}
@@ -92,15 +101,14 @@ function toggleMenu(menu: 'categories' | 'rooms') {
               </a>
             </div>
           </div>
-          <a href="#" class="sale">优惠活动</a>
+          <a href="#">优惠活动</a>
           <a href="#">设计和服务</a>
           <a href="#">家居灵感</a>
-          <a href="/products?sort=newest">新品</a>
-          <a href="/ai-match">AI 户型搭配</a>
+          <a href="/products?sort=newest" :class="{ active: activeNav === 'newest' }">新品</a>
+          <a href="/ai-match" :class="{ active: activeNav === 'ai-match' }">AI 户型搭配</a>
         </div>
       </nav>
     </header>
-  </div>
 </template>
 
 <style scoped>
@@ -249,8 +257,11 @@ header {
   color: var(--accent-deep);
 }
 
-.nav-inner a.sale {
-  color: var(--terra);
+/* 当前页导航高亮（与 hover 同视觉） */
+.nav-inner > a.active,
+.nav-item > a.active {
+  border-bottom-color: var(--ink);
+  color: var(--accent-deep);
 }
 
 .mega::after {
