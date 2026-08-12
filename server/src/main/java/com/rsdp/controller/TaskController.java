@@ -9,8 +9,10 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,5 +36,18 @@ public class TaskController {
     @PreAuthorize("isAuthenticated()")
     public Result<Map<String, Object>> getTask(@PathVariable @NotBlank(message = "任务 ID 不能为空") String taskId) {
         return Result.ok(taskService.getTaskStatus(taskId));
+    }
+
+    /**
+     * 最近任务列表（工作台「识别任务队列」；精确路径优先于 /{taskId} 模板）。
+     *
+     * @param size 条数（默认 5，上限 20）
+     * @return 最近任务列表
+     */
+    @GetMapping("/recent")
+    @PreAuthorize("isAuthenticated()")
+    public Result<List<Map<String, Object>>> recentTasks(
+        @RequestParam(defaultValue = "5") int size) {
+        return Result.ok(taskService.listRecentTasks(size));
     }
 }

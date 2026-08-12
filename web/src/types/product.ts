@@ -118,6 +118,10 @@ export interface ProductSummary {
   minFactoryPrice?: number
   primaryImageUrl: string
   factoryCodes?: string[]
+  /** RSKU 报价数（工作台「报价×N」chip） */
+  rskuCount?: number
+  /** 是否有场景图（工作台「缺场景图」chip） */
+  hasSceneImage?: boolean
   createdAt: string
   updatedAt: string
 }

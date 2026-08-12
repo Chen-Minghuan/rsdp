@@ -63,6 +63,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -144,9 +145,11 @@ public class ProductQueryService {
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
         Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(rspuIds);
+        Map<String, Long> rskuCountMap = batchRskuCounts(rspuIds);
+        java.util.Set<String> sceneImageRspuIds = batchSceneImageRspuIds(rspuIds);
 
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap, sceneImageRspuIds))
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
@@ -296,7 +299,7 @@ public class ProductQueryService {
         List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, Map.of(), Map.of()))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, Map.of(), Map.of(), Map.of(), java.util.Set.of()))
             .collect(Collectors.toList());
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
     }
@@ -481,9 +484,11 @@ public class ProductQueryService {
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(pageRspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(pageRspuIds);
         Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(pageRspuIds);
+        Map<String, Long> rskuCountMap = batchRskuCounts(pageRspuIds);
+        java.util.Set<String> sceneImageRspuIds = batchSceneImageRspuIds(pageRspuIds);
 
         List<ProductSummaryResponse> rows = pageRecords.stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap, sceneImageRspuIds))
             .collect(Collectors.toList());
 
         return PageResult.of(total, page, size, rows);
@@ -1198,7 +1203,9 @@ public class ProductQueryService {
     private ProductSummaryResponse toSummary(RspuMaster rspu,
                                              Map<String, String> primaryImageUrlMap,
                                              Map<String, List<String>> factoryCodeMap,
-                                             Map<String, BigDecimal> minPriceMap) {
+                                             Map<String, BigDecimal> minPriceMap,
+                                             Map<String, Long> rskuCountMap,
+                                             java.util.Set<String> sceneImageRspuIds) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
         summary.setRspuCode(rspu.getRspuCode());
@@ -1217,7 +1224,47 @@ public class ProductQueryService {
         summary.setUpdatedAt(rspu.getUpdatedAt());
         summary.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));
         summary.setFactoryCodes(factoryCodeMap.getOrDefault(rspu.getRspuId(), List.of()));
+        summary.setRskuCount(rskuCountMap.getOrDefault(rspu.getRspuId(), 0L));
+        summary.setHasSceneImage(sceneImageRspuIds.contains(rspu.getRspuId()));
         return summary;
+    }
+
+    /**
+     * 批量统计 RSPU 的 RSKU 报价数（工作台「报价×N」chip）。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return RSPU ID -> 报价数
+     */
+    private Map<String, Long> batchRskuCounts(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Map<String, Object>> rows = rskuSupplyMapper.selectMaps(new QueryWrapper<RskuSupply>()
+            .select("rspu_id", "COUNT(*) AS cnt")
+            .in("rspu_id", rspuIds)
+            .groupBy("rspu_id"));
+        Map<String, Long> result = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            result.put((String) row.get("rspu_id"), ((Number) row.get("cnt")).longValue());
+        }
+        return result;
+    }
+
+    /**
+     * 批量查询有场景图（image_type='scene'）的 RSPU 集合（工作台「缺场景图」chip）。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return 有场景图的 RSPU ID 集合
+     */
+    private java.util.Set<String> batchSceneImageRspuIds(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return java.util.Set.of();
+        }
+        List<ImageAssets> images = imageAssetsMapper.selectList(new QueryWrapper<ImageAssets>()
+            .select("rspu_id")
+            .in("rspu_id", rspuIds)
+            .eq("image_type", "scene"));
+        return images.stream().map(ImageAssets::getRspuId).collect(Collectors.toSet());
     }
 
     private String buildImageUrl(String imageId) {

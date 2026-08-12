@@ -28,9 +28,9 @@ const OK_VALUES = new Set([
   '已完成', '已确认', '已联系', '上架中'
 ])
 const WAIT_VALUES = new Set([
-  'pending', 'processing', 'mid', 'partial_success',
+  'pending', 'mid', 'partial_success',
   'PENDING', 'PRODUCING',
-  '待复核', '待确认', '待跟进', '进行中', '等待中', '处理中', '识别中', '部分成功', '中'
+  '待复核', '待确认', '待跟进', '等待中', '处理中', '部分成功', '中'
 ])
 const BAD_VALUES = new Set([
   'failed', 'error', 'low',
@@ -38,8 +38,9 @@ const BAD_VALUES = new Set([
 ])
 const INFO_VALUES = new Set([
   'inactive', 'skipped', 'high',
+  'processing', // 进行中属中性状态，不占用赭石（赭石仅标"需要人处理"）
   'CANCELLED', // 已取消属中性终态，不占用朱砂色（朱砂仅标存疑/失败）
-  '已下架', '已取消', '跳过', '高'
+  '已下架', '已取消', '跳过', '高', '进行中', '识别中'
 ])
 
 function resolveKind(text: string): PillKind | null {

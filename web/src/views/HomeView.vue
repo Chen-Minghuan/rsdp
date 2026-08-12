@@ -1,756 +1,792 @@
 <script setup lang="ts">
-import { NButton, NCard, NCarousel, NGrid, NGridItem, NImage, NModal, NSpace, NSpin, NTag } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageContainer from '@/components/PageContainer.vue'
-import HoverZoomImage from '@/components/HoverZoomImage.vue'
-import ImageMagnifier from '@/components/ImageMagnifier.vue'
-import { listDicts } from '@/api/dict'
-import { getPublicHome, getPublicContent } from '@/api/platform'
-import { listProducts } from '@/api/product'
+import StatusPill from '@/components/StatusPill.vue'
 import { getDashboardSummary, type DashboardSummary } from '@/api/dashboard'
+import { listProducts } from '@/api/product'
+import { listRecentTasks, type RecentTaskItem } from '@/api/task'
+import { listLeads, getLeadSourceStats } from '@/api/lead'
 import { useUserStore } from '@/stores/user'
-import { sanitizeHtml, isSafeExternalUrl } from '@/utils/htmlSanitizer'
-import { IMAGE_FALLBACK_SRC, PERMISSIONS, ROLES } from '@/utils/constants'
-import type { DictItem } from '@/types/dict'
-import type { PublicHomeBanner, PublicHomeCase, PublicHomeCustomized, PublicHomeData, PlatformContent } from '@/types/platform'
+import { PERMISSIONS, ROLES } from '@/utils/constants'
+import { LEAD_SOURCE_TEXT, LEAD_STATUS_TEXT, type LeadItem } from '@/types/lead'
 import type { ProductSummary } from '@/types/product'
 
+/**
+ * 产品数字化工作台首页（style-b 现代极简）。
+ * 结构对齐 docs/09-design/admin-workbench.html：
+ * 页头 hero → 统计带 → 左列（最新入库/识别任务队列/户型图待复核）→ 右栏（今日待办/留资线索/数据完备度/快捷操作）。
+ * 每个区块独立 try/catch：接口失败显示空态或 --，整页不白屏。
+ */
 const router = useRouter()
 const userStore = useUserStore()
 
-const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_CREATE))
-const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
-const canReadProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_READ))
 const isPlatformOperator = computed(() => userStore.hasAnyRole([ROLES.ADMIN, ROLES.EDITOR]))
+const canReadProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_READ))
 
-// 工作台统计带（仅平台运营角色可见，数据走 /dashboard/summary 聚合接口）
+function navigate(path: string) {
+  router.push(path)
+}
+
+// ---------- 页头 ----------
+
+const todayText = new Date().toLocaleDateString('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long'
+}).replaceAll('/', '-')
+
+// ---------- 统计带（常驻渲染，失败显示 --） ----------
+
 const dashboardSummary = ref<DashboardSummary | null>(null)
 
-/** 统计带 5 格配置。 */
 const dashboardStats = computed(() => {
   const s = dashboardSummary.value
-  if (!s) return []
   return [
-    { label: '产品总数 RSPU', value: s.rspuTotal.toLocaleString('zh-CN') },
-    { label: '工厂报价 RSKU', value: s.rskuTotal.toLocaleString('zh-CN') },
-    { label: 'AI 识别通过率', value: s.aiPassRate != null ? `${s.aiPassRate}%` : '—' },
-    { label: '本月订单金额', value: `¥${Number(s.monthOrderAmount).toLocaleString('zh-CN')}` },
-    { label: '今日留资线索', value: String(s.todayLeadCount) }
+    { label: '产品总数 RSPU', value: s ? s.rspuTotal.toLocaleString('zh-CN') : '--' },
+    { label: '工厂报价 RSKU', value: s ? s.rskuTotal.toLocaleString('zh-CN') : '--' },
+    { label: 'AI 识别通过率', value: s ? (s.aiPassRate != null ? `${s.aiPassRate}%` : '—') : '--' },
+    { label: '本月订单金额', value: s ? `¥${Number(s.monthOrderAmount).toLocaleString('zh-CN')}` : '--' },
+    { label: '今日留资线索', value: s ? String(s.todayLeadCount) : '--' }
   ]
 })
 
-const styleDicts = ref<DictItem[]>([])
-const sceneDicts = ref<DictItem[]>([])
-const materialDicts = ref<DictItem[]>([])
-const categoryDicts = ref<DictItem[]>([])
+// ---------- 左列：产品库 · 最新入库 ----------
 
-// 官网 CMS 营销区数据（免登录公开接口）
-const homeData = ref<PublicHomeData | null>(null)
-const banners = computed(() => homeData.value?.banners ?? [])
-const cases = computed(() => homeData.value?.cases ?? [])
-const customizeds = computed(() => homeData.value?.customizeds ?? [])
+const latestProducts = ref<ProductSummary[]>([])
+const productsLoaded = ref(false)
 
-// 新品上架（复用产品库接口，按 product:read 显隐）
-const newProducts = ref<ProductSummary[]>([])
+function formatPrice(value?: number): string {
+  return value != null ? `¥${Number(value).toLocaleString('zh-CN')}` : '暂无报价'
+}
 
-// 案例详情弹窗
-const showCaseDetail = ref(false)
-const activeCase = ref<PublicHomeCase | null>(null)
-const safeCaseContent = computed(() => sanitizeHtml(activeCase.value?.content))
+// ---------- 左列：识别任务队列 ----------
 
-// 客服咨询（CMS 内容驱动）
-const showConsulting = ref(false)
-const consultingLoading = ref(false)
-const consultingContent = ref<PlatformContent | null>(null)
-const safeConsultingContent = computed(() => sanitizeHtml(consultingContent.value?.content))
-const consultingTitle = computed(() => consultingContent.value?.title || '客服咨询')
+const recentTasks = ref<RecentTaskItem[]>([])
+const tasksLoaded = ref(false)
 
-/** 分级导航维度：点击标签携带对应筛选参数跳转产品库。 */
-const dimensions = computed(() => [
-  {
-    key: 'scene',
-    title: '按空间',
-    desc: '客厅 / 餐厅 / 卧室 / 书房',
-    dicts: sceneDicts.value,
-    queryKey: 'sceneCode',
-    valueField: 'dictCode' as const
-  },
-  {
-    key: 'style',
-    title: '按风格',
-    desc: '现代简约 / 奶油风 / 中古风',
-    dicts: styleDicts.value,
-    queryKey: 'positioningLabel',
-    valueField: 'dictCode' as const
-  },
-  {
-    key: 'category',
-    title: '按品类',
-    desc: '沙发 / 座椅 / 床 / 柜',
-    dicts: categoryDicts.value,
-    queryKey: 'keyword',
-    valueField: 'dictName' as const
-  },
-  {
-    key: 'material',
-    title: '按材质',
-    desc: '布艺 / 真皮 / 实木 / 金属',
-    dicts: materialDicts.value,
-    queryKey: 'materialTag',
-    valueField: 'dictCode' as const
+const TASK_TYPE_TEXT: Record<string, string> = {
+  image_entry: '图片录入',
+  excel_ai_import: 'Excel AI 导入',
+  document_import: 'PDF 导入',
+  pdf_import: 'PDF 导入',
+  excel_import: 'Excel 导入',
+  floor_plan_analysis: '户型图分析'
+}
+
+const TASK_STATUS_TEXT: Record<string, string> = {
+  pending: '等待中',
+  processing: '进行中',
+  done: '已完成',
+  partial_success: '部分成功',
+  failed: '失败'
+}
+
+function taskTypeText(type: string): string {
+  return TASK_TYPE_TEXT[type] ?? type
+}
+
+function taskStatusText(status: string): string {
+  return TASK_STATUS_TEXT[status] ?? status
+}
+
+function taskDuration(item: RecentTaskItem): string {
+  return item.durationSeconds != null ? `${item.durationSeconds}s` : '—'
+}
+
+// ---------- 右栏：最新留资线索 ----------
+
+const latestLeads = ref<LeadItem[]>([])
+const leadsLoaded = ref(false)
+const leadPendingCount = ref<number | null>(null)
+
+// ---------- 右栏：今日待办（由真实数据推导） ----------
+
+interface TodoItem {
+  level: 'bad' | 'terra' | 'ok' | 'info'
+  text: string
+  time: string
+  path?: string
+}
+
+const todos = computed<TodoItem[]>(() => {
+  const list: TodoItem[] = []
+  if (leadPendingCount.value != null && leadPendingCount.value > 0) {
+    list.push({
+      level: 'terra',
+      text: `${leadPendingCount.value} 条留资线索待跟进`,
+      time: '今日',
+      path: '/leads'
+    })
   }
-])
-
-const guideSteps = [
-  { title: '多模态录入', desc: '图片 / Excel / PDF 批量导入' },
-  { title: 'AI 自动识别', desc: '款式属性与六维标签' },
-  { title: '选品收藏', desc: '产品库筛选与收藏对比' },
-  { title: '搭配方案', desc: 'AI 空间搭配与手工组合' },
-  { title: '报价导出', desc: '数量小计与 Excel 导出' }
-]
-
-interface QuickEntry {
-  key: string
-  title: string
-  desc: string
-  path: string
-  visible: boolean
-}
-
-const quickEntries = computed<QuickEntry[]>(() => [
-  {
-    key: 'entry',
-    title: '新品录入',
-    desc: '上传产品图片，AI 自动识别建档',
-    path: '/entry',
-    visible: canCreateProduct.value
-  },
-  {
-    key: 'excel-ai-import',
-    title: 'Excel AI 导入',
-    desc: '整本报价单批量解析入库',
-    path: '/products/excel-ai-import',
-    visible: canImportProduct.value
-  },
-  {
-    key: 'document-import',
-    title: 'PDF 导入',
-    desc: '产品目录 PDF 智能提取',
-    path: '/products/document-import',
-    visible: canImportProduct.value
-  },
-  {
-    key: 'visual-search',
-    title: '以图搜图',
-    desc: '上传图片检索相似产品',
-    path: '/visual-search',
-    visible: canReadProduct.value
-  },
-  {
-    key: 'favorites',
-    title: '我的收藏',
-    desc: '收藏产品批量生成报价单',
-    path: '/favorites',
-    visible: canReadProduct.value
+  const failedCount = recentTasks.value.filter(t => t.status === 'failed').length
+  if (failedCount > 0) {
+    list.push({ level: 'bad', text: `${failedCount} 个识别任务失败`, time: '最近', path: undefined })
   }
-])
-
-function gotoProducts(queryKey: string, value: string) {
-  router.push({ path: '/products', query: { [queryKey]: value } })
-}
-
-/** 风格编码（如 IL/IT）映射为字典名称，未匹配时原样返回。 */
-function styleName(code?: string): string {
-  if (!code) return ''
-  return styleDicts.value.find(d => d.dictCode === code)?.dictName ?? code
-}
-
-/** Banner 点击：rspu 跳产品详情；url 开外链（仅允许 http/https）。 */
-function handleBannerClick(banner: PublicHomeBanner) {
-  if (banner.linkType === 'rspu' && banner.linkValue) {
-    router.push(`/products/${banner.linkValue}`)
-  } else if (banner.linkType === 'url' && banner.linkValue) {
-    if (isSafeExternalUrl(banner.linkValue)) {
-      window.open(banner.linkValue, '_blank', 'noopener')
-    }
+  const processingCount = recentTasks.value.filter(t => t.status === 'processing' || t.status === 'pending').length
+  if (processingCount > 0) {
+    list.push({ level: 'info', text: `${processingCount} 个识别任务进行中`, time: '最近', path: undefined })
   }
-}
+  return list
+})
 
-function openCaseDetail(item: PublicHomeCase) {
-  activeCase.value = item
-  showCaseDetail.value = true
-}
-
-async function openConsulting() {
-  showConsulting.value = true
-  if (consultingContent.value) return
-  consultingLoading.value = true
-  try {
-    consultingContent.value = await getPublicContent('platform_consulting_service')
-  } catch (e) {
-    console.error('加载客服咨询内容失败', e)
-  } finally {
-    consultingLoading.value = false
-  }
-}
-
-/** 定制卡片点击：站内路径走路由，外链仅允许 http/https。 */
-function handleCustomizedClick(item: PublicHomeCustomized) {
-  if (!item.linkValue) return
-  if (item.linkValue.startsWith('/')) {
-    router.push(item.linkValue)
-  } else if (isSafeExternalUrl(item.linkValue)) {
-    window.open(item.linkValue, '_blank', 'noopener')
-  }
-}
+// ---------- 加载（每区块独立 try/catch，互不影响） ----------
 
 onMounted(async () => {
-  try {
-    const [scenes, styles, materials, categories] = await Promise.all([
-      listDicts('scene'),
-      listDicts('style'),
-      listDicts('material'),
-      listDicts('category')
-    ])
-    sceneDicts.value = scenes
-    styleDicts.value = styles
-    materialDicts.value = materials
-    categoryDicts.value = categories
-  } catch (e) {
-    console.error('加载首页字典失败', e)
-  }
-
-  try {
-    homeData.value = await getPublicHome()
-  } catch (e) {
-    console.error('加载首页营销区失败', e)
-  }
-
-  if (canReadProduct.value) {
-    try {
-      const result = await listProducts({ page: 1, size: 8 })
-      newProducts.value = result.rows
-    } catch (e) {
-      console.error('加载新品上架失败', e)
-    }
-  }
-
   if (isPlatformOperator.value) {
     try {
       dashboardSummary.value = await getDashboardSummary()
     } catch (e) {
       console.error('加载工作台统计失败', e)
     }
+    try {
+      const stats = await getLeadSourceStats()
+      leadPendingCount.value = stats.pending
+    } catch (e) {
+      console.error('加载留资统计失败', e)
+    }
+    try {
+      latestLeads.value = (await listLeads({ page: 1, size: 3 })).rows
+    } catch (e) {
+      console.error('加载最新留资线索失败', e)
+    } finally {
+      leadsLoaded.value = true
+    }
+  }
+
+  if (canReadProduct.value) {
+    try {
+      latestProducts.value = (await listProducts({ page: 1, size: 4 })).rows
+    } catch (e) {
+      console.error('加载最新入库失败', e)
+    } finally {
+      productsLoaded.value = true
+    }
+  }
+
+  try {
+    recentTasks.value = await listRecentTasks(5)
+  } catch (e) {
+    console.error('加载识别任务队列失败', e)
+  } finally {
+    tasksLoaded.value = true
   }
 })
 </script>
 
 <template>
   <PageContainer>
-    <!-- 工作台统计带（仅 ADMIN/EDITOR，style-b 通栏分隔线式 + mono 数字） -->
-    <section v-if="dashboardStats.length" class="stats-band">
-      <div v-for="stat in dashboardStats" :key="stat.label" class="stat-cell">
-        <div class="stat-num">{{ stat.value }}</div>
-        <div class="stat-label">{{ stat.label }}</div>
+    <!-- 页头 hero -->
+    <section class="hero">
+      <div>
+        <div class="hero-label">DASHBOARD / OVERVIEW</div>
+        <h1>产品数字化工作台</h1>
+        <p>
+          今天是 <span class="mono">{{ todayText }}</span>
+          <template v-if="leadPendingCount != null">
+            · 有 <b>{{ leadPendingCount }} 条新留资</b> 待处理
+          </template>
+        </p>
+      </div>
+      <div class="hero-btns">
+        <button class="btn-a" @click="navigate('/products/excel-ai-import')">批量导入</button>
+        <button class="btn-b" @click="navigate('/quotes/build')">新建报价单</button>
       </div>
     </section>
 
-    <!-- 轮播 Banner（CMS 驱动；无 Banner 时回退品牌 Hero） -->
-    <section v-if="banners.length > 0" class="banner-section">
-      <n-carousel autoplay draggable class="banner-carousel">
-        <div
-          v-for="banner in banners"
-          :key="banner.bannerId"
-          class="banner-slide"
-          :class="{ clickable: banner.linkType !== 'none' }"
-          @click="handleBannerClick(banner)"
-        >
-          <img v-if="banner.imageUrl" :src="banner.imageUrl" :alt="banner.title || 'banner'" class="banner-img">
-          <div v-if="banner.title" class="banner-title">{{ banner.title }}</div>
-        </div>
-      </n-carousel>
-    </section>
-    <section v-else class="hero">
-      <h1 class="hero-title">家居全案，一站式数字化管理</h1>
-      <p class="hero-subtitle">
-        多模态 AI 录入 · 双层编码产品库 · 工厂报价 · AI 空间搭配 · 报价单一键生成
-      </p>
-      <n-space style="margin-top: 24px;">
-        <n-button v-if="canCreateProduct" type="primary" size="large" @click="router.push('/entry')">
-          开始录入
-        </n-button>
-        <n-button v-if="canReadProduct" size="large" @click="router.push('/products')">
-          浏览产品库
-        </n-button>
-      </n-space>
-    </section>
+    <!-- 统计带（常驻渲染，接口失败显示 --；仅 ADMIN/EDITOR 可见） -->
+    <div v-if="isPlatformOperator" class="stats">
+      <div v-for="stat in dashboardStats" :key="stat.label" class="stat">
+        <div class="num">{{ stat.value }}</div>
+        <div class="lab">{{ stat.label }}</div>
+      </div>
+    </div>
 
-    <!-- 新品上架 -->
-    <section v-if="canReadProduct && newProducts.length > 0" class="section">
-      <h2 class="section-title">新品上架</h2>
-      <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen">
-        <n-grid-item v-for="product in newProducts" :key="product.rspuId">
-          <n-card hoverable class="product-card" @click="router.push(`/products/${product.rspuId}`)">
-            <div class="product-image">
-              <ImageMagnifier
-                v-if="product.primaryImageUrl"
-                :src="product.primaryImageUrl"
-                :fallback-src="IMAGE_FALLBACK_SRC"
-                fluid
-                :click-viewer="false"
-              />
-              <div v-else class="product-image-placeholder">暂无图片</div>
-            </div>
-            <div class="product-name" :title="product.productName || styleName(product.positioningLabel) || product.rspuId">
-              {{ product.productName || styleName(product.positioningLabel) || product.rspuId }}
-            </div>
-            <div class="product-meta">{{ styleName(product.positioningLabel) }}</div>
-          </n-card>
-        </n-grid-item>
-      </n-grid>
-    </section>
-
-    <!-- 落地案例 -->
-    <section v-if="cases.length > 0" class="section">
-      <h2 class="section-title">落地案例</h2>
-      <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen">
-        <n-grid-item v-for="item in cases" :key="item.caseId">
-          <n-card hoverable class="case-card" @click="openCaseDetail(item)">
-            <div class="case-image">
-              <HoverZoomImage
-                v-if="item.coverImageUrl"
-                :src="item.coverImageUrl"
-                fluid
-                preview-disabled
-              />
-              <div v-else class="product-image-placeholder">暂无图片</div>
-            </div>
-            <div class="case-title">{{ item.title }}</div>
-          </n-card>
-        </n-grid-item>
-      </n-grid>
-    </section>
-
-    <!-- 产品定制 -->
-    <section v-if="customizeds.length > 0" class="section">
-      <h2 class="section-title">产品定制</h2>
-      <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen">
-        <n-grid-item v-for="item in customizeds" :key="item.customizedId">
-          <n-card
-            hoverable
-            class="customized-card"
-            :class="{ clickable: !!item.linkValue }"
-            @click="handleCustomizedClick(item)"
-          >
-            <div class="case-image">
-              <HoverZoomImage
-                v-if="item.coverImageUrl"
-                :src="item.coverImageUrl"
-                fluid
-                preview-disabled
-              />
-              <div v-else class="product-image-placeholder">定制服务</div>
-            </div>
-            <div class="case-title">{{ item.title }}</div>
-            <div v-if="item.description" class="customized-desc">{{ item.description }}</div>
-          </n-card>
-        </n-grid-item>
-      </n-grid>
-    </section>
-
-    <!-- 分级导航 -->
-    <section class="section">
-      <h2 class="section-title">按维度找产品</h2>
-      <n-grid :cols="4" :x-gap="16" :y-gap="16" responsive="screen">
-        <n-grid-item v-for="dim in dimensions" :key="dim.key">
-          <n-card hoverable class="dim-card" @click="router.push('/products')">
-            <div class="dim-title">{{ dim.title }}</div>
-            <div class="dim-desc">{{ dim.desc }}</div>
-            <n-space :size="8" style="margin-top: 12px; flex-wrap: wrap;">
-              <n-tag
-                v-for="dict in dim.dicts.slice(0, 4)"
-                :key="dict.dictCode"
-                size="small"
-                class="dim-tag"
-                @click.stop="gotoProducts(dim.queryKey, dict[dim.valueField])"
-              >
-                {{ dict.dictName }}
-              </n-tag>
-            </n-space>
-          </n-card>
-        </n-grid-item>
-      </n-grid>
-    </section>
-
-    <!-- 使用导览 -->
-    <section class="section">
-      <h2 class="section-title">五步完成产品数字化</h2>
-      <div class="guide-steps">
-        <template v-for="(step, index) in guideSteps" :key="step.title">
-          <div class="guide-step">
-            <div class="guide-number">{{ index + 1 }}</div>
-            <div class="guide-step-title">{{ step.title }}</div>
-            <div class="guide-step-desc">{{ step.desc }}</div>
+    <div class="cols">
+      <!-- 左列 -->
+      <div>
+        <!-- 产品库 · 最新入库 -->
+        <section class="section" style="margin-top: 0;">
+          <div class="section-head">
+            <div class="section-title">产品库 · 最新入库</div>
+            <span class="section-more" @click="navigate('/products')">进入产品库 →</span>
           </div>
-          <div v-if="index < guideSteps.length - 1" class="guide-arrow">→</div>
-        </template>
+          <div v-if="latestProducts.length" class="grid4">
+            <div
+              v-for="product in latestProducts"
+              :key="product.rspuId"
+              class="card"
+              @click="navigate(`/products/${product.rspuId}`)"
+            >
+              <div class="img">
+                <img v-if="product.primaryImageUrl" :src="product.primaryImageUrl" :alt="product.productName || product.categoryPath">
+              </div>
+              <div class="body">
+                <div class="prow">
+                  <span class="pname">{{ product.productName || product.categoryPath }}</span>
+                  <span class="price">{{ formatPrice(product.minFactoryPrice) }}</span>
+                </div>
+                <div class="pmeta">{{ product.rspuCode || product.rspuId }}</div>
+                <div class="pbar">
+                  <span v-if="product.positioningLabel" class="chip">{{ product.positioningLabel }}</span>
+                  <span v-if="(product.rskuCount ?? 0) > 0" class="chip hot">报价×{{ product.rskuCount }}</span>
+                  <span v-if="product.hasSceneImage === false" class="chip miss">缺场景图</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else class="empty-box">
+            {{ productsLoaded ? '暂无入库产品' : '加载中…' }}
+          </div>
+        </section>
+
+        <!-- 识别任务队列 -->
+        <section class="section">
+          <div class="section-head">
+            <div class="section-title">识别任务队列</div>
+          </div>
+          <div class="table">
+            <div class="trow head">
+              <span>任务</span><span>类型</span><span>提交人</span><span>耗时</span><span>状态</span><span />
+            </div>
+            <template v-if="recentTasks.length">
+              <div v-for="task in recentTasks" :key="task.taskId" class="trow">
+                <span class="mono">{{ task.taskId }}</span>
+                <span>{{ taskTypeText(task.taskType) }}</span>
+                <span class="mono">{{ task.createdBy || '-' }}</span>
+                <span class="mono">{{ taskDuration(task) }}</span>
+                <span><StatusPill :value="task.status" :label="taskStatusText(task.status)" /></span>
+                <span>
+                  <span v-if="task.rspuId" class="link" @click="navigate(`/products/${task.rspuId}`)">查看</span>
+                </span>
+              </div>
+            </template>
+            <div v-else class="empty-row">{{ tasksLoaded ? '暂无识别任务' : '加载中…' }}</div>
+          </div>
+        </section>
+
+        <!-- 户型图分析 · 待复核队列 -->
+        <section class="section">
+          <div class="section-head">
+            <div class="section-title">户型图分析 · 待复核队列</div>
+            <span class="section-more" @click="navigate('/matching/anchor')">进入 AI 工作台 →</span>
+          </div>
+          <div class="table">
+            <div class="empty-row">暂无待复核的户型图分析</div>
+          </div>
+        </section>
       </div>
-    </section>
 
-    <!-- 快捷入口 -->
-    <section class="section">
-      <h2 class="section-title">快捷入口</h2>
-      <n-grid :cols="5" :x-gap="16" :y-gap="16" responsive="screen">
-        <n-grid-item v-for="entry in quickEntries.filter(e => e.visible)" :key="entry.key">
-          <n-card hoverable class="quick-card" @click="router.push(entry.path)">
-            <div class="quick-title">{{ entry.title }}</div>
-            <div class="quick-desc">{{ entry.desc }}</div>
-          </n-card>
-        </n-grid-item>
-      </n-grid>
-    </section>
+      <!-- 右栏 -->
+      <div>
+        <!-- 今日待办 -->
+        <div class="panel">
+          <div class="panel-h"><h2>今日待办</h2></div>
+          <div class="panel-b" style="padding-top: 2px;">
+            <template v-if="todos.length">
+              <div v-for="(todo, i) in todos" :key="i" class="task" :class="{ clickable: todo.path }" @click="todo.path && navigate(todo.path)">
+                <i class="dot" :class="`dot-${todo.level}`" />
+                <div class="t-b">{{ todo.text }}</div>
+                <div class="t-t">{{ todo.time }}</div>
+              </div>
+            </template>
+            <div v-else class="empty-row">今日暂无待办</div>
+          </div>
+        </div>
 
-    <!-- 案例详情弹窗 -->
-    <n-modal v-model:show="showCaseDetail" preset="card" :title="activeCase?.title || '案例详情'" style="width: 720px;">
-      <n-image
-        v-if="activeCase?.coverImageUrl"
-        :src="activeCase.coverImageUrl"
-        object-fit="cover"
-        style="width: 100%; border-radius: 8px; margin-bottom: 12px;"
-      />
-      <!-- 内容仅 ADMIN/EDITOR 可在管理端维护，已做 HTML 消毒 -->
-      <div v-if="activeCase?.content" class="case-content" v-html="safeCaseContent" />
-      <p v-else style="color: var(--rsdp-text-secondary);">暂无详细介绍</p>
-    </n-modal>
+        <!-- 最新留资线索 -->
+        <div class="panel">
+          <div class="panel-h">
+            <h2>最新留资线索</h2>
+            <a @click="navigate('/leads')">全部线索 →</a>
+          </div>
+          <div class="panel-b" style="padding-top: 2px;">
+            <template v-if="latestLeads.length">
+              <div v-for="lead in latestLeads" :key="lead.leadId" class="lead-row">
+                <span>{{ lead.name }} <span class="src">{{ lead.phoneMasked }}</span></span>
+                <span class="src">{{ LEAD_SOURCE_TEXT[lead.source] ?? lead.source }}</span>
+                <span class="lead-intent">{{ lead.intent || '-' }}</span>
+                <span><StatusPill :value="lead.status" :label="LEAD_STATUS_TEXT[lead.status] ?? lead.status" /></span>
+              </div>
+            </template>
+            <div v-else class="empty-row">
+              {{ leadsLoaded ? '暂无留资线索' : '加载中…' }}
+            </div>
+          </div>
+        </div>
 
-    <!-- 客服咨询入口 -->
-    <n-button class="consulting-entry" type="primary" size="large" round @click="openConsulting">
-      客服咨询
-    </n-button>
+        <!-- AI 搭配数据完备度 -->
+        <div class="panel">
+          <div class="panel-h"><h2>AI 搭配数据完备度</h2></div>
+          <div class="panel-b">
+            <div v-for="label in ['主图覆盖率', '场景图覆盖率', '报价覆盖率']" :key="label" class="meter-row">
+              {{ label }} <span class="mv">--</span>
+              <div class="meter"><i style="width: 0%;" /></div>
+            </div>
+          </div>
+        </div>
 
-    <!-- 客服咨询弹窗 -->
-    <n-modal v-model:show="showConsulting" preset="card" :title="consultingTitle" style="width: 640px;">
-      <n-spin :show="consultingLoading">
-        <!-- 内容仅 ADMIN/EDITOR 可在管理端维护，已做 HTML 消毒 -->
-        <div v-if="consultingContent?.content" class="consulting-content" v-html="safeConsultingContent" />
-        <p v-else-if="!consultingLoading" style="color: var(--rsdp-text-secondary);">暂无客服内容</p>
-      </n-spin>
-    </n-modal>
+        <!-- 快捷操作 -->
+        <div class="panel">
+          <div class="panel-h"><h2>快捷操作</h2></div>
+          <div class="panel-b quick">
+            <button @click="navigate('/products/excel-ai-import')">⬆ 批量导入</button>
+            <button @click="navigate('/quotes/build')">＋ 新建报价单</button>
+            <button @click="navigate('/products')">🛋 产品库</button>
+            <button @click="navigate('/leads')">📋 留资线索</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </PageContainer>
 </template>
 
 <style scoped>
-/* 工作台统计带（style-b：通栏分隔线式，mono 大数字） */
-.stats-band {
+.mono {
+  font-family: var(--rsdp-font-mono);
+}
+
+/* ===== 页头 hero ===== */
+.hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 28px 0 22px;
+  border-bottom: 1px solid var(--rsdp-border);
+}
+
+.hero-label {
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: var(--rsdp-text-secondary);
+  font-family: var(--rsdp-font-mono);
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  font-size: 30px;
+  font-weight: 700;
+  margin-top: 8px;
+}
+
+.hero p {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--rsdp-text-secondary);
+}
+
+.hero p b {
+  color: var(--rsdp-warning);
+}
+
+.hero-btns {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-a {
+  background: var(--rsdp-primary);
+  color: #fff;
+  border: none;
+  padding: 10px 22px;
+  border-radius: var(--rsdp-radius);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-a:hover {
+  background: var(--rsdp-primary-hover);
+}
+
+.btn-b {
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-border);
+  padding: 10px 22px;
+  border-radius: var(--rsdp-radius);
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--rsdp-text);
+}
+
+.btn-b:hover {
+  border-color: #b5b5b5;
+}
+
+/* ===== 统计带 ===== */
+.stats {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   background: var(--rsdp-card-bg);
   border: 1px solid var(--rsdp-border);
   border-radius: var(--rsdp-radius);
-  margin-bottom: 16px;
+  margin-top: 20px;
 }
 
-.stat-cell {
-  padding: 16px 22px;
+.stat {
+  padding: 18px 24px;
   border-right: 1px solid var(--rsdp-border);
 }
 
-.stat-cell:last-child {
+.stat:last-child {
   border-right: none;
 }
 
-.stat-num {
-  font-family: var(--rsdp-font-mono);
-  font-size: 24px;
+.stat .num {
+  font-size: 25px;
   font-weight: 700;
-  color: var(--rsdp-text);
+  font-family: var(--rsdp-font-mono);
 }
 
-.stat-label {
-  margin-top: 4px;
+.stat .lab {
   font-size: 12px;
   color: var(--rsdp-text-secondary);
+  margin-top: 4px;
 }
 
-.banner-section {
-  border-radius: var(--rsdp-radius-lg);
-  overflow: hidden;
-}
-
-.banner-carousel {
-  height: 400px;
-}
-
-.banner-slide {
-  position: relative;
-  width: 100%;
-  height: 400px;
-}
-
-.banner-slide.clickable {
-  cursor: pointer;
-}
-
-.banner-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.banner-title {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 16px 24px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.55));
-  color: #fff;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.hero {
-  padding: 56px 40px;
-  border-radius: var(--rsdp-radius-lg);
-  background: linear-gradient(135deg, var(--rsdp-primary-suppl) 0%, var(--rsdp-serve-bg) 100%);
-  text-align: center;
-}
-
-.hero-title {
-  font-family: var(--rsdp-font-display);
-  font-size: 40px;
-  font-weight: 400;
-  letter-spacing: 1px;
-  color: var(--rsdp-text);
-}
-
-.hero-subtitle {
-  margin-top: 14px;
-  font-size: 15px;
-  color: var(--rsdp-text-secondary);
-  letter-spacing: 1px;
+/* ===== 布局 ===== */
+.cols {
+  display: grid;
+  grid-template-columns: 1.75fr 1fr;
+  gap: 24px;
+  margin-top: 24px;
 }
 
 .section {
-  margin-top: 36px;
+  margin-top: 24px;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
 .section-title {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.section-more {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+  cursor: pointer;
+}
+
+.section-more:hover {
   color: var(--rsdp-text);
-  margin-bottom: 16px;
-  padding-left: 10px;
-  border-left: 3px solid var(--rsdp-primary);
+  text-decoration: underline;
 }
 
-.product-card,
-.case-card {
-  cursor: pointer;
-  height: 100%;
+/* ===== 产品卡 ===== */
+.grid4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
 }
 
-.customized-card {
-  height: 100%;
-}
-
-.customized-card.clickable {
-  cursor: pointer;
-}
-
-.product-image,
-.case-image {
+.card {
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-border);
   border-radius: var(--rsdp-radius);
   overflow: hidden;
+  cursor: pointer;
+}
+
+.card:hover {
+  border-color: #b5b5b5;
+}
+
+.card .img {
   aspect-ratio: 4 / 3;
-  background: var(--rsdp-serve-bg);
-  margin-bottom: 10px;
+  background: var(--rsdp-info-bg);
 }
 
-/* 新品上架用放大镜组件：放大面板要溢出卡片显示，容器不能裁剪（图片圆角由组件内 img 自带） */
-.product-image {
-  overflow: visible;
-}
-
-.product-image-placeholder {
+.card .img img {
   width: 100%;
   height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.card .body {
+  padding: 12px 14px;
+}
+
+.prow {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--rsdp-text-secondary);
-  font-size: 13px;
-}
-
-.product-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--rsdp-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.product-meta {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
-}
-
-.case-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--rsdp-text);
-}
-
-.customized-desc {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.case-content {
-  font-size: 14px;
-  line-height: 1.8;
-  color: var(--rsdp-text);
-}
-
-.case-content :deep(img) {
-  max-width: 100%;
-}
-
-.dim-card {
-  cursor: pointer;
-  height: 100%;
-}
-
-.dim-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--rsdp-text);
-}
-
-.dim-desc {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
-}
-
-.dim-tag {
-  cursor: pointer;
-}
-
-.dim-tag:hover {
-  color: var(--rsdp-primary);
-}
-
-.guide-steps {
-  display: flex;
-  align-items: stretch;
   justify-content: space-between;
+  align-items: baseline;
   gap: 8px;
-  padding: 24px;
-  border-radius: var(--rsdp-radius-lg);
-  background: var(--rsdp-card-bg);
-  box-shadow: var(--rsdp-shadow-card);
 }
 
-.guide-step {
-  flex: 1;
-  text-align: center;
-}
-
-.guide-number {
-  width: 36px;
-  height: 36px;
-  margin: 0 auto 10px;
-  border-radius: 50%;
-  background: var(--rsdp-primary);
-  color: #fff;
-  font-size: 16px;
+.pname {
+  font-size: 13px;
   font-weight: 600;
-  line-height: 36px;
 }
 
-.guide-step-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--rsdp-text);
+.price {
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--rsdp-font-mono);
+  white-space: nowrap;
 }
 
-.guide-step-desc {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
-}
-
-.guide-arrow {
-  display: flex;
-  align-items: center;
-  color: var(--rsdp-text-secondary);
-  font-size: 18px;
-}
-
-.quick-card {
-  cursor: pointer;
-  height: 100%;
-  transition: border-color 0.2s;
-}
-
-.quick-card:hover {
-  border-color: var(--rsdp-primary);
-}
-
-.quick-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--rsdp-text);
-}
-
-.quick-desc {
+.pmeta {
   margin-top: 6px;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 11px;
+  color: var(--rsdp-text-secondary);
+  font-family: var(--rsdp-font-mono);
+}
+
+.pbar {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--rsdp-border);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-height: 20px;
+}
+
+.chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: var(--rsdp-info-bg);
   color: var(--rsdp-text-secondary);
 }
 
-.consulting-entry {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 100;
-  box-shadow: var(--rsdp-shadow-card);
+.chip.hot {
+  background: var(--rsdp-warning-bg);
+  color: var(--rsdp-warning);
 }
 
-.consulting-content {
-  font-size: 14px;
-  line-height: 1.8;
+.chip.miss {
+  background: var(--rsdp-error-bg);
+  color: var(--rsdp-error);
+}
+
+/* ===== 表格 ===== */
+.table {
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  overflow: hidden;
+}
+
+.trow {
+  display: grid;
+  grid-template-columns: 2fr 1.2fr 1fr 0.7fr 0.8fr 0.5fr;
+  padding: 11px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--rsdp-border);
+  align-items: center;
+  gap: 8px;
+}
+
+.trow.head {
+  background: var(--rsdp-serve-bg);
+  color: var(--rsdp-text-secondary);
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.trow:last-child {
+  border-bottom: none;
+}
+
+.trow:not(.head):hover {
+  background: var(--rsdp-serve-bg);
+}
+
+.link {
   color: var(--rsdp-text);
-  max-height: 60vh;
-  overflow-y: auto;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 12px;
 }
 
-.consulting-content :deep(img) {
-  max-width: 100%;
+.link:hover {
+  text-decoration: underline;
 }
 
-@media (max-width: 900px) {
-  .guide-steps {
-    flex-direction: column;
+/* ===== 空态 ===== */
+.empty-box,
+.empty-row {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+
+.empty-box {
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+}
+
+/* ===== 右栏面板 ===== */
+.panel {
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  margin-bottom: 20px;
+}
+
+.panel-h {
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--rsdp-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panel-h h2 {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.panel-h a {
+  font-size: 11px;
+  color: var(--rsdp-text-secondary);
+  cursor: pointer;
+}
+
+.panel-h a:hover {
+  color: var(--rsdp-text);
+  text-decoration: underline;
+}
+
+.panel-b {
+  padding: 10px 18px 14px;
+}
+
+.task {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rsdp-border);
+  align-items: flex-start;
+  font-size: 12px;
+}
+
+.task.clickable {
+  cursor: pointer;
+}
+
+.task:last-child {
+  border-bottom: none;
+}
+
+.task .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.dot-bad { background: var(--rsdp-error); }
+.dot-terra { background: var(--rsdp-warning); }
+.dot-ok { background: var(--rsdp-success); }
+.dot-info { background: var(--rsdp-text-secondary); }
+
+.task .t-b {
+  flex: 1;
+  line-height: 1.6;
+}
+
+.task .t-t {
+  font-family: var(--rsdp-font-mono);
+  font-size: 11px;
+  color: var(--rsdp-text-secondary);
+  white-space: nowrap;
+}
+
+.lead-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1.3fr 0.7fr;
+  padding: 10px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--rsdp-border);
+  align-items: center;
+  gap: 8px;
+}
+
+.lead-row:last-child {
+  border-bottom: none;
+}
+
+.lead-row .src {
+  font-family: var(--rsdp-font-mono);
+  font-size: 11px;
+  color: var(--rsdp-text-secondary);
+}
+
+.lead-intent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meter-row {
+  font-size: 12px;
+  margin: 10px 0;
+}
+
+.meter-row .mv {
+  font-family: var(--rsdp-font-mono);
+  font-weight: 700;
+}
+
+.meter {
+  height: 6px;
+  background: var(--rsdp-info-bg);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 5px;
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  background: var(--rsdp-primary);
+  border-radius: 3px;
+}
+
+.quick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.quick button {
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  padding: 11px 0;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--rsdp-text);
+}
+
+.quick button:hover {
+  border-color: #b5b5b5;
+  background: var(--rsdp-serve-bg);
+}
+
+@media (max-width: 1199px) {
+  .cols {
+    grid-template-columns: 1fr;
   }
 
-  .guide-arrow {
-    justify-content: center;
-    transform: rotate(90deg);
+  .grid4 {
+    grid-template-columns: repeat(2, 1fr);
   }
 
-  .banner-carousel,
-  .banner-slide {
-    height: 240px;
+  .stats {
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 </style>
