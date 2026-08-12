@@ -109,13 +109,14 @@ const inspirations = computed<InspirationItem[]>(() =>
       <!-- 区块 4 · 必逛好物 -->
       <section class="section">
         <div class="section-head">
+          <span class="section-no">01</span>
           <div class="section-title">必逛好物</div>
-          <div class="section-more">查看全部 →</div>
+          <div class="section-more">查看全部</div>
         </div>
         <TrioCards :items="trioItems" />
       </section>
 
-      <!-- 区块 5 · 服务卡 -->
+      <!-- 区块 5 · 服务分栏 -->
       <section class="section">
         <ServiceCards :items="serviceItems" />
       </section>
@@ -123,8 +124,9 @@ const inspirations = computed<InspirationItem[]>(() =>
       <!-- 区块 6 · 从房间开始探索 -->
       <section v-if="scenes.length" class="section">
         <div class="section-head">
+          <span class="section-no">02</span>
           <div class="section-title">从房间开始探索</div>
-          <div class="section-more">全部空间 →</div>
+          <div class="section-more">全部空间</div>
         </div>
         <RoomGrid :rooms="scenes" />
       </section>
@@ -132,13 +134,14 @@ const inspirations = computed<InspirationItem[]>(() =>
       <!-- 区块 7 · 新品上架（商品图/场景图双视图） -->
       <section v-if="products.length" class="section">
         <div class="section-head">
+          <span class="section-no">03</span>
           <div class="section-title">新品上架</div>
-          <span>
+          <span class="head-right">
             <span class="view-toggle">
               <span :class="{ on: viewMode === 'plain' }" @click="viewMode = 'plain'">商品图</span>
               <span :class="{ on: viewMode === 'scene' }" @click="viewMode = 'scene'">场景图</span>
             </span>
-            　<a class="section-more" href="/products?sort=newest">查看全部新品 →</a>
+            <a class="section-more" style="margin-left: 0;" href="/products?sort=newest">查看全部新品</a>
           </span>
         </div>
         <div class="grid4">
@@ -154,8 +157,9 @@ const inspirations = computed<InspirationItem[]>(() =>
       <!-- 区块 8 · 家居灵感 -->
       <section v-if="inspirations.length" id="inspiration" class="section">
         <div class="section-head">
+          <span class="section-no">04</span>
           <div class="section-title">家居灵感</div>
-          <div class="section-more">更多灵感 →</div>
+          <div class="section-more">更多灵感</div>
         </div>
         <InspirationWall :items="inspirations" />
       </section>
@@ -170,39 +174,41 @@ const inspirations = computed<InspirationItem[]>(() =>
 </template>
 
 <style scoped>
-/* ===== Hero ===== */
+/* ===== Hero（v2：直角分割式，细线无边框阴影） ===== */
 .hero-sec {
-  padding: 32px 0 0;
+  padding: 36px 0 0;
 }
 
 .hero {
   display: grid;
-  grid-template-columns: 1.05fr 1fr;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
+  grid-template-columns: 1fr 1.1fr;
+  border: 1px solid var(--line);
   background: var(--card);
-  box-shadow: var(--shadow-hero);
 }
 
 .hero-text {
-  padding: 68px 56px;
+  padding: 76px 64px;
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
 
 .hero-kicker {
-  font-size: 13px;
+  font-size: 11px;
   letter-spacing: 6px;
   color: var(--accent);
-  margin-bottom: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--accent);
+  width: fit-content;
+  margin-bottom: 26px;
 }
 
 .hero h1 {
   font-family: var(--font-serif);
-  font-size: 42px;
-  line-height: 1.4;
+  font-size: 46px;
+  line-height: 1.5;
   font-weight: 700;
+  letter-spacing: 2px;
 }
 
 .hero h1 em {
@@ -211,54 +217,61 @@ const inspirations = computed<InspirationItem[]>(() =>
 }
 
 .hero p {
-  margin-top: 20px;
-  font-size: 15px;
-  line-height: 1.9;
+  margin-top: 24px;
+  font-size: 14px;
+  line-height: 2.1;
   color: var(--ink2);
+  max-width: 420px;
 }
 
 .btns {
-  margin-top: 34px;
+  margin-top: 40px;
   display: flex;
   gap: 14px;
 }
 
 .hero-img {
   background: var(--suppl);
+  border-left: 1px solid var(--line);
 }
 
 .hero-img img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  display: block;
-  min-height: 380px;
+  min-height: 400px;
 }
 
 /* ===== 新品网格 ===== */
 .grid4 {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  gap: 32px 24px;
+}
+
+.head-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
   gap: 24px;
 }
 
 .view-toggle {
   display: inline-flex;
   border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  overflow: hidden;
-  font-size: 12px;
+  font-size: 11px;
   background: var(--card);
+  letter-spacing: 1px;
 }
 
 .view-toggle span {
-  padding: 5px 14px;
+  padding: 6px 16px;
   cursor: pointer;
   color: var(--ink2);
 }
 
 .view-toggle span.on {
-  background: var(--accent);
+  background: var(--ink);
   color: #fff;
 }
 
@@ -271,6 +284,11 @@ const inspirations = computed<InspirationItem[]>(() =>
 @media (max-width: 767px) {
   .hero {
     grid-template-columns: 1fr;
+  }
+
+  .hero-img {
+    border-left: none;
+    border-top: 1px solid var(--line);
   }
 
   .hero-text {

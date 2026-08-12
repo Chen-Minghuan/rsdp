@@ -2,8 +2,8 @@
 import { ref } from 'vue'
 
 /**
- * 留资 CTA（深棕大圆角色块）：点击主按钮展开内联表单，
- * 提交 POST /api/v1/public/leads（source 由调用方指定，首页为 site_form）。
+ * 留资 CTA（v2：直角深棕块 +「DESIGN SERVICE」字距小标 + 米白底直角按钮）。
+ * 点击主按钮展开内联表单，提交 POST /api/v1/public/leads（source 由调用方指定）。
  */
 const props = withDefaults(defineProps<{
   title?: string
@@ -54,6 +54,7 @@ async function submit() {
 <template>
   <section class="cta">
     <template v-if="!done">
+      <div class="kick">DESIGN SERVICE</div>
       <h2>{{ title }}</h2>
       <p>{{ desc }}</p>
       <button v-if="!expanded" class="btn-a" @click="expanded = true">{{ btnText }}</button>
@@ -68,6 +69,7 @@ async function submit() {
       </form>
     </template>
     <template v-else>
+      <div class="kick">DESIGN SERVICE</div>
       <h2>提交成功</h2>
       <p>我们的设计师会尽快与你联系，请保持电话畅通。</p>
     </template>
@@ -76,35 +78,43 @@ async function submit() {
 
 <style scoped>
 .cta {
-  margin-top: 64px;
+  margin-top: 80px;
   background: var(--accent-deep);
   color: var(--suppl);
   text-align: center;
-  padding: 64px 24px;
-  border-radius: var(--radius-lg);
+  padding: 76px 24px;
+  border-radius: var(--radius);
+}
+
+.kick {
+  font-size: 11px;
+  letter-spacing: 6px;
+  color: var(--on-deep-dim);
+  margin-bottom: 20px;
 }
 
 .cta h2 {
   font-family: var(--font-serif);
-  font-size: 30px;
+  font-size: 32px;
   font-weight: 700;
-  letter-spacing: 3px;
+  letter-spacing: 5px;
 }
 
 .cta p {
-  margin: 16px 0 28px;
-  color: #d9c8b4;
-  font-size: 15px;
-  letter-spacing: 1px;
+  margin: 18px 0 34px;
+  color: var(--on-deep-dim);
+  font-size: 13px;
+  letter-spacing: 2px;
+  line-height: 2;
 }
 
 .cta .btn-a {
-  background: #fff;
+  background: var(--bg);
   color: var(--accent-deep);
 }
 
 .cta .btn-a:hover {
-  background: var(--suppl);
+  background: #fff;
 }
 
 .cta-form {
@@ -116,16 +126,22 @@ async function submit() {
 }
 
 .cta-form input {
-  border: none;
-  border-radius: var(--radius-pill);
-  padding: 12px 22px;
-  font-size: 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 12px 18px;
+  font-size: 13px;
   outline: none;
   color: var(--ink);
+  letter-spacing: 1px;
+}
+
+.cta-form input:focus {
+  border-color: var(--on-deep-dim);
 }
 
 .cta-error {
-  font-size: 13px;
-  color: #f0b9a8;
+  font-size: 12px;
+  color: #e8b39a;
+  letter-spacing: 1px;
 }
 </style>

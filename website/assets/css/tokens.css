@@ -1,38 +1,49 @@
 /**
- * RSDP 用户端官网设计 tokens（style-a「暖调家居馆」）。
+ * RSDP 用户端官网设计 tokens（v2「高级沉稳版」）。
  *
- * 与 docs/09-design/RSDP用户端官网设计文档.md 第二章（2.1/2.2/2.3/2.4）完全一致；
- * 规则：赭石仅促销、深棕仅结构两端、全站禁用 #2453FC 蓝与 #FF0000 纯红。
+ * 对照 docs/09-design/v2设计变更说明.md 第一节 tokens 表与第二节七条硬性规则：
+ * 零 emoji/零图标、圆角 ≤ 2px、零阴影（1px 细线替代）、按钮/选中态墨底白字、
+ * 中文标题字距 2~6px、按钮字距 3~4px、正文行高 2.0~2.1。
  */
 
 :root {
   /* ========== 基础色板 ========== */
-  --bg: #FAF7F2;        /* 页面主背景（米白） */
+  --bg: #faf7f1;        /* 页面主背景（米白） */
   --card: #FFFFFF;      /* 卡片/面板背景 */
-  --suppl: #F3EADF;     /* 补充色（暖杏）：图片占位底、促销价底、搜索框底 */
-  --ink: #2B2118;       /* 主文字（深墨棕） */
-  --ink2: #9C8B78;      /* 次要文字（灰驼） */
-  --line: #E8DFD2;      /* 分割线、边框 */
+  --suppl: #f1e9dc;     /* 补充色（暖杏）：图片占位底、强调区块底 */
+  --ink: #221a12;       /* 主文字（墨色），按钮/选中态底 */
+  --ink2: #8a7a66;      /* 次要文字（灰驼） */
+  --line: #ded3c2;      /* 分割线、边框（细线更可见） */
 
   /* ========== 品牌/功能色 ========== */
-  --accent: #8B5E3C;       /* 主品牌色（中棕）：主按钮、链接悬停、激活态、新品标签 */
-  --accent-deep: #6F4A2E;  /* 深品牌色（深棕）：logo、标题强调、深色区块底 */
-  --terra: #C2622B;        /* 功能强调色（赭石）：仅促销/优惠相关位置 */
+  --accent: #7a5232;       /* 主品牌色（深棕降饱和）：链接悬停、新品标签 */
+  --accent-deep: #5d3d24;  /* 深品牌色：标题强调、深色区块底（CTA/工具条） */
+  --terra: #b85a26;        /* 功能强调色（赭石降饱和）：仅促销/优惠相关位置 */
+
+  /* ========== 深底反白文字（topbar / CTA / Footer） ========== */
+  --on-deep: #e9ddc9;      /* 深棕底上的主文字 */
+  --on-deep-dim: #c9b394;  /* 深棕底上的次要文字/小标 */
+  --footer-bg: #20170f;    /* Footer 深棕黑底 */
+  --footer-text: #a89880;  /* Footer 正文 */
 
   /* ========== 字体 ========== */
   --font-serif: 'Noto Serif SC', 'Songti SC', 'STSong', 'Georgia', serif;
   --font-body: 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 
-  /* ========== 圆角 / 阴影 / 间距 ========== */
-  --radius: 16px;
-  --radius-lg: 24px;   /* Hero / CTA 容器 */
-  --radius-pill: 999px;
-  --shadow-card: 0 4px 18px rgba(90, 64, 42, .07);
-  --shadow-card-hover: 0 12px 32px rgba(90, 64, 42, .13);
-  --shadow-hero: 0 8px 30px rgba(90, 64, 42, .08);
-  --wrap-max: 1320px;
-  --wrap-padding: 40px;
-  --section-gap: 56px;
+  /* ========== 圆角（v2：全面直角化，≤ 2px） ========== */
+  --radius: 2px;
+  --radius-lg: 2px;
+  --radius-pill: 2px;
+
+  /* ========== 阴影（v2：零阴影，细线替代；变量保留置空防误用） ========== */
+  --shadow-card: none;
+  --shadow-card-hover: none;
+  --shadow-hero: none;
+
+  /* ========== 间距与布局 ========== */
+  --wrap-max: 1360px;
+  --wrap-padding: 48px;
+  --section-gap: 72px;
 }
 
 * {
@@ -52,51 +63,69 @@ a {
   color: inherit;
 }
 
+img {
+  display: block;
+}
+
 .wrap {
   max-width: var(--wrap-max);
   margin: 0 auto;
   padding: 0 var(--wrap-padding);
 }
 
-/* ========== 区块通用 ========== */
+/* ========== 区块通用：编辑部式（编号 + serif 标题 + 通长细线） ========== */
 .section {
   margin-top: var(--section-gap);
 }
 
 .section-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 24px;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 28px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.section-no {
+  font-size: 11px;
+  color: var(--ink2);
+  letter-spacing: 2px;
+  font-family: Georgia, serif;
 }
 
 .section-title {
   font-family: var(--font-serif);
-  font-size: 24px;
+  font-size: 25px;
   font-weight: 700;
+  letter-spacing: 3px;
 }
 
 .section-more {
-  font-size: 13px;
-  color: var(--accent);
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink);
   cursor: pointer;
-  letter-spacing: 1px;
+  letter-spacing: 2px;
+  border-bottom: 1px solid var(--ink2);
+  padding-bottom: 2px;
 }
 
 .section-more:hover {
-  text-decoration: underline;
+  color: var(--accent-deep);
+  border-bottom-color: var(--accent-deep);
 }
 
-/* ========== 按钮（胶囊） ========== */
+/* ========== 按钮（直角，墨底/描边，字距 3px） ========== */
 .btn-a {
-  background: var(--accent);
+  background: var(--ink);
   color: #fff;
   border: none;
-  padding: 13px 32px;
-  border-radius: var(--radius-pill);
-  font-size: 14px;
+  padding: 14px 36px;
+  border-radius: var(--radius);
+  font-size: 13px;
   cursor: pointer;
-  letter-spacing: 1px;
+  letter-spacing: 3px;
 }
 
 .btn-a:hover {
@@ -105,17 +134,18 @@ a {
 
 .btn-b {
   background: transparent;
-  color: var(--accent-deep);
-  border: 1px solid var(--accent);
-  padding: 13px 32px;
-  border-radius: var(--radius-pill);
-  font-size: 14px;
+  color: var(--ink);
+  border: 1px solid var(--ink);
+  padding: 14px 36px;
+  border-radius: var(--radius);
+  font-size: 13px;
   cursor: pointer;
-  letter-spacing: 1px;
+  letter-spacing: 3px;
 }
 
 .btn-b:hover {
-  background: var(--suppl);
+  border-color: var(--accent-deep);
+  color: var(--accent-deep);
 }
 
 /* ========== 响应式（设计文档 8.1） ========== */
@@ -128,6 +158,6 @@ a {
 @media (max-width: 767px) {
   :root {
     --wrap-padding: 16px;
-    --section-gap: 40px;
+    --section-gap: 48px;
   }
 }

@@ -410,48 +410,51 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
 <style scoped>
 /* ===== 面包屑 + 类目头 ===== */
 .crumb {
-  margin-top: 24px;
-  font-size: 12px;
+  margin-top: 28px;
+  font-size: 11px;
   color: var(--ink2);
-  letter-spacing: 1px;
+  letter-spacing: 2px;
 }
 
 .crumb a:hover {
   color: var(--accent-deep);
-  text-decoration: underline;
+  border-bottom: 1px solid var(--accent-deep);
 }
 
 .cat-head {
   display: flex;
   align-items: baseline;
-  gap: 18px;
-  margin-top: 16px;
+  gap: 22px;
+  margin-top: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
 }
 
 .cat-head h1 {
   font-family: var(--font-serif);
-  font-size: 34px;
+  font-size: 40px;
   font-weight: 700;
-  letter-spacing: 2px;
+  letter-spacing: 6px;
 }
 
 .cat-head .count {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--ink2);
+  letter-spacing: 2px;
 }
 
-/* ===== 筛选药丸条（吸顶） ===== */
+/* ===== 筛选药丸条（吸顶，直角细线按钮） ===== */
 .filter-bar {
   position: sticky;
-  top: 117px;
+  top: 113px;
   z-index: 40;
   background: var(--bg);
-  padding: 18px 0 14px;
-  margin-top: 20px;
+  padding: 20px 0 16px;
+  margin-top: 16px;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -462,29 +465,28 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
 .pill {
   border: 1px solid var(--line);
   background: var(--card);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius);
   padding: 8px 18px;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   color: var(--ink);
-  letter-spacing: 1px;
+  letter-spacing: 2px;
   user-select: none;
 }
 
 .pill:hover {
-  border-color: var(--accent);
-  color: var(--accent-deep);
+  border-color: var(--ink);
 }
 
 .pill.on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--ink);
+  border-color: var(--ink);
   color: #fff;
 }
 
 .pill .caret {
-  font-size: 10px;
-  margin-left: 6px;
+  font-size: 9px;
+  margin-left: 8px;
   color: var(--ink2);
 }
 
@@ -499,8 +501,7 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   min-width: 160px;
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--shadow-card-hover);
+  border-radius: var(--radius);
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -509,8 +510,8 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
 
 .panel-opt {
   padding: 8px 12px;
-  font-size: 13px;
-  border-radius: 8px;
+  font-size: 12px;
+  letter-spacing: 1px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -529,24 +530,25 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 16px;
-  font-size: 13px;
-  color: var(--ink2);
+  gap: 24px;
+  font-size: 12px;
+  color: var(--ink);
+  letter-spacing: 2px;
 }
 
 .switch {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   cursor: pointer;
   user-select: none;
 }
 
 .switch .track {
-  width: 36px;
-  height: 20px;
-  border-radius: var(--radius-pill);
-  background: var(--line);
+  width: 34px;
+  height: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
   position: relative;
   transition: .2s;
 }
@@ -554,57 +556,58 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
 .switch .track::after {
   content: "";
   position: absolute;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #fff;
+  width: 12px;
+  height: 12px;
+  background: var(--ink2);
   top: 2px;
   left: 2px;
   transition: .2s;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .2);
 }
 
 .switch.on .track {
-  background: var(--accent);
+  background: var(--card);
+  border-color: var(--ink);
 }
 
 .switch.on .track::after {
-  left: 18px;
+  left: 16px;
+  background: var(--ink);
 }
 
 .view-toggle {
   display: inline-flex;
   border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  overflow: hidden;
-  font-size: 12px;
+  font-size: 11px;
   background: var(--card);
+  letter-spacing: 1px;
 }
 
 .view-toggle span {
-  padding: 6px 15px;
+  padding: 6px 16px;
   cursor: pointer;
   color: var(--ink2);
 }
 
 .view-toggle span.on {
-  background: var(--accent);
+  background: var(--ink);
   color: #fff;
 }
 
-/* ===== 已选筛选 ===== */
+/* ===== 已选筛选（直角） ===== */
 .active-filters {
   display: flex;
   gap: 8px;
-  margin: 16px 0 6px;
-  font-size: 12px;
+  margin: 18px 0 4px;
+  font-size: 11px;
+  letter-spacing: 1px;
 }
 
 .af {
   background: var(--suppl);
   color: var(--accent-deep);
-  border-radius: var(--radius-pill);
-  padding: 5px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 6px 14px;
   cursor: pointer;
 }
 
@@ -613,49 +616,52 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   color: var(--terra);
 }
 
-/* ===== 商品网格 ===== */
+/* ===== 商品网格（去卡片化） ===== */
 .grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 24px;
-  margin-top: 18px;
+  gap: 36px 24px;
+  margin-top: 24px;
 }
 
 .empty {
   text-align: center;
   color: var(--ink2);
-  font-size: 14px;
+  font-size: 13px;
+  letter-spacing: 2px;
   padding: 64px 0;
 }
 
-/* ===== 加载更多 ===== */
+/* ===== 加载更多（描边直角按钮） ===== */
 .more-wrap {
   text-align: center;
-  margin: 44px 0 8px;
+  margin: 56px 0 12px;
 }
 
 .btn-more {
-  background: var(--card);
-  border: 1px solid var(--accent);
-  color: var(--accent-deep);
-  padding: 13px 46px;
-  border-radius: var(--radius-pill);
-  font-size: 14px;
+  background: transparent;
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  padding: 14px 52px;
+  border-radius: var(--radius);
+  font-size: 12px;
   cursor: pointer;
-  letter-spacing: 2px;
+  letter-spacing: 4px;
 }
 
 .btn-more:hover {
-  background: var(--suppl);
+  background: var(--ink);
+  color: #fff;
 }
 
 .more-info {
-  margin-top: 14px;
-  font-size: 12px;
+  margin-top: 16px;
+  font-size: 11px;
   color: var(--ink2);
+  letter-spacing: 2px;
 }
 
-/* ===== 对比抽屉 ===== */
+/* ===== 对比抽屉（细线顶边，零阴影） ===== */
 .compare-drawer {
   position: fixed;
   left: 0;
@@ -664,7 +670,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   z-index: 60;
   background: var(--card);
   border-top: 1px solid var(--line);
-  box-shadow: 0 -8px 30px rgba(90, 64, 42, .12);
   padding: 16px 0;
 }
 
@@ -686,7 +691,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
-  border-radius: 8px;
   background: var(--suppl);
 }
 
@@ -704,6 +708,7 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   font-weight: 600;
   color: var(--ink);
   margin: 8px 0 6px;
+  letter-spacing: 1px;
 }
 
 .cc-row {
@@ -718,10 +723,11 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   font-size: 12px;
   cursor: pointer;
   padding: 0;
+  letter-spacing: 1px;
 }
 
 .cc-remove:hover {
-  text-decoration: underline;
+  border-bottom: 1px solid var(--accent);
 }
 
 @media (max-width: 1199px) {

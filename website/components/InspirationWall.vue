@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * 家居灵感瀑布（1 大 + 4 小，第一格纵向跨 2 行）。
+ * 家居灵感瀑布（v2：1 大 4 小，删浮层胶囊，改图下题注 serif + 底部 1px 细线；
+ * hover 仅图片 scale(1.03)）。
  */
 export interface InspirationItem {
   title: string
@@ -24,13 +25,15 @@ const { imageUrl } = usePublicApi()
       class="i-card"
       :href="item.link"
     >
-      <img
-        v-if="imageUrl(item.imageUrl)"
-        :src="imageUrl(item.imageUrl)"
-        :alt="item.title"
-        loading="lazy"
-      >
-      <span class="cap">{{ item.title }}</span>
+      <div class="rim">
+        <img
+          v-if="imageUrl(item.imageUrl)"
+          :src="imageUrl(item.imageUrl)"
+          :alt="item.title"
+          loading="lazy"
+        >
+      </div>
+      <div class="cap">{{ item.title }}</div>
     </component>
   </div>
 </template>
@@ -39,24 +42,25 @@ const { imageUrl } = usePublicApi()
 .insp {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;
-  gap: 20px;
+  gap: 24px;
 }
 
 .i-card {
-  position: relative;
-  border-radius: var(--radius);
-  overflow: hidden;
   cursor: pointer;
+}
+
+.i-card .rim {
+  overflow: hidden;
   background: var(--suppl);
+  height: 100%;
 }
 
 .i-card img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  display: block;
-  min-height: 190px;
-  transition: transform .3s;
+  min-height: 200px;
+  transition: transform .4s;
 }
 
 .i-card:hover img {
@@ -67,16 +71,13 @@ const { imageUrl } = usePublicApi()
   grid-row: span 2;
 }
 
-.cap {
-  position: absolute;
-  left: 16px;
-  bottom: 14px;
-  background: rgba(255, 255, 255, .95);
-  padding: 7px 17px;
-  border-radius: var(--radius-pill);
+.i-card .cap {
+  margin-top: 12px;
   font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 1px;
+  font-family: var(--font-serif);
+  letter-spacing: 2px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
 }
 
 @media (max-width: 767px) {

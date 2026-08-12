@@ -3,18 +3,18 @@ import { computed } from 'vue'
 import type { PublicProduct } from '~/types/api'
 
 /**
- * 商品卡（宜家 PLP 卡规格 × 暖调皮肤）：
- * 4:3 图区（双视图：商品图/场景图）+ 标签胶囊 + 变体胶囊 + serif 商品名 + 价格三段式 + 可选评分。
+ * 商品卡（v2 高级沉稳版 · 去容器化）：
+ * 图（suppl 底）+ 下方文字直接落页面，无白卡、无阴影、hover 仅图片 scale(1.03)。
+ * tag 直角小方块贴左上角（热卖=ink / 新品=accent / 即将下架=terra）；
+ * 星级评分改「N 条评价」小字（有 ratingCount 数据才展示）。
  */
 const props = withDefaults(defineProps<{
   product: PublicProduct
   /** 图区视图：商品图 / 场景图（场景图缺失时回退商品图） */
   viewMode?: 'plain' | 'scene'
-  /** 评分（0~5，无数据不展示评分行） */
-  rating?: number
-  /** 评分人数 */
+  /** 评价条数（无数据不展示评价行） */
   ratingCount?: number
-  /** 对比开关开启时图区右上角显示 ⊕ 按钮 */
+  /** 对比开关开启时图区右上角显示 ＋ 按钮 */
   compareOn?: boolean
   /** 当前已选中对比 */
   compared?: boolean
@@ -57,15 +57,10 @@ const tags = computed(() => {
   return result
 })
 
+/** 组合数文案（v2 移至图下 p-meta 行，不再用浮层胶囊）。 */
 const variantsText = computed(() => {
   const count = props.product.variantCount
-  return count > 1 ? `+${count - 1} 种组合` : ''
-})
-
-const stars = computed(() => {
-  if (props.rating == null) return ''
-  const full = Math.round(props.rating)
-  return '★'.repeat(full) + '☆'.repeat(5 - full)
+  return count > 1 ? `${count} 种组合` : ''
 })
 </script>
 
@@ -83,7 +78,7 @@ const stars = computed(() => {
         :aria-pressed="compared"
         @click.stop="emit('toggle-compare', product)"
       >
-        {{ compared ? '✓' : '⊕' }}
+        {{ compared ? '×' : '＋' }}
       </button>
       <img
         v-if="displayImage"
@@ -91,7 +86,6 @@ const stars = computed(() => {
         :alt="name"
         loading="lazy"
       >
-      <span v-if="variantsText" class="variants">{{ variantsText }}</span>
     </div>
     <div class="p-body">
       <div class="p-name">{{ name }}</div>
@@ -100,8 +94,9 @@ const stars = computed(() => {
         v-if="product.retailPrice != null"
         :value="product.retailPrice"
       />
-      <div v-if="rating != null" class="stars">
-        {{ stars }} <b>{{ rating.toFixed(1) }}</b> ({{ ratingCount ?? 0 }})
+      <div v-if="variantsText || ratingCount != null" class="p-meta">
+        <span v-if="variantsText">{{ variantsText }}</span>
+        <span v-if="ratingCount != null">{{ ratingCount }} 条评价</span>
       </div>
     </div>
   </div>
@@ -109,113 +104,97 @@ const stars = computed(() => {
 
 <style scoped>
 .p-card {
-  background: var(--card);
-  border-radius: var(--radius);
-  overflow: hidden;
   cursor: pointer;
-  box-shadow: var(--shadow-card);
-  transition: transform .2s, box-shadow .2s;
-}
-
-.p-card:hover {
-  transform: translateY(-4px);
-  box-shadow: var(--shadow-card-hover);
+  position: relative;
 }
 
 .p-img {
   position: relative;
   aspect-ratio: 4 / 3;
   background: var(--suppl);
+  overflow: hidden;
 }
 
 .p-img img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  display: block;
+  transition: transform .35s;
 }
 
+.p-card:hover .p-img img {
+  transform: scale(1.03);
+}
+
+/* tag：直角小方块贴左上角 */
 .tags {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: 0;
+  left: 0;
   display: flex;
-  gap: 6px;
-  z-index: 1;
+  z-index: 2;
 }
 
 .tag {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  padding: 3px 11px;
-  border-radius: var(--radius-pill);
+  padding: 5px 12px;
   color: #fff;
-  letter-spacing: 1px;
+  letter-spacing: 2px;
 }
 
 .tag.hot { background: var(--ink); }
 .tag.new { background: var(--accent); }
 .tag.end { background: var(--terra); }
 
-.variants {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
-  font-size: 11px;
-  color: var(--ink2);
-  background: rgba(255, 255, 255, .95);
-  padding: 3px 11px;
-  border-radius: var(--radius-pill);
-}
-
+/* 对比按钮：直角方块贴右上角 */
 .compare {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 30px;
-  height: 30px;
+  top: 0;
+  right: 0;
+  width: 32px;
+  height: 32px;
   border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, .95);
+  background: rgba(255, 255, 255, .94);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
-  color: var(--accent-deep);
+  font-size: 13px;
+  color: var(--ink);
   z-index: 2;
   cursor: pointer;
 }
 
 .compare:hover,
 .compare.on {
-  background: var(--accent);
+  background: var(--ink);
   color: #fff;
 }
 
 .p-body {
-  padding: 16px 18px 20px;
+  padding: 14px 2px 0;
 }
 
 .p-name {
   font-family: var(--font-serif);
   font-size: 16px;
   font-weight: 600;
+  letter-spacing: 1px;
 }
 
 .p-desc {
   margin-top: 6px;
-  font-size: 12px;
+  font-size: 11px;
+  color: var(--ink2);
+  letter-spacing: 2px;
+}
+
+.p-meta {
+  margin-top: 8px;
+  font-size: 11px;
   color: var(--ink2);
   letter-spacing: 1px;
-}
-
-.stars {
-  font-size: 12px;
-  color: var(--ink2);
-  margin-top: 8px;
-}
-
-.stars b {
-  color: var(--ink);
+  display: flex;
+  gap: 14px;
 }
 </style>

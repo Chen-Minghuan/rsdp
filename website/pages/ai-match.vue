@@ -169,7 +169,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
         <label class="upload-box">
           <input type="file" accept="image/jpeg,image/png" hidden @change="handleFileChange">
           <template v-if="!analyzing">
-            <div class="upload-icon">🏠</div>
+            <div class="upload-kick">FLOOR PLAN</div>
             <div class="upload-title">点击上传户型图</div>
             <div class="upload-hint">支持 CAD 导出图 / 中介户型图（JPG/PNG，≤10MB）</div>
           </template>
@@ -297,7 +297,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   margin-top: 16px;
   background: var(--suppl);
   color: var(--terra);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 12px 18px;
   font-size: 13px;
 }
@@ -306,7 +306,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   margin-top: 24px;
   background: var(--card);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
+  
   padding: 36px;
 }
 
@@ -335,8 +335,10 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   background: var(--suppl);
 }
 
-.upload-icon {
-  font-size: 36px;
+.upload-kick {
+  font-size: 11px;
+  letter-spacing: 6px;
+  color: var(--accent);
 }
 
 .upload-title {
@@ -422,7 +424,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 .edit-row select {
   flex: 1;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 10px 14px;
   font-size: 14px;
   outline: none;
@@ -470,7 +472,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--suppl);
 }
 

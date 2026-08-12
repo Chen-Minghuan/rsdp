@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 必逛好物 3 色块卡（宜家「大减价/当季新品/更低价格」× 暖调色块）。
+ * 必逛好物 3 色块卡（v2：直角、块间 gap 2px、无 hover 上浮）。
  * 配色循环：赭石底 → 深棕底 → 暖杏底（赭石仅用于促销语义首卡）。
  */
 export interface TrioCardItem {
@@ -36,34 +36,31 @@ const themes = ['t-terra', 't-deep', 't-suppl']
 .trio {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
+  gap: 2px;
 }
 
 .t-card {
-  border-radius: var(--radius);
-  padding: 32px 28px;
-  min-height: 160px;
+  padding: 36px 32px;
+  min-height: 190px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   cursor: pointer;
-  transition: transform .2s;
-}
-
-.t-card:hover {
-  transform: translateY(-3px);
 }
 
 .t-card h3 {
   font-family: var(--font-serif);
-  font-size: 22px;
-  letter-spacing: 2px;
+  font-size: 23px;
+  letter-spacing: 4px;
+  font-weight: 700;
 }
 
 .t-card p {
-  font-size: 13px;
-  opacity: .88;
-  margin-top: 8px;
+  font-size: 12px;
+  opacity: .85;
+  margin-top: 10px;
+  letter-spacing: 1px;
+  line-height: 1.8;
 }
 
 .t-terra { background: var(--terra); color: #fff; }
