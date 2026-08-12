@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
     status VARCHAR(16) DEFAULT 'active',
     aliases TEXT,
     remark TEXT,
+    image_id VARCHAR(64),
     PRIMARY KEY (dict_type, dict_code)
 );
 

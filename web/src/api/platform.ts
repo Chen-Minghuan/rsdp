@@ -10,7 +10,9 @@ import type {
   PlatformCustomDict,
   PlatformCustomDictPayload,
   PlatformCustomized,
-  PlatformCustomizedPayload
+  PlatformCustomizedPayload,
+  PlatformSceneCover,
+  PlatformSceneCoverPayload
 } from '@/types/platform'
 
 /**
@@ -126,6 +128,23 @@ export async function updatePlatformCustomized(customizedId: string, payload: Pl
 
 export async function deletePlatformCustomized(customizedId: string): Promise<void> {
   await apiClient.delete<ApiResult<void>>(`/v1/platform/customizeds/${customizedId}`)
+}
+
+// ==================== 空间封面 ====================
+
+/**
+ * 查询官网「空间探索」区块各场景的封面配置。
+ */
+export async function listSceneCovers(): Promise<PlatformSceneCover[]> {
+  const { data: result } = await apiClient.get<ApiResult<PlatformSceneCover[]>>('/v1/platform/scene-covers')
+  return result.data
+}
+
+/**
+ * 设置/清除指定场景的封面图（imageId 为 null 时清除封面，官网恢复产品图兜底）。
+ */
+export async function updateSceneCover(code: string, payload: PlatformSceneCoverPayload): Promise<void> {
+  await apiClient.put<ApiResult<void>>(`/v1/platform/scene-covers/${code}`, payload)
 }
 
 // ==================== 公开读取（免登录） ====================

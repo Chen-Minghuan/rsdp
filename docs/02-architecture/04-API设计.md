@@ -1269,6 +1269,16 @@ GET/POST/PUT/DELETE  /api/v1/platform/custom-dicts[/{dictId}]
 GET/POST/PUT/DELETE  /api/v1/platform/customizeds[/{customizedId}]
        # 产品定制卡片 CRUD
        # Request: { title (必填), coverImageId?, description?, linkValue?, sortOrder?, status? }
+
+GET    /api/v1/platform/scene-covers
+       # 空间场景封面列表（V35；全部 dict_type=scene 字典项，含未手配）
+       # Response: [{ code, name, imageId, imageUrl }]（imageUrl=/api/v1/images/{imageId} 或 null）
+
+PUT    /api/v1/platform/scene-covers/{code}
+       # 手配/清除空间场景封面（V35；校验字典存在且 dict_type=scene，
+       # imageId 非空时校验图片存在；传 null 清除手配；记审计日志并清空字典缓存）
+       # Request: { imageId }（null=清除，公开端回退"最新在售产品主图"兜底）
+       # Response: { code, name, imageId, imageUrl }
 ```
 
 ### 官网公开读取（免登录，/api/v1/public/**）
@@ -1296,7 +1306,8 @@ GET    /api/v1/public/products
        #            primaryImageUrl, sceneImageUrl, variantCount, createdAt }>
 
 GET    /api/v1/public/scenes
-       # 空间入口列表：启用场景字典 + 每个空间一张代表图（该场景下最新在售产品主图，可空）
+       # 空间入口列表：启用场景字典 + 每个空间一张代表图（可空）
+       # 封面图手配优先（category_dict.image_id，V35），无手配时回退"该场景下最新在售产品主图"
        # Response: [{ sceneCode, sceneName, sceneNameEn, imageUrl }]
 
 GET    /api/v1/public/categories

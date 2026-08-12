@@ -302,6 +302,7 @@ make clean
   - `V32__widen_import_row_type.sql`：excel_import_row.row_type 拓宽至 VARCHAR(32)（preview_placeholder 占位行）
   - `V33__excel_import_row_override_images.sql`：Excel 导入行级用户覆盖图片（excel_import_row.override_image_asset_ids，数据清洗页图片编辑；原本地分支 V31，与 main V31 重号后改号）
   - `V34__create_platform_lead.sql`：官网留资线索表（platform_lead：name/phone/source[ai_match|site_form|design_booking]/intent/budget/status[pending|contacted|done]/assignee/follow_log JSONB，用户端官网留资入口 + 管理端线索跟进）
+  - `V35__scene_dict_cover_image.sql`：官网空间探索场景封面图可手配（category_dict.image_id，仅存 image_assets.image_id 不加 FK/索引；管理端手配优先，无手配走"最新在售产品主图"兜底）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

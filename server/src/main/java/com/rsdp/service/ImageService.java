@@ -2,10 +2,12 @@ package com.rsdp.service;
 
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RskuSupply;
+import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.DesignOrderItemMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.mapper.RspuMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
@@ -31,6 +33,7 @@ public class ImageService {
     private final DataScopeHelper dataScopeHelper;
     private final RskuSupplyMapper rskuSupplyMapper;
     private final DesignOrderItemMapper designOrderItemMapper;
+    private final RspuMapper rspuMasterMapper;
 
     /**
      * 加载图片结果，包含资源流与 MIME 类型。
@@ -41,7 +44,8 @@ public class ImageService {
     /**
      * 根据图片 ID 加载图片文件资源与 MIME 类型。
      *
-     * <p>仅允许已登录且对图片关联 RSPU/RSKU 有数据权限的用户访问。</p>
+     * <p>公开资源（CMS 运营图、在售产品图，即 /api/v1/public/** 已公开引用的图片）允许匿名访问；
+     * 其余图片仅允许已登录且对图片关联 RSPU/RSKU 有数据权限的用户访问。</p>
      *
      * @param imageId 图片 ID
      * @return 加载结果
@@ -51,8 +55,31 @@ public class ImageService {
         if (imageAsset == null || imageAsset.getDeletedAt() != null) {
             throw new ResourceNotFoundException("图片不存在: " + imageId);
         }
-        assertLoggedInUserCanAccess(imageAsset);
+        if (!isPubliclyVisible(imageAsset)) {
+            assertLoggedInUserCanAccess(imageAsset);
+        }
         return doLoad(imageAsset);
+    }
+
+    /**
+     * 判断图片是否为公开可访问资源（官网匿名访问场景）。
+     *
+     * <p>判定规则：CMS 运营图（image_type=cms，专为官网公开配置）；
+     * 或归属于在售（status=active）产品的产品图（官网商品图/场景图均已在公开接口暴露）。</p>
+     *
+     * @param imageAsset 图片实体
+     * @return true 表示允许匿名访问
+     */
+    private boolean isPubliclyVisible(ImageAssets imageAsset) {
+        if ("cms".equals(imageAsset.getImageType())) {
+            return true;
+        }
+        String rspuId = imageAsset.getRspuId();
+        if (StringUtils.hasText(rspuId)) {
+            RspuMaster rspu = rspuMasterMapper.selectById(rspuId);
+            return rspu != null && "active".equals(rspu.getStatus());
+        }
+        return false;
     }
 
     /**

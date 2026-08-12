@@ -50,4 +50,11 @@ public class CategoryDict {
      */
     @TableField("remark")
     private String remark;
+
+    /**
+     * 场景封面图（image_assets.image_id），仅 dict_type=scene 使用（V35）。
+     * 官网空间探索入口手配优先，为空时走"该场景下最新在售产品主图"兜底。
+     */
+    @TableField("image_id")
+    private String imageId;
 }

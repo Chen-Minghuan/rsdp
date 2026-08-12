@@ -6,12 +6,14 @@ import com.rsdp.dto.request.PlatformCaseRequest;
 import com.rsdp.dto.request.PlatformContentRequest;
 import com.rsdp.dto.request.PlatformCustomDictRequest;
 import com.rsdp.dto.request.PlatformCustomizedRequest;
+import com.rsdp.dto.request.SceneCoverUpdateRequest;
 import com.rsdp.dto.response.CmsImageUploadResponse;
 import com.rsdp.dto.response.PlatformBannerResponse;
 import com.rsdp.dto.response.PlatformCaseResponse;
 import com.rsdp.dto.response.PlatformContentResponse;
 import com.rsdp.dto.response.PlatformCustomDictResponse;
 import com.rsdp.dto.response.PlatformCustomizedResponse;
+import com.rsdp.dto.response.SceneCoverResponse;
 import com.rsdp.service.PlatformCmsService;
 import com.rsdp.service.PlatformImageService;
 import jakarta.validation.Valid;
@@ -56,6 +58,26 @@ public class PlatformCmsController {
     @PostMapping("/images")
     public Result<CmsImageUploadResponse> uploadImage(@RequestParam("file") MultipartFile file) throws IOException {
         return Result.ok(platformImageService.upload(file));
+    }
+
+    // ==================== 空间场景封面（V35） ====================
+
+    /**
+     * 查询全部空间场景（dict_type=scene）的手配封面列表。
+     */
+    @GetMapping("/scene-covers")
+    public Result<List<SceneCoverResponse>> listSceneCovers() {
+        return Result.ok(platformCmsService.listSceneCovers());
+    }
+
+    /**
+     * 手配/清除空间场景封面图（imageId 传 null 清除，回退产品主图兜底）。
+     */
+    @PutMapping("/scene-covers/{code}")
+    public Result<SceneCoverResponse> updateSceneCover(
+        @PathVariable @NotBlank(message = "场景编码不能为空") String code,
+        @RequestBody @Valid SceneCoverUpdateRequest request) {
+        return Result.ok(platformCmsService.updateSceneCover(code, request));
     }
 
     // ==================== Banner ====================

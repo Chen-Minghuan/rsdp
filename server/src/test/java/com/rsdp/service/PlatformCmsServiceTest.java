@@ -1,19 +1,26 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.rsdp.dto.request.PlatformBannerRequest;
 import com.rsdp.dto.request.PlatformCaseRequest;
 import com.rsdp.dto.request.PlatformContentRequest;
 import com.rsdp.dto.request.PlatformCustomDictRequest;
 import com.rsdp.dto.request.PlatformCustomizedRequest;
+import com.rsdp.dto.request.SceneCoverUpdateRequest;
 import com.rsdp.dto.response.PlatformBannerResponse;
 import com.rsdp.dto.response.PlatformContentResponse;
 import com.rsdp.dto.response.PlatformCustomDictResponse;
+import com.rsdp.dto.response.SceneCoverResponse;
+import com.rsdp.entity.CategoryDict;
+import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.PlatformBanner;
 import com.rsdp.entity.PlatformContent;
 import com.rsdp.entity.PlatformCustomDict;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.mapper.CategoryDictMapper;
+import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.PlatformBannerMapper;
 import com.rsdp.mapper.PlatformCaseMapper;
 import com.rsdp.mapper.PlatformContentMapper;
@@ -25,11 +32,14 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -56,7 +66,113 @@ class PlatformCmsServiceTest {
     private PlatformCustomizedMapper customizedMapper;
 
     @Mock
+    private CategoryDictMapper categoryDictMapper;
+
+    @Mock
+    private ImageAssetsMapper imageAssetsMapper;
+
+    @Mock
     private AuditLogService auditLogService;
+
+    // ==================== 空间场景封面（V35） ====================
+
+    @Test
+    void listSceneCoversShouldReturnAllSceneDicts() {
+        CategoryDict living = new CategoryDict();
+        living.setDictType("scene");
+        living.setDictCode("LIVING");
+        living.setDictName("客厅");
+        living.setImageId("IMG-1");
+        CategoryDict study = new CategoryDict();
+        study.setDictType("scene");
+        study.setDictCode("STUDY");
+        study.setDictName("书房");
+        when(categoryDictMapper.selectAllByType("scene")).thenReturn(List.of(living, study));
+
+        List<SceneCoverResponse> covers = platformCmsService.listSceneCovers();
+
+        assertThat(covers).hasSize(2);
+        assertThat(covers.get(0).getCode()).isEqualTo("LIVING");
+        assertThat(covers.get(0).getImageId()).isEqualTo("IMG-1");
+        assertThat(covers.get(0).getImageUrl()).isEqualTo("/api/v1/images/IMG-1");
+        assertThat(covers.get(1).getImageId()).isNull();
+        assertThat(covers.get(1).getImageUrl()).isNull();
+    }
+
+    @Test
+    void updateSceneCoverShouldSetCover() {
+        CategoryDict scene = new CategoryDict();
+        scene.setDictType("scene");
+        scene.setDictCode("LIVING");
+        scene.setDictName("客厅");
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(scene);
+        ImageAssets image = new ImageAssets();
+        image.setImageId("IMG-9");
+        when(imageAssetsMapper.selectById("IMG-9")).thenReturn(image);
+
+        SceneCoverUpdateRequest request = new SceneCoverUpdateRequest();
+        request.setImageId("IMG-9");
+
+        SceneCoverResponse response = platformCmsService.updateSceneCover("LIVING", request);
+
+        assertThat(response.getImageId()).isEqualTo("IMG-9");
+        assertThat(response.getImageUrl()).isEqualTo("/api/v1/images/IMG-9");
+        verify(categoryDictMapper).update(isNull(), any(UpdateWrapper.class));
+        verify(auditLogService).logUpdate(eq("category_dict"), eq("scene:LIVING"), any(), any(CategoryDict.class), any());
+    }
+
+    @Test
+    void updateSceneCoverNullImageShouldClearCover() {
+        CategoryDict scene = new CategoryDict();
+        scene.setDictType("scene");
+        scene.setDictCode("LIVING");
+        scene.setDictName("客厅");
+        scene.setImageId("IMG-9");
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(scene);
+
+        SceneCoverUpdateRequest request = new SceneCoverUpdateRequest();
+        request.setImageId(null);
+
+        SceneCoverResponse response = platformCmsService.updateSceneCover("LIVING", request);
+
+        assertThat(response.getImageId()).isNull();
+        assertThat(response.getImageUrl()).isNull();
+        verify(imageAssetsMapper, never()).selectById(anyString());
+        verify(categoryDictMapper).update(isNull(), any(UpdateWrapper.class));
+        verify(auditLogService).logUpdate(eq("category_dict"), eq("scene:LIVING"), any(), any(CategoryDict.class), any());
+    }
+
+    @Test
+    void updateSceneCoverShouldRejectNonSceneDict() {
+        // 按 dict_type=scene + dict_code 查询不到（编码不存在或属于其他字典类型）
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(null);
+
+        SceneCoverUpdateRequest request = new SceneCoverUpdateRequest();
+        request.setImageId("IMG-9");
+
+        assertThatThrownBy(() -> platformCmsService.updateSceneCover("PE", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("场景字典项不存在");
+        verify(categoryDictMapper, never()).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void updateSceneCoverShouldRejectMissingImage() {
+        CategoryDict scene = new CategoryDict();
+        scene.setDictType("scene");
+        scene.setDictCode("LIVING");
+        scene.setDictName("客厅");
+        when(categoryDictMapper.selectOne(any(QueryWrapper.class))).thenReturn(scene);
+        when(imageAssetsMapper.selectById("IMG-X")).thenReturn(null);
+
+        SceneCoverUpdateRequest request = new SceneCoverUpdateRequest();
+        request.setImageId("IMG-X");
+
+        assertThatThrownBy(() -> platformCmsService.updateSceneCover("LIVING", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("图片不存在");
+        verify(categoryDictMapper, never()).update(isNull(), any(UpdateWrapper.class));
+    }
 
     @InjectMocks
     private PlatformCmsService platformCmsService;

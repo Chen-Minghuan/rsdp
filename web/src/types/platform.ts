@@ -105,6 +105,22 @@ export interface PlatformCustomizedPayload {
   status?: string | null
 }
 
+/** 空间探索场景封面（官网空间探索区块，按场景字典码配置） */
+export interface PlatformSceneCover {
+  /** 场景字典码（如 LIVING） */
+  code: string
+  /** 场景中文名 */
+  name: string
+  /** 封面图片 ID（null 表示未配置，官网自动使用产品图兜底） */
+  imageId: string | null
+  /** 封面图片地址（/api/v1/images/{id} 或 null） */
+  imageUrl: string | null
+}
+
+export interface PlatformSceneCoverPayload {
+  imageId: string | null
+}
+
 export interface CmsImageUploadResult {
   imageId: string
   url: string

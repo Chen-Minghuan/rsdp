@@ -132,7 +132,10 @@ public class PublicCatalogService {
     }
 
     /**
-     * 空间入口列表：场景字典（启用）+ 每个空间一张代表图（该场景下最新在售产品的主图）。
+     * 空间入口列表：场景字典（启用）+ 每个空间一张代表图。
+     *
+     * <p>封面图手配优先（category_dict.image_id，V35），
+     * 无手配时回退"该场景下最新在售产品的主图"。</p>
      *
      * @return 空间入口列表
      */
@@ -143,7 +146,9 @@ public class PublicCatalogService {
             item.setSceneCode(scene.getDictCode());
             item.setSceneName(scene.getDictName());
             item.setSceneNameEn(scene.getDictNameEn());
-            item.setImageUrl(findSceneRepresentImage(scene.getDictCode()));
+            item.setImageUrl(StringUtils.hasText(scene.getImageId())
+                ? imageUrl(scene.getImageId())
+                : findSceneRepresentImage(scene.getDictCode()));
             return item;
         }).toList();
     }

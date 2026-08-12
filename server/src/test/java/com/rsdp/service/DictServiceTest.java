@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.BusinessException;
@@ -18,6 +19,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 /**
@@ -240,7 +242,7 @@ class DictServiceTest {
             "扶手又宽又厚");
 
         assertThat(result.getRemark()).isEqualTo("扶手又宽又厚");
-        verify(categoryDictMapper).updateById(existing);
+        verify(categoryDictMapper).update(isNull(), any(UpdateWrapper.class));
     }
 
     @Test
@@ -293,7 +295,7 @@ class DictServiceTest {
         assertThat(result.getDictNameEn()).isEqualTo("Leather");
         assertThat(result.getAliases()).isEqualTo("[\"真皮\",\"牛皮\"]");
         assertThat(result.getSortOrder()).isEqualTo(10);
-        verify(categoryDictMapper).updateById(existing);
+        verify(categoryDictMapper).update(isNull(), any(UpdateWrapper.class));
         verify(auditLogService).logUpdate(eq("category_dict"), eq("material:LE"), any(), any(), any());
     }
 
@@ -312,7 +314,7 @@ class DictServiceTest {
         assertThat(result.getDictName()).isEqualTo("皮革");
         assertThat(result.getDictNameEn()).isEqualTo("Leather");
         assertThat(result.getAliases()).isNull();
-        verify(categoryDictMapper).updateById(existing);
+        verify(categoryDictMapper).update(isNull(), any(UpdateWrapper.class));
     }
 
     @Test
@@ -321,7 +323,7 @@ class DictServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("不允许通过界面维护");
 
-        verify(categoryDictMapper, never()).updateById(any(CategoryDict.class));
+        verify(categoryDictMapper, never()).update(isNull(), any(UpdateWrapper.class));
     }
 
     @Test
@@ -345,7 +347,7 @@ class DictServiceTest {
         CategoryDict result = dictService.updateDictStatus("fabric", "WB", "disabled");
 
         assertThat(result.getStatus()).isEqualTo("disabled");
-        verify(categoryDictMapper).updateById(existing);
+        verify(categoryDictMapper).update(isNull(), any(UpdateWrapper.class));
         verify(auditLogService).logUpdate(eq("category_dict"), eq("fabric:WB"), any(), any(), any());
     }
 
@@ -355,7 +357,7 @@ class DictServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("active 或 disabled");
 
-        verify(categoryDictMapper, never()).updateById(any(CategoryDict.class));
+        verify(categoryDictMapper, never()).update(isNull(), any(UpdateWrapper.class));
     }
 
     @Test

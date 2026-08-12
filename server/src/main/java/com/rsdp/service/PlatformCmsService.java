@@ -1,16 +1,21 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.rsdp.config.CacheConfig;
 import com.rsdp.dto.request.PlatformBannerRequest;
 import com.rsdp.dto.request.PlatformCaseRequest;
 import com.rsdp.dto.request.PlatformContentRequest;
 import com.rsdp.dto.request.PlatformCustomDictRequest;
 import com.rsdp.dto.request.PlatformCustomizedRequest;
+import com.rsdp.dto.request.SceneCoverUpdateRequest;
 import com.rsdp.dto.response.PlatformBannerResponse;
 import com.rsdp.dto.response.PlatformCaseResponse;
 import com.rsdp.dto.response.PlatformContentResponse;
 import com.rsdp.dto.response.PlatformCustomDictResponse;
 import com.rsdp.dto.response.PlatformCustomizedResponse;
+import com.rsdp.dto.response.SceneCoverResponse;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.PlatformBanner;
 import com.rsdp.entity.PlatformCase;
 import com.rsdp.entity.PlatformContent;
@@ -18,6 +23,8 @@ import com.rsdp.entity.PlatformCustomDict;
 import com.rsdp.entity.PlatformCustomized;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.mapper.CategoryDictMapper;
+import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.PlatformBannerMapper;
 import com.rsdp.mapper.PlatformCaseMapper;
 import com.rsdp.mapper.PlatformContentMapper;
@@ -27,6 +34,7 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.util.IdGenerator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.BeanUtils;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -51,13 +59,66 @@ public class PlatformCmsService {
     private static final Set<String> VALID_LINK_TYPES = Set.of("none", "rspu", "url");
     /** 合法内容类型。 */
     private static final Set<String> VALID_CONTENT_TYPES = Set.of("image", "rich_text", "embed");
+    /** 空间场景字典类型。 */
+    private static final String DICT_TYPE_SCENE = "scene";
 
     private final PlatformBannerMapper bannerMapper;
     private final PlatformCaseMapper caseMapper;
     private final PlatformContentMapper contentMapper;
     private final PlatformCustomDictMapper customDictMapper;
     private final PlatformCustomizedMapper customizedMapper;
+    private final CategoryDictMapper categoryDictMapper;
+    private final ImageAssetsMapper imageAssetsMapper;
     private final AuditLogService auditLogService;
+
+    // ==================== 空间场景封面（V35） ====================
+
+    /**
+     * 查询全部空间场景（dict_type=scene）的手配封面列表。
+     *
+     * @return 场景封面列表（code/name/imageId/imageUrl），按 sort_order 排序
+     */
+    public List<SceneCoverResponse> listSceneCovers() {
+        return categoryDictMapper.selectAllByType(DICT_TYPE_SCENE).stream()
+            .map(this::toSceneCoverResponse)
+            .toList();
+    }
+
+    /**
+     * 手配/清除空间场景封面图。
+     *
+     * <p>imageId 非空时校验图片存在；传 null/空白表示清除手配（公开端回退产品主图兜底）。
+     * 写操作记审计日志，并清空字典缓存（公开端 listScenes 经 DictService 读缓存）。</p>
+     *
+     * @param code    场景字典码
+     * @param request 封面图请求
+     * @return 更新后的场景封面
+     */
+    @CacheEvict(value = CacheConfig.CACHE_NAME_DICTS, allEntries = true)
+    @Transactional
+    public SceneCoverResponse updateSceneCover(String code, SceneCoverUpdateRequest request) {
+        CategoryDict scene = categoryDictMapper.selectOne(new QueryWrapper<CategoryDict>()
+            .eq("dict_type", DICT_TYPE_SCENE)
+            .eq("dict_code", code));
+        if (scene == null) {
+            throw new BusinessException("场景字典项不存在: scene=" + code);
+        }
+        String imageId = StringUtils.hasText(request.getImageId()) ? request.getImageId().trim() : null;
+        if (imageId != null && imageAssetsMapper.selectById(imageId) == null) {
+            throw new BusinessException("图片不存在: " + imageId);
+        }
+        CategoryDict oldSnapshot = copyCategoryDict(scene);
+        scene.setImageId(imageId);
+        // category_dict 为 (dict_type, dict_code) 复合主键，@TableId 仅标注 dict_type，
+        // updateById 会误更新同类型全部行，必须按复合条件只更新 image_id 列
+        categoryDictMapper.update(null, new UpdateWrapper<CategoryDict>()
+            .eq("dict_type", DICT_TYPE_SCENE)
+            .eq("dict_code", scene.getDictCode())
+            .set("image_id", imageId));
+        auditLogService.logUpdate("category_dict", DICT_TYPE_SCENE + ":" + scene.getDictCode(),
+            oldSnapshot, scene, currentUsername());
+        return toSceneCoverResponse(scene);
+    }
 
     // ==================== Banner ====================
 
@@ -524,6 +585,22 @@ public class PlatformCmsService {
         PlatformCustomized copy = new PlatformCustomized();
         BeanUtils.copyProperties(source, copy);
         return copy;
+    }
+
+    private CategoryDict copyCategoryDict(CategoryDict source) {
+        CategoryDict copy = new CategoryDict();
+        BeanUtils.copyProperties(source, copy);
+        return copy;
+    }
+
+    private SceneCoverResponse toSceneCoverResponse(CategoryDict scene) {
+        SceneCoverResponse response = new SceneCoverResponse();
+        response.setCode(scene.getDictCode());
+        response.setName(scene.getDictName());
+        response.setImageId(scene.getImageId());
+        response.setImageUrl(StringUtils.hasText(scene.getImageId())
+            ? "/api/v1/images/" + scene.getImageId() : null);
+        return response;
     }
 
     private PlatformBannerResponse toBannerResponse(PlatformBanner banner) {

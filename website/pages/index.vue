@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { TrioCardItem } from '~/components/TrioCards.vue'
 import type { ServiceCardItem } from '~/components/ServiceCards.vue'
 import type { InspirationItem } from '~/components/InspirationWall.vue'
 import type {
   CategoryNode,
   ContentResponse,
+  HomeBanner,
   HomeResponse,
   PageResult,
   PublicProduct,
@@ -45,10 +46,48 @@ const { data } = await useAsyncData('home-page', async () => {
 const categories = computed(() => data.value?.categories ?? [])
 const scenes = computed(() => data.value?.scenes ?? [])
 
-// ---------- 区块 3：Hero（platform_banner 主 Banner 驱动，无 Banner 回退默认文案） ----------
-const heroBanner = computed(() => data.value?.home?.banners?.[0] ?? null)
-const heroTitle = computed(() => heroBanner.value?.title || '')
-const heroImage = computed(() => imageUrl(heroBanner.value?.imageUrl))
+// ---------- 区块 3：Hero（platform_banner 轮播驱动，无 Banner 回退默认文案） ----------
+const banners = computed(() => data.value?.home?.banners ?? [])
+
+/** Hero 轮播帧（仅保留有图的 Banner）。 */
+interface HeroSlide extends HomeBanner {
+  src: string
+}
+const heroSlides = computed<HeroSlide[]>(() =>
+  banners.value.reduce<HeroSlide[]>((acc, b) => {
+    const src = imageUrl(b.imageUrl)
+    if (src) acc.push({ ...b, src })
+    return acc
+  }, [])
+)
+
+const heroIndex = ref(0)
+const activeSlide = computed(() =>
+  heroSlides.value.length ? heroSlides.value[heroIndex.value % heroSlides.value.length] : null
+)
+const heroTitle = computed(() => activeSlide.value?.title || banners.value[0]?.title || '')
+
+/** Banner 链接：url 跳外链（新标签），rspu 跳产品库，none 不可点。 */
+const heroLink = computed<{ href: string; external: boolean } | null>(() => {
+  const b = activeSlide.value
+  if (!b?.linkValue) return null
+  if (b.linkType === 'url') return { href: b.linkValue, external: true }
+  if (b.linkType === 'rspu') return { href: '/products', external: false }
+  return null
+})
+
+/** 自动轮播（~5s），仅客户端启动，SSR 渲染首帧。 */
+let heroTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  if (heroSlides.value.length > 1) {
+    heroTimer = setInterval(() => {
+      heroIndex.value = (heroIndex.value + 1) % heroSlides.value.length
+    }, 5000)
+  }
+})
+onBeforeUnmount(() => {
+  if (heroTimer) clearInterval(heroTimer)
+})
 
 // ---------- 区块 4：必逛好物（platform_content code=home_trio_cards，JSON 数组；兜底静态） ----------
 const trioItems = computed<TrioCardItem[]>(() =>
@@ -79,6 +118,9 @@ const inspirations = computed<InspirationItem[]>(() =>
     .slice(0, 5)
     .map(c => ({ title: c.title, imageUrl: c.coverImageUrl }))
 )
+
+// ---------- 区块 9：产品定制（platform_customized 驱动；无数据时隐藏区块） ----------
+const customizeds = computed(() => data.value?.home?.customizeds ?? [])
 </script>
 
 <template>
@@ -101,7 +143,33 @@ const inspirations = computed<InspirationItem[]>(() =>
             </div>
           </div>
           <div class="hero-img">
-            <img v-if="heroImage" :src="heroImage" alt="暖调客厅" fetchpriority="high">
+            <component
+              :is="heroLink ? 'a' : 'div'"
+              class="hero-img-link"
+              :class="{ clickable: heroLink }"
+              :href="heroLink?.href"
+              :target="heroLink?.external ? '_blank' : undefined"
+              :rel="heroLink?.external ? 'noopener' : undefined"
+            >
+              <img
+                v-for="(slide, i) in heroSlides"
+                :key="slide.bannerId"
+                :src="slide.src"
+                :alt="slide.title || '官网 Banner'"
+                :class="{ on: i === heroIndex % heroSlides.length }"
+                :fetchpriority="i === 0 ? 'high' : undefined"
+                :loading="i === 0 ? undefined : 'lazy'"
+              >
+            </component>
+            <!-- 轮播指示器（单条 Banner 不显示） -->
+            <div v-if="heroSlides.length > 1" class="hero-dots">
+              <span
+                v-for="(slide, i) in heroSlides"
+                :key="slide.bannerId"
+                :class="{ on: i === heroIndex % heroSlides.length }"
+                @click="heroIndex = i"
+              />
+            </div>
           </div>
         </div>
       </section>
@@ -164,11 +232,45 @@ const inspirations = computed<InspirationItem[]>(() =>
         <InspirationWall :items="inspirations" />
       </section>
 
-      <!-- 区块 9 · 留资 CTA -->
+      <!-- 区块 9 · 产品定制（CMS platform_customized 驱动，无数据隐藏） -->
+      <section v-if="customizeds.length" class="section">
+        <div class="section-head">
+          <span class="section-no">05</span>
+          <div class="section-title">产品定制</div>
+          <div class="section-more">了解定制服务</div>
+        </div>
+        <div class="custom-grid">
+          <component
+            :is="item.linkValue ? 'a' : 'div'"
+            v-for="item in customizeds"
+            :key="item.customizedId"
+            class="custom-card"
+            :class="{ clickable: item.linkValue }"
+            :href="item.linkValue || undefined"
+            :target="item.linkValue ? '_blank' : undefined"
+            :rel="item.linkValue ? 'noopener' : undefined"
+          >
+            <div class="rim">
+              <img
+                v-if="imageUrl(item.coverImageUrl)"
+                :src="imageUrl(item.coverImageUrl)"
+                :alt="item.title"
+                loading="lazy"
+              >
+            </div>
+            <div class="custom-text">
+              <div class="cap">{{ item.title }}</div>
+              <p v-if="item.description" class="desc">{{ item.description }}</p>
+            </div>
+          </component>
+        </div>
+      </section>
+
+      <!-- 区块 10 · 留资 CTA -->
       <CtaLead source="site_form" />
     </div>
 
-    <!-- 区块 10 · Footer -->
+    <!-- 区块 11 · Footer -->
     <SiteFooter />
   </div>
 </template>
@@ -231,15 +333,106 @@ const inspirations = computed<InspirationItem[]>(() =>
 }
 
 .hero-img {
+  position: relative;
   background: var(--suppl);
   border-left: 1px solid var(--line);
 }
 
-.hero-img img {
+.hero-img-link {
+  display: block;
+  position: relative;
+  height: 100%;
+  min-height: 400px;
+  overflow: hidden;
+}
+
+.hero-img-link.clickable {
+  cursor: pointer;
+}
+
+/* 轮播帧叠放淡入淡出：首帧 fetchpriority=high，其余 lazy */
+.hero-img-link img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  min-height: 400px;
+  opacity: 0;
+  transition: opacity .6s;
+}
+
+.hero-img-link img.on {
+  opacity: 1;
+}
+
+/* 轮播指示器（v2：直角小方块，细线风格，无阴影） */
+.hero-dots {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.hero-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--ink2);
+  cursor: pointer;
+}
+
+.hero-dots span.on {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+/* ===== 产品定制（图下题注 serif + 细线，同 InspirationWall 语法） ===== */
+.custom-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+.custom-card.clickable {
+  cursor: pointer;
+}
+
+.custom-card .rim {
+  overflow: hidden;
+  background: var(--suppl);
+  aspect-ratio: 4 / 3;
+}
+
+.custom-card .rim img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform .4s;
+}
+
+.custom-card.clickable:hover .rim img {
+  transform: scale(1.03);
+}
+
+.custom-card .custom-text {
+  margin-top: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.custom-card .cap {
+  font-size: 13px;
+  font-family: var(--font-serif);
+  letter-spacing: 2px;
+}
+
+.custom-card .desc {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 2;
+  color: var(--ink2);
 }
 
 /* ===== 新品网格 ===== */
@@ -300,6 +493,10 @@ const inspirations = computed<InspirationItem[]>(() =>
   }
 
   .grid4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .custom-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }

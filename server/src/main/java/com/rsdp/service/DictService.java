@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.config.CacheConfig;
 import com.rsdp.dto.response.DictTypeSummaryResponse;
@@ -152,7 +153,16 @@ public class DictService {
             dict.setRemark(remark.trim().isEmpty() ? null : remark.trim());
         }
 
-        categoryDictMapper.updateById(dict);
+        // category_dict 为 (dict_type, dict_code) 复合主键，@TableId 仅标注 dict_type，
+        // updateById 会误更新同类型全部行，必须按复合条件显式更新可编辑列
+        categoryDictMapper.update(null, new UpdateWrapper<CategoryDict>()
+            .eq("dict_type", dict.getDictType())
+            .eq("dict_code", dict.getDictCode())
+            .set("dict_name", dict.getDictName())
+            .set("dict_name_en", dict.getDictNameEn())
+            .set("aliases", dict.getAliases())
+            .set("sort_order", dict.getSortOrder())
+            .set("remark", dict.getRemark()));
         auditLogService.logUpdate("category_dict", dict.getDictType() + ":" + dict.getDictCode(),
             oldSnapshot, dict, SecurityOperatorContext.currentUsername());
         return dict;
@@ -175,7 +185,11 @@ public class DictService {
         CategoryDict oldSnapshot = snapshot(dict);
 
         dict.setStatus(status);
-        categoryDictMapper.updateById(dict);
+        // 同 updateDict：复合主键下 updateById 会误更新同类型全部行，按复合条件只更新 status 列
+        categoryDictMapper.update(null, new UpdateWrapper<CategoryDict>()
+            .eq("dict_type", dict.getDictType())
+            .eq("dict_code", dict.getDictCode())
+            .set("status", status));
         auditLogService.logUpdate("category_dict", dict.getDictType() + ":" + dict.getDictCode(),
             oldSnapshot, dict, SecurityOperatorContext.currentUsername());
         return dict;

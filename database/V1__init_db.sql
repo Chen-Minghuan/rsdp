@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS category_dict (
     status VARCHAR(16) DEFAULT 'active',
     aliases TEXT,                            -- 同义词别名 JSON 数组（V22）
     remark TEXT,                             -- 备注；六维字典存视觉判别要点（V29）
+    image_id VARCHAR(64),                    -- 场景封面图 image_assets.image_id，仅 dict_type=scene 使用（V35）
     PRIMARY KEY (dict_type, dict_code)
 );
 

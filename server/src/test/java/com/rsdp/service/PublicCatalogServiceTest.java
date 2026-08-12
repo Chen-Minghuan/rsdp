@@ -28,6 +28,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -137,6 +138,40 @@ class PublicCatalogServiceTest {
         assertThat(scenes).hasSize(1);
         assertThat(scenes.get(0).getSceneCode()).isEqualTo("LIVING");
         assertThat(scenes.get(0).getImageUrl()).isEqualTo("/api/v1/images/IMG-7");
+    }
+
+    @Test
+    void listScenes_manualCover_shouldPreferDictImage() {
+        CategoryDict scene = new CategoryDict();
+        scene.setDictType("scene");
+        scene.setDictCode("LIVING");
+        scene.setDictName("客厅");
+        scene.setImageId("IMG-COVER");
+        when(dictService.listByType("scene")).thenReturn(List.of(scene));
+
+        List<PublicSceneResponse> scenes = publicCatalogService.listScenes();
+
+        // 手配封面优先，不再查询产品主图兜底
+        assertThat(scenes.get(0).getImageUrl()).isEqualTo("/api/v1/images/IMG-COVER");
+        verifyNoInteractions(imageAssetsMapper);
+    }
+
+    @Test
+    void listScenes_noManualCover_shouldFallbackToProductImage() {
+        CategoryDict scene = new CategoryDict();
+        scene.setDictType("scene");
+        scene.setDictCode("DINING");
+        scene.setDictName("餐厅");
+        when(dictService.listByType("scene")).thenReturn(List.of(scene));
+
+        ImageAssets image = new ImageAssets();
+        image.setRspuId("RSPU-2");
+        image.setImageId("IMG-8");
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(image));
+
+        List<PublicSceneResponse> scenes = publicCatalogService.listScenes();
+
+        assertThat(scenes.get(0).getImageUrl()).isEqualTo("/api/v1/images/IMG-8");
     }
 
     @Test

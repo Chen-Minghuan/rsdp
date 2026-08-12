@@ -1,10 +1,12 @@
 package com.rsdp.service;
 
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.DesignOrderItemMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.mapper.RspuMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
@@ -46,6 +48,9 @@ class ImageServiceTest {
 
     @Mock
     private DesignOrderItemMapper designOrderItemMapper;
+
+    @Mock
+    private RspuMapper rspuMasterMapper;
 
     @InjectMocks
     private ImageService imageService;
@@ -106,6 +111,67 @@ class ImageServiceTest {
         when(imageAssetsMapper.selectById("IMG-NOTEXIST")).thenReturn(null);
 
         assertThatThrownBy(() -> imageService.loadImageResource("IMG-NOTEXIST"))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .hasMessageContaining("图片不存在");
+    }
+
+    @Test
+    void loadImageResource_shouldAllowAnonymousCmsImage() throws Exception {
+        securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(false);
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-CMS01");
+        asset.setImageType("cms");
+        asset.setStoragePath("cms/IMG-CMS01.png");
+        asset.setFormat("png");
+
+        when(imageAssetsMapper.selectById("IMG-CMS01")).thenReturn(asset);
+        when(storageService.get("cms/IMG-CMS01.png"))
+            .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
+
+        ImageService.LoadedImage loaded = imageService.loadImageResource("IMG-CMS01");
+
+        assertThat(loaded).isNotNull();
+        assertThat(loaded.contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void loadImageResource_shouldAllowAnonymousActiveProductImage() throws Exception {
+        securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(false);
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-PUB01");
+        asset.setRspuId("RSPU-PUB01");
+        asset.setImageType("white_bg");
+        asset.setStoragePath("images/IMG-PUB01.jpg");
+        asset.setFormat("jpg");
+        RspuMaster rspu = new RspuMaster();
+        rspu.setStatus("active");
+
+        when(imageAssetsMapper.selectById("IMG-PUB01")).thenReturn(asset);
+        when(rspuMasterMapper.selectById("RSPU-PUB01")).thenReturn(rspu);
+        when(storageService.get("images/IMG-PUB01.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
+
+        ImageService.LoadedImage loaded = imageService.loadImageResource("IMG-PUB01");
+
+        assertThat(loaded).isNotNull();
+        assertThat(loaded.resource()).isNotNull();
+    }
+
+    @Test
+    void loadImageResource_shouldDenyAnonymousInactiveProductImage() {
+        securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(false);
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-INACTIVE01");
+        asset.setRspuId("RSPU-INACTIVE01");
+        asset.setImageType("white_bg");
+        asset.setStoragePath("images/IMG-INACTIVE01.jpg");
+        RspuMaster rspu = new RspuMaster();
+        rspu.setStatus("inactive");
+
+        when(imageAssetsMapper.selectById("IMG-INACTIVE01")).thenReturn(asset);
+        when(rspuMasterMapper.selectById("RSPU-INACTIVE01")).thenReturn(rspu);
+
+        assertThatThrownBy(() -> imageService.loadImageResource("IMG-INACTIVE01"))
             .isInstanceOf(ResourceNotFoundException.class)
             .hasMessageContaining("图片不存在");
     }
