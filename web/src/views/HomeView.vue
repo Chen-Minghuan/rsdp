@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageContainer from '@/components/PageContainer.vue'
 import StatusPill from '@/components/StatusPill.vue'
+import ImageMagnifier from '@/components/ImageMagnifier.vue'
 import { getDashboardSummary, type DashboardSummary } from '@/api/dashboard'
 import { listProducts } from '@/api/product'
 import { listRecentTasks, type RecentTaskItem } from '@/api/task'
@@ -217,7 +218,13 @@ onMounted(async () => {
               @click="navigate(`/products/${product.rspuId}`)"
             >
               <div class="img">
-                <img v-if="product.primaryImageUrl" :src="product.primaryImageUrl" :alt="product.productName || product.categoryPath">
+                <ImageMagnifier
+                  v-if="product.primaryImageUrl"
+                  :src="product.primaryImageUrl"
+                  :alt="product.productName || product.categoryPath"
+                  fluid
+                  :click-viewer="false"
+                />
               </div>
               <div class="body">
                 <div class="prow">
@@ -488,7 +495,8 @@ onMounted(async () => {
   background: var(--rsdp-card-bg);
   border: 1px solid var(--rsdp-border);
   border-radius: var(--rsdp-radius);
-  overflow: hidden;
+  /* 放大镜面板需溢出卡片显示，不能 overflow: hidden */
+  overflow: visible;
   cursor: pointer;
 }
 
@@ -499,13 +507,6 @@ onMounted(async () => {
 .card .img {
   aspect-ratio: 4 / 3;
   background: var(--rsdp-info-bg);
-}
-
-.card .img img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
 }
 
 .card .body {

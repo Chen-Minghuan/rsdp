@@ -115,10 +115,11 @@ const variantsText = computed(() => {
   overflow: hidden;
 }
 
+/* contain 完整展示（不裁剪），hover 轻微放大 */
 .p-img img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   transition: transform .35s;
 }
 
