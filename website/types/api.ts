@@ -90,12 +90,3 @@ export interface CategoryNode {
   sortOrder?: number
   children: CategoryNode[]
 }
-
-/** 留资提交（POST /public/leads）。 */
-export interface LeadCreatePayload {
-  name: string
-  phone: string
-  source: string
-  intent?: string
-  budget?: string
-}

@@ -131,14 +131,6 @@ export async function deletePlatformCustomized(customizedId: string): Promise<vo
 // ==================== 公开读取（免登录） ====================
 
 /**
- * 首页聚合：启用 Banner + 落地案例 + 产品定制（免登录）。
- */
-export async function getPublicHome(): Promise<import('@/types/platform').PublicHomeData> {
-  const { data: result } = await apiClient.get<ApiResult<import('@/types/platform').PublicHomeData>>('/v1/public/home')
-  return result.data
-}
-
-/**
  * 按编码读取内容配置（服务协议/客服咨询等，免登录）。
  */
 export async function getPublicContent(code: string): Promise<PlatformContent> {
