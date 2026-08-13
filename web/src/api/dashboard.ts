@@ -12,7 +12,7 @@ export interface DashboardSummary {
   aiPassRate: number | null
   /** 本月订单额（不含已取消订单） */
   monthOrderAmount: number
-  /** 今日留资线索数 */
+  /** 今日意向客户数 */
   todayLeadCount: number
 }
 

@@ -37,8 +37,8 @@ import {
 } from '@/types/lead'
 
 /**
- * 管理端「留资线索」页：来源分布统计 + 线索表格 + 分配/记跟进/状态流转。
- * 参照 docs/09-design/admin.html 右栏「最新留资线索」与管理端设计文档 4.3 节。
+ * 管理端「意向客户」页：来源分布统计 + 客户表格 + 分配/记跟进/状态流转。
+ * 参照 docs/09-design/admin.html 右栏「最新意向客户」与管理端设计文档 4.3 节。
  */
 const message = useMessage()
 
@@ -66,7 +66,7 @@ async function loadLeads() {
     leads.value = result.rows
     total.value = result.total
   } catch (e) {
-    errorMessage.value = e instanceof Error ? e.message : '加载留资线索失败'
+    errorMessage.value = e instanceof Error ? e.message : '加载意向客户失败'
   } finally {
     loading.value = false
   }
@@ -247,7 +247,7 @@ const columns: DataTableColumns<LeadItem> = [
           { onPositiveClick: () => transitionStatus(row, LEAD_STATUS.CONTACTED) },
           {
             trigger: () => h(NButton, { text: true, type: 'primary', size: 'small' }, { default: () => '标记已联系' }),
-            default: () => '确认该线索已联系客户？'
+            default: () => '确认已联系该客户？'
           }
         ))
       } else if (row.status === LEAD_STATUS.CONTACTED) {
@@ -256,7 +256,7 @@ const columns: DataTableColumns<LeadItem> = [
           { onPositiveClick: () => transitionStatus(row, LEAD_STATUS.DONE) },
           {
             trigger: () => h(NButton, { text: true, type: 'primary', size: 'small' }, { default: () => '标记完成' }),
-            default: () => '确认该线索已跟进完成？'
+            default: () => '确认该客户已跟进完成？'
           }
         ))
       }
@@ -269,7 +269,7 @@ onMounted(reload)
 </script>
 
 <template>
-  <PageContainer title="留资线索" subtitle="官网 CTA / 表单 / AI 户型搭配入口的留资分配与跟进">
+  <PageContainer title="意向客户" subtitle="官网表单 / 设计预约 / AI 户型搭配入口的客户分配与跟进">
     <n-alert v-if="errorMessage" type="error" :show-icon="true" style="margin-bottom: 12px;">
       {{ errorMessage }}
     </n-alert>
@@ -300,7 +300,7 @@ onMounted(reload)
         }"
         remote
       />
-      <n-empty v-if="!loading && leads.length === 0" description="暂无留资线索" style="margin-top: 32px;" />
+      <n-empty v-if="!loading && leads.length === 0" description="暂无意向客户" style="margin-top: 32px;" />
     </n-spin>
 
     <!-- 分配跟进人 -->

@@ -3,7 +3,7 @@ import { routes } from './routes'
 import { navGroups } from '@/config/navigation'
 
 /**
- * 路由与导航配置测试（阶段 3：留资线索页）。
+ * 路由与导航配置测试（阶段 3：意向客户页）。
  *
  * 仅校验路由表与导航配置的静态声明，不创建 history、不触发导航守卫与组件加载。
  */
@@ -37,14 +37,14 @@ describe('router', () => {
 })
 
 describe('navigation config', () => {
-  it('should place 留资线索 under 用户端官网 group with pending badge', () => {
+  it('should place 意向客户 under 客户运营 group with pending badge', () => {
     const group = navGroups.find(g => g.key === 'website')
 
     expect(group).toBeDefined()
-    expect(group?.label).toBe('用户端官网')
+    expect(group?.label).toBe('客户运营')
     const item = group?.items.find(i => i.path === '/leads')
     expect(item).toBeDefined()
-    expect(item?.label).toBe('留资线索')
+    expect(item?.label).toBe('意向客户')
     expect(item?.roles).toEqual(['ADMIN', 'EDITOR'])
     expect(item?.badgeKey).toBe('leadPending')
   })

@@ -3,7 +3,7 @@ import type { LeadAssignee, LeadItem, LeadSourceStats } from '@/types/lead'
 import type { PageResult } from '@/types/product'
 
 /**
- * 留资线索管理端接口（/api/v1/leads，限 ADMIN/EDITOR）。
+ * 意向客户管理端接口（/api/v1/leads，限 ADMIN/EDITOR）。
  */
 
 /** 列表查询参数。 */

@@ -61,7 +61,7 @@ onMounted(async () => {
 
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
 
-/** 留资待跟进数（导航「留资线索」角标，仅平台运营角色拉取）。 */
+/** 意向客户待跟进数（导航「意向客户」角标，仅平台运营角色拉取）。 */
 const leadPendingCount = ref(0)
 
 async function loadLeadPendingCount() {

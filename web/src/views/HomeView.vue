@@ -16,7 +16,7 @@ import type { ProductSummary } from '@/types/product'
 /**
  * 产品数字化工作台首页（style-b 现代极简）。
  * 结构对齐 docs/09-design/admin-workbench.html：
- * 页头 hero → 统计带 → 左列（最新入库/识别任务队列/户型图待复核）→ 右栏（今日待办/留资线索/数据完备度/快捷操作）。
+ * 页头 hero → 统计带 → 左列（最新入库/识别任务队列/户型图待复核）→ 右栏（今日待办/意向客户/数据完备度/快捷操作）。
  * 每个区块独立 try/catch：接口失败显示空态或 --，整页不白屏。
  */
 const router = useRouter()
@@ -46,7 +46,7 @@ const dashboardStats = computed(() => {
     { label: '工厂报价 RSKU', value: s ? s.rskuTotal.toLocaleString('zh-CN') : '--' },
     { label: 'AI 识别通过率', value: s ? (s.aiPassRate != null ? `${s.aiPassRate}%` : '—') : '--' },
     { label: '本月订单金额', value: s ? `¥${Number(s.monthOrderAmount).toLocaleString('zh-CN')}` : '--' },
-    { label: '今日留资线索', value: s ? String(s.todayLeadCount) : '--' }
+    { label: '今日意向客户', value: s ? String(s.todayLeadCount) : '--' }
   ]
 })
 
@@ -93,7 +93,7 @@ function taskDuration(item: RecentTaskItem): string {
   return item.durationSeconds != null ? `${item.durationSeconds}s` : '—'
 }
 
-// ---------- 右栏：最新留资线索 ----------
+// ---------- 右栏：最新意向客户 ----------
 
 const latestLeads = ref<LeadItem[]>([])
 const leadsLoaded = ref(false)
@@ -113,7 +113,7 @@ const todos = computed<TodoItem[]>(() => {
   if (leadPendingCount.value != null && leadPendingCount.value > 0) {
     list.push({
       level: 'terra',
-      text: `${leadPendingCount.value} 条留资线索待跟进`,
+      text: `${leadPendingCount.value} 位意向客户待跟进`,
       time: '今日',
       path: '/leads'
     })
@@ -142,12 +142,12 @@ onMounted(async () => {
       const stats = await getLeadSourceStats()
       leadPendingCount.value = stats.pending
     } catch (e) {
-      console.error('加载留资统计失败', e)
+      console.error('加载意向客户统计失败', e)
     }
     try {
       latestLeads.value = (await listLeads({ page: 1, size: 3 })).rows
     } catch (e) {
-      console.error('加载最新留资线索失败', e)
+      console.error('加载最新意向客户失败', e)
     } finally {
       leadsLoaded.value = true
     }
@@ -183,7 +183,7 @@ onMounted(async () => {
         <p>
           今天是 <span class="mono">{{ todayText }}</span>
           <template v-if="leadPendingCount != null">
-            · 有 <b>{{ leadPendingCount }} 条新留资</b> 待处理
+            · 有 <b>{{ leadPendingCount }} 位新意向客户</b> 待处理
           </template>
         </p>
       </div>
@@ -299,11 +299,11 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- 最新留资线索 -->
+        <!-- 最新意向客户 -->
         <div class="panel">
           <div class="panel-h">
-            <h2>最新留资线索</h2>
-            <a @click="navigate('/leads')">全部线索 →</a>
+            <h2>最新意向客户</h2>
+            <a @click="navigate('/leads')">全部客户 →</a>
           </div>
           <div class="panel-b" style="padding-top: 2px;">
             <template v-if="latestLeads.length">
@@ -315,7 +315,7 @@ onMounted(async () => {
               </div>
             </template>
             <div v-else class="empty-row">
-              {{ leadsLoaded ? '暂无留资线索' : '加载中…' }}
+              {{ leadsLoaded ? '暂无意向客户' : '加载中…' }}
             </div>
           </div>
         </div>
@@ -338,7 +338,7 @@ onMounted(async () => {
             <button @click="navigate('/products/excel-ai-import')">⬆ 批量导入</button>
             <button @click="navigate('/quotes/build')">＋ 新建报价单</button>
             <button @click="navigate('/products')">🛋 产品库</button>
-            <button @click="navigate('/leads')">📋 留资线索</button>
+            <button @click="navigate('/leads')">📋 意向客户</button>
           </div>
         </div>
       </div>
