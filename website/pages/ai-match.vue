@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 /**
  * AI 户型搭配流程页（/ai-match）：
@@ -48,9 +48,24 @@ const analyzing = ref(false)
 const previewUrl = ref('')
 const rooms = ref<AnalyzeRoom[]>([])
 
+/** 上传限制与后端 ImageUploadValidator 一致：jpg/png ≤10MB（accept 属性可被绕过，必须 JS 层校验） */
+const ACCEPT_TYPES = ['image/jpeg', 'image/png']
+const MAX_FILE_SIZE = 10 * 1024 * 1024
+
 function handleFileChange(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 重置，允许重选同一文件再次触发 change
   if (!file) return
+  if (!ACCEPT_TYPES.includes(file.type)) {
+    errorMessage.value = '仅支持 JPG / PNG 格式的户型图'
+    return
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    errorMessage.value = '图片大小不能超过 10MB，请压缩后再上传'
+    return
+  }
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = URL.createObjectURL(file)
   analyze(file)
 }
@@ -144,9 +159,19 @@ function restart() {
   step.value = 'upload'
   scheme.value = null
   rooms.value = []
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = ''
   errorMessage.value = ''
+  // 尺寸/风格/预算一并重置，否则 watch 的「仅首次初始化」守卫会让下一轮沿用旧尺寸
+  confirmWidth.value = null
+  confirmDepth.value = null
+  stylePreference.value = ''
+  budgetLimit.value = null
 }
+
+onBeforeUnmount(() => {
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+})
 
 useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 </script>
