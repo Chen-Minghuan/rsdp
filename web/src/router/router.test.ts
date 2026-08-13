@@ -26,6 +26,14 @@ describe('router', () => {
     expect(paths).toContain('/schemes')
     expect(paths).toContain('/admin/platform')
   })
+
+  it('should require auth for home so the guard fetches user info before workbench renders', () => {
+    const home = routes.find(r => r.path === '/')
+
+    // 工作台区块按角色/权限门控取数，public 会导致首屏用户信息未加载、全部不渲染
+    expect(home?.meta?.requiresAuth).toBe(true)
+    expect(home?.meta?.public).toBeFalsy()
+  })
 })
 
 describe('navigation config', () => {

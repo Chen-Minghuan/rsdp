@@ -26,7 +26,9 @@ export const routes = [
     path: '/',
     name: 'Home',
     component: () => import('@/views/HomeView.vue'),
-    meta: { public: true }
+    // 工作台首页各区块依赖用户角色/权限（统计带仅 ADMIN/EDITOR、最新入库需 product:read），
+    // 必须 requiresAuth 让守卫先拉取用户信息，否则直接打开首页时权限未加载、区块全部不取数
+    meta: { requiresAuth: true }
   },
   {
     path: '/entry',
