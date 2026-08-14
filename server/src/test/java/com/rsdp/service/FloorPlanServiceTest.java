@@ -225,6 +225,120 @@ class FloorPlanServiceTest {
         assertThat(room.getDimensionConfidence()).isEqualTo("low");
     }
 
+    // ---------- 尺寸三级提取第②级：比例尺换算 scale_calc（P1） ----------
+
+    @Test
+    void buildRooms_scaleTextResolvable_shouldApplyScaleCalcMid() {
+        // 原图 2000×1500 像素 + "1px=5mm"：空间 bbox 0.4×0.3 → 800×450 像素 → 4000×2250mm
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_ANALYZING);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setWidth(2000);
+        imageAsset.setHeight(1500);
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setScaleText("1px=5mm");
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", null, 0.1, 0.2, 0.4, 0.3)));
+
+        floorPlanService.buildRooms("FPA-1", detected);
+
+        ArgumentCaptor<FloorPlanRoom> captor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper).insert(captor.capture());
+        FloorPlanRoom room = captor.getValue();
+        assertThat(room.getWidthMm()).isEqualTo(4000);
+        assertThat(room.getDepthMm()).isEqualTo(2250);
+        assertThat(room.getAreaM2()).isEqualByComparingTo(new BigDecimal("9.00"));
+        assertThat(room.getDimensionSource()).isEqualTo("scale_calc");
+        assertThat(room.getDimensionConfidence()).isEqualTo("mid");
+        // scale_calc 命中时不再走 AI 估算
+        verify(visionService, never()).chatText(anyString(), anyString());
+    }
+
+    @Test
+    void buildRooms_sheetPhysicalSizeScale_shouldApplyScaleCalcMid() {
+        // 整图物理尺寸写法："图幅 10000mm×7500mm" + 原图 2000×1500 像素 → 5mm/px，同上换算结果
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_ANALYZING);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setWidth(2000);
+        imageAsset.setHeight(1500);
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setScaleText("图幅 10000mm×7500mm");
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", null, 0.1, 0.2, 0.4, 0.3)));
+
+        floorPlanService.buildRooms("FPA-1", detected);
+
+        ArgumentCaptor<FloorPlanRoom> captor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper).insert(captor.capture());
+        FloorPlanRoom room = captor.getValue();
+        assertThat(room.getWidthMm()).isEqualTo(4000);
+        assertThat(room.getDepthMm()).isEqualTo(2250);
+        assertThat(room.getDimensionSource()).isEqualTo("scale_calc");
+        assertThat(room.getDimensionConfidence()).isEqualTo("mid");
+        verify(visionService, never()).chatText(anyString(), anyString());
+    }
+
+    @Test
+    void buildRooms_scaleTextUnresolvable_shouldFallbackToAiEstimate() {
+        // 仅有图纸比例 "1:100"：无法确定图上 1 单位对应多少像素，跳过 scale_calc 落到第③级
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_ANALYZING);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setWidth(2000);
+        imageAsset.setHeight(1500);
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"widthMm\": 3600, \"depthMm\": 3300}");
+
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setScaleText("1:100");
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", null, 0.1, 0.2, 0.4, 0.3)));
+
+        floorPlanService.buildRooms("FPA-1", detected);
+
+        ArgumentCaptor<FloorPlanRoom> captor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper).insert(captor.capture());
+        FloorPlanRoom room = captor.getValue();
+        assertThat(room.getWidthMm()).isEqualTo(3600);
+        assertThat(room.getDepthMm()).isEqualTo(3300);
+        assertThat(room.getDimensionSource()).isEqualTo("ai_estimate");
+        assertThat(room.getDimensionConfidence()).isEqualTo("low");
+    }
+
+    @Test
+    void buildRooms_scaleResolvableButNoPixelSize_shouldFallbackToAiEstimate() {
+        // 比例尺可解析但原图缺像素宽/高（历史数据），无法把 bbox 换算成像素 → 落第③级
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_ANALYZING);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"widthMm\": 3600, \"depthMm\": 3300}");
+
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setScaleText("1px=5mm");
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", null, 0.1, 0.2, 0.4, 0.3)));
+
+        floorPlanService.buildRooms("FPA-1", detected);
+
+        ArgumentCaptor<FloorPlanRoom> captor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper).insert(captor.capture());
+        FloorPlanRoom room = captor.getValue();
+        assertThat(room.getDimensionSource()).isEqualTo("ai_estimate");
+        assertThat(room.getDimensionConfidence()).isEqualTo("low");
+    }
+
     // ---------- 接口 2：查询 + task 状态同步校正 ----------
 
     @Test

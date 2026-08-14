@@ -216,6 +216,143 @@ class FloorPlanMatchingServiceTest {
         assertThat(schemeCaptor.getValue().getAnalysisId()).isEqualTo("FPA-1");
     }
 
+    // ---------- 沙发墙朝向（v3.0 §8 P1） ----------
+
+    @Test
+    void matchRoomScheme_depthSofaWall_shouldApplyDepthWallCap() {
+        // 4200×5000 = 21㎡（大客厅）：默认 width 朝向 R2 上限 3150；depth 朝向上限 3750，
+        // 3200 的沙发仅在 depth 朝向下保留
+        RspuMaster oversize = buildSofa("RSPU-BIG");
+        RspuMaster fit = buildSofa("RSPU-FIT");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(oversize, fit));
+        when(rspuMapper.selectBatchIds(anyList())).thenAnswer(invocation -> {
+            List<String> ids = invocation.getArgument(0);
+            return List.of(oversize, fit).stream().filter(r -> ids.contains(r.getRspuId())).toList();
+        });
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of(
+            buildVariant("RSPU-BIG", 3200, 1000),
+            buildVariant("RSPU-FIT", 3000, 1000)));
+        when(rskuSupplyMapper.selectCapableByRspuIds(anyList())).thenReturn(List.of(
+            buildRsku("RSPU-BIG"), buildRsku("RSPU-FIT")));
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+
+        RoomSchemeResponse matched = new RoomSchemeResponse();
+        when(aiMatchingService.generateRoomScheme(any(RoomSchemeRequest.class), anyList()))
+            .thenReturn(matched);
+
+        floorPlanMatchingService.matchRoomScheme(
+            4200, 5000, null, new BigDecimal("30000"), "depth");
+
+        ArgumentCaptor<List<RspuMaster>> candidatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(aiMatchingService).generateRoomScheme(any(RoomSchemeRequest.class), candidatesCaptor.capture());
+        assertThat(candidatesCaptor.getValue())
+            .extracting(RspuMaster::getRspuId).containsExactly("RSPU-BIG", "RSPU-FIT");
+    }
+
+    @Test
+    void matchRoomScheme_invalidSofaWall_shouldThrowBadRequest() {
+        assertThatThrownBy(() -> floorPlanMatchingService.matchRoomScheme(
+            4200, 5000, null, new BigDecimal("30000"), "diagonal"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("沙发墙朝向仅支持");
+        verify(rspuMapper, never()).selectList(any());
+    }
+
+    @Test
+    void generateSchemeForAnalysis_sofaWallDepth_shouldPassThroughToRules() {
+        // 管理端接口 4：sofaWall=depth 透传到规则引擎（3200 沙发在 depth 朝向下不被 R2 剔除）
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED, "alice");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom room = buildRoom("FPR-1", "FPA-1", 4200, 5000);
+        when(roomMapper.selectById("FPR-1")).thenReturn(room);
+
+        RspuMaster oversize = buildSofa("RSPU-BIG");
+        RspuMaster fit = buildSofa("RSPU-FIT");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(oversize, fit));
+        when(rspuMapper.selectBatchIds(anyList())).thenAnswer(invocation -> {
+            List<String> ids = invocation.getArgument(0);
+            return List.of(oversize, fit).stream().filter(r -> ids.contains(r.getRspuId())).toList();
+        });
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of(
+            buildVariant("RSPU-BIG", 3200, 1000),
+            buildVariant("RSPU-FIT", 3000, 1000)));
+        when(rskuSupplyMapper.selectCapableByRspuIds(anyList())).thenReturn(List.of(
+            buildRsku("RSPU-BIG"), buildRsku("RSPU-FIT")));
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+
+        SchemeItemResponse matchedItem = new SchemeItemResponse();
+        matchedItem.setRspuId("RSPU-BIG");
+        matchedItem.setRskuId("RSKU-RSPU-BIG");
+        RoomSchemeResponse matched = new RoomSchemeResponse();
+        matched.setItems(List.of(matchedItem));
+        when(aiMatchingService.generateRoomScheme(any(RoomSchemeRequest.class), anyList()))
+            .thenReturn(matched);
+
+        SchemeResponse created = new SchemeResponse();
+        created.setSchemeId("SCH-1");
+        when(schemeService.createScheme(any())).thenReturn(created);
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCH-1");
+        when(schemeMapper.selectById("SCH-1")).thenReturn(scheme);
+
+        FloorPlanSchemeRequest request = new FloorPlanSchemeRequest();
+        request.setRoomId("FPR-1");
+        request.setSofaWall("depth");
+        String schemeId = floorPlanMatchingService.generateSchemeForAnalysis("FPA-1", request, "alice");
+
+        assertThat(schemeId).isEqualTo("SCH-1");
+        // 朝向透传生效：depth 朝向下 3200 的沙发通过 R2，进入 LLM 终审候选
+        ArgumentCaptor<List<RspuMaster>> candidatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(aiMatchingService).generateRoomScheme(any(RoomSchemeRequest.class), candidatesCaptor.capture());
+        assertThat(candidatesCaptor.getValue())
+            .extracting(RspuMaster::getRspuId).containsExactly("RSPU-BIG", "RSPU-FIT");
+    }
+
+    @Test
+    void generateSchemeForAnalysis_noSofaWall_shouldBehaveLikeWidth() {
+        // 不传朝向：行为与默认 width 完全一致（3200 > 3150 的沙发仍被 R2 剔除）
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED, "alice");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom room = buildRoom("FPR-1", "FPA-1", 4200, 5000);
+        when(roomMapper.selectById("FPR-1")).thenReturn(room);
+
+        RspuMaster oversize = buildSofa("RSPU-BIG");
+        RspuMaster fit = buildSofa("RSPU-FIT");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(oversize, fit));
+        when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(fit));
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of(
+            buildVariant("RSPU-BIG", 3200, 1000),
+            buildVariant("RSPU-FIT", 3000, 1000)));
+        when(rskuSupplyMapper.selectCapableByRspuIds(anyList())).thenReturn(List.of(
+            buildRsku("RSPU-BIG"), buildRsku("RSPU-FIT")));
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+
+        SchemeItemResponse matchedItem = new SchemeItemResponse();
+        matchedItem.setRspuId("RSPU-FIT");
+        matchedItem.setRskuId("RSKU-RSPU-FIT");
+        RoomSchemeResponse matched = new RoomSchemeResponse();
+        matched.setItems(List.of(matchedItem));
+        when(aiMatchingService.generateRoomScheme(any(RoomSchemeRequest.class), anyList()))
+            .thenReturn(matched);
+
+        SchemeResponse created = new SchemeResponse();
+        created.setSchemeId("SCH-1");
+        when(schemeService.createScheme(any())).thenReturn(created);
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCH-1");
+        when(schemeMapper.selectById("SCH-1")).thenReturn(scheme);
+
+        FloorPlanSchemeRequest request = new FloorPlanSchemeRequest();
+        request.setRoomId("FPR-1");
+        String schemeId = floorPlanMatchingService.generateSchemeForAnalysis("FPA-1", request, "alice");
+
+        assertThat(schemeId).isEqualTo("SCH-1");
+        ArgumentCaptor<List<RspuMaster>> candidatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(aiMatchingService).generateRoomScheme(any(RoomSchemeRequest.class), candidatesCaptor.capture());
+        assertThat(candidatesCaptor.getValue())
+            .extracting(RspuMaster::getRspuId).containsExactly("RSPU-FIT");
+    }
+
     // ---------- 管理端接口 4 校验链 ----------
 
     @Test

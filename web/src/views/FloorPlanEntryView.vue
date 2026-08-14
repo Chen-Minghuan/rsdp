@@ -10,6 +10,8 @@ import {
   NEmpty,
   NInput,
   NInputNumber,
+  NRadioButton,
+  NRadioGroup,
   NSelect,
   NSpace,
   NSpin,
@@ -28,12 +30,16 @@ import {
   getFloorPlanAnalysis
 } from '@/api/floorPlan'
 import { listDicts } from '@/api/dict'
+import { getSchemeDetail } from '@/api/scheme'
+import { getProductDetail } from '@/api/product'
+import { listVariantsByRspu } from '@/api/variant'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type {
   DimensionConfidence,
   FloorPlanAnalysisResponse,
   FloorPlanRoom,
-  RoomBBox
+  RoomBBox,
+  SofaWallDirection
 } from '@/types/floorPlan'
 import type { DictItem } from '@/types/dict'
 
@@ -86,14 +92,37 @@ const rooms = ref<EditableRoom[]>([])
 const selectedLocalId = ref<string | null>(null)
 const confirming = ref(false)
 
+// ---------- 步骤 2：手绘新空间（误识别修正 / 纯手工补框） ----------
+const drawMode = ref(false)
+/** 拖拽中的草稿框（归一化坐标），用于虚线框视觉反馈。 */
+const draftBox = ref<RoomBBox | null>(null)
+const imageWrapRef = ref<HTMLElement | null>(null)
+/** 拖拽起点（归一化坐标），非空表示正在拖拽。 */
+let drawStart: { x: number; y: number } | null = null
+
 // ---------- 步骤 3：搭配生成 ----------
 const targetRoomId = ref<string | null>(null)
 const stylePreference = ref<string | null>(null)
 const budgetLimit = ref<number | null>(null)
+const sofaWall = ref<SofaWallDirection>('width')
 const generating = ref(false)
 
 // ---------- 步骤 4：完成 ----------
 const schemeId = ref('')
+
+/** 步骤 4 摆放示意中的单个产品占位矩形（mm 坐标系，原点在目标空间框左上角）。 */
+interface PlacementItem {
+  key: string
+  name: string
+  x: number
+  y: number
+  w: number
+  d: number
+}
+
+// ---------- 步骤 4：产品摆放示意（纯前端） ----------
+const placementItems = ref<PlacementItem[]>([])
+const placementLoading = ref(false)
 
 // ---------- 字典 ----------
 const roomTypeDicts = ref<DictItem[]>([])
@@ -120,6 +149,17 @@ const targetRoomOptions = computed(() =>
 )
 
 const canGenerate = computed(() => targetRoomId.value !== null && !generating.value)
+
+/** 步骤 3 选中的目标空间（步骤 4 摆放示意的定位基准）。 */
+const targetRoom = computed(() => rooms.value.find(r => r.roomId === targetRoomId.value) ?? null)
+
+/** 步骤 4 摆放示意展示条件：需有本地原图 + 目标空间带 bbox 与尺寸（从历史页跳入无原图时整块隐藏）。 */
+const canShowPlacement = computed(() =>
+  !!imagePreviewUrl.value &&
+  !!targetRoom.value?.bbox &&
+  !!targetRoom.value?.widthMm &&
+  !!targetRoom.value?.depthMm
+)
 
 function roomTypeName(code: string): string {
   return roomTypeDicts.value.find(d => d.dictCode === code)?.dictName ?? code
@@ -279,6 +319,97 @@ function selectRoom(row: EditableRoom) {
   selectedLocalId.value = row.localId
 }
 
+// ---------- 手绘新空间 ----------
+
+/** 手绘框最小边长（归一化），小于视为误触忽略。 */
+const MIN_DRAW_BOX_SIZE = 0.01
+
+function toggleDrawMode() {
+  drawMode.value = !drawMode.value
+  if (!drawMode.value) {
+    cancelDraft()
+  }
+}
+
+function exitDrawMode() {
+  drawMode.value = false
+  cancelDraft()
+}
+
+function cancelDraft() {
+  drawStart = null
+  draftBox.value = null
+  removeDragListeners()
+}
+
+function removeDragListeners() {
+  window.removeEventListener('mousemove', handleDrawMove)
+  window.removeEventListener('mouseup', handleDrawEnd)
+}
+
+/** 鼠标位置换算为相对户型图的归一化坐标（钳制到 [0,1]，图片缩放时比例始终正确）。 */
+function normalizedPoint(e: MouseEvent): { x: number; y: number } | null {
+  const wrap = imageWrapRef.value
+  if (!wrap) return null
+  const rect = wrap.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) return null
+  return {
+    x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
+  }
+}
+
+function handleDrawStart(e: MouseEvent) {
+  if (!drawMode.value) return
+  const p = normalizedPoint(e)
+  if (!p) return
+  e.preventDefault()
+  drawStart = p
+  draftBox.value = { x: p.x, y: p.y, w: 0, h: 0 }
+  window.addEventListener('mousemove', handleDrawMove)
+  window.addEventListener('mouseup', handleDrawEnd)
+}
+
+function handleDrawMove(e: MouseEvent) {
+  if (!drawStart) return
+  const p = normalizedPoint(e)
+  if (!p) return
+  draftBox.value = {
+    x: Math.min(drawStart.x, p.x),
+    y: Math.min(drawStart.y, p.y),
+    w: Math.abs(p.x - drawStart.x),
+    h: Math.abs(p.y - drawStart.y)
+  }
+}
+
+function handleDrawEnd() {
+  removeDragListeners()
+  const box = draftBox.value
+  draftBox.value = null
+  drawStart = null
+  if (!box || box.w < MIN_DRAW_BOX_SIZE || box.h < MIN_DRAW_BOX_SIZE) return
+  const row: EditableRoom = {
+    localId: nextLocalId(),
+    roomId: null,
+    roomType: 'LIVING',
+    widthMm: null,
+    depthMm: null,
+    bbox: { x: box.x, y: box.y, w: box.w, h: box.h },
+    dimensionSource: 'manual',
+    dimensionConfidence: 'high',
+    dimensionText: null
+  }
+  rooms.value.push(row)
+  selectedLocalId.value = row.localId
+}
+
+/** ESC 退出手绘态（挂在 window，仅绘制态响应）。 */
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && drawMode.value) {
+    exitDrawMode()
+  }
+}
+
 async function handleConfirmRooms() {
   if (rooms.value.length === 0) {
     errorMessage.value = '至少保留一个空间；若识别全部不准，请点击「添加空间」手工录入'
@@ -324,15 +455,162 @@ async function handleGenerateScheme() {
     const result = await generateFloorPlanScheme(analysisId.value, {
       roomId: targetRoomId.value,
       stylePreference: stylePreference.value || undefined,
-      budgetLimit: budgetLimit.value ?? undefined
+      budgetLimit: budgetLimit.value ?? undefined,
+      sofaWall: sofaWall.value
     }, { signal })
     schemeId.value = result.schemeId
     currentStep.value = 4
+    loadPlacement()
   } catch (e) {
     if (axios.isCancel(e)) return
     errorMessage.value = e instanceof Error ? e.message : '生成搭配方案失败，请重试'
   } finally {
     generating.value = false
+  }
+}
+
+// ---------- 步骤 4：产品摆放示意 ----------
+
+/**
+ * 解析变体 dimensions 为宽×深（mm）。
+ * 优先按结构化 JSON（{"w":560,"d":580,"unit":"mm"}）解析；
+ * 存量非结构化原文（如 "2200×900×450" / "4.2m*3.8m"）取前两段数字，小于 100 视为米制换算。
+ * 解析失败返回 null（该产品跳过不画）。
+ */
+function parseDimsMm(dimensions?: string | null): { w: number; d: number } | null {
+  if (!dimensions) return null
+  try {
+    const dim = JSON.parse(dimensions) as { w?: number; d?: number }
+    if (dim && typeof dim.w === 'number' && typeof dim.d === 'number' && dim.w > 0 && dim.d > 0) {
+      return { w: dim.w, d: dim.d }
+    }
+  } catch {
+    // 非 JSON 原文走正则兜底
+  }
+  const m = dimensions.match(/(\d+(?:\.\d+)?)\s*(?:m(?![a-z])|mm|毫米)?\s*[×xX*]\s*(\d+(?:\.\d+)?)/)
+  if (!m) return null
+  let w = parseFloat(m[1])
+  let d = parseFloat(m[2])
+  if (w < 100) w *= 1000
+  if (d < 100) d *= 1000
+  return w > 0 && d > 0 ? { w, d } : null
+}
+
+/** 拉取单个方案产品的品类与宽深尺寸（详情或尺寸拉取失败返回 null，跳过不画）。 */
+async function fetchPlacementSource(
+  rspuId: string,
+  name: string
+): Promise<{ key: string; name: string; categoryCode: string; dims: { w: number; d: number } } | null> {
+  try {
+    const [detail, variants] = await Promise.all([
+      getProductDetail(rspuId, { signal }),
+      listVariantsByRspu(rspuId, { signal })
+    ])
+    const dims = variants.map(v => parseDimsMm(v.dimensions)).find(d => d !== null)
+    if (!dims) return null
+    return { key: rspuId, name, categoryCode: detail.rspu.categoryCode, dims }
+  } catch (e) {
+    if (axios.isCancel(e)) throw e
+    return null
+  }
+}
+
+/** 将 mm 坐标矩形钳制到空间范围内（产品大于空间时按空间上限绘制）。 */
+function clampRect(rect: { x: number; y: number; w: number; d: number }, roomW: number, roomD: number) {
+  const w = Math.min(rect.w, roomW)
+  const d = Math.min(rect.d, roomD)
+  return {
+    ...rect,
+    w,
+    d,
+    x: Math.min(Math.max(rect.x, 0), roomW - w),
+    y: Math.min(Math.max(rect.y, 0), roomD - d)
+  }
+}
+
+/**
+ * 简化布局（KISS）：沙发贴所选墙居中，茶几居中于沙发前（400mm 通道），
+ * 电视柜贴沙发对面墙，休闲椅排在沙发旁；其余品类不参与绘制。
+ */
+function layoutPlacements(
+  products: Array<{ key: string; name: string; categoryCode: string; dims: { w: number; d: number } }>,
+  roomW: number,
+  roomD: number,
+  wall: SofaWallDirection
+): PlacementItem[] {
+  const alongWidth = wall !== 'depth'
+  const placed: PlacementItem[] = []
+  const sofa = products.find(p => p.categoryCode === 'SF')
+  let sofaRect: { x: number; y: number; w: number; d: number } | null = null
+  if (sofa) {
+    // 沙发长度沿墙方向：开间墙沿 x 轴，进深墙沿 y 轴（旋转 90°）
+    sofaRect = alongWidth
+      ? { x: (roomW - sofa.dims.w) / 2, y: 0, w: sofa.dims.w, d: sofa.dims.d }
+      : { x: 0, y: (roomD - sofa.dims.w) / 2, w: sofa.dims.d, d: sofa.dims.w }
+    placed.push({ key: sofa.key, name: sofa.name, ...clampRect(sofaRect, roomW, roomD) })
+  }
+  const teaTable = products.find(p => p.categoryCode === 'TB')
+  if (teaTable && sofaRect) {
+    const rect = alongWidth
+      ? { x: sofaRect.x + (sofaRect.w - teaTable.dims.w) / 2, y: sofaRect.y + sofaRect.d + 400, w: teaTable.dims.w, d: teaTable.dims.d }
+      : { x: sofaRect.x + sofaRect.w + 400, y: sofaRect.y + (sofaRect.d - teaTable.dims.d) / 2, w: teaTable.dims.d, d: teaTable.dims.w }
+    placed.push({ key: teaTable.key, name: teaTable.name, ...clampRect(rect, roomW, roomD) })
+  }
+  const tvCabinet = products.find(p => p.categoryCode === 'FC')
+  if (tvCabinet) {
+    const rect = alongWidth
+      ? { x: (roomW - tvCabinet.dims.w) / 2, y: roomD - tvCabinet.dims.d, w: tvCabinet.dims.w, d: tvCabinet.dims.d }
+      : { x: roomW - tvCabinet.dims.d, y: (roomD - tvCabinet.dims.w) / 2, w: tvCabinet.dims.d, d: tvCabinet.dims.w }
+    placed.push({ key: tvCabinet.key, name: tvCabinet.name, ...clampRect(rect, roomW, roomD) })
+  }
+  products
+    .filter(p => p.categoryCode === 'FS')
+    .forEach((chair, i) => {
+      const base = sofaRect ?? { x: 0, y: 0, w: 0, d: 0 }
+      const rect = alongWidth
+        ? { x: base.x + base.w + 300, y: base.y + i * (chair.dims.d + 200), w: chair.dims.w, d: chair.dims.d }
+        : { x: base.x + i * (chair.dims.d + 200), y: base.y + base.d + 300, w: chair.dims.d, d: chair.dims.w }
+      placed.push({ key: `${chair.key}-${i}`, name: chair.name, ...clampRect(rect, roomW, roomD) })
+    })
+  return placed
+}
+
+/** 方案生成成功后拉取方案明细与产品尺寸，计算摆放示意；无本地原图时整体跳过。 */
+async function loadPlacement() {
+  placementItems.value = []
+  const room = targetRoom.value
+  if (!canShowPlacement.value || !room?.widthMm || !room?.depthMm) return
+  placementLoading.value = true
+  try {
+    const scheme = await getSchemeDetail(schemeId.value, { signal })
+    const sources = await Promise.all(
+      (scheme.items ?? []).map(item => fetchPlacementSource(item.rspuId, item.rspuName))
+    )
+    placementItems.value = layoutPlacements(
+      sources.filter((s): s is NonNullable<typeof s> => s !== null),
+      room.widthMm,
+      room.depthMm,
+      sofaWall.value
+    )
+  } catch (e) {
+    if (axios.isCancel(e)) return
+    // 摆放示意是辅助展示，失败不阻断主流程
+    placementItems.value = []
+  } finally {
+    placementLoading.value = false
+  }
+}
+
+/** 摆放示意矩形定位（mm → 相对户型图百分比）。 */
+function placementStyle(item: PlacementItem) {
+  const room = targetRoom.value
+  const bbox = room?.bbox
+  if (!bbox || !room?.widthMm || !room?.depthMm) return {}
+  return {
+    left: `${(bbox.x + (item.x / room.widthMm) * bbox.w) * 100}%`,
+    top: `${(bbox.y + (item.y / room.depthMm) * bbox.h) * 100}%`,
+    width: `${(item.w / room.widthMm) * bbox.w * 100}%`,
+    height: `${(item.d / room.depthMm) * bbox.h * 100}%`
   }
 }
 
@@ -347,6 +625,7 @@ function resetAll() {
     clearTimeout(pollTimer)
     pollTimer = null
   }
+  exitDrawMode()
   revokePreviewUrl()
   currentStep.value = 1
   errorMessage.value = ''
@@ -360,7 +639,10 @@ function resetAll() {
   targetRoomId.value = null
   stylePreference.value = null
   budgetLimit.value = null
+  sofaWall.value = 'width'
   schemeId.value = ''
+  placementItems.value = []
+  placementLoading.value = false
 }
 
 const roomColumns: DataTableColumns<EditableRoom> = [
@@ -471,6 +753,7 @@ async function loadDicts() {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown)
   loadDicts()
   // 带 analysisId 进入（分析记录「去校正 / 查看」）：跳过步骤 1 直接拉取已有分析结果
   const existingId = route.query.analysisId
@@ -480,6 +763,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+  removeDragListeners()
   if (pollTimer) {
     clearTimeout(pollTimer)
     pollTimer = null
@@ -550,7 +835,13 @@ onUnmounted(() => {
           </p>
           <div class="room-layout">
             <div class="room-image-pane">
-              <div v-if="imagePreviewUrl" class="room-image-wrap">
+              <div
+                v-if="imagePreviewUrl"
+                ref="imageWrapRef"
+                class="room-image-wrap"
+                :class="{ drawing: drawMode }"
+                @mousedown="handleDrawStart"
+              >
                 <img :src="imagePreviewUrl" alt="户型图" class="room-image">
                 <div
                   v-for="(row, index) in rooms.filter(r => r.bbox)"
@@ -567,6 +858,16 @@ onUnmounted(() => {
                 >
                   <span class="room-bbox-no rsdp-mono">{{ index + 1 }}</span>
                 </div>
+                <div
+                  v-if="draftBox"
+                  class="room-draft-box"
+                  :style="{
+                    left: `${draftBox.x * 100}%`,
+                    top: `${draftBox.y * 100}%`,
+                    width: `${draftBox.w * 100}%`,
+                    height: `${draftBox.h * 100}%`
+                  }"
+                />
               </div>
               <n-empty v-else description="原图不可用（重新上传后可预览）" />
             </div>
@@ -580,7 +881,20 @@ onUnmounted(() => {
                 :single-line="false"
                 size="small"
               />
-              <n-button size="small" @click="addRoom">添加空间</n-button>
+              <n-space align="center" :size="12">
+                <n-button size="small" @click="addRoom">添加空间</n-button>
+                <n-button
+                  v-if="imagePreviewUrl"
+                  size="small"
+                  :type="drawMode ? 'primary' : 'default'"
+                  @click="toggleDrawMode"
+                >
+                  {{ drawMode ? '退出手绘' : '添加空间（手绘）' }}
+                </n-button>
+                <span v-if="drawMode" class="hint-text">
+                  在左侧图上拖拽框选新空间，松手自动新增一行；按 ESC 或再次点击按钮退出手绘。
+                </span>
+              </n-space>
             </div>
           </div>
           <n-space>
@@ -625,6 +939,13 @@ onUnmounted(() => {
                   ¥
                 </template>
               </n-input-number>
+            </n-space>
+            <n-space align="center" :size="12">
+              <span class="hint-text">沙发靠墙方向</span>
+              <n-radio-group v-model:value="sofaWall" size="small">
+                <n-radio-button value="width">开间方向墙</n-radio-button>
+                <n-radio-button value="depth">进深方向墙</n-radio-button>
+              </n-radio-group>
               <n-button
                 type="primary"
                 :loading="generating"
@@ -645,6 +966,38 @@ onUnmounted(() => {
           <n-alert type="success" :show-icon="false">
             搭配方案已生成并落入方案列表，方案编号：<span class="rsdp-mono">{{ schemeId }}</span>
           </n-alert>
+          <!-- 产品摆放示意（纯前端；无本地原图时整块隐藏） -->
+          <div v-if="canShowPlacement" class="placement-pane">
+            <p class="hint-text">
+              产品摆放示意：按产品宽深等比绘制占位矩形（沙发贴所选墙、茶几居中于沙发前），仅作布局参考；无尺寸数据的产品未绘制。
+            </p>
+            <n-spin :show="placementLoading">
+              <div class="room-image-wrap placement-wrap">
+                <img :src="imagePreviewUrl" alt="户型图" class="room-image">
+                <div
+                  v-if="targetRoom?.bbox"
+                  class="placement-room"
+                  :style="{
+                    left: `${(targetRoom?.bbox?.x ?? 0) * 100}%`,
+                    top: `${(targetRoom?.bbox?.y ?? 0) * 100}%`,
+                    width: `${(targetRoom?.bbox?.w ?? 0) * 100}%`,
+                    height: `${(targetRoom?.bbox?.h ?? 0) * 100}%`
+                  }"
+                />
+                <div
+                  v-for="item in placementItems"
+                  :key="item.key"
+                  class="placement-item"
+                  :style="placementStyle(item)"
+                >
+                  <span class="placement-name">{{ item.name }}</span>
+                </div>
+              </div>
+              <p v-if="!placementLoading && placementItems.length === 0" class="hint-text">
+                方案产品均无可用尺寸数据，未生成摆放示意。
+              </p>
+            </n-spin>
+          </div>
           <n-space>
             <n-button type="primary" @click="goSchemeDetail">查看方案详情</n-button>
             <n-button quaternary @click="resetAll">再上传一张户型图</n-button>
@@ -723,6 +1076,61 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 12px;
   align-items: flex-start;
+}
+
+/* 手绘态：十字光标，既有编号框暂不可点，避免与拖拽冲突 */
+.room-image-wrap.drawing {
+  cursor: crosshair;
+}
+
+.room-image-wrap.drawing .room-bbox {
+  pointer-events: none;
+}
+
+/* 手绘拖拽中的虚线草稿框 */
+.room-draft-box {
+  position: absolute;
+  border: 1.5px dashed var(--rsdp-primary);
+  background: rgba(0, 0, 0, 0.06);
+  pointer-events: none;
+}
+
+/* 步骤 4 产品摆放示意 */
+.placement-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.placement-wrap {
+  width: 60%;
+}
+
+.placement-room {
+  position: absolute;
+  border: 1.5px solid var(--rsdp-warning);
+  pointer-events: none;
+}
+
+.placement-item {
+  position: absolute;
+  border: 1.5px solid var(--rsdp-success);
+  background: var(--rsdp-success-bg);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.placement-name {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--rsdp-success);
+  background: var(--rsdp-card-bg);
+  border-radius: 3px;
+  white-space: nowrap;
 }
 
 :deep(.room-row-selected td) {

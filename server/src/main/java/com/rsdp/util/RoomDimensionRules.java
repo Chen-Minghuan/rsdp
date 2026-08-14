@@ -23,8 +23,9 @@ import java.util.Set;
  *   <li>R4 品类过滤：rspu_scene 含 LIVING 且品类命中客厅模板；</li>
  *   <li>R5 数据质量：尺寸可解析（dimensions 或 sizeText）且 ≥1 条有效 RSKU 报价；</li>
  *   <li>R1 面积分档：&lt;12㎡ 沙发 ≤2200 且不推 L 型；12~20㎡ 三人位为主（≤2400）；&gt;20㎡ 可 L 型/组合；</li>
- *   <li>R2 沙发长度 ≤ min(开间 × sofaWallRatio, 开间 - walkwayMinMm)（沙发墙=开间方向假设）；</li>
- *   <li>R3 进深链式校验：沙发深 + 通道 + 茶几深 + 过人通道 + 电视柜深 ≤ 进深，
+ *   <li>R2 沙发长度 ≤ min(沙发墙长 × sofaWallRatio, 沙发墙长 - walkwayMinMm)
+ *       （沙发墙朝向可指定 width/depth，默认 width=开间方向墙，§8 P1）；</li>
+ *   <li>R3 链式校验（沿沙发墙垂直方向：沙发深 + 通道 + 茶几深 + 过人通道 + 电视柜深），
  *       不满足依次降级：去电视柜 → 换窄茶几 → 换小沙发。</li>
  * </ul>
  *
@@ -65,6 +66,12 @@ public final class RoomDimensionRules {
 
     /** 候选总量上限（对齐 AiMatchingService.MAX_CANDIDATES）。 */
     public static final int MAX_TOTAL_CANDIDATES = 30;
+
+    /** 沙发墙朝向：开间方向墙（默认）。 */
+    public static final String SOFA_WALL_WIDTH = "width";
+
+    /** 沙发墙朝向：进深方向墙。 */
+    public static final String SOFA_WALL_DEPTH = "depth";
 
     /** R1 中档客厅（12~20㎡）沙发长度上限 mm（三人位 1800~2400 的上沿，§5.2 文本值）。 */
     public static final int MID_LIVING_SOFA_MAX_MM = 2400;
@@ -151,23 +158,44 @@ public final class RoomDimensionRules {
     }
 
     /**
-     * R1 + R2 合并后的沙发长度上限（mm）：
+     * R1 + R2 合并后的沙发长度上限（mm，沙发墙=开间方向假设）：
      * min(面积分档上限, 开间 × sofaWallRatio, 开间 - walkwayMinMm)。
      *
-     * @param widthMm 开间 mm（沙发墙=开间方向假设，§5.2 R2）
+     * @param widthMm 开间 mm
      * @param depthMm 进深 mm
      * @param rules   规则配置
      * @return 沙发长度上限
      */
     public static int sofaMaxLengthMm(int widthMm, int depthMm, FloorPlanRulesProperties rules) {
+        return sofaMaxLengthMm(widthMm, depthMm, SOFA_WALL_WIDTH, rules);
+    }
+
+    /**
+     * R1 + R2 合并后的沙发长度上限（mm）：
+     * min(面积分档上限, 沙发墙长 × sofaWallRatio, 沙发墙长 - walkwayMinMm)。
+     *
+     * <p>沙发墙朝向（v3.0 §8 P1）：{@link #SOFA_WALL_WIDTH}（默认）墙长取开间，
+     * {@link #SOFA_WALL_DEPTH} 墙长取进深；未知值按 width 处理（防御性归一，
+     * 入口校验在服务/DTO 层）。</p>
+     *
+     * @param widthMm  开间 mm
+     * @param depthMm  进深 mm
+     * @param sofaWall 沙发墙朝向（width/depth，null 按 width）
+     * @param rules    规则配置
+     * @return 沙发长度上限
+     */
+    public static int sofaMaxLengthMm(int widthMm, int depthMm, String sofaWall,
+                                      FloorPlanRulesProperties rules) {
         int tierCap = tierSofaMaxMm(areaM2(widthMm, depthMm), rules);
-        int wallCap = (int) (widthMm * rules.getSofaWallRatio());
-        int walkwayCap = widthMm - rules.getWalkwayMinMm();
+        int wallMm = SOFA_WALL_DEPTH.equals(sofaWall) ? depthMm : widthMm;
+        int wallCap = (int) (wallMm * rules.getSofaWallRatio());
+        int walkwayCap = wallMm - rules.getWalkwayMinMm();
         return Math.min(tierCap, Math.min(wallCap, walkwayCap));
     }
 
     /**
-     * 执行 R1~R5 全部硬规则筛选。
+     * 执行 R1~R5 全部硬规则筛选（沙发墙=开间方向假设，与
+     * {@link #filter(int, int, String, List, FloorPlanRulesProperties)} 传 width 等价）。
      *
      * @param widthMm    客厅开间 mm
      * @param depthMm    客厅进深 mm
@@ -178,7 +206,31 @@ public final class RoomDimensionRules {
     public static FilterResult filter(int widthMm, int depthMm,
                                       List<CandidateProduct> candidates,
                                       FloorPlanRulesProperties rules) {
+        return filter(widthMm, depthMm, SOFA_WALL_WIDTH, candidates, rules);
+    }
+
+    /**
+     * 执行 R1~R5 全部硬规则筛选。
+     *
+     * <p>沙发墙朝向（v3.0 §8 P1）：width（默认）时 R2 沙发/电视柜上限按开间墙长、
+     * R3 链式校验沿进深方向；depth 时两者方向对调（R2 按进深墙长，R3 沿开间方向核算）。
+     * null/未知朝向按 width 处理（防御性归一，保证无朝向时行为完全不变）。</p>
+     *
+     * @param widthMm    客厅开间 mm
+     * @param depthMm    客厅进深 mm
+     * @param sofaWall   沙发墙朝向（width/depth，null 按 width）
+     * @param candidates 候选产品事实数据（服务层装配）
+     * @param rules      规则配置
+     * @return 按品类分组的候选 + R3 降级说明
+     */
+    public static FilterResult filter(int widthMm, int depthMm, String sofaWall,
+                                      List<CandidateProduct> candidates,
+                                      FloorPlanRulesProperties rules) {
         List<String> degradations = new ArrayList<>();
+        boolean sofaOnDepthWall = SOFA_WALL_DEPTH.equals(sofaWall);
+        // 沙发墙方向的墙长（R2）；链式校验方向与之垂直（R3）
+        int wallMm = sofaOnDepthWall ? depthMm : widthMm;
+        int chainMm = sofaOnDepthWall ? widthMm : depthMm;
 
         // R4 品类过滤 + R5 数据质量过滤
         Map<String, List<CandidateProduct>> byCategory = new LinkedHashMap<>();
@@ -196,7 +248,7 @@ public final class RoomDimensionRules {
         }
 
         double area = areaM2(widthMm, depthMm);
-        int sofaMax = sofaMaxLengthMm(widthMm, depthMm, rules);
+        int sofaMax = sofaMaxLengthMm(widthMm, depthMm, sofaWall, rules);
 
         // R1 面积分档 + R2 沙发长度约束（仅沙发品类；L 型仅大客厅可推）
         boolean lTypeAllowed = area > rules.getLargeLivingAreaM2();
@@ -207,16 +259,16 @@ public final class RoomDimensionRules {
             .toList();
         byCategory.put(CATEGORY_SOFA, new ArrayList<>(sofas));
 
-        // 电视柜长度 ≤ 开间 × tvCabinetWallRatio
-        int tvCabinetMax = (int) (widthMm * rules.getTvCabinetWallRatio());
+        // 电视柜长度 ≤ 沙发墙对面墙长 × tvCabinetWallRatio（电视柜墙与沙发墙同向平行）
+        int tvCabinetMax = (int) (wallMm * rules.getTvCabinetWallRatio());
         List<CandidateProduct> tvCabinets = byCategory.get(CATEGORY_TV_CABINET)
             .stream()
             .filter(c -> c.widthMm() <= tvCabinetMax)
             .toList();
         byCategory.put(CATEGORY_TV_CABINET, new ArrayList<>(tvCabinets));
 
-        // R3 进深链式校验（含降级链）
-        applyDepthChain(widthMm, depthMm, byCategory, rules, degradations);
+        // R3 链式校验（含降级链）：沿沙发墙的垂直方向核算（默认 width 朝向时即进深方向）
+        applyDepthChain(chainMm, byCategory, rules, degradations);
 
         // 排序 + 每品类截断 + 总量截断
         Map<String, List<CandidateProduct>> result = new LinkedHashMap<>();
@@ -235,12 +287,16 @@ public final class RoomDimensionRules {
     }
 
     /**
-     * R3 进深链式校验：沙发深 + 通道(sofaTeaMinMm) + 茶几深 + 过人通道(walkwayMinMm) + 电视柜深 ≤ 进深。
+     * R3 链式校验：沙发深 + 通道(sofaTeaMinMm) + 茶几深 + 过人通道(walkwayMinMm) + 电视柜深
+     * ≤ 链式方向可用尺寸。
      *
-     * <p>沙发/茶几/电视柜深度取各自品类的最小值（最优情形，能否放下的几何判定）；
-     * 不满足时依次降级：去电视柜 → 换窄茶几 → 换小沙发（§5.2 R3）。</p>
+     * <p>链式方向与沙发墙垂直：沙发墙=开间方向（默认）时沿进深核算，沙发墙=进深方向时
+     * 沿开间核算（v3.0 §8 P1）。沙发/茶几/电视柜深度取各自品类的最小值（最优情形，
+     * 能否放下的几何判定）；不满足时依次降级：去电视柜 → 换窄茶几 → 换小沙发（§5.2 R3）。</p>
+     *
+     * @param chainMm 链式方向可用尺寸（mm）
      */
-    private static void applyDepthChain(int widthMm, int depthMm,
+    private static void applyDepthChain(int chainMm,
                                         Map<String, List<CandidateProduct>> byCategory,
                                         FloorPlanRulesProperties rules,
                                         List<String> degradations) {
@@ -263,42 +319,42 @@ public final class RoomDimensionRules {
         if (teaDepth != null && tvDepth != null) {
             long fullChain = (long) sofaDepth + rules.getSofaTeaMinMm() + teaDepth
                 + rules.getWalkwayMinMm() + tvDepth;
-            if (fullChain <= depthMm) {
+            if (fullChain <= chainMm) {
                 return;
             }
             // 降级 1：去电视柜
             byCategory.put(CATEGORY_TV_CABINET, new ArrayList<>());
-            degradations.add("进深不足以同时容纳沙发+茶几+电视柜，已按规则去掉电视柜");
+            degradations.add("纵深不足以同时容纳沙发+茶几+电视柜，已按规则去掉电视柜");
         }
 
-        // 无电视柜链：沙发（最浅） + 通道 + 茶几 ≤ 进深，按最优沙发逐候选判定茶几可行性
+        // 无电视柜链：沙发（最浅） + 通道 + 茶几 ≤ 链式方向尺寸，按最优沙发逐候选判定茶几可行性
         if (!teaTables.isEmpty() && teaDepth != null) {
-            int maxTeaDepth = depthMm - sofaDepth - rules.getSofaTeaMinMm();
+            int maxTeaDepth = chainMm - sofaDepth - rules.getSofaTeaMinMm();
             List<CandidateProduct> feasibleTeaTables = teaTables.stream()
                 .filter(c -> c.depthMm() == null || c.depthMm() <= maxTeaDepth)
                 .toList();
             if (feasibleTeaTables.isEmpty()) {
                 byCategory.put(CATEGORY_TEA_TABLE, new ArrayList<>());
-                degradations.add("进深不足，没有可放下的茶几，已去掉茶几");
+                degradations.add("纵深不足，没有可放下的茶几，已去掉茶几");
                 teaDepth = null;
             } else {
                 if (feasibleTeaTables.size() < teaTables.size()) {
                     // 降级 2：换窄茶几
-                    degradations.add("进深不足，已按规则筛选更窄的茶几");
+                    degradations.add("纵深不足，已按规则筛选更窄的茶几");
                 }
                 byCategory.put(CATEGORY_TEA_TABLE, new ArrayList<>(feasibleTeaTables));
                 teaDepth = minDepth(feasibleTeaTables);
             }
         }
 
-        // 降级 3：换小沙发（按剩余进深反推沙发深度上限：进深 - 通道 - 茶几）
+        // 降级 3：换小沙发（按剩余纵深反推沙发深度上限：链式方向尺寸 - 通道 - 茶几）
         int reserved = teaDepth != null ? rules.getSofaTeaMinMm() + teaDepth : 0;
-        int maxSofaDepth = depthMm - reserved;
+        int maxSofaDepth = chainMm - reserved;
         List<CandidateProduct> smallerSofas = byCategory.get(CATEGORY_SOFA).stream()
             .filter(c -> c.depthMm() == null || c.depthMm() <= maxSofaDepth)
             .toList();
         if (smallerSofas.size() != byCategory.get(CATEGORY_SOFA).size()) {
-            degradations.add("进深不足，已按规则筛选进深更小的沙发");
+            degradations.add("纵深不足，已按规则筛选进深更小的沙发");
         }
         byCategory.put(CATEGORY_SOFA, new ArrayList<>(smallerSofas));
     }

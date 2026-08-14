@@ -94,6 +94,82 @@ class RoomDimensionRulesTest {
         assertThat(RoomDimensionRules.sofaMaxLengthMm(2000, 5000, rules)).isEqualTo(1400);
     }
 
+    // ---------- R2 沙发墙朝向（v3.0 §8 P1） ----------
+
+    @Test
+    void r2_depthSofaWall_shouldUseDepthAsWallLength() {
+        // 4200×5000 = 21㎡（大客厅，无分档上限）
+        // 默认 width：min(4200×0.75, 4200-600) = 3150；depth 朝向：min(5000×0.75, 5000-600) = 3750
+        assertThat(RoomDimensionRules.sofaMaxLengthMm(4200, 5000, RoomDimensionRules.SOFA_WALL_DEPTH, rules))
+            .isEqualTo(3750);
+
+        // 3700 的沙发在默认 width 朝向下被 R2 剔除，depth 朝向下保留
+        FilterResult widthResult = RoomDimensionRules.filter(4200, 5000, List.of(
+            sofa("SF-LONG", 3700, 1000, false)), rules);
+        assertThat(widthResult.candidatesByCategory().get("SF")).isEmpty();
+
+        FilterResult depthResult = RoomDimensionRules.filter(4200, 5000,
+            RoomDimensionRules.SOFA_WALL_DEPTH, List.of(
+                sofa("SF-LONG", 3700, 1000, false)), rules);
+        assertThat(depthResult.candidatesByCategory().get("SF"))
+            .extracting(CandidateProduct::rspuId).containsExactly("SF-LONG");
+    }
+
+    @Test
+    void r2_depthSofaWall_tvCabinetCapShouldSwapDirection() {
+        // 4000×5000：电视柜上限默认 width=4000×0.8=3200；depth 朝向=5000×0.8=4000
+        FilterResult widthResult = RoomDimensionRules.filter(4000, 5000, List.of(
+            sofa("SF-1", 2000, 1000, false),
+            cand("FC-LONG", "FC", 3500, 400)), rules);
+        assertThat(widthResult.candidatesByCategory().get("FC")).isEmpty();
+
+        FilterResult depthResult = RoomDimensionRules.filter(4000, 5000,
+            RoomDimensionRules.SOFA_WALL_DEPTH, List.of(
+                sofa("SF-1", 2000, 1000, false),
+                cand("FC-LONG", "FC", 3500, 400)), rules);
+        assertThat(depthResult.candidatesByCategory().get("FC"))
+            .extracting(CandidateProduct::rspuId).containsExactly("FC-LONG");
+    }
+
+    @Test
+    void r3_depthSofaWall_chainShouldRunAlongWidth() {
+        // 2800×5000：全链 1000+350+600+600+400 = 2950
+        // 默认 width 朝向链沿进深 5000 核算 → 全链成立；depth 朝向链沿开间 2800 核算 → 去电视柜
+        FilterResult widthResult = RoomDimensionRules.filter(2800, 5000, List.of(
+            sofa("SF-1", 2000, 1000, false),
+            cand("TB-1", "TB", 1200, 600),
+            cand("FC-1", "FC", 2000, 400)), rules);
+        assertThat(widthResult.candidatesByCategory().get("FC")).hasSize(1);
+        assertThat(widthResult.degradations()).isEmpty();
+
+        FilterResult depthResult = RoomDimensionRules.filter(2800, 5000,
+            RoomDimensionRules.SOFA_WALL_DEPTH, List.of(
+                sofa("SF-1", 2000, 1000, false),
+                cand("TB-1", "TB", 1200, 600),
+                cand("FC-1", "FC", 2000, 400)), rules);
+        assertThat(depthResult.candidatesByCategory().get("FC")).isEmpty();
+        assertThat(depthResult.degradations()).anyMatch(d -> d.contains("电视柜"));
+    }
+
+    @Test
+    void sofaWall_nullOrDefault_shouldBehaveExactlyLikeWidth() {
+        // 无朝向（null）与显式 width 行为完全一致（保持无朝向时行为不变）
+        List<CandidateProduct> candidates = List.of(
+            sofa("SF-1", 2200, 1000, false),
+            cand("TB-1", "TB", 1200, 600),
+            cand("FC-1", "FC", 2000, 400));
+        FilterResult defaultResult = RoomDimensionRules.filter(4200, 3800, candidates, rules);
+        FilterResult nullResult = RoomDimensionRules.filter(4200, 3800, null, candidates, rules);
+        FilterResult widthResult = RoomDimensionRules.filter(4200, 3800,
+            RoomDimensionRules.SOFA_WALL_WIDTH, candidates, rules);
+
+        assertThat(nullResult.candidatesByCategory().get("SF"))
+            .isEqualTo(defaultResult.candidatesByCategory().get("SF"));
+        assertThat(widthResult.candidatesByCategory().get("SF"))
+            .isEqualTo(defaultResult.candidatesByCategory().get("SF"));
+        assertThat(nullResult.degradations()).isEqualTo(defaultResult.degradations());
+    }
+
     // ---------- R3 进深链式校验 ----------
 
     @Test

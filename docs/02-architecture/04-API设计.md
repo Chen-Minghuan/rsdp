@@ -1356,7 +1356,9 @@ POST   /api/v1/floor-plan/analyze          [product:read]
        # 走 ImageUploadValidator；hint 可选补充说明）。落图（image_type=floor_plan）
        # → 建 analysis（source=admin，status=pending）→ 建 async_task
        # （task_type=floor_plan_analysis）→ 事务提交后触发 AI 识别 + 尺寸三级提取
-       # （OCR 标注 high / AI 估算 low）→ status=awaiting_confirm
+       # （OCR 标注 high / 比例尺换算 scale_calc mid（P1，需可解析的 像素↔毫米 关系，
+       # 原图像素宽/高上传时落 image_assets.width/height）/ AI 估算 low）
+       # → status=awaiting_confirm
        # Form: image*, hint?
        # Response: { analysisId, taskId }
 
@@ -1390,7 +1392,10 @@ POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
        # 上下文）→ LLM 空返回规则兜底。落 scheme + scheme_item（价格快照语义沿用
        # SchemeService.createScheme，方案项均为 LIVING 场景产品），scheme.analysis_id
        # 回填溯源，方案名自动生成「客厅方案-yyyyMMdd-HHmmss」
-       # Request: { roomId*, stylePreference?, budgetLimit?(≥0), projectId? }
+       # sofaWall（P1）：沙发墙朝向，width=开间方向墙（默认，缺省按 width）、
+       # depth=进深方向墙；影响 R2 沙发/电视柜长度上限的墙长取值与 R3 链式校验方向
+       # （depth 时 R2 按进深墙长、R3 沿开间方向核算）；非法值 400 中文提示
+       # Request: { roomId*, stylePreference?, budgetLimit?(≥0), projectId?, sofaWall?("width"|"depth") }
        # Response: { schemeId }
 
 POST   /api/v1/floor-plan/{analysisId}/retry   [登录 + 归属校验]

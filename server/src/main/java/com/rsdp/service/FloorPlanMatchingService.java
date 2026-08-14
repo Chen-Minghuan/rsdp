@@ -93,20 +93,33 @@ public class FloorPlanMatchingService {
     private final ObjectMapper objectMapper;
 
     /**
-     * 公共匹配入口（官网 ai-match 链路；不落库）。
+     * 公共匹配入口（官网 ai-match 链路；不落库），缺省沙发墙朝向（width）的便捷重载，
+     * 语义见 {@link #matchRoomScheme(Integer, Integer, String, BigDecimal, String)}。
+     */
+    public RoomSchemeResponse matchRoomScheme(Integer widthMm, Integer depthMm,
+                                              String stylePreference, BigDecimal budgetLimit) {
+        return matchRoomScheme(widthMm, depthMm, stylePreference, budgetLimit, null);
+    }
+
+    /**
+     * 公共匹配入口（官网 ai-match 链路；不落库），支持可选沙发墙朝向（v3.0 §8 P1）。
      *
      * <p>widthMm/depthMm 均提供时走规则引擎：R1~R5 硬规则筛选 → LLM 终审 → 规则兜底；
      * 任一缺失时退化为 {@link AiMatchingService#generateRoomScheme(RoomSchemeRequest)}
-     * 原行为（无尺寸时行为不变，v3.0 §5.3）。</p>
+     * 原行为（无尺寸时行为不变，v3.0 §5.3）。sofaWall 缺省（null/空白）按 width
+     * （开间方向墙）处理；depth 时 R2 沙发/电视柜上限按进深墙长、R3 链式校验沿开间方向。</p>
      *
      * @param widthMm         空间开间（mm），可空
      * @param depthMm         空间进深（mm），可空
      * @param stylePreference 风格偏好（字典码），可空
      * @param budgetLimit     预算上限（元），可空
+     * @param sofaWall        沙发墙朝向（width/depth），可空（缺省 width）
      * @return 搭配方案（选品 + reasoning）
      */
     public RoomSchemeResponse matchRoomScheme(Integer widthMm, Integer depthMm,
-                                              String stylePreference, BigDecimal budgetLimit) {
+                                              String stylePreference, BigDecimal budgetLimit,
+                                              String sofaWall) {
+        String normalizedSofaWall = normalizeSofaWall(sofaWall);
         RoomSchemeRequest request = new RoomSchemeRequest();
         request.setRoomType(ROOM_TYPE_LIVING);
         request.setBudgetLimit(budgetLimit);
@@ -120,10 +133,11 @@ public class FloorPlanMatchingService {
 
         List<CandidateProduct> candidates = assembleCandidates(stylePreference);
         RoomDimensionRules.FilterResult filterResult =
-            RoomDimensionRules.filter(widthMm, depthMm, candidates, rulesProperties);
+            RoomDimensionRules.filter(widthMm, depthMm, normalizedSofaWall, candidates, rulesProperties);
         List<CandidateProduct> filtered = filterResult.flatCandidates();
         if (!filterResult.degradations().isEmpty()) {
-            log.info("客厅尺寸规则降级，room={}x{}，degradations={}", widthMm, depthMm, filterResult.degradations());
+            log.info("客厅尺寸规则降级，room={}x{}，sofaWall={}，degradations={}",
+                widthMm, depthMm, normalizedSofaWall, filterResult.degradations());
         }
 
         List<String> orderedIds = filtered.stream().map(CandidateProduct::rspuId).toList();
@@ -177,7 +191,7 @@ public class FloorPlanMatchingService {
         }
 
         RoomSchemeResponse matched = matchRoomScheme(room.getWidthMm(), room.getDepthMm(),
-            request.getStylePreference(), request.getBudgetLimit());
+            request.getStylePreference(), request.getBudgetLimit(), request.getSofaWall());
         List<SchemeItemResponse> matchedItems = matched.getItems() != null
             ? matched.getItems() : List.of();
         if (matchedItems.isEmpty()) {
@@ -368,6 +382,26 @@ public class FloorPlanMatchingService {
                 ProductStyleMatch::getRspuId,
                 m -> m.getOverallScore().doubleValue(),
                 (a, b) -> a));
+    }
+
+    /**
+     * 沙发墙朝向归一（v3.0 §8 P1）：null/空白按 width（开间方向墙，默认假设）；
+     * width/depth 原样返回；其余非法值抛 400 中文提示（DTO 层 @Pattern 已先拦一道，
+     * 此处为 public 入口等未来调用方的兜底校验）。
+     *
+     * @param sofaWall 朝向入参，可空
+     * @return width 或 depth
+     */
+    private String normalizeSofaWall(String sofaWall) {
+        if (!StringUtils.hasText(sofaWall)) {
+            return RoomDimensionRules.SOFA_WALL_WIDTH;
+        }
+        String normalized = sofaWall.trim();
+        if (RoomDimensionRules.SOFA_WALL_WIDTH.equals(normalized)
+            || RoomDimensionRules.SOFA_WALL_DEPTH.equals(normalized)) {
+            return normalized;
+        }
+        throw new BusinessException("沙发墙朝向仅支持 width（开间方向墙）或 depth（进深方向墙）: " + sofaWall);
     }
 
     /**

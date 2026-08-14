@@ -36,6 +36,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -49,6 +50,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+
+import javax.imageio.ImageIO;
 
 /**
  * 户型图分析服务（管理端，方案 v3.0 §4.2/§4.4/§4.5）。
@@ -83,10 +86,12 @@ public class FloorPlanService {
     private static final String PUBLIC_OPERATOR = "anonymous";
 
     private static final String DIM_SOURCE_OCR = "ocr_text";
+    private static final String DIM_SOURCE_SCALE_CALC = "scale_calc";
     private static final String DIM_SOURCE_AI_ESTIMATE = "ai_estimate";
     private static final String DIM_SOURCE_MANUAL = "manual";
 
     private static final String CONFIDENCE_HIGH = "high";
+    private static final String CONFIDENCE_MID = "mid";
     private static final String CONFIDENCE_LOW = "low";
 
     /** AI 估算提示词（尺寸三级提取第③级：无标注无比例尺时按常见户型经验估算）。 */
@@ -145,6 +150,12 @@ public class FloorPlanService {
         imageAsset.setAiProcessed(false);
         imageAsset.setFileSize(file.getSize());
         imageAsset.setFormat(extension);
+        // 像素宽/高：scale_calc 尺寸提取（第②级）的换算参照，读取失败留空不阻断上传
+        int[] pixelSize = readImagePixelSize(file);
+        if (pixelSize != null) {
+            imageAsset.setWidth(pixelSize[0]);
+            imageAsset.setHeight(pixelSize[1]);
+        }
         imageAsset.setUploadedBy(operator);
         imageAsset.setCreatedAt(now);
         imageAssetsMapper.insert(imageAsset);
@@ -541,8 +552,11 @@ public class FloorPlanService {
      *
      * <ol>
      *   <li>图上尺寸标注 OCR：dimensionText 经 {@link Dimensions} 解析，source=ocr_text / high；</li>
-     *   <li>比例尺换算：scaleText 像素换算为 P1 范围，当前跳过；</li>
-     *   <li>AI 估算：无标注时按常见户型经验轻量估算，source=ai_estimate / low；
+     *   <li>比例尺换算 scale_calc（P1）：scaleText 经
+     *       {@link Dimensions#parseScaleConversion} 解析出可靠 像素↔毫米 关系时，
+     *       结合原图像素宽/高（image_assets.width/height）与空间 bbox 归一化尺寸推算，
+     *       source=scale_calc / mid；解析不出可靠关系（如仅有 "1:100"）直接跳过；</li>
+     *   <li>AI 估算：无标注无可用比例尺时按常见户型经验轻量估算，source=ai_estimate / low；
      *       估算也失败则尺寸留空、confidence=low，由人工校正兜底。</li>
      * </ol>
      *
@@ -551,6 +565,8 @@ public class FloorPlanService {
      */
     public void buildRooms(String analysisId, FloorPlanDetectResult detected) {
         LocalDateTime now = LocalDateTime.now();
+        // 第②级换算上下文按批次解析一次（scaleText 为全图级标注）：解析不出可靠关系为 null
+        ScaleContext scaleContext = resolveScaleConversion(analysisId, detected.getScaleText());
         int sortOrder = 0;
         for (FloorPlanDetectResult.Room detectedRoom : detected.getRooms()) {
             FloorPlanRoom room = new FloorPlanRoom();
@@ -570,12 +586,19 @@ public class FloorPlanService {
                 room.setDimensionSource(DIM_SOURCE_OCR);
                 room.setDimensionConfidence(CONFIDENCE_HIGH);
             } else {
-                // 第③级：AI 估算（第②级比例尺换算为 P1，当前跳过）
-                dims = estimateRoomDimensions(room.getRoomType(), detectedRoom.getLabel());
+                // 第②级：比例尺换算（需可靠 像素↔毫米 关系 + 空间 bbox）
+                dims = scaleCalcDimensions(detectedRoom, scaleContext);
                 if (dims != null) {
-                    room.setDimensionSource(DIM_SOURCE_AI_ESTIMATE);
+                    room.setDimensionSource(DIM_SOURCE_SCALE_CALC);
+                    room.setDimensionConfidence(CONFIDENCE_MID);
+                } else {
+                    // 第③级：AI 估算
+                    dims = estimateRoomDimensions(room.getRoomType(), detectedRoom.getLabel());
+                    if (dims != null) {
+                        room.setDimensionSource(DIM_SOURCE_AI_ESTIMATE);
+                    }
+                    room.setDimensionConfidence(CONFIDENCE_LOW);
                 }
-                room.setDimensionConfidence(CONFIDENCE_LOW);
             }
             if (dims != null) {
                 room.setWidthMm(dims[0]);
@@ -588,6 +611,66 @@ public class FloorPlanService {
             room.setUpdatedAt(now);
             roomMapper.insert(room);
         }
+    }
+
+    /**
+     * 解析第②级比例尺换算上下文（批次级）：scaleText 有标注时才查原图像素宽/高
+     * （image_assets.width/height，上传时落库）。bbox 为归一化坐标，任何写法都需要
+     * 原图像素尺寸才能把 bbox 换算成空间像素尺寸，故换算关系或像素尺寸任一缺失
+     * 返回 null（落到第③级）。
+     */
+    private ScaleContext resolveScaleConversion(String analysisId, String scaleText) {
+        if (!StringUtils.hasText(scaleText)) {
+            return null;
+        }
+        Integer imageWidthPx = null;
+        Integer imageHeightPx = null;
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis != null && StringUtils.hasText(analysis.getImageId())) {
+            ImageAssets imageAsset = imageAssetsMapper.selectById(analysis.getImageId());
+            if (imageAsset != null) {
+                imageWidthPx = imageAsset.getWidth();
+                imageHeightPx = imageAsset.getHeight();
+            }
+        }
+        Dimensions.MmPerPixel conversion =
+            Dimensions.parseScaleConversion(scaleText, imageWidthPx, imageHeightPx);
+        if (conversion == null || imageWidthPx == null || imageWidthPx <= 0
+            || imageHeightPx == null || imageHeightPx <= 0) {
+            return null;
+        }
+        log.info("比例尺换算关系已确立，analysisId={}，scaleText={}，mmPerPixel={}/{}",
+            analysisId, scaleText, conversion.x(), conversion.y());
+        return new ScaleContext(conversion.x(), conversion.y(), imageWidthPx, imageHeightPx);
+    }
+
+    /**
+     * 第②级比例尺换算：空间 bbox 归一化尺寸 × 原图像素尺寸 × 每像素毫米数；
+     * 换算上下文缺失或 bbox 缺失/结果非正数返回 null（落到第③级）。
+     */
+    private int[] scaleCalcDimensions(FloorPlanDetectResult.Room detectedRoom, ScaleContext scale) {
+        if (scale == null || detectedRoom.getW() == null || detectedRoom.getH() == null
+            || detectedRoom.getW() <= 0 || detectedRoom.getH() <= 0) {
+            return null;
+        }
+        int widthMm = (int) Math.round(detectedRoom.getW() * scale.imageWidthPx() * scale.mmPerPixelX());
+        int depthMm = (int) Math.round(detectedRoom.getH() * scale.imageHeightPx() * scale.mmPerPixelY());
+        if (widthMm <= 0 || depthMm <= 0) {
+            return null;
+        }
+        return new int[] {widthMm, depthMm};
+    }
+
+    /**
+     * scale_calc 换算上下文：每像素毫米数（横向/纵向）+ 原图像素宽/高。
+     *
+     * @param mmPerPixelX   横向每像素毫米数
+     * @param mmPerPixelY   纵向每像素毫米数
+     * @param imageWidthPx  原图像素宽
+     * @param imageHeightPx 原图像素高
+     */
+    private record ScaleContext(double mmPerPixelX, double mmPerPixelY,
+                                int imageWidthPx, int imageHeightPx) {
     }
 
     /**
@@ -813,6 +896,25 @@ public class FloorPlanService {
             log.warn("JSON 序列化失败", e);
             return null;
         }
+    }
+
+    /**
+     * 读取图片像素宽/高（scale_calc 的换算参照，落 image_assets.width/height）；
+     * 读取失败返回 null（不阻断上传，仅放弃第②级比例尺换算）。
+     *
+     * @param file 上传图片
+     * @return [widthPx, heightPx]，失败返回 null
+     */
+    private int[] readImagePixelSize(MultipartFile file) {
+        try {
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(file.getBytes()));
+            if (image != null && image.getWidth() > 0 && image.getHeight() > 0) {
+                return new int[] {image.getWidth(), image.getHeight()};
+            }
+        } catch (Exception e) {
+            log.warn("读取户型图像素尺寸失败，按无像素尺寸处理", e);
+        }
+        return null;
     }
 
     private String getExtension(String filename) {

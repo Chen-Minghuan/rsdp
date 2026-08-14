@@ -243,8 +243,8 @@ public class AsyncTaskProcessor {
      *
      * <p>照 {@link #processProductEntry} 模式：claimPendingTask 原子认领；
      * AI 调用在事务外执行，DB 写入直接走 Mapper 短操作。尺寸三级提取与空间明细落库
-     * 收敛在 {@link FloorPlanService#buildRooms}（OCR 标注解析 high → AI 估算 low →
-     * 留空待人工校正；比例尺换算为 P1 范围）。</p>
+     * 收敛在 {@link FloorPlanService#buildRooms}（OCR 标注解析 high → 比例尺换算
+     * scale_calc mid（P1，需可解析的 像素↔毫米 关系）→ AI 估算 low → 留空待人工校正）。</p>
      *
      * @param taskId     任务 ID
      * @param analysisId 户型图分析批次 ID

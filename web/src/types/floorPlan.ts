@@ -74,12 +74,17 @@ export interface FloorPlanConfirmRequest {
   scaleRatio?: number | null
 }
 
+/** 沙发靠墙方向：width=开间方向墙（默认）/ depth=进深方向墙（影响 R2 规则墙长取值）。 */
+export type SofaWallDirection = 'width' | 'depth'
+
 /** 搭配方案生成请求（POST /floor-plan/{analysisId}/scheme）。 */
 export interface FloorPlanSchemeRequest {
   roomId: string
   stylePreference?: string
   budgetLimit?: number
   projectId?: string
+  /** 沙发靠墙方向（可选，默认 width） */
+  sofaWall?: SofaWallDirection
 }
 
 /** 搭配方案生成响应。 */
