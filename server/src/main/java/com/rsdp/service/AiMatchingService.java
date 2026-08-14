@@ -123,6 +123,7 @@ public class AiMatchingService {
 
         String prompt = buildPrompt(
             roomTypeName,
+            request.getRoomType(),
             request.getBudgetLimit(),
             getDictName("style", request.getStylePreference()),
             candidates,
@@ -133,13 +134,33 @@ public class AiMatchingService {
         String aiJson = visionService.chatText(SYSTEM_PROMPT, prompt);
         AiSchemeRecommendation recommendation = parseRecommendation(aiJson);
         if (recommendation.getRspuIds() == null || recommendation.getRspuIds().isEmpty()) {
-            recommendation = ruleFallback(candidates);
+            recommendation = ruleFallback(request.getRoomType(), candidates);
         }
 
         return buildResponse(
             request.getRoomType(),
             request.getBudgetLimit(),
             recommendation,
+            candidates
+        );
+    }
+
+    /**
+     * 规则兜底方案（多空间链路 v3.0 §8 P2：LLM 调用抛异常时由编排层逐空间降级调用）。
+     *
+     * <p>不调用 LLM，直接按空间模板从候选中取每品类最前者组合（候选已由调用方
+     * 按风格匹配分 + 创建时间排序），语义同 {@link #generateRoomScheme(RoomSchemeRequest, List)}
+     * 内部的空返回兜底。</p>
+     *
+     * @param request    请求（含可选空间尺寸）
+     * @param candidates 尺寸合规的候选产品（已排序）
+     * @return 规则兜底搭配方案
+     */
+    public RoomSchemeResponse ruleFallbackScheme(RoomSchemeRequest request, List<RspuMaster> candidates) {
+        return buildResponse(
+            request.getRoomType(),
+            request.getBudgetLimit(),
+            ruleFallback(request.getRoomType(), candidates),
             candidates
         );
     }
@@ -219,6 +240,18 @@ public class AiMatchingService {
      */
     private String buildPrompt(String roomTypeName, BigDecimal budgetLimit, String styleName,
                                List<RspuMaster> candidates, Integer widthMm, Integer depthMm) {
+        return buildPrompt(roomTypeName, null, budgetLimit, styleName, candidates, widthMm, depthMm);
+    }
+
+    /**
+     * 组装搭配终审 prompt；widthMm/depthMm 均非空时注入空间尺寸上下文（v3.0 §5.3），
+     * 并在候选行附品类码；选品组合提示按 roomType 空间模板给出（P2 多空间：
+     * 客厅「1 沙发 + 0~1 茶几 + 0~1 电视柜 + 0~2 休闲椅」、餐厅「1 餐桌 + 0~4 餐椅」、
+     * 卧室「1 床 + 0~2 柜类」）。
+     */
+    private String buildPrompt(String roomTypeName, String roomType, BigDecimal budgetLimit,
+                               String styleName, List<RspuMaster> candidates,
+                               Integer widthMm, Integer depthMm) {
         Map<String, BigDecimal> minPriceMap = batchMinPrices(
             candidates.stream().map(RspuMaster::getRspuId).toList()
         );
@@ -232,7 +265,7 @@ public class AiMatchingService {
                 .divide(BigDecimal.valueOf(1_000_000L), 1, java.math.RoundingMode.HALF_UP);
             sb.append("空间尺寸：").append(widthMm).append("mm × ").append(depthMm)
                 .append("mm（约 ").append(areaM2).append("㎡）\n");
-            sb.append("请从候选产品列表中挑选一套客厅搭配：1 款沙发 + 0~1 款茶几 + 0~1 款电视柜 + 0~2 款休闲椅。\n");
+            sb.append("请从候选产品列表中挑选一套").append(compositionHint(roomType)).append("。\n");
             sb.append("候选产品均已通过尺寸校验，你只需判断风格、颜色、材质的搭配协调性。\n");
         }
         sb.append("预算上限：").append(budgetLimit).append(" 元\n");
@@ -260,14 +293,15 @@ public class AiMatchingService {
     }
 
     /**
-     * 规则兜底（v3.0 §5.3 降级链）：LLM 返回空时，按客厅品类模板从候选中取每品类最前者
+     * 规则兜底（v3.0 §5.3 降级链）：LLM 返回空时，按空间品类模板从候选中取每品类最前者
      * （候选已由调用方按风格匹配分 + 创建时间排序），保证永远有结果。
      *
+     * @param roomType   空间类型（决定品类模板 maxPerCategory，P2 多空间）
      * @param candidates 尺寸合规候选（已排序）
      * @return 兜底推荐结果，reasoning 注明规则推荐
      */
-    private AiSchemeRecommendation ruleFallback(List<RspuMaster> candidates) {
-        Map<String, Integer> maxPerCategory = Map.of("SF", 1, "TB", 1, "FC", 1, "FS", 2);
+    private AiSchemeRecommendation ruleFallback(String roomType, List<RspuMaster> candidates) {
+        Map<String, Integer> maxPerCategory = maxPerCategoryFor(roomType);
         Map<String, Integer> picked = new java.util.HashMap<>();
         List<String> selectedIds = new ArrayList<>();
         for (RspuMaster candidate : candidates) {
@@ -290,6 +324,35 @@ public class AiMatchingService {
             ? "规则推荐：当前没有满足尺寸规则的候选产品，无法生成方案"
             : "规则推荐：AI 未给出有效结果，已按尺寸合规与风格匹配分自动组合");
         return fallback;
+    }
+
+    /**
+     * 空间模板选品组合提示（prompt 文案，P2 多空间）；默认客厅文案与历史版本完全一致。
+     *
+     * @param roomType 空间类型（LIVING/LIVING_ROOM/DINING_ROOM/BEDROOM 等）
+     * @return 组合提示文案
+     */
+    private static String compositionHint(String roomType) {
+        return switch (roomType == null ? "" : roomType.trim().toUpperCase()) {
+            case "DINING", "DINING_ROOM" -> "餐厅搭配：1 款餐桌 + 0~4 款餐椅";
+            case "BEDROOM" -> "卧室搭配：1 款床 + 0~2 款柜类";
+            default -> "客厅搭配：1 款沙发 + 0~1 款茶几 + 0~1 款电视柜 + 0~2 款休闲椅";
+        };
+    }
+
+    /**
+     * 空间模板每品类最大选品数（规则兜底用，P2 多空间；与
+     * {@code RoomDimensionRules} 各空间模板 maxPerCategory 保持一致）。
+     *
+     * @param roomType 空间类型
+     * @return 品类码 → 最大选品数
+     */
+    private static Map<String, Integer> maxPerCategoryFor(String roomType) {
+        return switch (roomType == null ? "" : roomType.trim().toUpperCase()) {
+            case "DINING", "DINING_ROOM" -> Map.of("DT", 1, "FS", 4);
+            case "BEDROOM" -> Map.of("BD", 1, "FC", 2);
+            default -> Map.of("SF", 1, "TB", 1, "FC", 1, "FS", 2);
+        };
     }
 
     private Map<String, BigDecimal> batchMinPrices(List<String> rspuIds) {

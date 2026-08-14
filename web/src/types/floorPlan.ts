@@ -79,7 +79,10 @@ export type SofaWallDirection = 'width' | 'depth'
 
 /** 搭配方案生成请求（POST /floor-plan/{analysisId}/scheme）。 */
 export interface FloorPlanSchemeRequest {
-  roomId: string
+  /** 目标空间 ID（单空间；与 roomIds 至少填一个） */
+  roomId?: string
+  /** 目标空间 ID 列表（多空间批量搭配：逐空间搭配合并落一个 scheme；与 roomId 至少填一个） */
+  roomIds?: string[]
   stylePreference?: string
   budgetLimit?: number
   projectId?: string

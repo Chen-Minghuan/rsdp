@@ -13,7 +13,7 @@ import type { PageResult } from '@/types/product'
 import type { ApiOptions } from './product'
 
 /**
- * 上传户型图并触发 AI 空间识别（multipart，jpg/png ≤10MB）。
+ * 上传户型图并触发 AI 空间识别（multipart，jpg/png/pdf ≤10MB；PDF 仅渲染第 1 页识别）。
  *
  * @param file 户型图文件（CAD 导出图 / 简易平面图）
  * @param hint 可选补充说明（如"这是三室两厅"）

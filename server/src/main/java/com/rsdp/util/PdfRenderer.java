@@ -1,15 +1,20 @@
 package com.rsdp.util;
 
+import com.rsdp.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+
+import javax.imageio.ImageIO;
 
 /**
  * PDF 页面渲染器。
@@ -18,6 +23,35 @@ import java.util.List;
 public final class PdfRenderer {
 
     private PdfRenderer() {
+    }
+
+    /**
+     * 将 PDF 首页渲染为 PNG 图片字节（户型图 PDF 支持，v3.0 §8 P2，KISS：仅渲染第 1 页，
+     * 渲染后进入既有图片识别管线，PDF 原文件不留存）。
+     *
+     * @param bytes PDF 文件字节
+     * @param dpi   渲染 DPI（沿用既有默认 200）
+     * @return 首页 PNG 图片字节
+     * @throws BusinessException PDF 已加密 / 非法或损坏 / 无页面（400 中文可读提示）
+     */
+    public static byte[] renderFirstPageAsPng(byte[] bytes, float dpi) {
+        try (PDDocument document = Loader.loadPDF(bytes)) {
+            if (document.getNumberOfPages() == 0) {
+                throw new BusinessException("PDF 文件没有任何页面");
+            }
+            long start = System.currentTimeMillis();
+            BufferedImage image = new PDFRenderer(document).renderImageWithDPI(0, dpi);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ImageIO.write(image, "png", out);
+            log.debug("渲染 PDF 首页完成，耗时 {}ms，尺寸 {}x{}",
+                System.currentTimeMillis() - start, image.getWidth(), image.getHeight());
+            return out.toByteArray();
+        } catch (InvalidPasswordException e) {
+            throw new BusinessException("PDF 文件已加密，请先解除密码保护后重新上传");
+        } catch (IOException e) {
+            log.warn("PDF 首页渲染失败", e);
+            throw new BusinessException("PDF 文件无法解析或已损坏，请上传有效的 PDF 户型图");
+        }
     }
 
     /**

@@ -26,6 +26,7 @@ import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.Dimensions;
 import com.rsdp.util.IdGenerator;
 import com.rsdp.util.ImageUploadValidator;
+import com.rsdp.util.PdfRenderer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -113,16 +114,26 @@ public class FloorPlanService {
     @Value("${rsdp.floor-plan.max-file-size-mb:10}")
     private long maxFileSizeMb;
 
+    /** PDF 首页渲染 DPI（v3.0 §8 P2，默认 200 与 PDF 导入链路既有默认一致）。 */
+    @Value("${rsdp.floor-plan.pdf-render-dpi:200}")
+    private float pdfRenderDpi;
+
     /**
      * 接口 1：上传户型图，落图 → 建 analysis 记录（source=admin）→ 创建异步任务 → 事务提交后触发分析。
      *
-     * @param file 户型图片（jpg/png，≤10MB，走 {@link ImageUploadValidator}）
+     * <p>支持 jpg/png 图片与 PDF（v3.0 §8 P2）：PDF 仅渲染第 1 页为 PNG
+     * （{@link PdfRenderer#renderFirstPageAsPng}，DPI 走 {@code rsdp.floor-plan.pdf-render-dpi}，
+     * 默认 200）后进入既有识别管线，image_assets 存渲染后的 PNG（format=png），
+     * PDF 原文件不留存；PDF 非法/加密/空页返回 400 中文可读提示。</p>
+     *
+     * @param file 户型图（jpg/png 图片或 PDF，≤10MB，走 {@link ImageUploadValidator#validateImageOrPdf}）
      * @param hint 用户补充说明（如"这是三室两厅"），可空
      * @return analysisId + taskId
      */
     @Transactional
     public Map<String, String> analyze(MultipartFile file, String hint) {
-        imageUploadValidator.validate(file, maxFileSizeMb * 1024L * 1024L);
+        ImageUploadValidator.UploadKind uploadKind =
+            imageUploadValidator.validateImageOrPdf(file, maxFileSizeMb * 1024L * 1024L);
 
         String analysisId = IdGenerator.floorPlanAnalysisId();
         String taskId = IdGenerator.taskId();
@@ -130,12 +141,21 @@ public class FloorPlanService {
         String operator = SecurityOperatorContext.currentUsername();
         LocalDateTime now = LocalDateTime.now();
 
-        // 1. 存户型原图（imageType=floor_plan，不关联 RSPU）
-        String extension = getExtension(file.getOriginalFilename());
+        // 1. 存户型图（imageType=floor_plan，不关联 RSPU）；PDF 先渲染首页为 PNG，原件不留存
+        byte[] imageBytes = readBytes(file);
+        String extension;
+        if (uploadKind == ImageUploadValidator.UploadKind.PDF) {
+            imageBytes = PdfRenderer.renderFirstPageAsPng(imageBytes, pdfRenderDpi);
+            extension = "png";
+        } else {
+            extension = getExtension(file.getOriginalFilename());
+        }
         String objectKey = "images/" + imageId + "." + extension;
         String storagePath;
         try {
-            storagePath = storageService.store(file, objectKey);
+            storagePath = uploadKind == ImageUploadValidator.UploadKind.PDF
+                ? storageService.store(new ByteArrayInputStream(imageBytes), objectKey, imageBytes.length, null)
+                : storageService.store(file, objectKey);
         } catch (IOException e) {
             log.error("户型图存储失败，imageId={}", imageId, e);
             throw new BusinessException("户型图存储失败");
@@ -148,10 +168,10 @@ public class FloorPlanService {
         imageAsset.setStoragePath(storagePath);
         imageAsset.setPrimary(false);
         imageAsset.setAiProcessed(false);
-        imageAsset.setFileSize(file.getSize());
+        imageAsset.setFileSize((long) imageBytes.length);
         imageAsset.setFormat(extension);
         // 像素宽/高：scale_calc 尺寸提取（第②级）的换算参照，读取失败留空不阻断上传
-        int[] pixelSize = readImagePixelSize(file);
+        int[] pixelSize = readImagePixelSize(imageBytes);
         if (pixelSize != null) {
             imageAsset.setWidth(pixelSize[0]);
             imageAsset.setHeight(pixelSize[1]);
@@ -899,15 +919,30 @@ public class FloorPlanService {
     }
 
     /**
+     * 读取上传文件字节；读取失败抛 400 中文提示。
+     *
+     * @param file 上传文件
+     * @return 文件字节
+     */
+    private byte[] readBytes(MultipartFile file) {
+        try {
+            return file.getBytes();
+        } catch (IOException e) {
+            log.error("读取户型图上传文件失败", e);
+            throw new BusinessException("读取上传文件失败");
+        }
+    }
+
+    /**
      * 读取图片像素宽/高（scale_calc 的换算参照，落 image_assets.width/height）；
      * 读取失败返回 null（不阻断上传，仅放弃第②级比例尺换算）。
      *
-     * @param file 上传图片
+     * @param imageBytes 图片字节（PDF 上传时为渲染后的 PNG 字节）
      * @return [widthPx, heightPx]，失败返回 null
      */
-    private int[] readImagePixelSize(MultipartFile file) {
+    private int[] readImagePixelSize(byte[] imageBytes) {
         try {
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(file.getBytes()));
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(imageBytes));
             if (image != null && image.getWidth() > 0 && image.getHeight() > 0) {
                 return new int[] {image.getWidth(), image.getHeight()};
             }

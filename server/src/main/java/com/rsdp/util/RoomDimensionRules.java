@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 客厅空间尺寸硬规则引擎（户型图链路 v3.0 §5）。
+ * 空间尺寸硬规则引擎（户型图链路 v3.0 §5；P2 起支持客厅/餐厅/卧室多空间模板）。
  *
  * <p>纯静态工具类，不依赖任何 Mapper/Service：候选产品的事实数据（尺寸、场景、报价、
  * 风格分）由 {@code FloorPlanMatchingService} 装配成 {@link CandidateProduct} 传入，
@@ -42,9 +42,15 @@ public final class RoomDimensionRules {
     public static final String CATEGORY_TV_CABINET = "FC";
     /** 品类码：休闲椅（座椅）。 */
     public static final String CATEGORY_LEISURE_CHAIR = "FS";
+    /** 品类码：餐桌。 */
+    public static final String CATEGORY_DINING_TABLE = "DT";
+    /** 品类码：床。 */
+    public static final String CATEGORY_BED = "BD";
 
     /** 客厅场景字典码。 */
     public static final String SCENE_LIVING = "LIVING";
+    /** 卧室场景字典码。 */
+    public static final String SCENE_BEDROOM = "BEDROOM";
 
     /** 客厅品类组合模板（§5.1，按输出顺序）。 */
     public static final List<String> TEMPLATE_CATEGORIES =
@@ -60,6 +66,60 @@ public final class RoomDimensionRules {
         CATEGORY_TV_CABINET, 1,
         CATEGORY_LEISURE_CHAIR, 2
     );
+
+    /**
+     * 空间模板（v3.0 §8 P2 多空间批量搭配）：品类组合 + 必选品类 + 每品类选品上限
+     * + 场景字典码（null 表示该空间无对应 scene 字典码，R4 退化为仅品类过滤）。
+     *
+     * @param templateKey        模板键（LIVING/DINING/BEDROOM）
+     * @param categories         品类组合（按输出顺序）
+     * @param requiredCategories 必选品类
+     * @param maxPerCategory     方案每品类最大选品数
+     * @param sceneCode          rspu_scene 场景字典码，可空
+     */
+    public record RoomTemplate(String templateKey, List<String> categories,
+                               Set<String> requiredCategories,
+                               Map<String, Integer> maxPerCategory, String sceneCode) {
+    }
+
+    /** 客厅模板（§5.1）。 */
+    public static final RoomTemplate LIVING_TEMPLATE = new RoomTemplate(
+        "LIVING", TEMPLATE_CATEGORIES, REQUIRED_CATEGORIES, MAX_PER_CATEGORY, SCENE_LIVING);
+
+    /** 餐厅模板（P2）：必选 DT 餐桌，可选 FS 餐椅（≤4）；scene 字典无 DINING 码，仅品类过滤。 */
+    public static final RoomTemplate DINING_TEMPLATE = new RoomTemplate(
+        "DINING",
+        List.of(CATEGORY_DINING_TABLE, CATEGORY_LEISURE_CHAIR),
+        Set.of(CATEGORY_DINING_TABLE),
+        Map.of(CATEGORY_DINING_TABLE, 1, CATEGORY_LEISURE_CHAIR, 4),
+        null);
+
+    /** 卧室模板（P2）：必选 BD 床，可选 FC 柜类（≤2）；场景码 BEDROOM。 */
+    public static final RoomTemplate BEDROOM_TEMPLATE = new RoomTemplate(
+        "BEDROOM",
+        List.of(CATEGORY_BED, CATEGORY_TV_CABINET),
+        Set.of(CATEGORY_BED),
+        Map.of(CATEGORY_BED, 1, CATEGORY_TV_CABINET, 2),
+        SCENE_BEDROOM);
+
+    /**
+     * room_type 字典码（floor_plan_room.room_type，如 LIVING_ROOM/DINING_ROOM/BEDROOM）
+     * → 空间模板；不支持的空间类型返回 null（由服务层转 400 中文提示）。
+     *
+     * @param roomType 空间类型字典码（兼容 LIVING/DINING 简写）
+     * @return 空间模板，不支持返回 null
+     */
+    public static RoomTemplate templateForRoomType(String roomType) {
+        if (roomType == null) {
+            return null;
+        }
+        return switch (roomType.trim().toUpperCase()) {
+            case "LIVING", "LIVING_ROOM" -> LIVING_TEMPLATE;
+            case "DINING", "DINING_ROOM" -> DINING_TEMPLATE;
+            case "BEDROOM" -> BEDROOM_TEMPLATE;
+            default -> null;
+        };
+    }
 
     /** 每品类候选上限。 */
     public static final int MAX_CANDIDATES_PER_CATEGORY = 6;
@@ -86,11 +146,11 @@ public final class RoomDimensionRules {
      * 规则引擎输入：单个候选产品的事实数据（由服务层装配）。
      *
      * @param rspuId        RSPU ID
-     * @param categoryCode  品类码（SF/TB/FC/FS 等）
+     * @param categoryCode  品类码（SF/TB/FC/FS/DT/BD 等）
      * @param widthMm       产品长度（沿墙方向，mm），null 表示尺寸不可解析（R5 不通过）
      * @param depthMm       产品深度（mm），SF/TB/FC 参与 R3 链式校验时必填
      * @param lType         是否 L 型/转角/贵妃类沙发
-     * @param livingScene   rspu_scene 是否含 LIVING
+     * @param sceneMatched  rspu_scene 是否命中模板场景码（模板无场景码时恒 true，规则侧不检查）
      * @param hasValidRsku  是否有 ≥1 条有效 RSKU 报价（未软删且有出厂价）
      * @param styleScore    风格匹配分（product_style_match.overall_score，无偏好或无数据为 0）
      * @param createdAt     创建时间（排序兜底）
@@ -101,7 +161,7 @@ public final class RoomDimensionRules {
         Integer widthMm,
         Integer depthMm,
         boolean lType,
-        boolean livingScene,
+        boolean sceneMatched,
         boolean hasValidRsku,
         double styleScore,
         LocalDateTime createdAt
@@ -109,20 +169,33 @@ public final class RoomDimensionRules {
     }
 
     /**
-     * 筛选结果：按品类分组的候选（模板顺序）+ R3 降级说明。
+     * 筛选结果：按品类分组的候选 + R3 降级说明。
+     *
+     * @param categoryOrder         品类输出顺序（模板品类顺序）
+     * @param candidatesByCategory  按品类分组的候选
+     * @param degradations          降级说明
      */
     public record FilterResult(
+        List<String> categoryOrder,
         Map<String, List<CandidateProduct>> candidatesByCategory,
         List<String> degradations
     ) {
         /**
-         * 按模板顺序（SF → TB → FC → FS）展开全部候选。
+         * 兼容构造：客厅模板顺序（{@link #TEMPLATE_CATEGORIES}）。
+         */
+        public FilterResult(Map<String, List<CandidateProduct>> candidatesByCategory,
+                            List<String> degradations) {
+            this(TEMPLATE_CATEGORIES, candidatesByCategory, degradations);
+        }
+
+        /**
+         * 按模板品类顺序展开全部候选。
          *
          * @return 候选列表（总量 ≤ {@link #MAX_TOTAL_CANDIDATES}）
          */
         public List<CandidateProduct> flatCandidates() {
             List<CandidateProduct> result = new ArrayList<>();
-            for (String category : TEMPLATE_CATEGORIES) {
+            for (String category : categoryOrder) {
                 result.addAll(candidatesByCategory.getOrDefault(category, List.of()));
             }
             return result;
@@ -238,7 +311,7 @@ public final class RoomDimensionRules {
             byCategory.put(category, new ArrayList<>());
         }
         for (CandidateProduct candidate : candidates) {
-            if (!candidate.livingScene() || !TEMPLATE_CATEGORY_SET.contains(candidate.categoryCode())) {
+            if (!candidate.sceneMatched() || !TEMPLATE_CATEGORY_SET.contains(candidate.categoryCode())) {
                 continue; // R4
             }
             if (candidate.widthMm() == null || candidate.widthMm() <= 0 || !candidate.hasValidRsku()) {
@@ -270,11 +343,111 @@ public final class RoomDimensionRules {
         // R3 链式校验（含降级链）：沿沙发墙的垂直方向核算（默认 width 朝向时即进深方向）
         applyDepthChain(chainMm, byCategory, rules, degradations);
 
-        // 排序 + 每品类截断 + 总量截断
+        return sortAndTruncate(byCategory, TEMPLATE_CATEGORIES, degradations);
+    }
+
+    /**
+     * 餐厅规则筛选（v3.0 §8 P2，{@link #DINING_TEMPLATE}：必选 DT 餐桌 + 可选 FS 餐椅 ≤4）。
+     *
+     * <p>复用 R1/R2/R4/R5 骨架的合理简化（简化假设）：</p>
+     * <ul>
+     *   <li>R4 退化为仅品类过滤：scene 字典无 DINING 场景码（V1 种子仅
+     *       LIVING/STUDY/BEDROOM/CAFE/OFFICE/HOTEL），餐厅场景以品类码（DT/FS）表达；</li>
+     *   <li>R2 简化：假设餐桌靠开间方向墙摆放（或居中按最不利靠墙核算），
+     *       餐桌长度 ≤ min(开间 × sofaWallRatio, 开间 - walkwayMinMm)（至少一侧过人通道）；</li>
+     *   <li>餐椅绕桌摆放不单独占墙，不做尺寸约束；</li>
+     *   <li>不做 R1 面积分档与 R3 链式校验（餐厅无"沙发-茶几-电视柜"纵深链）。</li>
+     * </ul>
+     *
+     * @param widthMm    餐厅开间 mm
+     * @param depthMm    餐厅进深 mm
+     * @param candidates 候选产品事实数据（服务层装配）
+     * @param rules      规则配置
+     * @return 按品类分组的候选（DT → FS）
+     */
+    public static FilterResult filterDining(int widthMm, int depthMm,
+                                            List<CandidateProduct> candidates,
+                                            FloorPlanRulesProperties rules) {
+        Map<String, List<CandidateProduct>> byCategory =
+            filterByTemplate(candidates, DINING_TEMPLATE);
+        // R2 简化：餐桌长度 ≤ min(开间 × sofaWallRatio, 开间 - walkwayMinMm)
+        int tableMax = Math.min((int) (widthMm * rules.getSofaWallRatio()),
+            widthMm - rules.getWalkwayMinMm());
+        byCategory.put(CATEGORY_DINING_TABLE, byCategory.get(CATEGORY_DINING_TABLE).stream()
+            .filter(c -> c.widthMm() <= tableMax)
+            .collect(java.util.stream.Collectors.toCollection(ArrayList::new)));
+        return sortAndTruncate(byCategory, DINING_TEMPLATE.categories(), List.of());
+    }
+
+    /**
+     * 卧室规则筛选（v3.0 §8 P2，{@link #BEDROOM_TEMPLATE}：必选 BD 床 + 可选 FC 柜类 ≤2）。
+     *
+     * <p>复用 R1/R2/R4/R5 骨架的合理简化（简化假设）：</p>
+     * <ul>
+     *   <li>R4：品类过滤（BD/FC）+ rspu_scene 含 BEDROOM（scene 字典有 BEDROOM 码）；</li>
+     *   <li>R2 简化：假设床靠开间方向墙摆放、床长沿墙，床长 ≤ 开间 - walkwayMinMm
+     *       （床侧至少保留一条过人通道）；</li>
+     *   <li>柜类可靠其他墙摆放，不做尺寸约束；</li>
+     *   <li>不做 R1 面积分档与 R3 链式校验（卧室无纵深摆放链）。</li>
+     * </ul>
+     *
+     * @param widthMm    卧室开间 mm
+     * @param depthMm    卧室进深 mm
+     * @param candidates 候选产品事实数据（服务层装配）
+     * @param rules      规则配置
+     * @return 按品类分组的候选（BD → FC）
+     */
+    public static FilterResult filterBedroom(int widthMm, int depthMm,
+                                             List<CandidateProduct> candidates,
+                                             FloorPlanRulesProperties rules) {
+        Map<String, List<CandidateProduct>> byCategory =
+            filterByTemplate(candidates, BEDROOM_TEMPLATE);
+        // R2 简化：床长 ≤ 开间 - 过道
+        int bedMax = widthMm - rules.getWalkwayMinMm();
+        byCategory.put(CATEGORY_BED, byCategory.get(CATEGORY_BED).stream()
+            .filter(c -> c.widthMm() <= bedMax)
+            .collect(java.util.stream.Collectors.toCollection(ArrayList::new)));
+        return sortAndTruncate(byCategory, BEDROOM_TEMPLATE.categories(), List.of());
+    }
+
+    /**
+     * 模板化 R4 品类过滤 + R5 数据质量过滤（多空间模板共用）：
+     * 品类命中模板（模板有场景码时还要求命中场景），尺寸可解析且有 ≥1 条有效 RSKU 报价。
+     */
+    private static Map<String, List<CandidateProduct>> filterByTemplate(
+        List<CandidateProduct> candidates, RoomTemplate template) {
+        Set<String> categorySet = Set.copyOf(template.categories());
+        Map<String, List<CandidateProduct>> byCategory = new LinkedHashMap<>();
+        for (String category : template.categories()) {
+            byCategory.put(category, new ArrayList<>());
+        }
+        for (CandidateProduct candidate : candidates) {
+            if (!categorySet.contains(candidate.categoryCode())) {
+                continue; // R4 品类
+            }
+            if (template.sceneCode() != null && !candidate.sceneMatched()) {
+                continue; // R4 场景（模板有场景码时）
+            }
+            if (candidate.widthMm() == null || candidate.widthMm() <= 0 || !candidate.hasValidRsku()) {
+                continue; // R5
+            }
+            byCategory.get(candidate.categoryCode()).add(candidate);
+        }
+        return byCategory;
+    }
+
+    /**
+     * 排序 + 每品类截断（≤{@value #MAX_CANDIDATES_PER_CATEGORY}）+ 总量截断
+     * （≤{@value #MAX_TOTAL_CANDIDATES}），按模板品类顺序输出；品类内按风格匹配分降序
+     * + 创建时间降序。
+     */
+    private static FilterResult sortAndTruncate(Map<String, List<CandidateProduct>> byCategory,
+                                                List<String> categoryOrder,
+                                                List<String> degradations) {
         Map<String, List<CandidateProduct>> result = new LinkedHashMap<>();
         int remaining = MAX_TOTAL_CANDIDATES;
-        for (String category : TEMPLATE_CATEGORIES) {
-            List<CandidateProduct> sorted = byCategory.get(category).stream()
+        for (String category : categoryOrder) {
+            List<CandidateProduct> sorted = byCategory.getOrDefault(category, List.of()).stream()
                 .sorted(Comparator.comparingDouble(CandidateProduct::styleScore).reversed()
                     .thenComparing(c -> c.createdAt() != null ? c.createdAt() : LocalDateTime.MIN,
                         Comparator.reverseOrder()))
@@ -283,7 +456,7 @@ public final class RoomDimensionRules {
             result.put(category, sorted);
             remaining -= sorted.size();
         }
-        return new FilterResult(result, degradations);
+        return new FilterResult(categoryOrder, result, degradations);
     }
 
     /**

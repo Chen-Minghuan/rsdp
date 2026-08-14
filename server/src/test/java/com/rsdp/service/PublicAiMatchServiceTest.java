@@ -37,6 +37,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
@@ -93,7 +94,7 @@ class PublicAiMatchServiceTest {
 
         PublicAiMatchAnalyzeResponse response = publicAiMatchService.analyze(file, "三室两厅");
 
-        verify(imageUploadValidator).validate(file, 10L * 1024 * 1024);
+        verify(imageUploadValidator).validateImageOrPdf(file, 10L * 1024 * 1024);
         assertThat(response.getRooms()).hasSize(2);
 
         PublicAiMatchAnalyzeResponse.RoomItem living = response.getRooms().get(0);
@@ -153,6 +154,65 @@ class PublicAiMatchServiceTest {
         assertThat(response.getAnalysisId()).isNull();
         assertThat(response.getRooms()).hasSize(1);
         assertThat(response.getRooms().get(0).getWidthMm()).isEqualTo(4200);
+    }
+
+    // ---------- analyze：PDF 户型图支持（v3.0 §8 P2） ----------
+
+    @Test
+    void analyze_pdf_shouldRenderFirstPageBeforeDetectAndPersist() throws Exception {
+        org.springframework.test.util.ReflectionTestUtils.setField(
+            publicAiMatchService, "pdfRenderDpi", 200f);
+        when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.PDF);
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", "4200×3800", 0.1, 0.2, 0.4, 0.3)));
+        when(visionService.detectFloorPlanRooms(any(byte[].class), any())).thenReturn(detected);
+        when(floorPlanService.savePublicAnalysis(any(byte[].class), any(), any()))
+            .thenReturn("FPA-PDF01");
+
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "plan.pdf", "application/pdf", createPdfBytes(2));
+
+        PublicAiMatchAnalyzeResponse response = publicAiMatchService.analyze(file, null);
+
+        assertThat(response.getAnalysisId()).isEqualTo("FPA-PDF01");
+        assertThat(response.getRooms()).hasSize(1);
+
+        // 识别与落库均使用渲染后的 PNG 字节（PDF 原件不进管线、不留存）
+        ArgumentCaptor<byte[]> bytesCaptor = ArgumentCaptor.forClass(byte[].class);
+        verify(visionService).detectFloorPlanRooms(bytesCaptor.capture(), any());
+        assertThat(bytesCaptor.getValue()).startsWith(new byte[]{(byte) 0x89, 'P', 'N', 'G'});
+        // 落库文件名按渲染图给出（扩展名 png）
+        verify(floorPlanService).savePublicAnalysis(any(byte[].class),
+            org.mockito.ArgumentMatchers.eq("floor-plan-page1.png"),
+            org.mockito.ArgumentMatchers.same(detected));
+    }
+
+    @Test
+    void analyze_invalidPdf_shouldThrowBadRequest() {
+        org.springframework.test.util.ReflectionTestUtils.setField(
+            publicAiMatchService, "pdfRenderDpi", 200f);
+        when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.PDF);
+
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "plan.pdf", "application/pdf", "not-a-pdf".getBytes());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> publicAiMatchService.analyze(file, null))
+            .isInstanceOf(com.rsdp.exception.BusinessException.class)
+            .hasMessageContaining("PDF");
+    }
+
+    private byte[] createPdfBytes(int pages) throws java.io.IOException {
+        try (org.apache.pdfbox.pdmodel.PDDocument document = new org.apache.pdfbox.pdmodel.PDDocument()) {
+            for (int i = 0; i < pages; i++) {
+                document.addPage(new org.apache.pdfbox.pdmodel.PDPage());
+            }
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        }
     }
 
     // ---------- generateScheme ----------

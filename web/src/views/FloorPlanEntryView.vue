@@ -62,7 +62,7 @@ const route = useRoute()
 const signal = useRequestAbort()
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png']
+const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/png', 'application/pdf']
 const POLL_INTERVAL_MS = 2000
 
 const CONFIDENCE_LABELS: Record<DimensionConfidence, string> = { high: '高', mid: '中', low: '低' }
@@ -84,6 +84,8 @@ const analyzing = ref(false)
 const analysisId = ref('')
 /** 上传图片的本地预览地址（Object URL，用于步骤 2 叠加 bbox，不依赖后端回显）。 */
 const imagePreviewUrl = ref('')
+/** 本次上传是否为 PDF（PDF 无本地图像预览，步骤 2 左侧走占位降级，表格校正不受影响）。 */
+const pdfSource = ref(false)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 let localIdCounter = 0
 
@@ -101,7 +103,7 @@ const imageWrapRef = ref<HTMLElement | null>(null)
 let drawStart: { x: number; y: number } | null = null
 
 // ---------- 步骤 3：搭配生成 ----------
-const targetRoomId = ref<string | null>(null)
+const targetRoomIds = ref<string[]>([])
 const stylePreference = ref<string | null>(null)
 const budgetLimit = ref<number | null>(null)
 const sofaWall = ref<SofaWallDirection>('width')
@@ -120,8 +122,16 @@ interface PlacementItem {
   d: number
 }
 
+/** 步骤 4 摆放示意的空间分组（多空间方案时每空间一块；单空间恒为单组，行为不变）。 */
+interface PlacementGroup {
+  roomId: string
+  roomName: string
+  room: EditableRoom
+  items: PlacementItem[]
+}
+
 // ---------- 步骤 4：产品摆放示意（纯前端） ----------
-const placementItems = ref<PlacementItem[]>([])
+const placementGroups = ref<PlacementGroup[]>([])
 const placementLoading = ref(false)
 
 // ---------- 字典 ----------
@@ -148,18 +158,20 @@ const targetRoomOptions = computed(() =>
     }))
 )
 
-const canGenerate = computed(() => targetRoomId.value !== null && !generating.value)
+const canGenerate = computed(() => targetRoomIds.value.length > 0 && !generating.value)
 
-/** 步骤 3 选中的目标空间（步骤 4 摆放示意的定位基准）。 */
-const targetRoom = computed(() => rooms.value.find(r => r.roomId === targetRoomId.value) ?? null)
-
-/** 步骤 4 摆放示意展示条件：需有本地原图 + 目标空间带 bbox 与尺寸（从历史页跳入无原图时整块隐藏）。 */
-const canShowPlacement = computed(() =>
-  !!imagePreviewUrl.value &&
-  !!targetRoom.value?.bbox &&
-  !!targetRoom.value?.widthMm &&
-  !!targetRoom.value?.depthMm
+/** 步骤 3 选中的目标空间列表（步骤 4 摆放示意按空间分组展示）。 */
+const targetRooms = computed(() =>
+  rooms.value.filter(r => r.roomId !== null && targetRoomIds.value.includes(r.roomId))
 )
+
+/** 可绘制摆放示意的目标空间（需带 bbox 与尺寸，不满足的空间跳过）。 */
+const placementRooms = computed(() =>
+  targetRooms.value.filter(r => r.bbox && r.widthMm && r.depthMm)
+)
+
+/** 步骤 4 摆放示意展示条件：需有本地原图 + 至少一个可绘制空间（PDF/历史页跳入无原图时整块隐藏）。 */
+const canShowPlacement = computed(() => !!imagePreviewUrl.value && placementRooms.value.length > 0)
 
 function roomTypeName(code: string): string {
   return roomTypeDicts.value.find(d => d.dictCode === code)?.dictName ?? code
@@ -196,21 +208,29 @@ function toEditableRoom(room: FloorPlanRoom): EditableRoom {
   }
 }
 
+/** 判断是否为 PDF 文件（部分环境 file.type 为空，用扩展名兜底）。 */
+function isPdfFile(file: File): boolean {
+  return file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
+}
+
 function handleFileChange({ fileList: files }: { fileList: UploadFileInfo[] }) {
   errorMessage.value = ''
   const file = files[0]?.file
   if (file) {
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      errorMessage.value = '仅支持 JPG / PNG 格式的户型图（CAD 请导出为图片后上传）'
+    if (!ALLOWED_FILE_TYPES.includes(file.type) && !isPdfFile(file)) {
+      errorMessage.value = '仅支持 JPG / PNG / PDF 格式的户型图（PDF 仅识别第 1 页）'
       fileList.value = []
+      pdfSource.value = false
       return
     }
     if (file.size > MAX_FILE_SIZE_BYTES) {
-      errorMessage.value = '图片大小不能超过 10MB'
+      errorMessage.value = '文件大小不能超过 10MB'
       fileList.value = []
+      pdfSource.value = false
       return
     }
   }
+  pdfSource.value = file ? isPdfFile(file) : false
   fileList.value = files
 }
 
@@ -224,7 +244,10 @@ async function handleAnalyze() {
   errorMessage.value = ''
   try {
     revokePreviewUrl()
-    imagePreviewUrl.value = URL.createObjectURL(file)
+    // PDF 无本地图像预览：步骤 2 左侧走占位提示，bbox 叠加与手绘框隐藏
+    if (!pdfSource.value) {
+      imagePreviewUrl.value = URL.createObjectURL(file)
+    }
     const result = await analyzeFloorPlan(file, hint.value.trim() || undefined, signal)
     analysisId.value = result.analysisId
     uploading.value = false
@@ -277,6 +300,7 @@ async function loadExistingAnalysis(id: string) {
   try {
     const result = await getFloorPlanAnalysis(id, { signal })
     analysisId.value = id
+    pdfSource.value = false
     applyAnalysisResult(result)
     if (result.status === 'awaiting_confirm' || result.status === 'confirmed') {
       currentStep.value = 2
@@ -433,8 +457,8 @@ async function handleConfirmRooms() {
       }))
     }, { signal })
     // 确认后进入搭配生成，默认选中第一个客厅（否则第一个空间）
-    const living = rooms.value.find(r => r.roomType === 'LIVING') ?? rooms.value[0]
-    targetRoomId.value = living?.roomId ?? null
+    const living = rooms.value.find(r => r.roomType === 'LIVING' && r.roomId) ?? rooms.value.find(r => r.roomId)
+    targetRoomIds.value = living?.roomId ? [living.roomId] : []
     currentStep.value = 3
   } catch (e) {
     if (axios.isCancel(e)) return
@@ -445,15 +469,19 @@ async function handleConfirmRooms() {
 }
 
 async function handleGenerateScheme() {
-  if (!targetRoomId.value) {
+  if (targetRoomIds.value.length === 0) {
     errorMessage.value = '请选择目标空间'
     return
   }
   generating.value = true
   errorMessage.value = ''
   try {
+    // 单空间提交 roomId（行为不变）；多空间提交 roomIds（后端逐空间搭配合并落一个 scheme）
+    const target = targetRoomIds.value.length === 1
+      ? { roomId: targetRoomIds.value[0] }
+      : { roomIds: [...targetRoomIds.value] }
     const result = await generateFloorPlanScheme(analysisId.value, {
-      roomId: targetRoomId.value,
+      ...target,
       stylePreference: stylePreference.value || undefined,
       budgetLimit: budgetLimit.value ?? undefined,
       sofaWall: sofaWall.value
@@ -498,17 +526,22 @@ function parseDimsMm(dimensions?: string | null): { w: number; d: number } | nul
 
 /** 拉取单个方案产品的品类与宽深尺寸（详情或尺寸拉取失败返回 null，跳过不画）。 */
 async function fetchPlacementSource(
-  rspuId: string,
-  name: string
-): Promise<{ key: string; name: string; categoryCode: string; dims: { w: number; d: number } } | null> {
+  item: { rspuId: string; rspuName: string; spaceTag?: string | null }
+): Promise<{ key: string; name: string; categoryCode: string; spaceTag: string | null; dims: { w: number; d: number } } | null> {
   try {
     const [detail, variants] = await Promise.all([
-      getProductDetail(rspuId, { signal }),
-      listVariantsByRspu(rspuId, { signal })
+      getProductDetail(item.rspuId, { signal }),
+      listVariantsByRspu(item.rspuId, { signal })
     ])
     const dims = variants.map(v => parseDimsMm(v.dimensions)).find(d => d !== null)
     if (!dims) return null
-    return { key: rspuId, name, categoryCode: detail.rspu.categoryCode, dims }
+    return {
+      key: item.rspuId,
+      name: item.rspuName,
+      categoryCode: detail.rspu.categoryCode,
+      spaceTag: item.spaceTag ?? null,
+      dims
+    }
   } catch (e) {
     if (axios.isCancel(e)) throw e
     return null
@@ -575,37 +608,55 @@ function layoutPlacements(
   return placed
 }
 
-/** 方案生成成功后拉取方案明细与产品尺寸，计算摆放示意；无本地原图时整体跳过。 */
+/**
+ * 方案生成成功后拉取方案明细与产品尺寸，按目标空间分组计算摆放示意：
+ * 产品按空间分区标签（spaceTag）匹配空间类型名归组，匹配不到的归入第一个空间；
+ * 无本地原图（PDF/历史页跳入）或空间无 bbox/尺寸时对应空间跳过。
+ */
 async function loadPlacement() {
-  placementItems.value = []
-  const room = targetRoom.value
-  if (!canShowPlacement.value || !room?.widthMm || !room?.depthMm) return
+  placementGroups.value = []
+  const roomsToDraw = placementRooms.value
+  if (!imagePreviewUrl.value || roomsToDraw.length === 0) return
   placementLoading.value = true
   try {
     const scheme = await getSchemeDetail(schemeId.value, { signal })
-    const sources = await Promise.all(
-      (scheme.items ?? []).map(item => fetchPlacementSource(item.rspuId, item.rspuName))
-    )
-    placementItems.value = layoutPlacements(
-      sources.filter((s): s is NonNullable<typeof s> => s !== null),
-      room.widthMm,
-      room.depthMm,
-      sofaWall.value
-    )
+    const sources = (await Promise.all(
+      (scheme.items ?? []).map(item => fetchPlacementSource(item))
+    )).filter((s): s is NonNullable<typeof s> => s !== null)
+    const buckets = roomsToDraw.map(room => ({
+      roomId: room.roomId as string,
+      roomName: roomTypeName(room.roomType),
+      room,
+      sources: [] as typeof sources
+    }))
+    for (const source of sources) {
+      const bucket = buckets.find(b => b.roomName === source.spaceTag) ?? buckets[0]
+      bucket.sources.push(source)
+    }
+    placementGroups.value = buckets.map(b => ({
+      roomId: b.roomId,
+      roomName: b.roomName,
+      room: b.room,
+      items: layoutPlacements(
+        b.sources,
+        b.room.widthMm as number,
+        b.room.depthMm as number,
+        sofaWall.value
+      )
+    }))
   } catch (e) {
     if (axios.isCancel(e)) return
     // 摆放示意是辅助展示，失败不阻断主流程
-    placementItems.value = []
+    placementGroups.value = []
   } finally {
     placementLoading.value = false
   }
 }
 
 /** 摆放示意矩形定位（mm → 相对户型图百分比）。 */
-function placementStyle(item: PlacementItem) {
-  const room = targetRoom.value
-  const bbox = room?.bbox
-  if (!bbox || !room?.widthMm || !room?.depthMm) return {}
+function placementStyle(item: PlacementItem, room: EditableRoom) {
+  const bbox = room.bbox
+  if (!bbox || !room.widthMm || !room.depthMm) return {}
   return {
     left: `${(bbox.x + (item.x / room.widthMm) * bbox.w) * 100}%`,
     top: `${(bbox.y + (item.y / room.depthMm) * bbox.h) * 100}%`,
@@ -636,13 +687,14 @@ function resetAll() {
   analysisId.value = ''
   rooms.value = []
   selectedLocalId.value = null
-  targetRoomId.value = null
+  targetRoomIds.value = []
   stylePreference.value = null
   budgetLimit.value = null
   sofaWall.value = 'width'
   schemeId.value = ''
-  placementItems.value = []
+  placementGroups.value = []
   placementLoading.value = false
+  pdfSource.value = false
 }
 
 const roomColumns: DataTableColumns<EditableRoom> = [
@@ -792,12 +844,12 @@ onUnmounted(() => {
         <n-spin :show="uploading || analyzing">
           <n-space vertical :size="16">
             <p class="hint-text">
-              支持 JPG / PNG（最大 10MB），CAD 图纸请先导出为图片。系统会识别图中的空间划分与尺寸标注，识别结果可在下一步人工修正。
+              支持 JPG / PNG / PDF（最大 10MB，PDF 仅识别第 1 页）。系统会识别图中的空间划分与尺寸标注，识别结果可在下一步人工修正。
             </p>
             <n-upload
               v-model:file-list="fileList"
               :default-upload="false"
-              accept=".jpg,.jpeg,.png"
+              accept=".jpg,.jpeg,.png,.pdf"
               :max="1"
               :disabled="uploading || analyzing"
               @change="handleFileChange"
@@ -869,6 +921,12 @@ onUnmounted(() => {
                   }"
                 />
               </div>
+              <div v-else-if="pdfSource" class="pdf-placeholder">
+                <p class="pdf-placeholder-title">PDF 户型图已上传（第 1 页）</p>
+                <p class="hint-text">
+                  PDF 来源无法在此叠加编号框，手绘补框亦不可用；请直接通过右侧表格校正空间与尺寸。
+                </p>
+              </div>
               <n-empty v-else description="原图不可用（重新上传后可预览）" />
             </div>
             <div class="room-table-pane">
@@ -911,14 +969,17 @@ onUnmounted(() => {
         <n-spin :show="generating">
           <n-space vertical :size="16">
             <p class="hint-text">
-              系统将按空间尺寸硬规则从产品库筛选候选，再由 AI 按风格协调性终审，生成一套搭配方案（落入方案列表，可转报价单）。
+              系统将按空间尺寸硬规则从产品库筛选候选，再由 AI 按风格协调性终审，生成一套搭配方案（落入方案列表，可转报价单）；选择多个空间时将逐空间搭配并合并为一套方案。
             </p>
             <n-space align="center" :size="12">
               <n-select
-                v-model:value="targetRoomId"
+                v-model:value="targetRoomIds"
                 :options="targetRoomOptions"
-                placeholder="目标空间"
-                style="width: 240px;"
+                placeholder="目标空间（可多选）"
+                multiple
+                clearable
+                max-tag-count="responsive"
+                style="width: 320px;"
               />
               <n-select
                 v-model:value="stylePreference"
@@ -966,34 +1027,41 @@ onUnmounted(() => {
           <n-alert type="success" :show-icon="false">
             搭配方案已生成并落入方案列表，方案编号：<span class="rsdp-mono">{{ schemeId }}</span>
           </n-alert>
-          <!-- 产品摆放示意（纯前端；无本地原图时整块隐藏） -->
+          <!-- 产品摆放示意（纯前端；无本地原图时整块隐藏；多空间按空间分组各画一块） -->
           <div v-if="canShowPlacement" class="placement-pane">
             <p class="hint-text">
               产品摆放示意：按产品宽深等比绘制占位矩形（沙发贴所选墙、茶几居中于沙发前），仅作布局参考；无尺寸数据的产品未绘制。
             </p>
             <n-spin :show="placementLoading">
-              <div class="room-image-wrap placement-wrap">
-                <img :src="imagePreviewUrl" alt="户型图" class="room-image">
-                <div
-                  v-if="targetRoom?.bbox"
-                  class="placement-room"
-                  :style="{
-                    left: `${(targetRoom?.bbox?.x ?? 0) * 100}%`,
-                    top: `${(targetRoom?.bbox?.y ?? 0) * 100}%`,
-                    width: `${(targetRoom?.bbox?.w ?? 0) * 100}%`,
-                    height: `${(targetRoom?.bbox?.h ?? 0) * 100}%`
-                  }"
-                />
-                <div
-                  v-for="item in placementItems"
-                  :key="item.key"
-                  class="placement-item"
-                  :style="placementStyle(item)"
-                >
-                  <span class="placement-name">{{ item.name }}</span>
+              <div class="placement-groups">
+                <div v-for="group in placementGroups" :key="group.roomId" class="placement-group">
+                  <p v-if="placementGroups.length > 1" class="hint-text">
+                    {{ group.roomName }}（<span class="rsdp-mono">{{ group.room.widthMm ?? '?' }}×{{ group.room.depthMm ?? '?' }}</span>mm）
+                  </p>
+                  <div class="room-image-wrap placement-wrap">
+                    <img :src="imagePreviewUrl" alt="户型图" class="room-image">
+                    <div
+                      v-if="group.room.bbox"
+                      class="placement-room"
+                      :style="{
+                        left: `${(group.room.bbox?.x ?? 0) * 100}%`,
+                        top: `${(group.room.bbox?.y ?? 0) * 100}%`,
+                        width: `${(group.room.bbox?.w ?? 0) * 100}%`,
+                        height: `${(group.room.bbox?.h ?? 0) * 100}%`
+                      }"
+                    />
+                    <div
+                      v-for="item in group.items"
+                      :key="item.key"
+                      class="placement-item"
+                      :style="placementStyle(item, group.room)"
+                    >
+                      <span class="placement-name">{{ item.name }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <p v-if="!placementLoading && placementItems.length === 0" class="hint-text">
+              <p v-if="!placementLoading && placementGroups.every(g => g.items.length === 0)" class="hint-text">
                 方案产品均无可用尺寸数据，未生成摆放示意。
               </p>
             </n-spin>
@@ -1100,6 +1168,36 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.placement-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.placement-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* PDF 来源步骤 2 左侧占位（无本地图像可预览） */
+.pdf-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+  padding: 24px 16px;
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  background: var(--rsdp-card-bg);
+}
+
+.pdf-placeholder-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--rsdp-text);
 }
 
 .placement-wrap {

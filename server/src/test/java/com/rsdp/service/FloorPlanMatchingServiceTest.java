@@ -5,6 +5,7 @@ import com.rsdp.config.properties.FloorPlanRulesProperties;
 import com.rsdp.dto.request.FloorPlanSchemeRequest;
 import com.rsdp.dto.request.RoomSchemeRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
+import com.rsdp.dto.request.SchemeItemRequest;
 import com.rsdp.dto.response.RoomSchemeResponse;
 import com.rsdp.dto.response.SchemeItemResponse;
 import com.rsdp.dto.response.SchemeResponse;
@@ -353,6 +354,198 @@ class FloorPlanMatchingServiceTest {
             .extracting(RspuMaster::getRspuId).containsExactly("RSPU-FIT");
     }
 
+    // ---------- 多空间批量搭配（v3.0 §8 P2） ----------
+
+    @Test
+    void generateSchemeForAnalysis_multiRoom_shouldMergeIntoOneScheme() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED, "alice");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom living = buildRoom("FPR-L", "FPA-1", "LIVING_ROOM", 4200, 5000);
+        FloorPlanRoom dining = buildRoom("FPR-D", "FPA-1", "DINING_ROOM", 3000, 2800);
+        when(roomMapper.selectById("FPR-L")).thenReturn(living);
+        when(roomMapper.selectById("FPR-D")).thenReturn(dining);
+
+        // 两次候选装配：第一次客厅（SF），第二次餐厅（DT）
+        RspuMaster sofa = buildProduct("RSPU-SF", "SF");
+        RspuMaster table = buildProduct("RSPU-DT", "DT");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(sofa), List.of(table));
+        when(rspuMapper.selectBatchIds(anyList())).thenAnswer(invocation -> {
+            List<String> ids = invocation.getArgument(0);
+            return List.of(sofa, table).stream().filter(r -> ids.contains(r.getRspuId())).toList();
+        });
+        when(rspuVariantMapper.selectList(any())).thenReturn(
+            List.of(buildVariant("RSPU-SF", 3000, 1000)),
+            List.of(buildVariant("RSPU-DT", 2200, 1100)));
+        when(rskuSupplyMapper.selectCapableByRspuIds(anyList())).thenAnswer(invocation -> {
+            List<String> ids = invocation.getArgument(0);
+            return ids.stream().map(this::buildRsku).toList();
+        });
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+
+        // LLM 终审（每空间独立调用）：原样选中规则引擎候选
+        when(aiMatchingService.generateRoomScheme(any(RoomSchemeRequest.class), anyList()))
+            .thenAnswer(invocation -> {
+                List<RspuMaster> candidates = invocation.getArgument(1);
+                RoomSchemeResponse response = new RoomSchemeResponse();
+                response.setItems(candidates.stream().map(r -> {
+                    SchemeItemResponse item = new SchemeItemResponse();
+                    item.setRspuId(r.getRspuId());
+                    item.setRskuId("RSKU-" + r.getRspuId());
+                    return item;
+                }).toList());
+                return response;
+            });
+
+        SchemeResponse created = new SchemeResponse();
+        created.setSchemeId("SCH-M1");
+        when(schemeService.createScheme(any())).thenReturn(created);
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCH-M1");
+        when(schemeMapper.selectById("SCH-M1")).thenReturn(scheme);
+
+        FloorPlanSchemeRequest request = new FloorPlanSchemeRequest();
+        request.setRoomIds(List.of("FPR-L", "FPR-D"));
+        String schemeId = floorPlanMatchingService.generateSchemeForAnalysis("FPA-1", request, "alice");
+
+        assertThat(schemeId).isEqualTo("SCH-M1");
+        // 每空间独立 LLM 终审（两次调用，候选各自 ≤30）
+        ArgumentCaptor<RoomSchemeRequest> requestCaptor = ArgumentCaptor.forClass(RoomSchemeRequest.class);
+        verify(aiMatchingService, org.mockito.Mockito.times(2))
+            .generateRoomScheme(requestCaptor.capture(), anyList());
+        assertThat(requestCaptor.getAllValues())
+            .extracting(RoomSchemeRequest::getRoomType)
+            .containsExactly("LIVING_ROOM", "DINING_ROOM");
+
+        // 合并落一个 scheme：名称「多空间搭配方案-」，明细含两空间选品
+        ArgumentCaptor<SchemeCreateRequest> createCaptor = ArgumentCaptor.forClass(SchemeCreateRequest.class);
+        verify(schemeService).createScheme(createCaptor.capture());
+        assertThat(createCaptor.getValue().getSchemeName()).startsWith("多空间搭配方案-");
+        assertThat(createCaptor.getValue().getItems())
+            .extracting(SchemeItemRequest::getRspuId)
+            .containsExactly("RSPU-SF", "RSPU-DT");
+        verify(schemeMapper).updateById(org.mockito.ArgumentMatchers
+            .argThat((Scheme s) -> "FPA-1".equals(s.getAnalysisId())));
+    }
+
+    @Test
+    void generateSchemeForAnalysis_multiRoom_llmFailureShouldFallbackToRuleForThatRoom() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED, "alice");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom living = buildRoom("FPR-L", "FPA-1", "LIVING_ROOM", 4200, 5000);
+        FloorPlanRoom dining = buildRoom("FPR-D", "FPA-1", "DINING_ROOM", 3000, 2800);
+        when(roomMapper.selectById("FPR-L")).thenReturn(living);
+        when(roomMapper.selectById("FPR-D")).thenReturn(dining);
+
+        RspuMaster sofa = buildProduct("RSPU-SF", "SF");
+        RspuMaster table = buildProduct("RSPU-DT", "DT");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(sofa), List.of(table));
+        when(rspuMapper.selectBatchIds(anyList())).thenAnswer(invocation -> {
+            List<String> ids = invocation.getArgument(0);
+            return List.of(sofa, table).stream().filter(r -> ids.contains(r.getRspuId())).toList();
+        });
+        when(rspuVariantMapper.selectList(any())).thenReturn(
+            List.of(buildVariant("RSPU-SF", 3000, 1000)),
+            List.of(buildVariant("RSPU-DT", 2200, 1100)));
+        when(rskuSupplyMapper.selectCapableByRspuIds(anyList())).thenAnswer(invocation -> {
+            List<String> ids = invocation.getArgument(0);
+            return ids.stream().map(this::buildRsku).toList();
+        });
+        lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
+
+        // 客厅 LLM 正常；餐厅 LLM 抛异常 → 该空间规则兜底
+        SchemeItemResponse sofaItem = new SchemeItemResponse();
+        sofaItem.setRspuId("RSPU-SF");
+        sofaItem.setRskuId("RSKU-RSPU-SF");
+        RoomSchemeResponse livingResponse = new RoomSchemeResponse();
+        livingResponse.setItems(List.of(sofaItem));
+        when(aiMatchingService.generateRoomScheme(any(RoomSchemeRequest.class), anyList()))
+            .thenReturn(livingResponse)
+            .thenThrow(new RuntimeException("LLM 超时"));
+        SchemeItemResponse tableItem = new SchemeItemResponse();
+        tableItem.setRspuId("RSPU-DT");
+        tableItem.setRskuId("RSKU-RSPU-DT");
+        RoomSchemeResponse fallbackResponse = new RoomSchemeResponse();
+        fallbackResponse.setItems(List.of(tableItem));
+        when(aiMatchingService.ruleFallbackScheme(any(RoomSchemeRequest.class), anyList()))
+            .thenReturn(fallbackResponse);
+
+        SchemeResponse created = new SchemeResponse();
+        created.setSchemeId("SCH-M2");
+        when(schemeService.createScheme(any())).thenReturn(created);
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCH-M2");
+        when(schemeMapper.selectById("SCH-M2")).thenReturn(scheme);
+
+        FloorPlanSchemeRequest request = new FloorPlanSchemeRequest();
+        request.setRoomIds(List.of("FPR-L", "FPR-D"));
+        String schemeId = floorPlanMatchingService.generateSchemeForAnalysis("FPA-1", request, "alice");
+
+        // 单空间失败不拖垮整批：方案仍落库，餐厅明细来自规则兜底
+        assertThat(schemeId).isEqualTo("SCH-M2");
+        ArgumentCaptor<SchemeCreateRequest> createCaptor = ArgumentCaptor.forClass(SchemeCreateRequest.class);
+        verify(schemeService).createScheme(createCaptor.capture());
+        assertThat(createCaptor.getValue().getItems())
+            .extracting(SchemeItemRequest::getRspuId)
+            .containsExactly("RSPU-SF", "RSPU-DT");
+    }
+
+    @Test
+    void generateSchemeForAnalysis_multiRoom_allRoomsEmpty_shouldThrow() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED, "alice");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom living = buildRoom("FPR-L", "FPA-1", "LIVING_ROOM", 4200, 5000);
+        FloorPlanRoom dining = buildRoom("FPR-D", "FPA-1", "DINING_ROOM", 3000, 2800);
+        when(roomMapper.selectById("FPR-L")).thenReturn(living);
+        when(roomMapper.selectById("FPR-D")).thenReturn(dining);
+
+        // 无任何候选产品（产品库为空）
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+        RoomSchemeResponse empty = new RoomSchemeResponse();
+        empty.setItems(List.of());
+        when(aiMatchingService.generateRoomScheme(any(RoomSchemeRequest.class), anyList()))
+            .thenReturn(empty);
+
+        FloorPlanSchemeRequest request = new FloorPlanSchemeRequest();
+        request.setRoomIds(List.of("FPR-L", "FPR-D"));
+
+        assertThatThrownBy(() -> floorPlanMatchingService.generateSchemeForAnalysis("FPA-1", request, "alice"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无法生成方案");
+        verify(schemeService, never()).createScheme(any());
+    }
+
+    @Test
+    void generateSchemeForAnalysis_multiRoom_unsupportedRoomType_shouldThrow() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED, "alice");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom kitchen = buildRoom("FPR-K", "FPA-1", "KITCHEN", 3000, 2800);
+        when(roomMapper.selectById("FPR-K")).thenReturn(kitchen);
+
+        FloorPlanSchemeRequest request = new FloorPlanSchemeRequest();
+        request.setRoomIds(List.of("FPR-K"));
+
+        assertThatThrownBy(() -> floorPlanMatchingService.generateSchemeForAnalysis("FPA-1", request, "alice"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("暂不支持");
+        verify(schemeService, never()).createScheme(any());
+    }
+
+    @Test
+    void generateSchemeForAnalysis_multiRoom_roomNotBelongingToAnalysis_shouldThrow() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED, "alice");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom other = buildRoom("FPR-OTHER", "FPA-2", "BEDROOM", 3300, 3000);
+        when(roomMapper.selectById("FPR-OTHER")).thenReturn(other);
+
+        FloorPlanSchemeRequest request = new FloorPlanSchemeRequest();
+        request.setRoomIds(List.of("FPR-OTHER"));
+
+        assertThatThrownBy(() -> floorPlanMatchingService.generateSchemeForAnalysis("FPA-1", request, "alice"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不属于该分析");
+        verify(schemeService, never()).createScheme(any());
+    }
+
     // ---------- 管理端接口 4 校验链 ----------
 
     @Test
@@ -400,9 +593,13 @@ class FloorPlanMatchingServiceTest {
     // ---------- 辅助 ----------
 
     private RspuMaster buildSofa(String rspuId) {
+        return buildProduct(rspuId, "SF");
+    }
+
+    private RspuMaster buildProduct(String rspuId, String categoryCode) {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
-        rspu.setCategoryCode("SF");
+        rspu.setCategoryCode(categoryCode);
         rspu.setStatus("active");
         return rspu;
     }
@@ -434,10 +631,15 @@ class FloorPlanMatchingServiceTest {
     }
 
     private FloorPlanRoom buildRoom(String roomId, String analysisId, int widthMm, int depthMm) {
+        return buildRoom(roomId, analysisId, "LIVING_ROOM", widthMm, depthMm);
+    }
+
+    private FloorPlanRoom buildRoom(String roomId, String analysisId, String roomType,
+                                    int widthMm, int depthMm) {
         FloorPlanRoom room = new FloorPlanRoom();
         room.setRoomId(roomId);
         room.setAnalysisId(analysisId);
-        room.setRoomType("LIVING_ROOM");
+        room.setRoomType(roomType);
         room.setWidthMm(widthMm);
         room.setDepthMm(depthMm);
         return room;

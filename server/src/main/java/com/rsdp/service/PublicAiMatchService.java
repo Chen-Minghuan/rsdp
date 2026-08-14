@@ -14,8 +14,10 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.util.Dimensions;
 import com.rsdp.util.ImageUploadValidator;
+import com.rsdp.util.PdfRenderer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -68,19 +70,28 @@ public class PublicAiMatchService {
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
 
+    /** PDF 首页渲染 DPI（v3.0 §8 P2，默认 200 与 PDF 导入链路既有默认一致）。 */
+    @Value("${rsdp.floor-plan.pdf-render-dpi:200}")
+    private float pdfRenderDpi;
+
     /**
      * 分析户型图：识别功能空间并解析尺寸标注。
+     *
+     * <p>支持 jpg/png 图片与 PDF（v3.0 §8 P2）：PDF 仅渲染第 1 页为 PNG
+     * （{@link PdfRenderer#renderFirstPageAsPng}）后进入既有识别管线，落库存渲染后的
+     * PNG，PDF 原文件不留存；PDF 非法/加密/空页返回 400 中文可读提示。</p>
      *
      * <p>识别完成后按 v3.0 §4.6 策略 B 落库（source=public，沉淀客户户型数据资产，
      * 响应追加 analysisId）。落库失败不阻断公开接口——识别结果已得出，落库仅作数据资产，
      * 异常记 warn 日志降级为不落库（analysisId=null）。</p>
      *
-     * @param file 户型图片（jpg/png，≤10MB）
+     * @param file 户型图（jpg/png 图片或 PDF，≤10MB）
      * @param hint 用户补充说明，可空
      * @return 空间识别结果列表 + analysisId（落库失败为 null）
      */
     public PublicAiMatchAnalyzeResponse analyze(MultipartFile file, String hint) {
-        imageUploadValidator.validate(file, MAX_IMAGE_SIZE_BYTES);
+        ImageUploadValidator.UploadKind uploadKind =
+            imageUploadValidator.validateImageOrPdf(file, MAX_IMAGE_SIZE_BYTES);
 
         byte[] imageBytes;
         try {
@@ -88,6 +99,12 @@ public class PublicAiMatchService {
         } catch (IOException e) {
             log.error("读取户型图上传文件失败", e);
             throw new BusinessException("读取上传图片失败");
+        }
+        // PDF：仅渲染首页为 PNG 进入识别管线，落库存渲染图（原件不留存）
+        String storedFilename = file.getOriginalFilename();
+        if (uploadKind == ImageUploadValidator.UploadKind.PDF) {
+            imageBytes = PdfRenderer.renderFirstPageAsPng(imageBytes, pdfRenderDpi);
+            storedFilename = "floor-plan-page1.png";
         }
 
         FloorPlanDetectResult detected = visionService.detectFloorPlanRooms(imageBytes, hint);
@@ -100,7 +117,7 @@ public class PublicAiMatchService {
 
         try {
             response.setAnalysisId(floorPlanService.savePublicAnalysis(
-                imageBytes, file.getOriginalFilename(), detected));
+                imageBytes, storedFilename, detected));
         } catch (Exception e) {
             log.warn("官网户型分析落库失败，降级为不落库（识别结果照常返回）", e);
         }

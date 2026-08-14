@@ -37,6 +37,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.util.List;
@@ -45,7 +46,9 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -97,6 +100,10 @@ class FloorPlanServiceTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(floorPlanService, "maxFileSizeMb", 10);
+        ReflectionTestUtils.setField(floorPlanService, "pdfRenderDpi", 200f);
+        // 上传校验器默认判定为图片（PDF 用例单独 stub）
+        lenient().when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.IMAGE);
     }
 
     @AfterEach
@@ -141,7 +148,94 @@ class FloorPlanServiceTest {
         // 非事务环境直接触发异步处理
         verify(asyncTaskProcessor).processFloorPlanAnalysis(
             response.get("taskId"), response.get("analysisId"), "images/stored.jpg", "三室两厅");
-        verify(imageUploadValidator).validate(file, 10L * 1024 * 1024);
+        verify(imageUploadValidator).validateImageOrPdf(file, 10L * 1024 * 1024);
+    }
+
+    // ---------- 接口 1：PDF 户型图支持（v3.0 §8 P2） ----------
+
+    @Test
+    void analyze_pdf_shouldRenderFirstPageAndStorePng() throws Exception {
+        when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.PDF);
+        when(storageService.store(any(InputStream.class), anyString(), anyLong(), any()))
+            .thenReturn("images/stored.png");
+
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "plan.pdf", "application/pdf", createPdfBytes(2));
+
+        Map<String, String> response = floorPlanService.analyze(file, null);
+
+        assertThat(response.get("analysisId")).startsWith("FPA-");
+
+        // 落库的是渲染后的 PNG（首页），PDF 原文件不留存
+        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper).insert(imageCaptor.capture());
+        ImageAssets imageAsset = imageCaptor.getValue();
+        assertThat(imageAsset.getFormat()).isEqualTo("png");
+        assertThat(imageAsset.getStoragePath()).isEqualTo("images/stored.png");
+        assertThat(imageAsset.getFileSize()).isPositive();
+        // 渲染图像素宽/高落库（scale_calc 换算参照）
+        assertThat(imageAsset.getWidth()).isPositive();
+        assertThat(imageAsset.getHeight()).isPositive();
+
+        // 存储走字节流重载（渲染后的 PNG 字节）
+        verify(storageService).store(any(InputStream.class),
+            org.mockito.ArgumentMatchers.matches("images/.*\\.png"), anyLong(), any());
+        verify(storageService, never()).store(
+            any(org.springframework.web.multipart.MultipartFile.class), anyString());
+        verify(asyncTaskProcessor).processFloorPlanAnalysis(
+            response.get("taskId"), response.get("analysisId"), "images/stored.png", null);
+    }
+
+    @Test
+    void analyze_invalidPdf_shouldThrowBadRequest() throws Exception {
+        when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.PDF);
+
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "plan.pdf", "application/pdf", "not-a-pdf".getBytes());
+
+        assertThatThrownBy(() -> floorPlanService.analyze(file, null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("PDF");
+        verify(storageService, never()).store(any(InputStream.class), anyString(), anyLong(), any());
+        verify(analysisMapper, never()).insert(any(FloorPlanAnalysis.class));
+    }
+
+    @Test
+    void analyze_encryptedPdf_shouldThrowBadRequest() throws Exception {
+        when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.PDF);
+
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "plan.pdf", "application/pdf", createEncryptedPdfBytes());
+
+        assertThatThrownBy(() -> floorPlanService.analyze(file, null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("加密");
+        verify(analysisMapper, never()).insert(any(FloorPlanAnalysis.class));
+    }
+
+    private byte[] createPdfBytes(int pages) throws IOException {
+        try (org.apache.pdfbox.pdmodel.PDDocument document = new org.apache.pdfbox.pdmodel.PDDocument()) {
+            for (int i = 0; i < pages; i++) {
+                document.addPage(new org.apache.pdfbox.pdmodel.PDPage());
+            }
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private byte[] createEncryptedPdfBytes() throws IOException {
+        try (org.apache.pdfbox.pdmodel.PDDocument document = new org.apache.pdfbox.pdmodel.PDDocument()) {
+            document.addPage(new org.apache.pdfbox.pdmodel.PDPage());
+            document.protect(new org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy(
+                "owner", "user", new org.apache.pdfbox.pdmodel.encryption.AccessPermission()));
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        }
     }
 
     // ---------- 尺寸三级提取（buildRooms，由异步任务调用） ----------

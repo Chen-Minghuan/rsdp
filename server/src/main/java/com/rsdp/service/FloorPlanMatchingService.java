@@ -140,15 +140,7 @@ public class FloorPlanMatchingService {
                 widthMm, depthMm, normalizedSofaWall, filterResult.degradations());
         }
 
-        List<String> orderedIds = filtered.stream().map(CandidateProduct::rspuId).toList();
-        Map<String, RspuMaster> rspuMap = orderedIds.isEmpty()
-            ? Map.of()
-            : rspuMapper.selectBatchIds(orderedIds).stream()
-                .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
-        List<RspuMaster> orderedCandidates = orderedIds.stream()
-            .map(rspuMap::get)
-            .filter(java.util.Objects::nonNull)
-            .toList();
+        List<RspuMaster> orderedCandidates = fetchOrderedRspus(filtered);
 
         RoomSchemeResponse response = aiMatchingService.generateRoomScheme(request, orderedCandidates);
         if (!filterResult.degradations().isEmpty() && StringUtils.hasText(response.getReasoning())) {
@@ -166,8 +158,12 @@ public class FloorPlanMatchingService {
      * scheme.analysis_id 回填溯源；方案项均为 LIVING 场景产品，详情页空间分区标签
      * 由 scheme 体系按 RSPU 场景自动得出。</p>
      *
+     * <p>多空间（v3.0 §8 P2）：{@code roomIds} 非空时走
+     * {@link #generateMultiRoomScheme}，逐空间按各自模板规则生成候选与 LLM 终审，
+     * 合并落一个 scheme；单空间 {@code roomId} 行为完全不变。</p>
+     *
      * @param analysisId 分析批次 ID
-     * @param request    搭配生成请求（roomId + 可选风格/预算/项目）
+     * @param request    搭配生成请求（roomId 或 roomIds + 可选风格/预算/项目）
      * @param operator   操作人用户名
      * @return 新建方案 ID
      */
@@ -179,6 +175,14 @@ public class FloorPlanMatchingService {
         assertCanAccess(analysis, operator);
         if (!FloorPlanService.STATUS_CONFIRMED.equals(analysis.getStatus())) {
             throw new BusinessException("分析未确认，请先在管理端人工确认空间尺寸后再生成方案，当前状态: " + analysis.getStatus());
+        }
+
+        List<String> roomIds = normalizeRoomIds(request.getRoomIds());
+        if (!roomIds.isEmpty()) {
+            return generateMultiRoomScheme(analysis, request, roomIds);
+        }
+        if (!StringUtils.hasText(request.getRoomId())) {
+            throw new BusinessException("roomId 与 roomIds 至少填一个");
         }
 
         FloorPlanRoom room = roomMapper.selectById(request.getRoomId());
@@ -203,17 +207,7 @@ public class FloorPlanMatchingService {
         createRequest.setRoomType(ROOM_TYPE_LIVING);
         createRequest.setProjectId(request.getProjectId());
         createRequest.setBudgetLimit(request.getBudgetLimit());
-        List<SchemeItemRequest> items = new ArrayList<>();
-        int sortOrder = 0;
-        for (SchemeItemResponse matchedItem : matchedItems) {
-            SchemeItemRequest item = new SchemeItemRequest();
-            item.setRspuId(matchedItem.getRspuId());
-            item.setRskuId(matchedItem.getRskuId());
-            item.setQuantity(1);
-            item.setSortOrder(sortOrder++);
-            items.add(item);
-        }
-        createRequest.setItems(items);
+        createRequest.setItems(toSchemeItems(matchedItems));
 
         SchemeResponse created = schemeService.createScheme(createRequest);
 
@@ -228,18 +222,187 @@ public class FloorPlanMatchingService {
     }
 
     /**
-     * 装配规则引擎候选：宽口径预取（active + 客厅模板品类 + rspu_scene 含 LIVING +
-     * 风格偏好下推）→ 逐个补齐尺寸（dimensions / sizeText 解析）、L 型标记、
-     * 有效报价标记、风格匹配分。
+     * 多空间批量搭配（v3.0 §8 P2）：逐空间按各自模板（客厅/餐厅/卧室）做尺寸硬规则
+     * 筛选 + LLM 终审（每空间独立调用，候选各自 ≤30），合并落一个 scheme + scheme_item。
+     *
+     * <p>降级链：单空间 LLM 终审抛异常 → 该空间规则兜底
+     * （{@link AiMatchingService#ruleFallbackScheme}）；全部空间均无结果才报错。
+     * 方案名「多空间搭配方案-yyyyMMdd-HHmmss」，跨空间按 rspuId 去重（保留先出现者）。</p>
+     *
+     * @param analysis 已确认的分析批次（存在性/归属/状态已校验）
+     * @param request  搭配生成请求
+     * @param roomIds  目标空间 ID 列表（已去空白去重）
+     * @return 新建方案 ID
+     */
+    private String generateMultiRoomScheme(FloorPlanAnalysis analysis,
+                                           FloorPlanSchemeRequest request,
+                                           List<String> roomIds) {
+        String analysisId = analysis.getAnalysisId();
+        List<SchemeItemResponse> mergedItems = new ArrayList<>();
+        Set<String> seenRspuIds = new java.util.HashSet<>();
+        for (String roomId : roomIds) {
+            FloorPlanRoom room = roomMapper.selectById(roomId);
+            if (room == null || !analysisId.equals(room.getAnalysisId())) {
+                throw new BusinessException("空间不存在或不属于该分析: " + roomId);
+            }
+            if (room.getWidthMm() == null || room.getDepthMm() == null
+                || room.getWidthMm() <= 0 || room.getDepthMm() <= 0) {
+                throw new BusinessException("目标空间缺少尺寸，请先人工校正开间/进深: " + roomId);
+            }
+            RoomDimensionRules.RoomTemplate template =
+                RoomDimensionRules.templateForRoomType(room.getRoomType());
+            if (template == null) {
+                throw new BusinessException(
+                    "该空间类型暂不支持搭配（当前支持客厅/餐厅/卧室）: " + room.getRoomType());
+            }
+            for (SchemeItemResponse item : matchRoomItems(room, template, request)) {
+                if (StringUtils.hasText(item.getRspuId()) && seenRspuIds.add(item.getRspuId())) {
+                    mergedItems.add(item);
+                }
+            }
+        }
+        if (mergedItems.isEmpty()) {
+            throw new BusinessException("没有满足各空间尺寸规则与报价要求的产品，无法生成方案");
+        }
+
+        SchemeCreateRequest createRequest = new SchemeCreateRequest();
+        createRequest.setSchemeName("多空间搭配方案-" + SCHEME_NAME_TIME.format(LocalDateTime.now()));
+        createRequest.setRoomType(null); // 多空间方案不归属单一空间类型
+        createRequest.setProjectId(request.getProjectId());
+        createRequest.setBudgetLimit(request.getBudgetLimit());
+        createRequest.setItems(toSchemeItems(mergedItems));
+
+        SchemeResponse created = schemeService.createScheme(createRequest);
+
+        // 回填方案溯源（scheme.analysis_id，V36）
+        Scheme scheme = schemeMapper.selectById(created.getSchemeId());
+        scheme.setAnalysisId(analysisId);
+        schemeMapper.updateById(scheme);
+
+        log.info("多空间搭配方案已落库，analysisId={}，roomIds={}，schemeId={}",
+            analysisId, roomIds, created.getSchemeId());
+        return created.getSchemeId();
+    }
+
+    /**
+     * 单空间匹配（多空间链路内逐空间调用）：模板规则筛选 → LLM 终审；
+     * LLM 终审抛异常时规则兜底（{@link AiMatchingService#ruleFallbackScheme}），
+     * 保证单空间失败不拖垮整批。
+     *
+     * @param room     空间明细（尺寸已校验非空）
+     * @param template 空间模板
+     * @param request  搭配生成请求（风格/预算/朝向）
+     * @return 终审/兜底后的方案项
+     */
+    private List<SchemeItemResponse> matchRoomItems(FloorPlanRoom room,
+                                                    RoomDimensionRules.RoomTemplate template,
+                                                    FloorPlanSchemeRequest request) {
+        RoomSchemeRequest roomRequest = new RoomSchemeRequest();
+        roomRequest.setRoomType(room.getRoomType());
+        roomRequest.setBudgetLimit(request.getBudgetLimit());
+        roomRequest.setStylePreference(request.getStylePreference());
+        roomRequest.setWidthMm(room.getWidthMm());
+        roomRequest.setDepthMm(room.getDepthMm());
+
+        List<CandidateProduct> candidates =
+            assembleCandidates(request.getStylePreference(), template);
+        RoomDimensionRules.FilterResult filterResult = switch (template.templateKey()) {
+            case "DINING" -> RoomDimensionRules.filterDining(
+                room.getWidthMm(), room.getDepthMm(), candidates, rulesProperties);
+            case "BEDROOM" -> RoomDimensionRules.filterBedroom(
+                room.getWidthMm(), room.getDepthMm(), candidates, rulesProperties);
+            default -> RoomDimensionRules.filter(room.getWidthMm(), room.getDepthMm(),
+                normalizeSofaWall(request.getSofaWall()), candidates, rulesProperties);
+        };
+        if (!filterResult.degradations().isEmpty()) {
+            log.info("空间尺寸规则降级，roomId={}，roomType={}，degradations={}",
+                room.getRoomId(), room.getRoomType(), filterResult.degradations());
+        }
+
+        List<RspuMaster> orderedCandidates = fetchOrderedRspus(filterResult.flatCandidates());
+        try {
+            RoomSchemeResponse response =
+                aiMatchingService.generateRoomScheme(roomRequest, orderedCandidates);
+            return response.getItems() != null ? response.getItems() : List.of();
+        } catch (Exception e) {
+            log.warn("空间 LLM 终审失败，规则兜底，roomId={}，roomType={}",
+                room.getRoomId(), room.getRoomType(), e);
+            RoomSchemeResponse fallback =
+                aiMatchingService.ruleFallbackScheme(roomRequest, orderedCandidates);
+            return fallback.getItems() != null ? fallback.getItems() : List.of();
+        }
+    }
+
+    /** 终审结果 → scheme_item 请求列表（quantity=1，sortOrder 按顺序递增）。 */
+    private List<SchemeItemRequest> toSchemeItems(List<SchemeItemResponse> matchedItems) {
+        List<SchemeItemRequest> items = new ArrayList<>();
+        int sortOrder = 0;
+        for (SchemeItemResponse matchedItem : matchedItems) {
+            SchemeItemRequest item = new SchemeItemRequest();
+            item.setRspuId(matchedItem.getRspuId());
+            item.setRskuId(matchedItem.getRskuId());
+            item.setQuantity(1);
+            item.setSortOrder(sortOrder++);
+            items.add(item);
+        }
+        return items;
+    }
+
+    /** 按候选 ID 顺序回查 RSPU（保持规则引擎输出顺序）。 */
+    private List<RspuMaster> fetchOrderedRspus(List<CandidateProduct> filtered) {
+        List<String> orderedIds = filtered.stream().map(CandidateProduct::rspuId).toList();
+        if (orderedIds.isEmpty()) {
+            return List.of();
+        }
+        Map<String, RspuMaster> rspuMap = rspuMapper.selectBatchIds(orderedIds).stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
+        return orderedIds.stream()
+            .map(rspuMap::get)
+            .filter(java.util.Objects::nonNull)
+            .toList();
+    }
+
+    /** roomIds 归一：去空白、trim、去重（保持提交顺序）。 */
+    private List<String> normalizeRoomIds(List<String> roomIds) {
+        if (roomIds == null) {
+            return List.of();
+        }
+        return roomIds.stream()
+            .filter(StringUtils::hasText)
+            .map(String::trim)
+            .distinct()
+            .toList();
+    }
+
+    /**
+     * 装配规则引擎候选（客厅模板）：宽口径预取 → 逐个补齐尺寸、L 型标记、
+     * 有效报价标记、风格匹配分。语义同
+     * {@link #assembleCandidates(String, RoomDimensionRules.RoomTemplate)}。
      */
     private List<CandidateProduct> assembleCandidates(String stylePreference) {
+        return assembleCandidates(stylePreference, RoomDimensionRules.LIVING_TEMPLATE);
+    }
+
+    /**
+     * 装配规则引擎候选：宽口径预取（active + 模板品类 + 模板场景码下推（模板无场景码时
+     * 不做场景过滤，如餐厅）+ 风格偏好下推）→ 逐个补齐尺寸（dimensions / sizeText 解析）、
+     * L 型标记、有效报价标记、风格匹配分。
+     *
+     * @param stylePreference 风格偏好（字典码），可空
+     * @param template        空间模板（v3.0 §8 P2 多空间）
+     * @return 候选产品事实数据
+     */
+    private List<CandidateProduct> assembleCandidates(String stylePreference,
+                                                      RoomDimensionRules.RoomTemplate template) {
         QueryWrapper<RspuMaster> wrapper = new QueryWrapper<RspuMaster>()
             .eq("status", "active")
-            .in("category_code", RoomDimensionRules.TEMPLATE_CATEGORIES)
-            .exists("SELECT 1 FROM rspu_scene sc WHERE sc.rspu_id = rspu_master.rspu_id"
-                + " AND sc.scene_code = '" + RoomDimensionRules.SCENE_LIVING + "'")
+            .in("category_code", template.categories())
             .orderByDesc("created_at")
             .last("LIMIT " + CANDIDATE_PREFETCH_LIMIT);
+        if (template.sceneCode() != null) {
+            wrapper.exists("SELECT 1 FROM rspu_scene sc WHERE sc.rspu_id = rspu_master.rspu_id"
+                + " AND sc.scene_code = '" + template.sceneCode() + "'");
+        }
         if (StringUtils.hasText(stylePreference)) {
             wrapper.exists(
                 "SELECT 1 FROM rspu_style s WHERE s.rspu_id = rspu_master.rspu_id AND s.style_code = {0}",
@@ -272,7 +435,7 @@ public class FloorPlanMatchingService {
                 dims != null ? dims[0] : null,
                 dims != null && dims[1] > 0 ? dims[1] : null,
                 isLType(rspu, variants),
-                true, // SQL 已下推 rspu_scene 含 LIVING，规则引擎 R4 作兜底复核
+                true, // 模板有场景码时 SQL 已下推 rspu_scene，无场景码时恒 true（规则侧不检查）
                 quotableRspuIds.contains(rspu.getRspuId()),
                 styleScoreMap.getOrDefault(rspu.getRspuId(), 0.0),
                 rspu.getCreatedAt()

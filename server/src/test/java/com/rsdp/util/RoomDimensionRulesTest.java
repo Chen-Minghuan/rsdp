@@ -279,4 +279,97 @@ class RoomDimensionRulesTest {
         assertThat(sofas.get(0).rspuId()).isEqualTo("SF-8");
         assertThat(sofas.get(0).styleScore()).isEqualTo(80.0);
     }
+
+    // ---------- 多空间模板（v3.0 §8 P2） ----------
+
+    @Test
+    void templateForRoomType_shouldMapDictCodesAndRejectUnsupported() {
+        assertThat(RoomDimensionRules.templateForRoomType("LIVING_ROOM"))
+            .isSameAs(RoomDimensionRules.LIVING_TEMPLATE);
+        assertThat(RoomDimensionRules.templateForRoomType("DINING_ROOM"))
+            .isSameAs(RoomDimensionRules.DINING_TEMPLATE);
+        assertThat(RoomDimensionRules.templateForRoomType("BEDROOM"))
+            .isSameAs(RoomDimensionRules.BEDROOM_TEMPLATE);
+        assertThat(RoomDimensionRules.templateForRoomType("KITCHEN")).isNull();
+        assertThat(RoomDimensionRules.templateForRoomType(null)).isNull();
+    }
+
+    @Test
+    void diningTemplate_shouldBeDtRequiredFsOptional4() {
+        assertThat(RoomDimensionRules.DINING_TEMPLATE.requiredCategories()).containsExactly("DT");
+        assertThat(RoomDimensionRules.DINING_TEMPLATE.maxPerCategory())
+            .containsEntry("DT", 1).containsEntry("FS", 4);
+        assertThat(RoomDimensionRules.DINING_TEMPLATE.sceneCode()).isNull();
+    }
+
+    @Test
+    void bedroomTemplate_shouldBeBdRequiredFcOptional2() {
+        assertThat(RoomDimensionRules.BEDROOM_TEMPLATE.requiredCategories()).containsExactly("BD");
+        assertThat(RoomDimensionRules.BEDROOM_TEMPLATE.maxPerCategory())
+            .containsEntry("BD", 1).containsEntry("FC", 2);
+        assertThat(RoomDimensionRules.BEDROOM_TEMPLATE.sceneCode()).isEqualTo("BEDROOM");
+    }
+
+    @Test
+    void filterDining_shouldCapTableLengthByWallRatioAndWalkway() {
+        // 开间 3000：餐桌上限 min(3000×0.75, 3000-600) = 2250
+        FilterResult result = RoomDimensionRules.filterDining(3000, 2800, List.of(
+            cand("DT-OVER", "DT", 2400, 1200),
+            cand("DT-FIT", "DT", 2200, 1100),
+            cand("FS-1", "FS", 500, 500),
+            cand("SF-1", "SF", 2000, 1000) // 非餐厅模板品类
+        ), rules);
+
+        assertThat(result.candidatesByCategory().get("DT"))
+            .extracting(CandidateProduct::rspuId).containsExactly("DT-FIT");
+        // 餐椅绕桌摆放不做尺寸约束
+        assertThat(result.candidatesByCategory().get("FS"))
+            .extracting(CandidateProduct::rspuId).containsExactly("FS-1");
+        // SF 不属于餐厅模板（R4 品类过滤）
+        assertThat(result.flatCandidates())
+            .extracting(CandidateProduct::rspuId).containsExactlyInAnyOrder("DT-FIT", "FS-1");
+    }
+
+    @Test
+    void filterDining_shouldApplyR5QualityFilter() {
+        CandidateProduct noDims = new CandidateProduct("DT-NODIM", "DT", null, null,
+            false, true, true, 0.0, LocalDateTime.now());
+        CandidateProduct noRsku = new CandidateProduct("DT-NORSKU", "DT", 2000, 1000,
+            false, true, false, 0.0, LocalDateTime.now());
+
+        FilterResult result = RoomDimensionRules.filterDining(3000, 2800,
+            List.of(cand("DT-1", "DT", 2000, 1000), noDims, noRsku), rules);
+
+        assertThat(result.candidatesByCategory().get("DT"))
+            .extracting(CandidateProduct::rspuId).containsExactly("DT-1");
+    }
+
+    @Test
+    void filterBedroom_shouldCapBedLengthByWidthMinusWalkway() {
+        // 开间 3300：床长上限 3300-600 = 2700
+        FilterResult result = RoomDimensionRules.filterBedroom(3300, 3000, List.of(
+            cand("BD-OVER", "BD", 2800, 2000),
+            cand("BD-FIT", "BD", 2200, 1900),
+            cand("FC-1", "FC", 800, 400)
+        ), rules);
+
+        assertThat(result.candidatesByCategory().get("BD"))
+            .extracting(CandidateProduct::rspuId).containsExactly("BD-FIT");
+        // 柜类可靠其他墙摆放，不做尺寸约束
+        assertThat(result.candidatesByCategory().get("FC"))
+            .extracting(CandidateProduct::rspuId).containsExactly("FC-1");
+    }
+
+    @Test
+    void filterBedroom_shouldRequireBedroomScene() {
+        // R4：卧室模板有场景码 BEDROOM，未命中场景的床被剔除
+        CandidateProduct noScene = new CandidateProduct("BD-NOSCENE", "BD", 2200, 1900,
+            false, false, true, 0.0, LocalDateTime.now());
+
+        FilterResult result = RoomDimensionRules.filterBedroom(3300, 3000,
+            List.of(cand("BD-1", "BD", 2200, 1900), noScene), rules);
+
+        assertThat(result.candidatesByCategory().get("BD"))
+            .extracting(CandidateProduct::rspuId).containsExactly("BD-1");
+    }
 }

@@ -46,10 +46,13 @@ const errorMessage = ref('')
 
 const analyzing = ref(false)
 const previewUrl = ref('')
+/** PDF 无法用 <img> 预览：仅记录标记与文件名，走占位卡，不创建 ObjectURL */
+const isPdf = ref(false)
+const fileName = ref('')
 const rooms = ref<AnalyzeRoom[]>([])
 
-/** 上传限制与后端 ImageUploadValidator 一致：jpg/png ≤10MB（accept 属性可被绕过，必须 JS 层校验） */
-const ACCEPT_TYPES = ['image/jpeg', 'image/png']
+/** 上传限制与后端 ImageUploadValidator 一致：jpg/png/pdf ≤10MB（accept 属性可被绕过，必须 JS 层校验） */
+const ACCEPT_TYPES = ['image/jpeg', 'image/png', 'application/pdf']
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 
 function handleFileChange(e: Event) {
@@ -58,15 +61,20 @@ function handleFileChange(e: Event) {
   input.value = '' // 重置，允许重选同一文件再次触发 change
   if (!file) return
   if (!ACCEPT_TYPES.includes(file.type)) {
-    errorMessage.value = '仅支持 JPG / PNG 格式的户型图'
+    errorMessage.value = '仅支持 JPG / PNG / PDF 格式的户型图'
     return
   }
   if (file.size > MAX_FILE_SIZE) {
-    errorMessage.value = '图片大小不能超过 10MB，请压缩后再上传'
+    errorMessage.value = '文件大小不能超过 10MB，请压缩后再上传'
     return
   }
-  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
-  previewUrl.value = URL.createObjectURL(file)
+  if (previewUrl.value) {
+    URL.revokeObjectURL(previewUrl.value)
+    previewUrl.value = ''
+  }
+  isPdf.value = file.type === 'application/pdf'
+  fileName.value = file.name
+  if (!isPdf.value) previewUrl.value = URL.createObjectURL(file)
   analyze(file)
 }
 
@@ -161,6 +169,8 @@ function restart() {
   rooms.value = []
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = ''
+  isPdf.value = false
+  fileName.value = ''
   errorMessage.value = ''
   // 尺寸/风格/预算一并重置，否则 watch 的「仅首次初始化」守卫会让下一轮沿用旧尺寸
   confirmWidth.value = null
@@ -192,11 +202,11 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
       <!-- 步骤 1：上传 -->
       <section v-if="step === 'upload'" class="panel upload-panel">
         <label class="upload-box">
-          <input type="file" accept="image/jpeg,image/png" hidden @change="handleFileChange">
+          <input type="file" accept="image/jpeg,image/png,application/pdf" hidden @change="handleFileChange">
           <template v-if="!analyzing">
             <div class="upload-kick">FLOOR PLAN</div>
             <div class="upload-title">点击上传户型图</div>
-            <div class="upload-hint">支持 CAD 导出图 / 中介户型图（JPG/PNG，≤10MB）</div>
+            <div class="upload-hint">支持 JPG / PNG / PDF，≤10MB（PDF 识别第 1 页）</div>
           </template>
           <template v-else>
             <div class="upload-title">AI 正在识别空间与尺寸…</div>
@@ -204,6 +214,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
           </template>
         </label>
         <img v-if="previewUrl" class="upload-preview" :src="previewUrl" alt="户型图预览">
+        <div v-else-if="isPdf" class="pdf-card upload-pdf-card">PDF 户型图 · {{ fileName }}</div>
       </section>
 
       <!-- 步骤 2：确认识别结果 -->
@@ -211,6 +222,10 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
         <h2 class="panel-title">确认识别结果</h2>
         <div class="confirm-grid">
           <img v-if="previewUrl" class="confirm-img" :src="previewUrl" alt="户型图">
+          <div v-else-if="isPdf" class="confirm-img pdf-card confirm-pdf-card">
+            <span class="pdf-card-kick">PDF</span>
+            <span class="pdf-card-name">PDF 户型图 · {{ fileName }}</span>
+          </div>
           <div>
             <div class="room-list">
               <div v-for="(room, i) in rooms" :key="i" class="room-row">
@@ -383,6 +398,42 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   max-width: 320px;
   border-radius: var(--radius);
   display: block;
+}
+
+/* PDF 占位卡：直角细线风格（PDF 无法 <img> 预览，不引入 pdf.js） */
+.pdf-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--suppl);
+  color: var(--ink2);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.upload-pdf-card {
+  margin-top: 20px;
+  max-width: 320px;
+  padding: 24px 18px;
+  text-align: center;
+}
+
+.confirm-pdf-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 24px;
+}
+
+.pdf-card-kick {
+  font-size: 11px;
+  letter-spacing: 6px;
+  color: var(--accent);
+}
+
+.pdf-card-name {
+  font-size: 13px;
 }
 
 /* 确认 */

@@ -1321,8 +1321,12 @@ POST   /api/v1/public/leads
        # Response: { leadId, status }
 
 POST   /api/v1/public/ai-match/analyze
-       # AI 户型图分析（multipart；file 为 jpg/png ≤10MB，走 ImageUploadValidator；
-       # hint 可选用户补充说明）。AI 识别空间 + 尺寸标注解析（mm/米两种写法，
+       # AI 户型图分析（multipart；file 为 jpg/png 图片或 PDF（P2）≤10MB，走
+       # ImageUploadValidator.validateImageOrPdf（PDF 感知重载，其他上传入口不接受 PDF 不变）；
+       # hint 可选用户补充说明）。PDF 仅渲染第 1 页为 PNG（PdfRenderer.renderFirstPageAsPng，
+       # DPI 走 rsdp.floor-plan.pdf-render-dpi 默认 200）后进入既有识别管线，落库存渲染后
+       # PNG（format=png），PDF 原文件不留存；PDF 非法/加密/空页返回 400 中文可读提示。
+       # AI 识别空间 + 尺寸标注解析（mm/米两种写法，
        # 解析成功 confidence=high 并给出 widthMm/depthMm/areaM2，否则 low）。
        # P1 起落库（v3.0 §4.6 策略 B）：写 image_assets（image_type=floor_plan）
        # + floor_plan_analysis（source=public、created_by=null、status=awaiting_confirm、
@@ -1352,8 +1356,12 @@ POST   /api/v1/public/ai-match/scheme
 
 ```
 POST   /api/v1/floor-plan/analyze          [product:read]
-       # 上传户型图并创建异步分析任务（multipart；image 为 jpg/png ≤10MB，
-       # 走 ImageUploadValidator；hint 可选补充说明）。落图（image_type=floor_plan）
+       # 上传户型图并创建异步分析任务（multipart；image 为 jpg/png 图片或 PDF（P2）
+       # ≤10MB，走 ImageUploadValidator.validateImageOrPdf；hint 可选补充说明）。
+       # PDF 仅渲染第 1 页为 PNG（PdfRenderer.renderFirstPageAsPng，DPI 走
+       # rsdp.floor-plan.pdf-render-dpi 默认 200）后进入既有识别管线，image_assets
+       # 存渲染后 PNG（format=png），PDF 原文件不留存；PDF 非法/加密/空页 400 中文提示。
+       # 落图（image_type=floor_plan）
        # → 建 analysis（source=admin，status=pending）→ 建 async_task
        # （task_type=floor_plan_analysis）→ 事务提交后触发 AI 识别 + 尺寸三级提取
        # （OCR 标注 high / 比例尺换算 scale_calc mid（P1，需可解析的 像素↔毫米 关系，
@@ -1387,7 +1395,7 @@ PUT    /api/v1/floor-plan/{analysisId}/rooms   [登录 + 归属校验]
        # Response: 同 GET（校正后的分析详情）
 
 POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
-       # 基于 confirmed 空间生成客厅搭配方案（P0-B）：FloorPlanMatchingService 编排
+       # 基于 confirmed 空间生成搭配方案（P0-B）：FloorPlanMatchingService 编排
        # 尺寸硬规则 R1~R5（rsdp.floor-plan.rules 配置）→ LLM 终审（prompt 注入空间尺寸
        # 上下文）→ LLM 空返回规则兜底。落 scheme + scheme_item（价格快照语义沿用
        # SchemeService.createScheme，方案项均为 LIVING 场景产品），scheme.analysis_id
@@ -1395,7 +1403,14 @@ POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
        # sofaWall（P1）：沙发墙朝向，width=开间方向墙（默认，缺省按 width）、
        # depth=进深方向墙；影响 R2 沙发/电视柜长度上限的墙长取值与 R3 链式校验方向
        # （depth 时 R2 按进深墙长、R3 沿开间方向核算）；非法值 400 中文提示
-       # Request: { roomId*, stylePreference?, budgetLimit?(≥0), projectId?, sofaWall?("width"|"depth") }
+       # roomIds（P2 多空间批量搭配）：非空时忽略 roomId，逐空间按各自模板规则
+       # （客厅 LIVING：SF+TB/FC/FS；餐厅 DINING_ROOM：DT 必选+FS≤4；卧室 BEDROOM：
+       # BD 必选+FC≤2；其余空间类型 400）生成候选与 LLM 终审（每空间独立调用，
+       # 候选各自 ≤30；单空间 LLM 异常该空间规则兜底，全部无结果才报错），
+       # 合并落一个 scheme（名称「多空间搭配方案-yyyyMMdd-HHmmss」，跨空间按 rspuId
+       # 去重）+ scheme_item；官网 public 链路不开放多空间
+       # Request: { roomId?, roomIds?(string[],≤9), stylePreference?, budgetLimit?(≥0),
+       #            projectId?, sofaWall?("width"|"depth") } —— roomId 与 roomIds 至少填一个
        # Response: { schemeId }
 
 POST   /api/v1/floor-plan/{analysisId}/retry   [登录 + 归属校验]
