@@ -628,9 +628,12 @@ public class SchemeService {
                 ? templateItem.getQuantity()
                 : 1;
 
-            // 价格快照对比：模板保存价 vs 当前最新价
+            // 价格快照对比：模板保存价 vs 当前最新价。
+            // 出厂价变动明细（含金额）受出厂价可见性约束：设计师等无权限角色不返回变动条目，
+            // 防止经 oldPrice/newPrice 旁路泄露出厂价（canAccessFactory 对设计师恒 true，不能用作价格判据）
             if (templateItem.getFactoryPrice() != null && rsku.getFactoryPrice() != null
-                && templateItem.getFactoryPrice().compareTo(rsku.getFactoryPrice()) != 0) {
+                && templateItem.getFactoryPrice().compareTo(rsku.getFactoryPrice()) != 0
+                && dataScopeHelper.canViewFactoryPrice(rsku.getFactoryCode())) {
                 RspuMaster rspu = rspuMapper.selectById(templateItem.getRspuId());
                 PriceChangeResponse change = new PriceChangeResponse();
                 change.setRspuId(templateItem.getRspuId());
@@ -786,11 +789,15 @@ public class SchemeService {
 
         QuoteResponse quote = quoteService.generateQuote(quoteItems);
 
-        // 快照模式：对比方案保存时的价格与当前最新价格
+        // 快照模式：对比方案保存时的价格与当前最新价格。
+        // 出厂价可见性约束：无权限角色（设计师等）不返回变动条目，防止经 oldPrice/newPrice 旁路泄露
         List<PriceChangeResponse> priceChanges = accessibleItems.stream()
             .map(item -> {
                 RskuSupply currentRsku = rskuSupplyMapper.selectById(item.getRskuId());
                 if (currentRsku == null) {
+                    return null;
+                }
+                if (!dataScopeHelper.canViewFactoryPrice(currentRsku.getFactoryCode())) {
                     return null;
                 }
                 BigDecimal oldPrice = item.getFactoryPrice();

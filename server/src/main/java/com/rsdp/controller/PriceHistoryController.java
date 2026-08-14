@@ -33,6 +33,10 @@ public class PriceHistoryController {
     /**
      * 查询某 RSKU 的价格历史。
      *
+     * <p>价格历史的 old/newPrice 为出厂价明文（AES 解密），属于全系统最高敏感字段，
+     * 因此按出厂价可见性判定（平台运营全部可见、工厂管理员仅本厂、设计师等一律拒绝），
+     * 不能用数据范围（canAccessRskuFactory）代替——设计师 DataScope=ALL 会造成出厂价旁路泄露。</p>
+     *
      * @param rskuId RSKU ID
      * @return 价格历史列表
      */
@@ -42,7 +46,7 @@ public class PriceHistoryController {
         if (rsku == null) {
             throw new BusinessException("RSKU 不存在: " + rskuId);
         }
-        if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
+        if (!dataScopeHelper.canViewFactoryPrice(rsku.getFactoryCode())) {
             throw new BusinessException("无权访问该 RSKU 的价格历史");
         }
         return Result.ok(priceHistoryService.listByRsku(rskuId));

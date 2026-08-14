@@ -418,6 +418,41 @@ class SchemeServiceTest {
     }
 
     @Test
+    void generateQuote_shouldMaskPriceChangesWhenFactoryPriceNotVisible() {
+        // 出厂价不可见角色（设计师等）：价格变动条目整体不返回，防止 oldPrice/newPrice 旁路泄露
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setStatus("active");
+
+        SchemeItem item = new SchemeItem();
+        item.setSchemeItemId(1L);
+        item.setSchemeId("SCHEME-001");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setFactoryPrice(new BigDecimal("2000"));
+        item.setQuantity(3);
+
+        RskuSupply currentRsku = new RskuSupply();
+        currentRsku.setRskuId("RSKU-001");
+        currentRsku.setRspuId("RSPU-001");
+        currentRsku.setFactoryCode("F001");
+        currentRsku.setFactoryPrice(new BigDecimal("2200"));
+
+        QuoteResponse quote = new QuoteResponse();
+        quote.setItems(List.of());
+
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
+        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)))).thenReturn(quote);
+        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(currentRsku);
+        when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(false);
+
+        QuoteResponse response = schemeService.generateQuote("SCHEME-001");
+
+        assertThat(response.getPriceChanges()).isEmpty();
+    }
+
+    @Test
     void createScheme_shouldMergeDuplicateRskuQuantities() {
         SchemeItemRequest itemRequest1 = new SchemeItemRequest();
         itemRequest1.setRspuId("RSPU-001");
@@ -543,6 +578,71 @@ class SchemeServiceTest {
 
         // 模板自身不被修改
         verify(schemeMapper, never()).updateById(any(Scheme.class));
+    }
+
+    @Test
+    void copyFromTemplate_shouldMaskPriceChangesWhenFactoryPriceNotVisible() {
+        // 出厂价不可见角色：套用模板的价格变动条目整体不返回，防止 oldPrice/newPrice 旁路泄露
+        Scheme template = new Scheme();
+        template.setSchemeId("SCHEME-TPL");
+        template.setSchemeName("现代客厅模板");
+        template.setIsTemplate(true);
+        template.setCreatedBy("testuser");
+
+        Project project = new Project();
+        project.setProjectId("PROJ-1");
+        when(projectService.getAccessibleProject("PROJ-1")).thenReturn(project);
+
+        SchemeItem tplItem = new SchemeItem();
+        tplItem.setSchemeId("SCHEME-TPL");
+        tplItem.setRspuId("RSPU-001");
+        tplItem.setRskuId("RSKU-001");
+        tplItem.setFactoryCode("F001");
+        tplItem.setFactoryPrice(new BigDecimal("2000"));
+        tplItem.setQuantity(1);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(tplItem));
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-001");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("2500"));
+        rsku.setLeadTimeDays(20);
+        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setPositioningLabel("布艺沙发");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(schemeMapper.selectCount(any())).thenReturn(0L);
+
+        AtomicReference<Scheme> inserted = new AtomicReference<>();
+        when(schemeMapper.insert(any(Scheme.class))).thenAnswer(inv -> {
+            inserted.set(inv.getArgument(0));
+            return 1;
+        });
+        when(schemeMapper.selectById(anyString())).thenAnswer(inv -> {
+            String id = inv.getArgument(0);
+            if ("SCHEME-TPL".equals(id)) {
+                return template;
+            }
+            Scheme saved = inserted.get();
+            return saved != null && saved.getSchemeId().equals(id) ? saved : null;
+        });
+        when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(false);
+
+        CopyFromTemplateRequest request = new CopyFromTemplateRequest();
+        request.setProjectId("PROJ-1");
+
+        CopyFromTemplateResponse response = schemeService.copyFromTemplate("SCHEME-TPL", request);
+
+        assertThat(response.getPriceChanges()).isEmpty();
+        assertThat(response.getSkippedRskuIds()).isEmpty();
+        // 方案仍正常生成（掩码只影响变动明细展示）
+        assertThat(response.getScheme().getTotalPrice()).isEqualByComparingTo("2500");
     }
 
     @Test
