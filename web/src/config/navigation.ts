@@ -188,6 +188,12 @@ export const navGroups: NavGroup[] = [
         key: 'floor-plan',
         label: '户型图搭配',
         path: '/floor-plan'
+      },
+      {
+        // 分析记录：与向导同权限门槛（登录即可）
+        key: 'floor-plan-history',
+        label: '分析记录',
+        path: '/floor-plan/history'
       }
     ]
   },

@@ -63,6 +63,9 @@ class PublicAiMatchServiceTest {
     private FloorPlanMatchingService floorPlanMatchingService;
 
     @Mock
+    private FloorPlanService floorPlanService;
+
+    @Mock
     private RspuMapper rspuMapper;
 
     @Mock
@@ -107,6 +110,49 @@ class PublicAiMatchServiceTest {
         assertThat(bedroom.getDepthMm()).isNull();
         assertThat(bedroom.getAreaM2()).isNull();
         assertThat(bedroom.getConfidence()).isEqualTo("low");
+    }
+
+    @Test
+    void analyze_shouldPersistPublicAnalysisAndReturnAnalysisId() {
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", "4200×3800", 0.1, 0.2, 0.4, 0.3)));
+        when(visionService.detectFloorPlanRooms(any(byte[].class), any())).thenReturn(detected);
+        when(floorPlanService.savePublicAnalysis(any(byte[].class), any(), any()))
+            .thenReturn("FPA-PUB01");
+
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "plan.jpg", "image/jpeg", "fake-plan".getBytes());
+
+        PublicAiMatchAnalyzeResponse response = publicAiMatchService.analyze(file, null);
+
+        // 官网匿名分析落库（v3.0 §4.6 策略 B）：响应追加 analysisId
+        assertThat(response.getAnalysisId()).isEqualTo("FPA-PUB01");
+        assertThat(response.getRooms()).hasSize(1);
+        verify(floorPlanService).savePublicAnalysis(
+            any(byte[].class),
+            org.mockito.ArgumentMatchers.eq("plan.jpg"),
+            org.mockito.ArgumentMatchers.same(detected));
+    }
+
+    @Test
+    void analyze_persistFails_shouldDegradeWithoutAnalysisId() {
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", "4200×3800", 0.1, 0.2, 0.4, 0.3)));
+        when(visionService.detectFloorPlanRooms(any(byte[].class), any())).thenReturn(detected);
+        when(floorPlanService.savePublicAnalysis(any(byte[].class), any(), any()))
+            .thenThrow(new RuntimeException("DB 不可用"));
+
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "plan.jpg", "image/jpeg", "fake-plan".getBytes());
+
+        PublicAiMatchAnalyzeResponse response = publicAiMatchService.analyze(file, null);
+
+        // 落库失败不阻断公开接口：识别结果照常返回，analysisId 降级为 null
+        assertThat(response.getAnalysisId()).isNull();
+        assertThat(response.getRooms()).hasSize(1);
+        assertThat(response.getRooms().get(0).getWidthMm()).isEqualTo(4200);
     }
 
     // ---------- generateScheme ----------
@@ -215,7 +261,8 @@ class PublicAiMatchServiceTest {
             styleMatchMapper, schemeMapper, aiMatchingService, schemeService,
             dataScopeHelper, new FloorPlanRulesProperties(), new ObjectMapper());
         PublicAiMatchService service = new PublicAiMatchService(
-            imageUploadValidator, visionService, realMatchingService, rspuMapper, imageAssetsMapper);
+            imageUploadValidator, visionService, realMatchingService, floorPlanService,
+            rspuMapper, imageAssetsMapper);
 
         RspuMaster oversize = buildSofa("RSPU-BIG");
         RspuMaster fit = buildSofa("RSPU-FIT");

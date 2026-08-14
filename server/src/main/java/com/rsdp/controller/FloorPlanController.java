@@ -1,8 +1,10 @@
 package com.rsdp.controller;
 
+import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.FloorPlanConfirmRequest;
 import com.rsdp.dto.request.FloorPlanSchemeRequest;
+import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.FloorPlanMatchingService;
@@ -53,6 +55,23 @@ public class FloorPlanController {
     }
 
     /**
+     * 分析历史列表（P1）：分页 + 可选 status 过滤，按创建时间倒序。
+     * 归属隔离与详情同口径（平台运营全见，其他角色仅本人创建）。
+     *
+     * @param page   页码（从 1 开始）
+     * @param size   每页条数（1~100）
+     * @param status 状态过滤（可选）
+     * @return 分页列表（含 roomCount 批量统计）
+     */
+    @GetMapping
+    public Result<PageResult<FloorPlanAnalysisListItemResponse>> listAnalyses(
+        @RequestParam(defaultValue = "1") long page,
+        @RequestParam(defaultValue = "20") long size,
+        @RequestParam(required = false) String status) {
+        return Result.ok(floorPlanService.listAnalyses(page, size, status));
+    }
+
+    /**
      * 接口 2：查询分析状态与空间列表（前端轮询入口，以 task 状态同步校正 analysis 状态）。
      *
      * @param analysisId 分析批次 ID
@@ -91,6 +110,18 @@ public class FloorPlanController {
         String schemeId = floorPlanMatchingService.generateSchemeForAnalysis(
             analysisId, request, SecurityOperatorContext.currentUsername());
         return Result.ok(Map.of("schemeId", schemeId));
+    }
+
+    /**
+     * 失败重试（P1）：仅 failed 状态可重试（其他状态 400 中文提示）；
+     * 重置状态为 pending + 清 errorMessage + 新建异步任务重新触发识别。
+     *
+     * @param analysisId 分析批次 ID
+     * @return 新任务 taskId
+     */
+    @PostMapping("/{analysisId}/retry")
+    public Result<Map<String, String>> retry(@PathVariable String analysisId) {
+        return Result.ok(floorPlanService.retry(analysisId));
     }
 
     /**

@@ -86,3 +86,39 @@ export interface FloorPlanSchemeRequest {
 export interface FloorPlanSchemeResponse {
   schemeId: string
 }
+
+/** 分析来源：admin=管理端上传 / public=官网用户上传。 */
+export type FloorPlanSource = 'admin' | 'public'
+
+/** 分析批次列表项（GET /floor-plan 分页）。 */
+export interface FloorPlanListItem {
+  analysisId: string
+  status: FloorPlanAnalysisStatus
+  source: FloorPlanSource
+  /** 识别出的空间数 */
+  roomCount: number
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  errorMessage?: string | null
+}
+
+/** 失败重试响应（POST /floor-plan/{analysisId}/retry，仅 failed 可重试）。 */
+export interface FloorPlanRetryResponse {
+  taskId: string
+}
+
+/** 分析状态展示文案（StatusPill 的 label 覆盖）。 */
+export const FLOOR_PLAN_STATUS_TEXT: Record<FloorPlanAnalysisStatus, string> = {
+  pending: '等待中',
+  analyzing: '分析中',
+  awaiting_confirm: '待校正',
+  confirmed: '已确认',
+  failed: '识别失败'
+}
+
+/** 分析来源展示文案。 */
+export const FLOOR_PLAN_SOURCE_TEXT: Record<FloorPlanSource, string> = {
+  admin: '管理端',
+  public: '官网'
+}

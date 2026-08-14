@@ -1,9 +1,13 @@
 package com.rsdp.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.common.PageResult;
 import com.rsdp.dto.FloorPlanBBox;
 import com.rsdp.dto.FloorPlanDetectResult;
 import com.rsdp.dto.request.FloorPlanConfirmRequest;
+import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.FloorPlanAnalysis;
@@ -28,10 +32,12 @@ import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -49,7 +55,8 @@ import static org.mockito.Mockito.when;
  *
  * <p>尺寸标注解析（mm/米/无标注/畸形）用例见 {@link com.rsdp.util.DimensionsTest}；
  * 本类覆盖：上传建单、尺寸三级提取落库（{@link FloorPlanService#buildRooms}）、
- * 人工校正状态机与整体替换语义、归属校验、task 状态同步校正。</p>
+ * 人工校正状态机与整体替换语义、归属校验、task 状态同步校正、分析历史列表（P1）、
+ * 失败重试状态机（P1）、官网匿名落库（v3.0 §4.6 策略 B）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class FloorPlanServiceTest {
@@ -343,6 +350,229 @@ class FloorPlanServiceTest {
         verify(roomMapper, never()).insert(any(FloorPlanRoom.class));
     }
 
+    // ---------- 分析历史列表（P1） ----------
+
+    @Test
+    void listAnalyses_shouldReturnPageWithBatchRoomCounts() {
+        FloorPlanAnalysis a1 = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED);
+        FloorPlanAnalysis a2 = buildAnalysis("FPA-2", FloorPlanService.STATUS_FAILED);
+        a2.setErrorMessage("AI 服务超时");
+        Page<FloorPlanAnalysis> page = new Page<>(1, 20);
+        page.setRecords(List.of(a1, a2));
+        page.setTotal(5);
+        when(analysisMapper.selectPage(org.mockito.ArgumentMatchers.<Page<FloorPlanAnalysis>>any(), any())).thenReturn(page);
+        when(roomMapper.selectList(any())).thenReturn(List.of(
+            buildRoom("FPR-1", "LIVING_ROOM"),
+            buildRoom("FPR-2", "BEDROOM"),
+            roomOf("FPR-3", "FPA-2", "BALCONY")));
+
+        PageResult<FloorPlanAnalysisListItemResponse> result =
+            floorPlanService.listAnalyses(1, 20, null);
+
+        assertThat(result.getTotal()).isEqualTo(5);
+        assertThat(result.getPage()).isEqualTo(1);
+        assertThat(result.getSize()).isEqualTo(20);
+        assertThat(result.getRows()).hasSize(2);
+        // roomCount 按 analysis 批量统计（FPA-1 两个空间，FPA-2 一个）
+        assertThat(result.getRows().get(0).getAnalysisId()).isEqualTo("FPA-1");
+        assertThat(result.getRows().get(0).getRoomCount()).isEqualTo(2);
+        assertThat(result.getRows().get(1).getRoomCount()).isEqualTo(1);
+        assertThat(result.getRows().get(1).getErrorMessage()).isEqualTo("AI 服务超时");
+    }
+
+    @Test
+    void listAnalyses_withStatus_shouldApplyStatusFilter() {
+        Page<FloorPlanAnalysis> page = new Page<>(1, 20);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(analysisMapper.selectPage(org.mockito.ArgumentMatchers.<Page<FloorPlanAnalysis>>any(), any())).thenReturn(page);
+
+        floorPlanService.listAnalyses(1, 20, "failed");
+
+        ArgumentCaptor<QueryWrapper<FloorPlanAnalysis>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(analysisMapper).selectPage(any(), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).contains("status =");
+    }
+
+    @Test
+    void listAnalyses_nonStaff_shouldFilterByCreator() {
+        loginAs("alice");
+        Page<FloorPlanAnalysis> page = new Page<>(1, 20);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(analysisMapper.selectPage(org.mockito.ArgumentMatchers.<Page<FloorPlanAnalysis>>any(), any())).thenReturn(page);
+
+        floorPlanService.listAnalyses(1, 20, null);
+
+        ArgumentCaptor<QueryWrapper<FloorPlanAnalysis>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(analysisMapper).selectPage(any(), captor.capture());
+        // 非平台运营仅见本人创建（与详情归属校验同口径）
+        assertThat(captor.getValue().getSqlSegment()).contains("created_by =");
+    }
+
+    @Test
+    void listAnalyses_platformStaff_shouldSeeAll() {
+        loginAsAdmin("admin");
+        Page<FloorPlanAnalysis> page = new Page<>(1, 20);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(analysisMapper.selectPage(org.mockito.ArgumentMatchers.<Page<FloorPlanAnalysis>>any(), any())).thenReturn(page);
+
+        floorPlanService.listAnalyses(1, 20, null);
+
+        ArgumentCaptor<QueryWrapper<FloorPlanAnalysis>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(analysisMapper).selectPage(any(), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).doesNotContain("created_by");
+    }
+
+    // ---------- 失败重试（P1） ----------
+
+    @Test
+    void retry_failedAnalysis_shouldResetAndCreateNewTask() throws Exception {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_FAILED);
+        analysis.setErrorMessage("AI 服务超时");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        AsyncTask oldTask = new AsyncTask();
+        oldTask.setTaskId("TASK-1");
+        oldTask.setStatus("failed");
+        oldTask.setInputData("{\"analysisId\":\"FPA-1\",\"hint\":\"三室两厅\"}");
+        when(asyncTaskMapper.selectById("TASK-1")).thenReturn(oldTask);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setStoragePath("images/fp.jpg");
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+
+        Map<String, String> result = floorPlanService.retry("FPA-1");
+
+        String newTaskId = result.get("taskId");
+        assertThat(newTaskId).startsWith("TASK-");
+
+        // 状态复位 pending + 清 errorMessage + 换挂新任务
+        ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
+        verify(analysisMapper).updateById(analysisCaptor.capture());
+        FloorPlanAnalysis updated = analysisCaptor.getValue();
+        assertThat(updated.getStatus()).isEqualTo(FloorPlanService.STATUS_PENDING);
+        assertThat(updated.getErrorMessage()).isNull();
+        assertThat(updated.getTaskId()).isEqualTo(newTaskId);
+
+        // 上一轮残留空间明细软删，避免重试后重复
+        verify(roomMapper).delete(any());
+
+        // 新建异步任务并沿用原 hint
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).insert(taskCaptor.capture());
+        AsyncTask newTask = taskCaptor.getValue();
+        assertThat(newTask.getTaskId()).isEqualTo(newTaskId);
+        assertThat(newTask.getTaskType()).isEqualTo(FloorPlanService.TASK_TYPE);
+        assertThat(newTask.getStatus()).isEqualTo("pending");
+        assertThat(newTask.getInputData()).contains("三室两厅");
+
+        // 非事务环境直接触发异步处理
+        verify(asyncTaskProcessor).processFloorPlanAnalysis(newTaskId, "FPA-1", "images/fp.jpg", "三室两厅");
+    }
+
+    @Test
+    void retry_crashedAnalyzingWithFailedTask_shouldAllowRetry() throws Exception {
+        // JVM 崩溃场景：analysis 停在 analyzing，task 已被收割为 failed —— 先同步校正再重试
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_ANALYZING);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        AsyncTask oldTask = new AsyncTask();
+        oldTask.setTaskId("TASK-1");
+        oldTask.setStatus("failed");
+        oldTask.setErrorMessage("任务超时收割");
+        when(asyncTaskMapper.selectById("TASK-1")).thenReturn(oldTask);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setStoragePath("images/fp.jpg");
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+
+        Map<String, String> result = floorPlanService.retry("FPA-1");
+
+        assertThat(result.get("taskId")).startsWith("TASK-");
+        assertThat(analysis.getStatus()).isEqualTo(FloorPlanService.STATUS_PENDING);
+        verify(asyncTaskMapper).insert(any(AsyncTask.class));
+        verify(asyncTaskProcessor).processFloorPlanAnalysis(
+            org.mockito.ArgumentMatchers.eq(result.get("taskId")),
+            org.mockito.ArgumentMatchers.eq("FPA-1"),
+            org.mockito.ArgumentMatchers.eq("images/fp.jpg"),
+            org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    void retry_nonFailedStatus_shouldThrow() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+
+        assertThatThrownBy(() -> floorPlanService.retry("FPA-1"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("仅识别失败的分析可重试");
+        verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
+        verify(analysisMapper, never()).updateById(any(FloorPlanAnalysis.class));
+    }
+
+    @Test
+    void retry_nonOwner_shouldThrowNotFound() {
+        loginAs("alice");
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_FAILED);
+        analysis.setCreatedBy("bob");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+
+        assertThatThrownBy(() -> floorPlanService.retry("FPA-1"))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
+    }
+
+    // ---------- 官网匿名分析落库（v3.0 §4.6 策略 B） ----------
+
+    @Test
+    void savePublicAnalysis_shouldPersistPublicAnalysisWithRooms() throws Exception {
+        when(storageService.store(any(InputStream.class), anyString(),
+            org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn("images/pub-fp.jpg");
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", "4200×3800", 0.1, 0.2, 0.4, 0.3),
+            new FloorPlanDetectResult.Room("bedroom", "主卧", null, 0.5, 0.2, 0.3, 0.3)));
+
+        String analysisId = floorPlanService.savePublicAnalysis(
+            "fake-plan".getBytes(), "plan.jpg", detected);
+
+        assertThat(analysisId).startsWith("FPA-");
+
+        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper).insert(imageCaptor.capture());
+        assertThat(imageCaptor.getValue().getImageType()).isEqualTo("floor_plan");
+        assertThat(imageCaptor.getValue().getUploadedBy()).isNull();
+        assertThat(imageCaptor.getValue().getStoragePath()).isEqualTo("images/pub-fp.jpg");
+
+        ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
+        verify(analysisMapper).insert(analysisCaptor.capture());
+        FloorPlanAnalysis analysis = analysisCaptor.getValue();
+        assertThat(analysis.getAnalysisId()).isEqualTo(analysisId);
+        assertThat(analysis.getSource()).isEqualTo("public");
+        assertThat(analysis.getCreatedBy()).isNull();
+        assertThat(analysis.getStatus()).isEqualTo(FloorPlanService.STATUS_AWAITING_CONFIRM);
+        assertThat(analysis.getRawResult()).contains("living_room");
+        assertThat(analysis.getConfirmedRooms()).isNull();
+
+        // 空间明细：有尺寸标注 → ocr_text/high；无标注 → source 留空、low（官网同步链路不做 AI 估算）
+        ArgumentCaptor<FloorPlanRoom> roomCaptor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper, org.mockito.Mockito.times(2)).insert(roomCaptor.capture());
+        FloorPlanRoom living = roomCaptor.getAllValues().get(0);
+        assertThat(living.getAnalysisId()).isEqualTo(analysisId);
+        assertThat(living.getRoomType()).isEqualTo("LIVING_ROOM");
+        assertThat(living.getWidthMm()).isEqualTo(4200);
+        assertThat(living.getDepthMm()).isEqualTo(3800);
+        assertThat(living.getDimensionSource()).isEqualTo("ocr_text");
+        assertThat(living.getDimensionConfidence()).isEqualTo("high");
+        FloorPlanRoom bedroom = roomCaptor.getAllValues().get(1);
+        assertThat(bedroom.getRoomType()).isEqualTo("BEDROOM");
+        assertThat(bedroom.getWidthMm()).isNull();
+        assertThat(bedroom.getDimensionSource()).isNull();
+        assertThat(bedroom.getDimensionConfidence()).isEqualTo("low");
+        // 同步链路不触发 AI 估算
+        verify(visionService, never()).chatText(anyString(), anyString());
+    }
+
     // ---------- 接口 5：软删 ----------
 
     @Test
@@ -395,15 +625,26 @@ class FloorPlanServiceTest {
     }
 
     private FloorPlanRoom buildRoom(String roomId, String roomType) {
+        return roomOf(roomId, "FPA-1", roomType);
+    }
+
+    private FloorPlanRoom roomOf(String roomId, String analysisId, String roomType) {
         FloorPlanRoom room = new FloorPlanRoom();
         room.setRoomId(roomId);
-        room.setAnalysisId("FPA-1");
+        room.setAnalysisId(analysisId);
         room.setRoomType(roomType);
         return room;
     }
 
     private void loginAs(String username) {
         User principal = new User(username, "password", List.of());
+        SecurityContextHolder.getContext().setAuthentication(
+            new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+    }
+
+    private void loginAsAdmin(String username) {
+        User principal = new User(username, "password",
+            List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
         SecurityContextHolder.getContext().setAuthentication(
             new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
     }

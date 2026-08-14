@@ -170,6 +170,13 @@ export const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
   },
   {
+    // 静态路径优先于带 query 的 /floor-plan 匹配，声明顺序保持在向导之前
+    path: '/floor-plan/history',
+    name: 'FloorPlanHistory',
+    component: () => import('@/views/FloorPlanHistoryView.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     // 户型图搭配四步向导：上传识别（product:read 登录即可）+ 生成方案（scheme:create 在接口层拦截），页面级仅要求登录
     path: '/floor-plan',
     name: 'FloorPlanEntry',

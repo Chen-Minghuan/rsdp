@@ -22,6 +22,12 @@ public class PublicAiMatchAnalyzeResponse {
     private List<RoomItem> rooms = new ArrayList<>();
 
     /**
+     * 落库的分析批次 ID（v3.0 §4.6 策略 B：官网匿名分析落库为数据资产）；
+     * 落库失败降级时为 null。
+     */
+    private String analysisId;
+
+    /**
      * 单个空间的识别结果。
      */
     @Data

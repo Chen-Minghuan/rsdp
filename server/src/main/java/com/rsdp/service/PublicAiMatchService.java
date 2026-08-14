@@ -64,15 +64,20 @@ public class PublicAiMatchService {
     private final ImageUploadValidator imageUploadValidator;
     private final VisionService visionService;
     private final FloorPlanMatchingService floorPlanMatchingService;
+    private final FloorPlanService floorPlanService;
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
 
     /**
      * 分析户型图：识别功能空间并解析尺寸标注。
      *
+     * <p>识别完成后按 v3.0 §4.6 策略 B 落库（source=public，沉淀客户户型数据资产，
+     * 响应追加 analysisId）。落库失败不阻断公开接口——识别结果已得出，落库仅作数据资产，
+     * 异常记 warn 日志降级为不落库（analysisId=null）。</p>
+     *
      * @param file 户型图片（jpg/png，≤10MB）
      * @param hint 用户补充说明，可空
-     * @return 空间识别结果列表
+     * @return 空间识别结果列表 + analysisId（落库失败为 null）
      */
     public PublicAiMatchAnalyzeResponse analyze(MultipartFile file, String hint) {
         imageUploadValidator.validate(file, MAX_IMAGE_SIZE_BYTES);
@@ -92,6 +97,13 @@ public class PublicAiMatchService {
             .map(this::toRoomItem)
             .collect(Collectors.toList());
         response.setRooms(rooms);
+
+        try {
+            response.setAnalysisId(floorPlanService.savePublicAnalysis(
+                imageBytes, file.getOriginalFilename(), detected));
+        } catch (Exception e) {
+            log.warn("官网户型分析落库失败，降级为不落库（识别结果照常返回）", e);
+        }
         return response;
     }
 

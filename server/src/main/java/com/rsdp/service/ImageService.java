@@ -44,8 +44,8 @@ public class ImageService {
     /**
      * 根据图片 ID 加载图片文件资源与 MIME 类型。
      *
-     * <p>公开资源（CMS 运营图、在售产品图，即 /api/v1/public/** 已公开引用的图片）允许匿名访问；
-     * 其余图片仅允许已登录且对图片关联 RSPU/RSKU 有数据权限的用户访问。</p>
+     * <p>公开资源（CMS 运营图、户型原图、在售产品图，即 /api/v1/public/** 已公开引用的图片）
+     * 允许匿名访问；其余图片仅允许已登录且对图片关联 RSPU/RSKU 有数据权限的用户访问。</p>
      *
      * @param imageId 图片 ID
      * @return 加载结果
@@ -65,13 +65,15 @@ public class ImageService {
      * 判断图片是否为公开可访问资源（官网匿名访问场景）。
      *
      * <p>判定规则：CMS 运营图（image_type=cms，专为官网公开配置）；
+     * 户型原图（image_type=floor_plan，v3.0 §4.6 策略 B 明确要求——官网分析落库后
+     * 需匿名回显原图，图片 ID 为完整 UUID 不可枚举）；
      * 或归属于在售（status=active）产品的产品图（官网商品图/场景图均已在公开接口暴露）。</p>
      *
      * @param imageAsset 图片实体
      * @return true 表示允许匿名访问
      */
     private boolean isPubliclyVisible(ImageAssets imageAsset) {
-        if ("cms".equals(imageAsset.getImageType())) {
+        if ("cms".equals(imageAsset.getImageType()) || "floor_plan".equals(imageAsset.getImageType())) {
             return true;
         }
         String rspuId = imageAsset.getRspuId();

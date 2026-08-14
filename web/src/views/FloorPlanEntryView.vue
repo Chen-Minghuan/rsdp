@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import {
   NAlert,
@@ -52,6 +52,7 @@ interface EditableRoom {
 }
 
 const router = useRouter()
+const route = useRoute()
 const signal = useRequestAbort()
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
@@ -225,6 +226,32 @@ function applyAnalysisResult(result: FloorPlanAnalysisResponse) {
     .slice()
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     .map(toEditableRoom)
+}
+
+/**
+ * 加载已有分析批次（带 analysisId 进入时）：
+ * awaiting_confirm / confirmed 直接进步骤 2；pending / analyzing 继续轮询；failed 提示失败原因。
+ * 原图无本地 Object URL，步骤 2 左侧走 n-empty 兜底。
+ */
+async function loadExistingAnalysis(id: string) {
+  try {
+    const result = await getFloorPlanAnalysis(id, { signal })
+    analysisId.value = id
+    applyAnalysisResult(result)
+    if (result.status === 'awaiting_confirm' || result.status === 'confirmed') {
+      currentStep.value = 2
+      return
+    }
+    if (result.status === 'failed') {
+      errorMessage.value = result.errorMessage || '该批次识别失败，请在分析记录页重试'
+      return
+    }
+    analyzing.value = true
+    pollAnalysis(id)
+  } catch (e) {
+    if (axios.isCancel(e)) return
+    errorMessage.value = e instanceof Error ? e.message : '加载分析结果失败'
+  }
 }
 
 function addRoom() {
@@ -443,7 +470,14 @@ async function loadDicts() {
   }
 }
 
-onMounted(loadDicts)
+onMounted(() => {
+  loadDicts()
+  // 带 analysisId 进入（分析记录「去校正 / 查看」）：跳过步骤 1 直接拉取已有分析结果
+  const existingId = route.query.analysisId
+  if (typeof existingId === 'string' && existingId) {
+    loadExistingAnalysis(existingId)
+  }
+})
 
 onUnmounted(() => {
   if (pollTimer) {

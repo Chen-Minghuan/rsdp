@@ -8,9 +8,11 @@ import { getDashboardSummary, type DashboardSummary } from '@/api/dashboard'
 import { listProducts } from '@/api/product'
 import { listRecentTasks, type RecentTaskItem } from '@/api/task'
 import { listLeads, getLeadSourceStats } from '@/api/lead'
+import { listFloorPlanAnalyses } from '@/api/floorPlan'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import { LEAD_SOURCE_TEXT, LEAD_STATUS_TEXT, type LeadItem } from '@/types/lead'
+import { FLOOR_PLAN_SOURCE_TEXT, type FloorPlanListItem } from '@/types/floorPlan'
 import type { ProductSummary } from '@/types/product'
 
 /**
@@ -99,6 +101,17 @@ const latestLeads = ref<LeadItem[]>([])
 const leadsLoaded = ref(false)
 const leadPendingCount = ref<number | null>(null)
 
+// ---------- 左列：户型图分析 · 待复核队列 ----------
+
+const pendingFloorPlans = ref<FloorPlanListItem[]>([])
+const floorPlanPendingCount = ref<number | null>(null)
+const floorPlansLoaded = ref(false)
+
+function formatTime(value?: string): string {
+  if (!value) return '-'
+  return value.replace('T', ' ').slice(0, 16)
+}
+
 // ---------- 右栏：今日待办（由真实数据推导） ----------
 
 interface TodoItem {
@@ -150,6 +163,15 @@ onMounted(async () => {
       console.error('加载最新意向客户失败', e)
     } finally {
       leadsLoaded.value = true
+    }
+    try {
+      const result = await listFloorPlanAnalyses({ page: 1, size: 3, status: 'awaiting_confirm' })
+      pendingFloorPlans.value = result.rows
+      floorPlanPendingCount.value = result.total
+    } catch (e) {
+      console.error('加载户型图待复核队列失败', e)
+    } finally {
+      floorPlansLoaded.value = true
     }
   }
 
@@ -270,14 +292,26 @@ onMounted(async () => {
           </div>
         </section>
 
-        <!-- 户型图分析 · 待复核队列 -->
-        <section class="section">
+        <!-- 户型图分析 · 待复核队列（仅 ADMIN/EDITOR 拉取，接口失败回退空态） -->
+        <section v-if="isPlatformOperator" class="section">
           <div class="section-head">
-            <div class="section-title">户型图分析 · 待复核队列</div>
-            <span class="section-more" @click="navigate('/matching/anchor')">进入 AI 工作台 →</span>
+            <div class="section-title">
+              户型图分析 · 待复核队列
+              <span v-if="floorPlanPendingCount != null" class="mono fp-count">{{ floorPlanPendingCount }}</span>
+            </div>
+            <span class="section-more" @click="navigate('/floor-plan/history')">全部分析 →</span>
           </div>
           <div class="table">
-            <div class="empty-row">暂无待复核的户型图分析</div>
+            <template v-if="pendingFloorPlans.length">
+              <div v-for="item in pendingFloorPlans" :key="item.analysisId" class="fp-row">
+                <span class="chip">{{ FLOOR_PLAN_SOURCE_TEXT[item.source] ?? item.source }}</span>
+                <span class="mono fp-time">{{ formatTime(item.createdAt) }}</span>
+                <span class="link" @click="navigate(`/floor-plan?analysisId=${item.analysisId}`)">去校正</span>
+              </div>
+            </template>
+            <div v-else class="empty-row">
+              {{ floorPlansLoaded ? '暂无待复核的户型图分析' : '加载中…' }}
+            </div>
           </div>
         </section>
       </div>
@@ -617,6 +651,37 @@ onMounted(async () => {
   padding: 28px 16px;
   text-align: center;
   font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+
+/* ===== 户型图待复核 ===== */
+.fp-count {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--rsdp-warning);
+}
+
+.fp-row {
+  display: grid;
+  grid-template-columns: 0.8fr 1.6fr 0.6fr;
+  padding: 11px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--rsdp-border);
+  align-items: center;
+  gap: 8px;
+}
+
+.fp-row:last-child {
+  border-bottom: none;
+}
+
+.fp-row:hover {
+  background: var(--rsdp-serve-bg);
+}
+
+.fp-time {
+  font-size: 11px;
   color: var(--rsdp-text-secondary);
 }
 

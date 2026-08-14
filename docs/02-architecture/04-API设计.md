@@ -1323,9 +1323,13 @@ POST   /api/v1/public/leads
 POST   /api/v1/public/ai-match/analyze
        # AI 户型图分析（multipart；file 为 jpg/png ≤10MB，走 ImageUploadValidator；
        # hint 可选用户补充说明）。AI 识别空间 + 尺寸标注解析（mm/米两种写法，
-       # 解析成功 confidence=high 并给出 widthMm/depthMm/areaM2，否则 low）
+       # 解析成功 confidence=high 并给出 widthMm/depthMm/areaM2，否则 low）。
+       # P1 起落库（v3.0 §4.6 策略 B）：写 image_assets（image_type=floor_plan）
+       # + floor_plan_analysis（source=public、created_by=null、status=awaiting_confirm、
+       # raw_result 留档）+ floor_plan_room；落库失败记 warn 降级为不落库（analysisId=null），
+       # 不阻断公开接口。配套：floor_plan 原图匿名可见（ImageService.isPubliclyVisible）
        # Form: file*, hint?
-       # Response: { rooms: [{ roomType, roomName, widthMm, depthMm, areaM2,
+       # Response: { analysisId, rooms: [{ roomType, roomName, widthMm, depthMm, areaM2,
        #            dimensionText, confidence }] }
 
 POST   /api/v1/public/ai-match/scheme
@@ -1356,6 +1360,15 @@ POST   /api/v1/floor-plan/analyze          [product:read]
        # Form: image*, hint?
        # Response: { analysisId, taskId }
 
+GET    /api/v1/floor-plan                  [登录 + 归属过滤]
+       # 分析历史列表（P1）：分页 + 可选 status 过滤，按创建时间倒序；
+       # roomCount 按页内 analysisId 批量统计（避免 N+1）。
+       # 归属过滤与详情同口径：平台运营（ADMIN/EDITOR）全见（含官网匿名 source=public
+       # 记录），其他角色仅 created_by=本人
+       # Query: page=1&size=20（上限 100）&status?=pending|analyzing|awaiting_confirm|confirmed|failed
+       # Response: PageResult<{ analysisId, status, source, roomCount, createdBy,
+       #            createdAt, updatedAt, errorMessage }>
+
 GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # 查询分析状态与空间列表（前端轮询入口；以 task 状态同步校正 analysis 状态：
        # task=failed → analysis=failed + errorMessage 透传）
@@ -1379,6 +1392,13 @@ POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
        # 回填溯源，方案名自动生成「客厅方案-yyyyMMdd-HHmmss」
        # Request: { roomId*, stylePreference?, budgetLimit?(≥0), projectId? }
        # Response: { schemeId }
+
+POST   /api/v1/floor-plan/{analysisId}/retry   [登录 + 归属校验]
+       # 失败重试（P1）：仅 failed 状态可重试（其他状态 400 中文提示；状态判定前先以
+       # task 状态同步校正，JVM 崩溃卡在 analyzing 的场景也可重试）。重置 analysis 状态为
+       # pending + 清 errorMessage + 软删上一轮残留空间明细 + 新建异步任务（沿用原图与原
+       # hint）重新触发 processFloorPlanAnalysis
+       # Response: { taskId }
 
 DELETE /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # 软删分析批次（@TableLogic），级联软删其下空间明细

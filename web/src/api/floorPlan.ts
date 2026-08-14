@@ -1,11 +1,15 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
 import type {
   FloorPlanAnalysisResponse,
+  FloorPlanAnalysisStatus,
   FloorPlanAnalyzeResponse,
   FloorPlanConfirmRequest,
+  FloorPlanListItem,
+  FloorPlanRetryResponse,
   FloorPlanSchemeRequest,
   FloorPlanSchemeResponse
 } from '@/types/floorPlan'
+import type { PageResult } from '@/types/product'
 import type { ApiOptions } from './product'
 
 /**
@@ -100,4 +104,49 @@ export async function generateFloorPlanScheme(
  */
 export async function deleteFloorPlanAnalysis(analysisId: string, options?: ApiOptions): Promise<void> {
   await apiClient.delete<ApiResult<null>>(`/v1/floor-plan/${analysisId}`, { signal: options?.signal })
+}
+
+/** 分析历史分页查询参数。 */
+export interface FloorPlanListParams {
+  page?: number
+  size?: number
+  /** 按状态过滤（pending/analyzing/awaiting_confirm/confirmed/failed），不传查全部 */
+  status?: FloorPlanAnalysisStatus
+}
+
+/**
+ * 分页查询户型图分析历史（按创建时间倒序）。
+ *
+ * @param params 分页与状态过滤参数
+ * @param options 可选请求选项（AbortSignal）
+ * @returns 分析批次分页结果
+ */
+export async function listFloorPlanAnalyses(
+  params?: FloorPlanListParams,
+  options?: ApiOptions
+): Promise<PageResult<FloorPlanListItem>> {
+  const { data: result } = await apiClient.get<ApiResult<PageResult<FloorPlanListItem>>>(
+    '/v1/floor-plan',
+    { params, signal: options?.signal }
+  )
+  return result.data
+}
+
+/**
+ * 重试失败的分析批次（仅 failed 状态可重试，重新触发 AI 识别）。
+ *
+ * @param analysisId 分析批次 ID
+ * @param options 可选请求选项（AbortSignal）
+ * @returns 新的异步任务 ID
+ */
+export async function retryFloorPlanAnalysis(
+  analysisId: string,
+  options?: ApiOptions
+): Promise<FloorPlanRetryResponse> {
+  const { data: result } = await apiClient.post<ApiResult<FloorPlanRetryResponse>>(
+    `/v1/floor-plan/${analysisId}/retry`,
+    null,
+    { signal: options?.signal }
+  )
+  return result.data
 }

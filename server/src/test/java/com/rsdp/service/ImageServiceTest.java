@@ -195,18 +195,23 @@ class ImageServiceTest {
     }
 
     @Test
-    void loadImageResource_shouldDenyAnonymousFloorPlanImage() {
+    void loadImageResource_shouldAllowAnonymousFloorPlanImage() throws Exception {
+        // v3.0 §4.6 策略 B：官网匿名分析落库后需匿名回显原图，floor_plan 公开可见
         securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(false);
         ImageAssets asset = new ImageAssets();
         asset.setImageId("IMG-FP02");
         asset.setImageType("floor_plan");
         asset.setStoragePath("images/IMG-FP02.jpg");
+        asset.setFormat("jpg");
 
         when(imageAssetsMapper.selectById("IMG-FP02")).thenReturn(asset);
+        when(storageService.get("images/IMG-FP02.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
 
-        assertThatThrownBy(() -> imageService.loadImageResource("IMG-FP02"))
-            .isInstanceOf(ResourceNotFoundException.class)
-            .hasMessageContaining("图片不存在");
+        ImageService.LoadedImage loaded = imageService.loadImageResource("IMG-FP02");
+
+        assertThat(loaded).isNotNull();
+        assertThat(loaded.contentType()).isEqualTo("image/jpeg");
     }
 
     @Test
