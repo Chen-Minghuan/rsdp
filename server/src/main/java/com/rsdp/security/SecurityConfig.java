@@ -126,6 +126,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/orders/**").hasAuthority(Permissions.ORDER_DELETE)
 
+                // 户型图分析（管理端）：上传走产品读权限，方案生成走方案创建权限，
+                // 查询/校正/删除登录即可，由 FloorPlanService 做归属校验（非平台运营仅见自己创建的）
+                .requestMatchers(HttpMethod.POST, "/api/v1/floor-plan/analyze").hasAuthority(Permissions.PRODUCT_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/floor-plan/*/scheme").hasAuthority(Permissions.SCHEME_CREATE)
+                .requestMatchers("/api/v1/floor-plan/**").authenticated()
+
                 // 检索/推荐接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/matching/**").hasAuthority(Permissions.PRODUCT_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/retrieval/**").hasAuthority(Permissions.PRODUCT_READ)

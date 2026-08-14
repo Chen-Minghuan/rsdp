@@ -330,8 +330,8 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 .panel {
   margin-top: 24px;
   background: var(--card);
+  border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  
   padding: 36px;
 }
 
@@ -424,12 +424,12 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   color: var(--accent-deep);
 }
 
+/* 低置信度提示：v2 文字规范——赭石文字 + 顶部 1px 细线（与 PriceText sale 态同款），不加色块徽章 */
 .room-warn {
   font-size: 11px;
   color: var(--terra);
-  background: var(--suppl);
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
+  border-top: 1px solid var(--terra);
+  padding-top: 2px;
 }
 
 .edit-row {

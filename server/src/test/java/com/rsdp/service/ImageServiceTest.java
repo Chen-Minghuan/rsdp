@@ -177,6 +177,39 @@ class ImageServiceTest {
     }
 
     @Test
+    void loadImageResource_shouldAllowLoggedInFloorPlanImage() throws Exception {
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-FP01");
+        asset.setImageType("floor_plan");
+        asset.setStoragePath("images/IMG-FP01.jpg");
+        asset.setFormat("jpg");
+
+        when(imageAssetsMapper.selectById("IMG-FP01")).thenReturn(asset);
+        when(storageService.get("images/IMG-FP01.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
+
+        ImageService.LoadedImage loaded = imageService.loadImageResource("IMG-FP01");
+
+        assertThat(loaded).isNotNull();
+        assertThat(loaded.contentType()).isEqualTo("image/jpeg");
+    }
+
+    @Test
+    void loadImageResource_shouldDenyAnonymousFloorPlanImage() {
+        securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(false);
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-FP02");
+        asset.setImageType("floor_plan");
+        asset.setStoragePath("images/IMG-FP02.jpg");
+
+        when(imageAssetsMapper.selectById("IMG-FP02")).thenReturn(asset);
+
+        assertThatThrownBy(() -> imageService.loadImageResource("IMG-FP02"))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .hasMessageContaining("图片不存在");
+    }
+
+    @Test
     void resolveContentType_shouldReturnCorrectMimeType() {
         assertThat(imageService.resolveContentType("photo.jpg")).isEqualTo("image/jpeg");
         assertThat(imageService.resolveContentType("photo.jpeg")).isEqualTo("image/jpeg");

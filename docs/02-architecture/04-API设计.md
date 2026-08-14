@@ -1329,13 +1329,60 @@ POST   /api/v1/public/ai-match/analyze
        #            dimensionText, confidence }] }
 
 POST   /api/v1/public/ai-match/scheme
-       # AI 户型搭配方案（内部复用 AiMatchingService.generateRoomScheme，固定 LIVING 空间，
+       # AI 户型搭配方案（P0-B 起统一走 FloorPlanMatchingService 双端唯一出口：
+       # widthMm/depthMm 提供时尺寸硬规则 R1~R5 生效——面积分档/沙发长度上限/
+       # 进深链式校验，官网不再推荐放不下的沙发；缺失时退化为原 AI 选品行为。
+       # LLM 终审空返回时规则兜底（每品类取风格分最高者），永远有结果。
        # 预算缺省 999999；红线：绝不透传 factoryCode/factoryName/factoryPrice/totalPrice，
        # totalRetailPrice 为零售参考价 retail_price 求和）
        # Request: { stylePreference?, budgetLimit?(≥0), widthMm?(≥1), depthMm?(≥1) }
        # Response: { reasoning, totalRetailPrice,
        #            items: [{ rspuId, productName, categoryPath, positioningLabel,
        #            retailPrice, primaryImageUrl }] }
+```
+
+### 户型图分析（管理端，/api/v1/floor-plan/**，V36）
+
+> 户型图 → 空间尺寸 → 产品搭配 链路（方案 v3.0 §4.2）。异步识别 + 人工校正 + 搭配落 scheme。
+> 数据归属：平台运营（ADMIN/EDITOR）可见全部，其他用户仅本人创建（Service 层校验）。
+
+```
+POST   /api/v1/floor-plan/analyze          [product:read]
+       # 上传户型图并创建异步分析任务（multipart；image 为 jpg/png ≤10MB，
+       # 走 ImageUploadValidator；hint 可选补充说明）。落图（image_type=floor_plan）
+       # → 建 analysis（source=admin，status=pending）→ 建 async_task
+       # （task_type=floor_plan_analysis）→ 事务提交后触发 AI 识别 + 尺寸三级提取
+       # （OCR 标注 high / AI 估算 low）→ status=awaiting_confirm
+       # Form: image*, hint?
+       # Response: { analysisId, taskId }
+
+GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
+       # 查询分析状态与空间列表（前端轮询入口；以 task 状态同步校正 analysis 状态：
+       # task=failed → analysis=failed + errorMessage 透传）
+       # Response: { analysisId, imageId, imageUrl, status, taskId, scaleRatio,
+       #            source, errorMessage, createdBy, createdAt, updatedAt,
+       #            rooms: [{ roomId, roomType, bbox, widthMm, depthMm, areaM2,
+       #            dimensionSource, dimensionConfidence, dimensionText, sortOrder }] }
+
+PUT    /api/v1/floor-plan/{analysisId}/rooms   [登录 + 归属校验]
+       # 人工校正（整体替换语义：带 roomId 就地更新 / 不带新增 / 未提交的软删），
+       # 仅 awaiting_confirm 或 confirmed 状态可提交；校正后尺寸来源=manual、置信度=high，
+       # 状态 → confirmed
+       # Request: { rooms: [{ roomId?, roomType*, widthMm?, depthMm?, bbox? }], scaleRatio? }
+       # Response: 同 GET（校正后的分析详情）
+
+POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
+       # 基于 confirmed 空间生成客厅搭配方案（P0-B）：FloorPlanMatchingService 编排
+       # 尺寸硬规则 R1~R5（rsdp.floor-plan.rules 配置）→ LLM 终审（prompt 注入空间尺寸
+       # 上下文）→ LLM 空返回规则兜底。落 scheme + scheme_item（价格快照语义沿用
+       # SchemeService.createScheme，方案项均为 LIVING 场景产品），scheme.analysis_id
+       # 回填溯源，方案名自动生成「客厅方案-yyyyMMdd-HHmmss」
+       # Request: { roomId*, stylePreference?, budgetLimit?(≥0), projectId? }
+       # Response: { schemeId }
+
+DELETE /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
+       # 软删分析批次（@TableLogic），级联软删其下空间明细
+       # Response: null
 ```
 
 ### 管理端工作台统计带（GET 限 ADMIN/EDITOR）

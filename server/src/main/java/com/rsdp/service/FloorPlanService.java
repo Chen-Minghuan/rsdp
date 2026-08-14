@@ -1,0 +1,576 @@
+package com.rsdp.service;
+
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.rsdp.dto.FloorPlanBBox;
+import com.rsdp.dto.FloorPlanDetectResult;
+import com.rsdp.dto.request.FloorPlanConfirmRequest;
+import com.rsdp.dto.response.FloorPlanAnalysisResponse;
+import com.rsdp.dto.response.FloorPlanRoomResponse;
+import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.FloorPlanAnalysis;
+import com.rsdp.entity.FloorPlanRoom;
+import com.rsdp.entity.ImageAssets;
+import com.rsdp.exception.BusinessException;
+import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.FloorPlanAnalysisMapper;
+import com.rsdp.mapper.FloorPlanRoomMapper;
+import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.Dimensions;
+import com.rsdp.util.IdGenerator;
+import com.rsdp.util.ImageUploadValidator;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/**
+ * 户型图分析服务（管理端，方案 v3.0 §4.2/§4.4/§4.5）。
+ *
+ * <p>职责：上传建单（接口 1）、分析状态与空间列表查询（接口 2，以 task 状态同步校正
+ * analysis 状态）、人工校正整体替换（接口 3）、软删（接口 5），以及尺寸三级提取与
+ * 空间明细落库（{@link #buildRooms}，由 {@link AsyncTaskProcessor#processFloorPlanAnalysis}
+ * 在异步任务中调用，v3.0 §4.4「尺寸三级优先级在 FloorPlanService 内实现」）。</p>
+ *
+ * <p>归属校验与 async_task 同口径：平台运营人员（ADMIN/EDITOR）可见全部，
+ * 其他用户仅能访问自己创建的分析（v3.0 §3 数据归属）。</p>
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class FloorPlanService {
+
+    /** 分析状态机：pending → analyzing → awaiting_confirm → confirmed；失败为 failed。 */
+    public static final String STATUS_PENDING = "pending";
+    public static final String STATUS_ANALYZING = "analyzing";
+    public static final String STATUS_AWAITING_CONFIRM = "awaiting_confirm";
+    public static final String STATUS_CONFIRMED = "confirmed";
+    public static final String STATUS_FAILED = "failed";
+
+    /** 异步任务类型（async_task.task_type）。 */
+    public static final String TASK_TYPE = "floor_plan_analysis";
+
+    private static final String SOURCE_ADMIN = "admin";
+
+    private static final String DIM_SOURCE_OCR = "ocr_text";
+    private static final String DIM_SOURCE_AI_ESTIMATE = "ai_estimate";
+    private static final String DIM_SOURCE_MANUAL = "manual";
+
+    private static final String CONFIDENCE_HIGH = "high";
+    private static final String CONFIDENCE_LOW = "low";
+
+    /** AI 估算提示词（尺寸三级提取第③级：无标注无比例尺时按常见户型经验估算）。 */
+    private static final String ESTIMATE_SYSTEM_PROMPT =
+        "你是住宅户型尺寸估算专家。按中国常见户型经验估算指定空间的开间和进深（单位毫米）。"
+            + "只输出 JSON：{\"widthMm\": 4200, \"depthMm\": 3800}，不要任何其他文字。";
+
+    private final FloorPlanAnalysisMapper analysisMapper;
+    private final FloorPlanRoomMapper roomMapper;
+    private final AsyncTaskMapper asyncTaskMapper;
+    private final ImageAssetsMapper imageAssetsMapper;
+    private final ImageUploadValidator imageUploadValidator;
+    private final StorageService storageService;
+    private final VisionService visionService;
+    private final AsyncTaskProcessor asyncTaskProcessor;
+    private final AuditLogService auditLogService;
+    private final ObjectMapper objectMapper;
+
+    @Value("${rsdp.floor-plan.max-file-size-mb:10}")
+    private long maxFileSizeMb;
+
+    /**
+     * 接口 1：上传户型图，落图 → 建 analysis 记录（source=admin）→ 创建异步任务 → 事务提交后触发分析。
+     *
+     * @param file 户型图片（jpg/png，≤10MB，走 {@link ImageUploadValidator}）
+     * @param hint 用户补充说明（如"这是三室两厅"），可空
+     * @return analysisId + taskId
+     */
+    @Transactional
+    public Map<String, String> analyze(MultipartFile file, String hint) {
+        imageUploadValidator.validate(file, maxFileSizeMb * 1024L * 1024L);
+
+        String analysisId = IdGenerator.floorPlanAnalysisId();
+        String taskId = IdGenerator.taskId();
+        String imageId = IdGenerator.imageId();
+        String operator = SecurityOperatorContext.currentUsername();
+        LocalDateTime now = LocalDateTime.now();
+
+        // 1. 存户型原图（imageType=floor_plan，不关联 RSPU）
+        String extension = getExtension(file.getOriginalFilename());
+        String objectKey = "images/" + imageId + "." + extension;
+        String storagePath;
+        try {
+            storagePath = storageService.store(file, objectKey);
+        } catch (IOException e) {
+            log.error("户型图存储失败，imageId={}", imageId, e);
+            throw new BusinessException("户型图存储失败");
+        }
+        registerStorageRollbackCleanup(storagePath);
+
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId(imageId);
+        imageAsset.setImageType("floor_plan");
+        imageAsset.setStoragePath(storagePath);
+        imageAsset.setPrimary(false);
+        imageAsset.setAiProcessed(false);
+        imageAsset.setFileSize(file.getSize());
+        imageAsset.setFormat(extension);
+        imageAsset.setUploadedBy(operator);
+        imageAsset.setCreatedAt(now);
+        imageAssetsMapper.insert(imageAsset);
+        auditLogService.logCreate("image_assets", imageId, imageAsset, operator);
+
+        // 2. 建分析批次记录
+        FloorPlanAnalysis analysis = new FloorPlanAnalysis();
+        analysis.setAnalysisId(analysisId);
+        analysis.setImageId(imageId);
+        analysis.setStatus(STATUS_PENDING);
+        analysis.setTaskId(taskId);
+        analysis.setSource(SOURCE_ADMIN);
+        analysis.setCreatedBy(operator);
+        analysis.setCreatedAt(now);
+        analysis.setUpdatedAt(now);
+        analysisMapper.insert(analysis);
+        auditLogService.logCreate("floor_plan_analysis", analysisId, analysis, operator);
+
+        // 3. 建异步任务（input_data 携带分析上下文，供 processFloorPlanAnalysis 使用）
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setTaskType(TASK_TYPE);
+        task.setStatus(STATUS_PENDING);
+        task.setProgress(0);
+        Map<String, Object> inputData = new HashMap<>();
+        inputData.put("analysisId", analysisId);
+        inputData.put("imageId", imageId);
+        inputData.put("objectKey", storagePath);
+        if (StringUtils.hasText(hint)) {
+            inputData.put("hint", hint.trim());
+        }
+        task.setInputData(toJson(inputData));
+        task.setCreatedBy(operator);
+        task.setCreatedAt(now);
+        asyncTaskMapper.insert(task);
+
+        // 4. 事务提交后触发异步分析（与产品录入 triggerAsyncProcess 同模式）
+        triggerAsyncAnalysis(taskId, analysisId, storagePath, hint);
+
+        log.info("户型图分析任务已创建，analysisId={}，taskId={}", analysisId, taskId);
+        return Map.of("analysisId", analysisId, "taskId", taskId);
+    }
+
+    /**
+     * 接口 2：查询分析状态与空间列表。
+     *
+     * <p>v3.0 §4.5 补充要求：analysis 表不做独立收割——若 JVM 崩溃，async_task 会被
+     * AsyncTaskReaper 收割标 failed，而 analysis 行可能永远停在 analyzing。本方法在返回前
+     * 以 task 状态为准同步校正 analysis 状态（task=failed → analysis=failed + error_message 透传）。</p>
+     *
+     * @param analysisId 分析批次 ID
+     * @return 分析详情（含未软删空间列表，按 sort_order 升序）
+     */
+    public FloorPlanAnalysisResponse getAnalysis(String analysisId) {
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+        syncStatusFromTask(analysis);
+
+        List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
+            .eq("analysis_id", analysisId)
+            .orderByAsc("sort_order"));
+        return toResponse(analysis, rooms);
+    }
+
+    /**
+     * 接口 3：人工校正，整体替换语义——提交的列表为最终生效数据
+     * （带 roomId 就地更新、不带 roomId 新增、未提交的已识别空间软删），状态 → confirmed。
+     *
+     * <p>人工校正后尺寸来源一律为 manual、置信度 high（v3.0 §4.4）。</p>
+     *
+     * @param analysisId 分析批次 ID
+     * @param request    校正后的空间列表 + 可选比例尺
+     * @return 校正后的分析详情
+     */
+    @Transactional
+    public FloorPlanAnalysisResponse confirmRooms(String analysisId, FloorPlanConfirmRequest request) {
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+        // 状态机：仅识别完成待确认（或已确认后再次修改）可提交校正
+        if (!STATUS_AWAITING_CONFIRM.equals(analysis.getStatus())
+            && !STATUS_CONFIRMED.equals(analysis.getStatus())) {
+            throw new BusinessException("当前状态不允许人工校正（仅识别完成待确认后可提交），当前状态: " + analysis.getStatus());
+        }
+
+        List<FloorPlanRoom> existingRooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
+            .eq("analysis_id", analysisId));
+        Map<String, FloorPlanRoom> existingMap = existingRooms.stream()
+            .collect(Collectors.toMap(FloorPlanRoom::getRoomId, Function.identity()));
+
+        List<FloorPlanConfirmRequest.RoomItem> items = request.getRooms() != null
+            ? request.getRooms() : List.of();
+        Set<String> submittedIds = new HashSet<>();
+        for (FloorPlanConfirmRequest.RoomItem item : items) {
+            if (StringUtils.hasText(item.getRoomId())) {
+                if (!existingMap.containsKey(item.getRoomId())) {
+                    throw new BusinessException("空间不存在或不属于该分析: " + item.getRoomId());
+                }
+                submittedIds.add(item.getRoomId());
+            }
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        // 未提交的已识别空间视为误识别，软删（@TableLogic 语义：就地置 deleted_at）
+        for (FloorPlanRoom room : existingRooms) {
+            if (!submittedIds.contains(room.getRoomId())) {
+                room.setDeletedAt(now);
+                roomMapper.updateById(room);
+            }
+        }
+
+        int sort = 0;
+        for (FloorPlanConfirmRequest.RoomItem item : items) {
+            String roomType = normalizeRoomType(item.getRoomType());
+            BigDecimal areaM2 = computeAreaM2(item.getWidthMm(), item.getDepthMm());
+            String bboxJson = toJson(item.getBbox());
+            if (StringUtils.hasText(item.getRoomId())) {
+                FloorPlanRoom room = existingMap.get(item.getRoomId());
+                room.setRoomType(roomType);
+                room.setWidthMm(item.getWidthMm());
+                room.setDepthMm(item.getDepthMm());
+                room.setAreaM2(areaM2);
+                room.setBbox(bboxJson);
+                room.setDimensionSource(DIM_SOURCE_MANUAL);
+                room.setDimensionConfidence(CONFIDENCE_HIGH);
+                room.setSortOrder(sort);
+                room.setUpdatedAt(now);
+                roomMapper.updateById(room);
+            } else {
+                FloorPlanRoom room = new FloorPlanRoom();
+                room.setRoomId(IdGenerator.floorPlanRoomId());
+                room.setAnalysisId(analysisId);
+                room.setRoomType(roomType);
+                room.setWidthMm(item.getWidthMm());
+                room.setDepthMm(item.getDepthMm());
+                room.setAreaM2(areaM2);
+                room.setBbox(bboxJson);
+                room.setDimensionSource(DIM_SOURCE_MANUAL);
+                room.setDimensionConfidence(CONFIDENCE_HIGH);
+                room.setSortOrder(sort);
+                room.setCreatedAt(now);
+                room.setUpdatedAt(now);
+                roomMapper.insert(room);
+            }
+            sort++;
+        }
+
+        analysis.setStatus(STATUS_CONFIRMED);
+        analysis.setConfirmedRooms(toJson(items));
+        if (request.getScaleRatio() != null) {
+            analysis.setScaleRatio(request.getScaleRatio());
+        }
+        analysis.setUpdatedAt(now);
+        analysisMapper.updateById(analysis);
+        auditLogService.logUpdate("floor_plan_analysis", analysisId, null, analysis,
+            SecurityOperatorContext.currentUsername());
+
+        List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
+            .eq("analysis_id", analysisId)
+            .orderByAsc("sort_order"));
+        return toResponse(analysis, rooms);
+    }
+
+    /**
+     * 接口 5：软删分析批次（@TableLogic 模式），级联软删其下空间明细。
+     *
+     * @param analysisId 分析批次 ID
+     */
+    @Transactional
+    public void deleteAnalysis(String analysisId) {
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+
+        roomMapper.delete(new QueryWrapper<FloorPlanRoom>().eq("analysis_id", analysisId));
+        analysisMapper.deleteById(analysisId);
+        auditLogService.logDelete("floor_plan_analysis", analysisId, analysis,
+            SecurityOperatorContext.currentUsername());
+        log.info("户型图分析已软删，analysisId={}", analysisId);
+    }
+
+    /**
+     * 尺寸三级提取并落空间明细（由 {@link AsyncTaskProcessor#processFloorPlanAnalysis} 调用，
+     * v3.0 §4.4「尺寸三级优先级在 FloorPlanService 内实现」）：
+     *
+     * <ol>
+     *   <li>图上尺寸标注 OCR：dimensionText 经 {@link Dimensions} 解析，source=ocr_text / high；</li>
+     *   <li>比例尺换算：scaleText 像素换算为 P1 范围，当前跳过；</li>
+     *   <li>AI 估算：无标注时按常见户型经验轻量估算，source=ai_estimate / low；
+     *       估算也失败则尺寸留空、confidence=low，由人工校正兜底。</li>
+     * </ol>
+     *
+     * @param analysisId 分析批次 ID
+     * @param detected   AI 空间识别结果
+     */
+    public void buildRooms(String analysisId, FloorPlanDetectResult detected) {
+        LocalDateTime now = LocalDateTime.now();
+        int sortOrder = 0;
+        for (FloorPlanDetectResult.Room detectedRoom : detected.getRooms()) {
+            FloorPlanRoom room = new FloorPlanRoom();
+            room.setRoomId(IdGenerator.floorPlanRoomId());
+            room.setAnalysisId(analysisId);
+            room.setRoomType(normalizeRoomType(detectedRoom.getRoomType()));
+            room.setDimensionText(detectedRoom.getDimensionText());
+            if (detectedRoom.getX() != null && detectedRoom.getY() != null
+                && detectedRoom.getW() != null && detectedRoom.getH() != null) {
+                room.setBbox(toJson(new FloorPlanBBox(detectedRoom.getX(), detectedRoom.getY(),
+                    detectedRoom.getW(), detectedRoom.getH())));
+            }
+
+            int[] dims = Dimensions.parseDimensionMm(detectedRoom.getDimensionText());
+            if (dims != null) {
+                // 第①级：图上尺寸标注 OCR
+                room.setDimensionSource(DIM_SOURCE_OCR);
+                room.setDimensionConfidence(CONFIDENCE_HIGH);
+            } else {
+                // 第③级：AI 估算（第②级比例尺换算为 P1，当前跳过）
+                dims = estimateRoomDimensions(room.getRoomType(), detectedRoom.getLabel());
+                if (dims != null) {
+                    room.setDimensionSource(DIM_SOURCE_AI_ESTIMATE);
+                }
+                room.setDimensionConfidence(CONFIDENCE_LOW);
+            }
+            if (dims != null) {
+                room.setWidthMm(dims[0]);
+                room.setDepthMm(dims[1]);
+                room.setAreaM2(computeAreaM2(dims[0], dims[1]));
+            }
+
+            room.setSortOrder(sortOrder++);
+            room.setCreatedAt(now);
+            room.setUpdatedAt(now);
+            roomMapper.insert(room);
+        }
+    }
+
+    /**
+     * 以 task 状态为准同步校正 analysis 状态（v3.0 §4.5）：
+     * 仅对非终态（pending/analyzing）生效，task=failed → analysis=failed + error_message 透传。
+     */
+    private void syncStatusFromTask(FloorPlanAnalysis analysis) {
+        if (!STATUS_PENDING.equals(analysis.getStatus()) && !STATUS_ANALYZING.equals(analysis.getStatus())) {
+            return;
+        }
+        if (!StringUtils.hasText(analysis.getTaskId())) {
+            return;
+        }
+        AsyncTask task = asyncTaskMapper.selectById(analysis.getTaskId());
+        if (task != null && STATUS_FAILED.equals(task.getStatus())) {
+            analysis.setStatus(STATUS_FAILED);
+            analysis.setErrorMessage(task.getErrorMessage());
+            analysis.setUpdatedAt(LocalDateTime.now());
+            analysisMapper.updateById(analysis);
+            log.info("户型图分析状态按任务状态校正为 failed，analysisId={}", analysis.getAnalysisId());
+        }
+    }
+
+    /**
+     * 尺寸三级提取第③级：AI 按空间类型估算开间/进深（轻量文本调用），失败返回 null。
+     */
+    private int[] estimateRoomDimensions(String roomType, String label) {
+        try {
+            String roomDesc = StringUtils.hasText(label) ? label : roomType;
+            String json = visionService.chatText(ESTIMATE_SYSTEM_PROMPT,
+                "请估算空间「" + roomDesc + "」的开间和进深。");
+            JsonNode node = objectMapper.readTree(json);
+            JsonNode width = node.get("widthMm");
+            JsonNode depth = node.get("depthMm");
+            if (width != null && width.isNumber() && depth != null && depth.isNumber()
+                && width.asInt() > 0 && depth.asInt() > 0) {
+                return new int[] {width.asInt(), depth.asInt()};
+            }
+            log.warn("AI 尺寸估算输出格式不符，按无尺寸处理，roomType={}，json={}", roomType, json);
+        } catch (Exception e) {
+            log.warn("AI 尺寸估算失败，按无尺寸处理，roomType={}", roomType, e);
+        }
+        return null;
+    }
+
+    /**
+     * 归属校验：平台运营人员（ADMIN/EDITOR）可访问任意分析，其他用户仅能访问自己创建的
+     * （与 async_task 同口径，v3.0 §3 数据归属）。
+     */
+    private void assertCanAccess(FloorPlanAnalysis analysis) {
+        if (!SecurityOperatorContext.isPlatformStaff()) {
+            String currentUser = SecurityOperatorContext.currentUsername();
+            String creator = analysis.getCreatedBy();
+            if (creator == null || !creator.equals(currentUser)) {
+                throw new ResourceNotFoundException("户型图分析不存在: " + analysis.getAnalysisId());
+            }
+        }
+    }
+
+    /**
+     * 事务提交后触发异步分析（与 ProductService.triggerAsyncProcess 同模式）；
+     * 无活动事务时（如单元测试）直接调用。
+     */
+    private void triggerAsyncAnalysis(String taskId, String analysisId, String objectKey, String hint) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    asyncTaskProcessor.processFloorPlanAnalysis(taskId, analysisId, objectKey, hint);
+                }
+            });
+        } else {
+            asyncTaskProcessor.processFloorPlanAnalysis(taskId, analysisId, objectKey, hint);
+        }
+    }
+
+    /**
+     * 注册事务回滚清理：事务回滚时删除已写入存储的户型图，避免孤儿文件。
+     */
+    private void registerStorageRollbackCleanup(String objectKey) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status != STATUS_ROLLED_BACK) {
+                    return;
+                }
+                try {
+                    storageService.delete(objectKey);
+                } catch (IOException e) {
+                    log.warn("事务回滚后清理户型图失败: {}", objectKey, e);
+                }
+            }
+        });
+    }
+
+    private FloorPlanAnalysisResponse toResponse(FloorPlanAnalysis analysis, List<FloorPlanRoom> rooms) {
+        FloorPlanAnalysisResponse response = new FloorPlanAnalysisResponse();
+        response.setAnalysisId(analysis.getAnalysisId());
+        response.setImageId(analysis.getImageId());
+        response.setImageUrl(analysis.getImageId() != null ? "/api/v1/images/" + analysis.getImageId() : null);
+        response.setStatus(analysis.getStatus());
+        response.setTaskId(analysis.getTaskId());
+        response.setScaleRatio(analysis.getScaleRatio());
+        response.setSource(analysis.getSource());
+        response.setErrorMessage(analysis.getErrorMessage());
+        response.setCreatedBy(analysis.getCreatedBy());
+        response.setCreatedAt(analysis.getCreatedAt());
+        response.setUpdatedAt(analysis.getUpdatedAt());
+        List<FloorPlanRoomResponse> roomResponses = new ArrayList<>();
+        for (FloorPlanRoom room : rooms) {
+            roomResponses.add(toRoomResponse(room));
+        }
+        response.setRooms(roomResponses);
+        return response;
+    }
+
+    private FloorPlanRoomResponse toRoomResponse(FloorPlanRoom room) {
+        FloorPlanRoomResponse response = new FloorPlanRoomResponse();
+        response.setRoomId(room.getRoomId());
+        response.setRoomType(room.getRoomType());
+        response.setBbox(parseBBox(room.getBbox()));
+        response.setWidthMm(room.getWidthMm());
+        response.setDepthMm(room.getDepthMm());
+        response.setAreaM2(room.getAreaM2());
+        response.setDimensionSource(room.getDimensionSource());
+        response.setDimensionConfidence(room.getDimensionConfidence());
+        response.setDimensionText(room.getDimensionText());
+        response.setSortOrder(room.getSortOrder());
+        return response;
+    }
+
+    private FloorPlanBBox parseBBox(String bboxJson) {
+        if (!StringUtils.hasText(bboxJson)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(bboxJson, FloorPlanBBox.class);
+        } catch (Exception e) {
+            log.warn("解析空间 bbox 失败，按无框处理，bbox={}", bboxJson, e);
+            return null;
+        }
+    }
+
+    /**
+     * 空间类型归一：AI 枚举（living_room 等）映射为 room_type 字典码（LIVING_ROOM 等），
+     * 其余大写化，空值兜底 OTHER。
+     */
+    private String normalizeRoomType(String roomType) {
+        if (!StringUtils.hasText(roomType)) {
+            return "OTHER";
+        }
+        return switch (roomType.trim().toLowerCase()) {
+            case "living_room" -> "LIVING_ROOM";
+            case "dining_room" -> "DINING_ROOM";
+            case "study" -> "STUDY_ROOM";
+            default -> roomType.trim().toUpperCase();
+        };
+    }
+
+    /**
+     * 计算面积（平方米，两位小数）；尺寸缺失或非正数返回 null。
+     *
+     * @param widthMm 开间 mm
+     * @param depthMm 进深 mm
+     * @return 面积（㎡）
+     */
+    public static BigDecimal computeAreaM2(Integer widthMm, Integer depthMm) {
+        if (widthMm == null || depthMm == null || widthMm <= 0 || depthMm <= 0) {
+            return null;
+        }
+        return BigDecimal.valueOf((long) widthMm * depthMm)
+            .divide(BigDecimal.valueOf(1_000_000L), 2, RoundingMode.HALF_UP);
+    }
+
+    private String toJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.warn("JSON 序列化失败", e);
+            return null;
+        }
+    }
+
+    private String getExtension(String filename) {
+        if (filename == null || filename.lastIndexOf(".") == -1) {
+            return "";
+        }
+        return filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
+    }
+}

@@ -170,6 +170,13 @@ export const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
   },
   {
+    // 户型图搭配四步向导：上传识别（product:read 登录即可）+ 生成方案（scheme:create 在接口层拦截），页面级仅要求登录
+    path: '/floor-plan',
+    name: 'FloorPlanEntry',
+    component: () => import('@/views/FloorPlanEntryView.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/visual-search',
     name: 'VisualSearch',
     component: () => import('@/views/VisualSearchView.vue'),

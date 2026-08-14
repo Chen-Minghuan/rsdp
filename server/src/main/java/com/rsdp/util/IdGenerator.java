@@ -86,6 +86,24 @@ public final class IdGenerator {
     }
 
     /**
+     * 生成户型图分析批次主键。
+     *
+     * @return {@code FPA-<完整 UUID>}
+     */
+    public static String floorPlanAnalysisId() {
+        return generate("FPA");
+    }
+
+    /**
+     * 生成户型图空间明细主键。
+     *
+     * @return {@code FPR-<完整 UUID>}
+     */
+    public static String floorPlanRoomId() {
+        return generate("FPR");
+    }
+
+    /**
      * 生成通用批次主键。
      *
      * @return {@code BATCH-<完整 UUID>}

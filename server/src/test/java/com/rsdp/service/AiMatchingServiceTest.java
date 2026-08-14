@@ -281,6 +281,111 @@ class AiMatchingServiceTest {
         assertThat(response.getReasoning()).contains("格式异常");
     }
 
+    @Test
+    void generateRoomScheme_withDimensions_shouldInjectDimensionContextIntoPrompt() throws Exception {
+        RspuMaster sofa = new RspuMaster();
+        sofa.setRspuId("RSPU-SF");
+        sofa.setCategoryCode("SF");
+        sofa.setPositioningLabel("现代简约");
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-SF");
+        rsku.setRspuId("RSPU-SF");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("2500"));
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        factory.setFactoryName("测试工厂");
+
+        when(rskuSupplyMapper.selectCapableByRspuIds(any())).thenReturn(List.of(rsku));
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of(factory));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING", "客厅")));
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("MC", "中古风")));
+
+        AiSchemeRecommendation rec = new AiSchemeRecommendation();
+        rec.setRspuIds(List.of("RSPU-SF"));
+        rec.setReasoning("风格统一");
+        when(visionService.chatText(any(), any())).thenReturn(objectMapper.writeValueAsString(rec));
+
+        RoomSchemeRequest request = new RoomSchemeRequest();
+        request.setRoomType("LIVING");
+        request.setBudgetLimit(new BigDecimal("10000"));
+        request.setStylePreference("MC");
+        request.setWidthMm(4200);
+        request.setDepthMm(3800);
+
+        // 重载：候选由调用方（规则引擎）提供，不应再触发候选取数
+        RoomSchemeResponse response = aiMatchingService.generateRoomScheme(request, List.of(sofa));
+
+        org.mockito.ArgumentCaptor<String> promptCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(visionService).chatText(any(), promptCaptor.capture());
+        String prompt = promptCaptor.getValue();
+        assertThat(prompt).contains("4200mm × 3800mm");
+        assertThat(prompt).contains("16.0㎡");
+        assertThat(prompt).contains("均已通过尺寸校验");
+        assertThat(prompt).contains("品类：SF");
+        org.mockito.Mockito.verify(rspuMapper, org.mockito.Mockito.never()).selectList(any());
+        assertThat(response.getItems()).hasSize(1);
+    }
+
+    @Test
+    void generateRoomScheme_llmReturnsEmpty_shouldFallbackToRuleBasedSelection() throws Exception {
+        RspuMaster sofa = new RspuMaster();
+        sofa.setRspuId("RSPU-SF");
+        sofa.setCategoryCode("SF");
+        sofa.setPositioningLabel("现代简约");
+        RspuMaster teaTable = new RspuMaster();
+        teaTable.setRspuId("RSPU-TB");
+        teaTable.setCategoryCode("TB");
+        teaTable.setPositioningLabel("现代简约");
+        RspuMaster chair1 = new RspuMaster();
+        chair1.setRspuId("RSPU-FS1");
+        chair1.setCategoryCode("FS");
+        RspuMaster chair2 = new RspuMaster();
+        chair2.setRspuId("RSPU-FS2");
+        chair2.setCategoryCode("FS");
+        RspuMaster chair3 = new RspuMaster();
+        chair3.setRspuId("RSPU-FS3");
+        chair3.setCategoryCode("FS");
+
+        List<RspuMaster> candidates = List.of(sofa, teaTable, chair1, chair2, chair3);
+        // 每个候选一条可报价 RSKU
+        when(rskuSupplyMapper.selectCapableByRspuIds(any())).thenAnswer(invocation -> {
+            List<RskuSupply> result = new java.util.ArrayList<>();
+            for (RspuMaster rspu : candidates) {
+                RskuSupply rsku = new RskuSupply();
+                rsku.setRskuId("RSKU-" + rspu.getRspuId());
+                rsku.setRspuId(rspu.getRspuId());
+                rsku.setFactoryCode("F001");
+                rsku.setFactoryPrice(new BigDecimal("1000"));
+                result.add(rsku);
+            }
+            return result;
+        });
+        when(factoryMasterMapper.selectBatchIds(any())).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(dictService.listByType("room_type")).thenReturn(List.of(createDict("LIVING", "客厅")));
+
+        // LLM 返回空数组 → 规则兜底：每品类取最前者（SF×1 + TB×1 + FS×2）
+        when(visionService.chatText(any(), any()))
+            .thenReturn("{\"rspuIds\": [], \"reasoning\": \"没有合适组合\"}");
+
+        RoomSchemeRequest request = new RoomSchemeRequest();
+        request.setRoomType("LIVING");
+        request.setBudgetLimit(new BigDecimal("10000"));
+        request.setWidthMm(4200);
+        request.setDepthMm(3800);
+
+        RoomSchemeResponse response = aiMatchingService.generateRoomScheme(request, candidates);
+
+        assertThat(response.getItems())
+            .extracting(com.rsdp.dto.response.SchemeItemResponse::getRspuId)
+            .containsExactly("RSPU-SF", "RSPU-TB", "RSPU-FS1", "RSPU-FS2");
+        assertThat(response.getReasoning()).contains("规则推荐");
+    }
+
     private CategoryDict createDict(String code, String name) {
         CategoryDict dict = new CategoryDict();
         dict.setDictCode(code);

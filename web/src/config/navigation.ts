@@ -182,6 +182,12 @@ export const navGroups: NavGroup[] = [
         path: '/matching/room-scheme',
         permission: PERMISSIONS.PRODUCT_READ,
         activeMatch: 'prefix'
+      },
+      {
+        // 户型图搭配：登录即可上传识别（与后端 analyze 接口 product:read 一致），不设权限门槛
+        key: 'floor-plan',
+        label: '户型图搭配',
+        path: '/floor-plan'
       }
     ]
   },

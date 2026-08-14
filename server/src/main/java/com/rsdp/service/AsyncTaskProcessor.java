@@ -3,11 +3,14 @@ package com.rsdp.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.Dimensions;
+import com.rsdp.dto.FloorPlanDetectResult;
 import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.StyleMatchResult;
 import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.FloorPlanAnalysis;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.FloorPlanAnalysisMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.chroma.ChromaMetadataBuilder;
@@ -15,6 +18,7 @@ import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.OcrPostProcessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -50,6 +54,11 @@ public class AsyncTaskProcessor {
     private final StyleMatchingService styleMatchingService;
     private final RspuVariantService rspuVariantService;
     private final ProductSubjectCropService subjectCropService;
+    private final FloorPlanAnalysisMapper floorPlanAnalysisMapper;
+    /**
+     * 户型图分析服务（延迟解析，打破 FloorPlanService ↔ AsyncTaskProcessor 循环依赖）。
+     */
+    private final ObjectProvider<FloorPlanService> floorPlanServiceProvider;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.ai.model}")
@@ -226,6 +235,81 @@ public class AsyncTaskProcessor {
                 safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
                 safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
             }
+        }
+    }
+
+    /**
+     * 异步处理户型图分析任务：AI 识别空间划分与尺寸标注，落 floor_plan_room 明细。
+     *
+     * <p>照 {@link #processProductEntry} 模式：claimPendingTask 原子认领；
+     * AI 调用在事务外执行，DB 写入直接走 Mapper 短操作。尺寸三级提取与空间明细落库
+     * 收敛在 {@link FloorPlanService#buildRooms}（OCR 标注解析 high → AI 估算 low →
+     * 留空待人工校正；比例尺换算为 P1 范围）。</p>
+     *
+     * @param taskId     任务 ID
+     * @param analysisId 户型图分析批次 ID
+     * @param objectKey  户型原图存储对象键
+     * @param hint       用户补充说明，可空
+     */
+    @Async("taskExecutor")
+    public void processFloorPlanAnalysis(String taskId, String analysisId, String objectKey, String hint) {
+        log.info("开始异步处理户型图分析任务，taskId={}，analysisId={}", taskId, analysisId);
+        // 原子认领任务：仅 pending 状态可置为 processing，防止多执行器并发重复处理同一任务
+        if (asyncTaskMapper.claimPendingTask(taskId) == 0) {
+            log.warn("任务已被认领或不处于 pending 状态，跳过处理，taskId={}", taskId);
+            return;
+        }
+
+        safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_ANALYZING, null, null);
+
+        byte[] imageBytes;
+        try (InputStream imageStream = storageService.get(objectKey)) {
+            imageBytes = imageStream.readAllBytes();
+        } catch (Exception e) {
+            log.error("读取户型图失败，taskId={}，analysisId={}", taskId, analysisId, e);
+            safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_FAILED, null, "读取户型图失败: " + e.getMessage());
+            safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+            return;
+        }
+
+        try {
+            FloorPlanDetectResult detected = visionService.detectFloorPlanRooms(imageBytes, hint);
+            updateTaskStatus(taskId, "processing", 60, null, null);
+
+            // 尺寸三级提取 + 空间明细落库：v3.0 §4.4 收敛在 FloorPlanService 内实现（唯一出口）
+            floorPlanServiceProvider.getObject().buildRooms(analysisId, detected);
+
+            String rawResult = objectMapper.writeValueAsString(detected);
+            safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_AWAITING_CONFIRM, rawResult, null);
+            updateTaskStatus(taskId, "done", 100, null, null);
+            log.info("户型图分析异步任务完成，taskId={}，analysisId={}，识别空间数={}",
+                taskId, analysisId, detected.getRooms().size());
+        } catch (Exception e) {
+            log.error("户型图空间识别失败，taskId={}，analysisId={}", taskId, analysisId, e);
+            safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_FAILED, null, e.getMessage());
+            safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+        }
+    }
+
+    /**
+     * 更新户型图分析状态；自身失败不中断任务状态更新。
+     */
+    private void safeUpdateAnalysis(String analysisId, String status, String rawResult, String errorMessage) {
+        try {
+            FloorPlanAnalysis analysis = floorPlanAnalysisMapper.selectById(analysisId);
+            if (analysis == null) {
+                log.warn("户型图分析记录不存在，analysisId={}", analysisId);
+                return;
+            }
+            analysis.setStatus(status);
+            if (rawResult != null) {
+                analysis.setRawResult(rawResult);
+            }
+            analysis.setErrorMessage(errorMessage);
+            analysis.setUpdatedAt(LocalDateTime.now());
+            floorPlanAnalysisMapper.updateById(analysis);
+        } catch (Exception ex) {
+            log.error("更新户型图分析状态异常，analysisId={}", analysisId, ex);
         }
     }
 

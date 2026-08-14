@@ -31,6 +31,9 @@ public class Scheme {
     private String projectId;
     private Boolean isTemplate;
 
+    /** 来源户型图分析批次（V36，方案溯源），可空。 */
+    private String analysisId;
+
     @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String templateTags;

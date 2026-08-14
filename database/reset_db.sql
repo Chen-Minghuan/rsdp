@@ -62,6 +62,8 @@ DROP TABLE IF EXISTS platform_content CASCADE;
 DROP TABLE IF EXISTS platform_custom_dict CASCADE;
 DROP TABLE IF EXISTS platform_customized CASCADE;
 DROP TABLE IF EXISTS platform_lead CASCADE;
+DROP TABLE IF EXISTS floor_plan_room CASCADE;
+DROP TABLE IF EXISTS floor_plan_analysis CASCADE;
 DROP TABLE IF EXISTS project CASCADE;
 DROP TABLE IF EXISTS design_order_item CASCADE;
 DROP TABLE IF EXISTS design_order CASCADE;
@@ -519,6 +521,7 @@ CREATE TABLE IF NOT EXISTS scheme (
     project_id VARCHAR(64),
     is_template BOOLEAN NOT NULL DEFAULT false,
     template_tags TEXT,
+    analysis_id VARCHAR(64),
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
@@ -569,6 +572,45 @@ CREATE TABLE IF NOT EXISTS async_task (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );
+
+-- 户型图分析批次表（V36 并入：一次上传一条）
+CREATE TABLE IF NOT EXISTS floor_plan_analysis (
+    analysis_id      VARCHAR(64) PRIMARY KEY,
+    image_id         VARCHAR(64) NOT NULL,
+    status           VARCHAR(16) NOT NULL DEFAULT 'pending',
+    task_id          VARCHAR(64),
+    raw_result       JSONB,
+    confirmed_rooms  JSONB,
+    scale_ratio      DECIMAL(10,4),
+    source           VARCHAR(16) NOT NULL DEFAULT 'admin',
+    error_message    TEXT,
+    created_by       VARCHAR(64),
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP,
+    deleted_at       TIMESTAMP,
+    FOREIGN KEY (image_id) REFERENCES image_assets(image_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fpa_created_by ON floor_plan_analysis(created_by, created_at) WHERE deleted_at IS NULL;
+
+-- 户型图空间识别明细表（V36 并入）
+CREATE TABLE IF NOT EXISTS floor_plan_room (
+    room_id          VARCHAR(64) PRIMARY KEY,
+    analysis_id      VARCHAR(64) NOT NULL,
+    room_type        VARCHAR(32) NOT NULL,
+    bbox             JSONB,
+    width_mm         INTEGER,
+    depth_mm         INTEGER,
+    area_m2          DECIMAL(8,2),
+    dimension_source VARCHAR(16),
+    dimension_confidence VARCHAR(8) DEFAULT 'low',
+    dimension_text   VARCHAR(128),
+    sort_order       INTEGER DEFAULT 0,
+    deleted_at       TIMESTAMP,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP,
+    FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fpr_analysis ON floor_plan_room(analysis_id) WHERE deleted_at IS NULL;
 
 -- Excel AI 辅助导入批次表
 CREATE TABLE IF NOT EXISTS excel_import_batch (

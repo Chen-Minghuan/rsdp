@@ -429,6 +429,7 @@ CREATE TABLE IF NOT EXISTS scheme (
     project_id VARCHAR(64),                          -- 所属设计项目（V4 并入）
     is_template BOOLEAN NOT NULL DEFAULT false,      -- 是否为方案模板（V4 并入）
     template_tags TEXT,                              -- 模板标签 JSON 数组（V4 并入）
+    analysis_id VARCHAR(64),                         -- 来源户型图分析批次，可空（V36 并入）
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
@@ -479,6 +480,45 @@ CREATE TABLE IF NOT EXISTS async_task (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );
+
+-- 户型图分析批次表（V36 并入：一次上传一条）
+CREATE TABLE IF NOT EXISTS floor_plan_analysis (
+    analysis_id      VARCHAR(64) PRIMARY KEY,
+    image_id         VARCHAR(64) NOT NULL,             -- 户型原图，指向 image_assets
+    status           VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending/analyzing/awaiting_confirm/confirmed/failed
+    task_id          VARCHAR(64),                      -- 关联 async_task
+    raw_result       JSONB,                            -- AI 原始识别结果（不动，留档）
+    confirmed_rooms  JSONB,                            -- 人工校正后的空间列表（最终生效数据）
+    scale_ratio      DECIMAL(10,4),                    -- 识别/人工确认的比例尺（像素:实际mm），可空
+    source           VARCHAR(16) NOT NULL DEFAULT 'admin',  -- admin（管理端）/ public（官网匿名）
+    error_message    TEXT,
+    created_by       VARCHAR(64),                      -- 官网匿名来源可空
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP,
+    deleted_at       TIMESTAMP,
+    FOREIGN KEY (image_id) REFERENCES image_assets(image_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fpa_created_by ON floor_plan_analysis(created_by, created_at) WHERE deleted_at IS NULL;
+
+-- 户型图空间识别明细表（V36 并入：每个识别出的空间一行，人工校正就地更新）
+CREATE TABLE IF NOT EXISTS floor_plan_room (
+    room_id          VARCHAR(64) PRIMARY KEY,
+    analysis_id      VARCHAR(64) NOT NULL,
+    room_type        VARCHAR(32) NOT NULL,             -- 引用 room_type 字典（LIVING_ROOM/BEDROOM/...）
+    bbox             JSONB,                            -- {x, y, w, h} 归一化坐标 [0,1]
+    width_mm         INTEGER,                          -- 开间（人工校正后为准）
+    depth_mm         INTEGER,                          -- 进深
+    area_m2          DECIMAL(8,2),
+    dimension_source VARCHAR(16),                      -- ocr_text / scale_calc / ai_estimate / manual
+    dimension_confidence VARCHAR(8) DEFAULT 'low',     -- high/mid/low
+    dimension_text   VARCHAR(128),                     -- 图上尺寸标注原文
+    sort_order       INTEGER DEFAULT 0,
+    deleted_at       TIMESTAMP,                        -- 人工删除误识别空间
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP,
+    FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fpr_analysis ON floor_plan_room(analysis_id) WHERE deleted_at IS NULL;
 
 -- Excel AI 辅助导入批次表
 CREATE TABLE IF NOT EXISTS excel_import_batch (

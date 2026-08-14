@@ -134,10 +134,17 @@ public class ImageService {
 
     /**
      * 断言当前登录用户可访问指定图片。
+     *
+     * <p>户型原图（image_type=floor_plan，不关联 RSPU/RSKU）：登录用户即可访问
+     * （管理端户型分析页回显场景；图片 ID 为完整 UUID 不可枚举，分析数据本身的
+     * 归属隔离由 FloorPlanService 负责）。</p>
      */
     private void assertLoggedInUserCanAccess(ImageAssets imageAsset) {
         if (!SecurityOperatorContext.isAuthenticated()) {
             throw new ResourceNotFoundException("图片不存在: " + imageAsset.getImageId());
+        }
+        if ("floor_plan".equals(imageAsset.getImageType())) {
+            return;
         }
         String rspuId = imageAsset.getRspuId();
         if (StringUtils.hasText(rspuId) && dataScopeHelper.canAccessRspu(rspuId)) {

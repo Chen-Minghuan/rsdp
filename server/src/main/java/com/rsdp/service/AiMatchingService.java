@@ -102,6 +102,49 @@ public class AiMatchingService {
     }
 
     /**
+     * 生成 AI 搭配方案（候选由调用方经尺寸硬规则预筛，户型图链路 v3.0 §5.3）。
+     *
+     * <p>与 {@link #generateRoomScheme(RoomSchemeRequest)} 的差异：</p>
+     * <ul>
+     *   <li>候选列表由调用方提供（已过 RoomDimensionRules R1~R5），不再自行取数；</li>
+     *   <li>request 携带 widthMm/depthMm 时，prompt 注入空间尺寸上下文，
+     *       告知 LLM 候选均已通过尺寸校验、只需判断搭配协调性；</li>
+     *   <li>LLM 返回空（或解析失败）时按规则兜底：候选已按风格匹配分 + 创建时间排序，
+     *       每品类取最前者组合（SF×1 / TB×1 / FC×1 / FS×2），reasoning 注明规则推荐，
+     *       保证永远有结果。</li>
+     * </ul>
+     *
+     * @param request    请求（含可选空间尺寸）
+     * @param candidates 尺寸合规的候选产品（按风格分降序 + 创建时间降序）
+     * @return 搭配方案
+     */
+    public RoomSchemeResponse generateRoomScheme(RoomSchemeRequest request, List<RspuMaster> candidates) {
+        String roomTypeName = getDictName("room_type", request.getRoomType());
+
+        String prompt = buildPrompt(
+            roomTypeName,
+            request.getBudgetLimit(),
+            getDictName("style", request.getStylePreference()),
+            candidates,
+            request.getWidthMm(),
+            request.getDepthMm()
+        );
+
+        String aiJson = visionService.chatText(SYSTEM_PROMPT, prompt);
+        AiSchemeRecommendation recommendation = parseRecommendation(aiJson);
+        if (recommendation.getRspuIds() == null || recommendation.getRspuIds().isEmpty()) {
+            recommendation = ruleFallback(candidates);
+        }
+
+        return buildResponse(
+            request.getRoomType(),
+            request.getBudgetLimit(),
+            recommendation,
+            candidates
+        );
+    }
+
+    /**
      * 以某个产品为锚点，推荐目标品类下的搭配产品。
      *
      * @param request 请求
@@ -167,13 +210,31 @@ public class AiMatchingService {
     }
 
     private String buildPrompt(String roomTypeName, BigDecimal budgetLimit, String styleName, List<RspuMaster> candidates) {
+        return buildPrompt(roomTypeName, budgetLimit, styleName, candidates, null, null);
+    }
+
+    /**
+     * 组装搭配终审 prompt；widthMm/depthMm 均非空时注入空间尺寸上下文（v3.0 §5.3），
+     * 并在候选行附品类码，便于 LLM 按「1 沙发 + 0~1 茶几 + 0~1 电视柜 + 0~2 休闲椅」选品。
+     */
+    private String buildPrompt(String roomTypeName, BigDecimal budgetLimit, String styleName,
+                               List<RspuMaster> candidates, Integer widthMm, Integer depthMm) {
         Map<String, BigDecimal> minPriceMap = batchMinPrices(
             candidates.stream().map(RspuMaster::getRspuId).toList()
         );
 
+        boolean withDimension = widthMm != null && depthMm != null;
         StringBuilder sb = new StringBuilder();
         sb.append("请为以下空间生成家具搭配方案。\n");
         sb.append("空间类型：").append(roomTypeName).append("\n");
+        if (withDimension) {
+            BigDecimal areaM2 = BigDecimal.valueOf((long) widthMm * depthMm)
+                .divide(BigDecimal.valueOf(1_000_000L), 1, java.math.RoundingMode.HALF_UP);
+            sb.append("空间尺寸：").append(widthMm).append("mm × ").append(depthMm)
+                .append("mm（约 ").append(areaM2).append("㎡）\n");
+            sb.append("请从候选产品列表中挑选一套客厅搭配：1 款沙发 + 0~1 款茶几 + 0~1 款电视柜 + 0~2 款休闲椅。\n");
+            sb.append("候选产品均已通过尺寸校验，你只需判断风格、颜色、材质的搭配协调性。\n");
+        }
         sb.append("预算上限：").append(budgetLimit).append(" 元\n");
         if (styleName != null && !styleName.isBlank()) {
             sb.append("风格偏好：").append(styleName).append("\n");
@@ -182,8 +243,11 @@ public class AiMatchingService {
 
         for (RspuMaster rspu : candidates) {
             BigDecimal minPrice = minPriceMap.get(rspu.getRspuId());
-            sb.append("- ").append(rspu.getRspuId())
-                .append(" | 风格：").append(rspu.getPositioningLabel())
+            sb.append("- ").append(rspu.getRspuId());
+            if (withDimension) {
+                sb.append(" | 品类：").append(rspu.getCategoryCode());
+            }
+            sb.append(" | 风格：").append(rspu.getPositioningLabel())
                 .append(" | 主色：").append(rspu.getColorPrimaryName())
                 .append(" | 材质：").append(rspu.getMaterialTags())
                 .append(" | 适用场景：").append(rspu.getSceneTags())
@@ -193,6 +257,39 @@ public class AiMatchingService {
 
         sb.append("\n请输出 JSON 格式的推荐结果。");
         return sb.toString();
+    }
+
+    /**
+     * 规则兜底（v3.0 §5.3 降级链）：LLM 返回空时，按客厅品类模板从候选中取每品类最前者
+     * （候选已由调用方按风格匹配分 + 创建时间排序），保证永远有结果。
+     *
+     * @param candidates 尺寸合规候选（已排序）
+     * @return 兜底推荐结果，reasoning 注明规则推荐
+     */
+    private AiSchemeRecommendation ruleFallback(List<RspuMaster> candidates) {
+        Map<String, Integer> maxPerCategory = Map.of("SF", 1, "TB", 1, "FC", 1, "FS", 2);
+        Map<String, Integer> picked = new java.util.HashMap<>();
+        List<String> selectedIds = new ArrayList<>();
+        for (RspuMaster candidate : candidates) {
+            String category = candidate.getCategoryCode();
+            Integer max = maxPerCategory.get(category);
+            if (max == null) {
+                continue;
+            }
+            int count = picked.getOrDefault(category, 0);
+            if (count >= max) {
+                continue;
+            }
+            picked.put(category, count + 1);
+            selectedIds.add(candidate.getRspuId());
+        }
+
+        AiSchemeRecommendation fallback = new AiSchemeRecommendation();
+        fallback.setRspuIds(selectedIds);
+        fallback.setReasoning(selectedIds.isEmpty()
+            ? "规则推荐：当前没有满足尺寸规则的候选产品，无法生成方案"
+            : "规则推荐：AI 未给出有效结果，已按尺寸合规与风格匹配分自动组合");
+        return fallback;
     }
 
     private Map<String, BigDecimal> batchMinPrices(List<String> rspuIds) {

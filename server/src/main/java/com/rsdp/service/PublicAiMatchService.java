@@ -3,7 +3,6 @@ package com.rsdp.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.FloorPlanDetectResult;
 import com.rsdp.dto.request.PublicAiMatchSchemeRequest;
-import com.rsdp.dto.request.RoomSchemeRequest;
 import com.rsdp.dto.response.PublicAiMatchAnalyzeResponse;
 import com.rsdp.dto.response.PublicAiMatchSchemeResponse;
 import com.rsdp.dto.response.RoomSchemeResponse;
@@ -13,6 +12,7 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.util.Dimensions;
 import com.rsdp.util.ImageUploadValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,8 +26,6 @@ import java.math.RoundingMode;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -47,14 +45,6 @@ public class PublicAiMatchService {
     /** 预算缺省值（视为不限预算，满足 RoomSchemeRequest @NotNull）。 */
     private static final BigDecimal DEFAULT_BUDGET_LIMIT = new BigDecimal("999999");
 
-    /** 毫米标注：4200×3800 / 4200*3800。 */
-    private static final Pattern DIM_MM_PATTERN =
-        Pattern.compile("(\\d{3,5})\\s*[×xX*]\\s*(\\d{3,5})");
-
-    /** 米标注：4.2m*3.8m / 4.2×3.8m。 */
-    private static final Pattern DIM_M_PATTERN =
-        Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*m\\s*[×xX*]\\s*(\\d+(?:\\.\\d+)?)\\s*m?");
-
     /** 空间类型枚举 → 中文名。 */
     private static final Map<String, String> ROOM_TYPE_NAMES = Map.of(
         "living_room", "客厅",
@@ -73,7 +63,7 @@ public class PublicAiMatchService {
 
     private final ImageUploadValidator imageUploadValidator;
     private final VisionService visionService;
-    private final AiMatchingService aiMatchingService;
+    private final FloorPlanMatchingService floorPlanMatchingService;
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
 
@@ -108,20 +98,21 @@ public class PublicAiMatchService {
     /**
      * 生成公开安全的 AI 搭配方案。
      *
-     * <p>内部复用 {@link AiMatchingService#generateRoomScheme}（固定客厅空间），
-     * 再将方案项回查 RSPU 展示字段与主图后脱敏输出。</p>
+     * <p>统一走 {@link FloorPlanMatchingService#matchRoomScheme}（双端唯一出口）：
+     * widthMm/depthMm 提供时尺寸硬规则 R1~R5 生效（修复此前组装内部请求时丢弃尺寸的
+     * 现网缺陷），缺失时退化为原 AI 选品行为。再将方案项回查 RSPU 展示字段与主图后
+     * 脱敏输出（仅零售参考价，绝不含工厂字段）。</p>
      *
      * @param request 搭配请求（风格/预算/尺寸均可空）
      * @return 公开搭配方案（仅零售参考价，无工厂字段）
      */
     public PublicAiMatchSchemeResponse generateScheme(PublicAiMatchSchemeRequest request) {
-        RoomSchemeRequest inner = new RoomSchemeRequest();
-        inner.setRoomType("LIVING");
-        inner.setBudgetLimit(request.getBudgetLimit() != null
-            ? request.getBudgetLimit() : DEFAULT_BUDGET_LIMIT);
-        inner.setStylePreference(request.getStylePreference());
-
-        RoomSchemeResponse scheme = aiMatchingService.generateRoomScheme(inner);
+        RoomSchemeResponse scheme = floorPlanMatchingService.matchRoomScheme(
+            request.getWidthMm(),
+            request.getDepthMm(),
+            request.getStylePreference(),
+            request.getBudgetLimit() != null ? request.getBudgetLimit() : DEFAULT_BUDGET_LIMIT
+        );
 
         List<SchemeItemResponse> schemeItems = scheme.getItems() != null
             ? scheme.getItems() : List.of();
@@ -171,7 +162,7 @@ public class PublicAiMatchService {
         item.setRoomName(roomName);
         item.setDimensionText(room.getDimensionText());
 
-        int[] dims = parseDimensionMm(room.getDimensionText());
+        int[] dims = Dimensions.parseDimensionMm(room.getDimensionText());
         if (dims != null) {
             item.setWidthMm(dims[0]);
             item.setDepthMm(dims[1]);
@@ -182,35 +173,6 @@ public class PublicAiMatchService {
             item.setConfidence(CONFIDENCE_LOW);
         }
         return item;
-    }
-
-    /**
-     * 从尺寸标注原文解析开间/进深（mm）。
-     *
-     * <p>优先匹配毫米标注（如 "4200×3800"、"4200*3800"），
-     * 其次匹配米标注（如 "4.2m*3.8m"、"4.2×3.8m"）并 ×1000 换算；
-     * 无法解析时返回 null。</p>
-     *
-     * @param dimensionText 尺寸标注原文，可空
-     * @return [widthMm, depthMm]，解析失败返回 null
-     */
-    static int[] parseDimensionMm(String dimensionText) {
-        if (!StringUtils.hasText(dimensionText)) {
-            return null;
-        }
-        Matcher mmMatcher = DIM_MM_PATTERN.matcher(dimensionText);
-        if (mmMatcher.find()) {
-            return new int[] {Integer.parseInt(mmMatcher.group(1)), Integer.parseInt(mmMatcher.group(2))};
-        }
-        Matcher mMatcher = DIM_M_PATTERN.matcher(dimensionText);
-        if (mMatcher.find()) {
-            int widthMm = BigDecimal.valueOf(Double.parseDouble(mMatcher.group(1)))
-                .multiply(BigDecimal.valueOf(1000)).intValue();
-            int depthMm = BigDecimal.valueOf(Double.parseDouble(mMatcher.group(2)))
-                .multiply(BigDecimal.valueOf(1000)).intValue();
-            return new int[] {widthMm, depthMm};
-        }
-        return null;
     }
 
     private Map<String, RspuMaster> batchRspuMap(List<String> rspuIds) {
