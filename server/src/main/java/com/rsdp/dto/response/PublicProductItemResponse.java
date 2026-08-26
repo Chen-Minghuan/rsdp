@@ -40,9 +40,6 @@ public class PublicProductItemResponse {
     /** 主图访问地址（/api/v1/images/{imageId}）。 */
     private String primaryImageUrl;
 
-    /** 场景图访问地址（image_type=scene，用于双视图切换）。 */
-    private String sceneImageUrl;
-
     /** 变体数量（颜色/尺寸组合数）。 */
     private Integer variantCount;
 

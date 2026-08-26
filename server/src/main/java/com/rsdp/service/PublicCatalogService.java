@@ -39,7 +39,6 @@ public class PublicCatalogService {
     /** 公开列表单页上限。 */
     private static final int MAX_PAGE_SIZE = 50;
 
-    private static final String IMAGE_TYPE_SCENE = "scene";
     private static final String STATUS_ACTIVE = "active";
     private static final String DICT_TYPE_SCENE = "scene";
     private static final String DICT_TYPE_CATEGORY = "category";
@@ -107,8 +106,7 @@ public class PublicCatalogService {
         }
 
         List<String> rspuIds = records.stream().map(RspuMaster::getRspuId).toList();
-        Map<String, String> primaryImageMap = batchImageUrls(rspuIds, false);
-        Map<String, String> sceneImageMap = batchImageUrls(rspuIds, true);
+        Map<String, String> primaryImageMap = batchPrimaryImageUrls(rspuIds);
         Map<String, Long> variantCountMap = batchVariantCounts(rspuIds);
 
         List<PublicProductItemResponse> rows = records.stream().map(rspu -> {
@@ -123,7 +121,6 @@ public class PublicCatalogService {
             item.setMaterialTags(parseStringList(rspu.getMaterialTags()));
             item.setRetailPrice(rspu.getRetailPrice());
             item.setPrimaryImageUrl(primaryImageMap.get(rspu.getRspuId()));
-            item.setSceneImageUrl(sceneImageMap.get(rspu.getRspuId()));
             item.setVariantCount(variantCountMap.getOrDefault(rspu.getRspuId(), 0L).intValue());
             item.setCreatedAt(rspu.getCreatedAt());
             return item;
@@ -186,21 +183,16 @@ public class PublicCatalogService {
     }
 
     /**
-     * 批量查询产品图片地址。
+     * 批量查询产品主图地址。
      *
      * @param rspuIds 产品 ID 列表
-     * @param scene   true=取场景图（image_type=scene），false=取主图（is_primary）
-     * @return rspuId → 图片访问地址
+     * @return rspuId → 主图访问地址
      */
-    private Map<String, String> batchImageUrls(List<String> rspuIds, boolean scene) {
+    private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
         QueryWrapper<ImageAssets> wrapper = new QueryWrapper<ImageAssets>()
             .in("rspu_id", rspuIds)
+            .eq("is_primary", true)
             .orderByDesc("created_at");
-        if (scene) {
-            wrapper.eq("image_type", IMAGE_TYPE_SCENE);
-        } else {
-            wrapper.eq("is_primary", true);
-        }
         List<ImageAssets> images = imageAssetsMapper.selectList(wrapper);
         Map<String, String> result = new HashMap<>();
         for (ImageAssets image : images) {

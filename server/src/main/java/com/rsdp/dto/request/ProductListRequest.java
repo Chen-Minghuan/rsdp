@@ -53,7 +53,4 @@ public class ProductListRequest {
 
     /** 主图资产筛选：true=仅有主图，false=仅无主图，缺省不过滤（服务 AI 搭配数据补齐）。 */
     private Boolean hasPrimaryImage;
-
-    /** 场景图资产筛选：true=仅有场景图，false=仅无场景图，缺省不过滤。 */
-    private Boolean hasSceneImage;
 }

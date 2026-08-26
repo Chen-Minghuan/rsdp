@@ -137,8 +137,8 @@ GET    /api/v1/products
        #        statusTab: "onSale"|"warehouse"|"soldOut"|"recycled" (可选, 商城状态页签;
        #                 onSale=status=active, warehouse=status!=active,
        #                 soldOut=恒空, recycled=回收站即已软删除记录),
-       #        hasPrimaryImage / hasSceneImage: boolean (可选, 图片资产有无三态筛选,
-       #                 true=仅有主图/场景图, false=仅无, 缺省不过滤; 服务 AI 搭配数据补齐)
+       #        hasPrimaryImage: boolean (可选, 主图资产有无三态筛选,
+       #                 true=仅有主图, false=仅无主图, 缺省不过滤; 服务 AI 搭配数据补齐)
        # Response: { total, page, size, rows: [ProductSummary...] }
        # 说明：
        #   - positioningLabel / sceneCode / materialTag 均按字典码精确查询
@@ -1303,7 +1303,7 @@ GET    /api/v1/public/products
        #        价格区间为零售参考价 retail_price（不加密），非工厂报价
        # Response: PageResult<{ rspuId, rspuCode, productName, categoryCode, categoryPath,
        #            positioningLabel, colorPrimaryName, materialTags[], retailPrice,
-       #            primaryImageUrl, sceneImageUrl, variantCount, createdAt }>
+       #            primaryImageUrl, variantCount, createdAt }>
 
 GET    /api/v1/public/scenes
        # 空间入口列表：启用场景字典 + 每个空间一张代表图（可空）

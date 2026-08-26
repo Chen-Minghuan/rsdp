@@ -50,7 +50,6 @@ class PublicCatalogControllerTest {
         item.setProductName("云朵三人位布艺沙发");
         item.setRetailPrice(new BigDecimal("4680.00"));
         item.setPrimaryImageUrl("/api/v1/images/IMG-1");
-        item.setSceneImageUrl("/api/v1/images/IMG-2");
         item.setVariantCount(3);
 
         when(publicCatalogService.listProducts(anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
@@ -61,8 +60,7 @@ class PublicCatalogControllerTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.total").value(1))
             .andExpect(jsonPath("$.data.rows[0].rspuCode").value("SF-WJ-002-L"))
-            .andExpect(jsonPath("$.data.rows[0].primaryImageUrl").value("/api/v1/images/IMG-1"))
-            .andExpect(jsonPath("$.data.rows[0].sceneImageUrl").value("/api/v1/images/IMG-2"));
+            .andExpect(jsonPath("$.data.rows[0].primaryImageUrl").value("/api/v1/images/IMG-1"));
     }
 
     @Test

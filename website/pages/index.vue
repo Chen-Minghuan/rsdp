@@ -113,8 +113,7 @@ const serviceItems = computed<ServiceCardItem[]>(() =>
   ]
 )
 
-// ---------- 区块 7：新品上架（双视图切换） ----------
-const viewMode = ref<'plain' | 'scene'>('plain')
+// ---------- 区块 7：新品上架 ----------
 const products = computed(() => data.value?.products?.rows ?? [])
 
 // ---------- 区块 8：家居灵感（platform_case 驱动；无案例时隐藏区块） ----------
@@ -204,16 +203,12 @@ const customizeds = computed(() => data.value?.home?.customizeds ?? [])
         <RoomGrid :rooms="scenes" />
       </section>
 
-      <!-- 区块 7 · 新品上架（商品图/场景图双视图） -->
+      <!-- 区块 7 · 新品上架 -->
       <section v-if="products.length" class="section">
         <div class="section-head">
           <span class="section-no">03</span>
           <div class="section-title">新品上架</div>
           <span class="head-right">
-            <span class="view-toggle">
-              <span :class="{ on: viewMode === 'plain' }" @click="viewMode = 'plain'">商品图</span>
-              <span :class="{ on: viewMode === 'scene' }" @click="viewMode = 'scene'">场景图</span>
-            </span>
             <a class="section-more" style="margin-left: 0;" href="/products?sort=newest">查看全部新品</a>
           </span>
         </div>
@@ -222,7 +217,6 @@ const customizeds = computed(() => data.value?.home?.customizeds ?? [])
             v-for="product in products"
             :key="product.rspuId"
             :product="product"
-            :view-mode="viewMode"
           />
         </div>
       </section>
@@ -452,25 +446,6 @@ const customizeds = computed(() => data.value?.home?.customizeds ?? [])
   display: flex;
   align-items: center;
   gap: 24px;
-}
-
-.view-toggle {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  font-size: 11px;
-  background: var(--card);
-  letter-spacing: 1px;
-}
-
-.view-toggle span {
-  padding: 6px 16px;
-  cursor: pointer;
-  color: var(--ink2);
-}
-
-.view-toggle span.on {
-  background: var(--ink);
-  color: #fff;
 }
 
 @media (max-width: 1199px) {

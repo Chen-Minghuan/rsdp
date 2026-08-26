@@ -319,7 +319,6 @@ class ProductQueryServiceTest {
         request.setPage(1L);
         request.setSize(10L);
         request.setHasPrimaryImage(false);
-        request.setHasSceneImage(true);
 
         Page<RspuMaster> page = new Page<>(1, 10, 0);
         page.setRecords(List.of());
@@ -332,10 +331,9 @@ class ProductQueryServiceTest {
         ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
         verify(rspuMapper).selectPage(any(Page.class), captor.capture());
         String sqlSegment = captor.getValue().getSqlSegment();
-        // 无主图 → NOT EXISTS is_primary；有场景图 → EXISTS image_type='scene'
+        // 无主图 → NOT EXISTS is_primary
         assertThat(sqlSegment).contains("NOT EXISTS");
         assertThat(sqlSegment).contains("ia.is_primary = TRUE");
-        assertThat(sqlSegment).contains("ia.image_type = 'scene'");
     }
 
     @Test

@@ -67,7 +67,7 @@ public class ImageService {
      * <p>判定规则：CMS 运营图（image_type=cms，专为官网公开配置）；
      * 户型原图（image_type=floor_plan，v3.0 §4.6 策略 B 明确要求——官网分析落库后
      * 需匿名回显原图，图片 ID 为完整 UUID 不可枚举）；
-     * 或归属于在售（status=active）产品的产品图（官网商品图/场景图均已在公开接口暴露）。</p>
+     * 或归属于在售（status=active）产品的产品图（官网商品主图已在公开接口暴露）。</p>
      *
      * @param imageAsset 图片实体
      * @return true 表示允许匿名访问

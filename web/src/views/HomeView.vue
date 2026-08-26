@@ -257,7 +257,6 @@ onMounted(async () => {
                 <div class="pbar">
                   <span v-if="product.positioningLabel" class="chip">{{ product.positioningLabel }}</span>
                   <span v-if="(product.rskuCount ?? 0) > 0" class="chip hot">报价×{{ product.rskuCount }}</span>
-                  <span v-if="product.hasSceneImage === false" class="chip miss">缺场景图</span>
                 </div>
               </div>
             </div>
@@ -358,7 +357,7 @@ onMounted(async () => {
         <div class="panel">
           <div class="panel-h"><h2>AI 搭配数据完备度</h2></div>
           <div class="panel-b">
-            <div v-for="label in ['主图覆盖率', '场景图覆盖率', '报价覆盖率']" :key="label" class="meter-row">
+            <div v-for="label in ['主图覆盖率', '报价覆盖率']" :key="label" class="meter-row">
               {{ label }} <span class="mv">--</span>
               <div class="meter"><i style="width: 0%;" /></div>
             </div>
@@ -594,11 +593,6 @@ onMounted(async () => {
 .chip.hot {
   background: var(--rsdp-warning-bg);
   color: var(--rsdp-warning);
-}
-
-.chip.miss {
-  background: var(--rsdp-error-bg);
-  color: var(--rsdp-error);
 }
 
 /* ===== 表格 ===== */

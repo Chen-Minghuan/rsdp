@@ -28,8 +28,6 @@ public class ProductSummaryResponse {
     private List<String> factoryCodes;
     /** RSKU 报价数（工作台「报价×N」chip）。 */
     private Long rskuCount;
-    /** 是否有场景图（工作台「缺场景图」chip）。 */
-    private Boolean hasSceneImage;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

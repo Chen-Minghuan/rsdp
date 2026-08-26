@@ -228,10 +228,6 @@ const currentPriceRangeLabel = computed(() => {
   return priceRangeOptions.find(r => r.min === f.priceMin && r.max === f.priceMax)?.label
 })
 
-// ---------- 双视图切换 ----------
-
-const viewMode = ref<'plain' | 'scene'>('plain')
-
 // ---------- 商品对比 ----------
 
 const compareOn = ref(false)
@@ -351,10 +347,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
           <span class="switch" :class="{ on: compareOn }" @click="compareOn = !compareOn">
             <span class="track" />商品对比
           </span>
-          <span class="view-toggle">
-            <span :class="{ on: viewMode === 'plain' }" @click="viewMode = 'plain'">商品图</span>
-            <span :class="{ on: viewMode === 'scene' }" @click="viewMode = 'scene'">场景图</span>
-          </span>
         </div>
       </div>
 
@@ -373,7 +365,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
           v-for="product in products"
           :key="product.rspuId"
           :product="product"
-          :view-mode="viewMode"
           :compare-on="compareOn"
           :compared="isCompared(product)"
           @toggle-compare="toggleCompare"
@@ -591,25 +582,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
 .switch.on .track::after {
   left: 16px;
   background: var(--ink);
-}
-
-.view-toggle {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  font-size: 11px;
-  background: var(--card);
-  letter-spacing: 1px;
-}
-
-.view-toggle span {
-  padding: 6px 16px;
-  cursor: pointer;
-  color: var(--ink2);
-}
-
-.view-toggle span.on {
-  background: var(--ink);
-  color: #fff;
 }
 
 /* ===== 已选筛选（直角） ===== */

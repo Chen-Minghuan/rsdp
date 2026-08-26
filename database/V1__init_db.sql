@@ -352,7 +352,7 @@ CREATE TABLE IF NOT EXISTS image_assets (
     rspu_id VARCHAR(64),
     variant_id VARCHAR(64),                        -- 变体专属图
     rsku_id VARCHAR(64),                           -- 工厂实拍图
-    image_type VARCHAR(32) NOT NULL,               -- white_bg/factory_photo/detail/scene/original
+    image_type VARCHAR(32) NOT NULL,               -- white_bg/factory_photo/detail/original
     storage_path TEXT NOT NULL,
     storage_url TEXT,
     file_size BIGINT,

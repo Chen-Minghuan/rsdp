@@ -81,8 +81,6 @@ export interface ProductListParams {
   statusTab?: SpuStatusTab
   /** 主图资产筛选：true=仅有主图，false=仅无主图 */
   hasPrimaryImage?: boolean
-  /** 场景图资产筛选：true=仅有场景图，false=仅无场景图 */
-  hasSceneImage?: boolean
 }
 
 /**
@@ -120,8 +118,6 @@ export interface ProductSummary {
   factoryCodes?: string[]
   /** RSKU 报价数（工作台「报价×N」chip） */
   rskuCount?: number
-  /** 是否有场景图（工作台「缺场景图」chip） */
-  hasSceneImage?: boolean
   createdAt: string
   updatedAt: string
 }

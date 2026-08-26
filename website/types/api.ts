@@ -77,7 +77,6 @@ export interface PublicProduct {
   materialTags?: string[]
   retailPrice?: number
   primaryImageUrl?: string
-  sceneImageUrl?: string
   variantCount: number
   createdAt?: string
 }

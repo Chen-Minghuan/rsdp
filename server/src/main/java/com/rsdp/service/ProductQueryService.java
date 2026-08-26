@@ -146,10 +146,9 @@ public class ProductQueryService {
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
         Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(rspuIds);
         Map<String, Long> rskuCountMap = batchRskuCounts(rspuIds);
-        java.util.Set<String> sceneImageRspuIds = batchSceneImageRspuIds(rspuIds);
 
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap, sceneImageRspuIds))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap))
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
@@ -220,8 +219,7 @@ public class ProductQueryService {
             wrapper.le("created_at", LocalDate.parse(request.getCreatedTo().trim()).atTime(LocalTime.MAX));
         }
         applyStatusTab(wrapper, request.getStatusTab());
-        applyImageAssetFilter(wrapper, request.getHasPrimaryImage(), true);
-        applyImageAssetFilter(wrapper, request.getHasSceneImage(), false);
+        applyPrimaryImageFilter(wrapper, request.getHasPrimaryImage());
         if (StringUtils.hasText(request.getKeyword())) {
             String keyword = "%" + request.getKeyword().trim() + "%";
             wrapper.and(w -> w.like("category_path", keyword).or().like("rspu_id", keyword));
@@ -269,21 +267,17 @@ public class ProductQueryService {
     }
 
     /**
-     * 图片资产筛选：按主图/场景图存在性过滤（EXISTS / NOT EXISTS 子查询）。
+     * 主图资产筛选：按主图存在性过滤（EXISTS / NOT EXISTS 子查询）。
      *
      * @param wrapper  查询构造器
-     * @param hasImage true=仅有该类图片，false=仅无该类图片，null 不过滤
-     * @param primary  true=主图（is_primary），false=场景图（image_type='scene'）
+     * @param hasImage true=仅有主图，false=仅无主图，null 不过滤
      */
-    private void applyImageAssetFilter(QueryWrapper<RspuMaster> wrapper, Boolean hasImage, boolean primary) {
+    private void applyPrimaryImageFilter(QueryWrapper<RspuMaster> wrapper, Boolean hasImage) {
         if (hasImage == null) {
             return;
         }
-        String condition = primary
-            ? "ia.is_primary = TRUE"
-            : "ia.image_type = 'scene'";
         String subquery = "SELECT 1 FROM image_assets ia WHERE ia.rspu_id = rspu_master.rspu_id"
-            + " AND ia.deleted_at IS NULL AND " + condition;
+            + " AND ia.deleted_at IS NULL AND ia.is_primary = TRUE";
         if (hasImage) {
             wrapper.exists(subquery);
         } else {
@@ -299,7 +293,7 @@ public class ProductQueryService {
         List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, Map.of(), Map.of(), Map.of(), java.util.Set.of()))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, Map.of(), Map.of(), Map.of()))
             .collect(Collectors.toList());
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
     }
@@ -485,10 +479,9 @@ public class ProductQueryService {
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(pageRspuIds);
         Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(pageRspuIds);
         Map<String, Long> rskuCountMap = batchRskuCounts(pageRspuIds);
-        java.util.Set<String> sceneImageRspuIds = batchSceneImageRspuIds(pageRspuIds);
 
         List<ProductSummaryResponse> rows = pageRecords.stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap, sceneImageRspuIds))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap))
             .collect(Collectors.toList());
 
         return PageResult.of(total, page, size, rows);
@@ -1204,8 +1197,7 @@ public class ProductQueryService {
                                              Map<String, String> primaryImageUrlMap,
                                              Map<String, List<String>> factoryCodeMap,
                                              Map<String, BigDecimal> minPriceMap,
-                                             Map<String, Long> rskuCountMap,
-                                             java.util.Set<String> sceneImageRspuIds) {
+                                             Map<String, Long> rskuCountMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
         summary.setRspuCode(rspu.getRspuCode());
@@ -1225,7 +1217,6 @@ public class ProductQueryService {
         summary.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));
         summary.setFactoryCodes(factoryCodeMap.getOrDefault(rspu.getRspuId(), List.of()));
         summary.setRskuCount(rskuCountMap.getOrDefault(rspu.getRspuId(), 0L));
-        summary.setHasSceneImage(sceneImageRspuIds.contains(rspu.getRspuId()));
         return summary;
     }
 
@@ -1248,23 +1239,6 @@ public class ProductQueryService {
             result.put((String) row.get("rspu_id"), ((Number) row.get("cnt")).longValue());
         }
         return result;
-    }
-
-    /**
-     * 批量查询有场景图（image_type='scene'）的 RSPU 集合（工作台「缺场景图」chip）。
-     *
-     * @param rspuIds RSPU ID 列表
-     * @return 有场景图的 RSPU ID 集合
-     */
-    private java.util.Set<String> batchSceneImageRspuIds(List<String> rspuIds) {
-        if (rspuIds == null || rspuIds.isEmpty()) {
-            return java.util.Set.of();
-        }
-        List<ImageAssets> images = imageAssetsMapper.selectList(new QueryWrapper<ImageAssets>()
-            .select("rspu_id")
-            .in("rspu_id", rspuIds)
-            .eq("image_type", "scene"));
-        return images.stream().map(ImageAssets::getRspuId).collect(Collectors.toSet());
     }
 
     private String buildImageUrl(String imageId) {

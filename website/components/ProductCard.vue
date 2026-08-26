@@ -8,19 +8,15 @@ import type { PublicProduct } from '~/types/api'
  * tag 直角小方块贴左上角（热卖=ink / 新品=accent / 即将下架=terra）；
  * 星级评分改「N 条评价」小字（有 ratingCount 数据才展示）。
  */
-const props = withDefaults(defineProps<{
+const props = defineProps<{
   product: PublicProduct
-  /** 图区视图：商品图 / 场景图（场景图缺失时回退商品图） */
-  viewMode?: 'plain' | 'scene'
   /** 评价条数（无数据不展示评价行） */
   ratingCount?: number
   /** 对比开关开启时图区右上角显示 ＋ 按钮 */
   compareOn?: boolean
   /** 当前已选中对比 */
   compared?: boolean
-}>(), {
-  viewMode: 'plain'
-})
+}>()
 
 const emit = defineEmits<{
   (e: 'toggle-compare', product: PublicProduct): void
@@ -30,13 +26,7 @@ const { imageUrl } = usePublicApi()
 
 const NEW_DAYS = 30
 
-const displayImage = computed(() => {
-  const p = props.product
-  const raw = props.viewMode === 'scene'
-    ? (p.sceneImageUrl || p.primaryImageUrl)
-    : p.primaryImageUrl
-  return imageUrl(raw)
-})
+const displayImage = computed(() => imageUrl(props.product.primaryImageUrl))
 
 const name = computed(() =>
   props.product.productName || props.product.categoryPath || '未命名商品'

@@ -80,13 +80,8 @@ class PublicCatalogServiceTest {
         ImageAssets primary = new ImageAssets();
         primary.setRspuId("RSPU-1");
         primary.setImageId("IMG-1");
-        ImageAssets scene = new ImageAssets();
-        scene.setRspuId("RSPU-1");
-        scene.setImageId("IMG-2");
-        // 第一次调用取主图，第二次取场景图
         when(imageAssetsMapper.selectList(any(QueryWrapper.class)))
-            .thenReturn(List.of(primary))
-            .thenReturn(List.of(scene));
+            .thenReturn(List.of(primary));
 
         Map<String, Object> countRow = new HashMap<>();
         countRow.put("rspu_id", "RSPU-1");
@@ -100,7 +95,6 @@ class PublicCatalogServiceTest {
         PublicProductItemResponse item = result.getRows().get(0);
         assertThat(item.getRspuCode()).isEqualTo("SF-WJ-002-L");
         assertThat(item.getPrimaryImageUrl()).isEqualTo("/api/v1/images/IMG-1");
-        assertThat(item.getSceneImageUrl()).isEqualTo("/api/v1/images/IMG-2");
         assertThat(item.getVariantCount()).isEqualTo(3);
         assertThat(item.getMaterialTags()).containsExactly("布艺", "实木");
         assertThat(item.getRetailPrice()).isEqualByComparingTo("4680.00");
