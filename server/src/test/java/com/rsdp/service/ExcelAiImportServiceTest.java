@@ -131,6 +131,8 @@ class ExcelAiImportServiceTest {
     private RspuCodeService rspuCodeService;
     @Mock
     private DataScopeHelper dataScopeHelper;
+    @Mock
+    private com.rsdp.mapper.FactoryMasterMapper factoryMasterMapper;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -147,6 +149,9 @@ class ExcelAiImportServiceTest {
         // previewMapping 的 saveBatch 使用编程式事务（P1-7），单测中事务管理器全部 mock
         lenient().when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
         lenient().when(dataScopeHelper.canAccessFactory(anyString())).thenReturn(true);
+        // 默认工厂编码存在；个别测试可覆盖为 null 模拟填错编码
+        lenient().when(factoryMasterMapper.selectById(anyString()))
+            .thenReturn(new com.rsdp.entity.FactoryMaster());
     }
 
     @Test
@@ -3269,6 +3274,32 @@ class ExcelAiImportServiceTest {
         BusinessException e = assertThrows(BusinessException.class,
             () -> excelAiImportService.confirmAndImport(request));
         assertTrue(e.getMessage().contains("默认工厂编码"), "异常信息: " + e.getMessage());
+    }
+
+    @Test
+    void confirmAndImport_shouldRejectUnknownDefaultFactoryCode() throws IOException {
+        // 默认工厂编码填错（如 TESE/TEST 笔误）时，应在抢占前批次级拒绝并给出可读提示，
+        // 避免行内映射创建逐行失败且真实原因被事务掩盖（Transaction is already completed）
+        ExcelImportBatch savedBatch = prepareCategoryBatch(createExcelWithMultiPriceColumns(),
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"产品尺寸\":\"dimensions\",\"材质说明\":\"materialTags\",\"价格-A级布\":\"__PRICE__:A级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(factoryMasterMapper.selectById("TESE")).thenReturn(null);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of(
+            "型号品名 ITEM NO/DESCRIPTION", "externalCode,productName",
+            "产品尺寸(厘米) SIZE（CM）", "dimensions",
+            "材质说明 SIZE", "materialTags"));
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("TESE");
+
+        BusinessException e = assertThrows(BusinessException.class,
+            () -> excelAiImportService.confirmAndImport(request));
+        assertTrue(e.getMessage().contains("默认工厂编码不存在: TESE"), "异常信息: " + e.getMessage());
+        // 前置校验失败不得抢占批次（批次保持原状态，历史结果不丢失）
+        verify(batchMapper, never()).claimForImport(anyString());
     }
 
     @Test

@@ -40,10 +40,13 @@ public class RspuFactoryMappingService {
     /**
      * 创建或更新 RSPU-工厂关联。
      *
+     * <p>noRollbackFor：校验类业务异常（如工厂不存在、重复关联）被 Excel 导入链路捕获为
+     * 软错误继续处理，不能让它们把外层行事务标记为 rollback-only。</p>
+     *
      * @param request 关联请求
      * @return 关联 ID
      */
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public Long saveMapping(RspuFactoryMappingRequest request) {
         dataScopeHelper.assertCanAccessRspu(request.getRspuId());
         validateRequest(request);

@@ -37,6 +37,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ExternalServiceException;
 import com.rsdp.exception.ForbiddenException;
 import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ExcelImportBatchMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -259,6 +260,7 @@ public class ExcelAiImportService {
     private final DictUnresolvedService dictUnresolvedService;
     private final DataScopeHelper dataScopeHelper;
     private final RspuCodeService rspuCodeService;
+    private final FactoryMasterMapper factoryMasterMapper;
 
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
@@ -373,14 +375,21 @@ public class ExcelAiImportService {
         if (hasFactoryPriceColumn && !StringUtils.hasText(request.getDefaultFactoryCode())) {
             throw new BusinessException("存在出厂价价格列，必须填写默认工厂编码");
         }
+        // 默认工厂编码必须真实存在：填错（如 TESE/TEST 笔误）会在行内映射创建时逐行失败且报错被事务掩盖，
+        // 批次级前置校验直接给出可读提示
+        String defaultFactoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
+            ? request.getDefaultFactoryCode().trim() : null;
+        if (defaultFactoryCode != null && factoryMasterMapper.selectById(defaultFactoryCode) == null) {
+            throw new BusinessException("默认工厂编码不存在: " + defaultFactoryCode
+                + "，请检查是否填写错误（可在工厂管理中查看已有工厂编码）");
+        }
+        if (defaultFactoryCode != null && !dataScopeHelper.canAccessFactory(defaultFactoryCode)) {
+            throw new BusinessException("无权使用该工厂: " + defaultFactoryCode);
+        }
         // 原子抢占导入权，防止并发重复导入（替代先查状态再判断的 check-then-act 竞态）；
         // pending / done 均可抢占（done 批次支持「以更新模式重新导入」），importing 拒绝
         if (batchMapper.claimForImport(batch.getBatchId()) == 0) {
             throw new BusinessException("批次正在导入中，请稍后重试: " + batch.getStatus());
-        }
-        if (StringUtils.hasText(request.getDefaultFactoryCode())
-            && !dataScopeHelper.canAccessFactory(request.getDefaultFactoryCode())) {
-            throw new BusinessException("无权使用该工厂: " + request.getDefaultFactoryCode());
         }
         batch.setStatus("importing");
         try {
@@ -2614,7 +2623,11 @@ public class ExcelAiImportService {
             transactionManager.commit(status);
             return result;
         } catch (Exception e) {
-            transactionManager.rollback(status);
+            // commit 失败（如内层事务已标 rollback-only）时 status 已完成，
+            // 再 rollback 会抛 "Transaction is already completed" 掩盖真实原因
+            if (!status.isCompleted()) {
+                transactionManager.rollback(status);
+            }
             if (e instanceof BusinessException be) {
                 throw be;
             }

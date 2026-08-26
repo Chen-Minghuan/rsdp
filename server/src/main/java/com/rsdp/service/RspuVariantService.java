@@ -52,7 +52,7 @@ public class RspuVariantService {
      * @param request 变体创建请求
      * @return 创建后的变体响应
      */
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public RspuVariantResponse createVariant(String rspuId, RspuVariantCreateRequest request) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
