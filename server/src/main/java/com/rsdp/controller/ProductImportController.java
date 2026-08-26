@@ -1,10 +1,9 @@
 package com.rsdp.controller;
 
-import com.alibaba.excel.EasyExcel;
 import com.rsdp.common.Result;
-import com.rsdp.dto.excel.ProductImportRow;
 import com.rsdp.dto.response.ProductImportResult;
 import com.rsdp.service.ProductImportService;
+import com.rsdp.util.ProductImportTemplateBuilder;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
@@ -19,7 +18,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 /**
  * 产品（RSPU）批量导入接口。
@@ -42,14 +40,11 @@ public class ProductImportController {
     public void downloadTemplate(HttpServletResponse response) throws IOException {
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         response.setCharacterEncoding("utf-8");
-        String fileName = URLEncoder.encode("product_import_template", StandardCharsets.UTF_8)
+        String fileName = URLEncoder.encode("产品导入模板", StandardCharsets.UTF_8)
             .replaceAll("\\+", "%20");
         response.setHeader("Content-disposition", "attachment;filename=" + fileName + ".xlsx");
 
-        List<ProductImportRow> templateRows = List.of();
-        EasyExcel.write(response.getOutputStream(), ProductImportRow.class)
-            .sheet("template")
-            .doWrite(templateRows);
+        ProductImportTemplateBuilder.write(response.getOutputStream());
     }
 
     /**

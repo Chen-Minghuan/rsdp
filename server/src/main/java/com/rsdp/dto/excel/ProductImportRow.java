@@ -65,18 +65,21 @@ public class ProductImportRow {
     private String sizeCode;
 
     /** 尺寸/规格原文（工厂方言，码未识别时保留） */
+    @ExcelProperty("尺寸原文")
     private String sizeText;
 
     @ExcelProperty("颜色码")
     private String colorCode;
 
     /** 颜色原文（工厂方言，码未识别时保留） */
+    @ExcelProperty("颜色原文")
     private String colorText;
 
     @ExcelProperty("材质码")
     private String materialCode;
 
     /** 材质原文（工厂方言，码未识别时保留） */
+    @ExcelProperty("材质原文")
     private String materialText;
 
     @ExcelProperty("变体参考价格带")
@@ -96,5 +99,6 @@ public class ProductImportRow {
     private String dimensionsText;
 
     /** 零售参考价（销售价/含税价/零售价/市场价列或 sales 角色价格列） */
+    @ExcelProperty("零售参考价")
     private java.math.BigDecimal retailPrice;
 }

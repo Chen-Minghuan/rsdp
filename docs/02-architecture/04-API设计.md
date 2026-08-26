@@ -214,7 +214,9 @@ DELETE /api/v1/products/{rspuId}/permanent
        #       产品被方案明细（scheme_item）引用时拒绝彻底删除（返回 400 并提示引用数），需先处理相关方案
 
 GET    /api/v1/products/import-template
-       # 下载产品批量导入 Excel 模板（已实现）
+       # 下载产品批量导入 Excel 模板（已实现，文件名「产品导入模板.xlsx」）
+       # 模板双 Sheet：Sheet1「产品导入模板」仅表头（反射读取 ProductImportRow @ExcelProperty 生成，
+       #   必填列品类码红色加粗、建议列橙色加粗，无示例数据行）；Sheet2「填写说明」图例 + 逐列要求/示例
        # Response: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 
 POST   /api/v1/products/import
