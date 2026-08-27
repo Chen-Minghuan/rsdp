@@ -40,6 +40,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const defaultMoq = ref<number | null>(1)
   /** 默认产品等级（factory_level 字典码）；行内无产品等级时使用，报价（RSKU）创建必填等级 */
   const defaultProductLevel = ref<string | null>(null)
+  /** 默认材质码（material 字典码）；价格列与行内材质均无法识别时使用 */
+  const defaultMaterialCode = ref<string | null>(null)
 
   /** 导入前全量预览数据（原始表头视角） */
   const previewData = ref<PreviewDataRow[]>([])
@@ -433,6 +435,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         defaultShippingFrom: defaultShippingFrom.value || undefined,
         defaultMoq: defaultMoq.value ?? undefined,
         defaultProductLevel: defaultProductLevel.value || undefined,
+        defaultMaterialCode: defaultMaterialCode.value || undefined,
         selectedPriceColumns: selectedPriceColumns.value,
         priceColumnSelections,
         previewEdits: Object.values(previewEdits.value),
@@ -629,6 +632,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultShippingFrom.value = ''
     defaultMoq.value = 1
     defaultProductLevel.value = null
+    defaultMaterialCode.value = null
     previewData.value = []
     previewEdits.value = {}
     skippedRows.value = new Set()
@@ -666,6 +670,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultShippingFrom,
     defaultMoq,
     defaultProductLevel,
+    defaultMaterialCode,
     previewData,
     previewEdits,
     skippedRows,

@@ -2733,6 +2733,8 @@ public class ExcelAiImportService {
         // 请求级默认产品等级（对齐 defaultFactoryCode/defaultMoq 模式）：行值缺失时兜底，
         // 统一解析一次避免 createRspu 与变体/RSKU 组装重复记录行级问题
         String defaultProductLevel = resolveDefaultProductLevel(request, dictCache, rowIssues);
+        // 请求级默认材质码（同模式）：价格列材质与行级材质均无法归一时兜底
+        String defaultMaterialCode = resolveDefaultMaterialCode(request, dictCache, rowIssues);
         String rspuId;
         boolean createdNewRspu;
         if (prep.sameProduct()) {
@@ -2761,7 +2763,7 @@ public class ExcelAiImportService {
         // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）
         excelImportRowService.updateStage(importRowId, "create_factory_mapping");
         VariantRskuOutcome variantRskuOutcome = createRspuFactoryMappingAndVariants(rspuId, dataRow, row,
-            priceColumns, request, dictCache, importRowId, rowIssues, defaultProductLevel);
+            priceColumns, request, dictCache, importRowId, rowIssues, defaultProductLevel, defaultMaterialCode);
         String variantId = variantRskuOutcome.firstVariantId();
 
         // 登记图片元数据（文件已在事务外写入对象存储）
@@ -3651,6 +3653,33 @@ public class ExcelAiImportService {
     }
 
     /**
+     * 解析请求级默认材质码（对齐 defaultProductLevel 模式）。
+     *
+     * <p>经 material 字典归一（normalizeDictCode）并校验合法性；非法值记行级
+     * rowIssue 不阻断导入，本行按原文保留。由 persistRow 统一解析一次后透传。</p>
+     *
+     * @param request   导入请求（可为 null）
+     * @param dictCache 字典缓存
+     * @param rowIssues 行级问题收集器
+     * @return 合法默认材质码；未提供或非法时返回 null
+     */
+    private String resolveDefaultMaterialCode(ExcelAiMappingRequest request,
+                                              Map<String, List<CategoryDict>> dictCache,
+                                              List<String> rowIssues) {
+        if (request == null || !StringUtils.hasText(request.getDefaultMaterialCode())) {
+            return null;
+        }
+        String raw = request.getDefaultMaterialCode().trim();
+        String normalized = normalizeDictCode(raw, dictCache.get("material"));
+        if (!isValidDictCode(normalized, dictCache.get("material"))) {
+            log.warn("默认材质未识别，本行按原文保留（不阻断导入）: {}", raw);
+            rowIssues.add("默认材质未识别: " + raw + "，本行按原文保留");
+            return null;
+        }
+        return normalized;
+    }
+
+    /**
      * 解析导入用尺寸码：归一后命中字典则用之；缺失或未归一时按 ADR-007 回退默认 X。
      *
      * @param rawSizeCode Excel 行内尺寸码原文（可空）
@@ -3765,7 +3794,8 @@ public class ExcelAiImportService {
                                                         Map<String, List<CategoryDict>> dictCache,
                                                         Long importRowId,
                                                         List<String> rowIssues,
-                                                        String defaultProductLevel) {
+                                                        String defaultProductLevel,
+                                                        String defaultMaterialCode) {
         String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
             ? request.getDefaultFactoryCode()
             : null;
@@ -3790,13 +3820,18 @@ public class ExcelAiImportService {
         String firstVariantId = null;
         List<String> rskuIds = new ArrayList<>();
         // 多尺寸文字展开：尺寸/备注文字明确写了 ≥2 个规格时，按"尺寸 × 材质价格列"展开变体；
-        // 未识别出多规格时 specLoop 为单元素 null，逐行走原逻辑，行为完全不变
+        // 单规格同样消费解析结果（携带尺寸原文与结构化 dimensions）——
+        // 此前单规格走 null 路径，解析出的尺寸被整体丢弃，变体 dimensions 为空；
+        // 未识别出规格时 spec 为 null，逐行走原逻辑
         List<SizeSpecParser.SizeSpec> parsedSpecs = SizeSpecParser.parse(
             baseRow.getDimensionsText(), baseRow.getDescription());
         boolean multiSize = parsedSpecs.size() >= 2;
+        SizeSpecParser.SizeSpec singleSpec = multiSize
+            ? null
+            : SizeSpecParser.parseFirst(baseRow.getDimensionsText(), baseRow.getDescription());
         List<SizeSpecParser.SizeSpec> specLoop = multiSize
             ? parsedSpecs
-            : Collections.singletonList(null);
+            : Collections.singletonList(singleSpec);
         if (multiSize) {
             log.info("识别到 {} 个尺寸规格，本行按尺寸展开创建变体：{}", parsedSpecs.size(),
                 parsedSpecs.stream().map(SizeSpecParser.SizeSpec::sizeText).toList());
@@ -3839,6 +3874,13 @@ public class ExcelAiImportService {
                             rowIssues.add("价格列材质未识别: " + materialName.trim()
                                 + "，已回退行级材质 " + fallbackMaterialCode);
                         }
+                    } else if (defaultMaterialCode != null) {
+                        // 行级材质也无法归一时回退请求级默认材质（对齐 defaultProductLevel 模式）
+                        materialCode = defaultMaterialCode;
+                        if (StringUtils.hasText(materialName)) {
+                            rowIssues.add("价格列材质未识别: " + materialName.trim()
+                                + "，已使用默认材质 " + defaultMaterialCode);
+                        }
                     } else if (StringUtils.hasText(materialName)) {
                         materialText = materialName.trim();
                         rowIssues.add("材质码未识别: " + materialText + "，已按原文保留，待治理归一");
@@ -3854,8 +3896,9 @@ public class ExcelAiImportService {
 
                 // 按尺寸规格展开：多尺寸时同一价格列对每个尺寸各建/复用一个变体并挂 RSKU
                 for (SizeSpecParser.SizeSpec spec : specLoop) {
-                    // 多尺寸展开时尺寸码不参与（避免所有规格塌缩为同一变体），与 createVariantIfNeeded 语义一致
-                    String rowSizeCode = spec == null && StringUtils.hasText(baseRow.getSizeCode())
+                    // 多尺寸展开时尺寸码不参与（避免所有规格塌缩为同一变体），与 createVariantIfNeeded 语义一致；
+                    // 单规格无塌缩风险，保留行级尺寸码
+                    String rowSizeCode = !multiSize && StringUtils.hasText(baseRow.getSizeCode())
                         ? baseRow.getSizeCode() : null;
                     String rowColorCode = StringUtils.hasText(baseRow.getColorCode())
                         ? baseRow.getColorCode() : null;

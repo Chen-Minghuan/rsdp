@@ -146,4 +146,24 @@ class SizeSpecParserTest {
         assertEquals(3, specs.size());
         assertTrue(specs.stream().noneMatch(s -> s.sizeText().contains("960")));
     }
+
+    @Test
+    void parseFirstReturnsSingleWhdSpec() {
+        // 单规格 W*D*H（含换行附加信息）：parse 按保守约束返回空，parseFirst 应提取首个规格
+        SizeSpecParser.SizeSpec spec = SizeSpecParser.parseFirst("605*590*810\n坐高450");
+        assertNotNull(spec);
+        assertEquals("605*590*810", spec.sizeText());
+        assertEquals(605, spec.dimensions().getW());
+        assertEquals(590, spec.dimensions().getD());
+        assertEquals(810, spec.dimensions().getH());
+    }
+
+    @Test
+    void parseFirstReturnsNullForGarbageAndSkipsAccessory() {
+        assertNull(SizeSpecParser.parseFirst("1张/箱", null));
+        // 配件标注段跳过，取后续有效段
+        SizeSpecParser.SizeSpec spec = SizeSpecParser.parseFirst("踏：960*600*400\n2380*840*910");
+        assertNotNull(spec);
+        assertEquals("2380*840*910", spec.sizeText());
+    }
 }

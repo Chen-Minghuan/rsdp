@@ -53,6 +53,8 @@ class AiRecognitionPersistenceServiceTest {
     private DictResolverService dictResolverService;
     @Mock
     private RspuCodeService rspuCodeService;
+    @Mock
+    private com.rsdp.mapper.RspuVariantMapper rspuVariantMapper;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -455,5 +457,71 @@ class AiRecognitionPersistenceServiceTest {
         // 识别主流程不受影响：RSPU 更新与识别记录落库照常执行
         verify(rspuMapper).updateById(rspu);
         verify(aiRecognitionMapper).insert(any(com.rsdp.entity.AiRecognition.class));
+    }
+
+    @Test
+    void saveSuccess_shouldInferSizeCodeFromVariantDimensionsWhenOcrMissing() {
+        // OCR 无尺寸时按变体 dimensions JSON 回退推断尺寸码并补发编码
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("待识别");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+        // OCR 推断失败 → 走变体回退
+        when(rspuCodeService.inferSizeCode(any())).thenReturn(null);
+        com.rsdp.entity.RspuVariant variant = new com.rsdp.entity.RspuVariant();
+        variant.setDimensions("{\"w\":605,\"d\":590,\"h\":810,\"unit\":\"mm\"}");
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of(variant));
+        when(rspuCodeService.inferSizeCodeFromMm(810L)).thenReturn("M");
+        when(rspuCodeService.assignCode("RSPU-TEST01", "FS", "MC", "M")).thenReturn("FS-MC-001-M");
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-001-M");
+        assertThat(rspu.getReviewStatus()).isNotEqualTo("存疑");
+        verify(rspuCodeService).inferSizeCodeFromMm(810L);
+    }
+
+    @Test
+    void saveSuccess_shouldMarkDoubtfulWhenNoSizeFromOcrOrVariants() {
+        // OCR 与变体均无尺寸：保持「存疑」语义，不发号
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("待识别");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+        when(rspuCodeService.inferSizeCode(any())).thenReturn(null);
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of());
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        assertThat(rspu.getRspuCode()).isNull();
+        assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
+        assertThat(rspu.getReviewComment()).contains("无法推断尺寸码");
+        verify(rspuCodeService, never()).assignCode(any(), any(), any(), any());
     }
 }

@@ -451,6 +451,8 @@ export interface ExcelAiMappingRequest {
   defaultMoq?: number
   /** 默认产品等级（factory_level 字典码，如 S/A/B/C）；行内无产品等级时用于报价（RSKU）创建 */
   defaultProductLevel?: string
+  /** 默认材质码（material 字典码或名称）；价格列与行内材质均无法识别时使用 */
+  defaultMaterialCode?: string
   /** 旧版价格列选择（保留兼容；不传 priceColumnSelections 时后端按全 factory 处理）。空数组=不选，缺省=全部 */
   selectedPriceColumns?: string[]
   /** 价格列角色选择（优先于 selectedPriceColumns；「不导入」的列不进数组）。空数组=不选，缺省=全部按 factory */

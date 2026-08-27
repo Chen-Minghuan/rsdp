@@ -4,17 +4,21 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.dto.Dimensions;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
+import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
+import com.rsdp.mapper.RspuVariantMapper;
+import com.rsdp.util.SizeSpecParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -43,6 +47,7 @@ public class AiRecognitionPersistenceService {
     private final AuditLogService auditLogService;
     private final DictResolverService dictResolverService;
     private final RspuCodeService rspuCodeService;
+    private final RspuVariantMapper rspuVariantMapper;
     private final ObjectMapper objectMapper;
 
     /**
@@ -234,6 +239,10 @@ public class AiRecognitionPersistenceService {
         }
         String inferredSizeCode = rspuCodeService.inferSizeCode(labels);
         if (!StringUtils.hasText(inferredSizeCode)) {
+            // OCR 无尺寸时按变体尺寸回退（dimensions JSON / sizeText 经 SizeSpecParser 解析）
+            inferredSizeCode = inferSizeCodeFromVariants(rspu.getRspuId());
+        }
+        if (!StringUtils.hasText(inferredSizeCode)) {
             rspu.setReviewStatus("存疑");
             rspu.setReviewComment("无法推断尺寸码，需补充尺寸后生成业务编码");
             return;
@@ -260,6 +269,69 @@ public class AiRecognitionPersistenceService {
             rspu.setReviewStatus("存疑");
             rspu.setReviewComment("生成业务编码失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 从变体尺寸回退推断尺寸码：取该 RSPU 全部未删除变体的 dimensions JSON
+     * （{"w","d","h","unit"}）与 sizeText（经 SizeSpecParser 解析）中的最大边毫米数，
+     * 再走 {@link RspuCodeService#inferSizeCodeFromMm} 阈值推断。无任何可用尺寸返回 null。
+     *
+     * @param rspuId RSPU ID
+     * @return 尺寸码或 null
+     */
+    private String inferSizeCodeFromVariants(String rspuId) {
+        List<RspuVariant> variants = rspuVariantMapper.selectList(
+            new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId));
+        long maxMm = 0;
+        for (RspuVariant variant : variants) {
+            maxMm = Math.max(maxMm, maxVariantDimensionMm(variant));
+        }
+        return maxMm > 0 ? rspuCodeService.inferSizeCodeFromMm(maxMm) : null;
+    }
+
+    /**
+     * 单个变体的最大边毫米数（dimensions JSON 优先，sizeText 解析兜底；解析失败按 0）。
+     */
+    private long maxVariantDimensionMm(RspuVariant variant) {
+        long max = maxFromDimensionsJson(variant.getDimensions());
+        if (max <= 0 && StringUtils.hasText(variant.getSizeText())) {
+            for (SizeSpecParser.SizeSpec spec : SizeSpecParser.parse(variant.getSizeText(), null)) {
+                Dimensions dims = spec.dimensions();
+                if (dims != null) {
+                    max = Math.max(max, maxOf(dims));
+                }
+            }
+        }
+        return max;
+    }
+
+    private long maxFromDimensionsJson(String dimensionsJson) {
+        if (!StringUtils.hasText(dimensionsJson)) {
+            return 0;
+        }
+        try {
+            Dimensions dims = objectMapper.readValue(dimensionsJson, Dimensions.class);
+            return maxOf(dims);
+        } catch (Exception e) {
+            log.debug("变体 dimensions JSON 解析失败，按无尺寸处理: {}", dimensionsJson);
+            return 0;
+        }
+    }
+
+    /**
+     * 尺寸对象的最大边（统一换算毫米）。
+     */
+    private long maxOf(Dimensions dims) {
+        long max = Math.max(dims.getW() != null ? dims.getW() : 0,
+            Math.max(dims.getD() != null ? dims.getD() : 0, dims.getH() != null ? dims.getH() : 0));
+        String unit = dims.getUnit() != null ? dims.getUnit().trim().toLowerCase() : "mm";
+        double factor = switch (unit) {
+            case "cm" -> 10.0;
+            case "m" -> 1000.0;
+            case "inch" -> 25.4;
+            default -> 1.0;
+        };
+        return Math.round(max * factor);
     }
 
     /**

@@ -67,6 +67,14 @@ public class ExcelAiMappingRequest {
     private String defaultProductLevel;
 
     /**
+     * 默认材质码（material 字典码或名称），价格列材质名与行级材质均无法归一时作为兜底
+     * （如单列「出厂价」且数据无材质列的场景），与 defaultProductLevel 同属请求级默认值；
+     * 非法值记行级问题（rowIssue）不阻断导入，本行按原文保留。
+     */
+    @Size(max = 32)
+    private String defaultMaterialCode;
+
+    /**
      * 默认交期天数，未配置规则时使用。
      */
     private Integer defaultLeadTimeDays;

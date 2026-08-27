@@ -43,6 +43,7 @@ const {
   defaultShippingFrom,
   defaultMoq,
   defaultProductLevel,
+  defaultMaterialCode,
   hasSelectedFile,
   pendingTaskCount,
   batchRecovering
@@ -75,6 +76,7 @@ const STANDARD_FIELDS = [
 
 const categoryOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
+const materialOptions = ref<DictItem[]>([])
 
 /** 价格列导入模式选项：出厂价/销售价/不导入 */
 const priceRoleOptions: { label: string; value: PriceColumnImportMode }[] = [
@@ -102,6 +104,14 @@ async function loadProductLevelDicts() {
   }
 }
 
+async function loadMaterialDicts() {
+  try {
+    materialOptions.value = await listDicts('material')
+  } catch (e) {
+    console.error('加载材质字典失败', e)
+  }
+}
+
 function handleBeforeUnload(e: BeforeUnloadEvent) {
   if (uploading.value || pendingTaskCount.value > 0) {
     e.preventDefault()
@@ -112,6 +122,7 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 onMounted(() => {
   loadCategoryDicts()
   loadProductLevelDicts()
+  loadMaterialDicts()
   // 从其他页面返回时，如仍有进行中的识别任务，恢复轮询展示进度
   if (pendingTaskCount.value > 0) {
     store.ensurePolling()
@@ -862,8 +873,16 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
               clearable
               style="width: 200px;"
             />
+            <n-select
+              v-model:value="defaultMaterialCode"
+              :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="默认材质"
+              clearable
+              filterable
+              style="width: 200px;"
+            />
             <n-text depth="3" style="font-size: 12px;">
-              默认产品等级：行内无产品等级时使用，报价（RSKU）创建必填等级
+              默认产品等级：行内无产品等级时使用，报价（RSKU）创建必填等级；默认材质：价格列与行内材质均无法识别时使用
             </n-text>
           </n-space>
         </n-card>

@@ -134,12 +134,28 @@ public class RspuCodeService {
         }
         // 阈值按 mm 设计，OCR 尺寸可能带 cm/m/inch 单位，先统一换算为 mm 再比较
         max = Math.round(max * unitToMmFactor(dims.getUnit()));
+        return inferSizeCodeFromMm(max);
+    }
+
+    /**
+     * 按最大边毫米数推断尺寸码（字典感知降级）。
+     *
+     * <p>供 OCR 无尺寸时的变体尺寸回退路径使用：变体 dimensions JSON / sizeText
+     * 解析出最大边毫米数后据此推断。推断不出或字典中无可降级码时返回 null。</p>
+     *
+     * @param maxMm 最大边尺寸（毫米）
+     * @return 尺寸码（字典中存在的 S/M/L/X 等）或 null
+     */
+    public String inferSizeCodeFromMm(Long maxMm) {
+        if (maxMm == null || maxMm <= 0) {
+            return null;
+        }
         String inferred;
-        if (max < SIZE_SMALL_THRESHOLD) {
+        if (maxMm < SIZE_SMALL_THRESHOLD) {
             inferred = "S";
-        } else if (max < SIZE_MEDIUM_THRESHOLD) {
+        } else if (maxMm < SIZE_MEDIUM_THRESHOLD) {
             inferred = "M";
-        } else if (max < SIZE_LARGE_THRESHOLD) {
+        } else if (maxMm < SIZE_LARGE_THRESHOLD) {
             inferred = "L";
         } else {
             inferred = "X";

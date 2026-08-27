@@ -166,6 +166,29 @@ class RspuCodeServiceTest {
     }
 
     @Test
+    void inferSizeCodeFromMm_shouldInferByThresholds() {
+        when(dictService.listByType("size"))
+            .thenReturn(List.of(createDict("S"), createDict("M"), createDict("L"), createDict("X")));
+
+        org.junit.jupiter.api.Assertions.assertAll(
+            () -> assertThat(rspuCodeService.inferSizeCodeFromMm(500L)).isEqualTo("S"),
+            () -> assertThat(rspuCodeService.inferSizeCodeFromMm(1000L)).isEqualTo("M"),
+            () -> assertThat(rspuCodeService.inferSizeCodeFromMm(1500L)).isEqualTo("L"),
+            () -> assertThat(rspuCodeService.inferSizeCodeFromMm(2200L)).isEqualTo("X"),
+            () -> assertThat(rspuCodeService.inferSizeCodeFromMm(null)).isNull(),
+            () -> assertThat(rspuCodeService.inferSizeCodeFromMm(0L)).isNull()
+        );
+    }
+
+    @Test
+    void inferSizeCodeFromMm_shouldDegradeToNearestExistingCode() {
+        // 字典只有 M/L：推断 X 应降级为 L（与 OCR 路径同一降级语义）
+        when(dictService.listByType("size")).thenReturn(List.of(createDict("M"), createDict("L")));
+
+        assertThat(rspuCodeService.inferSizeCodeFromMm(2200L)).isEqualTo("L");
+    }
+
+    @Test
     void inferSizeCode_shouldReturnNull_whenNoDegradableCodeInDict() {
         // 字典里只有非等级码（如 SINGLE）：无等级码可降级，返回 null 走"存疑"路径
         when(dictService.listByType("size")).thenReturn(List.of(createDict("SINGLE")));

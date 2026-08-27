@@ -152,6 +152,46 @@ public final class SizeSpecParser {
         return List.of();
     }
 
+    /**
+     * 解析首个有效三维/二维尺寸规格（不启用 {@link #parse} 的"≥2 才展开"保守约束）。
+     *
+     * <p>供单规格尺寸提取（变体 dimensions 结构化、尺寸码推断回退）使用；
+     * 多尺寸展开仍走 {@link #parse}。无可解析尺寸时返回 null。</p>
+     *
+     * @param texts 尺寸文字、描述/备注等候选文本（可多个）
+     * @return 首个有效规格（含原文片段与结构化尺寸）或 null
+     */
+    public static SizeSpec parseFirst(String... texts) {
+        if (texts == null) {
+            return null;
+        }
+        for (String text : texts) {
+            if (!StringUtils.hasText(text)) {
+                continue;
+            }
+            String globalUnit = parseUnit(text);
+            for (String segment : SEGMENT_SPLIT.split(text.trim())) {
+                String rawSeg = segment.trim();
+                if (ACCESSORY_LABEL_PATTERN.matcher(rawSeg).find()) {
+                    continue;
+                }
+                String seg = stripLeadingNonDigit(rawSeg);
+                Matcher matcher = WHD_PATTERN.matcher(seg);
+                if (!matcher.find()) {
+                    continue;
+                }
+                Dimensions dim = new Dimensions();
+                dim.setW(roundValue(matcher.group(1)));
+                dim.setD(roundValue(matcher.group(2)));
+                dim.setH(roundValue(matcher.group(3)));
+                String unit = parseUnit(seg);
+                dim.setUnit(unit != null ? unit : globalUnit);
+                return new SizeSpec(seg, dim);
+            }
+        }
+        return null;
+    }
+
     /** 去掉段落开头的非数字前缀（如"尺寸：1.8m"→"1.8m"、"备注：2380*840"→"2380*840"）。 */
     private static String stripLeadingNonDigit(String segment) {
         return segment.replaceAll("^[^\\d]*(?=\\d)", "").trim();
