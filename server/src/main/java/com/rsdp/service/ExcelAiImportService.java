@@ -2730,6 +2730,9 @@ public class ExcelAiImportService {
         String groupKey = prep.groupKey();
 
         excelImportRowService.updateStage(importRowId, "create_rspu");
+        // 请求级默认产品等级（对齐 defaultFactoryCode/defaultMoq 模式）：行值缺失时兜底，
+        // 统一解析一次避免 createRspu 与变体/RSKU 组装重复记录行级问题
+        String defaultProductLevel = resolveDefaultProductLevel(request, dictCache, rowIssues);
         String rspuId;
         boolean createdNewRspu;
         if (prep.sameProduct()) {
@@ -2750,7 +2753,7 @@ public class ExcelAiImportService {
                 createdNewRspu = false;
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
-                rspuId = createRspu(row, dictCache, rowIssues);
+                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel);
                 saveStylesAndScenes(rspuId, row, dictCache);
                 createdNewRspu = true;
             }
@@ -2758,7 +2761,7 @@ public class ExcelAiImportService {
         // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）
         excelImportRowService.updateStage(importRowId, "create_factory_mapping");
         VariantRskuOutcome variantRskuOutcome = createRspuFactoryMappingAndVariants(rspuId, dataRow, row,
-            priceColumns, request, dictCache, importRowId, rowIssues);
+            priceColumns, request, dictCache, importRowId, rowIssues, defaultProductLevel);
         String variantId = variantRskuOutcome.firstVariantId();
 
         // 登记图片元数据（文件已在事务外写入对象存储）
@@ -3560,7 +3563,7 @@ public class ExcelAiImportService {
     }
 
     private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
-                              List<String> rowIssues) {
+                              List<String> rowIssues, String defaultProductLevel) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -3588,9 +3591,10 @@ public class ExcelAiImportService {
         rspu.setReferencePriceBand(StringUtils.hasText(row.getReferencePriceBand())
             ? row.getReferencePriceBand().trim().toLowerCase()
             : null);
+        // 产品等级：行值归一优先；行值缺失时回退请求级默认值（persistRow 已统一归一 + 校验）
         rspu.setProductLevel(StringUtils.hasText(row.getProductLevel())
             ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
-            : null);
+            : defaultProductLevel);
         rspu.setWarrantyYears(row.getWarrantyYears());
         rspu.setKeySpecs(trim(row.getKeySpecs()));
         rspu.setStatus("processing");
@@ -3619,6 +3623,34 @@ public class ExcelAiImportService {
     }
 
     /**
+     * 解析请求级默认产品等级（对齐 defaultFactoryCode/defaultMoq 既有模式）。
+     *
+     * <p>经 factory_level 字典归一（normalizeDictCode）并校验合法性；非法值记行级
+     * rowIssue 不阻断导入，本行产品等级留空。由 persistRow 统一解析一次后透传，
+     * 避免 createRspu 与变体/RSKU 请求组装重复记录行级问题。</p>
+     *
+     * @param request   导入请求（可为 null）
+     * @param dictCache 字典缓存
+     * @param rowIssues 行级问题收集器
+     * @return 合法默认产品等级码；未提供或非法时返回 null
+     */
+    private String resolveDefaultProductLevel(ExcelAiMappingRequest request,
+                                              Map<String, List<CategoryDict>> dictCache,
+                                              List<String> rowIssues) {
+        if (request == null || !StringUtils.hasText(request.getDefaultProductLevel())) {
+            return null;
+        }
+        String raw = request.getDefaultProductLevel().trim();
+        String normalized = normalizeDictCode(raw, dictCache.get("factory_level"));
+        if (!isValidDictCode(normalized, dictCache.get("factory_level"))) {
+            log.warn("默认产品等级未识别，本行产品等级留空（不阻断导入）: {}", raw);
+            rowIssues.add("默认产品等级未识别: " + raw + "，本行产品等级留空");
+            return null;
+        }
+        return normalized;
+    }
+
+    /**
      * 解析导入用尺寸码：归一后命中字典则用之；缺失或未归一时按 ADR-007 回退默认 X。
      *
      * @param rawSizeCode Excel 行内尺寸码原文（可空）
@@ -3637,7 +3669,7 @@ public class ExcelAiImportService {
 
     private String createVariantIfNeeded(String rspuId, ProductImportRow row,
                                          Map<String, List<CategoryDict>> dictCache,
-                                         SizeSpecParser.SizeSpec spec) {
+                                         SizeSpecParser.SizeSpec spec, String defaultProductLevel) {
         boolean hasVariantInfo = spec != null
             || StringUtils.hasText(row.getVariantDisplayName())
             || StringUtils.hasText(row.getSizeCode()) || StringUtils.hasText(row.getSizeText())
@@ -3679,7 +3711,7 @@ public class ExcelAiImportService {
             : null);
         request.setProductLevel(StringUtils.hasText(row.getProductLevel())
             ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
-            : null);
+            : defaultProductLevel);
 
         var variantResponse = rspuVariantService.createVariant(rspuId, request);
         if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
@@ -3732,7 +3764,8 @@ public class ExcelAiImportService {
                                                         ExcelAiMappingRequest request,
                                                         Map<String, List<CategoryDict>> dictCache,
                                                         Long importRowId,
-                                                        List<String> rowIssues) {
+                                                        List<String> rowIssues,
+                                                        String defaultProductLevel) {
         String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
             ? request.getDefaultFactoryCode()
             : null;
@@ -3793,13 +3826,24 @@ public class ExcelAiImportService {
 
                 String materialName = priceColumn.getMaterialName();
                 String materialGradeCode = resolveMaterialGradeCode(materialName);
-                // 材质码尽力解析（别名→字典）；未识别时降级为原文（material_text），不阻断变体/报价创建
+                // 材质码尽力解析（别名→字典）；未识别时依次回退行级材质码、行材质标签首值
+                // （复用同一字典缓存），覆盖「单列出厂价 + 行材质列有值」场景；
+                // 全部落空才降级为原文（material_text）并采集待治理，不阻断变体/报价创建
                 String materialCode = resolveMaterialCode(materialName, dictCache.get("material"));
                 String materialText = null;
-                if (materialCode == null && StringUtils.hasText(materialName)) {
-                    materialText = materialName.trim();
-                    rowIssues.add("材质码未识别: " + materialText + "，已按原文保留，待治理归一");
-                    dictUnresolvedService.record("material", materialText, null, SecurityOperatorContext.currentUsername());
+                if (materialCode == null) {
+                    String fallbackMaterialCode = resolveRowLevelMaterialCode(baseRow, dictCache.get("material"));
+                    if (fallbackMaterialCode != null) {
+                        materialCode = fallbackMaterialCode;
+                        if (StringUtils.hasText(materialName)) {
+                            rowIssues.add("价格列材质未识别: " + materialName.trim()
+                                + "，已回退行级材质 " + fallbackMaterialCode);
+                        }
+                    } else if (StringUtils.hasText(materialName)) {
+                        materialText = materialName.trim();
+                        rowIssues.add("材质码未识别: " + materialText + "，已按原文保留，待治理归一");
+                        dictUnresolvedService.record("material", materialText, null, SecurityOperatorContext.currentUsername());
+                    }
                 }
 
                 // 交期：行级 Excel 值优先，否则按工厂交期规则动态计算
@@ -3836,7 +3880,7 @@ public class ExcelAiImportService {
                         variantRequest.setReferencePriceBand(resolvePriceBand(price));
                         variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
                             ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
-                            : null);
+                            : defaultProductLevel);
                         var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
                         if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
                             log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
@@ -3865,7 +3909,7 @@ public class ExcelAiImportService {
                         rskuRequest.setShippingWarehouseId(shippingWarehouseId);
                         rskuRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
                             ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
-                            : null);
+                            : defaultProductLevel);
                         try {
                             String rskuId = rskuService.upsertRsku(rskuRequest);
                             if (StringUtils.hasText(rskuId)) {
@@ -3884,7 +3928,7 @@ public class ExcelAiImportService {
             // 没有价格列时创建变体（RSPU + 变体 + 图片，不建 RSKU）：
             // 识别到多尺寸规格时按尺寸各建一个变体，否则维持单默认变体
             for (SizeSpecParser.SizeSpec spec : specLoop) {
-                String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache, spec);
+                String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache, spec, defaultProductLevel);
                 if (firstVariantId == null) {
                     firstVariantId = variantId;
                 }
@@ -4140,6 +4184,22 @@ public class ExcelAiImportService {
             }
         }
         return null;
+    }
+
+    /**
+     * 价格列材质未识别时的行级回退：行级材质码（prepareRow 已完成别名→字典归一）优先，
+     * 其次取行材质标签首值经同一材质字典缓存归一（resolveMaterialCode 复用）。
+     *
+     * @param row       产品导入行
+     * @param materials 材质字典缓存（与价格列解析共用）
+     * @return 回退材质码；行级亦无可用材质时返回 null
+     */
+    private String resolveRowLevelMaterialCode(ProductImportRow row, List<CategoryDict> materials) {
+        if (StringUtils.hasText(row.getMaterialCode())) {
+            return row.getMaterialCode();
+        }
+        String firstTag = splitCsv(row.getMaterialTags()).stream().findFirst().orElse(null);
+        return resolveMaterialCode(firstTag, materials);
     }
 
     private String resolvePriceBand(BigDecimal price) {

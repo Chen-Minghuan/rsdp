@@ -2552,6 +2552,26 @@ class ExcelAiImportServiceTest {
         }
     }
 
+    private byte[] createExcelWithSinglePriceColumnAndMaterial() {
+        // 「实木座椅.xlsx」场景：单列「出厂价」（非「价格-A级布」父子表头）+ 行级材质列
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("型号品名");
+            header.createCell(1).setCellValue("材质说明");
+            header.createCell(2).setCellValue("出厂价");
+            var data = sheet.createRow(1);
+            data.createCell(0).setCellValue("ABC-001 实木椅");
+            data.createCell(1).setCellValue("实木");
+            data.createCell(2).setCellValue("1999");
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private byte[] createExcelWithMultiSizeAndPriceColumns() {
         try (var out = new java.io.ByteArrayOutputStream();
              org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
@@ -3408,6 +3428,130 @@ class ExcelAiImportServiceTest {
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         verify(rskuService, times(2)).upsertRsku(any());
+    }
+
+    @Test
+    void confirmAndImport_shouldApplyDefaultProductLevelToRspuAndRskuRequest() throws IOException {
+        // 请求级默认产品等级（对齐 defaultFactoryCode/defaultMoq）：行内无产品等级列时，
+        // defaultProductLevel 经 factory_level 字典归一后落到 RSPU 与 RSKU 创建请求
+        ExcelImportBatch savedBatch = prepareCategoryBatch(createExcelWithMultiPriceColumns(),
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"产品尺寸\":\"dimensions\",\"材质说明\":\"materialTags\",\"价格-A级布\":\"__PRICE__:A级布\",\"价格-AA级布\":\"__PRICE__:AA级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithMultiPriceColumns()));
+        stubCommonDicts();
+        when(dictService.listByType("factory_level"))
+            .thenReturn(List.of(createDict("factory_level", "A", "A级")));
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+        when(rskuService.upsertRsku(any())).thenReturn("RSKU-1", "RSKU-2");
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of(
+            "型号品名 ITEM NO/DESCRIPTION", "externalCode,productName",
+            "产品尺寸(厘米) SIZE（CM）", "dimensions",
+            "材质说明 SIZE", "materialTags"));
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+        // 填字典名「A级」验证归一为字典码「A」
+        request.setDefaultProductLevel("A级");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
+        assertEquals("A", rspuCaptor.getValue().getProductLevel(), "默认产品等级应归一后落 RSPU");
+
+        ArgumentCaptor<com.rsdp.dto.request.RskuCreateRequest> rskuCaptor =
+            ArgumentCaptor.forClass(com.rsdp.dto.request.RskuCreateRequest.class);
+        verify(rskuService, times(2)).upsertRsku(rskuCaptor.capture());
+        for (com.rsdp.dto.request.RskuCreateRequest rskuRequest : rskuCaptor.getAllValues()) {
+            assertEquals("A", rskuRequest.getProductLevel(), "默认产品等级应落到每个 RSKU 创建请求");
+        }
+    }
+
+    @Test
+    void confirmAndImport_shouldRecordRowIssueForInvalidDefaultProductLevel() throws IOException {
+        // 非法默认产品等级：记行级 rowIssue（不阻断导入），本行产品等级留空
+        ExcelImportBatch savedBatch = prepareCategoryBatch(createExcelWithMultiPriceColumns(),
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"产品尺寸\":\"dimensions\",\"材质说明\":\"materialTags\",\"价格-A级布\":\"__PRICE__:A级布\",\"价格-AA级布\":\"__PRICE__:AA级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithMultiPriceColumns()));
+        stubCommonDicts();
+        when(dictService.listByType("factory_level"))
+            .thenReturn(List.of(createDict("factory_level", "A", "A级")));
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+        when(rskuService.upsertRsku(any())).thenReturn("RSKU-1");
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of(
+            "型号品名 ITEM NO/DESCRIPTION", "externalCode,productName",
+            "产品尺寸(厘米) SIZE（CM）", "dimensions",
+            "材质说明 SIZE", "materialTags"));
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+        request.setDefaultProductLevel("不存在的等级");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "非法默认等级不应阻断导入: " + result.getFailures());
+        assertTrue(result.getFailures().stream()
+                .anyMatch(f -> f.getReason() != null && f.getReason().contains("默认产品等级未识别: 不存在的等级")),
+            "应记行级问题: " + result.getFailures());
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
+        assertNull(rspuCaptor.getValue().getProductLevel(), "非法默认等级时本行产品等级留空");
+    }
+
+    @Test
+    void confirmAndImport_shouldFallbackToRowMaterialWhenPriceColumnMaterialUnresolved() throws IOException {
+        // 单列「出厂价」场景：价格列材质名「出厂价」归一失败时回退行级材质标签（实木→WO），
+        // RSKU 正常创建；rowIssue 记录回退而非原文保留
+        ExcelImportBatch savedBatch = prepareCategoryBatch(createExcelWithSinglePriceColumnAndMaterial(),
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"材质说明\":\"materialTags\",\"出厂价\":\"__PRICE__:出厂价\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithSinglePriceColumnAndMaterial()));
+        stubCommonDicts();
+        when(dictService.listByType("material"))
+            .thenReturn(List.of(createDict("material", "WO", "实木")));
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+        when(rskuService.upsertRsku(any())).thenReturn("RSKU-1");
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of(
+            "型号品名", "externalCode,productName",
+            "材质说明", "materialTags"));
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        ArgumentCaptor<com.rsdp.dto.request.RskuCreateRequest> rskuCaptor =
+            ArgumentCaptor.forClass(com.rsdp.dto.request.RskuCreateRequest.class);
+        verify(rskuService, times(1)).upsertRsku(rskuCaptor.capture());
+        assertEquals("WO", rskuCaptor.getValue().getMaterialCode(), "价格列材质未识别时应回退行级材质码");
+        assertTrue(result.getFailures().stream()
+                .anyMatch(f -> f.getReason() != null
+                    && f.getReason().contains("价格列材质未识别: 出厂价，已回退行级材质 WO")),
+            "应记录材质回退行级问题: " + result.getFailures());
     }
 
     @Test

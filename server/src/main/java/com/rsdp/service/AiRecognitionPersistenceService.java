@@ -216,6 +216,14 @@ public class AiRecognitionPersistenceService {
         return normalized;
     }
 
+    /**
+     * AI 识别补全风格后补发 RSPU 业务编码（rspu_code 为空时）。
+     *
+     * <p>品类用 rspu.category_code，风格用新补的风格码（无则用现有定位标签），
+     * 尺寸码用 {@link RspuCodeService#inferSizeCode} 的 AI 尺寸推断 + 字典感知降级能力；
+     * 推断不出尺寸/风格按既有「存疑」语义留空不阻断。assignCode 本身幂等
+     * （已有 code 直接返回），发号失败（含非业务异常）捕获降级，不影响识别主流程。</p>
+     */
     private void assignRspuCodeIfPossible(RspuMaster rspu, AiLabels labels, String styleCode) {
         if (StringUtils.hasText(rspu.getRspuCode())) {
             return;
@@ -237,10 +245,18 @@ public class AiRecognitionPersistenceService {
             return;
         }
         try {
-            String code = rspuCodeService.generateNextCode(categoryCode, effectiveStyleCode, inferredSizeCode);
+            String code = rspuCodeService.assignCode(rspu.getRspuId(), categoryCode,
+                effectiveStyleCode, inferredSizeCode);
+            // assignCode 内部已落库；同步到当前实体，避免后续 updateById 用旧快照覆盖
             rspu.setRspuCode(code);
+            log.info("AI 识别补全风格后补发 RSPU 业务编码成功，rspuId={}，rspuCode={}", rspu.getRspuId(), code);
         } catch (BusinessException e) {
             log.warn("AI 识别后生成 RSPU 业务编码失败，rspuId={}，原因={}", rspu.getRspuId(), e.getMessage());
+            rspu.setReviewStatus("存疑");
+            rspu.setReviewComment("生成业务编码失败: " + e.getMessage());
+        } catch (Exception e) {
+            // 非业务异常（基础设施故障等）同样降级：标记存疑但不中断识别结果落库
+            log.warn("AI 识别后补发 RSPU 业务编码异常，rspuId={}", rspu.getRspuId(), e);
             rspu.setReviewStatus("存疑");
             rspu.setReviewComment("生成业务编码失败: " + e.getMessage());
         }

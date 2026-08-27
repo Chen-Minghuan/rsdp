@@ -390,4 +390,70 @@ class AiRecognitionPersistenceServiceTest {
             objectMapper.getTypeFactory().constructMapType(java.util.Map.class, String.class, String.class));
         assertThat(stored).containsEntry("E", "皮革");
     }
+
+    @Test
+    void saveSuccess_shouldAssignRspuCodeAfterStyleFilled() {
+        // 「待识别」风格被 AI 补全后、rspu_code 为空时，调 RspuCodeService.assignCode 补发编码
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("待识别");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+        when(rspuCodeService.inferSizeCode(any())).thenReturn("M");
+        when(rspuCodeService.assignCode("RSPU-TEST01", "FS", "MC", "M")).thenReturn("FS-MC-001-M");
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
+        assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-001-M");
+        assertThat(rspu.getReviewStatus()).isNotEqualTo("存疑");
+        verify(rspuCodeService).assignCode("RSPU-TEST01", "FS", "MC", "M");
+    }
+
+    @Test
+    void saveSuccess_shouldNotBlockRecognitionWhenAssignCodeFails() {
+        // 补发编码失败：标记存疑但不阻断识别主流程（识别记录照常落库、RSPU 照常更新）
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("待识别");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+        when(rspuCodeService.inferSizeCode(any())).thenReturn("M");
+        when(rspuCodeService.assignCode(any(), any(), any(), any()))
+            .thenThrow(new com.rsdp.exception.BusinessException("风格/职级码不存在: MC"));
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+
+        String productName = persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, null);
+
+        assertThat(rspu.getRspuCode()).isNull();
+        assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
+        assertThat(rspu.getReviewComment()).contains("生成业务编码失败");
+        assertThat(rspu.getStatus()).isEqualTo("active");
+        // 识别主流程不受影响：RSPU 更新与识别记录落库照常执行
+        verify(rspuMapper).updateById(rspu);
+        verify(aiRecognitionMapper).insert(any(com.rsdp.entity.AiRecognition.class));
+    }
 }

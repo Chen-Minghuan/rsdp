@@ -42,6 +42,7 @@ const {
   defaultFactoryCode,
   defaultShippingFrom,
   defaultMoq,
+  defaultProductLevel,
   hasSelectedFile,
   pendingTaskCount,
   batchRecovering
@@ -73,6 +74,7 @@ const STANDARD_FIELDS = [
 ]
 
 const categoryOptions = ref<DictItem[]>([])
+const productLevelOptions = ref<DictItem[]>([])
 
 /** 价格列导入模式选项：出厂价/销售价/不导入 */
 const priceRoleOptions: { label: string; value: PriceColumnImportMode }[] = [
@@ -92,6 +94,14 @@ async function loadCategoryDicts() {
   }
 }
 
+async function loadProductLevelDicts() {
+  try {
+    productLevelOptions.value = await listDicts('factory_level')
+  } catch (e) {
+    console.error('加载产品等级字典失败', e)
+  }
+}
+
 function handleBeforeUnload(e: BeforeUnloadEvent) {
   if (uploading.value || pendingTaskCount.value > 0) {
     e.preventDefault()
@@ -101,6 +111,7 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 
 onMounted(() => {
   loadCategoryDicts()
+  loadProductLevelDicts()
   // 从其他页面返回时，如仍有进行中的识别任务，恢复轮询展示进度
   if (pendingTaskCount.value > 0) {
     store.ensurePolling()
@@ -844,6 +855,16 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             <n-input v-model:value="defaultFactoryCode" placeholder="默认工厂编码" style="width: 160px;" />
             <n-input v-model:value="defaultShippingFrom" placeholder="默认发货地" style="width: 160px;" />
             <n-input-number v-model:value="defaultMoq" placeholder="默认 MOQ" :min="1" style="width: 120px;" />
+            <n-select
+              v-model:value="defaultProductLevel"
+              :options="productLevelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+              placeholder="默认产品等级"
+              clearable
+              style="width: 200px;"
+            />
+            <n-text depth="3" style="font-size: 12px;">
+              默认产品等级：行内无产品等级时使用，报价（RSKU）创建必填等级
+            </n-text>
           </n-space>
         </n-card>
 

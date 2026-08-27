@@ -2,6 +2,7 @@ package com.rsdp.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -56,6 +57,14 @@ public class ExcelAiMappingRequest {
      * 默认最小起订量，用于为每个价格列创建 RSKU。
      */
     private Integer defaultMoq;
+
+    /**
+     * 默认产品等级（factory_level 字典码或名称），行内无产品等级列时作为兜底，
+     * 与 defaultFactoryCode/defaultMoq 同属请求级默认值；
+     * 非法值记行级问题（rowIssue）不阻断导入，本行产品等级留空。
+     */
+    @Size(max = 16)
+    private String defaultProductLevel;
 
     /**
      * 默认交期天数，未配置规则时使用。

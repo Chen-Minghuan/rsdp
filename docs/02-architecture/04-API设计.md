@@ -313,6 +313,8 @@ POST   /api/v1/products/excel-ai-import/import
        #     defaultShippingFrom: string,   // 默认发货地（冗余显示字段）
        #     defaultLeadTimeDays: number,   // 默认基础交期天数；优先级：Excel 行级交期列 > 工厂交期规则 > 本默认值
        #     defaultMoq: number             // 默认最小起订量
+       #     defaultProductLevel: string,   // 默认产品等级（factory_level 字典码或名称，≤16 字符）；行内无产品等级列时兜底，
+       #                                    // 落到 RSPU/变体/RSKU 创建请求；非法值记行级 failures「默认产品等级未识别」不阻断导入
        #     updateIfExists: boolean        // externalCode 已存在时：true 复用并更新已有 RSPU，false（默认）跳过该行
        #     categoryMapping: { [rawValue: string]: string }  // 用户确认的品类映射（原始值 → 字典码），行级解析最高优先；导入后写回别名库
        #     previewEdits: [{ rowIndex: number, header: string, value: string|null }]  // 数据清洗阶段对原始单元格的编辑；按 rowIndex + header 定位覆盖，优先级高于 forward fill
@@ -354,6 +356,11 @@ POST   /api/v1/products/excel-ai-import/import
        #     「更新日期/产品下单说明/注意事项」等说明尾注行自动跳过
        #   - 交期：Excel 行级交期列（映射 leadTimeDays，容忍「30天」「25-30天」写法）优先，
        #     其次按 factory_lead_time_rule 动态计算，最后回退 defaultLeadTimeDays
+       #   - 产品等级兜底链：Excel 行级产品等级列归一 > defaultProductLevel 请求默认值
+       #     （persistRow 统一归一校验一次后透传 RSPU/变体/RSKU 组装）
+       #   - 价格列材质回退：价格列材质名归一失败时依次回退 行级材质码 > 行材质标签首值归一
+       #     （覆盖「单列出厂价 + 行材质列」场景），记 failures「价格列材质未识别: X，已回退行级材质 Y」；
+       #     全部落空才按原文保留 material_text 并采集 dict_unresolved_value 待治理
        #   - 主数据创建成功后为每个 RSPU 触发异步 AI 识别任务，前端通过 taskIds 轮询
        #   - 失败行不影响其他行，失败原因写入返回结果
        #   - 当指定 defaultFactoryCode 时，会为每个 RSPU 创建 RSPU-工厂关联（rspu_factory_mapping），

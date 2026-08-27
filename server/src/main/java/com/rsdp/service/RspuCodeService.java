@@ -80,13 +80,17 @@ public class RspuCodeService {
      *
      * <p>若该 RSPU 已有业务编码，则直接返回已有编码；否则生成新编码并写入数据库。</p>
      *
+     * <p>noRollbackFor = BusinessException：校验类业务异常不污染外层事务
+     * （对齐 RspuVariantService.createVariant / RskuService.upsertRsku 既有模式），
+     * 调用方（如 AI 识别持久化）捕获后可降级继续主流程。</p>
+     *
      * @param rspuId       RSPU ID
      * @param categoryCode 品类码
      * @param styleCode    风格/职级码
      * @param sizeCode     尺寸码
      * @return 生成的业务编码
      */
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public String assignCode(String rspuId, String categoryCode, String styleCode, String sizeCode) {
         if (!StringUtils.hasText(rspuId)) {
             throw new BusinessException("RSPU ID 不能为空");
