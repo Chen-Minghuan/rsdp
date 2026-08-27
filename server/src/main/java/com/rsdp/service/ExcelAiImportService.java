@@ -4387,11 +4387,31 @@ public class ExcelAiImportService {
         if (images == null || images.isEmpty()) {
             return null;
         }
-        String primaryObjectKey = null;
+        // 跨导入查重（V31 content_hash）：同 RSPU 已登记同内容图片时跳过重复登记——
+        // 重复/更新导入、跨行锚定组合图分发不再产生图片副本；
+        // 库中已有主图时本轮不再设新主图（防多主图并存），主图 objectKey 直接复用库中值
+        List<ImageAssets> existingImages = imageAssetsMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ImageAssets>()
+                .eq("rspu_id", rspuId));
+        Map<String, ImageAssets> existingByHash = new HashMap<>();
+        String existingPrimaryKey = null;
+        for (ImageAssets existing : existingImages) {
+            if (StringUtils.hasText(existing.getContentHash())) {
+                existingByHash.putIfAbsent(existing.getContentHash(), existing);
+            }
+            if (Boolean.TRUE.equals(existing.getPrimary()) && existingPrimaryKey == null) {
+                existingPrimaryKey = existing.getStoragePath();
+            }
+        }
+
+        String primaryObjectKey = existingPrimaryKey;
         boolean hasPrimary = images.stream().anyMatch(StoredImage::primary);
         for (int i = 0; i < images.size(); i++) {
             StoredImage stored = images.get(i);
-            boolean isPrimary = allowPrimary
+            if (StringUtils.hasText(stored.contentHash()) && existingByHash.containsKey(stored.contentHash())) {
+                continue;
+            }
+            boolean isPrimary = allowPrimary && primaryObjectKey == null
                 && (stored.primary() || (!strictPrimary && !hasPrimary && i == 0));
             ImageAssets imageAsset = new ImageAssets();
             imageAsset.setImageId(stored.imageId());
@@ -4409,6 +4429,9 @@ public class ExcelAiImportService {
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);
             auditLogService.logCreate("image_assets", stored.imageId(), imageAsset, SecurityOperatorContext.currentUsername());
+            if (StringUtils.hasText(stored.contentHash())) {
+                existingByHash.put(stored.contentHash(), imageAsset);
+            }
 
             if (isPrimary) {
                 primaryObjectKey = stored.objectKey();

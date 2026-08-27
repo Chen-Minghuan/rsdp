@@ -14,6 +14,7 @@ import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ExcelImportBatch;
 import com.rsdp.entity.ExcelImportRow;
+import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
@@ -3894,6 +3895,106 @@ class ExcelAiImportServiceTest {
         when(dictService.listByType("size")).thenReturn(List.of());
         when(dictService.listByType("color")).thenReturn(List.of());
         when(dictService.listByType("factory_level")).thenReturn(List.of());
+    }
+
+    @Test
+    void confirmAndImport_shouldSkipDuplicateImageByContentHash() throws IOException {
+        // 重复/更新导入时同 RSPU 已登记同内容图片（content_hash 命中）应跳过重复登记，不再产生图片副本
+        byte[] pngBytes = createPng(0xFFAA00);
+        byte[] excelBytes = createExcelWithEmbeddedImage(pngBytes);
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"类别\":\"categoryCode\",\"型号\":\"externalCode,productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ImageAssets existing = new ImageAssets();
+        existing.setImageId("IMG-OLD");
+        existing.setContentHash(com.rsdp.util.ContentHashes.sha256Hex(pngBytes));
+        existing.setPrimary(true);
+        existing.setStoragePath("images/IMG-OLD.png");
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(existing));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("类别", "categoryCode", "型号", "externalCode,productName"));
+        request.setCategoryHint("FS");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        verify(imageAssetsMapper, never()).insert(any(ImageAssets.class));
+    }
+
+    @Test
+    void confirmAndImport_shouldNotCreateSecondPrimaryWhenPrimaryExists() throws IOException {
+        // 库中已有主图时，本轮新内容图片照常登记但不得再置主图（防多主图并存）
+        byte[] pngBytes = createPng(0xFFAA00);
+        byte[] excelBytes = createExcelWithEmbeddedImage(pngBytes);
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"类别\":\"categoryCode\",\"型号\":\"externalCode,productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ImageAssets existing = new ImageAssets();
+        existing.setImageId("IMG-OLD");
+        existing.setContentHash("different-hash");
+        existing.setPrimary(true);
+        existing.setStoragePath("images/IMG-OLD.png");
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(existing));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("类别", "categoryCode", "型号", "externalCode,productName"));
+        request.setCategoryHint("FS");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper, times(1)).insert(imageCaptor.capture());
+        org.junit.jupiter.api.Assertions.assertFalse(imageCaptor.getValue().getPrimary(),
+            "库中已有主图时新登记图片不得再置主图");
+    }
+
+    private byte[] createExcelWithEmbeddedImage(byte[] pngBytes) {
+        // 图片列（col0）内嵌一张 PNG + 类别/型号两列
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("图片 PICTURE");
+            header.createCell(1).setCellValue("类别");
+            header.createCell(2).setCellValue("型号");
+            var row1 = sheet.createRow(1);
+            row1.createCell(1).setCellValue("FS");
+            row1.createCell(2).setCellValue("WG-TEST-001");
+
+            var helper = workbook.getCreationHelper();
+            var drawing = sheet.createDrawingPatriarch();
+            var anchor = helper.createClientAnchor();
+            anchor.setRow1(1);
+            anchor.setCol1(0);
+            anchor.setRow2(2);
+            anchor.setCol2(1);
+            drawing.createPicture(anchor, workbook.addPicture(pngBytes, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private byte[] createExcelWithDoubleHeaderAndRows(int dataRows) {
