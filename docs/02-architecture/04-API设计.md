@@ -1326,10 +1326,14 @@ GET    /api/v1/public/categories
 POST   /api/v1/public/leads
        # 留资提交（V34 platform_lead；source 限 ai_match/site_form/design_booking，
        # 非法来源 400；初始状态 pending；审计操作人记 anonymous）
+       # ⚠️ 限流：IP 维度 5 次/60s（PublicRateLimitFilter，超限 429「请求过于频繁」）
        # Request: { name*, phone*, source*, intent?, budget? }
        # Response: { leadId, status }
 
 POST   /api/v1/public/ai-match/analyze
+       # ⚠️ 限流：IP 维度 10 次/60s（ai-match 全端点，PublicRateLimitFilter，超限 429；
+       # 配置 rsdp.rate-limit.*：enabled/ai-match-permits/leads-permits/window-seconds，
+       # 可用 RSDP_RATE_LIMIT_* 环境变量覆盖；单实例内存计数，多实例部署需换共享计数）
        # AI 户型图分析（multipart；file 为 jpg/png 图片或 PDF（P2）≤10MB，走
        # ImageUploadValidator.validateImageOrPdf（PDF 感知重载，其他上传入口不接受 PDF 不变）；
        # hint 可选用户补充说明）。PDF 仅渲染第 1 页为 PNG（PdfRenderer.renderFirstPageAsPng，
