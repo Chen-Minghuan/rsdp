@@ -1667,6 +1667,11 @@ public class ExcelAiImportService {
                     // 从合并表头兜底提取材质名
                     materialName = extractMaterialNameFromPriceHeader(mergedHeader);
                 }
+                // 价格词本身不是材质名（单列「出厂价」等普通价格表头）：置空，
+                // 避免污染变体显示名「尺寸-出厂价」、材质原文与未归一采集
+                if (isPriceWord(materialName)) {
+                    materialName = null;
+                }
                 PriceColumnInfo info = new PriceColumnInfo();
                 info.setHeader(mergedHeader);
                 info.setMaterialName(materialName);
@@ -1722,6 +1727,24 @@ public class ExcelAiImportService {
             return StringUtils.hasText(suffix) ? suffix : cleaned;
         }
         return cleaned;
+    }
+
+    /** 价格词集合：这些词出现在价格列「材质名」位置时一律视为无材质名。 */
+    private static final java.util.Set<String> PRICE_WORDS = java.util.Set.of(
+        "价格", "出厂价", "单价", "售价", "销售价", "零售价", "市场价", "含税价", "批发价",
+        "price", "cost", "factory price");
+
+    /**
+     * 判断文本是否为价格词（忽略大小写与空白）。
+     *
+     * @param text 待判定文本（可空）
+     * @return true 表示是价格词而非材质名
+     */
+    private boolean isPriceWord(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        return PRICE_WORDS.contains(text.trim().toLowerCase());
     }
 
     private boolean isImageUrlField(String standardField) {
@@ -3870,17 +3893,15 @@ public class ExcelAiImportService {
                     String fallbackMaterialCode = resolveRowLevelMaterialCode(baseRow, dictCache.get("material"));
                     if (fallbackMaterialCode != null) {
                         materialCode = fallbackMaterialCode;
-                        if (StringUtils.hasText(materialName)) {
-                            rowIssues.add("价格列材质未识别: " + materialName.trim()
-                                + "，已回退行级材质 " + fallbackMaterialCode);
-                        }
+                        rowIssues.add(StringUtils.hasText(materialName)
+                            ? "价格列材质未识别: " + materialName.trim() + "，已回退行级材质 " + fallbackMaterialCode
+                            : "价格列无材质名，已回退行级材质 " + fallbackMaterialCode);
                     } else if (defaultMaterialCode != null) {
                         // 行级材质也无法归一时回退请求级默认材质（对齐 defaultProductLevel 模式）
                         materialCode = defaultMaterialCode;
-                        if (StringUtils.hasText(materialName)) {
-                            rowIssues.add("价格列材质未识别: " + materialName.trim()
-                                + "，已使用默认材质 " + defaultMaterialCode);
-                        }
+                        rowIssues.add(StringUtils.hasText(materialName)
+                            ? "价格列材质未识别: " + materialName.trim() + "，已使用默认材质 " + defaultMaterialCode
+                            : "价格列无材质名，已使用默认材质 " + defaultMaterialCode);
                     } else if (StringUtils.hasText(materialName)) {
                         materialText = materialName.trim();
                         rowIssues.add("材质码未识别: " + materialText + "，已按原文保留，待治理归一");

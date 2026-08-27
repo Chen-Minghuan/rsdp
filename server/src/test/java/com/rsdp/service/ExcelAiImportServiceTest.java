@@ -561,6 +561,11 @@ class ExcelAiImportServiceTest {
         assertNotNull(variantRequest.getDimensions(), "单规格尺寸应写入结构化 dimensions");
         assertTrue(variantRequest.getDimensions().contains("605")
             && variantRequest.getDimensions().contains("810"), variantRequest.getDimensions());
+        // 价格词「出厂价」不是材质名：显示名不得带「-出厂价」
+        assertEquals("605*590*810", variantRequest.getDisplayName());
+        // 价格列材质名被价格词清洗置空
+        assertTrue(preview.getPriceColumns().stream()
+            .allMatch(p -> p.getMaterialName() == null), "价格词不应被当成材质名");
     }
 
     @Test
@@ -3720,7 +3725,7 @@ class ExcelAiImportServiceTest {
         assertEquals("WO", rskuCaptor.getValue().getMaterialCode(), "价格列材质未识别时应回退行级材质码");
         assertTrue(result.getFailures().stream()
                 .anyMatch(f -> f.getReason() != null
-                    && f.getReason().contains("价格列材质未识别: 出厂价，已回退行级材质 WO")),
+                    && f.getReason().contains("已回退行级材质 WO")),
             "应记录材质回退行级问题: " + result.getFailures());
     }
 
