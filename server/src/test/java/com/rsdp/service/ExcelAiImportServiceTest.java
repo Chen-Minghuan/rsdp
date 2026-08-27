@@ -643,6 +643,93 @@ class ExcelAiImportServiceTest {
         assertEquals("WO", rskuCaptor.getValue().getMaterialCode());
     }
 
+    @Test
+    void confirmAndImport_shouldNotThrowNpeWhenPhysicalLayoutNullAndSkipRows() throws IOException {
+        // 原始文件读取失败（physicalLayout=null）且用户勾了跳过行时，不得 NPE（降级无图导入）
+        byte[] excelBytes = createExcelWithSingleSizeAndPriceColumn();
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"尺寸(W*D*H)\":\"dimensions\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenThrow(new IOException("存储读取失败"));
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("型号品名", "externalCode,productName", "尺寸(W*D*H)", "dimensions"));
+        request.setCategoryHint("FS");
+        request.setSelectedPriceColumns(List.of());
+        request.setSkipRows(java.util.List.of(999));
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertNotNull(result);
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+    }
+
+    @Test
+    void confirmAndImport_shouldReuseExistingVariantInNoPriceBranch() throws IOException {
+        // 无价格列分支：同"码或原文"组合的已有变体直接复用，不撞唯一索引导致整行失败
+        byte[] excelBytes = createExcelWithSingleSizeAndPriceColumn();
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"尺寸(W*D*H)\":\"dimensions\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+
+        RspuVariant existingVariant = new RspuVariant();
+        existingVariant.setVariantId("V-EXISTING");
+        existingVariant.setSizeText("605*590*810");
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of(existingVariant));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("型号品名", "externalCode,productName", "尺寸(W*D*H)", "dimensions"));
+        request.setCategoryHint("FS");
+        request.setSelectedPriceColumns(List.of()); // 不选任何价格列 → 走无价格列分支
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        verify(rspuVariantService, never()).createVariant(anyString(), any());
+    }
+
+    @Test
+    void confirmAndImport_shouldRestoreDoneBatchResultWhenImportFails() throws IOException {
+        // done 批次重导失败：恢复历史结果（status/counts/failures/processedAt），不退化为 pending
+        byte[] excelBytes = createExcelWithSingleSizeAndPriceColumn();
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"尺寸(W*D*H)\":\"dimensions\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        java.time.LocalDateTime previousProcessedAt = java.time.LocalDateTime.of(2026, 8, 27, 10, 0);
+        savedBatch.setStatus("done");
+        savedBatch.setSuccessCount(80);
+        savedBatch.setFailedCount(5);
+        savedBatch.setFailures("[]");
+        savedBatch.setProcessedAt(previousProcessedAt);
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        // 抢占后导入主流程抛异常（模拟字典服务故障）
+        when(dictService.listByType("category")).thenThrow(new RuntimeException("DB 故障"));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("型号品名", "externalCode,productName", "尺寸(W*D*H)", "dimensions"));
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+
+        assertThrows(RuntimeException.class, () -> excelAiImportService.confirmAndImport(request));
+
+        verify(batchMapper).restoreBatchResult(savedBatch.getBatchId(), 80, 5, "[]", previousProcessedAt);
+        verify(batchMapper, never()).resetToPending(anyString());
+    }
+
     private byte[] createExcelWithSingleSizeAndPriceColumn() {
         // 「实木座椅.xlsx」场景：单列「出厂价」+ 单规格尺寸列「尺寸(W*D*H)」（605*590*810 坐高450）
         try (var out = new java.io.ByteArrayOutputStream();

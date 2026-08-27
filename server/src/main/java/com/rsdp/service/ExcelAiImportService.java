@@ -386,6 +386,10 @@ public class ExcelAiImportService {
         if (defaultFactoryCode != null && !dataScopeHelper.canAccessFactory(defaultFactoryCode)) {
             throw new BusinessException("无权使用该工厂: " + defaultFactoryCode);
         }
+        // 快照上一轮导入结果：抢占会清零计数字段，导入主流程失败复位时恢复，
+        // done 批次重导失败不丢历史结果（行级记录已删无法恢复，批次级结果与失败明细可恢复）
+        BatchResultSnapshot previousResult = new BatchResultSnapshot(batch.getStatus(),
+            batch.getSuccessCount(), batch.getFailedCount(), batch.getFailures(), batch.getProcessedAt());
         // 原子抢占导入权，防止并发重复导入（替代先查状态再判断的 check-then-act 竞态）；
         // pending / done 均可抢占（done 批次支持「以更新模式重新导入」），importing 拒绝
         if (batchMapper.claimForImport(batch.getBatchId()) == 0) {
@@ -395,24 +399,37 @@ public class ExcelAiImportService {
         try {
             return doConfirmImport(batch, request, mapping);
         } catch (RuntimeException | Error e) {
-            // 抢占成功后任何异常都必须把批次复位为 pending，否则批次永久卡死 importing、
-            // 用户无法重试（claimForImport 只认 pending/done）；复位本身容错，不掩盖原始异常
-            resetBatchToPendingQuietly(batch);
+            // 抢占成功后任何异常都必须恢复批次状态，否则批次永久卡死 importing、
+            // 用户无法重试（claimForImport 只认 pending/done）；恢复本身容错，不掩盖原始异常
+            restoreBatchQuietly(batch, previousResult);
             throw e;
         }
     }
 
+    /** 上一轮导入结果快照（抢占前捕获，失败复位时恢复）。 */
+    private record BatchResultSnapshot(String status, Integer successCount, Integer failedCount,
+                                       String failures, java.time.LocalDateTime processedAt) {
+    }
+
     /**
-     * 复位批次状态为 pending（导入主流程异常时调用）。复位失败只记日志，不再抛出。
+     * 导入主流程异常时恢复批次状态：done 批次恢复历史结果（状态/计数/失败明细/完成时间），
+     * 其余复位为 pending。恢复失败只记日志，不再抛出。
      *
-     * @param batch 导入批次
+     * @param batch    导入批次
+     * @param previous 抢占前的结果快照
      */
-    private void resetBatchToPendingQuietly(ExcelImportBatch batch) {
+    private void restoreBatchQuietly(ExcelImportBatch batch, BatchResultSnapshot previous) {
         try {
-            batchMapper.resetToPending(batch.getBatchId());
-            batch.setStatus("pending");
-        } catch (Exception resetError) {
-            log.error("复位导入批次状态失败，batchId={}", batch.getBatchId(), resetError);
+            if ("done".equals(previous.status())) {
+                batchMapper.restoreBatchResult(batch.getBatchId(), previous.successCount(),
+                    previous.failedCount(), previous.failures(), previous.processedAt());
+                batch.setStatus("done");
+            } else {
+                batchMapper.resetToPending(batch.getBatchId());
+                batch.setStatus("pending");
+            }
+        } catch (Exception restoreError) {
+            log.error("恢复导入批次状态失败，batchId={}", batch.getBatchId(), restoreError);
         }
     }
 
@@ -475,9 +492,12 @@ public class ExcelAiImportService {
                 }
             }
             rawDataRows = filteredRows;
-            physicalLayout = new PhysicalLayout(filteredPhysicalIndexes, physicalLayout.imageColumns(),
-                physicalLayout.minDataColumn(), physicalLayout.maxDataColumn(),
-                physicalLayout.imageMergedGroups(), physicalLayout.sheetName());
+            // 原始文件读取失败时 physicalLayout 为 null（后续逻辑均有 null 兜底），不得解引用重建
+            if (physicalLayout != null) {
+                physicalLayout = new PhysicalLayout(filteredPhysicalIndexes, physicalLayout.imageColumns(),
+                    physicalLayout.minDataColumn(), physicalLayout.maxDataColumn(),
+                    physicalLayout.imageMergedGroups(), physicalLayout.sheetName());
+            }
         }
 
         List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
@@ -3764,6 +3784,14 @@ public class ExcelAiImportService {
         request.setProductLevel(StringUtils.hasText(row.getProductLevel())
             ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
             : defaultProductLevel);
+
+        // 重复/更新导入与组内重复属性：同"码或原文"组合的变体直接复用，
+        // 不触发 uk_variant_attrs 唯一索引冲突导致整行失败（与价格列分支同语义）
+        String existingVariantId = findExistingVariantId(rspuId, sizeCode, sizeText,
+            request.getColorCode(), row.getColorText(), request.getMaterialCode(), row.getMaterialText());
+        if (existingVariantId != null) {
+            return existingVariantId;
+        }
 
         var variantResponse = rspuVariantService.createVariant(rspuId, request);
         if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {

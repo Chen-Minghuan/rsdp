@@ -39,6 +39,25 @@ public interface ExcelImportBatchMapper extends BaseMapper<ExcelImportBatch> {
     int resetToPending(@Param("batchId") String batchId);
 
     /**
+     * 恢复 done 批次上一轮导入结果（导入主流程失败复位时调用）：
+     * 状态回到 done 并还原计数、失败明细与完成时间，done 批次重导失败不丢历史结果。
+     *
+     * @param batchId      批次 ID
+     * @param successCount 原成功数
+     * @param failedCount  原失败数
+     * @param failures     原失败明细 JSON
+     * @param processedAt  原完成时间
+     * @return 影响行数；0 表示批次已不在 importing 状态（无需恢复）
+     */
+    @Update("UPDATE excel_import_batch SET status = 'done', success_count = #{successCount},"
+        + " failed_count = #{failedCount}, failures = CAST(#{failures} AS jsonb),"
+        + " processed_at = #{processedAt}, updated_at = now()"
+        + " WHERE batch_id = #{batchId} AND status = 'importing'")
+    int restoreBatchResult(@Param("batchId") String batchId, @Param("successCount") Integer successCount,
+                           @Param("failedCount") Integer failedCount, @Param("failures") String failures,
+                           @Param("processedAt") LocalDateTime processedAt);
+
+    /**
      * 收割超时 importing 批次：状态停留在 importing 且长时间未更新，视为导入线程已消亡
      * （如 JVM 崩溃/重启），复位为 pending 允许用户重试。
      *
