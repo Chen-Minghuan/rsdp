@@ -549,7 +549,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   aspect-ratio: 4 / 3;
   object-fit: cover;
   border-radius: var(--radius);
-  background: var(--suppl);
+  background: #fff;
 }
 
 .sc-name {

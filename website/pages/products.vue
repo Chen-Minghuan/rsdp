@@ -755,7 +755,7 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
-  background: var(--suppl);
+  background: #fff;
 }
 
 .compare-card.is-empty {

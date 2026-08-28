@@ -112,7 +112,7 @@ const variantsText = computed(() => {
 .p-img {
   position: relative;
   aspect-ratio: 4 / 3;
-  background: var(--suppl);
+  background: #fff;
   overflow: hidden;
 }
 
