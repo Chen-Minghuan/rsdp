@@ -37,7 +37,7 @@ interface AnalyzeResponse {
   rooms: AnalyzeRoom[]
 }
 
-const { post, imageUrl, apiBase } = usePublicApi()
+const { post, imageUrl, requestBase } = usePublicApi()
 
 const step = ref<'upload' | 'confirm' | 'result'>('upload')
 const errorMessage = ref('')
@@ -85,7 +85,7 @@ async function analyze(file: File) {
     const form = new FormData()
     form.append('file', file)
     const result = await $fetch<{ code: number, message: string, data: AnalyzeResponse }>(
-      `${apiBase}/api/v1/public/ai-match/analyze`,
+      `${requestBase}/api/v1/public/ai-match/analyze`,
       { method: 'POST', body: form }
     )
     if (result.code !== 200) throw new Error(result.message || '识别失败')

@@ -7,10 +7,16 @@ import type { ApiResult } from '~/types/api'
 export function usePublicApi() {
   const config = useRuntimeConfig()
   const apiBase = config.public.apiBase
+  /**
+   * 请求基址：浏览器端用同源相对路径（''），开发走 nitro devProxy、生产走 Nginx 反代，
+   * 彻底避开跨域（后端 CORS 白名单不含官网源时，客户端直连 apiBase 会被 403）；
+   * SSR 服务端无同源概念，必须用绝对地址 apiBase。
+   */
+  const requestBase = import.meta.client ? '' : apiBase
 
   async function get<T>(path: string, query?: Record<string, string | number>): Promise<T | null> {
     try {
-      const result = await $fetch<ApiResult<T>>(`${apiBase}${path}`, { query })
+      const result = await $fetch<ApiResult<T>>(`${requestBase}${path}`, { query })
       return result && result.code === 200 ? result.data : null
     } catch {
       return null
@@ -18,7 +24,7 @@ export function usePublicApi() {
   }
 
   async function post<T>(path: string, body: unknown): Promise<T | null> {
-    const result = await $fetch<ApiResult<T>>(`${apiBase}${path}`, {
+    const result = await $fetch<ApiResult<T>>(`${requestBase}${path}`, {
       method: 'POST',
       body
     }).catch((err: unknown) => {
@@ -33,14 +39,15 @@ export function usePublicApi() {
   }
 
   /**
-   * 图片地址拼装：后端返回相对路径（/api/v1/images/xxx），拼上 apiBase；
+   * 图片地址拼装：后端返回相对路径（/api/v1/images/xxx），原样返回——浏览器会按本站源解析，
+   * 开发走 nitro devProxy、生产走 Nginx 反代，与接口请求同一通路；
+   * 同时保证 SSR 与客户端渲染结果一致，避免水合（hydration）不匹配。
    * 外部绝对地址原样返回。
    */
   function imageUrl(url?: string | null): string | undefined {
     if (!url) return undefined
-    if (/^https?:\/\//.test(url)) return url
-    return `${apiBase}${url}`
+    return url
   }
 
-  return { get, post, imageUrl, apiBase }
+  return { get, post, imageUrl, apiBase, requestBase }
 }

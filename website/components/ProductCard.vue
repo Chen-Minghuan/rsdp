@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { PublicProduct } from '~/types/api'
 
 /**
@@ -27,6 +27,14 @@ const { imageUrl } = usePublicApi()
 const NEW_DAYS = 30
 
 const displayImage = computed(() => imageUrl(props.product.primaryImageUrl))
+
+/** 图片加载完成后淡入（水合时已缓存的图 complete=true 直接置位，不依赖 load 事件）。 */
+const imgEl = ref<HTMLImageElement>()
+const imgLoaded = ref(false)
+
+onMounted(() => {
+  if (imgEl.value?.complete) imgLoaded.value = true
+})
 
 const name = computed(() =>
   props.product.productName || props.product.categoryPath || '未命名商品'
@@ -72,9 +80,12 @@ const variantsText = computed(() => {
       </button>
       <img
         v-if="displayImage"
+        ref="imgEl"
         :src="displayImage"
         :alt="name"
+        :class="{ loaded: imgLoaded }"
         loading="lazy"
+        @load="imgLoaded = true"
       >
     </div>
     <div class="p-body">
@@ -105,16 +116,27 @@ const variantsText = computed(() => {
   overflow: hidden;
 }
 
-/* contain 完整展示（不裁剪），hover 轻微放大 */
+/* contain 完整展示（不裁剪），hover 轻微放大；加载完成后淡入 */
 .p-img img {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  transition: transform .35s;
+  opacity: 0;
+  transition: opacity .25s ease, transform .35s;
+}
+
+.p-img img.loaded {
+  opacity: 1;
 }
 
 .p-card:hover .p-img img {
   transform: scale(1.03);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .p-img img {
+    transition: none;
+  }
 }
 
 /* tag：直角小方块贴左上角 */

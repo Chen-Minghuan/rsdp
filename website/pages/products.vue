@@ -117,6 +117,20 @@ const products = ref<PublicProduct[]>([])
 const total = ref(0)
 const page = ref(1)
 const loadingMore = ref(false)
+/** 本次「加载更多」新追加的商品 id（用于错峰入场动画，首屏/筛选重置为空）。 */
+const enteringIds = ref<string[]>([])
+
+/** 追加商品 id → 入场延迟 ms（每张错开 40ms）。 */
+const enteringDelay = computed(() => {
+  const map = new Map<string, number>()
+  enteringIds.value.forEach((id, i) => map.set(id, i * 70))
+  return map
+})
+
+/** 加载中渲染的骨架卡数量（与本次将追加的条数一致）。 */
+const skeletonCount = computed(() =>
+  loadingMore.value ? Math.max(0, Math.min(PAGE_SIZE, total.value - products.value.length)) : 0
+)
 
 function fetchProducts(targetPage: number) {
   const f = filters.value
@@ -143,6 +157,7 @@ watch(firstPage, (val) => {
   products.value = val?.rows ?? []
   total.value = val?.total ?? 0
   page.value = 1
+  enteringIds.value = []
 }, { immediate: true })
 
 async function loadMore() {
@@ -151,6 +166,7 @@ async function loadMore() {
   try {
     const next = await fetchProducts(page.value + 1)
     if (next) {
+      enteringIds.value = next.rows.map(r => r.rspuId)
       products.value = [...products.value, ...next.rows]
       page.value += 1
     }
@@ -364,11 +380,19 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
         <ProductCard
           v-for="product in products"
           :key="product.rspuId"
+          :class="{ 'p-card-enter': enteringDelay.has(product.rspuId) }"
+          :style="enteringDelay.has(product.rspuId) ? { '--d': `${enteringDelay.get(product.rspuId)}ms` } : undefined"
           :product="product"
           :compare-on="compareOn"
           :compared="isCompared(product)"
           @toggle-compare="toggleCompare"
         />
+        <!-- 加载更多骨架卡：点击即渲染，数据回来后整体替换 -->
+        <div v-for="i in skeletonCount" :key="`sk-${i}`" class="sk-card" aria-hidden="true">
+          <div class="sk-block sk-img" />
+          <div class="sk-block sk-line" style="width: 62%" />
+          <div class="sk-block sk-line" style="width: 38%" />
+        </div>
       </div>
       <div v-if="!products.length && !pending" class="empty">暂无符合条件的商品</div>
 
@@ -613,6 +637,55 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   grid-template-columns: repeat(4, 1fr);
   gap: 36px 24px;
   margin-top: 24px;
+}
+
+/* ===== 加载更多：新卡错峰入场（--d 为每张延迟） ===== */
+.p-card-enter {
+  animation: card-in .65s ease both;
+  animation-delay: var(--d, 0ms);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ===== 骨架卡（直角米色块 + 轻微呼吸，对齐真实卡片占位） ===== */
+.sk-card {
+  pointer-events: none;
+}
+
+.sk-block {
+  background: var(--suppl);
+  animation: sk-pulse 1.1s ease-in-out infinite;
+}
+
+.sk-img {
+  aspect-ratio: 4 / 3;
+}
+
+.sk-line {
+  height: 12px;
+  margin-top: 12px;
+}
+
+@keyframes sk-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+
+/* 系统减弱动效时直接呈现，不播放动画 */
+@media (prefers-reduced-motion: reduce) {
+  .p-card-enter,
+  .sk-block {
+    animation: none;
+  }
 }
 
 .empty {
