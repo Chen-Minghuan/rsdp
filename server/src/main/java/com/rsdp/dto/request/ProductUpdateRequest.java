@@ -2,6 +2,7 @@ package com.rsdp.dto.request;
 
 import lombok.Data;
 
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
@@ -49,6 +50,10 @@ public class ProductUpdateRequest {
 
     /** 参考价格带。 */
     private String referencePriceBand;
+
+    /** 零售参考价/销售价（不加密，官网对外展示口径），必须大于 0。 */
+    @Positive
+    private java.math.BigDecimal retailPrice;
 
     /** 产品等级，如 S/A/B/C。 */
     private String productLevel;

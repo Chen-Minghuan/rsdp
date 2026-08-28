@@ -183,6 +183,9 @@ const primaryColorCss = computed(() => {
     <section class="info-group">
       <h3 class="info-group-title">价格与规格</h3>
       <n-descriptions bordered :column="3" label-placement="left" size="small">
+        <n-descriptions-item label="销售价（零售价）">
+          {{ rspu.retailPrice != null ? `¥ ${Number(rspu.retailPrice).toFixed(2)}` : '-' }}
+        </n-descriptions-item>
         <n-descriptions-item label="参考价格带">{{ rspu.referencePriceBand || '-' }}</n-descriptions-item>
         <n-descriptions-item label="产品等级">{{ rspu.productLevel || '-' }}</n-descriptions-item>
         <n-descriptions-item label="质保年限">

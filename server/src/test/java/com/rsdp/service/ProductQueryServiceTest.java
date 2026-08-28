@@ -472,6 +472,7 @@ class ProductQueryServiceTest {
         request.setSceneTags(List.of("LIVING"));
         request.setSixDimTags(Map.of("A", "现代"));
         request.setReferencePriceBand("mid");
+        request.setRetailPrice(new java.math.BigDecimal("1999.00"));
         request.setWarrantyYears(3);
         request.setKeySpecs(Map.of("width", "80cm"));
 
@@ -483,6 +484,7 @@ class ProductQueryServiceTest {
         assertThat(rspu.getSceneTags()).isEqualTo("[\"LIVING\"]");
         assertThat(rspu.getSixDimTags()).isEqualTo("{\"A\":\"现代\"}");
         assertThat(rspu.getReferencePriceBand()).isEqualTo("mid");
+        assertThat(rspu.getRetailPrice()).isEqualByComparingTo("1999.00");
         assertThat(rspu.getWarrantyYears()).isEqualTo(3);
         assertThat(rspu.getKeySpecs()).isEqualTo("{\"width\":\"80cm\"}");
 
@@ -550,6 +552,7 @@ class ProductQueryServiceTest {
         rspu.setRspuId("RSPU-TEST01");
         rspu.setPositioningLabel("MC");
         rspu.setColorPrimaryName("原木色");
+        rspu.setRetailPrice(new java.math.BigDecimal("1299.00"));
 
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
 
@@ -560,6 +563,7 @@ class ProductQueryServiceTest {
 
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
         assertThat(rspu.getColorPrimaryName()).isEqualTo("原木色");
+        assertThat(rspu.getRetailPrice()).isEqualByComparingTo("1299.00");
         assertThat(rspu.getWarrantyYears()).isEqualTo(5);
     }
 

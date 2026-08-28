@@ -489,18 +489,6 @@ const columns: DataTableColumns<ProductSummary> = [
     renderExpand
   },
   {
-    title: '商品编号',
-    key: 'rspuId',
-    width: 150,
-    render(row) {
-      return h(
-        'span',
-        { style: { fontSize: '12px', fontFamily: 'monospace', color: '#606266', wordBreak: 'break-all' } },
-        row.rspuId
-      )
-    }
-  },
-  {
     title: '商品信息',
     key: 'productInfo',
     width: 220,
@@ -533,7 +521,7 @@ const columns: DataTableColumns<ProductSummary> = [
     }
   },
   {
-    title: '价格',
+    title: '出厂价',
     key: 'minFactoryPrice',
     width: 110,
     align: 'center',
@@ -548,6 +536,25 @@ const columns: DataTableColumns<ProductSummary> = [
           }
         },
         formatPrice(row.minFactoryPrice)
+      )
+    }
+  },
+  {
+    title: '销售价',
+    key: 'retailPrice',
+    width: 110,
+    align: 'center',
+    render(row) {
+      return h(
+        'span',
+        {
+          style: {
+            fontWeight: 700,
+            color: 'var(--rsdp-text)',
+            fontFamily: 'var(--rsdp-font-mono)'
+          }
+        },
+        formatPrice(row.retailPrice)
       )
     }
   },

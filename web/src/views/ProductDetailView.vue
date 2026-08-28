@@ -600,6 +600,7 @@ function openEditModal() {
     fabricTags: Array.isArray(r.fabricTags) ? [...r.fabricTags] : [],
     sceneTags: Array.isArray(r.sceneTags) ? [...r.sceneTags] : [],
     referencePriceBand: r.referencePriceBand,
+    retailPrice: r.retailPrice,
     productLevel: r.productLevel,
     warrantyYears: r.warrantyYears,
     sixDimTagsEdit: Object.fromEntries(sixDimEditKeys.map(k => [k, r.sixDimTags?.[k] ?? null])),
@@ -645,6 +646,7 @@ async function handleUpdateProduct() {
     sceneTags: editForm.value.sceneTags,
     sixDimTags,
     referencePriceBand: editForm.value.referencePriceBand,
+    retailPrice: editForm.value.retailPrice ?? undefined,
     productLevel: editForm.value.productLevel,
     warrantyYears: editForm.value.warrantyYears,
     keySpecs
@@ -1532,6 +1534,16 @@ onBeforeRouteUpdate((to, from) => {
             v-model:value="editForm.referencePriceBand"
             :options="priceBandOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
             placeholder="选择价格带"
+            clearable
+          />
+        </n-form-item>
+        <n-form-item label="销售价">
+          <n-input-number
+            v-model:value="editForm.retailPrice"
+            :min="0.01"
+            :precision="2"
+            placeholder="零售参考价（官网对外展示）"
+            style="width: 100%;"
             clearable
           />
         </n-form-item>

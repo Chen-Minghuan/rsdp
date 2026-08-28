@@ -188,7 +188,7 @@ PUT    /api/v1/products/{rspuId}/review
        # Request: { reviewStatus: "已确认"|"存疑", reviewComment? }
 
 PUT    /api/v1/products/{rspuId}
-       # 更新产品元数据（产品名称、定位标签、颜色、材质、场景、六维标签、价格带、保修年限等，已实现）
+       # 更新产品元数据（产品名称、定位标签、颜色、材质、场景、六维标签、价格带、零售参考价retailPrice、保修年限等，已实现）
        # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）
        #        status: "active"|"inactive"（可选，销售状态上下架，非法值返回 400）
        # 说明：工厂管理员/业务员只能更新本厂已录入 RSKU 的 RSPU；非本厂产品返回 403

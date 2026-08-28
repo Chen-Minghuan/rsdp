@@ -985,6 +985,9 @@ public class ProductQueryService {
         if (request.getReferencePriceBand() != null) {
             rspu.setReferencePriceBand(request.getReferencePriceBand().trim());
         }
+        if (request.getRetailPrice() != null) {
+            rspu.setRetailPrice(request.getRetailPrice());
+        }
         if (StringUtils.hasText(request.getProductLevel())) {
             String productLevel = request.getProductLevel().trim().toUpperCase();
             validateProductLevel(productLevel);
@@ -1212,6 +1215,7 @@ public class ProductQueryService {
         summary.setAestheticsConfidence(rspu.getAestheticsConfidence());
         summary.setProductLevel(rspu.getProductLevel());
         summary.setMinFactoryPrice(minPriceMap.get(rspu.getRspuId()));
+        summary.setRetailPrice(rspu.getRetailPrice());
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());
         summary.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));

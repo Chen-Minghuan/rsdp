@@ -24,6 +24,8 @@ public class ProductSummaryResponse {
     private String aestheticsConfidence;
     private String productLevel;
     private BigDecimal minFactoryPrice;
+    /** 零售参考价/销售价（不加密，官网对外展示口径）。 */
+    private BigDecimal retailPrice;
     private String primaryImageUrl;
     private List<String> factoryCodes;
     /** RSKU 报价数（工作台「报价×N」chip）。 */

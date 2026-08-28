@@ -114,6 +114,8 @@ export interface ProductSummary {
   aestheticsConfidence: string
   productLevel?: string
   minFactoryPrice?: number
+  /** 零售参考价/销售价（不加密，官网对外展示口径） */
+  retailPrice?: number
   primaryImageUrl: string
   factoryCodes?: string[]
   /** RSKU 报价数（工作台「报价×N」chip） */
@@ -226,6 +228,8 @@ export interface ProductDetail {
     fabricTags?: string[]
     sceneTags: string[]
     referencePriceBand: string
+    /** 零售参考价/销售价（不加密，官网对外展示口径） */
+    retailPrice?: number
     /** 预算区间（JSON 值，结构由 AI/导入决定，如 { min, max, currency }） */
     budgetRange?: unknown
     productLevel?: string
@@ -312,6 +316,8 @@ export interface ProductUpdateRequest {
   sceneTags?: string[]
   sixDimTags?: Record<string, string>
   referencePriceBand?: string
+  /** 零售参考价/销售价（必须大于 0；未传则不更新） */
+  retailPrice?: number
   productLevel?: string
   warrantyYears?: number
   keySpecs?: Record<string, string>
