@@ -63,7 +63,7 @@ const variantsText = computed(() => {
 </script>
 
 <template>
-  <div class="p-card">
+  <NuxtLink :to="`/products/${product.rspuId}`" class="p-card">
     <div class="p-img">
       <div v-if="tags.length" class="tags">
         <span v-for="tag in tags" :key="tag.text" class="tag" :class="tag.cls">{{ tag.text }}</span>
@@ -74,7 +74,7 @@ const variantsText = computed(() => {
         class="compare"
         :class="{ on: compared }"
         :aria-pressed="compared"
-        @click.stop="emit('toggle-compare', product)"
+        @click.stop.prevent="emit('toggle-compare', product)"
       >
         {{ compared ? '×' : '＋' }}
       </button>
@@ -100,13 +100,16 @@ const variantsText = computed(() => {
         <span v-if="ratingCount != null">{{ ratingCount }} 条评价</span>
       </div>
     </div>
-  </div>
+  </NuxtLink>
 </template>
 
 <style scoped>
 .p-card {
   cursor: pointer;
   position: relative;
+  display: block;
+  color: inherit;
+  text-decoration: none;
 }
 
 .p-img {

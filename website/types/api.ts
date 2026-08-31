@@ -17,6 +17,46 @@ export interface PageResult<T> {
   rows: T[]
 }
 
+/** 公开商品详情（GET /public/products/{rspuId}）。 */
+export interface PublicProductDetail {
+  rspuId: string
+  rspuCode?: string
+  productName?: string
+  categoryCode?: string
+  categoryPath?: string
+  positioningLabel?: string
+  colorPrimaryName?: string
+  colorSecondary?: string
+  materialTags: string[]
+  fabricTags: string[]
+  description?: string
+  retailPrice?: number
+  referencePriceBand?: string
+  productLevel?: string
+  warrantyYears?: number
+  sixDimTags: Record<string, string>
+  keySpecs: Record<string, unknown>
+  createdAt?: string
+  images: Array<{
+    imageId: string
+    url: string
+    primary?: boolean
+    variantId?: string
+  }>
+  variants: Array<{
+    variantId: string
+    displayName?: string
+    variantCode?: string
+    sizeCode?: string
+    sizeText?: string
+    dimensions?: Record<string, unknown>
+    colorCode?: string
+    colorText?: string
+    materialCode?: string
+    materialText?: string
+  }>
+}
+
 /** 首页聚合（GET /public/home）。 */
 export interface HomeResponse {
   banners: HomeBanner[]

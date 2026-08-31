@@ -11,11 +11,14 @@ const props = withDefaults(defineProps<{
   btnText?: string
   /** 留资来源：ai_match / site_form / design_booking */
   source?: string
+  /** 意向文案预填（如商品详情页带入"咨询：商品名 · 规格"） */
+  intent?: string
 }>(), {
   title: '不知道从何开始？',
   desc: '上传户型图，3 分钟生成你的专属客厅搭配方案，设计师免费复核。',
   btnText: '免费获取搭配方案',
-  source: 'site_form'
+  source: 'site_form',
+  intent: ''
 })
 
 const { post } = usePublicApi()
@@ -23,7 +26,7 @@ const { post } = usePublicApi()
 const expanded = ref(false)
 const name = ref('')
 const phone = ref('')
-const intent = ref('')
+const intent = ref(props.intent)
 const submitting = ref(false)
 const errorMessage = ref('')
 const done = ref(false)
