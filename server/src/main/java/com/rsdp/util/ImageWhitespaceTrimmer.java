@@ -68,6 +68,26 @@ public final class ImageWhitespaceTrimmer {
     private static final int COLUMN_TEXTURE_GRADIENT = 15;
 
     /**
+     * 内容居中：行/列亮度标准差达到该值视为有纹理（织物/皮革/木纹），一律按内容保护；
+     * 低于该值且颜色近背景才视为版式留白可裁掉（白色织物身体不再被当白边吃掉）。
+     */
+    private static final double CONTENT_TEXTURE_STDDEV = 5.0;
+
+    /**
+     * 内容居中判空的颜色容差（比收紧的 {@link #COLOR_TOLERANCE} 严格）：
+     * 画册版式留白是纯背景色（JPEG 噪点 ±2~3），而浅色产品身体（248 灰等）
+     * 与背景差 7+，严格容差下被判为内容——锚定之外的第二道防误切闸。
+     */
+    private static final int STRICT_COLOR_TOLERANCE = 5;
+
+    /**
+     * 内容居中每边扫描上限（相对当前图像该边长度）。
+     * 取 50% 而非收紧的 maxTrimRatio：前置阶段可能已清掉某一边，
+     * 对侧需要足够额度才能清干净实现对称；防误切由严格色容差/纹理/连续段保护承担。
+     */
+    private static final double CENTER_MAX_TRIM_RATIO = 0.5;
+
+    /**
      * 边缘切片切除：切片带列的纹理行平均占比下限（照片几乎逐行有纹理）。
      */
     private static final double SLICE_COLUMN_MIN_TEXTURE = 0.5;
@@ -164,7 +184,7 @@ public final class ImageWhitespaceTrimmer {
      * @param page         原始图片
      * @param bbox         AI 返回的相对坐标框（应已经过 {@link ProductBoxRefiner} 清洗）
      * @param expandRatio  裁剪前外扩比例（相对图片宽高）
-     * @param padRatio     收紧后留白比例（相对内容宽高）
+     * @param padRatio     收紧后四边留白比例（相对内容最长边，产品居中），如 0.05
      * @param quality      JPEG 质量，0.0 ~ 1.0
      * @param options      收紧策略
      * @param coreBox      核心框（相对坐标），可为 null
@@ -242,10 +262,11 @@ public final class ImageWhitespaceTrimmer {
             ? (presliced.getHeight() - coreBottomPx) - trimResult.top() : -1;
         BufferedImage recropped = recropBottomTextBand(trimmed, bgRgb, cornerMeans, options, coreBottomRow);
 
-        // 5. 留白 padding（使用页面背景色）
-        BufferedImage padded = pad(recropped, padRatio, bgRgb);
+        // 5. 内容居中重排：扫描真实内容包围盒（近背景色 + 低纹理双判定），
+        // 裁到内容后按统一比例补齐对称边距，让产品在画布中相对居中
+        BufferedImage centered = centerContent(recropped, bgRgb, options, padRatio);
 
-        return ImageCropper.encodeJpeg(padded, quality);
+        return ImageCropper.encodeJpeg(centered, quality);
     }
 
     /**
@@ -563,25 +584,174 @@ public final class ImageWhitespaceTrimmer {
     }
 
     /**
-     * 按内容宽高比例补背景色边距。
+     * 内容居中重排：在收紧结果上扫描真实内容包围盒（近背景色 + 低纹理双判定，
+     * 每边扫描上限与收紧一致），裁到内容后按统一比例（相对内容最长边）补齐对称
+     * 背景色边距，让产品在画布中相对居中——解决 AI 框内含版式留白（画册产品偏左/
+     * 偏上、右侧或顶部留放大片空白）导致产品不居中的问题。
+     *
+     * <p>防误切（与收紧同级保护）：四角背景不一致（场景背景）不启用；
+     * 纹理行/列（亮度标准差 ≥ {@link #CONTENT_TEXTURE_STDDEV}，如白色织物/皮革身体）
+     * 一律视为内容；判空颜色容差收紧到 {@link #STRICT_COLOR_TOLERANCE}（浅色产品身体
+     * 与纯背景留白可区分）；每边扫描上限 {@link #CENTER_MAX_TRIM_RATIO} 兜底，
+     * 内容框无效时放弃居中仅补边距。</p>
+     *
+     * @param image       收紧后的图像
+     * @param bgRgb       背景色
+     * @param options     收紧策略（复用其一致性容差/收紧上限/连续段保护）
+     * @param marginRatio 四边留白比例（相对内容最长边），如 0.05
+     * @return 居中重排后的图像
      */
-    private static BufferedImage pad(BufferedImage image, double padRatio, int bgRgb) {
-        if (padRatio <= 0.0) {
-            return image;
+    private static BufferedImage centerContent(BufferedImage image, int bgRgb,
+                                               TrimOptions options, double marginRatio) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+
+        int left = 0;
+        int top = 0;
+        int right = width - 1;
+        int bottom = height - 1;
+        boolean consistent = options.cornerConsistencyTolerance() <= 0
+            || cornersConsistent(estimateCornerMeans(image), options.cornerConsistencyTolerance());
+        if (consistent) {
+            // 每边扫描上限取固定 50% 而非收紧的 maxTrimRatio：文字带重裁等前置阶段可能已清掉
+            // 某一边（如底部），若按收紧后图像的 25% 设限，对侧留白会清不干净导致仍不居中；
+            // 防误切由严格色容差 + 纹理保护 + 连续段保护承担，上限仅兜底防灾难性误判
+            int maxTrimX = (int) Math.floor(width * CENTER_MAX_TRIM_RATIO);
+            int maxTrimY = (int) Math.floor(height * CENTER_MAX_TRIM_RATIO);
+            while (top < maxTrimY && isStrictBlankRow(image, top, 0, width, bgRgb, options)
+                && rowLowTexture(image, top, 0, width)) {
+                top++;
+            }
+            int trimmed = 0;
+            while (bottom > top && trimmed < maxTrimY && isStrictBlankRow(image, bottom, 0, width, bgRgb, options)
+                && rowLowTexture(image, bottom, 0, width)) {
+                bottom--;
+                trimmed++;
+            }
+            while (left < maxTrimX && isStrictBlankColumn(image, left, top, bottom, bgRgb, options)
+                && columnLowTexture(image, left, top, bottom)) {
+                left++;
+            }
+            trimmed = 0;
+            while (right > left && trimmed < maxTrimX && isStrictBlankColumn(image, right, top, bottom, bgRgb, options)
+                && columnLowTexture(image, right, top, bottom)) {
+                right--;
+                trimmed++;
+            }
+            int contentW = right - left + 1;
+            int contentH = bottom - top + 1;
+            // 防御：内容框无效时放弃居中（不切产品），按原图补边距；
+            // 不设面积下限——每边扫描已有收紧上限保护，小占比内容（版式留白多的图）正是居中的目标场景
+            if (contentW <= 0 || contentH <= 0) {
+                left = 0;
+                top = 0;
+                right = width - 1;
+                bottom = height - 1;
+            } else if (left > 0 || top > 0 || right < width - 1 || bottom < height - 1) {
+                log.debug("内容居中重排：内容框 [{},{} ~ {},{}]（原图 {}x{}）", left, top, right, bottom, width, height);
+            }
         }
-        int padX = (int) Math.round(image.getWidth() * padRatio);
-        int padY = (int) Math.round(image.getHeight() * padRatio);
-        if (padX <= 0 && padY <= 0) {
-            return image;
+
+        BufferedImage content = (left == 0 && top == 0 && right == width - 1 && bottom == height - 1)
+            ? image
+            : image.getSubimage(left, top, right - left + 1, bottom - top + 1);
+        if (marginRatio <= 0.0) {
+            return content;
         }
-        BufferedImage padded = new BufferedImage(
-            image.getWidth() + 2 * padX, image.getHeight() + 2 * padY, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = padded.createGraphics();
+        int margin = (int) Math.round(Math.max(content.getWidth(), content.getHeight()) * marginRatio);
+        BufferedImage canvas = new BufferedImage(
+            content.getWidth() + 2 * margin, content.getHeight() + 2 * margin, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = canvas.createGraphics();
         g.setColor(new java.awt.Color(bgRgb));
-        g.fillRect(0, 0, padded.getWidth(), padded.getHeight());
-        g.drawImage(image, padX, padY, null);
+        g.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
+        g.drawImage(content, margin, margin, null);
         g.dispose();
-        return padded;
+        return canvas;
+    }
+
+    /** 严格判空行：颜色容差收紧到 {@link #STRICT_COLOR_TOLERANCE}，其余语义同 {@link #isBlankRow}。 */
+    private static boolean isStrictBlankRow(BufferedImage image, int y, int fromX, int toX, int bgRgb,
+                                            TrimOptions options) {
+        int total = toX - fromX;
+        int blank = 0;
+        int nonBgRun = 0;
+        int maxNonBgRun = 0;
+        for (int x = fromX; x < toX; x++) {
+            if (isNearBackgroundStrict(image.getRGB(x, y), bgRgb)) {
+                blank++;
+                nonBgRun = 0;
+            } else {
+                nonBgRun++;
+                maxNonBgRun = Math.max(maxNonBgRun, nonBgRun);
+            }
+        }
+        if (options.protectContentRun() && maxNonBgRun >= CONTENT_RUN_LENGTH) {
+            return false;
+        }
+        return (double) blank / total >= options.blankRatio();
+    }
+
+    /** 严格判空列：颜色容差收紧到 {@link #STRICT_COLOR_TOLERANCE}，其余语义同 {@link #isBlankColumn}。 */
+    private static boolean isStrictBlankColumn(BufferedImage image, int x, int fromY, int toY, int bgRgb,
+                                               TrimOptions options) {
+        int total = toY - fromY + 1;
+        int blank = 0;
+        int nonBgRun = 0;
+        int maxNonBgRun = 0;
+        for (int y = fromY; y <= toY; y++) {
+            if (isNearBackgroundStrict(image.getRGB(x, y), bgRgb)) {
+                blank++;
+                nonBgRun = 0;
+            } else {
+                nonBgRun++;
+                maxNonBgRun = Math.max(maxNonBgRun, nonBgRun);
+            }
+        }
+        if (options.protectContentRun() && maxNonBgRun >= CONTENT_RUN_LENGTH) {
+            return false;
+        }
+        return (double) blank / total >= options.blankRatio();
+    }
+
+    private static boolean isNearBackgroundStrict(int rgb, int bgRgb) {
+        return Math.abs(((rgb >> 16) & 0xFF) - ((bgRgb >> 16) & 0xFF)) <= STRICT_COLOR_TOLERANCE
+            && Math.abs(((rgb >> 8) & 0xFF) - ((bgRgb >> 8) & 0xFF)) <= STRICT_COLOR_TOLERANCE
+            && Math.abs((rgb & 0xFF) - (bgRgb & 0xFF)) <= STRICT_COLOR_TOLERANCE;
+    }
+
+    /** 行亮度标准差低于阈值（近乎纯色，如版式留白）时视为低纹理行（隔行采样加速）。 */
+    private static boolean rowLowTexture(BufferedImage image, int y, int fromX, int toX) {        long sum = 0;
+        long sumSq = 0;
+        int n = 0;
+        for (int x = fromX; x < toX; x += 2) {
+            int lum = luminance(image.getRGB(x, y));
+            sum += lum;
+            sumSq += lum * lum;
+            n++;
+        }
+        return variance(sum, sumSq, n) < CONTENT_TEXTURE_STDDEV * CONTENT_TEXTURE_STDDEV;
+    }
+
+    /** 列亮度标准差低于阈值时视为低纹理列（隔行采样加速）。 */
+    private static boolean columnLowTexture(BufferedImage image, int x, int fromY, int toY) {
+        long sum = 0;
+        long sumSq = 0;
+        int n = 0;
+        for (int y = fromY; y <= toY; y += 2) {
+            int lum = luminance(image.getRGB(x, y));
+            sum += lum;
+            sumSq += lum * lum;
+            n++;
+        }
+        return variance(sum, sumSq, n) < CONTENT_TEXTURE_STDDEV * CONTENT_TEXTURE_STDDEV;
+    }
+
+    private static double variance(long sum, long sumSq, int n) {
+        if (n <= 0) {
+            return 0;
+        }
+        double mean = sum / (double) n;
+        return Math.max(0.0, sumSq / (double) n - mean * mean);
     }
 
     /**

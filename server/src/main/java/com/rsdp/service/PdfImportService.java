@@ -87,9 +87,9 @@ public class PdfImportService {
     private static final double BOX_EXPAND_RATIO = 0.10;
 
     /**
-     * 白边收紧后的留白比例（相对内容宽高）。
+     * 四边统一留白比例（相对内容最长边，产品居中重排）。
      */
-    private static final double CROP_PAD_RATIO = 0.02;
+    private static final double CROP_PAD_RATIO = 0.05;
 
     /**
      * 导入 PDF 文件，自动识别产品页、裁剪产品图并创建 RSPU 录入任务。

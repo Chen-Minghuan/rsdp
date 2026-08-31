@@ -348,8 +348,105 @@ class ImageWhitespaceTrimmerTest {
         assertThat(result.getHeight()).isGreaterThan(370);
     }
 
-    private BufferedImage createPage(int width, int height, Color bg) {
-        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+    @Test
+    void centerContent_shouldCenterProductWhenWhitespaceInsideCoreBox() throws IOException {
+        // 画册版式：产品偏左，图块内右侧大片留白（原文字位）；核心框锚定整页 → 锚定收紧无效，
+        // 居中重排应裁掉框内留白并让产品左右居中
+        BufferedImage page = createPage(700, 400, Color.WHITE);
+        fillRect(page, 100, 100, 450, 200, new Color(30, 60, 120));
+
+        ProductBoundingBox box = new ProductBoundingBox(0.0, 0.0, 1.0, 1.0);
+        byte[] jpeg = ImageWhitespaceTrimmer.cropRefineToJpeg(page, box, 0.0, 0.05, 0.9f,
+            ImageWhitespaceTrimmer.TrimOptions.document(), box);
+        BufferedImage result = decode(jpeg);
+
+        // 内容 450x200，边距 5%×450≈23 → 画布 ≈ 496x246（而非原来的 700 宽）
+        assertThat(result.getWidth()).isBetween(480, 510);
+        assertThat(result.getHeight()).isBetween(230, 260);
+        // 产品左右边距对称（居中）：产品色左右边界到画布边缘距离差 ≤3px
+        int leftEdge = firstDarkColumn(result, true);
+        int rightEdge = firstDarkColumn(result, false);
+        assertThat(Math.abs(leftEdge - (result.getWidth() - 1 - rightEdge)))
+            .as("产品应左右居中").isLessThanOrEqualTo(3);
+    }
+
+    @Test
+    void centerContent_shouldCenterVerticallyWhenTopWhitespace() throws IOException {
+        // 产品偏下，顶部大片留白 → 居中重排后上下边距对称
+        BufferedImage page = createPage(600, 600, Color.WHITE);
+        fillRect(page, 150, 150, 300, 300, new Color(30, 60, 120));
+
+        byte[] jpeg = ImageWhitespaceTrimmer.cropRefineToJpeg(
+            page, new ProductBoundingBox(0.0, 0.0, 1.0, 1.0), 0.0, 0.05, 0.9f,
+            ImageWhitespaceTrimmer.TrimOptions.conservative());
+        BufferedImage result = decode(jpeg);
+
+        // 内容 300x300，边距 5%×300=15 → 画布 ≈ 330x330
+        assertThat(result.getWidth()).isBetween(320, 345);
+        assertThat(result.getHeight()).isBetween(320, 345);
+        int topEdge = firstDarkRow(result, true);
+        int bottomEdge = firstDarkRow(result, false);
+        assertThat(Math.abs(topEdge - (result.getHeight() - 1 - bottomEdge)))
+            .as("产品应上下居中").isLessThanOrEqualTo(3);
+    }
+
+    @Test
+    void centerContent_shouldProtectTexturedNearWhiteProduct() throws IOException {
+        // 近白色织物产品（240±噪点，纹理标准差 >5）：颜色近背景但有纹理，
+        // 居中重排不得把产品身体当版式留白裁掉
+        BufferedImage page = createPage(600, 400, Color.WHITE);
+        java.util.Random rnd = new java.util.Random(42);
+        for (int y = 100; y < 300; y++) {
+            for (int x = 100; x < 500; x++) {
+                int v = 240 + rnd.nextInt(25) - 12;
+                page.setRGB(x, y, (v << 16) | (v << 8) | v);
+            }
+        }
+
+        byte[] jpeg = ImageWhitespaceTrimmer.cropRefineToJpeg(
+            page, new ProductBoundingBox(0.0, 0.0, 1.0, 1.0), 0.0, 0.05, 0.9f,
+            ImageWhitespaceTrimmer.TrimOptions.conservative());
+        BufferedImage result = decode(jpeg);
+
+        // 织物块 400x200 完整保留 + 边距 5%×400=20 → 画布 ≈ 440x240
+        assertThat(result.getWidth()).isBetween(425, 455);
+        assertThat(result.getHeight()).isBetween(225, 255);
+        // 中心仍是织物浅灰（≈240）而非纯白背景
+        int centerLum = result.getRGB(result.getWidth() / 2, result.getHeight() / 2) & 0xFF;
+        assertThat(centerLum).isLessThan(252);
+    }
+
+    /** 首/末含深色（亮度 <200）内容的列。 */
+    private int firstDarkColumn(BufferedImage image, boolean fromLeft) {
+        int w = image.getWidth();
+        int h = image.getHeight();
+        for (int i = 0; i < w; i++) {
+            int x = fromLeft ? i : w - 1 - i;
+            for (int y = 0; y < h; y++) {
+                if ((image.getRGB(x, y) & 0xFF) < 200) {
+                    return x;
+                }
+            }
+        }
+        return fromLeft ? w : -1;
+    }
+
+    /** 首/末含深色（亮度 <200）内容的行。 */
+    private int firstDarkRow(BufferedImage image, boolean fromTop) {
+        int w = image.getWidth();
+        int h = image.getHeight();
+        for (int i = 0; i < h; i++) {
+            int y = fromTop ? i : h - 1 - i;
+            for (int x = 0; x < w; x++) {
+                if ((image.getRGB(x, y) & 0xFF) < 200) {
+                    return y;
+                }
+            }
+        }
+        return fromTop ? h : -1;
+    }
+
+    private BufferedImage createPage(int width, int height, Color bg) {        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
         g.setColor(bg);
         g.fillRect(0, 0, width, height);

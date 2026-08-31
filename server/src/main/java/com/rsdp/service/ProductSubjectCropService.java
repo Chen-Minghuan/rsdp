@@ -65,8 +65,8 @@ public class ProductSubjectCropService {
     /** 完整性校验不通过时的加大外扩比例 */
     private static final double RETRY_EXPAND_RATIO = 0.10;
 
-    /** 收紧后留白比例（与 PDF 导入一致） */
-    private static final double CROP_PAD_RATIO = 0.02;
+    /** 四边统一留白比例（相对内容最长边，产品居中重排；与 PDF 导入一致） */
+    private static final double CROP_PAD_RATIO = 0.05;
 
     /** 输出 JPEG 质量 */
     private static final float OUTPUT_QUALITY = 0.9f;
