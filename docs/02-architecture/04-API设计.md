@@ -1314,6 +1314,17 @@ GET    /api/v1/public/products
        #            positioningLabel, colorPrimaryName, materialTags[], retailPrice,
        #            primaryImageUrl, variantCount, createdAt }>
 
+GET    /api/v1/public/products/{rspuId}
+       # 公开商品详情（仅 status=active，下架/不存在返回 code=404「商品不存在或已下架」）
+       # 红线同列表：只含展示字段与零售参考价，绝不含出厂价/工厂/RSKU 字段
+       # Response: { rspuId, rspuCode, productName, categoryCode, categoryPath, positioningLabel,
+       #            colorPrimaryName, colorSecondary, materialTags[], fabricTags[], description,
+       #            retailPrice, referencePriceBand, productLevel, warrantyYears,
+       #            sixDimTags{}, keySpecs{}, createdAt,
+       #            images: [{ imageId, url, primary, variantId? }]（主图在前）,
+       #            variants: [{ variantId, displayName, variantCode, sizeCode, sizeText,
+       #                         dimensions{}, colorCode, colorText, materialCode, materialText }] }
+
 GET    /api/v1/public/scenes
        # 空间入口列表：启用场景字典 + 每个空间一张代表图（可空）
        # 封面图手配优先（category_dict.image_id，V35），无手配时回退"该场景下最新在售产品主图"

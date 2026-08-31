@@ -6,12 +6,14 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.response.PublicCategoryResponse;
+import com.rsdp.dto.response.PublicProductDetailResponse;
 import com.rsdp.dto.response.PublicProductItemResponse;
 import com.rsdp.dto.response.PublicSceneResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuVariant;
+import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
@@ -235,6 +237,113 @@ public class PublicCatalogService {
             .orderByDesc("created_at")
             .last("LIMIT 1"));
         return images.isEmpty() ? null : imageUrl(images.get(0).getImageId());
+    }
+
+    /**
+     * 公开商品详情（仅在售 active 产品，下架/不存在一律 404）。
+     *
+     * <p>红线同 {@link #listProducts}：不联查 RSKU/工厂，价格仅零售参考价。</p>
+     *
+     * @param rspuId RSPU ID
+     * @return 商品详情（含全部图片与变体）
+     */
+    public PublicProductDetailResponse getProductDetail(String rspuId) {
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null || !STATUS_ACTIVE.equals(rspu.getStatus())) {
+            throw new ResourceNotFoundException("商品不存在或已下架");
+        }
+
+        PublicProductDetailResponse detail = new PublicProductDetailResponse();
+        detail.setRspuId(rspu.getRspuId());
+        detail.setRspuCode(rspu.getRspuCode());
+        detail.setProductName(rspu.getProductName());
+        detail.setCategoryCode(rspu.getCategoryCode());
+        detail.setCategoryPath(rspu.getCategoryPath());
+        detail.setPositioningLabel(rspu.getPositioningLabel());
+        detail.setColorPrimaryName(rspu.getColorPrimaryName());
+        detail.setColorSecondary(rspu.getColorSecondary());
+        detail.setMaterialTags(parseStringList(rspu.getMaterialTags()));
+        detail.setFabricTags(parseStringList(rspu.getFabricTags()));
+        detail.setDescription(rspu.getDescription());
+        detail.setRetailPrice(rspu.getRetailPrice());
+        detail.setReferencePriceBand(rspu.getReferencePriceBand());
+        detail.setProductLevel(rspu.getProductLevel());
+        detail.setWarrantyYears(rspu.getWarrantyYears());
+        detail.setSixDimTags(parseStringMap(rspu.getSixDimTags()));
+        detail.setKeySpecs(parseObjectMap(rspu.getKeySpecs()));
+        detail.setCreatedAt(rspu.getCreatedAt());
+        detail.setImages(listImageItems(rspuId));
+        detail.setVariants(listVariantItems(rspuId));
+        return detail;
+    }
+
+    /**
+     * 查询产品的全部图片（主图在前，同序按创建时间升序）。
+     *
+     * @param rspuId RSPU ID
+     * @return 图片项列表
+     */
+    private List<PublicProductDetailResponse.ImageItem> listImageItems(String rspuId) {
+        List<ImageAssets> images = imageAssetsMapper.selectList(new QueryWrapper<ImageAssets>()
+            .eq("rspu_id", rspuId)
+            .orderByDesc("is_primary")
+            .orderByAsc("created_at"));
+        return images.stream().map(image -> {
+            PublicProductDetailResponse.ImageItem item = new PublicProductDetailResponse.ImageItem();
+            item.setImageId(image.getImageId());
+            item.setUrl(imageUrl(image.getImageId()));
+            item.setPrimary(image.getPrimary());
+            item.setVariantId(image.getVariantId());
+            return item;
+        }).toList();
+    }
+
+    /**
+     * 查询产品的全部变体（仅展示字段，不含报价）。
+     *
+     * @param rspuId RSPU ID
+     * @return 变体项列表
+     */
+    private List<PublicProductDetailResponse.VariantItem> listVariantItems(String rspuId) {
+        List<RspuVariant> variants = rspuVariantMapper.selectList(new QueryWrapper<RspuVariant>()
+            .eq("rspu_id", rspuId)
+            .orderByAsc("created_at"));
+        return variants.stream().map(variant -> {
+            PublicProductDetailResponse.VariantItem item = new PublicProductDetailResponse.VariantItem();
+            item.setVariantId(variant.getVariantId());
+            item.setDisplayName(variant.getDisplayName());
+            item.setVariantCode(variant.getVariantCode());
+            item.setSizeCode(variant.getSizeCode());
+            item.setSizeText(variant.getSizeText());
+            item.setDimensions(parseObjectMap(variant.getDimensions()));
+            item.setColorCode(variant.getColorCode());
+            item.setColorText(variant.getColorText());
+            item.setMaterialCode(variant.getMaterialCode());
+            item.setMaterialText(variant.getMaterialText());
+            return item;
+        }).toList();
+    }
+
+    private Map<String, String> parseStringMap(String json) {
+        if (!StringUtils.hasText(json)) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, String>>() {});
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    private Map<String, Object> parseObjectMap(String json) {
+        if (!StringUtils.hasText(json)) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            return Map.of();
+        }
     }
 
     private String imageUrl(String imageId) {

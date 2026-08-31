@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.response.PublicCategoryResponse;
+import com.rsdp.dto.response.PublicProductDetailResponse;
 import com.rsdp.dto.response.PublicProductItemResponse;
 import com.rsdp.dto.response.PublicSceneResponse;
 import com.rsdp.entity.CategoryDict;
@@ -219,5 +220,82 @@ class PublicCatalogServiceTest {
 
         assertThat(tree).hasSize(2);
         assertThat(tree).allMatch(node -> node.getChildren().isEmpty());
+    }
+
+    @Test
+    void getProductDetail_shouldAssembleImagesAndVariants() throws Exception {
+        RspuMaster rspu = sampleRspu();
+        rspu.setDescription("三人位布艺沙发，羽绒填充");
+        rspu.setFabricTags("[\"LI\"]");
+        rspu.setWarrantyYears(3);
+        rspu.setSixDimTags("{\"A\":\"宽厚扶手\"}");
+        rspu.setKeySpecs("{\"框架\":\"实木\"}");
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
+
+        ImageAssets primary = new ImageAssets();
+        primary.setRspuId("RSPU-1");
+        primary.setImageId("IMG-1");
+        primary.setPrimary(true);
+        ImageAssets detail = new ImageAssets();
+        detail.setRspuId("RSPU-1");
+        detail.setImageId("IMG-2");
+        detail.setPrimary(false);
+        detail.setVariantId("VAR-1");
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class)))
+            .thenReturn(List.of(primary, detail));
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("VAR-1");
+        variant.setDisplayName("585*580*750");
+        variant.setSizeText("585*580*750");
+        variant.setDimensions("{\"w\":585,\"d\":580,\"h\":750,\"unit\":\"mm\"}");
+        variant.setMaterialText("实木");
+        when(rspuVariantMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(variant));
+
+        PublicProductDetailResponse result = publicCatalogService.getProductDetail("RSPU-1");
+
+        assertThat(result.getRspuCode()).isEqualTo("SF-WJ-002-L");
+        assertThat(result.getDescription()).isEqualTo("三人位布艺沙发，羽绒填充");
+        assertThat(result.getFabricTags()).containsExactly("LI");
+        assertThat(result.getSixDimTags()).containsEntry("A", "宽厚扶手");
+        assertThat(result.getKeySpecs()).containsEntry("框架", "实木");
+        assertThat(result.getRetailPrice()).isEqualByComparingTo("4680.00");
+
+        assertThat(result.getImages()).hasSize(2);
+        assertThat(result.getImages().get(0).getUrl()).isEqualTo("/api/v1/images/IMG-1");
+        assertThat(result.getImages().get(0).getPrimary()).isTrue();
+        assertThat(result.getImages().get(1).getVariantId()).isEqualTo("VAR-1");
+
+        assertThat(result.getVariants()).hasSize(1);
+        assertThat(result.getVariants().get(0).getDisplayName()).isEqualTo("585*580*750");
+        assertThat(result.getVariants().get(0).getDimensions())
+            .containsEntry("w", 585)
+            .containsEntry("unit", "mm");
+
+        // 脱敏红线：序列化结果绝不含工厂/RSKU/出厂价字段
+        String json = objectMapper.writeValueAsString(result);
+        assertThat(json).doesNotContain("factory", "factoryPrice", "rsku", "moq", "leadTimeDays");
+    }
+
+    @Test
+    void getProductDetail_inactive_shouldThrowNotFound() {
+        RspuMaster rspu = sampleRspu();
+        rspu.setStatus("inactive");
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> publicCatalogService.getProductDetail("RSPU-1"))
+            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class)
+            .hasMessageContaining("商品不存在或已下架");
+        verifyNoInteractions(imageAssetsMapper, rspuVariantMapper);
+    }
+
+    @Test
+    void getProductDetail_notFound_shouldThrowNotFound() {
+        when(rspuMapper.selectById("RSPU-X")).thenReturn(null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> publicCatalogService.getProductDetail("RSPU-X"))
+            .isInstanceOf(com.rsdp.exception.ResourceNotFoundException.class);
     }
 }

@@ -2,6 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.response.PublicCategoryResponse;
+import com.rsdp.dto.response.PublicProductDetailResponse;
 import com.rsdp.dto.response.PublicProductItemResponse;
 import com.rsdp.dto.response.PublicSceneResponse;
 import com.rsdp.exception.GlobalExceptionHandler;
@@ -122,5 +123,46 @@ class PublicCatalogControllerTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data[0].dictCode").value("SF"))
             .andExpect(jsonPath("$.data[0].children[0].dictCode").value("SF-3P"));
+    }
+
+    @Test
+    void productDetail_shouldReturnDetail() throws Exception {
+        PublicProductDetailResponse detail = new PublicProductDetailResponse();
+        detail.setRspuId("RSPU-1");
+        detail.setRspuCode("SF-WJ-002-L");
+        detail.setProductName("云朵三人位布艺沙发");
+        detail.setRetailPrice(new BigDecimal("4680.00"));
+        PublicProductDetailResponse.ImageItem image = new PublicProductDetailResponse.ImageItem();
+        image.setImageId("IMG-1");
+        image.setUrl("/api/v1/images/IMG-1");
+        image.setPrimary(true);
+        detail.setImages(List.of(image));
+        PublicProductDetailResponse.VariantItem variant = new PublicProductDetailResponse.VariantItem();
+        variant.setVariantId("VAR-1");
+        variant.setDisplayName("585*580*750");
+        detail.setVariants(List.of(variant));
+
+        when(publicCatalogService.getProductDetail("RSPU-1")).thenReturn(detail);
+
+        mockMvc.perform(get("/api/v1/public/products/RSPU-1"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.rspuCode").value("SF-WJ-002-L"))
+            .andExpect(jsonPath("$.data.images[0].url").value("/api/v1/images/IMG-1"))
+            .andExpect(jsonPath("$.data.variants[0].displayName").value("585*580*750"))
+            // 脱敏红线：响应不含工厂/出厂价字段
+            .andExpect(jsonPath("$.data.factoryPrice").doesNotExist())
+            .andExpect(jsonPath("$.data.factoryCode").doesNotExist());
+    }
+
+    @Test
+    void productDetail_notFound_shouldReturn404Code() throws Exception {
+        when(publicCatalogService.getProductDetail("RSPU-X"))
+            .thenThrow(new com.rsdp.exception.ResourceNotFoundException("商品不存在或已下架"));
+
+        mockMvc.perform(get("/api/v1/public/products/RSPU-X"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(404))
+            .andExpect(jsonPath("$.message").value("商品不存在或已下架"));
     }
 }

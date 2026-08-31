@@ -3,12 +3,14 @@ package com.rsdp.controller;
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.response.PublicCategoryResponse;
+import com.rsdp.dto.response.PublicProductDetailResponse;
 import com.rsdp.dto.response.PublicProductItemResponse;
 import com.rsdp.dto.response.PublicSceneResponse;
 import com.rsdp.service.PublicCatalogService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -56,6 +58,19 @@ public class PublicCatalogController {
         @RequestParam(required = false) String sort) {
         return Result.ok(publicCatalogService.listProducts(
             page, size, category, seatCount, color, material, priceMin, priceMax, sort));
+    }
+
+    /**
+     * 公开商品详情（仅在售产品；下架/不存在返回 404）。
+     *
+     * <p>含全部产品图与变体展示信息（组合选择用），不含任何工厂报价字段。</p>
+     *
+     * @param rspuId RSPU ID
+     * @return 商品详情
+     */
+    @GetMapping("/products/{rspuId}")
+    public Result<PublicProductDetailResponse> productDetail(@PathVariable String rspuId) {
+        return Result.ok(publicCatalogService.getProductDetail(rspuId));
     }
 
     /**
