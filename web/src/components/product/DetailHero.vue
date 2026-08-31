@@ -172,6 +172,10 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
   border-radius: 4px;
 }
 
+.hero-image-wrapper :deep(.magnifier) {
+  background: #fff;
+}
+
 .hero-image-placeholder {
   display: flex;
   align-items: center;

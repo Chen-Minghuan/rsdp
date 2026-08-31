@@ -91,7 +91,13 @@ function imageMeta(img: ProductDetail['images'][number]): string {
 
 .image-card-preview {
   position: relative;
-  background: var(--rsdp-serve-bg);
+  background: #fff;
+}
+
+/* NImage 根节点是 div.n-image（inline-block 收缩包裹），需撑满容器，
+   内部 img 的 width:100% + object-fit:contain 才能在整个预览区居中 */
+.image-card-preview :deep(.n-image) {
+  width: 100%;
 }
 
 .primary-badge {
