@@ -2,16 +2,22 @@
 /**
  * 官网内容管理 - 内容配置 Tab（服务协议/客服咨询等，按类型切换编辑器）。
  */
-import { ref, onMounted, h } from 'vue'
+import { ref, computed, onMounted, h } from 'vue'
 import {
   NAlert, NButton, NSpace, NDataTable, NTag, NSwitch, NModal, NForm, NFormItem,
-  NInput, NSelect, NPopconfirm, NSpin, useMessage, type DataTableColumns
+  NInput, NSelect, NPopconfirm, NSpin, NTooltip, useMessage, type DataTableColumns
 } from 'naive-ui'
 import CmsImageUpload from '@/components/CmsImageUpload.vue'
 import {
   listPlatformContents, createPlatformContent, updatePlatformContent, deletePlatformContent
 } from '@/api/platform'
 import type { PlatformContent, PlatformContentType } from '@/types/platform'
+import {
+  PLATFORM_CONTENT_PRESETS,
+  isBuiltinPlatformContent,
+  isJsonListPlatformContent,
+  platformContentPlacement
+} from '@/utils/platformContent'
 
 const message = useMessage()
 const loading = ref(false)
@@ -38,6 +44,43 @@ const typeOptions = [
 const typeLabel = (type: string) =>
   type === 'rich_text' ? '富文本' : type === 'image' ? '单图' : '嵌入代码'
 
+/** 新增内容模板选择（'' = 自定义；预设自动带 code 与示例内容，锁定不可改） */
+const presetCode = ref('')
+
+/** 可选模板：排除库中已存在的预设 code，防重复创建 */
+const presetOptions = computed(() => {
+  const existing = new Set(contents.value.map((c) => c.code))
+  const options = PLATFORM_CONTENT_PRESETS.filter((p) => !existing.has(p.code)).map((p) => ({
+    label: p.label,
+    value: p.code as string
+  }))
+  return [...options, { label: '自定义', value: '' }]
+})
+
+/** 当前编码是否 JSON 数组类内容（隐藏类型选择，步骤 9 由结构化编辑器接管） */
+const isJsonContent = computed(() => isJsonListPlatformContent(form.value.code))
+
+/** 内容输入框 placeholder（按内容形态切换） */
+const contentPlaceholder = computed(() =>
+  isJsonContent.value
+    ? 'JSON 数组，如 [{"title":"…","desc":"…","link":"…"}]'
+    : form.value.contentType === 'embed'
+      ? '<iframe …> 等嵌入代码'
+      : '富文本 HTML（如 <p>…</p>），前台原样渲染'
+)
+
+function onPresetChange(value: string) {
+  const preset = PLATFORM_CONTENT_PRESETS.find((p) => p.code === value)
+  if (preset) {
+    form.value.code = preset.code
+    form.value.contentType = 'rich_text'
+    form.value.content = preset.content
+  } else {
+    form.value.code = ''
+    form.value.content = ''
+  }
+}
+
 onMounted(load)
 
 async function load() {
@@ -54,11 +97,15 @@ async function load() {
 function openCreate() {
   editing.value = null
   form.value = { code: '', title: '', contentType: 'rich_text', content: '', contentImageId: null, status: 'active' }
+  // 默认选中第一个可用预设（无可用预设时为 '' 自定义）
+  presetCode.value = presetOptions.value[0]?.value ?? ''
+  onPresetChange(presetCode.value)
   showEditModal.value = true
 }
 
 function openEdit(row: PlatformContent) {
   editing.value = row
+  presetCode.value = ''
   form.value = {
     code: row.code,
     title: row.title || '',
@@ -126,6 +173,12 @@ async function handleDelete(row: PlatformContent) {
 
 const columns: DataTableColumns<PlatformContent> = [
   { title: '编码', key: 'code', width: 230 },
+  {
+    title: '前台位置',
+    key: 'placement',
+    width: 210,
+    render: (row) => platformContentPlacement(row.code)
+  },
   { title: '标题', key: 'title', ellipsis: { tooltip: true } },
   {
     title: '类型',
@@ -150,14 +203,30 @@ const columns: DataTableColumns<PlatformContent> = [
     render: (row) =>
       h(NSpace, { size: 4 }, () => [
         h(NButton, { size: 'small', quaternary: true, onClick: () => openEdit(row) }, () => '编辑'),
-        h(
-          NPopconfirm,
-          { onPositiveClick: () => handleDelete(row) },
-          {
-            trigger: () => h(NButton, { size: 'small', quaternary: true, type: 'error' }, () => '删除'),
-            default: () => `确定删除内容「${row.code}」吗？前台按编码读取将 404。`
-          }
-        )
+        isBuiltinPlatformContent(row.code)
+          ? h(
+              NTooltip,
+              { trigger: 'hover' },
+              {
+                trigger: () =>
+                  h('span', { style: 'display: inline-block;' }, [
+                    h(
+                      NButton,
+                      { size: 'small', quaternary: true, type: 'error', disabled: true },
+                      () => '删除'
+                    )
+                  ]),
+                default: () => '内置内容：删除会导致官网对应区块加载失败'
+              }
+            )
+          : h(
+              NPopconfirm,
+              { onPositiveClick: () => handleDelete(row) },
+              {
+                trigger: () => h(NButton, { size: 'small', quaternary: true, type: 'error' }, () => '删除'),
+                default: () => `确定删除内容「${row.code}」吗？前台按编码读取将 404。`
+              }
+            )
       ])
   }
 ]
@@ -175,29 +244,35 @@ const columns: DataTableColumns<PlatformContent> = [
 
     <n-modal v-model:show="showEditModal" preset="card" :title="editing ? `编辑内容（${form.code}）` : '新增内容'" style="width: 560px;">
       <n-form label-placement="left" label-width="90">
+        <n-form-item v-if="!editing" label="内容模板">
+          <n-select v-model:value="presetCode" :options="presetOptions" @update:value="onPresetChange" />
+        </n-form-item>
         <n-form-item label="内容编码" required>
           <n-input
             v-model:value="form.code"
             maxlength="64"
             placeholder="小写字母/数字/下划线，如 platform_user_agreement"
-            :disabled="!!editing"
+            :disabled="!!editing || !!presetCode"
           />
         </n-form-item>
         <n-form-item label="标题">
           <n-input v-model:value="form.title" maxlength="128" placeholder="展示标题（可选）" />
         </n-form-item>
-        <n-form-item label="内容类型">
+        <n-form-item v-if="!isJsonContent" label="内容类型">
           <n-select v-model:value="form.contentType" :options="typeOptions" />
         </n-form-item>
-        <n-form-item v-if="form.contentType === 'image'" label="图片">
+        <n-form-item v-if="!isJsonContent && form.contentType === 'image'" label="图片">
           <cms-image-upload v-model="form.contentImageId" />
         </n-form-item>
-        <n-form-item v-else :label="form.contentType === 'embed' ? '嵌入代码' : '内容'">
+        <n-form-item
+          v-else
+          :label="isJsonContent ? '内容（JSON 数组）' : form.contentType === 'embed' ? '嵌入代码' : '内容'"
+        >
           <n-input
             v-model:value="form.content"
             type="textarea"
             :rows="8"
-            :placeholder="form.contentType === 'embed' ? '<iframe …> 等嵌入代码' : '富文本 HTML（如 <p>…</p>），前台原样渲染'"
+            :placeholder="contentPlaceholder"
           />
         </n-form-item>
         <n-form-item label="状态">
