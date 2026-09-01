@@ -13,6 +13,7 @@ import {
   listPlatformBanners, createPlatformBanner, updatePlatformBanner, deletePlatformBanner
 } from '@/api/platform'
 import type { PlatformBanner, BannerLinkType } from '@/types/platform'
+import { BANNER_POSITIONS, bannerPositionLabel } from '@/utils/platformContent'
 
 const message = useMessage()
 const loading = ref(false)
@@ -36,6 +37,9 @@ const linkTypeOptions = [
   { label: '产品详情（填 RSPU ID）', value: 'rspu' },
   { label: '外链 URL', value: 'url' }
 ]
+
+/** 位置选项（官网当前仅 home_top 生效，固定下拉防填错静默不显示） */
+const positionOptions = BANNER_POSITIONS.map((p) => ({ label: p.label, value: p.value }))
 
 onMounted(load)
 
@@ -135,7 +139,12 @@ const columns: DataTableColumns<PlatformBanner> = [
       })
   },
   { title: '标题', key: 'title', ellipsis: { tooltip: true } },
-  { title: '位置', key: 'position', width: 100 },
+  {
+    title: '位置',
+    key: 'position',
+    width: 170,
+    render: (row) => bannerPositionLabel(row.position)
+  },
   {
     title: '跳转',
     key: 'linkType',
@@ -198,7 +207,7 @@ const columns: DataTableColumns<PlatformBanner> = [
           <n-input v-model:value="form.title" maxlength="128" placeholder="轮播标题（可选）" />
         </n-form-item>
         <n-form-item label="位置">
-          <n-input v-model:value="form.position" maxlength="32" placeholder="home_top" />
+          <n-select v-model:value="form.position" :options="positionOptions" />
         </n-form-item>
         <n-form-item label="跳转类型">
           <n-select v-model:value="form.linkType" :options="linkTypeOptions" />
