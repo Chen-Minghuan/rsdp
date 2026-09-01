@@ -8,12 +8,14 @@ import {
   NInput, NSelect, NPopconfirm, NSpin, NTooltip, useMessage, type DataTableColumns
 } from 'naive-ui'
 import CmsImageUpload from '@/components/CmsImageUpload.vue'
+import CardItemsEditor from '@/components/CardItemsEditor.vue'
 import {
   listPlatformContents, createPlatformContent, updatePlatformContent, deletePlatformContent
 } from '@/api/platform'
 import type { PlatformContent, PlatformContentType } from '@/types/platform'
 import {
   PLATFORM_CONTENT_PRESETS,
+  getPlatformContentMeta,
   isBuiltinPlatformContent,
   isJsonListPlatformContent,
   platformContentPlacement
@@ -57,16 +59,15 @@ const presetOptions = computed(() => {
   return [...options, { label: '自定义', value: '' }]
 })
 
-/** 当前编码是否 JSON 数组类内容（隐藏类型选择，步骤 9 由结构化编辑器接管） */
+/** 当前编码是否 JSON 数组类内容（隐藏类型选择，由结构化条目编辑器接管） */
 const isJsonContent = computed(() => isJsonListPlatformContent(form.value.code))
 
-/** 内容输入框 placeholder（按内容形态切换） */
+/** JSON 数组类内容的条目数上限（与官网组件 slice 一致，未知时兜底 4） */
+const jsonMaxItems = computed(() => getPlatformContentMeta(form.value.code)?.maxItems ?? 4)
+
+/** 内容输入框 placeholder（仅富文本/嵌入类内容使用；JSON 数组类走结构化编辑器） */
 const contentPlaceholder = computed(() =>
-  isJsonContent.value
-    ? 'JSON 数组，如 [{"title":"…","desc":"…","link":"…"}]'
-    : form.value.contentType === 'embed'
-      ? '<iframe …> 等嵌入代码'
-      : '富文本 HTML（如 <p>…</p>），前台原样渲染'
+  form.value.contentType === 'embed' ? '<iframe …> 等嵌入代码' : '富文本 HTML（如 <p>…</p>），前台原样渲染'
 )
 
 function onPresetChange(value: string) {
@@ -121,6 +122,22 @@ async function handleSave() {
   if (!form.value.code.trim()) {
     message.warning('请输入内容编码')
     return
+  }
+  if (isJsonContent.value) {
+    let items: { title?: string }[] = []
+    try {
+      items = JSON.parse(form.value.content || '[]')
+    } catch {
+      items = []
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      message.warning('请至少添加 1 条内容条目')
+      return
+    }
+    if (items.some((it) => !it?.title?.trim())) {
+      message.warning('存在未填写标题的条目，请补全或删除')
+      return
+    }
   }
   const content = form.value.contentType === 'image' ? form.value.contentImageId : form.value.content
   if (form.value.contentType === 'image' && !content) {
@@ -264,10 +281,10 @@ const columns: DataTableColumns<PlatformContent> = [
         <n-form-item v-if="!isJsonContent && form.contentType === 'image'" label="图片">
           <cms-image-upload v-model="form.contentImageId" />
         </n-form-item>
-        <n-form-item
-          v-else
-          :label="isJsonContent ? '内容（JSON 数组）' : form.contentType === 'embed' ? '嵌入代码' : '内容'"
-        >
+        <n-form-item v-else-if="isJsonContent" label="内容条目">
+          <card-items-editor v-model="form.content" :max-items="jsonMaxItems" style="width: 100%;" />
+        </n-form-item>
+        <n-form-item v-else :label="form.contentType === 'embed' ? '嵌入代码' : '内容'">
           <n-input
             v-model:value="form.content"
             type="textarea"
