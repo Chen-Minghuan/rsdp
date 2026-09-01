@@ -1,6 +1,6 @@
 -- V34: 官网留资线索表（platform_lead）
 -- 背景：用户端官网（Nuxt 3 新站）的留资 CTA / 表单 / AI 户型搭配入口统一写入本表，
--- 管理端「留资线索」页做分配与跟进（见 docs/09-design/RSDP管理端工作台设计文档.md 第 4.3 节）。
+-- 管理端「留资线索」页做分配与跟进（见 docs/09-design/RSDP管理端工作台设计文档.md 第 4.3 节（docs/09-design/ 已删除））。
 -- 幂等：IF NOT EXISTS
 
 CREATE TABLE IF NOT EXISTS platform_lead (

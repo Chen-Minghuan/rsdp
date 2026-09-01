@@ -1,5 +1,5 @@
 // RSDP 用户端官网（Nuxt 3 SSR）
-// 视觉与结构参照 docs/09-design/index.html + RSDP用户端官网设计文档.md
+// 视觉与结构参照 docs/09-design/index.html + RSDP用户端官网设计文档.md（docs/09-design/ 已删除，现行以本文件 tokens/实现为准）
 export default defineNuxtConfig({
   ssr: true,
 

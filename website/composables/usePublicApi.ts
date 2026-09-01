@@ -8,8 +8,9 @@ export function usePublicApi() {
   const config = useRuntimeConfig()
   const apiBase = config.public.apiBase
   /**
-   * 请求基址：浏览器端用同源相对路径（''），开发走 nitro devProxy、生产走 Nginx 反代，
+   * 请求基址：浏览器端用同源相对路径（''），当前经 nitro devProxy 或 NUXT_PUBLIC_API_BASE 直连后端，
    * 彻底避开跨域（后端 CORS 白名单不含官网源时，客户端直连 apiBase 会被 403）；
+   * 官网暂未纳入 docker-compose 生产编排（无 website 服务/路由），生产部署方式待补；
    * SSR 服务端无同源概念，必须用绝对地址 apiBase。
    */
   const requestBase = import.meta.client ? '' : apiBase
@@ -40,7 +41,7 @@ export function usePublicApi() {
 
   /**
    * 图片地址拼装：后端返回相对路径（/api/v1/images/xxx），原样返回——浏览器会按本站源解析，
-   * 开发走 nitro devProxy、生产走 Nginx 反代，与接口请求同一通路；
+   * 当前经 nitro devProxy 或 NUXT_PUBLIC_API_BASE 直连后端（官网暂未纳入 docker-compose 生产编排，生产部署方式待补），与接口请求同一通路；
    * 同时保证 SSR 与客户端渲染结果一致，避免水合（hydration）不匹配。
    * 外部绝对地址原样返回。
    */

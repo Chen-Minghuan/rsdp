@@ -17,7 +17,7 @@ import type { ProductSummary } from '@/types/product'
 
 /**
  * 产品数字化工作台首页（style-b 现代极简）。
- * 结构对齐 docs/09-design/admin-workbench.html：
+ * 结构对齐 docs/09-design/admin-workbench.html（docs/09-design/ 已删除，现行以本文件 tokens/实现为准）：
  * 页头 hero → 统计带 → 左列（最新入库/识别任务队列/户型图待复核）→ 右栏（今日待办/意向客户/数据完备度/快捷操作）。
  * 每个区块独立 try/catch：接口失败显示空态或 --，整页不白屏。
  */

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 对账：MyBatis-Plus 实体字段 vs PostgreSQL 表列（V1 + V2）
+// 对账：MyBatis-Plus 实体字段 vs PostgreSQL 表列（自动按版本号读取 database/ 下全部 V{数字}__*.sql 迁移脚本）
 // 找出“DB 有 / 实体缺”与“实体有 / DB 无”的字段。
 // 用法：node scripts/check_entity_db_fields.js
 const fs = require("fs");

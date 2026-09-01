@@ -6,7 +6,7 @@ import type { CategoryNode, PageResult, PublicProduct } from '~/types/api'
  * 商品列表页（PLP）：面包屑 + 类目头 + 吸顶筛选药丸条 + 已选 chips
  * + 4 列商品网格 + 加载更多 + 商品对比抽屉。
  * 筛选条件与 URL query 双向同步；数据走 /api/v1/public/products。
- * 视觉参照 docs/09-design/products.html。
+ * 视觉参照 docs/09-design/products.html（docs/09-design/ 已删除，现行以本文件 tokens/实现为准）。
  */
 const route = useRoute()
 const router = useRouter()

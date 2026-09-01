@@ -1,7 +1,7 @@
 /**
  * RSDP 设计系统 token（style-b「现代极简工作台」）。
  *
- * 视觉目标参照 docs/09-design/admin.html 与《RSDP管理端工作台设计文档》第二章：
+ * 视觉目标参照 docs/09-design/admin.html 与《RSDP管理端工作台设计文档》第二章（docs/09-design/ 已删除，现行以本文件 tokens/实现为准）：
  * 灰白底、黑白为主、功能色仅出现在状态上、编码/价格等数字信息等宽字体。
  * Naive UI 组件主题通过 App.vue 的 themeOverrides 消费同名色值，两边需保持一致。
  */

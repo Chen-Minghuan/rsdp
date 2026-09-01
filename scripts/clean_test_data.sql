@@ -64,6 +64,9 @@ TRUNCATE TABLE design_order_item CASCADE;
 TRUNCATE TABLE design_order CASCADE;
 TRUNCATE TABLE order_no_counter CASCADE;
 TRUNCATE TABLE dict_unresolved_value CASCADE;
+TRUNCATE TABLE platform_lead CASCADE;
+TRUNCATE TABLE floor_plan_room CASCADE;
+TRUNCATE TABLE floor_plan_analysis CASCADE;
 
 SET session_replication_role = DEFAULT;
 

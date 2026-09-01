@@ -48,6 +48,7 @@
 ├── KimiCode-大型项目协作指南.md # Kimi Code 大型项目协作指南
 ├── server/                    # SpringBoot 后端服务
 ├── web/                       # Vue3 前端应用
+├── website/                   # Nuxt 3 用户端官网（SSR）
 ├── deploy/                    # Docker Compose / Nginx 部署配置
 ├── database/                  # PostgreSQL 脚本
 ├── docs/                      # 项目文档（按主题编号）
@@ -57,7 +58,10 @@
 │   ├── 04-decisions/          # 决策记录（ADR）
 │   ├── 05-status/             # 当前进度 / 待办事项
 │   ├── 06-reference/          # 业务规则 / 双层编码体系
-│   └── 07-issues/             # 问题排障日志
+│   ├── 07-issues/             # 问题排障日志
+│   ├── 08-roadmap/            # 后续开发计划 / 整合方案
+│   └── FAQ.md                 # 常见问题
+├── data/                      # 运行数据（uploads 上传文件 / style-knowledge 风格素材）
 ├── scripts/                   # 常用脚本（setup / test / backup）
 └── ops/                       # 运维脚本
 ```
@@ -146,10 +150,13 @@ cd web && pnpm install && pnpm dev
 | `make infra-ai` | 启动包含 Ollama 的基础设施（需要 NVIDIA GPU） |
 | `make init-db` | 初始化数据库 |
 | `make seed` | 导入种子数据 |
+| `make seed-style` | 导入风格数据库种子数据 |
 | `make dev` | 启动基础设施 + 初始化数据库（默认不含 Ollama） |
+| `make prod` | 生产部署：完整 Docker Compose 启动 |
 | `make backend` | 启动后端 |
 | `make frontend` | 启动前端开发服务器 |
 | `make test` | 运行全量测试 |
+| `make lint` | 代码检查 |
 | `make build` | 构建前后端 |
 | `make clean` | 清理容器与构建产物 |
 
@@ -181,11 +188,13 @@ cd web && pnpm install && pnpm dev
 ## 开发路线
 
 1. ✅ 项目骨架 + 数据库设计
-2. 🔄 图片上传 + AI 识别（DashScope → Ollama）
-3. ⏳ 人工复核 + RSPU/RSKU 录入
-4. ⏳ 同款判定 + 向量检索
-5. ⏳ 工厂报价 + 比价
-6. ⏳ 部署文档 + 生产优化
+2. 🔄 图片上传 + AI 识别（DashScope → Ollama；DashScope 已于 2026-07 全流程跑通，本地 Ollama 切换待做）
+3. ✅ 人工复核 + RSPU/RSKU 录入（2026-06，人工复核确认/存疑 + 录入页面上线）
+4. ✅ 同款判定 + 向量检索（2026-06，以图搜图/以文搜图 2026-06-30；向量疑似同款标记 2026-08-06）
+5. ✅ 工厂报价 + 比价（2026-07，工厂 Excel 报价单批量导入 2026-07-01）
+6. ✅ 部署文档 + 生产优化（2026-07，Docker Compose + Nginx HTTPS 一键部署）
+
+> 后续阶段（项目/订单/官网/户型图等模块）已陆续上线，详见 `docs/05-status/当前进度.md` 与 `docs/08-roadmap/`。
 
 ## 贡献
 

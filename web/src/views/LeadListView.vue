@@ -38,7 +38,7 @@ import {
 
 /**
  * 管理端「意向客户」页：来源分布统计 + 客户表格 + 分配/记跟进/状态流转。
- * 参照 docs/09-design/admin.html 右栏「最新意向客户」与管理端设计文档 4.3 节。
+ * 参照 docs/09-design/admin.html 右栏「最新意向客户」与管理端设计文档 4.3 节（docs/09-design/ 已删除，现行以本文件 tokens/实现为准）。
  */
 const message = useMessage()
 

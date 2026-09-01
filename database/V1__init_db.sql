@@ -1,5 +1,5 @@
 -- RSDP 多模态录入数据库初始化脚本（PostgreSQL 版本）
--- 基于 docs/RSDP-多模态录入数据库设计.md
+-- 基于 docs/02-architecture/02-数据库设计.md
 -- 说明：JSON 字段使用 JSONB 类型以获得更好的查询性能和索引支持
 
 -- 字典表（先创建，后续表的外键依赖它）

@@ -1,6 +1,6 @@
 # ADR 007：RSPU 与 RSKU 业务编码落地实施方案
 
-> 状态：草案（待评审）  
+> 状态：已实施（2026-07-29，见 V20__business_code.sql）  
 > 影响范围：数据库、后端 Service、前端展示、Excel 导入、存量数据迁移  
 > 相关文档：
 > - `docs/06-reference/02-双层编码体系.md`

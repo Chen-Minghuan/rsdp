@@ -23,8 +23,8 @@ for /f "usebackq tokens=1,* delims==" %%a in ("%ENV_FILE%") do (
     set "raw_key=%%a"
     set "raw_val=%%b"
     for /f "tokens=*" %%k in ("!raw_key!") do set "key=%%k"
-    if not "!key:~0,1!=="#" (
-        if not "!key!=="" (
+    if not "!key:~0,1!"=="#" (
+        if not "!key!"=="" (
             set "!key!=!raw_val!"
         )
     )
@@ -48,7 +48,7 @@ call :validate_secret RSDP_JWT_SECRET
 if %ERRORLEVEL% neq 0 exit /b 1
 
 echo [1/2] 停止现有后端进程...
-taskkill /F /FI "WINDOWTITLE eq RSDP Backend :8081" >nul 2>&1 || true
+taskkill /F /FI "WINDOWTITLE eq RSDP Backend :8081" >nul 2>&1 || rem
 
 echo [2/2] 启动后端 Spring Boot（端口 8081）...
 start "RSDP Backend :8081" /d "%PROJECT_ROOT%\server" cmd /k "mvn spring-boot:run -Dspring-boot.run.profiles=dev "-Dspring-boot.run.jvmArguments=-Xmx2g" ^>^> "%LOG_DIR%\backend.log" 2^>^&1 & echo 后端已启动，按 Ctrl+C 停止后关闭窗口 & pause"

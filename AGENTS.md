@@ -22,7 +22,7 @@
 - **数据库**：PostgreSQL 16
 - **向量数据库**：ChromaDB 0.5+（REST API）
 - **文件存储**：MinIO 8.5+（生产）/ 本地磁盘（开发）
-- **缓存**：Redis 7.x + Caffeine 3.x
+- **缓存**：Redis 7.x（关闭时以 ConcurrentMapCacheManager 做 JVM 内存回退，见 `config/CacheConfig.java`）
 - **AI 推理**：当前 MVP 通过 DashScope `qwen3-vl-plus`（OpenAI 兼容接口）完成视觉识别；后续目标切换为本地 Ollama 托管 Qwen 2.5-VL 7B + nomic-embed-text
 - **HTTP 客户端**：Spring RestClient（虚拟线程）
 - **Excel**：EasyExcel 3.3+
@@ -73,7 +73,7 @@
 │   │   ├── 04-API设计.md
 │   │   └── 05-RSDP-数据库完善方案-工厂与导入模块.md
 │   ├── 03-guides/                 # 开发指南（环境搭建/编码规范/测试/风格库导入格式）
-│   ├── 04-decisions/              # 决策记录（ADR 001-006）
+│   ├── 04-decisions/              # 决策记录（ADR 001-007）
 │   ├── 05-status/                 # 项目状态
 │   │   ├── 当前进度.md
 │   │   └── 待办事项.md
@@ -93,7 +93,7 @@
 │   │   ├── views/                 # 页面（产品/工厂/项目/方案/报价/订单/统计等）
 │   │   ├── components/            # 通用组件（PageContainer 等）
 │   │   ├── composables/           # 组合式函数（useEcharts、useRequestAbort）
-│   │   ├── stores/                # Pinia 状态（user、excelImport）
+│   │   ├── stores/                # Pinia 状态（user、excelImport、documentImport）
 │   │   ├── router/                # 路由
 │   │   ├── config/                # 导航分组配置 navigation.ts
 │   │   ├── styles/                # 设计 token（tokens.css）
@@ -109,7 +109,7 @@
 │   ├── assets/css/tokens.css      # style-a 设计 token（暖调，与管理端 tokens 不同体系）
 │   ├── components/                # PriceText/ProductCard/SiteHeader/SiteFooter 等（原生组件，不用 Naive UI）
 │   ├── composables/               # usePublicApi（/api/v1/public/** 封装 + 图片地址拼接）
-│   ├── pages/                     # index.vue 首页（11 区块）
+│   ├── pages/                     # index.vue 首页（11 区块）、ai-match.vue、products/index.vue、products/[id].vue
 │   ├── types/                     # 公开接口类型
 │   └── nuxt.config.ts             # SSR + runtimeConfig.public.apiBase + Noto Serif SC CDN
 ├── deploy/                        # 部署配置
@@ -129,7 +129,7 @@
 │   └── reset_db.sql               # 数据库重置脚本
 ├── data/                          # 运行数据（uploads 上传文件、style-knowledge 风格素材）
 ├── ops/                           # 运维脚本
-│   └── anchor_encode.sh           # 锚点图批量编码
+│   └── anchor_encode.sh           # 锚点图批量编码（未完成 stub）
 └── scripts/                       # 常用脚本
     ├── setup.sh                   # 开发环境一键搭建
     ├── test.sh                    # 运行全部测试
@@ -137,6 +137,9 @@
     ├── start-local / stop-local / restart-backend（.sh/.bat）  # 本地启停
     ├── seed-demo-data.sh/.sql     # 演示数据导入
     ├── check_entity_db_fields.js  # 实体-数据库字段对账
+    ├── clean_test_data.sql        # 测试数据清理
+    ├── gen-dev-cert.sh            # 开发证书生成
+    ├── generate_six_dim_dict_seed.js  # 六维字典种子生成
     └── generate_style_knowledge_seed.js  # 风格知识种子生成
 ```
 
@@ -147,7 +150,7 @@
 ├── service/      # 业务逻辑层（含 chroma/ 向量检索、storage/ 文件存储子包）
 ├── mapper/       # MyBatis-Plus Mapper
 ├── entity/       # 数据库实体
-├── dto/          # 请求/响应 DTO（按 request/ response 分包）
+├── dto/          # 请求/响应 DTO（按 request/ response 分包，另有 excel/ 导入子包）
 ├── config/       # 配置类（AI、缓存、MinIO、MyBatis、TypeHandler、properties/）
 ├── security/     # Spring Security + JWT + 数据权限（datascope/）
 ├── event/        # 领域事件（如 RSPU 删除联动清理）
@@ -199,7 +202,7 @@ RSKU（供应单元）：[RSPU ID]-[工厂代码3位]-[材质版本2位]
 - 使用 Lombok 减少样板代码。
 - DTO 放 `dto/` 包，按 `request/` / `response/` 分包。
 - 新增 public 方法必须写 JavaDoc。
-- JSON 字段在实体中用 `String` 存储，通过 `JsonUtils` 或 Jackson TypeHandler 序列化/反序列化。
+- JSON 字段在实体中用 `String` 存储，通过 `config/typehandler/JsonbTypeHandler` 序列化/反序列化。
 - 敏感价格字段 `factory_price` 使用 AES 加密 TypeHandler。
 
 ### 5.2 RESTful API
@@ -215,7 +218,7 @@ RSKU（供应单元）：[RSPU ID]-[工厂代码3位]-[材质版本2位]
 - 常量/枚举放 `src/utils/constants.ts`。
 
 ### 5.4 数据库
-- 元数据表用 PostgreSQL，JSON 字段存 `TEXT`（后续可优化为 JSONB）。
+- 元数据表用 PostgreSQL，JSON 字段统一存 JSONB。
 - 向量主存 ChromaDB，PostgreSQL 只保留 `style_vector` 副本。
 - 所有修改 RSPU/RSKU/工厂的操作必须记审计日志。
 

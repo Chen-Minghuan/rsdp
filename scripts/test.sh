@@ -15,10 +15,13 @@ pnpm install
 echo "前端类型检查..."
 pnpm type-check
 
+echo "前端单元测试（Vitest）..."
+pnpm test
+
 echo "前端代码检查..."
 pnpm lint
 
 cd ..
 
 echo "=== 全量测试完成 ==="
-echo "提示：当前前端尚未配置 Vitest/Playwright，已用 type-check + lint 作为质量 gate。"
+echo "提示：前端已配置 Vitest 单元测试（pnpm test）；Playwright E2E 仍在规划中。"

@@ -23,8 +23,14 @@ set -a
 source <(sed 's/\r$//' "$ENV_FILE")
 set +a
 
-# 图片源目录可通过环境变量覆盖
-SOURCE_DIR="${DEMO_IMAGE_SOURCE:-/c/develop/roomVip/测试案例图/案例图}"
+# 图片源目录必须通过 DEMO_IMAGE_SOURCE 环境变量指定（无默认值，避免他机硬编码路径）
+if [ -z "${DEMO_IMAGE_SOURCE:-}" ]; then
+    echo "错误：未设置 DEMO_IMAGE_SOURCE 环境变量"
+    echo "用法：DEMO_IMAGE_SOURCE=/path/to/测试案例图/案例图 scripts/seed-demo-data.sh"
+    echo "说明：图片源目录为本机测试案例图目录，需包含 中古风/奶油风/侘寂风 等风格子文件夹"
+    exit 1
+fi
+SOURCE_DIR="$DEMO_IMAGE_SOURCE"
 DEST_DIR="$PROJECT_ROOT/server/data/uploads/images"
 SQL_FILE="$PROJECT_ROOT/scripts/seed-demo-data.sql"
 

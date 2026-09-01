@@ -2,8 +2,8 @@
 
 ## 写代码前
 1. 先读 `AGENTS.md` 和 `docs/05-status/当前进度.md`。
-2. 涉及数据库改动时先读 `docs/02-architecture/数据库设计.md`。
-3. 涉及接口变化时先读 `docs/02-architecture/API设计.md`。
+2. 涉及数据库改动时先读 `docs/02-architecture/02-数据库设计.md`。
+3. 涉及接口变化时先读 `docs/02-architecture/04-API设计.md`。
 4. 不确定时提问，不要猜测。
 
 ## 写代码时
@@ -15,5 +15,5 @@
 
 ## 写代码后
 1. 简要说明改动点。
-2. 如果有接口变化，同步更新 `docs/02-architecture/API设计.md`。
+2. 如果有接口变化，同步更新 `docs/02-architecture/04-API设计.md`。
 3. 更新 `docs/05-status/当前进度.md`。

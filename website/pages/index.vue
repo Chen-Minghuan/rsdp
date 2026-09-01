@@ -14,7 +14,7 @@ import type {
 } from '~/types/api'
 
 /**
- * 用户端官网首页：11 个区块严格按 docs/09-design/index.html 顺序还原，
+ * 用户端官网首页：11 个区块严格按 docs/09-design/index.html 顺序还原（docs/09-design/ 已删除，现行以本文件 tokens/实现为准），
  * 数据全部走 /api/v1/public/** 接口，接口不可用时各区块回退默认文案/隐藏，保证 SSR 首屏可渲染。
  */
 const { get, imageUrl } = usePublicApi()
