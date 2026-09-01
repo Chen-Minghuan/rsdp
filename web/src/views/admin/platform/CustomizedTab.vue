@@ -4,7 +4,7 @@
  */
 import { ref, onMounted, h } from 'vue'
 import {
-  NButton, NSpace, NDataTable, NSwitch, NModal, NForm, NFormItem,
+  NAlert, NButton, NSpace, NDataTable, NSwitch, NModal, NForm, NFormItem,
   NInput, NInputNumber, NSelect, NPopconfirm, NSpin, useMessage, type DataTableColumns
 } from 'naive-ui'
 import CmsImageUpload from '@/components/CmsImageUpload.vue'
@@ -160,6 +160,9 @@ const columns: DataTableColumns<PlatformCustomized> = [
 
 <template>
   <n-spin :show="loading">
+    <n-alert type="info" :bordered="false" style="margin-bottom: 12px;">
+      对应官网首页区块 9「产品定制」：按排序值升序展示启用卡片；无启用卡片时官网该区块整体隐藏。
+    </n-alert>
     <n-space justify="end" style="margin-bottom: 12px;">
       <n-button type="primary" @click="openCreate">新增定制卡片</n-button>
     </n-space>

@@ -4,7 +4,7 @@
  */
 import { ref, onMounted, h } from 'vue'
 import {
-  NButton, NSpace, NDataTable, NTag, NSwitch, NModal, NForm, NFormItem,
+  NAlert, NButton, NSpace, NDataTable, NTag, NSwitch, NModal, NForm, NFormItem,
   NInput, NInputNumber, NSelect, NPopconfirm, NSpin, useMessage, type DataTableColumns
 } from 'naive-ui'
 import CmsImageUpload from '@/components/CmsImageUpload.vue'
@@ -181,6 +181,9 @@ const columns: DataTableColumns<PlatformBanner> = [
 
 <template>
   <n-spin :show="loading">
+    <n-alert type="info" :bordered="false" style="margin-bottom: 12px;">
+      对应官网首页区块 3「Hero 轮播」：仅位置为「首页顶部轮播」且启用的 Banner 生效，按排序值升序播放；无启用 Banner 时官网显示默认首屏文案。
+    </n-alert>
     <n-space justify="end" style="margin-bottom: 12px;">
       <n-button type="primary" @click="openCreate">新增 Banner</n-button>
     </n-space>

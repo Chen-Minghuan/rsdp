@@ -4,7 +4,7 @@
  */
 import { ref, onMounted, h } from 'vue'
 import {
-  NButton, NSpace, NDataTable, NSwitch, NModal, NForm, NFormItem,
+  NAlert, NButton, NSpace, NDataTable, NSwitch, NModal, NForm, NFormItem,
   NInput, NInputNumber, NSelect, NPopconfirm, NSpin, useMessage, type DataTableColumns
 } from 'naive-ui'
 import CmsImageUpload from '@/components/CmsImageUpload.vue'
@@ -156,6 +156,9 @@ const columns: DataTableColumns<PlatformCase> = [
 
 <template>
   <n-spin :show="loading">
+    <n-alert type="info" :bordered="false" style="margin-bottom: 12px;">
+      对应官网首页区块 8「家居灵感」：展示前 5 条（按排序值升序），仅标题 + 封面生效，「详情内容」官网暂不展示；无启用案例时官网该区块整体隐藏。
+    </n-alert>
     <n-space justify="end" style="margin-bottom: 12px;">
       <n-button type="primary" @click="openCreate">新增案例</n-button>
     </n-space>

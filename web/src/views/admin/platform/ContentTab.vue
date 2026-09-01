@@ -4,7 +4,7 @@
  */
 import { ref, onMounted, h } from 'vue'
 import {
-  NButton, NSpace, NDataTable, NTag, NSwitch, NModal, NForm, NFormItem,
+  NAlert, NButton, NSpace, NDataTable, NTag, NSwitch, NModal, NForm, NFormItem,
   NInput, NSelect, NPopconfirm, NSpin, useMessage, type DataTableColumns
 } from 'naive-ui'
 import CmsImageUpload from '@/components/CmsImageUpload.vue'
@@ -165,6 +165,9 @@ const columns: DataTableColumns<PlatformContent> = [
 
 <template>
   <n-spin :show="loading">
+    <n-alert type="info" :bordered="false" style="margin-bottom: 12px;">
+      内容编码与官网区块一一绑定（home_trio_cards → 首页区块 4「必逛好物」、home_service_cards → 区块 5「服务卡」）；内置编码不可删除，删除会导致官网对应区块加载失败。
+    </n-alert>
     <n-space justify="end" style="margin-bottom: 12px;">
       <n-button type="primary" @click="openCreate">新增内容</n-button>
     </n-space>

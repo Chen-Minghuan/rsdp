@@ -7,7 +7,7 @@
  */
 import { ref, onMounted } from 'vue'
 import {
-  NButton, NImage, NPopconfirm, NSpin, NUpload, useMessage, type UploadFileInfo
+  NAlert, NButton, NImage, NPopconfirm, NSpin, NUpload, useMessage, type UploadFileInfo
 } from 'naive-ui'
 import { listSceneCovers, updateSceneCover, uploadCmsImage } from '@/api/platform'
 import type { PlatformSceneCover } from '@/types/platform'
@@ -63,6 +63,9 @@ async function handleClear(row: PlatformSceneCover) {
 
 <template>
   <n-spin :show="loading">
+    <n-alert type="info" :bordered="false" style="margin-bottom: 12px;">
+      对应官网首页区块 6「空间探索」：手配封面优先展示；未配置的场景，官网自动使用最新在售产品主图兜底。
+    </n-alert>
     <div class="cover-grid">
       <div v-for="item in covers" :key="item.code" class="cover-card">
         <div class="cover-preview">
