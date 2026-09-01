@@ -1253,5 +1253,10 @@ INSERT INTO platform_content (content_id, code, title, content_type, content) VA
 ('CONT-USER-AGREEMENT', 'platform_user_agreement', '服务协议', 'rich_text',
  '<h3>RSDP 家居全案平台服务协议</h3><p>欢迎使用 RSDP 家居全案平台。请您在使用本平台前仔细阅读本协议。</p><p>1. 本平台提供的产品信息、价格信息仅供参考，实际以双方确认的订单为准。</p><p>2. 您应当妥善保管账号信息，因账号保管不善造成的损失由您自行承担。</p><p>3. 未经许可，不得将平台数据用于任何商业用途。</p><p>（本内容为占位文案，请在管理端「官网内容-内容管理」中替换为正式协议。）</p>'),
 ('CONT-CONSULTING-SERVICE', 'platform_consulting_service', '客服咨询', 'rich_text',
- '<h3>联系客服</h3><p>如需产品咨询、报价或售后服务，请通过以下方式联系我们：</p><p>工作时间：周一至周五 9:00 - 18:00</p><p>（本内容为占位文案，请在管理端「官网内容-内容管理」中配置真实联系方式。）</p>')
+ '<h3>联系客服</h3><p>如需产品咨询、报价或售后服务，请通过以下方式联系我们：</p><p>工作时间：周一至周五 9:00 - 18:00</p><p>（本内容为占位文案，请在管理端「官网内容-内容管理」中配置真实联系方式。）</p>'),
+-- 官网首页区块 4/5 内容（V37 并入）：必逛好物 + 服务卡，JSON 数组，与 website 首页静态兜底一致
+('CONT-HOME-TRIO-CARDS', 'home_trio_cards', '首页必逛好物', 'rich_text',
+ '[{"title":"大减价","desc":"百余款商品 5 折起 · 即日至 8 月 31 日"},{"title":"当季新品","desc":"秋冬系列全新上市 · 探索新材质"},{"title":"更低价格","desc":"同样的设计 · 更可持续的价格"}]'),
+('CONT-HOME-SERVICE-CARDS', 'home_service_cards', '首页服务卡', 'rich_text',
+ '[{"title":"送货服务","desc":"珠三角 48 小时达，全国物流可追踪"},{"title":"安装服务","desc":"专业师傅上门，安装完毕清理现场"},{"title":"退换保障","desc":"30 天无理由退换（定制款除外）"},{"title":"免费设计","desc":"AI 户型搭配 + 设计师 1v1 复核"}]')
 ON CONFLICT (code) DO NOTHING;
