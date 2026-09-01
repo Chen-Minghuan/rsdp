@@ -102,7 +102,7 @@ if docker ps --format '{{.Names}}' | grep -qx 'rsdp-postgres'; then
 else
     echo "警告：未检测到 rsdp-postgres 容器，尝试使用本地 psql..."
     export PGPASSWORD="${POSTGRES_PASSWORD:-rsdp}"
-    psql -h localhost -p 5433 -U "${POSTGRES_USER:-rsdp}" -d rsdp -f "$SQL_FILE"
+    psql -h localhost -p 5432 -U "${POSTGRES_USER:-rsdp}" -d rsdp -f "$SQL_FILE"
 fi
 
 echo ""
