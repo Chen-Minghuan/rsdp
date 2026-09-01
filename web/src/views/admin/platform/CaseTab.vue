@@ -173,12 +173,17 @@ const columns: DataTableColumns<PlatformCase> = [
           <cms-image-upload v-model="form.coverImageId" />
         </n-form-item>
         <n-form-item label="详情内容">
-          <n-input
-            v-model:value="form.content"
-            type="textarea"
-            :rows="6"
-            placeholder="富文本 HTML（如 <p>…</p>），前台原样渲染"
-          />
+          <div style="width: 100%;">
+            <n-input
+              v-model:value="form.content"
+              type="textarea"
+              :rows="6"
+              placeholder="富文本 HTML（如 <p>…</p>），前台原样渲染"
+            />
+            <div style="margin-top: 4px; font-size: 12px; color: #999;">
+              官网首页暂不展示详情，仅标题 + 封面生效（该字段为预留，可留空）
+            </div>
+          </div>
         </n-form-item>
         <n-form-item label="排序值">
           <n-input-number v-model:value="form.sortOrder" :min="0" :max="9999" style="width: 100%;" />
