@@ -214,7 +214,7 @@ onUnmounted(() => {
           <n-grid-item v-for="item in results" :key="item.rspuId">
             <n-card hoverable @click="goToDetail(item.rspuId)">
               <n-space vertical>
-                <HoverZoomImage :src="item.mainImageUrl" fluid :height="160" preview-disabled />
+                <HoverZoomImage :src="item.mainImageUrl" fluid :height="160" object-fit="contain" preview-disabled />
 
                 <n-space justify="space-between" align="center">
                   <span class="rspu-id">{{ item.rspuId }}</span>

@@ -310,7 +310,7 @@ function formatTime(value?: string): string {
             <n-grid-item v-for="item in favorites" :key="item.favoriteId">
               <n-card hoverable class="favorite-card">
                 <div class="card-image" @click="router.push(`/products/${item.rspuId}`)">
-                  <HoverZoomImage :src="item.primaryImageUrl" fluid preview-disabled />
+                  <HoverZoomImage :src="item.primaryImageUrl" fluid object-fit="contain" preview-disabled />
                 </div>
                 <div class="card-body">
                   <div class="card-title" :title="item.productName || item.rspuId">

@@ -493,7 +493,8 @@ const columns: DataTableColumns<ProductSummary> = [
     key: 'productInfo',
     width: 220,
     render(row) {
-      const image = h(HoverZoomImage, { src: row.primaryImageUrl, width: 50, height: 50 })
+      // objectFit=contain：完整展示产品图（沙发等宽幅图 cover 会切掉两侧）
+      const image = h(HoverZoomImage, { src: row.primaryImageUrl, width: 50, height: 50, objectFit: 'contain' })
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
         image,
         h(
