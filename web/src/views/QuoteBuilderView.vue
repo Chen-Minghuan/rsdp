@@ -26,6 +26,7 @@ import { getProductDetail } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
 import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
+import { listProjects } from '@/api/project'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
@@ -105,6 +106,25 @@ const saving = ref(false)
 const quoteResult = ref<QuoteResponse | null>(null)
 const showSaveModal = ref(false)
 const schemeName = ref('')
+/** 保存方案弹窗：可选所属项目（'' = 个人方案），默认取 URL 带入的项目上下文 */
+const selectedProjectId = ref('')
+const projectOptions = ref<{ label: string; value: string }[]>([])
+let projectsLoaded = false
+
+/**
+ * 惰性加载可选项目列表（新建模式的保存弹窗首次打开时拉取一次）。
+ * 加载失败不阻塞保存，仍可存为个人方案。
+ */
+async function loadProjectOptions() {
+  if (projectsLoaded) return
+  try {
+    const result = await listProjects({ page: 1, size: 200 })
+    projectOptions.value = result.rows.map((p) => ({ label: p.projectName, value: p.projectId }))
+    projectsLoaded = true
+  } catch {
+    // 忽略：下拉仅展示"个人方案"
+  }
+}
 
 const products = ref<ProductDetail[]>([])
 const rskuMap = ref<Record<string, Rsku[]>>({})
@@ -306,6 +326,10 @@ function openSaveModal() {
   errorMessage.value = ''
   successMessage.value = ''
   schemeName.value = ''
+  selectedProjectId.value = contextProjectId.value
+  if (!isEditMode.value) {
+    loadProjectOptions()
+  }
   showSaveModal.value = true
 }
 
@@ -345,11 +369,11 @@ async function handleSaveAsScheme() {
     } else {
       await createScheme({
         schemeName: schemeName.value.trim(),
-        projectId: contextProjectId.value || undefined,
+        projectId: selectedProjectId.value || undefined,
         items
       }, { signal })
       showSaveModal.value = false
-      router.push(contextProjectId.value ? `/projects/${contextProjectId.value}` : '/schemes')
+      router.push(selectedProjectId.value ? `/projects/${selectedProjectId.value}` : '/schemes')
     }
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '保存方案失败'
@@ -614,6 +638,13 @@ onBeforeRouteUpdate((to) => {
             maxlength="128"
             show-count
             clearable
+          />
+        </n-form-item>
+        <n-form-item v-if="!isEditMode" label="所属项目">
+          <n-select
+            v-model:value="selectedProjectId"
+            :options="[{ label: '个人方案（不归属项目）', value: '' }, ...projectOptions]"
+            placeholder="个人方案（不归属项目）"
           />
         </n-form-item>
       </n-form>
