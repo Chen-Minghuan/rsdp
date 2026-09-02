@@ -19,10 +19,11 @@ import {
   NForm,
   NFormItem,
   NInput,
+  NPagination,
   type DataTableColumns
 } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
-import { getProductDetail } from '@/api/product'
+import { getProductDetail, listProducts } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
 import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
@@ -30,7 +31,7 @@ import { listProjects } from '@/api/project'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
-import type { ProductDetail } from '@/types/product'
+import type { ProductDetail, ProductSummary } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
 import type { QuoteResponse, QuoteItem } from '@/types/quote'
 import type { Scheme } from '@/types/scheme'
@@ -131,6 +132,115 @@ const rskuMap = ref<Record<string, Rsku[]>>({})
 const selectedRskuMap = reactive<Record<string, string>>({})
 const quantityMap = reactive<Record<string, number>>({})
 const originalScheme = ref<Scheme | null>(null)
+
+// ---------- 添加产品弹窗（构建器内直接选品，解决项目入口空构建器无法选产品的问题） ----------
+const showAddModal = ref(false)
+const addKeyword = ref('')
+const addLoading = ref(false)
+const addRows = ref<ProductSummary[]>([])
+const addTotal = ref(0)
+const addPage = ref(1)
+const ADD_PAGE_SIZE = 10
+const addCheckedKeys = ref<string[]>([])
+const addingProducts = ref(false)
+
+/** 已在构建器中的产品 ID（弹窗中禁选防重复） */
+const existingIds = computed(() => new Set(products.value.map((p) => p.rspu.rspuId)))
+
+const addColumns: DataTableColumns<ProductSummary> = [
+  { type: 'selection', disabled: (row: ProductSummary) => existingIds.value.has(row.rspuId) },
+  {
+    title: '图片',
+    key: 'image',
+    width: 70,
+    render: (row) => h(HoverZoomImage, { src: row.primaryImageUrl, width: 44, height: 44, objectFit: 'contain' })
+  },
+  {
+    title: '产品',
+    key: 'productName',
+    render: (row) => row.productName || row.categoryPath
+  },
+  { title: '编码', key: 'rspuCode', width: 150, render: (row) => row.rspuCode || row.rspuId },
+  {
+    title: '最低出厂价',
+    key: 'minFactoryPrice',
+    width: 110,
+    render: (row) => (row.minFactoryPrice != null ? `¥${row.minFactoryPrice.toFixed(2)}` : '暂无报价')
+  }
+]
+
+function openAddModal() {
+  addKeyword.value = ''
+  addCheckedKeys.value = []
+  addPage.value = 1
+  showAddModal.value = true
+  loadAddRows()
+}
+
+async function loadAddRows() {
+  addLoading.value = true
+  try {
+    const result = await listProducts(
+      { keyword: addKeyword.value.trim() || undefined, status: 'active', page: addPage.value, size: ADD_PAGE_SIZE },
+      { signal }
+    )
+    addRows.value = result.rows
+    addTotal.value = result.total
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '加载产品列表失败'
+  } finally {
+    addLoading.value = false
+  }
+}
+
+/** 确认添加：逐个拉产品详情与 RSKU 报价，默认选中有报价的最低价 RSKU（与 URL 带入时的逻辑一致）。 */
+async function handleAddProducts() {
+  const newIds = addCheckedKeys.value.filter((id) => !existingIds.value.has(id))
+  if (newIds.length === 0) {
+    showAddModal.value = false
+    return
+  }
+  const room = Math.max(0, MAX_ITEMS - products.value.length)
+  const ids = newIds.slice(0, room)
+  addingProducts.value = true
+  try {
+    const details = await Promise.all(ids.map((id) => getProductDetail(id, { signal })))
+    const rskuResults = await Promise.all(ids.map((id) => listRskuByRspu(id, { signal })))
+    details.forEach((p, i) => {
+      const rspuId = p.rspu.rspuId
+      const list = rskuResults[i]
+      products.value.push(p)
+      rskuMap.value[rspuId] = list
+      quantityMap[rspuId] = 1
+      const selectable = list.filter((r) => r.factoryPrice != null)
+      if (selectable.length > 0) {
+        const cheapest = selectable.reduce((min, r) => (r.factoryPrice! < min.factoryPrice! ? r : min), selectable[0])
+        selectedRskuMap[rspuId] = cheapest.rskuId
+      }
+    })
+    // 产品集变化后旧报价结果失效
+    quoteResult.value = null
+    if (newIds.length > ids.length) {
+      errorMessage.value = `方案最多支持 ${MAX_ITEMS} 个产品，超出的 ${newIds.length - ids.length} 个未加入`
+    }
+    showAddModal.value = false
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '添加产品失败'
+  } finally {
+    addingProducts.value = false
+  }
+}
+
+/** 从构建器移除产品（同步清理 RSKU/数量选择并使旧报价结果失效）。 */
+function removeProduct(rspuId: string) {
+  products.value = products.value.filter((p) => p.rspu.rspuId !== rspuId)
+  const map = { ...rskuMap.value }
+  delete map[rspuId]
+  rskuMap.value = map
+  delete selectedRskuMap[rspuId]
+  delete quantityMap[rspuId]
+  quoteResult.value = null
+}
 
 const MAX_ITEMS = 50
 const isItemsLimitReached = computed(() => products.value.length >= MAX_ITEMS)
@@ -493,6 +603,7 @@ onBeforeRouteUpdate((to) => {
       <n-space vertical>
         <n-space>
           <n-button size="small" @click="router.push('/products')">返回产品库</n-button>
+          <n-button v-if="canSaveScheme" size="small" type="primary" secondary @click="openAddModal">添加产品</n-button>
         </n-space>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
@@ -528,6 +639,9 @@ onBeforeRouteUpdate((to) => {
             :title="`${product.rspu.positioningLabel} (${product.rspu.rspuId})`"
             size="small"
           >
+            <template #header-extra>
+              <n-button size="tiny" quaternary type="error" @click="removeProduct(product.rspu.rspuId)">移除</n-button>
+            </template>
             <n-space align="center" justify="space-between">
               <n-space align="center">
                 <HoverZoomImage
@@ -589,7 +703,11 @@ onBeforeRouteUpdate((to) => {
           </n-space>
         </template>
 
-        <n-empty v-if="!loading && products.length === 0 && !errorMessage" description="未选择产品" />
+        <n-empty v-if="!loading && products.length === 0 && !errorMessage" description="未选择产品">
+          <template v-if="canSaveScheme" #extra>
+            <n-button type="primary" @click="openAddModal">添加产品</n-button>
+          </template>
+        </n-empty>
 
         <template v-if="quoteResult">
           <n-divider />
@@ -623,6 +741,49 @@ onBeforeRouteUpdate((to) => {
         </template>
       </n-space>
     </n-card>
+
+    <!-- 添加产品弹窗 -->
+    <n-modal v-model:show="showAddModal" title="添加产品" preset="card" style="width: 760px;">
+      <n-space vertical>
+        <n-space>
+          <n-input
+            v-model:value="addKeyword"
+            placeholder="按名称/编码搜索"
+            clearable
+            style="width: 260px;"
+            @keyup.enter="addPage = 1; loadAddRows()"
+          />
+          <n-button :loading="addLoading" @click="addPage = 1; loadAddRows()">搜索</n-button>
+        </n-space>
+        <n-data-table
+          v-model:checked-row-keys="addCheckedKeys"
+          :columns="addColumns"
+          :data="addRows"
+          :loading="addLoading"
+          :row-key="(row: ProductSummary) => row.rspuId"
+          size="small"
+        />
+        <n-space justify="space-between" align="center">
+          <n-pagination
+            v-model:page="addPage"
+            :item-count="addTotal"
+            :page-size="ADD_PAGE_SIZE"
+            @update:page="loadAddRows"
+          />
+          <n-space>
+            <n-button @click="showAddModal = false">取消</n-button>
+            <n-button
+              type="primary"
+              :loading="addingProducts"
+              :disabled="addCheckedKeys.length === 0"
+              @click="handleAddProducts"
+            >
+              添加（{{ addCheckedKeys.length }}）
+            </n-button>
+          </n-space>
+        </n-space>
+      </n-space>
+    </n-modal>
 
     <n-modal
       v-model:show="showSaveModal"
