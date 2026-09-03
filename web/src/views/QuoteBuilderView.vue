@@ -692,6 +692,7 @@ onBeforeRouteUpdate((to) => {
                   :src="product.images && product.images.length > 0 ? `/api/v1/images/${product.images[0].imageId}` : null"
                   :width="80"
                   :height="80"
+                  object-fit="contain"
                 />
                 <n-select
                   v-model:value="selectedRskuMap[product.rspu.rspuId]"

@@ -88,7 +88,8 @@ const itemColumns: DataTableColumns<OrderInviteItem> = [
           ? `/api/v1/images/${row.imageId}?inviteToken=${encodeURIComponent(token.value)}`
           : null,
         width: 56,
-        height: 56
+        height: 56,
+        objectFit: 'contain'
       })
   },
   { title: '产品名称', key: 'productName', render: row => row.productName || '-' },

@@ -293,7 +293,8 @@ const itemColumns: DataTableColumns<SchemeItem> = [
       return h(HoverZoomImage, {
         src: row.primaryImageUrl,
         width: 80,
-        height: 80
+        height: 80,
+        objectFit: 'contain'
       })
     }
   },
@@ -563,6 +564,7 @@ onBeforeRouteUpdate((to) => {
                         :width="64"
                         :height="64"
                         radius="8px"
+                        object-fit="contain"
                         preview-disabled
                       />
                       <div class="zone-item-body">

@@ -109,6 +109,7 @@ function navigateToDetail(item: AiSchemeItem) {
                   :src="item.primaryImageUrl"
                   :width="120"
                   :height="120"
+                  object-fit="contain"
                 />
 
                 <n-space vertical>

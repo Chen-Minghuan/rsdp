@@ -275,7 +275,8 @@ const itemColumns: DataTableColumns<OrderItem> = [
       h(HoverZoomImage, {
         src: row.imageId ? `/api/v1/images/${row.imageId}` : null,
         width: 56,
-        height: 56
+        height: 56,
+        objectFit: 'contain'
       })
   },
   { title: '产品名称', key: 'productName', render: row => row.productName || '-' },

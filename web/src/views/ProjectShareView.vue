@@ -87,7 +87,7 @@ onMounted(async () => {
                 <n-image
                   v-if="imageUrl(item.imageId)"
                   :src="imageUrl(item.imageId)"
-                  object-fit="cover"
+                  object-fit="contain"
                   preview-disabled
                   class="zone-item-img"
                 />

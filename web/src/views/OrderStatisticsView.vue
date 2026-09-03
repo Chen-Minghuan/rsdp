@@ -94,6 +94,7 @@ const productColumns: DataTableColumns<OrderProductStat> = [
         src: row.imageId ? `/api/v1/images/${row.imageId}` : null,
         width: 48,
         height: 48,
+        objectFit: 'contain',
         previewDisabled: true
       })
   },
