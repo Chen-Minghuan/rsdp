@@ -8,7 +8,7 @@ import type {
   CopyFromTemplateResponse
 } from '@/types/scheme'
 import type { PageResult } from '@/types/product'
-import type { QuoteResponse } from '@/types/quote'
+import type { QuoteResponse, QuoteMode } from '@/types/quote'
 import type { ApiOptions } from './product'
 
 /**
@@ -91,9 +91,13 @@ export async function deleteScheme(schemeId: string, options?: ApiOptions): Prom
 
 /**
  * 根据搭配方案生成报价单。
+ *
+ * @param schemeId 方案 ID
+ * @param mode     报价口径（可空，默认成本核价；sale=销售报价）
+ * @param options  请求选项
  */
-export async function generateQuoteFromScheme(schemeId: string, options?: ApiOptions): Promise<QuoteResponse> {
-  const { data: result } = await apiClient.post<ApiResult<QuoteResponse>>(`/v1/schemes/${schemeId}/quote`, null, { signal: options?.signal })
+export async function generateQuoteFromScheme(schemeId: string, mode?: QuoteMode, options?: ApiOptions): Promise<QuoteResponse> {
+  const { data: result } = await apiClient.post<ApiResult<QuoteResponse>>(`/v1/schemes/${schemeId}/quote`, mode ? { mode } : null, { signal: options?.signal })
   return result.data
 }
 

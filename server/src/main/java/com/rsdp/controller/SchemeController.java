@@ -5,6 +5,7 @@ import com.rsdp.common.Result;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemReorderRequest;
+import com.rsdp.dto.request.SchemeQuoteRequest;
 import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
 import com.rsdp.dto.response.CopyFromTemplateResponse;
@@ -151,10 +152,12 @@ public class SchemeController {
      * 根据方案生成报价单。
      *
      * @param schemeId 方案 ID
+     * @param request  请求（可空；mode=cost|sale 报价口径，默认成本核价）
      * @return 报价单
      */
     @PostMapping("/{schemeId}/quote")
-    public Result<QuoteResponse> generateQuote(@PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId) {
-        return Result.ok(schemeService.generateQuote(schemeId));
+    public Result<QuoteResponse> generateQuote(@PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
+                                               @RequestBody(required = false) SchemeQuoteRequest request) {
+        return Result.ok(schemeService.generateQuote(schemeId, request != null ? request.getMode() : null));
     }
 }

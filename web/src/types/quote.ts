@@ -7,10 +7,17 @@ export interface QuoteItemRequest {
 }
 
 /**
+ * 报价口径：成本核价（内部）| 销售报价（对客户）。
+ */
+export type QuoteMode = 'cost' | 'sale'
+
+/**
  * 生成报价单请求。
  */
 export interface QuoteGenerateRequest {
   items: QuoteItemRequest[]
+  /** 报价口径（默认 cost） */
+  mode?: QuoteMode
 }
 
 /**
@@ -27,6 +34,14 @@ export interface QuoteItem {
   factoryPrice: number
   quantity: number
   subtotal?: number
+  /** 标准售价（仅 sale 口径返回） */
+  salePrice?: number
+  /** 售价是否低于成本（仅 sale 口径） */
+  belowCost?: boolean
+  /** 成本价（仅 sale 口径且有出厂价查看权限时返回） */
+  costPrice?: number
+  /** 毛利 = 售价 − 成本（仅 sale 口径且有出厂价查看权限时返回） */
+  marginAmount?: number
   priceBand: string
   materialDescription?: string
   leadTimeDays?: number
@@ -41,6 +56,10 @@ export interface QuoteItem {
  */
 export interface QuoteSummary {
   totalPrice: number
+  /** 成本合计（仅 sale 口径且全部明细成本可见时返回） */
+  totalCost?: number
+  /** 毛利合计（仅 sale 口径且全部明细成本可见时返回） */
+  totalMargin?: number
   itemCount: number
   totalQuantity: number
   factoryCount: number
@@ -64,5 +83,7 @@ export interface PriceChange {
 export interface QuoteResponse {
   items: QuoteItem[]
   summary: QuoteSummary
+  /** 售价低于成本的口径级警告（仅 sale 口径） */
+  priceWarning?: string
   priceChanges?: PriceChange[]
 }

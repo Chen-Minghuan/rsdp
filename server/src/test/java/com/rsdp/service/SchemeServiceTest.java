@@ -406,7 +406,7 @@ class SchemeServiceTest {
 
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
-        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)))).thenReturn(quote);
+        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)), null)).thenReturn(quote);
         when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(currentRsku);
         when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
 
@@ -443,13 +443,41 @@ class SchemeServiceTest {
 
         when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
-        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)))).thenReturn(quote);
+        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)), null)).thenReturn(quote);
         when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(currentRsku);
         when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(false);
 
         QuoteResponse response = schemeService.generateQuote("SCHEME-001");
 
         assertThat(response.getPriceChanges()).isEmpty();
+    }
+
+    @Test
+    void generateQuote_shouldPassSaleModeToQuoteService() {
+        // 方案报价支持口径透传：sale 口径原样传给报价服务
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setStatus("active");
+
+        SchemeItem item = new SchemeItem();
+        item.setSchemeItemId(1L);
+        item.setSchemeId("SCHEME-001");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setQuantity(3);
+
+        QuoteResponse quote = new QuoteResponse();
+        quote.setItems(List.of());
+
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
+        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)), "sale")).thenReturn(quote);
+        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(null);
+
+        QuoteResponse response = schemeService.generateQuote("SCHEME-001", "sale");
+
+        assertThat(response).isSameAs(quote);
+        verify(quoteService).generateQuote(eq(List.of(req("RSKU-001", 3))), eq("sale"));
     }
 
     @Test

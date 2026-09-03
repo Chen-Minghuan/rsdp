@@ -38,7 +38,7 @@ public class QuoteController {
      */
     @PostMapping("/generate")
     public Result<QuoteResponse> generate(@Valid @RequestBody QuoteGenerateRequest request) {
-        return Result.ok(quoteService.generateQuote(request.getItems()));
+        return Result.ok(quoteService.generateQuote(request.getItems(), request.getMode()));
     }
 
     /**
@@ -49,9 +49,12 @@ public class QuoteController {
      */
     @PostMapping("/export")
     public ResponseEntity<byte[]> export(@Valid @RequestBody QuoteGenerateRequest request) {
-        byte[] content = quoteExportService.exportQuote(request.getItems());
+        byte[] content = quoteExportService.exportQuote(request.getItems(), request.getMode());
+        // 文件名按口径区分（销售报价单 sales_quote / 成本核价单 quote）；
         // 时间戳 + 8 位随机后缀，避免并发导出文件名重复
-        String filename = "quote_" + System.currentTimeMillis() + "_"
+        String prefix = QuoteService.MODE_SALE.equals(QuoteService.resolveMode(request.getMode()))
+            ? "sales_quote_" : "quote_";
+        String filename = prefix + System.currentTimeMillis() + "_"
             + UUID.randomUUID().toString().substring(0, 8) + ".xlsx";
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")

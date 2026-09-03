@@ -409,7 +409,7 @@ async function handleGenerateQuote() {
   generating.value = true
   errorMessage.value = ''
   try {
-    quoteResult.value = await generateQuoteFromScheme(schemeId.value, { signal })
+    quoteResult.value = await generateQuoteFromScheme(schemeId.value, undefined, { signal })
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '生成报价单失败'
   } finally {

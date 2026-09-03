@@ -29,11 +29,17 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 报价单服务。
+ * 报价单服务：支持两种价格口径——成本核价（cost，内部，出厂价 + 权限掩码）与
+ * 销售报价（sale，对客户，标准售价计价，售价低于成本仅警告不拦截）。
  */
 @Service
 @RequiredArgsConstructor
 public class QuoteService {
+
+    /** 报价口径：成本核价（内部）。 */
+    public static final String MODE_COST = "cost";
+    /** 报价口径：销售报价（对客户）。 */
+    public static final String MODE_SALE = "sale";
 
     private final RskuSupplyMapper rskuSupplyMapper;
     private final RspuMapper rspuMapper;
@@ -41,14 +47,48 @@ public class QuoteService {
     private final ImageAssetsMapper imageAssetsMapper;
     private final FactoryService factoryService;
     private final DataScopeHelper dataScopeHelper;
+    private final PricingService pricingService;
 
     /**
-     * 根据 RSKU ID 及数量列表生成报价单。
+     * 解析报价口径：空值回退成本核价（向后兼容），非法值抛业务异常。
+     *
+     * @param mode 原始口径参数（可空）
+     * @return {@link #MODE_COST} 或 {@link #MODE_SALE}
+     */
+    public static String resolveMode(String mode) {
+        if (!StringUtils.hasText(mode)) {
+            return MODE_COST;
+        }
+        if (MODE_COST.equals(mode) || MODE_SALE.equals(mode)) {
+            return mode;
+        }
+        throw new BusinessException("非法报价口径: " + mode + "（支持 cost/sale）");
+    }
+
+    /**
+     * 根据 RSKU ID 及数量列表生成报价单（成本核价口径）。
      *
      * @param quoteItems 报价单项请求列表
      * @return 报价单
      */
     public QuoteResponse generateQuote(List<QuoteItemRequest> quoteItems) {
+        return generateQuote(quoteItems, null);
+    }
+
+    /**
+     * 根据 RSKU ID 及数量列表生成报价单。
+     *
+     * <p>口径 cost：出厂价 + 权限掩码（维持原行为）；口径 sale：单价取标准售价
+     * （{@link PricingService#resolveSalePrice}，RSPU 建议销售价优先，否则成本 × 全局加价倍率），
+     * 未定价 RSKU 整单拦截报错；有出厂价查看权限时每项附成本与毛利（仅内部），
+     * 无权限则绝不返回成本字段。</p>
+     *
+     * @param quoteItems 报价单项请求列表
+     * @param mode       报价口径（可空，默认 cost）
+     * @return 报价单
+     */
+    public QuoteResponse generateQuote(List<QuoteItemRequest> quoteItems, String mode) {
+        String resolvedMode = resolveMode(mode);
         if (quoteItems == null || quoteItems.isEmpty()) {
             throw new BusinessException("请选择至少一个 RSKU");
         }
@@ -115,15 +155,38 @@ public class QuoteService {
             .map(RspuMaster::getRspuId).toList());
 
         List<QuoteItemResponse> items = mergedItems.stream()
-            .map(item -> buildItem(item, rskuMap.get(item.getRskuId()), rspuMap, factoryMap, primaryImageUrlMap))
+            .map(item -> buildItem(item, rskuMap.get(item.getRskuId()), rspuMap, factoryMap, primaryImageUrlMap, resolvedMode))
             .collect(Collectors.toList());
 
-        QuoteSummaryResponse summary = computeSummary(items);
+        QuoteSummaryResponse summary = computeSummary(items, resolvedMode);
 
         QuoteResponse response = new QuoteResponse();
         response.setItems(items);
         response.setSummary(summary);
+        response.setPriceWarning(buildPriceWarning(items, resolvedMode));
         return response;
+    }
+
+    /**
+     * 汇总售价低于成本的明细为口径级警告（仅 sale 口径；清库存场景提示，无则返回 {@code null}）。
+     *
+     * @param items 报价项
+     * @param mode  报价口径
+     * @return 警告文案或 {@code null}
+     */
+    private static String buildPriceWarning(List<QuoteItemResponse> items, String mode) {
+        if (!MODE_SALE.equals(mode)) {
+            return null;
+        }
+        List<String> names = items.stream()
+            .filter(QuoteItemResponse::isBelowCost)
+            .map(item -> StringUtils.hasText(item.getRspuName()) ? item.getRspuName() : item.getRspuId())
+            .distinct()
+            .toList();
+        if (names.isEmpty()) {
+            return null;
+        }
+        return "以下产品售价低于成本：" + String.join("、", names) + "（清库存场景请确认）";
     }
 
     private Map<String, RspuMaster> batchRspuMap(List<RskuSupply> rskus) {
@@ -202,7 +265,8 @@ public class QuoteService {
                                         RskuSupply rsku,
                                         Map<String, RspuMaster> rspuMap,
                                         Map<String, FactoryMaster> factoryMap,
-                                        Map<String, String> primaryImageUrlMap) {
+                                        Map<String, String> primaryImageUrlMap,
+                                        String mode) {
         RspuMaster rspu = rspuMap.get(rsku.getRspuId());
         if (rspu == null) {
             throw new ResourceNotFoundException("RSPU 不存在: " + rsku.getRspuId());
@@ -214,9 +278,23 @@ public class QuoteService {
             : 1;
         // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见；掩码时小计同步隐藏，避免经小计/总价泄露
         boolean canViewPrice = dataScopeHelper.canViewFactoryPrice(rsku.getFactoryCode());
-        BigDecimal subtotal = canViewPrice && rsku.getFactoryPrice() != null
-            ? rsku.getFactoryPrice().multiply(BigDecimal.valueOf(quantity))
-            : null;
+        boolean saleMode = MODE_SALE.equals(mode);
+
+        // 售价口径：标准售价（建议销售价优先，否则成本 × 全局加价倍率），未定价整单拦截
+        BigDecimal salePrice = null;
+        BigDecimal subtotal;
+        if (saleMode) {
+            salePrice = pricingService.resolveSalePrice(rspu, rsku);
+            if (salePrice == null) {
+                throw new BusinessException("产品未定价（无建议销售价且无出厂价）: " + rsku.getRspuId());
+            }
+            subtotal = salePrice.multiply(BigDecimal.valueOf(quantity))
+                .setScale(2, java.math.RoundingMode.HALF_UP);
+        } else {
+            subtotal = canViewPrice && rsku.getFactoryPrice() != null
+                ? rsku.getFactoryPrice().multiply(BigDecimal.valueOf(quantity))
+                : null;
+        }
 
         QuoteItemResponse item = new QuoteItemResponse();
         item.setRspuId(rspu.getRspuId());
@@ -230,6 +308,18 @@ public class QuoteService {
         item.setFactoryPrice(canViewPrice ? rsku.getFactoryPrice() : null);
         item.setQuantity(quantity);
         item.setSubtotal(subtotal);
+        if (saleMode) {
+            BigDecimal cost = rsku.getFactoryPrice();
+            item.setSalePrice(salePrice);
+            item.setBelowCost(PricingService.isBelowCost(salePrice, cost));
+            // 成本与毛利仅内部可见：无出厂价权限的角色绝不返回
+            if (canViewPrice) {
+                item.setCostPrice(cost);
+                item.setMarginAmount(cost != null
+                    ? salePrice.subtract(cost).setScale(2, java.math.RoundingMode.HALF_UP)
+                    : null);
+            }
+        }
         item.setPriceBand(rsku.getPriceBand());
         item.setMaterialDescription(rsku.getMaterialDescription());
         item.setLeadTimeDays(rsku.getLeadTimeDays());
@@ -240,7 +330,7 @@ public class QuoteService {
         return item;
     }
 
-    private QuoteSummaryResponse computeSummary(List<QuoteItemResponse> items) {
+    private QuoteSummaryResponse computeSummary(List<QuoteItemResponse> items, String mode) {
         BigDecimal totalPrice = BigDecimal.ZERO;
         int totalQuantity = 0;
         int maxLeadTimeDays = 0;
@@ -267,6 +357,18 @@ public class QuoteService {
         summary.setTotalQuantity(totalQuantity);
         summary.setFactoryCount(factoryCodes.size());
         summary.setMaxLeadTimeDays(maxLeadTimeDays);
+
+        // 毛利汇总（仅 sale 口径且全部明细成本可见，避免部分可见导致误导性合计）
+        if (MODE_SALE.equals(mode) && !items.isEmpty()
+            && items.stream().allMatch(item -> item.getCostPrice() != null)) {
+            BigDecimal totalCost = items.stream()
+                .map(item -> item.getCostPrice().multiply(BigDecimal.valueOf(
+                    item.getQuantity() != null && item.getQuantity() > 0 ? item.getQuantity() : 1)))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, java.math.RoundingMode.HALF_UP);
+            summary.setTotalCost(totalCost);
+            summary.setTotalMargin(totalPrice.subtract(totalCost).setScale(2, java.math.RoundingMode.HALF_UP));
+        }
         return summary;
     }
 }

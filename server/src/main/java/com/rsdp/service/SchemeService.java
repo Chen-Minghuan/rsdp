@@ -755,12 +755,23 @@ public class SchemeService {
     }
 
     /**
-     * 根据方案生成报价单。
+     * 根据方案生成报价单（成本核价口径）。
      *
      * @param schemeId 方案 ID
      * @return 报价单
      */
     public QuoteResponse generateQuote(String schemeId) {
+        return generateQuote(schemeId, null);
+    }
+
+    /**
+     * 根据方案生成报价单。
+     *
+     * @param schemeId 方案 ID
+     * @param mode     报价口径（可空，默认成本核价；sale=销售报价，透传给报价服务）
+     * @return 报价单
+     */
+    public QuoteResponse generateQuote(String schemeId, String mode) {
         Scheme scheme = schemeMapper.selectById(schemeId);
         if (scheme == null) {
             throw new ResourceNotFoundException("方案不存在: " + schemeId);
@@ -787,7 +798,7 @@ public class SchemeService {
             })
             .collect(Collectors.toList());
 
-        QuoteResponse quote = quoteService.generateQuote(quoteItems);
+        QuoteResponse quote = quoteService.generateQuote(quoteItems, mode);
 
         // 快照模式：对比方案保存时的价格与当前最新价格。
         // 出厂价可见性约束：无权限角色（设计师等）不返回变动条目，防止经 oldPrice/newPrice 旁路泄露

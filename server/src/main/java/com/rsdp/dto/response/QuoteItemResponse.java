@@ -22,6 +22,14 @@ public class QuoteItemResponse {
     private BigDecimal factoryPrice;
     private Integer quantity;
     private BigDecimal subtotal;
+    /** 标准售价（仅 sale 口径返回；对客户可见，明文） */
+    private BigDecimal salePrice;
+    /** 售价是否低于成本（仅 sale 口径；清库存场景提示） */
+    private boolean belowCost;
+    /** 成本价（仅 sale 口径且有出厂价查看权限时返回，绝不向无权限角色泄露） */
+    private BigDecimal costPrice;
+    /** 毛利 = 售价 − 成本（仅 sale 口径且有出厂价查看权限时返回） */
+    private BigDecimal marginAmount;
     private String priceBand;
     private String materialDescription;
     private Integer leadTimeDays;

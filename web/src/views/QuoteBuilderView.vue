@@ -20,6 +20,8 @@ import {
   NFormItem,
   NInput,
   NPagination,
+  NRadioGroup,
+  NRadioButton,
   type DataTableColumns
 } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
@@ -33,7 +35,7 @@ import { PERMISSIONS } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductDetail, ProductSummary } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
-import type { QuoteResponse, QuoteItem } from '@/types/quote'
+import type { QuoteResponse, QuoteItem, QuoteMode } from '@/types/quote'
 import type { Scheme } from '@/types/scheme'
 
 const route = useRoute()
@@ -105,6 +107,10 @@ const generating = ref(false)
 const exporting = ref(false)
 const saving = ref(false)
 const quoteResult = ref<QuoteResponse | null>(null)
+/** 报价口径：成本核价（内部，默认）| 销售报价（对客户） */
+const quoteMode = ref<QuoteMode>('cost')
+/** 已生成报价结果实际使用的口径（生成后切换选择不影响已展示结果） */
+const quoteResultMode = ref<QuoteMode>('cost')
 const showSaveModal = ref(false)
 const schemeName = ref('')
 /** 保存方案弹窗：可选所属项目（'' = 个人方案），默认取 URL 带入的项目上下文 */
@@ -389,7 +395,8 @@ async function handleGenerateQuote() {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    quoteResult.value = await generateQuote({ items }, { signal })
+    quoteResult.value = await generateQuote({ items, mode: quoteMode.value }, { signal })
+    quoteResultMode.value = quoteMode.value
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '生成报价单失败'
   } finally {
@@ -418,8 +425,8 @@ async function handleExportQuote() {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    await exportQuote({ items }, { signal })
-    successMessage.value = '报价单已开始下载'
+    await exportQuote({ items, mode: quoteMode.value }, { signal })
+    successMessage.value = quoteMode.value === 'sale' ? '销售报价单已开始下载' : '核价单已开始下载'
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '导出报价单失败'
   } finally {
@@ -497,44 +504,77 @@ function formatPrice(value: number | undefined): string {
   return `¥${value.toFixed(2)}`
 }
 
-const quoteColumns: DataTableColumns<QuoteItem> = [
-  { title: 'RSPU', key: 'rspuName' },
-  {
-    title: 'RSKU ID',
-    key: 'rskuId',
-    width: 160,
-    render(row: QuoteItem) {
-      return h('span', { class: 'rsdp-mono', style: { fontSize: '12px' } }, row.rskuId)
+/** 报价结果表格列：按生成口径显示「销售价/出厂价」；sale 口径且成本可见时追加「成本」「毛利」列。 */
+const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
+  const saleMode = quoteResultMode.value === 'sale'
+  const columns: DataTableColumns<QuoteItem> = [
+    { title: 'RSPU', key: 'rspuName' },
+    {
+      title: 'RSKU ID',
+      key: 'rskuId',
+      width: 160,
+      render(row: QuoteItem) {
+        return h('span', { class: 'rsdp-mono', style: { fontSize: '12px' } }, row.rskuId)
+      }
+    },
+    { title: '工厂', key: 'factoryName' },
+    saleMode
+      ? {
+        title: '销售价',
+        key: 'salePrice',
+        width: 120,
+        render(row: QuoteItem) {
+          return h('span', { class: 'rsdp-mono' }, formatPrice(row.salePrice))
+        }
+      }
+      : {
+        title: '出厂价',
+        key: 'factoryPrice',
+        width: 120,
+        render(row: QuoteItem) {
+          return h('span', { class: 'rsdp-mono' }, formatPrice(row.factoryPrice))
+        }
+      },
+    {
+      title: '数量',
+      key: 'quantity',
+      width: 80,
+      render(row: QuoteItem) {
+        return row.quantity ?? '-'
+      }
+    },
+    {
+      title: '小计',
+      key: 'subtotal',
+      width: 120,
+      render(row: QuoteItem) {
+        return h('span', { class: 'rsdp-mono' }, formatPrice(row.subtotal))
+      }
     }
-  },
-  { title: '工厂', key: 'factoryName' },
-  {
-    title: '出厂价',
-    key: 'factoryPrice',
-    width: 120,
-    render(row: QuoteItem) {
-      return h('span', { class: 'rsdp-mono' }, formatPrice(row.factoryPrice))
-    }
-  },
-  {
-    title: '数量',
-    key: 'quantity',
-    width: 80,
-    render(row: QuoteItem) {
-      return row.quantity ?? '-'
-    }
-  },
-  {
-    title: '小计',
-    key: 'subtotal',
-    width: 120,
-    render(row: QuoteItem) {
-      return h('span', { class: 'rsdp-mono' }, formatPrice(row.subtotal))
-    }
-  },
-  { title: '交期(天)', key: 'leadTimeDays', width: 100 },
-  { title: 'MOQ', key: 'moq', width: 100 }
-]
+  ]
+  if (saleMode && quoteResult.value?.items.some(item => item.costPrice != null)) {
+    columns.push({
+      title: '成本',
+      key: 'costPrice',
+      width: 110,
+      render(row: QuoteItem) {
+        return h('span', { class: 'rsdp-mono' }, formatPrice(row.costPrice))
+      }
+    }, {
+      title: '毛利',
+      key: 'marginAmount',
+      width: 110,
+      render(row: QuoteItem) {
+        return h('span', { class: 'rsdp-mono' }, formatPrice(row.marginAmount))
+      }
+    })
+  }
+  columns.push(
+    { title: '交期(天)', key: 'leadTimeDays', width: 100 },
+    { title: 'MOQ', key: 'moq', width: 100 }
+  )
+  return columns
+})
 
 function isFactoryCapable(rsku: Rsku | undefined): boolean {
   if (!rsku || !rsku.productLevel) return true
@@ -689,8 +729,15 @@ onBeforeRouteUpdate((to) => {
               {{ Object.values(selectedRskuMap).filter(Boolean).length }} / {{ products.length }}
             </n-descriptions-item>
           </n-descriptions>
+          <div v-if="quoteMode === 'sale'" style="font-size: 12px; color: var(--rsdp-text-secondary, #888);">
+            上方预估总价/小计为成本口径（内部参考），销售报价口径以生成结果为准
+          </div>
 
-          <n-space>
+          <n-space align="center">
+            <n-radio-group v-model:value="quoteMode" size="small">
+              <n-radio-button value="cost">成本核价（内部）</n-radio-button>
+              <n-radio-button value="sale">销售报价（对客户）</n-radio-button>
+            </n-radio-group>
             <n-button type="primary" :loading="generating" @click="handleGenerateQuote">
               确认生成报价单
             </n-button>
@@ -712,7 +759,15 @@ onBeforeRouteUpdate((to) => {
         <template v-if="quoteResult">
           <n-divider />
 
-          <n-card title="报价单" size="small">
+          <n-card :title="quoteResultMode === 'sale' ? '报价单（销售报价）' : '报价单（成本核价）'" size="small">
+            <n-alert
+              v-if="quoteResult.priceWarning"
+              type="warning"
+              :show-icon="true"
+              style="margin-bottom: 12px;"
+            >
+              {{ quoteResult.priceWarning }}
+            </n-alert>
             <n-data-table
               :columns="quoteColumns"
               :data="quoteResult.items"
@@ -721,7 +776,7 @@ onBeforeRouteUpdate((to) => {
             />
 
             <n-descriptions bordered :column="5" label-placement="left" style="margin-top: 16px;">
-              <n-descriptions-item label="总价">
+              <n-descriptions-item :label="quoteResultMode === 'sale' ? '销售总价' : '总价'">
                 ¥{{ (quoteResult.summary.totalPrice ?? 0).toFixed(2) }}
               </n-descriptions-item>
               <n-descriptions-item label="项数">
@@ -735,6 +790,12 @@ onBeforeRouteUpdate((to) => {
               </n-descriptions-item>
               <n-descriptions-item label="最大交期">
                 {{ quoteResult.summary.maxLeadTimeDays || '-' }} 天
+              </n-descriptions-item>
+              <n-descriptions-item v-if="quoteResult.summary.totalCost != null" label="成本合计">
+                ¥{{ quoteResult.summary.totalCost.toFixed(2) }}
+              </n-descriptions-item>
+              <n-descriptions-item v-if="quoteResult.summary.totalMargin != null" label="毛利合计">
+                ¥{{ quoteResult.summary.totalMargin.toFixed(2) }}
               </n-descriptions-item>
             </n-descriptions>
           </n-card>

@@ -677,17 +677,28 @@ PUT    /api/v1/dicts/six-dim-schema/{categoryCode}/{dimKey}   # 权限 dict:upda
 ```
 POST   /api/v1/quotes/generate
        # 根据选中的 RSKU 及数量列表生成报价单（已实现）
-       # Request: { items: [{ rskuId, quantity }, ...] }
+       # Request: { items: [{ rskuId, quantity }, ...], mode? }
+       # mode 报价口径：cost=成本核价（内部，默认，出厂价 + 权限掩码）| sale=销售报价（对客户，
+       #   单价 = 标准售价：RSPU 建议销售价 retail_price 优先，否则 成本 × 全局加价倍率
+       #   pricing.markup.global；未定价 RSKU 整单 400 拦截"产品未定价"）；非法值 400
        # Response: {
        #   items: [QuoteItem...],           # QuoteItem 包含 quantity、subtotal
-       #   summary: { totalPrice, itemCount, totalQuantity, factoryCount, maxLeadTimeDays }
+       #   summary: { totalPrice, itemCount, totalQuantity, factoryCount, maxLeadTimeDays },
+       #   priceWarning?                    # 仅 sale：售价低于成本的产品名汇总（清库存提示）
        # }
+       # sale 口径新增字段：items[].salePrice/belowCost；有出厂价查看权限时另附
+       #   items[].costPrice/marginAmount 与 summary.totalCost/totalMargin（仅内部，
+       #   无权限角色绝不返回成本字段）；sale 口径 subtotal/totalPrice 为售价口径
 
 POST   /api/v1/quotes/export
        # 根据选中的 RSKU 及数量列表导出 Excel 报价单（已实现）
-       # Request: { items: [{ rskuId, quantity }, ...] }
-       # Response: application/octet-stream，Content-Disposition: attachment; filename="quote_<timestamp>.xlsx"
-       # 说明：工作簿包含两个 sheet："报价明细"（逐项报价，含数量/小计）和"汇总"（总价、项数、总数量、工厂数、最大交期、价格变动提示）
+       # Request: { items: [{ rskuId, quantity }, ...], mode? }（口径同 generate）
+       # Response: application/octet-stream，Content-Disposition: attachment;
+       #   filename="quote_<timestamp>.xlsx"（sale 口径为 sales_quote_<timestamp>.xlsx）
+       # 说明：工作簿包含两个 sheet："报价明细"（逐项报价，含数量/小计；sale 口径列名「销售价」
+       #   且不含成本列与工厂信息列——工厂编码/名称不导出、工厂 SKU 以「型号」口径展示，cost 口径为「出厂价」）
+       #   和"汇总"（报价口径、总价、项数、总数量、最大交期、价格变动提示；
+       #   「涉及工厂数」仅 cost 口径输出，sale 口径不输出）
 ```
 
 ### 搭配方案
@@ -731,6 +742,7 @@ DELETE /api/v1/schemes/{schemeId}
 
 POST   /api/v1/schemes/{schemeId}/quote
        # 根据搭配方案生成报价单（已实现）
+       # Request: { mode? }（可空；mode=cost|sale 报价口径，同 /quotes/generate，默认成本核价）
        # Response: QuoteResponse
        # 说明：采用快照模式，scheme_item 保存创建/更新时的 factory_price。
        #      重新生成报价单时，报价单按 RSKU 最新价格计算；若与快照不一致，
