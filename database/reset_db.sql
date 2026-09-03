@@ -69,6 +69,7 @@ DROP TABLE IF EXISTS design_order_item CASCADE;
 DROP TABLE IF EXISTS design_order CASCADE;
 DROP TABLE IF EXISTS order_no_counter CASCADE;
 DROP TABLE IF EXISTS sys_config CASCADE;
+DROP TABLE IF EXISTS pricing_rule CASCADE;
 DROP TABLE IF EXISTS factory_product_capability CASCADE;
 DROP TABLE IF EXISTS sys_user_factory CASCADE;
 DROP TABLE IF EXISTS sys_user_role CASCADE;
@@ -1274,6 +1275,17 @@ CREATE TABLE IF NOT EXISTS sys_config (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- 品类级加价倍率（V39 并入）：标准售价 = 成本 × 品类倍率（retail_price 优先；无规则回退全局 pricing.markup.global）
+CREATE TABLE IF NOT EXISTS pricing_rule (
+    rule_id VARCHAR(64) PRIMARY KEY,
+    category_code VARCHAR(16) NOT NULL,
+    markup_multiplier NUMERIC(6,3) NOT NULL CHECK (markup_multiplier > 0),
+    remark VARCHAR(255),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_pricing_rule_category ON pricing_rule(category_code);
+
 -- 字典别名表（V16 并入）：工厂方言叫法 → 字典码的持久化映射（导入确认后自学习积累）
 CREATE TABLE IF NOT EXISTS dict_alias (
     id          BIGSERIAL PRIMARY KEY,
@@ -2304,6 +2316,7 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('scheme:delete', '删除搭配方案'),
 ('dict:create', '创建字典项'),
 ('dict:update', '编辑字典项'),
+('pricing:update', '定价规则管理'),
 ('user:read', '查看用户'),
 ('user:create', '创建用户'),
 ('user:update', '编辑用户'),
@@ -2341,7 +2354,7 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'EDITOR'
-  AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill', 'recommendation:score:config:read', 'recommendation:score:config:update')
+  AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill', 'recommendation:score:config:read', 'recommendation:score:config:update', 'pricing:update')
 ON CONFLICT DO NOTHING;
 
 -- VIEWER：只读

@@ -46,6 +46,9 @@ public final class Permissions {
     public static final String DICT_CREATE = "dict:create";
     public static final String DICT_UPDATE = "dict:update";
 
+    // 定价管理
+    public static final String PRICING_UPDATE = "pricing:update";
+
     // 用户管理
     public static final String USER_READ = "user:read";
     public static final String USER_CREATE = "user:create";

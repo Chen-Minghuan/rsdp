@@ -44,6 +44,8 @@ export const PERMISSIONS = {
   DICT_CREATE: 'dict:create',
   DICT_UPDATE: 'dict:update',
 
+  PRICING_UPDATE: 'pricing:update',
+
   USER_READ: 'user:read',
   USER_CREATE: 'user:create',
   USER_UPDATE: 'user:update',

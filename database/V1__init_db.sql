@@ -1198,6 +1198,17 @@ CREATE TABLE IF NOT EXISTS sys_config (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- 品类级加价倍率（V39 并入）：标准售价 = 成本 × 品类倍率（retail_price 优先；无规则回退全局 pricing.markup.global）
+CREATE TABLE IF NOT EXISTS pricing_rule (
+    rule_id VARCHAR(64) PRIMARY KEY,
+    category_code VARCHAR(16) NOT NULL,
+    markup_multiplier NUMERIC(6,3) NOT NULL CHECK (markup_multiplier > 0),
+    remark VARCHAR(255),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_pricing_rule_category ON pricing_rule(category_code);
+
 -- 字典别名表（V16 并入）：工厂方言叫法 → 字典码的持久化映射（导入确认后自学习积累）
 CREATE TABLE IF NOT EXISTS dict_alias (
     id          BIGSERIAL PRIMARY KEY,

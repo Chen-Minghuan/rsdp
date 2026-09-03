@@ -195,6 +195,11 @@ public class SecurityConfig {
                 // 系统配置：读取需订单读权限，修改仅 ADMIN
                 .requestMatchers(HttpMethod.GET, "/api/v1/configs/**").hasAuthority(Permissions.ORDER_READ)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/configs/**").hasRole("ADMIN")
+
+                // 定价管理：规则/试算读取需 product:read；规则变更需 pricing:update（仅 ADMIN 持有）
+                .requestMatchers(HttpMethod.GET, "/api/v1/pricing/**").hasAuthority(Permissions.PRODUCT_READ)
+                .requestMatchers(HttpMethod.PUT, "/api/v1/pricing/rules/**").hasAuthority(Permissions.PRICING_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/pricing/rules/**").hasAuthority(Permissions.PRICING_UPDATE)
                 // 搭配方案写接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/schemes").hasAuthority(Permissions.SCHEME_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_UPDATE)

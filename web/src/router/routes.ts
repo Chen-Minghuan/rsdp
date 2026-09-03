@@ -146,6 +146,12 @@ export const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.QUOTE_GENERATE] }
   },
   {
+    path: '/pricing',
+    name: 'PricingManagement',
+    component: () => import('@/views/PricingManagementView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
+  },
+  {
     path: '/schemes',
     name: 'SchemeList',
     component: () => import('@/views/SchemeListView.vue'),

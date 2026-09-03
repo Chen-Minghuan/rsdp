@@ -206,6 +206,12 @@ export const navGroups: NavGroup[] = [
         label: '报价单生成器',
         path: '/quotes/build',
         permission: PERMISSIONS.QUOTE_GENERATE
+      },
+      {
+        key: 'pricing',
+        label: '定价管理',
+        path: '/pricing',
+        permission: PERMISSIONS.PRODUCT_READ
       }
     ]
   },

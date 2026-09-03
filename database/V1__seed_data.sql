@@ -941,6 +941,7 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('scheme:delete', '删除搭配方案'),
 ('dict:create', '创建字典项'),
 ('dict:update', '编辑字典项'),
+('pricing:update', '定价规则管理'),
 ('user:read', '查看用户'),
 ('user:create', '创建用户'),
 ('user:update', '编辑用户'),
@@ -978,7 +979,7 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'EDITOR'
-  AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill', 'recommendation:score:config:read', 'recommendation:score:config:update')
+  AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill', 'recommendation:score:config:read', 'recommendation:score:config:update', 'pricing:update')
 ON CONFLICT DO NOTHING;
 
 -- VIEWER：只读

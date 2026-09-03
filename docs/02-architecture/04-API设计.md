@@ -938,6 +938,41 @@ PUT    /api/v1/configs/{key}
        #   RSPU 已录入建议销售价 retail_price 时不走倍率；仅影响新订单/新报价）
 ```
 
+### 定价管理
+
+```
+售价解析链（三级）：RSPU 建议销售价 retail_price（最高优先）
+  → 成本 × 品类倍率（pricing_rule，按 RSPU category_code 命中）
+  → 成本 × 全局倍率（sys_config pricing.markup.global，缺省 2.5，兜底）
+  → 都空则未定价（订单/报价拦截）
+
+GET    /api/v1/pricing/rules
+       # 品类加价规则列表（需 product:read；关联 category_dict 返回品类名称）
+       # Response: [{ ruleId, categoryCode, categoryName, markupMultiplier, remark,
+       #              createdAt, updatedAt }]
+
+PUT    /api/v1/pricing/rules/{categoryCode}
+       # 按品类编码 upsert 加价规则（需 pricing:update，仅 ADMIN 持有；记审计日志）
+       # Request: { markupMultiplier (必填，>0), remark? }
+
+DELETE /api/v1/pricing/rules/{categoryCode}
+       # 按品类编码删除加价规则（需 pricing:update；不存在 404；记审计日志）
+
+GET    /api/v1/pricing/preview
+       # 定价试算清单（需 product:read；基准为"在售且成本最低的 RSKU"，与产品列表
+       #   "最低出厂价"口径一致；批量查询无 N+1）
+       # Query: categoryCode?, source? (MANUAL/CATEGORY_RULE/GLOBAL/NONE，非法 400),
+       #        keyword?（匹配商品名称/定位标签/业务编码）, page=1, size=20（上限 200）
+       # Response: PageResult<{ rspuId, rspuCode, productName, categoryCode, categoryName,
+       #   costPrice?（仅有 factory_price 权限返回）, salePrice, priceSource,
+       #   appliedMultiplier?（自动计价时返回）, marginRate?（(售价−成本)/售价 四位小数，
+       #   仅有权限时返回）, belowCost }>
+
+GET    /api/v1/pricing/preview/summary
+       # 定价试算总览计数（需 product:read）
+       # Response: { manual, categoryRule, global, unpriced, belowCost, total }
+```
+
 ### 视觉/语义检索
 
 ```
