@@ -13,4 +13,7 @@ import java.util.List;
 public class OrderDetailResponse extends OrderResponse {
 
     private List<OrderItemResponse> items;
+
+    /** 售价低于成本的订单级警告（清库存场景提示；无则 null） */
+    private String priceWarning;
 }

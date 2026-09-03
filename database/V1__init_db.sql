@@ -1180,10 +1180,12 @@ CREATE TABLE IF NOT EXISTS design_order_item (
     original_price TEXT,
     final_price TEXT,
     adjust_price TEXT,
+    list_price NUMERIC(12,2),                        -- 标准售价快照（明文，对客户可见；区别于上面三列 TEXT 存 AES 密文，V38 并入）
     factory_code VARCHAR(16),
     snapshot_json TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+COMMENT ON COLUMN design_order_item.list_price IS '标准售价快照（明文 NUMERIC：售价对客户可见不敏感，且便于 SQL 分析；刻意区别于 original_price/final_price/adjust_price 三列 TEXT 存 AES 密文）';
 CREATE INDEX IF NOT EXISTS idx_order_item_order ON design_order_item(order_id);
 CREATE INDEX IF NOT EXISTS idx_order_item_rspu ON design_order_item(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_order_item_factory ON design_order_item(factory_code);

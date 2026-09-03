@@ -308,6 +308,7 @@ make clean
   - `V35__scene_dict_cover_image.sql`：官网空间探索场景封面图可手配（category_dict.image_id，仅存 image_assets.image_id 不加 FK/索引；管理端手配优先，无手配走"最新在售产品主图"兜底）
   - `V36__floor_plan_module.sql`：户型图分析模块（floor_plan_analysis 批次表[含 source admin/public + deleted_at 软删列] + floor_plan_room 空间明细表[OCR/AI估算/人工三级尺寸来源] + scheme.analysis_id 溯源列；管理端 /api/v1/floor-plan/** 链路，设计见 docs/05-status/户型图空间搭配链路完整方案v3.0.md）
   - `V37__platform_home_content_seed.sql`：官网首页内容种子（platform_content 补 home_trio_cards / home_service_cards 两条 JSON 数组文案，与 website 首页静态兜底一致，消除官网首页 /public/content 404 WARN）
+  - `V38__pricing_model.sql`：价格体系 P1（design_order_item.list_price 标准售价快照明文列 + sys_config 种子 pricing.markup.global=2.5 全局加价倍率；订单计价从"出厂价×折扣率"切换为"标准售价×折扣率"）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

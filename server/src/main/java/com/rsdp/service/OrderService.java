@@ -45,7 +45,7 @@ import java.util.Map;
 import com.rsdp.util.IdGenerator;
 
 /**
- * 设计订单服务：由方案生成订单（价格快照 × 全局折扣率）、状态机迁移、归属校验。
+ * 设计订单服务：由方案生成订单（标准售价 × 折扣率计价）、状态机迁移、归属校验。
  */
 @Service
 @RequiredArgsConstructor
@@ -79,13 +79,18 @@ public class OrderService {
     private final ProjectService projectService;
     private final ConfigService configService;
     private final CompanyService companyService;
+    private final PricingService pricingService;
     private final OrderNoGenerator orderNoGenerator;
     private final DataScopeHelper dataScopeHelper;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
     /**
-     * 由方案生成订单：价格取 RSKU 当前出厂价快照 × 折扣率（企业 price_ratio 优先于全局 price_rate），订单生成后价格不可变。
+     * 由方案生成订单：标准售价（RSPU 建议销售价优先，否则成本 × 全局加价倍率）× 折扣率
+     * （企业 price_ratio 优先于全局 price_rate，语义为乘标准售价的客户折扣），订单生成后价格不可变。
+     *
+     * <p>RSKU 无法定价（无建议销售价且无出厂价）时整单拦截报错；售价低于成本的项不拦截
+     * （清库存场景），在响应 priceWarning 中给出警告。</p>
      *
      * @param request 创建请求
      * @return 订单详情
@@ -164,8 +169,15 @@ public class OrderService {
             int quantity = schemeItem.getQuantity() != null && schemeItem.getQuantity() > 0
                 ? schemeItem.getQuantity()
                 : 1;
+            // 成本价快照（维持原逻辑：出厂价缺失记 0）
             BigDecimal originalPrice = rsku.getFactoryPrice() != null ? rsku.getFactoryPrice() : BigDecimal.ZERO;
-            BigDecimal finalPrice = originalPrice.multiply(priceRate).setScale(2, RoundingMode.HALF_UP);
+            // 标准售价：RSPU 建议销售价优先，否则成本 × 全局加价倍率；无法定价则整单拦截
+            BigDecimal salePrice = pricingService.resolveSalePrice(rspu, rsku);
+            if (salePrice == null) {
+                throw new BusinessException("产品未定价（无建议销售价且无出厂价）: " + schemeItem.getRspuId());
+            }
+            // 到手单价 = 标准售价 × 折扣率
+            BigDecimal finalPrice = salePrice.multiply(priceRate).setScale(2, RoundingMode.HALF_UP);
 
             originalTotal = originalTotal.add(originalPrice.multiply(BigDecimal.valueOf(quantity)));
             finalTotal = finalTotal.add(finalPrice.multiply(BigDecimal.valueOf(quantity)));
@@ -183,6 +195,7 @@ public class OrderService {
             item.setQuantity(quantity);
             item.setOriginalPrice(originalPrice);
             item.setFinalPrice(finalPrice);
+            item.setListPrice(salePrice);
             item.setFactoryCode(rsku.getFactoryCode());
             item.setSnapshotJson(buildSnapshotJson(rspu, rsku));
             item.setCreatedAt(LocalDateTime.now());
@@ -217,7 +230,7 @@ public class OrderService {
     }
 
     /**
-     * 解析生效的订单折扣率：当前用户归属企业时企业 price_ratio 优先，否则回退全局 price_rate。
+     * 解析生效的订单折扣率（乘标准售价的客户折扣）：当前用户归属企业时企业 price_ratio 优先，否则回退全局 price_rate。
      *
      * @return 生效折扣率
      */
@@ -270,7 +283,26 @@ public class OrderService {
         OrderDetailResponse response = new OrderDetailResponse();
         copyBaseFields(toResponse(order), response);
         response.setItems(items.stream().map(this::toItemResponse).toList());
+        response.setPriceWarning(buildPriceWarning(items));
         return response;
+    }
+
+    /**
+     * 汇总售价低于成本的明细为订单级警告（清库存场景提示；无则返回 {@code null}）。
+     *
+     * @param items 订单明细
+     * @return 警告文案或 {@code null}
+     */
+    private static String buildPriceWarning(List<DesignOrderItem> items) {
+        List<String> names = items.stream()
+            .filter(item -> PricingService.isBelowCost(item.getListPrice(), item.getOriginalPrice()))
+            .map(item -> StringUtils.hasText(item.getProductName()) ? item.getProductName() : item.getRspuId())
+            .distinct()
+            .toList();
+        if (names.isEmpty()) {
+            return null;
+        }
+        return "以下产品售价低于成本：" + String.join("、", names) + "（清库存场景请确认）";
     }
 
     /**
@@ -559,6 +591,8 @@ public class OrderService {
         response.setOriginalPrice(item.getOriginalPrice());
         response.setFinalPrice(item.getFinalPrice());
         response.setAdjustPrice(item.getAdjustPrice());
+        response.setListPrice(item.getListPrice());
+        response.setBelowCost(PricingService.isBelowCost(item.getListPrice(), item.getOriginalPrice()));
         BigDecimal effective = effectivePrice(item);
         response.setEffectivePrice(effective);
         response.setFactoryCode(item.getFactoryCode());

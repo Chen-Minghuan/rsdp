@@ -831,7 +831,10 @@ GET    /api/v1/orders
 
 POST   /api/v1/orders
        # 由方案生成订单（需 order:create + 方案归属或 ADMIN）
-       # 说明：价格快照 = RSKU 当前出厂价 × 全局折扣率 price_rate（保留两位），生成后价格不可变
+       # 说明：到手价 = 标准售价 × 折扣率（保留两位），生成后价格不可变
+       #      标准售价 = RSPU 建议销售价 retail_price（优先）否则 成本 × 全局加价倍率
+       #      pricing.markup.global（缺省 2.5）；RSKU 未定价（两者皆空）整单 400 拦截；
+       #      售价低于成本不拦截（清库存），响应 priceWarning 给出警告
        # Request: { schemeId, projectId?, receiverName?, receiverPhone?, receiverArea?,
        #            receiverAddress?, remark? }
        # Response: OrderDetailResponse
@@ -839,7 +842,8 @@ POST   /api/v1/orders
 GET    /api/v1/orders/{orderId}
        # 查询订单详情（需 order:read + 归属或 ADMIN）
        # Response: OrderDetailResponse（含 items: [{ id, rspuId, rskuId, productName, model,
-       #   imageId, quantity, originalPrice, finalPrice, factoryCode, subtotal }]）
+       #   imageId, quantity, originalPrice, finalPrice, listPrice, belowCost, factoryCode,
+       #   subtotal }], priceWarning?）
 
 PUT    /api/v1/orders/{orderId}
        # 更新收件信息与备注（需 order:update + 归属；仅 PENDING 可改）
@@ -917,7 +921,9 @@ GET    /api/v1/configs/{key}
        # 读取配置（price_rate 需 order:read）
 
 PUT    /api/v1/configs/{key}
-       # 更新配置（仅 ADMIN），如 price_rate 全局折扣率
+       # 更新配置（仅 ADMIN），如 price_rate 全局折扣率、pricing.markup.global 全局加价倍率
+       # pricing.markup.global：标准售价 = 成本 × 倍率（缺省 2.5，必须 > 0；
+       #   RSPU 已录入建议销售价 retail_price 时不走倍率；仅影响新订单/新报价）
 ```
 
 ### 视觉/语义检索
@@ -1096,7 +1102,8 @@ GET    /api/v1/member/invites
 ```
 
 **订单计价折扣率优先级**：当前用户归属企业时使用企业 `price_ratio`，否则回退全局
-`order.price_rate`（详见「设计订单」与「系统配置」）。
+`order.price_rate`；自价格体系 P1 起折扣率语义为"乘标准售价"（客户折扣，0.9 = 九折），
+不再乘出厂价（详见「设计订单」与「系统配置」）。
 
 ### 系统
 

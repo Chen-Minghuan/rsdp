@@ -77,4 +77,37 @@ class ConfigServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("0 到 1");
     }
+
+    @Test
+    void getGlobalMarkupMultiplierShouldDefaultToTwoPointFiveWhenMissing() {
+        when(sysConfigMapper.selectById(ConfigService.MARKUP_GLOBAL_KEY)).thenReturn(null);
+
+        assertThat(configService.getGlobalMarkupMultiplier()).isEqualByComparingTo(new BigDecimal("2.5"));
+    }
+
+    @Test
+    void getGlobalMarkupMultiplierShouldRejectNonPositiveValue() {
+        SysConfig config = new SysConfig();
+        config.setConfigKey(ConfigService.MARKUP_GLOBAL_KEY);
+        config.setConfigValue("-1");
+        when(sysConfigMapper.selectById(ConfigService.MARKUP_GLOBAL_KEY)).thenReturn(config);
+
+        assertThatThrownBy(() -> configService.getGlobalMarkupMultiplier())
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("大于 0");
+    }
+
+    @Test
+    void setGlobalMarkupShouldRejectMalformedValue() {
+        assertThatThrownBy(() -> configService.set(ConfigService.MARKUP_GLOBAL_KEY, "abc"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("格式错误");
+    }
+
+    @Test
+    void setGlobalMarkupShouldRejectNonPositiveValue() {
+        assertThatThrownBy(() -> configService.set(ConfigService.MARKUP_GLOBAL_KEY, "0"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("大于 0");
+    }
 }

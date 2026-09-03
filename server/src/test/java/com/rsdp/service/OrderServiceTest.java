@@ -88,6 +88,9 @@ class OrderServiceTest {
     private CompanyService companyService;
 
     @Mock
+    private PricingService pricingService;
+
+    @Mock
     private OrderNoGenerator orderNoGenerator;
 
     @Mock
@@ -148,9 +151,12 @@ class OrderServiceTest {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
         rspu.setPositioningLabel("布艺沙发");
+        rspu.setRetailPrice(new BigDecimal("2500.00"));
         when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(rspu));
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
         when(configService.getOrderPriceRate()).thenReturn(new BigDecimal("0.8"));
+        // 标准售价：RSPU 建议销售价 2500 优先
+        when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("2500.00"));
         when(orderNoGenerator.generate()).thenReturn("DO-20260715-001");
 
         AtomicReference<DesignOrder> insertedOrder = new AtomicReference<>();
@@ -181,17 +187,186 @@ class OrderServiceTest {
 
             OrderDetailResponse response = orderService.create(request);
 
-            // 快照价：1000 × 0.8 = 800，数量 2
+            // 成本快照：1000 × 2 = 2000；到手价 = 标准售价 2500 × 0.8 = 2000，数量 2
             assertThat(response.getOriginalTotalPrice()).isEqualByComparingTo("2000.00");
-            assertThat(response.getFinalTotalPrice()).isEqualByComparingTo("1600.00");
+            assertThat(response.getFinalTotalPrice()).isEqualByComparingTo("4000.00");
             assertThat(response.getPriceRate()).isEqualByComparingTo("0.8");
             assertThat(response.getStatus()).isEqualTo(OrderService.STATUS_PENDING);
             assertThat(response.getItemCount()).isEqualTo(1);
             assertThat(response.getExpectedLeadTime()).isEqualTo(25);
+            assertThat(response.getPriceWarning()).isNull();
             assertThat(response.getItems()).hasSize(1);
-            assertThat(response.getItems().get(0).getFinalPrice()).isEqualByComparingTo("800.00");
+            assertThat(response.getItems().get(0).getOriginalPrice()).isEqualByComparingTo("1000.00");
+            assertThat(response.getItems().get(0).getListPrice()).isEqualByComparingTo("2500.00");
+            assertThat(response.getItems().get(0).getFinalPrice()).isEqualByComparingTo("2000.00");
+            assertThat(response.getItems().get(0).isBelowCost()).isFalse();
             assertThat(response.getItems().get(0).getProductName()).isEqualTo("布艺沙发");
-            assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo("1600.00");
+            assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo("4000.00");
+        }
+    }
+
+    @Test
+    void createShouldApplyAutoMarkupSalePrice() {
+        when(schemeMapper.selectById("SCHEME-1")).thenReturn(ownedScheme());
+
+        SchemeItem item = new SchemeItem();
+        item.setSchemeId("SCHEME-1");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setFactoryCode("F001");
+        item.setQuantity(1);
+        when(schemeItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item));
+        stubDataScope();
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-001");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("1000.00"));
+        when(rskuSupplyMapper.selectBatchIds(anyList())).thenReturn(List.of(rsku));
+        // 无建议销售价：标准售价由 PricingService 自动加价（成本 1000 × 2.5）
+        when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(new RspuMaster()));
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        when(configService.getOrderPriceRate()).thenReturn(BigDecimal.ONE);
+        when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("2500.00"));
+        when(orderNoGenerator.generate()).thenReturn("DO-20260715-003");
+
+        AtomicReference<DesignOrder> insertedOrder = new AtomicReference<>();
+        when(designOrderMapper.insert(any(DesignOrder.class))).thenAnswer(inv -> {
+            insertedOrder.set(inv.getArgument(0));
+            return 1;
+        });
+        when(designOrderMapper.selectById(anyString())).thenAnswer(inv -> {
+            DesignOrder saved = insertedOrder.get();
+            return saved != null && saved.getOrderId().equals(inv.getArgument(0)) ? saved : null;
+        });
+        AtomicReference<List<DesignOrderItem>> insertedItems = new AtomicReference<>(List.of());
+        when(designOrderItemMapper.insertBatchSafe(anyList())).thenAnswer(inv -> {
+            insertedItems.set(inv.getArgument(0));
+            return 1;
+        });
+        when(designOrderItemMapper.selectList(any(QueryWrapper.class)))
+            .thenAnswer(inv -> insertedItems.get());
+
+        OrderCreateRequest request = new OrderCreateRequest();
+        request.setSchemeId("SCHEME-1");
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.currentUsername()).thenReturn("designer1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            OrderDetailResponse response = orderService.create(request);
+
+            // 自动加价：标准售价 2500，折扣率 1 → 到手 2500
+            assertThat(response.getItems().get(0).getListPrice()).isEqualByComparingTo("2500.00");
+            assertThat(response.getItems().get(0).getFinalPrice()).isEqualByComparingTo("2500.00");
+            assertThat(response.getFinalTotalPrice()).isEqualByComparingTo("2500.00");
+        }
+    }
+
+    @Test
+    void createShouldRejectUnpricedRsku() {
+        when(schemeMapper.selectById("SCHEME-1")).thenReturn(ownedScheme());
+
+        SchemeItem item = new SchemeItem();
+        item.setSchemeId("SCHEME-1");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setFactoryCode("F001");
+        item.setQuantity(1);
+        when(schemeItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item));
+        stubDataScope();
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-001");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F001");
+        when(rskuSupplyMapper.selectBatchIds(anyList())).thenReturn(List.of(rsku));
+        when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(new RspuMaster()));
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        when(configService.getOrderPriceRate()).thenReturn(BigDecimal.ONE);
+        // 无建议销售价且无出厂价：无法定价
+        when(pricingService.resolveSalePrice(any(), any())).thenReturn(null);
+
+        OrderCreateRequest request = new OrderCreateRequest();
+        request.setSchemeId("SCHEME-1");
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.currentUsername()).thenReturn("designer1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            assertThatThrownBy(() -> orderService.create(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("未定价")
+                .hasMessageContaining("RSPU-001");
+            verify(designOrderMapper, never()).insert(any(DesignOrder.class));
+        }
+    }
+
+    @Test
+    void createShouldWarnWhenSalePriceBelowCost() {
+        when(schemeMapper.selectById("SCHEME-1")).thenReturn(ownedScheme());
+
+        SchemeItem item = new SchemeItem();
+        item.setSchemeId("SCHEME-1");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setFactoryCode("F001");
+        item.setQuantity(1);
+        when(schemeItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item));
+        stubDataScope();
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-001");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("1000.00"));
+        when(rskuSupplyMapper.selectBatchIds(anyList())).thenReturn(List.of(rsku));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setPositioningLabel("布艺沙发");
+        when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(rspu));
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        when(configService.getOrderPriceRate()).thenReturn(BigDecimal.ONE);
+        // 清库存：建议销售价 800 低于成本 1000，允许继续但给出警告
+        when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("800.00"));
+        when(orderNoGenerator.generate()).thenReturn("DO-20260715-004");
+
+        AtomicReference<DesignOrder> insertedOrder = new AtomicReference<>();
+        when(designOrderMapper.insert(any(DesignOrder.class))).thenAnswer(inv -> {
+            insertedOrder.set(inv.getArgument(0));
+            return 1;
+        });
+        when(designOrderMapper.selectById(anyString())).thenAnswer(inv -> {
+            DesignOrder saved = insertedOrder.get();
+            return saved != null && saved.getOrderId().equals(inv.getArgument(0)) ? saved : null;
+        });
+        AtomicReference<List<DesignOrderItem>> insertedItems = new AtomicReference<>(List.of());
+        when(designOrderItemMapper.insertBatchSafe(anyList())).thenAnswer(inv -> {
+            insertedItems.set(inv.getArgument(0));
+            return 1;
+        });
+        when(designOrderItemMapper.selectList(any(QueryWrapper.class)))
+            .thenAnswer(inv -> insertedItems.get());
+
+        OrderCreateRequest request = new OrderCreateRequest();
+        request.setSchemeId("SCHEME-1");
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.currentUsername()).thenReturn("designer1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+
+            OrderDetailResponse response = orderService.create(request);
+
+            assertThat(response.getItems().get(0).isBelowCost()).isTrue();
+            assertThat(response.getPriceWarning())
+                .contains("售价低于成本")
+                .contains("布艺沙发")
+                .contains("清库存");
         }
     }
 
@@ -219,6 +394,7 @@ class OrderServiceTest {
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
         // 企业折扣率 0.9 优先于全局 0.8
         when(companyService.resolveOrderPriceRate("user-1")).thenReturn(new BigDecimal("0.9"));
+        when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("1000.00"));
         when(orderNoGenerator.generate()).thenReturn("DO-20260715-002");
 
         AtomicReference<DesignOrder> insertedOrder = new AtomicReference<>();
@@ -249,7 +425,7 @@ class OrderServiceTest {
 
             OrderDetailResponse response = orderService.create(request);
 
-            // 快照价：1000 × 0.9（企业折扣率）= 900，数量 2
+            // 到手价：标准售价 1000 × 0.9（企业折扣率）= 900，数量 2
             assertThat(response.getPriceRate()).isEqualByComparingTo("0.9");
             assertThat(response.getFinalTotalPrice()).isEqualByComparingTo("1800.00");
             assertThat(response.getItems().get(0).getFinalPrice()).isEqualByComparingTo("900.00");

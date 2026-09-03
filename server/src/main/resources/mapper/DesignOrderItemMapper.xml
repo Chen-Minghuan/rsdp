@@ -16,6 +16,7 @@
             original_price,
             final_price,
             adjust_price,
+            list_price,
             factory_code,
             snapshot_json,
             created_at
@@ -33,6 +34,7 @@
                 #{item.originalPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
                 #{item.finalPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
                 #{item.adjustPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
+                #{item.listPrice},
                 #{item.factoryCode},
                 #{item.snapshotJson, typeHandler=com.rsdp.config.typehandler.JsonbTypeHandler},
                 #{item.createdAt}
