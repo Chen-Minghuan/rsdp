@@ -81,7 +81,8 @@ public class QuoteExportService {
             QuoteItemRow row = new QuoteItemRow();
             row.setSeq(i + 1);
             row.setRspuId(item.getRspuId());
-            row.setRspuName(item.getRspuName());
+            // 名称列优先完整商品名（rspu_master.product_name），空则回退定位标签
+            row.setRspuName(displayName(item));
             row.setRskuId(item.getRskuId());
             row.setFactoryCode(item.getFactoryCode());
             row.setFactoryName(item.getFactoryName());
@@ -108,7 +109,8 @@ public class QuoteExportService {
             SaleQuoteItemRow row = new SaleQuoteItemRow();
             row.setSeq(i + 1);
             row.setRspuId(item.getRspuId());
-            row.setRspuName(item.getRspuName());
+            // 名称列优先完整商品名（rspu_master.product_name），空则回退定位标签
+            row.setRspuName(displayName(item));
             row.setRskuId(item.getRskuId());
             row.setFactorySku(item.getFactorySku());
             row.setSalePrice(formatPrice(item.getSalePrice()));
@@ -151,6 +153,17 @@ public class QuoteExportService {
             }
         }
         return rows;
+    }
+
+    /**
+     * 报价项展示名称：完整商品名（product_name）优先，空则回退定位标签（rspuName）。
+     *
+     * @param item 报价项
+     * @return 展示名称
+     */
+    private static String displayName(QuoteItemResponse item) {
+        String productName = item.getProductName();
+        return productName != null && !productName.isBlank() ? productName : item.getRspuName();
     }
 
     private String formatPrice(BigDecimal price) {

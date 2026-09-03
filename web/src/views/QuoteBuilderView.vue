@@ -508,7 +508,11 @@ function formatPrice(value: number | undefined): string {
 const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
   const saleMode = quoteResultMode.value === 'sale'
   const columns: DataTableColumns<QuoteItem> = [
-    { title: 'RSPU', key: 'rspuName' },
+    {
+      title: '产品',
+      key: 'productName',
+      render: (row: QuoteItem) => row.productName || row.rspuName
+    },
     {
       title: 'RSKU ID',
       key: 'rskuId',

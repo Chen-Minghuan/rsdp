@@ -151,6 +151,7 @@ class OrderServiceTest {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
         rspu.setPositioningLabel("布艺沙发");
+        rspu.setProductName("像素沙发");
         rspu.setRetailPrice(new BigDecimal("2500.00"));
         when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(rspu));
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
@@ -200,7 +201,7 @@ class OrderServiceTest {
             assertThat(response.getItems().get(0).getListPrice()).isEqualByComparingTo("2500.00");
             assertThat(response.getItems().get(0).getFinalPrice()).isEqualByComparingTo("2000.00");
             assertThat(response.getItems().get(0).isBelowCost()).isFalse();
-            assertThat(response.getItems().get(0).getProductName()).isEqualTo("布艺沙发");
+            assertThat(response.getItems().get(0).getProductName()).isEqualTo("像素沙发");
             assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo("4000.00");
         }
     }
@@ -363,6 +364,8 @@ class OrderServiceTest {
             OrderDetailResponse response = orderService.create(request);
 
             assertThat(response.getItems().get(0).isBelowCost()).isTrue();
+            // 无完整商品名称时快照回退定位标签，priceWarning 同步使用
+            assertThat(response.getItems().get(0).getProductName()).isEqualTo("布艺沙发");
             assertThat(response.getPriceWarning())
                 .contains("售价低于成本")
                 .contains("布艺沙发")

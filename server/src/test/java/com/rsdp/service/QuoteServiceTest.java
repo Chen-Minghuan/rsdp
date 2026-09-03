@@ -75,6 +75,7 @@ class QuoteServiceTest {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
         rspu.setPositioningLabel("中古风");
+        rspu.setProductName("像素沙发");
 
         FactoryMaster factory = new FactoryMaster();
         factory.setFactoryCode("F001");
@@ -95,6 +96,9 @@ class QuoteServiceTest {
         assertThat(response.getItems()).hasSize(1);
         assertThat(response.getItems().get(0).getQuantity()).isEqualTo(2);
         assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
+        // 完整商品名称透出（rspuName 保持定位标签不动）
+        assertThat(response.getItems().get(0).getProductName()).isEqualTo("像素沙发");
+        assertThat(response.getItems().get(0).getRspuName()).isEqualTo("中古风");
         assertThat(response.getSummary().getTotalPrice()).isEqualByComparingTo(new BigDecimal("5000"));
         assertThat(response.getSummary().getItemCount()).isEqualTo(1);
         assertThat(response.getSummary().getTotalQuantity()).isEqualTo(2);

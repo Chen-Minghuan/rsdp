@@ -682,7 +682,8 @@ POST   /api/v1/quotes/generate
        #   单价 = 标准售价：RSPU 建议销售价 retail_price 优先，否则 成本 × 全局加价倍率
        #   pricing.markup.global；未定价 RSKU 整单 400 拦截"产品未定价"）；非法值 400
        # Response: {
-       #   items: [QuoteItem...],           # QuoteItem 包含 quantity、subtotal
+       #   items: [QuoteItem...],           # QuoteItem 包含 quantity、subtotal、productName
+       #   # （完整商品名称，rspu_master.product_name，可能为空；rspuName 仍为定位标签）
        #   summary: { totalPrice, itemCount, totalQuantity, factoryCount, maxLeadTimeDays },
        #   priceWarning?                    # 仅 sale：售价低于成本的产品名汇总（清库存提示）
        # }
@@ -856,6 +857,8 @@ GET    /api/v1/orders/{orderId}
        # Response: OrderDetailResponse（含 items: [{ id, rspuId, rskuId, productName, model,
        #   imageId, quantity, originalPrice, finalPrice, listPrice, belowCost, factoryCode,
        #   subtotal }], priceWarning?）
+       # 说明：items[].productName 为商品名称快照——完整商品名称（rspu_master.product_name）
+       #   优先，空则回退定位标签（positioning_label）；仅影响新订单，存量订单快照不变
 
 PUT    /api/v1/orders/{orderId}
        # 更新收件信息与备注（需 order:update + 归属；仅 PENDING 可改）

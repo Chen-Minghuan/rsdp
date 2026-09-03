@@ -299,6 +299,7 @@ public class QuoteService {
         QuoteItemResponse item = new QuoteItemResponse();
         item.setRspuId(rspu.getRspuId());
         item.setRspuName(rspu.getPositioningLabel());
+        item.setProductName(rspu.getProductName());
         item.setPrimaryImageUrl(primaryImageUrlMap.get(rspu.getRspuId()));
 
         item.setRskuId(rsku.getRskuId());

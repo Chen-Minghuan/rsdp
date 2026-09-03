@@ -32,10 +32,11 @@ class QuoteExportServiceTest {
     private QuoteExportService quoteExportService;
 
     @Test
-    void exportQuote_shouldReturnExcelBytes() {
+    void exportQuote_shouldReturnExcelBytes() throws Exception {
         QuoteItemResponse item = new QuoteItemResponse();
         item.setRspuId("RSPU-001");
-        item.setRspuName("中古风沙发");
+        item.setRspuName("中古风");
+        item.setProductName("像素沙发");
         item.setRskuId("RSKU-001");
         item.setFactoryCode("F001");
         item.setFactoryName("测试工厂");
@@ -64,13 +65,21 @@ class QuoteExportServiceTest {
         assertThat(content).isNotEmpty();
         // Excel .xlsx 文件本质上是 ZIP 文件，起始字节应为 "PK"
         assertThat(content).startsWith((byte) 0x50, (byte) 0x4B);
+        // 「RSPU 名称」列值优先完整商品名称
+        try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
+                new java.io.ByteArrayInputStream(content))) {
+            var sheet = workbook.getSheet("报价明细");
+            int nameCol = columnIndex(sheet.getRow(0), "RSPU 名称");
+            assertThat(sheet.getRow(1).getCell(nameCol).getStringCellValue()).isEqualTo("像素沙发");
+        }
     }
 
     @Test
     void exportQuote_saleMode_shouldUseSalePriceColumnWithoutCost() throws Exception {
         QuoteItemResponse item = new QuoteItemResponse();
         item.setRspuId("RSPU-001");
-        item.setRspuName("中古风沙发");
+        item.setRspuName("中古风");
+        item.setProductName("像素沙发");
         item.setRskuId("RSKU-001");
         item.setFactoryCode("F001");
         item.setFactoryName("测试工厂");
@@ -105,6 +114,10 @@ class QuoteExportServiceTest {
             headerRow.forEach(cell -> headers.add(cell.getStringCellValue()));
             assertThat(headers).contains("销售价");
             assertThat(headers).doesNotContain("出厂价");
+            // 「RSPU 名称」列值优先完整商品名称
+            int nameCol = columnIndex(workbook.getSheet("报价明细").getRow(0), "RSPU 名称");
+            assertThat(workbook.getSheet("报价明细").getRow(1).getCell(nameCol).getStringCellValue())
+                .isEqualTo("像素沙发");
             // 销售报价对客户导出：不出现工厂编码/工厂名称列，工厂 SKU 以「型号」口径展示；汇总不含"涉及工厂数"
             assertThat(headers).doesNotContain("工厂编码", "工厂名称", "工厂 SKU");
             assertThat(headers).contains("型号");
@@ -142,5 +155,15 @@ class QuoteExportServiceTest {
         r.setRskuId(rskuId);
         r.setQuantity(quantity);
         return r;
+    }
+
+    /** 按表头文本定位列索引。 */
+    private static int columnIndex(org.apache.poi.ss.usermodel.Row headerRow, String header) {
+        for (var cell : headerRow) {
+            if (header.equals(cell.getStringCellValue())) {
+                return cell.getColumnIndex();
+            }
+        }
+        throw new IllegalStateException("表头不存在: " + header);
     }
 }

@@ -322,7 +322,7 @@ const itemColumns: DataTableColumns<SchemeItem> = [
 ]
 
 const quoteColumns: DataTableColumns<QuoteItem> = [
-  { title: 'RSPU', key: 'rspuName' },
+  { title: '产品', key: 'rspuName', render: (row: QuoteItem) => row.productName || row.rspuName },
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
   {

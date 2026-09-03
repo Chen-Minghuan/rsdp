@@ -26,6 +26,8 @@ export interface QuoteGenerateRequest {
 export interface QuoteItem {
   rspuId: string
   rspuName: string
+  /** 完整商品名称（rspu_master.product_name，可能为空；空时回退 rspuName） */
+  productName?: string
   primaryImageUrl?: string
   rskuId: string
   factoryCode: string

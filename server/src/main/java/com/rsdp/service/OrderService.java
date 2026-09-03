@@ -189,7 +189,8 @@ public class OrderService {
             item.setOrderId(orderId);
             item.setRspuId(schemeItem.getRspuId());
             item.setRskuId(schemeItem.getRskuId());
-            item.setProductName(rspu != null ? rspu.getPositioningLabel() : null);
+            // 商品名称快照：完整商品名称（product_name）优先，空则回退定位标签（positioning_label）
+            item.setProductName(rspu != null ? displayProductName(rspu) : null);
             item.setModel(rsku.getFactorySku());
             item.setImageId(primaryImageMap.get(schemeItem.getRspuId()));
             item.setQuantity(quantity);
@@ -503,6 +504,17 @@ public class OrderService {
             result.putIfAbsent(image.getRspuId(), image.getImageId());
         }
         return result;
+    }
+
+    /**
+     * 订单明细商品名称快照口径：完整商品名称（rspu_master.product_name）优先，
+     * 为空时回退定位标签（positioning_label）。仅影响新订单，存量订单快照不变。
+     *
+     * @param rspu 产品主档
+     * @return 商品名称快照
+     */
+    private static String displayProductName(RspuMaster rspu) {
+        return StringUtils.hasText(rspu.getProductName()) ? rspu.getProductName() : rspu.getPositioningLabel();
     }
 
     private String buildSnapshotJson(RspuMaster rspu, RskuSupply rsku) {

@@ -12,6 +12,8 @@ public class QuoteItemResponse {
 
     private String rspuId;
     private String rspuName;
+    /** 完整商品名称（来自 rspu_master.product_name，可能为空；空时前端/导出回退 rspuName 定位标签） */
+    private String productName;
     private String primaryImageUrl;
 
     private String rskuId;
