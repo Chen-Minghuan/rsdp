@@ -26,6 +26,8 @@ public class SchemeItemResponse {
     private Integer leadTimeDays;
     private Integer moq;
     private Integer sortOrder;
-    /** 空间分区标签（RSPU 首个场景标签名；无标签为 null，前端归入「未分区」） */
+    /** 生效的空间字典码（scheme_item.space_tag 覆盖优先，空则回退产品 rspu_scene 首场景码；无空间为 null，前端归「未分区」） */
     private String spaceTag;
+    /** 空间显示名（生效码的场景字典名；码已从字典删除时原样返回码；无空间为 null） */
+    private String spaceTagName;
 }

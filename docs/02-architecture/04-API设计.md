@@ -725,6 +725,9 @@ GET    /api/v1/schemes
 GET    /api/v1/schemes/{schemeId}
        # 查询搭配方案详情（已实现）
        # Response: SchemeResponse（含 projectId / isTemplate / templateTags）
+       # 说明：items[].spaceTag 为生效的空间字典码（scheme_item.space_tag 覆盖优先，
+       #   空则回退产品 rspu_scene 首场景码；无空间为 null）；items[].spaceTagName 为显示名
+       #   （覆盖/推导码的场景字典名，码已从字典删除时原样返回码，无空间为 null）
 
 PUT    /api/v1/schemes/{schemeId}
        # 更新搭配方案（已实现）
@@ -758,9 +761,13 @@ PUT    /api/v1/schemes/{schemeId}/template
 
 PUT    /api/v1/schemes/{schemeId}/items/reorder
        # 方案明细拖拽排序（已实现，需 scheme:update + 方案归属）
-       # Request: { itemIds: number[] }（全部明细按新顺序排列的完整不重复列表，否则报错）
-       # Response: SchemeResponse（items 按 sort_order 升序，含 spaceTag 空间分区标签）
-       # 说明：空间标签取 RSPU 首个场景标签名，仅作展示分组，不支持跨区归属修改
+       # Request: { itemIds: number[], spaceTags?: { [itemId]: string | null } }
+       #   itemIds 为全部明细按新顺序排列的完整不重复列表，否则报错
+       #   spaceTags（可选，空间画布跨区拖拽）：键出现时同事务更新 scheme_item.space_tag
+       #     （非空码=覆盖空间分区；显式 null=清除覆盖恢复跟随产品推导），键不出现则不动该列
+       #     （兼容纯排序调用）；覆盖码不强制校验字典存在（允许先拖入后建字典的兜底）
+       # Response: SchemeResponse（items 按 sort_order 升序，含 spaceTag/spaceTagName 空间分区标签）
+       # 说明：排序 + 空间覆盖在同一事务内提交，要么都成功要么整体回滚
 
 POST   /api/v1/schemes/{schemeId}/copy-from-template
        # 套用模板创建新方案（已实现，需 scheme:create）

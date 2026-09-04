@@ -462,9 +462,29 @@ public class SchemeService {
             .map(item -> buildItemResponse(item, rspuMap, rskuMap, factoryMap, primaryImageUrlMap))
             .collect(Collectors.toList());
 
-        // 空间分区标签：取 RSPU 首个场景标签（阶段 9 画布空间分区）
-        Map<String, String> spaceTagMap = batchSpaceTags(rspuIds);
-        itemResponses.forEach(item -> item.setSpaceTag(spaceTagMap.get(item.getRspuId())));
+        // 空间分区标签（阶段 9 画布空间分区 / 方案 A）：scheme_item.space_tag 覆盖优先，
+        // 空则回退产品 rspu_scene 首场景码；显示名批量查场景字典，码已删时原样返回码
+        Map<String, String> derivedSpaceCodes = batchSpaceTagCodes(rspuIds);
+        Map<Long, String> overrideCodes = items.stream()
+            .filter(item -> StringUtils.hasText(item.getSpaceTag()))
+            .collect(Collectors.toMap(SchemeItem::getSchemeItemId, SchemeItem::getSpaceTag, (a, b) -> a));
+        List<String> effectiveCodes = itemResponses.stream()
+            .map(item -> {
+                String code = overrideCodes.get(item.getSchemeItemId());
+                return StringUtils.hasText(code) ? code : derivedSpaceCodes.get(item.getRspuId());
+            })
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList();
+        Map<String, String> sceneNames = batchSceneNames(effectiveCodes);
+        itemResponses.forEach(item -> {
+            String code = overrideCodes.get(item.getSchemeItemId());
+            if (!StringUtils.hasText(code)) {
+                code = derivedSpaceCodes.get(item.getRspuId());
+            }
+            item.setSpaceTag(StringUtils.hasText(code) ? code : null);
+            item.setSpaceTagName(StringUtils.hasText(code) ? sceneNames.getOrDefault(code, code) : null);
+        });
 
         SchemeResponse response = new SchemeResponse();
         response.setSchemeId(scheme.getSchemeId());
@@ -510,10 +530,13 @@ public class SchemeService {
     /**
      * 方案明细拖拽排序（阶段 9）：按给定顺序重写 sort_order。
      *
-     * <p>itemIds 必须是该方案全部明细的完整列表，否则报错。</p>
+     * <p>itemIds 必须是该方案全部明细的完整列表，否则报错。
+     * 可选的 spaceTags（明细 ID → 场景字典码）在同一事务内更新 scheme_item.space_tag
+     * （排序 + 空间覆盖要么都成功要么整体回滚）：值为 {@code null} 表示清除覆盖恢复跟随产品；
+     * 键不出现时不动该列；覆盖码不强制校验字典存在（允许先拖入后建字典的兜底）。</p>
      *
      * @param schemeId 方案 ID
-     * @param request  排序请求（itemIds 按新顺序排列）
+     * @param request  排序请求（itemIds 按新顺序排列；spaceTags 可选空间覆盖）
      * @return 更新后的方案详情
      */
     @Transactional
@@ -534,12 +557,22 @@ public class SchemeService {
             throw new BusinessException("排序列表必须与方案全部明细一致（完整且不重复）");
         }
 
+        Map<Long, String> spaceTags = request.getSpaceTags();
+        if (spaceTags != null && !spaceTags.isEmpty() && !existingIds.containsAll(spaceTags.keySet())) {
+            throw new BusinessException("空间覆盖标签包含不属于本方案的明细");
+        }
+
         Scheme oldSnapshot = snapshot(scheme);
         int order = 1;
         for (Long itemId : itemIds) {
-            schemeItemMapper.update(null, new UpdateWrapper<SchemeItem>()
+            UpdateWrapper<SchemeItem> update = new UpdateWrapper<SchemeItem>()
                 .eq("scheme_item_id", itemId)
-                .set("sort_order", order++));
+                .set("sort_order", order++);
+            if (spaceTags != null && spaceTags.containsKey(itemId)) {
+                String spaceTag = spaceTags.get(itemId);
+                update.set("space_tag", StringUtils.hasText(spaceTag) ? spaceTag.trim() : null);
+            }
+            schemeItemMapper.update(null, update);
         }
         scheme.setUpdatedAt(LocalDateTime.now());
         schemeMapper.updateById(scheme);
@@ -876,12 +909,12 @@ public class SchemeService {
     }
 
     /**
-     * 批量获取 RSPU 的空间分区标签：取每个 RSPU 的首个场景标签名（无标签则不出现）。
+     * 批量获取 RSPU 的推导空间码：取每个 RSPU 的首个场景字典码（无标签则不出现）。
      *
      * @param rspuIds RSPU ID 列表
-     * @return rspuId → 场景标签名
+     * @return rspuId → 首个场景字典码
      */
-    private Map<String, String> batchSpaceTags(List<String> rspuIds) {
+    private Map<String, String> batchSpaceTagCodes(List<String> rspuIds) {
         if (rspuIds.isEmpty()) {
             return Map.of();
         }
@@ -889,11 +922,24 @@ public class SchemeService {
             new QueryWrapper<RspuScene>()
                 .in("rspu_id", rspuIds)
                 .orderByAsc("scene_code"));
-        if (scenes.isEmpty()) {
+        Map<String, String> result = new HashMap<>();
+        for (RspuScene scene : scenes) {
+            result.putIfAbsent(scene.getRspuId(), scene.getSceneCode());
+        }
+        return result;
+    }
+
+    /**
+     * 批量查询场景字典名称（category_dict dict_type=scene）。
+     *
+     * @param codes 场景字典码列表
+     * @return 场景码 → 场景名称映射
+     */
+    private Map<String, String> batchSceneNames(List<String> codes) {
+        if (codes.isEmpty()) {
             return Map.of();
         }
-        List<String> codes = scenes.stream().map(RspuScene::getSceneCode).distinct().toList();
-        Map<String, String> nameMap = categoryDictMapper.selectList(
+        return categoryDictMapper.selectList(
                 new QueryWrapper<CategoryDict>()
                     .eq("dict_type", "scene")
                     .in("dict_code", codes))
@@ -901,12 +947,6 @@ public class SchemeService {
                 CategoryDict::getDictCode,
                 CategoryDict::getDictName,
                 (a, b) -> a));
-        Map<String, String> result = new HashMap<>();
-        for (RspuScene scene : scenes) {
-            result.putIfAbsent(scene.getRspuId(),
-                nameMap.getOrDefault(scene.getSceneCode(), scene.getSceneCode()));
-        }
-        return result;
     }
 
     private Map<String, RskuSupply> batchRskuMap(List<String> rskuIds) {

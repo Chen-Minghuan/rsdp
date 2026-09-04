@@ -32,6 +32,8 @@ public class SchemeItem {
     private Integer moq;
     private Integer quantity;
     private Integer sortOrder;
+    /** 空间覆盖标签（场景字典码，可空=跟随产品 rspu_scene 首场景推导，V40） */
+    private String spaceTag;
     private LocalDateTime createdAt;
 
     @TableLogic(value = "null", delval = "now()")

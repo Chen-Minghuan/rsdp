@@ -16,9 +16,11 @@ import com.rsdp.dto.response.SchemeItemResponse;
 import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
 import com.rsdp.entity.FactoryMaster;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.Project;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.Scheme;
 import com.rsdp.entity.SchemeItem;
@@ -885,6 +887,193 @@ class SchemeServiceTest {
         assertThatThrownBy(() -> schemeService.reorderItems("SCHEME-001", request))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("无权操作");
+        verify(schemeItemMapper, never()).update(any(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class));
+    }
+
+    // ==================== spaceTag 解析（覆盖优先、推导回退，方案 A 步骤 2） ====================
+
+    private SchemeItem baseDetailItem() {
+        SchemeItem item = new SchemeItem();
+        item.setSchemeItemId(1L);
+        item.setSchemeId("SCHEME-001");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setFactoryCode("F001");
+        item.setQuantity(1);
+        return item;
+    }
+
+    private void stubDetailFixtures(SchemeItem item) {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试方案");
+        scheme.setCreatedBy("testuser");
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setPositioningLabel("中古风");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(rspu));
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+    }
+
+    private RspuScene scene(String rspuId, String sceneCode) {
+        RspuScene scene = new RspuScene();
+        scene.setRspuId(rspuId);
+        scene.setSceneCode(sceneCode);
+        return scene;
+    }
+
+    private CategoryDict sceneDict(String code, String name) {
+        CategoryDict dict = new CategoryDict();
+        dict.setDictCode(code);
+        dict.setDictName(name);
+        return dict;
+    }
+
+    @Test
+    void getSchemeDetail_spaceTagOverrideShouldWin() {
+        // 覆盖优先：scheme_item.space_tag=BEDROOM 时忽略产品首场景 LIVING
+        SchemeItem item = baseDetailItem();
+        item.setSpaceTag("BEDROOM");
+        stubDetailFixtures(item);
+        when(rspuSceneMapper.selectList(any())).thenReturn(List.of(scene("RSPU-001", "LIVING")));
+        when(categoryDictMapper.selectList(any()))
+            .thenReturn(List.of(sceneDict("BEDROOM", "卧室"), sceneDict("LIVING", "客厅")));
+
+        SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
+
+        assertThat(response.getItems().get(0).getSpaceTag()).isEqualTo("BEDROOM");
+        assertThat(response.getItems().get(0).getSpaceTagName()).isEqualTo("卧室");
+    }
+
+    @Test
+    void getSchemeDetail_spaceTagShouldFallbackToProductScene() {
+        // 推导回退：无覆盖码时取产品 rspu_scene 首场景码
+        SchemeItem item = baseDetailItem();
+        stubDetailFixtures(item);
+        when(rspuSceneMapper.selectList(any())).thenReturn(List.of(scene("RSPU-001", "LIVING")));
+        when(categoryDictMapper.selectList(any())).thenReturn(List.of(sceneDict("LIVING", "客厅")));
+
+        SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
+
+        assertThat(response.getItems().get(0).getSpaceTag()).isEqualTo("LIVING");
+        assertThat(response.getItems().get(0).getSpaceTagName()).isEqualTo("客厅");
+    }
+
+    @Test
+    void getSchemeDetail_spaceTagNameShouldFallbackToCodeWhenDictDeleted() {
+        // 码已删：覆盖码不在场景字典时 spaceTagName 原样返回码
+        SchemeItem item = baseDetailItem();
+        item.setSpaceTag("OLDSPACE");
+        stubDetailFixtures(item);
+        when(rspuSceneMapper.selectList(any())).thenReturn(List.of());
+        when(categoryDictMapper.selectList(any())).thenReturn(List.of());
+
+        SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
+
+        assertThat(response.getItems().get(0).getSpaceTag()).isEqualTo("OLDSPACE");
+        assertThat(response.getItems().get(0).getSpaceTagName()).isEqualTo("OLDSPACE");
+    }
+
+    @Test
+    void getSchemeDetail_spaceTagShouldBeNullWhenNoSpace() {
+        // 无空间：spaceTag/spaceTagName 均 null（前端归「未分区」）
+        SchemeItem item = baseDetailItem();
+        stubDetailFixtures(item);
+        when(rspuSceneMapper.selectList(any())).thenReturn(List.of());
+
+        SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
+
+        assertThat(response.getItems().get(0).getSpaceTag()).isNull();
+        assertThat(response.getItems().get(0).getSpaceTagName()).isNull();
+    }
+
+    // ==================== reorder 携带空间覆盖标签 ====================
+
+    private SchemeItem reorderItem(long id) {
+        SchemeItem item = new SchemeItem();
+        item.setSchemeItemId(id);
+        item.setSchemeId("SCHEME-001");
+        item.setRspuId("RSPU-00" + id);
+        item.setRskuId("RSKU-00" + id);
+        item.setFactoryCode("F001");
+        return item;
+    }
+
+    private void stubReorderFixtures(Scheme scheme, List<SchemeItem> items) {
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(items);
+        // 详情回查相关 stub：校验失败场景不会走到，统一 lenient
+        lenient().when(rspuMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(factoryMasterMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+    }
+
+    @Test
+    void reorderItemsShouldUpdateSpaceTagWhenProvided() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试方案");
+        scheme.setCreatedBy("testuser");
+        stubReorderFixtures(scheme, List.of(reorderItem(1L), reorderItem(2L)));
+
+        com.rsdp.dto.request.SchemeItemReorderRequest request = new com.rsdp.dto.request.SchemeItemReorderRequest();
+        request.setItemIds(List.of(1L, 2L));
+        // item1 覆盖为 LIVING；item2 显式 null 清除覆盖（键出现即更新列）
+        request.setSpaceTags(new java.util.HashMap<>(java.util.Map.of(1L, "LIVING")));
+        request.getSpaceTags().put(2L, null);
+
+        schemeService.reorderItems("SCHEME-001", request);
+
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SchemeItem>> captor =
+            ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class);
+        verify(schemeItemMapper, times(2)).update(any(), captor.capture());
+        // 两条更新都写 sort_order，且都写 space_tag（item2 为显式置 null）
+        assertThat(captor.getAllValues().get(0).getSqlSet()).contains("sort_order").contains("space_tag");
+        assertThat(captor.getAllValues().get(1).getSqlSet()).contains("sort_order").contains("space_tag");
+    }
+
+    @Test
+    void reorderItemsShouldNotTouchSpaceTagWhenAbsent() {
+        // 纯排序调用（spaceTags 不出现）：不动 space_tag 列
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试方案");
+        scheme.setCreatedBy("testuser");
+        stubReorderFixtures(scheme, List.of(reorderItem(1L), reorderItem(2L)));
+
+        com.rsdp.dto.request.SchemeItemReorderRequest request = new com.rsdp.dto.request.SchemeItemReorderRequest();
+        request.setItemIds(List.of(2L, 1L));
+
+        schemeService.reorderItems("SCHEME-001", request);
+
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SchemeItem>> captor =
+            ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class);
+        verify(schemeItemMapper, times(2)).update(any(), captor.capture());
+        assertThat(captor.getAllValues().get(0).getSqlSet()).contains("sort_order").doesNotContain("space_tag");
+        assertThat(captor.getAllValues().get(1).getSqlSet()).contains("sort_order").doesNotContain("space_tag");
+    }
+
+    @Test
+    void reorderItemsShouldRejectSpaceTagOfForeignItem() {
+        // 空间覆盖键必须属于本方案明细，否则整体报错（同事务：不产生任何更新）
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试方案");
+        scheme.setCreatedBy("testuser");
+        stubReorderFixtures(scheme, List.of(reorderItem(1L), reorderItem(2L)));
+
+        com.rsdp.dto.request.SchemeItemReorderRequest request = new com.rsdp.dto.request.SchemeItemReorderRequest();
+        request.setItemIds(List.of(1L, 2L));
+        request.setSpaceTags(java.util.Map.of(99L, "LIVING"));
+
+        assertThatThrownBy(() -> schemeService.reorderItems("SCHEME-001", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不属于本方案");
         verify(schemeItemMapper, never()).update(any(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class));
     }
 }

@@ -99,7 +99,8 @@ public class SchemeController {
     }
 
     /**
-     * 方案明细拖拽排序（itemIds 为全部明细按新顺序的完整列表）。
+     * 方案明细拖拽排序（itemIds 为全部明细按新顺序的完整列表；
+     * 可选 spaceTags 同事务更新明细空间覆盖标签，键不出现则不动该列）。
      *
      * @param schemeId 方案 ID
      * @param request  排序请求

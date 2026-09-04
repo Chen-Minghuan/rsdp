@@ -43,6 +43,9 @@ public class DesignOrderItem {
     /** 标准售价快照（明文，对客户可见；区别于上面三列 AES 密文，便于 SQL 分析） */
     private BigDecimal listPrice;
 
+    /** 订单空间快照（场景字典码，明文；步骤 5 复制逻辑接入，V40） */
+    private String spaceTag;
+
     private String factoryCode;
 
     @JsonRawValue
