@@ -29,9 +29,11 @@ import { getSchemeDetail, generateQuoteFromScheme, setSchemeTemplate, copyFromTe
 import { exportQuote } from '@/api/quote'
 import { createOrder } from '@/api/order'
 import { listProjects } from '@/api/project'
+import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
+import type { DictItem } from '@/types/dict'
 import type { Scheme, SchemeItem } from '@/types/scheme'
 import type { PriceChange, QuoteItem, QuoteResponse } from '@/types/quote'
 
@@ -196,7 +198,7 @@ const errorMessage = ref('')
 const scheme = ref<Scheme | null>(null)
 const quoteResult = ref<QuoteResponse | null>(null)
 
-// ---------- 空间分区视图 + 拖拽排序（阶段 9） ----------
+// ---------- 空间分区视图 + 拖拽排序（阶段 9 / 方案 A 步骤 3：跨区拖拽=空间覆盖） ----------
 /** 视图模式：zones=空间分区 / table=表格 */
 const viewMode = ref<'zones' | 'table'>('zones')
 /** 画布有序明细（与 scheme.items 同步，拖拽时先本地重排再落库） */
@@ -204,25 +206,59 @@ const orderedItems = ref<SchemeItem[]>([])
 const draggingId = ref<number | null>(null)
 const reordering = ref(false)
 
+/** 分区视图模型：code=空间字典码（「未分区」为 null），name=显示名。 */
+interface ZoneView {
+  code: string | null
+  name: string
+  items: SchemeItem[]
+}
+
+/** 前端暂存的空分区（无明细不落库；拖入卡片后随 reorder 生效，刷新后无人分区自然消失） */
+const extraZones = ref<{ code: string; name: string }[]>([])
+
+/**
+ * 本次会话内被人工调整过分区的明细（用于「已调整」覆盖标记）。
+ * 注意：后端 spaceTag 为生效码（覆盖/推导不可区分），跨会话的持久覆盖标记需后端补字段；
+ * 刷新后以服务端数据为准，标记清空。
+ */
+const overriddenItemIds = ref<Set<number>>(new Set())
+
 watch(scheme, (value) => {
   orderedItems.value = value ? [...value.items] : []
 }, { immediate: true })
 
-/** 分区键：无空间标签归入「未分区」。 */
+/** 分区键（显示维度）：无空间标签归入「未分区」。 */
 function zoneKey(item: SchemeItem): string {
-  return item.spaceTag || '未分区'
+  return item.spaceTagName || '未分区'
 }
 
-/** 空间分区（按画布顺序分组，保持组内顺序与全局顺序一致）。 */
-const zones = computed(() => {
+/** 空间分区（按画布顺序分组 + 前端空分区，保持组内顺序与全局顺序一致）。 */
+const zones = computed<ZoneView[]>(() => {
   const map = new Map<string, SchemeItem[]>()
   for (const item of orderedItems.value) {
     const key = zoneKey(item)
     if (!map.has(key)) map.set(key, [])
     map.get(key)!.push(item)
   }
-  return [...map.entries()].map(([name, items]) => ({ name, items }))
+  const grouped = [...map.entries()].map(([name, items]) => ({
+    name,
+    code: items[0].spaceTag ?? null,
+    items
+  }))
+  // 合并未有明细的空分区
+  const existingCodes = new Set(grouped.map(z => z.code))
+  const empties: ZoneView[] = extraZones.value
+    .filter(z => !existingCodes.has(z.code))
+    .map(z => ({ code: z.code, name: z.name, items: [] }))
+  return [...grouped, ...empties]
 })
+
+function markOverridden(itemId: number, code: string | null) {
+  const next = new Set(overriddenItemIds.value)
+  if (code) next.add(itemId)
+  else next.delete(itemId)
+  overriddenItemIds.value = next
+}
 
 function onDragStart(itemId: number) {
   draggingId.value = itemId
@@ -232,7 +268,7 @@ function onDragEnd() {
   draggingId.value = null
 }
 
-/** 同分区内拖拽落点：重排后整单提交 reorder。 */
+/** 拖拽落点为分区卡片：同区=重排；跨区=移动并设置空间覆盖为目标分区码。 */
 function onDropOnItem(target: SchemeItem) {
   const draggedId = draggingId.value
   draggingId.value = null
@@ -241,28 +277,111 @@ function onDropOnItem(target: SchemeItem) {
   const from = list.findIndex(i => i.schemeItemId === draggedId)
   const to = list.findIndex(i => i.schemeItemId === target.schemeItemId)
   if (from < 0 || to < 0) return
-  // 空间标签是产品属性（RSPU 场景推导），仅允许同分区内排序
-  if (zoneKey(list[from]) !== zoneKey(list[to])) return
+  const fromZone = zoneKey(list[from])
+  const toZone = zoneKey(list[to])
   const [moved] = list.splice(from, 1)
   list.splice(to, 0, moved)
+  let spaceTags: Record<number, string | null> | undefined
+  if (fromZone !== toZone) {
+    // 跨区移动：目标分区码作为覆盖码（目标「未分区」则提交 null 清除覆盖）
+    const targetCode = target.spaceTag ?? null
+    moved.spaceTag = targetCode
+    moved.spaceTagName = targetCode ? (target.spaceTagName ?? targetCode) : null
+    spaceTags = { [moved.schemeItemId]: targetCode }
+    markOverridden(moved.schemeItemId, targetCode)
+  }
   orderedItems.value = list
-  saveOrder()
+  saveOrder(spaceTags)
 }
 
-async function saveOrder() {
+/** 拖拽落点为空分区/分区空白区：移动到该分区末尾并设置空间覆盖（空分区同样生效）。 */
+function onDropOnZone(zone: ZoneView) {
+  const draggedId = draggingId.value
+  draggingId.value = null
+  if (draggedId == null) return
+  const list = [...orderedItems.value]
+  const from = list.findIndex(i => i.schemeItemId === draggedId)
+  if (from < 0) return
+  // 同分区空白处放下：保持原状不提交
+  if (zoneKey(list[from]) === zone.name) return
+  const [moved] = list.splice(from, 1)
+  moved.spaceTag = zone.code
+  moved.spaceTagName = zone.code ? zone.name : null
+  // 插入目标分区末尾；空分区追加到全局末尾
+  let insertAt = list.length
+  if (zone.items.length > 0) {
+    const lastId = zone.items[zone.items.length - 1].schemeItemId
+    const idx = list.findIndex(i => i.schemeItemId === lastId)
+    if (idx >= 0) insertAt = idx + 1
+  }
+  list.splice(insertAt, 0, moved)
+  orderedItems.value = list
+  markOverridden(moved.schemeItemId, zone.code)
+  saveOrder({ [moved.schemeItemId]: zone.code })
+}
+
+async function saveOrder(spaceTags?: Record<number, string | null>) {
   reordering.value = true
   try {
     scheme.value = await reorderSchemeItems(
       schemeId.value,
-      orderedItems.value.map(i => i.schemeItemId)
+      orderedItems.value.map(i => i.schemeItemId),
+      spaceTags
     )
     message.success('排序已保存')
   } catch (e) {
     message.error(e instanceof Error ? e.message : '保存排序失败')
+    // 落库失败：重新加载详情回滚本地乐观状态
     loadDetail()
   } finally {
     reordering.value = false
   }
+}
+
+// ---------- 「+ 添加空间」（前端空分区） ----------
+const showAddZoneModal = ref(false)
+const sceneDicts = ref<DictItem[]>([])
+let sceneDictsLoaded = false
+const addZoneCode = ref<string | null>(null)
+
+/** 已存在的分区码（有明细的分区 + 前端空分区），弹窗中置灰禁选。 */
+const existingZoneCodes = computed(() => {
+  const codes = new Set<string>()
+  for (const zone of zones.value) {
+    if (zone.code) codes.add(zone.code)
+  }
+  return codes
+})
+
+const addZoneOptions = computed(() =>
+  sceneDicts.value.map(d => ({
+    label: `${d.dictName}（${d.dictCode}）`,
+    value: d.dictCode,
+    disabled: existingZoneCodes.value.has(d.dictCode)
+  }))
+)
+
+async function openAddZoneModal() {
+  addZoneCode.value = null
+  showAddZoneModal.value = true
+  if (sceneDictsLoaded) return
+  try {
+    sceneDicts.value = await listDicts('scene', { signal })
+    sceneDictsLoaded = true
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '加载场景字典失败')
+  }
+}
+
+function handleAddZone() {
+  const dict = sceneDicts.value.find(d => d.dictCode === addZoneCode.value)
+  if (!dict) {
+    message.warning('请选择要添加的空间')
+    return
+  }
+  extraZones.value.push({ code: dict.dictCode, name: dict.dictName })
+  showAddZoneModal.value = false
+  message.success(`已添加空间「${dict.dictName}」，拖拽产品卡片进入后生效`)
 }
 
 const duplicateRspuIds = computed(() => {
@@ -398,6 +517,9 @@ async function loadDetail() {
   errorMessage.value = ''
   try {
     scheme.value = await getSchemeDetail(schemeId.value, { signal })
+    // 重新加载后：会话级空分区与覆盖标记以服务端数据为准
+    extraZones.value = []
+    overriddenItemIds.value = new Set()
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载方案详情失败'
   } finally {
@@ -535,19 +657,34 @@ onBeforeRouteUpdate((to) => {
 
           <n-card title="方案产品" size="small">
             <template #header-extra>
-              <n-radio-group v-model:value="viewMode" size="small">
-                <n-radio-button value="zones">空间分区</n-radio-button>
-                <n-radio-button value="table">表格</n-radio-button>
-              </n-radio-group>
+              <n-space align="center" :size="8">
+                <n-button
+                  v-if="viewMode === 'zones' && canEditScheme"
+                  size="small"
+                  @click="openAddZoneModal"
+                >
+                  + 添加空间
+                </n-button>
+                <n-radio-group v-model:value="viewMode" size="small">
+                  <n-radio-button value="zones">空间分区</n-radio-button>
+                  <n-radio-button value="table">表格</n-radio-button>
+                </n-radio-group>
+              </n-space>
             </template>
 
-            <!-- 空间分区视图（阶段 9）：按 RSPU 场景标签分区，分区内可拖拽排序 -->
+            <!-- 空间分区视图（阶段 9 / 方案 A）：按空间字典码分区，跨区拖拽 = 空间覆盖（仅本方案生效） -->
             <div v-if="viewMode === 'zones'">
-              <n-empty v-if="orderedItems.length === 0" description="方案中暂无产品" />
+              <n-empty v-if="orderedItems.length === 0 && zones.length === 0" description="方案中暂无产品" />
               <template v-else>
                 <div v-for="zone in zones" :key="zone.name" class="zone">
                   <div class="zone-title">{{ zone.name }}（{{ zone.items.length }}）</div>
-                  <div class="zone-items">
+                  <div
+                    class="zone-items"
+                    :class="{ 'zone-items-empty': zone.items.length === 0 }"
+                    @dragover.prevent
+                    @drop.prevent="onDropOnZone(zone)"
+                  >
+                    <div v-if="zone.items.length === 0" class="zone-empty">拖拽产品卡片到此处加入「{{ zone.name }}」</div>
                     <div
                       v-for="item in zone.items"
                       :key="item.schemeItemId"
@@ -557,7 +694,7 @@ onBeforeRouteUpdate((to) => {
                       @dragstart="onDragStart(item.schemeItemId)"
                       @dragend="onDragEnd"
                       @dragover.prevent
-                      @drop.prevent="onDropOnItem(item)"
+                      @drop.prevent.stop="onDropOnItem(item)"
                     >
                       <HoverZoomImage
                         :src="item.primaryImageUrl"
@@ -570,6 +707,14 @@ onBeforeRouteUpdate((to) => {
                       <div class="zone-item-body">
                         <div class="zone-item-name" :title="item.rspuName || item.rspuId">
                           {{ item.rspuName || item.rspuId }}
+                          <n-tag
+                            v-if="overriddenItemIds.has(item.schemeItemId)"
+                            size="tiny"
+                            type="warning"
+                            style="margin-left: 4px;"
+                          >
+                            已调整
+                          </n-tag>
                         </div>
                         <div class="zone-item-meta">
                           x{{ item.quantity ?? 1 }}
@@ -583,7 +728,7 @@ onBeforeRouteUpdate((to) => {
                   </div>
                 </div>
                 <p v-if="canEditScheme" class="zone-hint">
-                  {{ reordering ? '正在保存排序…' : '拖拽卡片可调整分区内顺序（空间标签为产品属性，不支持跨区拖动）' }}
+                  {{ reordering ? '正在保存排序…' : '拖拽卡片可调整分区与顺序' }}
                 </p>
               </template>
             </div>
@@ -704,6 +849,31 @@ onBeforeRouteUpdate((to) => {
         </n-space>
       </template>
     </n-modal>
+    <!-- 添加空间弹窗（前端空分区，拖入卡片后随 reorder 生效） -->
+    <n-modal
+      v-model:show="showAddZoneModal"
+      preset="card"
+      title="添加空间"
+      style="width: 420px;"
+    >
+      <n-form label-placement="top">
+        <n-form-item label="空间（来自场景字典，已存在的分区不可重复添加）">
+          <n-select
+            v-model:value="addZoneCode"
+            :options="addZoneOptions"
+            placeholder="选择空间，如：客厅、卧室"
+            filterable
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showAddZoneModal = false">取消</n-button>
+          <n-button type="primary" @click="handleAddZone">添加</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
     <!-- 转订单弹窗 -->
     <n-modal
       v-model:show="showOrderModal"
@@ -760,6 +930,21 @@ onBeforeRouteUpdate((to) => {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.zone-items-empty {
+  min-height: 64px;
+  align-items: center;
+  border: 1px dashed var(--rsdp-border);
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.zone-empty {
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
 }
 
 .zone-item {

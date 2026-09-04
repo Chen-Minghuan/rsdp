@@ -43,8 +43,10 @@ export interface SchemeItem {
   subtotal?: number
   leadTimeDays?: number
   moq?: number
-  /** 空间分区标签（RSPU 首个场景标签名；无标签为 null，归入「未分区」） */
+  /** 生效的空间字典码（scheme_item.space_tag 覆盖优先，空回退产品首场景码；无空间为 null，归「未分区」） */
   spaceTag?: string | null
+  /** 空间显示名（场景字典名；码已删时为码原文；无空间为 null） */
+  spaceTagName?: string | null
   sortOrder: number
 }
 

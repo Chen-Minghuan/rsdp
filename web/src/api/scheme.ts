@@ -104,11 +104,21 @@ export async function generateQuoteFromScheme(schemeId: string, mode?: QuoteMode
 /**
  * 方案明细拖拽排序（itemIds 为全部明细按新顺序的完整列表）。
  *
- * @param schemeId 方案 ID
- * @param itemIds  明细 ID 按新顺序排列
+ * @param schemeId  方案 ID
+ * @param itemIds   明细 ID 按新顺序排列
+ * @param spaceTags 可选空间覆盖（明细 ID → 场景字典码；null=清除覆盖恢复跟随产品，
+ *                  仅在发生跨区拖拽时携带，纯排序不传）
  * @returns 更新后的方案详情
  */
-export async function reorderSchemeItems(schemeId: string, itemIds: number[]): Promise<Scheme> {
-  const { data: result } = await apiClient.put<ApiResult<Scheme>>(`/v1/schemes/${schemeId}/items/reorder`, { itemIds })
+export async function reorderSchemeItems(
+  schemeId: string,
+  itemIds: number[],
+  spaceTags?: Record<number, string | null>
+): Promise<Scheme> {
+  const body: { itemIds: number[]; spaceTags?: Record<number, string | null> } = { itemIds }
+  if (spaceTags && Object.keys(spaceTags).length > 0) {
+    body.spaceTags = spaceTags
+  }
+  const { data: result } = await apiClient.put<ApiResult<Scheme>>(`/v1/schemes/${schemeId}/items/reorder`, body)
   return result.data
 }
