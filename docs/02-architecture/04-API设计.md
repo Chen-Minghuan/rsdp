@@ -711,7 +711,9 @@ POST   /api/v1/schemes
        #   schemeName (max 128 字符),
        #   roomType?,
        #   budgetLimit?,
-       #   items: [{ rspuId, rskuId, quantity?, sortOrder? }] (1..50 项)
+       #   items: [{ rspuId, rskuId, quantity?, sortOrder?, spaceTag? }] (1..50 项)
+       #   # spaceTag 可空空间覆盖标签（场景字典码；空=跟随产品场景推导，
+       #   #   编辑保存时回传原值防覆盖丢失；添加产品「放入分区」/户型图搭配回填使用）
        # }
        # Response: SchemeResponse
 
@@ -737,10 +739,11 @@ PUT    /api/v1/schemes/{schemeId}
        #   roomType?,
        #   projectId?（非空时校验项目归属并更新关联）,
        #   budgetLimit?,
-       #   items: [{ rspuId, rskuId, quantity?, sortOrder? }] (1..50 项)
+       #   items: [{ rspuId, rskuId, quantity?, sortOrder?, spaceTag? }] (1..50 项)
        # }
        # Response: SchemeResponse
-       # 说明：会物理删除旧子项并重新写入，保证幂等
+       # 说明：会物理删除旧子项并重新写入，保证幂等；spaceTag 语义同创建
+       #   （前端编辑模式回传原覆盖码，防止删旧建新丢失空间覆盖）
 
 DELETE /api/v1/schemes/{schemeId}
        # 删除搭配方案（已实现）
@@ -753,6 +756,9 @@ POST   /api/v1/schemes/{schemeId}/quote
        #      重新生成报价单时，报价单按 RSKU 最新价格计算；若与快照不一致，
        #      会在 response.priceChanges 中列出变动项：
        #      [{ rspuId, rspuName, rskuId, oldPrice, newPrice }]
+       #      方案语境报价项附 spaceTag/spaceTagName（方案明细覆盖码优先，回退产品
+       #      场景推导；独立报价构建器 /quotes/generate 不附，恒为 null），
+       #      供前端按空间分组展示与导出「空间」列
 
 PUT    /api/v1/schemes/{schemeId}/template
        # 设为/取消方案模板（已实现，需 scheme:update + 方案归属）

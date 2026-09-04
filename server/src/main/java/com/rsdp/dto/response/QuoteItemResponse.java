@@ -28,6 +28,10 @@ public class QuoteItemResponse {
     private BigDecimal salePrice;
     /** 售价是否低于成本（仅 sale 口径；清库存场景提示） */
     private boolean belowCost;
+    /** 空间字典码（仅方案语境报价附带：方案明细覆盖码优先，回退产品场景推导；独立构建器为 null） */
+    private String spaceTag;
+    /** 空间显示名（场景字典名；码已删时为码原文；无空间为 null） */
+    private String spaceTagName;
     /** 成本价（仅 sale 口径且有出厂价查看权限时返回，绝不向无权限角色泄露） */
     private BigDecimal costPrice;
     /** 毛利 = 售价 − 成本（仅 sale 口径且有出厂价查看权限时返回） */

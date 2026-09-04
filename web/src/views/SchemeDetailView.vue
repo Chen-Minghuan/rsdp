@@ -410,6 +410,19 @@ const itemColumns: DataTableColumns<SchemeItem> = [
   },
   { title: 'RSPU', key: 'rspuId', width: 160 },
   { title: '名称', key: 'rspuName' },
+  {
+    title: '空间',
+    key: 'spaceTagName',
+    width: 120,
+    render(row: SchemeItem) {
+      return h('span', [
+        row.spaceTagName || '-',
+        row.spaceTagOverridden
+          ? h(NTag, { size: 'tiny', type: 'warning', style: 'margin-left: 4px;' }, { default: () => '已调整' })
+          : null
+      ])
+    }
+  },
   { title: '工厂', key: 'factoryName' },
   {
     title: '出厂价',
@@ -456,6 +469,20 @@ const quoteColumns: DataTableColumns<QuoteItem> = [
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
   { title: 'MOQ', key: 'moq', width: 100 }
 ]
+
+// ---------- 报价结果空间分组（方案 A 步骤 6：任一报价项带空间信息时按空间分组展示） ----------
+const quoteHasSpaceGroups = computed(() => (quoteResult.value?.items ?? []).some(item => item.spaceTagName))
+
+/** 按报价项原顺序首次出现分组；无空间信息的项归「其他」。 */
+const quoteSpaceGroups = computed(() => {
+  const map = new Map<string, QuoteItem[]>()
+  for (const item of quoteResult.value?.items ?? []) {
+    const key = item.spaceTagName || '其他'
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(item)
+  }
+  return [...map.entries()].map(([name, items]) => ({ name, items }))
+})
 
 const priceChangeColumns: DataTableColumns<PriceChange> = [
   { title: 'RSPU', key: 'rspuName' },
@@ -754,7 +781,20 @@ onBeforeRouteUpdate((to) => {
           <template v-if="quoteResult">
             <n-divider />
             <n-card title="报价单" size="small">
+              <!-- 任一报价项带空间信息时按空间分组展示 -->
+              <template v-if="quoteHasSpaceGroups">
+                <div v-for="group in quoteSpaceGroups" :key="group.name" class="quote-space-group">
+                  <div class="quote-space-title">{{ group.name }}（{{ group.items.length }}）</div>
+                  <n-data-table
+                    :columns="quoteColumns"
+                    :data="group.items"
+                    :bordered="true"
+                    :single-line="false"
+                  />
+                </div>
+              </template>
               <n-data-table
+                v-else
                 :columns="quoteColumns"
                 :data="quoteResult.items"
                 :bordered="true"
@@ -989,5 +1029,18 @@ onBeforeRouteUpdate((to) => {
   margin-top: 4px;
   font-size: 12px;
   color: var(--rsdp-text-secondary);
+}
+
+.quote-space-group {
+  margin-bottom: 16px;
+}
+
+.quote-space-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+  padding-left: 8px;
+  border-left: 3px solid var(--rsdp-primary);
+  margin-bottom: 8px;
 }
 </style>

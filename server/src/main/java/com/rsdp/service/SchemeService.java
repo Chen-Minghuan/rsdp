@@ -19,6 +19,7 @@ import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
 import com.rsdp.dto.response.CopyFromTemplateResponse;
 import com.rsdp.dto.response.PriceChangeResponse;
+import com.rsdp.dto.response.QuoteItemResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.SchemeItemResponse;
 import com.rsdp.dto.response.SchemeResponse;
@@ -809,6 +810,9 @@ public class SchemeService {
     /**
      * 根据方案生成报价单。
      *
+     * <p>报价项附方案空间信息（spaceTag/spaceTagName：方案明细覆盖码优先，
+     * 回退产品场景推导），供前端按空间分组展示与导出空间列。</p>
+     *
      * @param schemeId 方案 ID
      * @param mode     报价口径（可空，默认成本核价；sale=销售报价，透传给报价服务）
      * @return 报价单
@@ -842,6 +846,9 @@ public class SchemeService {
 
         QuoteResponse quote = quoteService.generateQuote(quoteItems, mode);
 
+        // 空间标签（方案 A 步骤 6）：报价项按方案明细附空间信息（覆盖码优先，回退产品场景推导）
+        attachSpaceTags(accessibleItems, quote.getItems());
+
         // 快照模式：对比方案保存时的价格与当前最新价格。
         // 出厂价可见性约束：无权限角色（设计师等）不返回变动条目，防止经 oldPrice/newPrice 旁路泄露
         List<PriceChangeResponse> priceChanges = accessibleItems.stream()
@@ -872,6 +879,41 @@ public class SchemeService {
 
         quote.setPriceChanges(priceChanges);
         return quote;
+    }
+
+    /**
+     * 给方案语境的报价项附空间信息（方案 A 步骤 6）：按方案明细生效码
+     * （space_tag 覆盖优先，回退产品 rspu_scene 首场景码）匹配 rspuId+rskuId 填充
+     * spaceTag/spaceTagName；独立报价构建器（无方案语境）不调用，字段保持 null。
+     *
+     * @param schemeItems 方案明细（已按数据权限过滤）
+     * @param quoteItems  报价项
+     */
+    private void attachSpaceTags(List<SchemeItem> schemeItems, List<QuoteItemResponse> quoteItems) {
+        if (quoteItems == null || quoteItems.isEmpty() || schemeItems.isEmpty()) {
+            return;
+        }
+        List<String> rspuIds = schemeItems.stream().map(SchemeItem::getRspuId).distinct().toList();
+        Map<String, String> derivedCodes = batchSpaceTagCodes(rspuIds);
+        // 键：rspuId|rskuId → 生效空间码
+        Map<String, String> codeByItem = new HashMap<>();
+        for (SchemeItem item : schemeItems) {
+            String code = StringUtils.hasText(item.getSpaceTag())
+                ? item.getSpaceTag()
+                : derivedCodes.get(item.getRspuId());
+            if (StringUtils.hasText(code)) {
+                codeByItem.putIfAbsent(item.getRspuId() + "|" + item.getRskuId(), code);
+            }
+        }
+        Map<String, String> sceneNames = batchSceneNames(
+            codeByItem.values().stream().distinct().toList());
+        for (QuoteItemResponse quoteItem : quoteItems) {
+            String code = codeByItem.get(quoteItem.getRspuId() + "|" + quoteItem.getRskuId());
+            if (StringUtils.hasText(code)) {
+                quoteItem.setSpaceTag(code);
+                quoteItem.setSpaceTagName(sceneNames.getOrDefault(code, code));
+            }
+        }
     }
 
     private SchemeItemResponse buildItemResponse(SchemeItem item,

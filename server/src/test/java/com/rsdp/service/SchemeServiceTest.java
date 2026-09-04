@@ -483,6 +483,73 @@ class SchemeServiceTest {
     }
 
     @Test
+    void generateQuote_shouldAttachSpaceTagsFromSchemeItems() {
+        // 方案语境报价：覆盖码优先附到报价项（rspuId+rskuId 匹配），显示名走场景字典
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setStatus("active");
+
+        SchemeItem item = new SchemeItem();
+        item.setSchemeItemId(1L);
+        item.setSchemeId("SCHEME-001");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setSpaceTag("BEDROOM");
+        item.setQuantity(3);
+
+        com.rsdp.dto.response.QuoteItemResponse quoteItem = new com.rsdp.dto.response.QuoteItemResponse();
+        quoteItem.setRspuId("RSPU-001");
+        quoteItem.setRskuId("RSKU-001");
+        QuoteResponse quote = new QuoteResponse();
+        quote.setItems(List.of(quoteItem));
+
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
+        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)), null)).thenReturn(quote);
+        when(rspuSceneMapper.selectList(any())).thenReturn(List.of());
+        when(categoryDictMapper.selectList(any())).thenReturn(List.of(sceneDict("BEDROOM", "卧室")));
+        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(null);
+
+        QuoteResponse response = schemeService.generateQuote("SCHEME-001");
+
+        assertThat(response.getItems().get(0).getSpaceTag()).isEqualTo("BEDROOM");
+        assertThat(response.getItems().get(0).getSpaceTagName()).isEqualTo("卧室");
+    }
+
+    @Test
+    void generateQuote_shouldAttachDerivedSpaceTagWhenNoOverride() {
+        // 无覆盖码：回退产品 rspu_scene 首场景码
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setStatus("active");
+
+        SchemeItem item = new SchemeItem();
+        item.setSchemeItemId(1L);
+        item.setSchemeId("SCHEME-001");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setQuantity(3);
+
+        com.rsdp.dto.response.QuoteItemResponse quoteItem = new com.rsdp.dto.response.QuoteItemResponse();
+        quoteItem.setRspuId("RSPU-001");
+        quoteItem.setRskuId("RSKU-001");
+        QuoteResponse quote = new QuoteResponse();
+        quote.setItems(List.of(quoteItem));
+
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
+        when(quoteService.generateQuote(List.of(req("RSKU-001", 3)), null)).thenReturn(quote);
+        when(rspuSceneMapper.selectList(any())).thenReturn(List.of(scene("RSPU-001", "LIVING")));
+        when(categoryDictMapper.selectList(any())).thenReturn(List.of(sceneDict("LIVING", "客厅")));
+        when(rskuSupplyMapper.selectById("RSKU-001")).thenReturn(null);
+
+        QuoteResponse response = schemeService.generateQuote("SCHEME-001");
+
+        assertThat(response.getItems().get(0).getSpaceTag()).isEqualTo("LIVING");
+        assertThat(response.getItems().get(0).getSpaceTagName()).isEqualTo("客厅");
+    }
+
+    @Test
     void createScheme_shouldMergeDuplicateRskuQuantities() {
         SchemeItemRequest itemRequest1 = new SchemeItemRequest();
         itemRequest1.setRspuId("RSPU-001");

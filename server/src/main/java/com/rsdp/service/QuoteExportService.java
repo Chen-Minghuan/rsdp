@@ -90,6 +90,7 @@ public class QuoteExportService {
             row.setFactoryPrice(formatPrice(item.getFactoryPrice()));
             row.setQuantity(item.getQuantity());
             row.setSubtotal(formatPrice(item.getSubtotal()));
+            row.setSpaceTagName(item.getSpaceTagName());
             row.setPriceBand(item.getPriceBand());
             row.setMaterialDescription(item.getMaterialDescription());
             row.setLeadTimeDays(item.getLeadTimeDays());
@@ -116,6 +117,7 @@ public class QuoteExportService {
             row.setSalePrice(formatPrice(item.getSalePrice()));
             row.setQuantity(item.getQuantity());
             row.setSubtotal(formatPrice(item.getSubtotal()));
+            row.setSpaceTagName(item.getSpaceTagName());
             row.setMaterialDescription(item.getMaterialDescription());
             row.setLeadTimeDays(item.getLeadTimeDays());
             row.setMoq(item.getMoq());
@@ -209,6 +211,10 @@ public class QuoteExportService {
         @com.alibaba.excel.annotation.ExcelProperty("小计")
         private String subtotal;
 
+        /** 空间显示名（方案语境报价附带；独立报价为空） */
+        @com.alibaba.excel.annotation.ExcelProperty("空间")
+        private String spaceTagName;
+
         @com.alibaba.excel.annotation.ExcelProperty("价格带")
         private String priceBand;
 
@@ -262,6 +268,10 @@ public class QuoteExportService {
 
         @com.alibaba.excel.annotation.ExcelProperty("小计")
         private String subtotal;
+
+        /** 空间显示名（方案语境报价附带；独立报价为空） */
+        @com.alibaba.excel.annotation.ExcelProperty("空间")
+        private String spaceTagName;
 
         @com.alibaba.excel.annotation.ExcelProperty("材质说明")
         private String materialDescription;

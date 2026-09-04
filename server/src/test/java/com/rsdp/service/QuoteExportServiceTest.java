@@ -43,6 +43,7 @@ class QuoteExportServiceTest {
         item.setFactoryPrice(new BigDecimal("2500"));
         item.setQuantity(3);
         item.setSubtotal(new BigDecimal("7500"));
+        item.setSpaceTagName("客厅");
         item.setLeadTimeDays(25);
         item.setMoq(10);
 
@@ -71,6 +72,9 @@ class QuoteExportServiceTest {
             var sheet = workbook.getSheet("报价明细");
             int nameCol = columnIndex(sheet.getRow(0), "RSPU 名称");
             assertThat(sheet.getRow(1).getCell(nameCol).getStringCellValue()).isEqualTo("像素沙发");
+            // 方案语境：「空间」列带显示名
+            int spaceCol = columnIndex(sheet.getRow(0), "空间");
+            assertThat(sheet.getRow(1).getCell(spaceCol).getStringCellValue()).isEqualTo("客厅");
         }
     }
 
@@ -86,6 +90,7 @@ class QuoteExportServiceTest {
         item.setSalePrice(new BigDecimal("6000"));
         item.setQuantity(3);
         item.setSubtotal(new BigDecimal("18000.00"));
+        item.setSpaceTagName("客厅");
         item.setLeadTimeDays(25);
         item.setMoq(10);
 
@@ -118,6 +123,10 @@ class QuoteExportServiceTest {
             int nameCol = columnIndex(workbook.getSheet("报价明细").getRow(0), "RSPU 名称");
             assertThat(workbook.getSheet("报价明细").getRow(1).getCell(nameCol).getStringCellValue())
                 .isEqualTo("像素沙发");
+            // 销售版同样带「空间」列（空间非敏感信息）
+            int spaceCol = columnIndex(workbook.getSheet("报价明细").getRow(0), "空间");
+            assertThat(workbook.getSheet("报价明细").getRow(1).getCell(spaceCol).getStringCellValue())
+                .isEqualTo("客厅");
             // 销售报价对客户导出：不出现工厂编码/工厂名称列，工厂 SKU 以「型号」口径展示；汇总不含"涉及工厂数"
             assertThat(headers).doesNotContain("工厂编码", "工厂名称", "工厂 SKU");
             assertThat(headers).contains("型号");

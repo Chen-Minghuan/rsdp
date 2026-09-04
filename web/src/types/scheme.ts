@@ -8,6 +8,8 @@ export interface SchemeItemRequest {
   rskuId: string
   quantity: number
   sortOrder?: number
+  /** 空间覆盖标签（场景字典码，可空=跟随产品推导；编辑保存时回传原值防覆盖丢失） */
+  spaceTag?: string | null
 }
 
 /**

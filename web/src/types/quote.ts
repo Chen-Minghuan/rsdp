@@ -40,6 +40,10 @@ export interface QuoteItem {
   salePrice?: number
   /** 售价是否低于成本（仅 sale 口径） */
   belowCost?: boolean
+  /** 空间字典码（仅方案语境报价附带；独立构建器为 null） */
+  spaceTag?: string | null
+  /** 空间显示名（场景字典名；无空间为 null） */
+  spaceTagName?: string | null
   /** 成本价（仅 sale 口径且有出厂价查看权限时返回） */
   costPrice?: number
   /** 毛利 = 售价 − 成本（仅 sale 口径且有出厂价查看权限时返回） */

@@ -30,9 +30,11 @@ import { listRskuByRspu } from '@/api/rsku'
 import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
 import { listProjects } from '@/api/project'
+import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
+import type { DictItem } from '@/types/dict'
 import type { ProductDetail, ProductSummary } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
 import type { QuoteResponse, QuoteItem, QuoteMode } from '@/types/quote'
@@ -139,6 +141,39 @@ const selectedRskuMap = reactive<Record<string, string>>({})
 const quantityMap = reactive<Record<string, number>>({})
 const originalScheme = ref<Scheme | null>(null)
 
+// ---------- 空间覆盖（方案 A 步骤 6）：编辑回传防丢失 + 添加产品「放入分区」 ----------
+/** 编辑模式：原方案各项的空间覆盖码（rspuId → spaceTag，取首个非空），保存时回传防覆盖丢失 */
+const originalSpaceTagMap = computed(() => {
+  const map: Record<string, string> = {}
+  for (const item of originalScheme.value?.items ?? []) {
+    if (item.spaceTag && !map[item.rspuId]) {
+      map[item.rspuId] = item.spaceTag
+    }
+  }
+  return map
+})
+
+/** 添加产品弹窗「放入分区」选择（rspuId → 场景字典码；未选=跟随产品推导） */
+const zoneSelectionMap = reactive<Record<string, string>>({})
+const addZoneCode = ref<string | null>(null)
+const sceneDicts = ref<DictItem[]>([])
+let sceneDictsLoaded = false
+
+const addZoneOptions = computed(() => [
+  { label: '跟随产品标签（默认）', value: '' },
+  ...sceneDicts.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+])
+
+async function loadSceneDictsOnce() {
+  if (sceneDictsLoaded) return
+  try {
+    sceneDicts.value = await listDicts('scene', { signal })
+    sceneDictsLoaded = true
+  } catch {
+    // 场景字典加载失败不阻塞添加产品（分区选择不可用而已）
+  }
+}
+
 // ---------- 添加产品弹窗（构建器内直接选品，解决项目入口空构建器无法选产品的问题） ----------
 const showAddModal = ref(false)
 const addKeyword = ref('')
@@ -179,8 +214,10 @@ function openAddModal() {
   addKeyword.value = ''
   addCheckedKeys.value = []
   addPage.value = 1
+  addZoneCode.value = null
   showAddModal.value = true
   loadAddRows()
+  loadSceneDictsOnce()
 }
 
 async function loadAddRows() {
@@ -218,6 +255,12 @@ async function handleAddProducts() {
       products.value.push(p)
       rskuMap.value[rspuId] = list
       quantityMap[rspuId] = 1
+      // 「放入分区」选择随产品项暂存，保存方案时携带 spaceTag
+      if (addZoneCode.value) {
+        zoneSelectionMap[rspuId] = addZoneCode.value
+      } else {
+        delete zoneSelectionMap[rspuId]
+      }
       const selectable = list.filter((r) => r.factoryPrice != null)
       if (selectable.length > 0) {
         const cheapest = selectable.reduce((min, r) => (r.factoryPrice! < min.factoryPrice! ? r : min), selectable[0])
@@ -237,7 +280,7 @@ async function handleAddProducts() {
   }
 }
 
-/** 从构建器移除产品（同步清理 RSKU/数量选择并使旧报价结果失效）。 */
+/** 从构建器移除产品（同步清理 RSKU/数量/分区选择并使旧报价结果失效）。 */
 function removeProduct(rspuId: string) {
   products.value = products.value.filter((p) => p.rspu.rspuId !== rspuId)
   const map = { ...rskuMap.value }
@@ -245,6 +288,7 @@ function removeProduct(rspuId: string) {
   rskuMap.value = map
   delete selectedRskuMap[rspuId]
   delete quantityMap[rspuId]
+  delete zoneSelectionMap[rspuId]
   quoteResult.value = null
 }
 
@@ -468,7 +512,9 @@ async function handleSaveAsScheme() {
       rspuId,
       rskuId: rskuId!,
       quantity: quantityMap[rspuId] ?? 1,
-      sortOrder: index
+      sortOrder: index,
+      // 空间覆盖：「放入分区」选择优先，其次回传原方案覆盖码（编辑模式防丢失），否则跟随产品推导
+      spaceTag: zoneSelectionMap[rspuId] ?? originalSpaceTagMap.value[rspuId] ?? null
     }))
 
   saving.value = true
@@ -556,6 +602,17 @@ const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
       }
     }
   ]
+  if (quoteResult.value?.items.some(item => item.spaceTagName)) {
+    // 方案语境报价附带空间信息时才显示「空间」列（独立构建器恒空不出现）
+    columns.push({
+      title: '空间',
+      key: 'spaceTagName',
+      width: 100,
+      render(row: QuoteItem) {
+        return row.spaceTagName || '-'
+      }
+    })
+  }
   if (saleMode && quoteResult.value?.items.some(item => item.costPrice != null)) {
     columns.push({
       title: '成本',
@@ -836,7 +893,14 @@ onBeforeRouteUpdate((to) => {
             :page-size="ADD_PAGE_SIZE"
             @update:page="loadAddRows"
           />
-          <n-space>
+          <n-space align="center">
+            <span style="font-size: 12px; color: var(--rsdp-text-secondary);">放入分区</span>
+            <n-select
+              v-model:value="addZoneCode"
+              :options="addZoneOptions"
+              placeholder="跟随产品标签（默认）"
+              style="width: 180px;"
+            />
             <n-button @click="showAddModal = false">取消</n-button>
             <n-button
               type="primary"
