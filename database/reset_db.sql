@@ -550,6 +550,7 @@ CREATE TABLE IF NOT EXISTS scheme_item (
     moq INTEGER,
     quantity INTEGER DEFAULT 1,
     sort_order INTEGER DEFAULT 0,
+    space_tag VARCHAR(32),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP,
     FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
@@ -1258,11 +1259,13 @@ CREATE TABLE IF NOT EXISTS design_order_item (
     final_price TEXT,
     adjust_price TEXT,
     list_price NUMERIC(12,2),                        -- 标准售价快照（明文，对客户可见；区别于上面三列 TEXT 存 AES 密文，V38 并入）
+    space_tag VARCHAR(32),                           -- 空间快照（由方案复制冻结，V40 并入）
     factory_code VARCHAR(16),
     snapshot_json TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 COMMENT ON COLUMN design_order_item.list_price IS '标准售价快照（明文 NUMERIC：售价对客户可见不敏感，且便于 SQL 分析；刻意区别于 original_price/final_price/adjust_price 三列 TEXT 存 AES 密文）';
+COMMENT ON COLUMN design_order_item.space_tag IS '空间快照（由方案生成订单时从 scheme_item.space_tag 复制冻结；为空=未指定空间/存量订单，邀请页平铺展示兜底）';
 CREATE INDEX IF NOT EXISTS idx_order_item_order ON design_order_item(order_id);
 CREATE INDEX IF NOT EXISTS idx_order_item_rspu ON design_order_item(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_order_item_factory ON design_order_item(factory_code);
