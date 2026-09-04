@@ -865,9 +865,11 @@ GET    /api/v1/orders/{orderId}
        # 查询订单详情（需 order:read + 归属或 ADMIN）
        # Response: OrderDetailResponse（含 items: [{ id, rspuId, rskuId, productName, model,
        #   imageId, quantity, originalPrice, finalPrice, listPrice, belowCost, factoryCode,
-       #   subtotal }], priceWarning?）
+       #   subtotal, spaceTag, spaceTagName }], priceWarning?）
        # 说明：items[].productName 为商品名称快照——完整商品名称（rspu_master.product_name）
-       #   优先，空则回退定位标签（positioning_label）；仅影响新订单，存量订单快照不变
+       #   优先，空则回退定位标签（positioning_label）；仅影响新订单，存量订单快照不变；
+       #   items[].spaceTag/spaceTagName 为订单空间快照（由方案明细 space_tag 复制冻结，
+       #   场景字典名展示，码已删回退码原文；存量订单为 null）
 
 PUT    /api/v1/orders/{orderId}
        # 更新收件信息与备注（需 order:update + 归属；仅 PENDING 可改）
@@ -931,7 +933,10 @@ GET    /api/v1/public/orders/invite/{token}
        # 查看邀请页订单视图（HMAC-SHA256 签名 + 过期 + 库存哈希三重校验）
        # Response: { orderNo, status, receiverArea, finalTotalPrice, itemCount,
        #   expectedLeadTime, expireAt, confirmed, confirmedAt,
-       #   items: [{ productName, model, imageId, quantity, finalPrice, subtotal }] }
+       #   items: [{ productName, model, imageId, quantity, finalPrice, subtotal,
+       #             spaceTag, spaceTagName }] }
+       # 说明：spaceTag/spaceTagName 为订单空间快照（仅作分组展示，不含敏感信息；
+       #   存量订单为 null，前端此时保持平铺展示）
        # 安全约束：绝不返回 originalPrice/factoryCode/rskuId 等敏感字段
 
 POST   /api/v1/public/orders/invite/{token}/confirm

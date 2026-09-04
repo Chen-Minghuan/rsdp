@@ -4,9 +4,11 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.dto.response.InviteTokenResponse;
 import com.rsdp.dto.response.OrderInviteItemResponse;
 import com.rsdp.dto.response.OrderInviteViewResponse;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.DesignOrder;
 import com.rsdp.entity.DesignOrderItem;
 import com.rsdp.exception.BusinessException;
+import com.rsdp.mapper.CategoryDictMapper;
 import com.rsdp.mapper.DesignOrderItemMapper;
 import com.rsdp.mapper.DesignOrderMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +26,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 订单邀请服务：生成 HMAC-SHA256 签名的一次性邀请链接，
@@ -40,17 +44,20 @@ public class OrderInviteService {
 
     private final DesignOrderMapper designOrderMapper;
     private final DesignOrderItemMapper designOrderItemMapper;
+    private final CategoryDictMapper categoryDictMapper;
     private final OrderService orderService;
     private final byte[] secretKey;
     private final int inviteExpireDays;
 
     public OrderInviteService(DesignOrderMapper designOrderMapper,
                               DesignOrderItemMapper designOrderItemMapper,
+                              CategoryDictMapper categoryDictMapper,
                               OrderService orderService,
                               @Value("${rsdp.order.invite-secret:}") String configuredSecret,
                               @Value("${rsdp.order.invite-expire-days:7}") int inviteExpireDays) {
         this.designOrderMapper = designOrderMapper;
         this.designOrderItemMapper = designOrderItemMapper;
+        this.categoryDictMapper = categoryDictMapper;
         this.orderService = orderService;
         if (configuredSecret == null || configuredSecret.isBlank()) {
             throw new IllegalArgumentException(
@@ -239,11 +246,19 @@ public class OrderInviteService {
 
     /**
      * 组装公开视图：只含到手价，绝不携带 originalPrice/factoryCode/rskuId。
+     *
+     * <p>空间信息（spaceTag/spaceTagName）仅作分组展示，不含敏感信息；
+     * 显示名批量查场景字典，码已删时回退码原文。</p>
      */
     private OrderInviteViewResponse buildView(DesignOrder order) {
         List<DesignOrderItem> items = designOrderItemMapper.selectList(new QueryWrapper<DesignOrderItem>()
             .eq("order_id", order.getOrderId())
             .orderByAsc("id"));
+        Map<String, String> sceneNames = batchSceneNames(items.stream()
+            .map(DesignOrderItem::getSpaceTag)
+            .filter(code -> code != null && !code.isBlank())
+            .distinct()
+            .toList());
         List<OrderInviteItemResponse> itemResponses = items.stream().map(item -> {
             OrderInviteItemResponse r = new OrderInviteItemResponse();
             r.setProductName(item.getProductName());
@@ -253,6 +268,10 @@ public class OrderInviteService {
             r.setFinalPrice(item.getFinalPrice());
             if (item.getFinalPrice() != null && item.getQuantity() != null) {
                 r.setSubtotal(item.getFinalPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
+            }
+            if (item.getSpaceTag() != null && !item.getSpaceTag().isBlank()) {
+                r.setSpaceTag(item.getSpaceTag());
+                r.setSpaceTagName(sceneNames.getOrDefault(item.getSpaceTag(), item.getSpaceTag()));
             }
             return r;
         }).toList();
@@ -269,6 +288,25 @@ public class OrderInviteService {
         view.setConfirmedAt(order.getInviteConfirmedAt());
         view.setItems(itemResponses);
         return view;
+    }
+
+    /**
+     * 批量查询场景字典名称（category_dict dict_type=scene）。
+     *
+     * @param codes 场景字典码列表
+     * @return 场景码 → 场景名称映射
+     */
+    private Map<String, String> batchSceneNames(List<String> codes) {
+        if (codes.isEmpty()) {
+            return Map.of();
+        }
+        return categoryDictMapper.selectList(new QueryWrapper<CategoryDict>()
+                .eq("dict_type", "scene")
+                .in("dict_code", codes))
+            .stream().collect(Collectors.toMap(
+                CategoryDict::getDictCode,
+                CategoryDict::getDictName,
+                (a, b) -> a));
     }
 
     private byte[] hmac(String payload) {

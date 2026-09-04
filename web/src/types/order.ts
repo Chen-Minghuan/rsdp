@@ -49,6 +49,10 @@ export interface OrderItem {
   adjustPrice?: number | null
   /** 生效到手单价（adjustPrice 优先，其次 finalPrice） */
   effectivePrice?: number
+  /** 空间字典码（订单空间快照，可空） */
+  spaceTag?: string | null
+  /** 空间显示名（场景字典名；码已删时为码原文；无空间为 null） */
+  spaceTagName?: string | null
   factoryCode?: string
   /** 小计（到手单价 × 数量） */
   subtotal?: number
@@ -104,6 +108,10 @@ export interface OrderInviteItem {
   quantity?: number
   finalPrice?: number
   subtotal?: number
+  /** 空间字典码（订单空间快照，可空） */
+  spaceTag?: string | null
+  /** 空间显示名（场景字典名；码已删时为码原文；无空间为 null） */
+  spaceTagName?: string | null
 }
 
 /**

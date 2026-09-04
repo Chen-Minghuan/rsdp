@@ -12,6 +12,7 @@ import com.rsdp.dto.response.OrderItemResponse;
 import com.rsdp.dto.response.OrderListResponse;
 import com.rsdp.dto.response.OrderResponse;
 import com.rsdp.entity.DesignOrder;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.DesignOrderItem;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.Project;
@@ -23,6 +24,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ForbiddenException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.DesignOrderItemMapper;
+import com.rsdp.mapper.CategoryDictMapper;
 import com.rsdp.mapper.DesignOrderMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -76,6 +78,7 @@ public class OrderService {
     private final RskuSupplyMapper rskuSupplyMapper;
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
+    private final CategoryDictMapper categoryDictMapper;
     private final ProjectService projectService;
     private final ConfigService configService;
     private final CompanyService companyService;
@@ -191,6 +194,8 @@ public class OrderService {
             item.setRskuId(schemeItem.getRskuId());
             // 商品名称快照：完整商品名称（product_name）优先，空则回退定位标签（positioning_label）
             item.setProductName(rspu != null ? displayProductName(rspu) : null);
+            // 空间快照：方案明细的覆盖标签原样冻结（null=跟随产品推导，步骤 5）
+            item.setSpaceTag(schemeItem.getSpaceTag());
             item.setModel(rsku.getFactorySku());
             item.setImageId(primaryImageMap.get(schemeItem.getRspuId()));
             item.setQuantity(quantity);
@@ -281,11 +286,37 @@ public class OrderService {
         List<DesignOrderItem> items = designOrderItemMapper.selectList(
             new QueryWrapper<DesignOrderItem>().eq("order_id", orderId).orderByAsc("id"));
 
+        // 空间显示名批量翻译（场景字典；码已删回退码原文）
+        Map<String, String> sceneNames = batchSceneNames(items.stream()
+            .map(DesignOrderItem::getSpaceTag)
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList());
+
         OrderDetailResponse response = new OrderDetailResponse();
         copyBaseFields(toResponse(order), response);
-        response.setItems(items.stream().map(this::toItemResponse).toList());
+        response.setItems(items.stream().map(item -> toItemResponse(item, sceneNames)).toList());
         response.setPriceWarning(buildPriceWarning(items));
         return response;
+    }
+
+    /**
+     * 批量查询场景字典名称（category_dict dict_type=scene）。
+     *
+     * @param codes 场景字典码列表
+     * @return 场景码 → 场景名称映射
+     */
+    private Map<String, String> batchSceneNames(List<String> codes) {
+        if (codes.isEmpty()) {
+            return Map.of();
+        }
+        return categoryDictMapper.selectList(new QueryWrapper<CategoryDict>()
+                .eq("dict_type", "scene")
+                .in("dict_code", codes))
+            .stream().collect(java.util.stream.Collectors.toMap(
+                CategoryDict::getDictCode,
+                CategoryDict::getDictName,
+                (a, b) -> a));
     }
 
     /**
@@ -591,7 +622,7 @@ public class OrderService {
         target.setUpdatedAt(source.getUpdatedAt());
     }
 
-    private OrderItemResponse toItemResponse(DesignOrderItem item) {
+    private OrderItemResponse toItemResponse(DesignOrderItem item, Map<String, String> sceneNames) {
         OrderItemResponse response = new OrderItemResponse();
         response.setId(item.getId());
         response.setRspuId(item.getRspuId());
@@ -600,6 +631,10 @@ public class OrderService {
         response.setModel(item.getModel());
         response.setImageId(item.getImageId());
         response.setQuantity(item.getQuantity());
+        if (StringUtils.hasText(item.getSpaceTag())) {
+            response.setSpaceTag(item.getSpaceTag());
+            response.setSpaceTagName(sceneNames.getOrDefault(item.getSpaceTag(), item.getSpaceTag()));
+        }
         response.setOriginalPrice(item.getOriginalPrice());
         response.setFinalPrice(item.getFinalPrice());
         response.setAdjustPrice(item.getAdjustPrice());

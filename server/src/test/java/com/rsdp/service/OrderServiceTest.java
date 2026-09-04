@@ -79,6 +79,9 @@ class OrderServiceTest {
     private ImageAssetsMapper imageAssetsMapper;
 
     @Mock
+    private com.rsdp.mapper.CategoryDictMapper categoryDictMapper;
+
+    @Mock
     private ProjectService projectService;
 
     @Mock
@@ -136,6 +139,7 @@ class OrderServiceTest {
         item.setRskuId("RSKU-001");
         item.setFactoryCode("F001");
         item.setQuantity(2);
+        item.setSpaceTag("LIVING");
         when(schemeItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item));
         stubDataScope();
 
@@ -155,6 +159,10 @@ class OrderServiceTest {
         rspu.setRetailPrice(new BigDecimal("2500.00"));
         when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(rspu));
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        com.rsdp.entity.CategoryDict living = new com.rsdp.entity.CategoryDict();
+        living.setDictCode("LIVING");
+        living.setDictName("客厅");
+        when(categoryDictMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(living));
         when(configService.getOrderPriceRate()).thenReturn(new BigDecimal("0.8"));
         // 标准售价：RSPU 建议销售价 2500 优先
         when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("2500.00"));
@@ -203,6 +211,9 @@ class OrderServiceTest {
             assertThat(response.getItems().get(0).isBelowCost()).isFalse();
             assertThat(response.getItems().get(0).getProductName()).isEqualTo("像素沙发");
             assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo("4000.00");
+            // 空间快照：方案明细 space_tag 复制到订单项，显示名走场景字典翻译
+            assertThat(response.getItems().get(0).getSpaceTag()).isEqualTo("LIVING");
+            assertThat(response.getItems().get(0).getSpaceTagName()).isEqualTo("客厅");
         }
     }
 

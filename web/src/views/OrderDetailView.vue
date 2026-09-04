@@ -281,6 +281,7 @@ const itemColumns: DataTableColumns<OrderItem> = [
   },
   { title: '产品名称', key: 'productName', render: row => row.productName || '-' },
   { title: '型号', key: 'model', width: 120, render: row => row.model || '-' },
+  { title: '空间', key: 'spaceTagName', width: 100, render: row => row.spaceTagName || '-' },
   { title: '数量', key: 'quantity', width: 80, render: row => row.quantity ?? '-' },
   {
     title: '出厂单价',

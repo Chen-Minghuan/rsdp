@@ -36,6 +36,9 @@ class OrderInviteServiceTest {
     private DesignOrderItemMapper designOrderItemMapper;
 
     @Mock
+    private com.rsdp.mapper.CategoryDictMapper categoryDictMapper;
+
+    @Mock
     private OrderService orderService;
 
     private OrderInviteService inviteService;
@@ -43,7 +46,7 @@ class OrderInviteServiceTest {
     @BeforeEach
     void setUp() {
         inviteService = new OrderInviteService(
-            designOrderMapper, designOrderItemMapper, orderService,
+            designOrderMapper, designOrderItemMapper, categoryDictMapper, orderService,
             "test-secret-must-be-at-least-32-characters-long", 7);
     }
 
@@ -117,7 +120,7 @@ class OrderInviteServiceTest {
     @Test
     void getInviteView_expiredToken_shouldReject() {
         OrderInviteService shortLivedService = new OrderInviteService(
-            designOrderMapper, designOrderItemMapper, orderService,
+            designOrderMapper, designOrderItemMapper, categoryDictMapper, orderService,
             "test-secret-must-be-at-least-32-characters-long", -1);
         DesignOrder order = buildOrder();
         when(orderService.getAccessibleOrder("ORD-test0001")).thenReturn(order);
@@ -126,6 +129,70 @@ class OrderInviteServiceTest {
         assertThatThrownBy(() -> shortLivedService.getInviteView(invite.getToken()))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("已过期");
+    }
+
+    @Test
+    void getInviteView_shouldExposeSpaceTagWithDictName() {
+        // 空间快照透出：码 + 场景字典名（空间信息仅作分组展示，不含敏感信息）
+        DesignOrder order = buildOrder();
+        when(orderService.getAccessibleOrder("ORD-test0001")).thenReturn(order);
+        DesignOrderItem item = new DesignOrderItem();
+        item.setId(1L);
+        item.setOrderId("ORD-test0001");
+        item.setProductName("北欧实木餐椅");
+        item.setQuantity(4);
+        item.setFinalPrice(new BigDecimal("2499.75"));
+        item.setSpaceTag("LIVING");
+        when(designOrderItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item));
+        com.rsdp.entity.CategoryDict living = new com.rsdp.entity.CategoryDict();
+        living.setDictCode("LIVING");
+        living.setDictName("客厅");
+        when(categoryDictMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(living));
+        InviteTokenResponse invite = inviteService.createInvite("ORD-test0001");
+        when(designOrderMapper.selectById("ORD-test0001")).thenReturn(order);
+
+        OrderInviteViewResponse view = inviteService.getInviteView(invite.getToken());
+
+        assertThat(view.getItems().get(0).getSpaceTag()).isEqualTo("LIVING");
+        assertThat(view.getItems().get(0).getSpaceTagName()).isEqualTo("客厅");
+    }
+
+    @Test
+    void getInviteView_spaceTagNameShouldFallbackToCodeWhenDictDeleted() {
+        // 码已删：spaceTagName 回退码原文
+        DesignOrder order = buildOrder();
+        when(orderService.getAccessibleOrder("ORD-test0001")).thenReturn(order);
+        DesignOrderItem item = new DesignOrderItem();
+        item.setId(1L);
+        item.setOrderId("ORD-test0001");
+        item.setProductName("北欧实木餐椅");
+        item.setQuantity(1);
+        item.setFinalPrice(new BigDecimal("100.00"));
+        item.setSpaceTag("OLDSPACE");
+        when(designOrderItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item));
+        when(categoryDictMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        InviteTokenResponse invite = inviteService.createInvite("ORD-test0001");
+        when(designOrderMapper.selectById("ORD-test0001")).thenReturn(order);
+
+        OrderInviteViewResponse view = inviteService.getInviteView(invite.getToken());
+
+        assertThat(view.getItems().get(0).getSpaceTag()).isEqualTo("OLDSPACE");
+        assertThat(view.getItems().get(0).getSpaceTagName()).isEqualTo("OLDSPACE");
+    }
+
+    @Test
+    void getInviteView_noSpaceTag_shouldReturnNull() {
+        // 存量订单无空间快照：spaceTag/spaceTagName 均 null（前端走平铺兼容分支）
+        DesignOrder order = buildOrder();
+        when(orderService.getAccessibleOrder("ORD-test0001")).thenReturn(order);
+        mockItems();
+        InviteTokenResponse invite = inviteService.createInvite("ORD-test0001");
+        when(designOrderMapper.selectById("ORD-test0001")).thenReturn(order);
+
+        OrderInviteViewResponse view = inviteService.getInviteView(invite.getToken());
+
+        assertThat(view.getItems().get(0).getSpaceTag()).isNull();
+        assertThat(view.getItems().get(0).getSpaceTagName()).isNull();
     }
 
     @Test

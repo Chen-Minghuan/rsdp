@@ -99,6 +99,26 @@ const itemColumns: DataTableColumns<OrderInviteItem> = [
   { title: '小计', key: 'subtotal', width: 130, render: row => formatPrice(row.subtotal) }
 ]
 
+// ---------- 空间分组（步骤 5：任一明细带空间信息时按空间分组展示；存量订单保持平铺） ----------
+/** 任一明细带空间显示名时启用分组视图。 */
+const hasSpaceGroups = computed(() => (view.value?.items ?? []).some(item => item.spaceTagName))
+
+/** 按明细原顺序首次出现分组；无空间信息的明细归「其他」。 */
+const spaceGroups = computed(() => {
+  const map = new Map<string, OrderInviteItem[]>()
+  for (const item of view.value?.items ?? []) {
+    const key = item.spaceTagName || '其他'
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(item)
+  }
+  return [...map.entries()].map(([name, items]) => ({ name, items }))
+})
+
+/** 明细图片地址（邀请 token 免登录取图）。 */
+function itemImageUrl(imageId?: string): string | null {
+  return imageId ? `/api/v1/images/${imageId}?inviteToken=${encodeURIComponent(token.value)}` : null
+}
+
 onMounted(loadView)
 </script>
 
@@ -134,7 +154,36 @@ onMounted(loadView)
         </n-card>
 
         <n-card title="产品明细">
-          <n-data-table :columns="itemColumns" :data="view.items" :bordered="false" :single-line="false" />
+          <!-- 空间分组视图（任一明细带空间信息时启用；卡片式布局对手机端友好） -->
+          <template v-if="hasSpaceGroups">
+            <div v-for="group in spaceGroups" :key="group.name" class="space-group">
+              <div class="space-group-title">{{ group.name }}（{{ group.items.length }}）</div>
+              <div
+                v-for="(item, idx) in group.items"
+                :key="idx"
+                class="space-item"
+              >
+                <HoverZoomImage
+                  :src="itemImageUrl(item.imageId)"
+                  :width="56"
+                  :height="56"
+                  radius="8px"
+                  object-fit="contain"
+                  preview-disabled
+                />
+                <div class="space-item-body">
+                  <div class="space-item-name">{{ item.productName || '-' }}</div>
+                  <div class="space-item-meta">{{ item.model || '-' }} · x{{ item.quantity ?? '-' }}</div>
+                </div>
+                <div class="space-item-price">
+                  <div>{{ formatPrice(item.finalPrice) }}</div>
+                  <div class="space-item-subtotal">小计 {{ formatPrice(item.subtotal) }}</div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <!-- 存量订单（全部明细无空间信息）保持平铺表格 -->
+          <n-data-table v-else :columns="itemColumns" :data="view.items" :bordered="false" :single-line="false" />
           <n-space justify="end" style="margin-top: 16px;">
             <span style="font-size: 16px;">
               合计（到手价）：
@@ -167,5 +216,62 @@ onMounted(loadView)
   max-width: 960px;
   margin: 0 auto;
   padding: 24px 16px;
+}
+
+.space-group {
+  margin-bottom: 16px;
+}
+
+.space-group-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+  padding-left: 8px;
+  border-left: 3px solid var(--rsdp-primary);
+  margin-bottom: 10px;
+}
+
+.space-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rsdp-border);
+}
+
+.space-item:last-child {
+  border-bottom: none;
+}
+
+.space-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.space-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+}
+
+.space-item-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+
+.space-item-price {
+  text-align: right;
+  font-family: var(--rsdp-font-mono);
+  font-size: 13px;
+  color: var(--rsdp-text);
+  white-space: nowrap;
+}
+
+.space-item-subtotal {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--rsdp-price);
+  font-weight: 600;
 }
 </style>

@@ -17,6 +17,7 @@
             final_price,
             adjust_price,
             list_price,
+            space_tag,
             factory_code,
             snapshot_json,
             created_at
@@ -35,6 +36,7 @@
                 #{item.finalPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
                 #{item.adjustPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
                 #{item.listPrice},
+                #{item.spaceTag},
                 #{item.factoryCode},
                 #{item.snapshotJson, typeHandler=com.rsdp.config.typehandler.JsonbTypeHandler},
                 #{item.createdAt}

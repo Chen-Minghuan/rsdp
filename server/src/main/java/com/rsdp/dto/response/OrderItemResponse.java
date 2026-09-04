@@ -29,6 +29,10 @@ public class OrderItemResponse {
     private BigDecimal listPrice;
     /** 售价是否低于成本（清库存场景提示） */
     private boolean belowCost;
+    /** 空间字典码（订单空间快照，可空） */
+    private String spaceTag;
+    /** 空间显示名（场景字典名；码已删时为码原文；无空间为 null） */
+    private String spaceTagName;
     private String factoryCode;
     /** 小计（生效到手单价 × 数量） */
     private BigDecimal subtotal;
