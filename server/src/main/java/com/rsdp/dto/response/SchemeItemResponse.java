@@ -30,4 +30,6 @@ public class SchemeItemResponse {
     private String spaceTag;
     /** 空间显示名（生效码的场景字典名；码已从字典删除时原样返回码；无空间为 null） */
     private String spaceTagName;
+    /** 是否人工覆盖的空间标签（scheme_item.space_tag 非空；false=跟随产品推导） */
+    private boolean spaceTagOverridden;
 }

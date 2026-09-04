@@ -164,6 +164,8 @@ public class SchemeService {
             schemeItem.setMoq(rsku.getMoq());
             schemeItem.setQuantity(quantity);
             schemeItem.setSortOrder(itemRequest.getSortOrder() != null ? itemRequest.getSortOrder() : i);
+            schemeItem.setSpaceTag(StringUtils.hasText(itemRequest.getSpaceTag())
+                ? itemRequest.getSpaceTag().trim() : null);
             schemeItem.setCreatedAt(LocalDateTime.now());
             schemeItems.add(schemeItem);
         }
@@ -283,6 +285,8 @@ public class SchemeService {
             schemeItem.setMoq(rsku.getMoq());
             schemeItem.setQuantity(quantity);
             schemeItem.setSortOrder(itemRequest.getSortOrder() != null ? itemRequest.getSortOrder() : i);
+            schemeItem.setSpaceTag(StringUtils.hasText(itemRequest.getSpaceTag())
+                ? itemRequest.getSpaceTag().trim() : null);
             schemeItem.setCreatedAt(LocalDateTime.now());
             schemeItems.add(schemeItem);
         }
@@ -484,6 +488,7 @@ public class SchemeService {
             }
             item.setSpaceTag(StringUtils.hasText(code) ? code : null);
             item.setSpaceTagName(StringUtils.hasText(code) ? sceneNames.getOrDefault(code, code) : null);
+            item.setSpaceTagOverridden(overrideCodes.containsKey(item.getSchemeItemId()));
         });
 
         SchemeResponse response = new SchemeResponse();
@@ -614,6 +619,8 @@ public class SchemeService {
     /**
      * 套用模板创建新方案：复制方案项并取 RSKU 当前最新价，模板自身不被修改。
      *
+     * <p>复制内容包括数量、排序与空间覆盖标签（space_tag，模板价值 = 复用空间布局）。</p>
+     *
      * @param schemeId 模板方案 ID
      * @param request  套用请求（目标项目 + 可选新方案名）
      * @return 新方案详情与价格变动对比
@@ -697,6 +704,8 @@ public class SchemeService {
             item.setMoq(rsku.getMoq());
             item.setQuantity(quantity);
             item.setSortOrder(sortOrder++);
+            // 复制空间覆盖标签：模板价值 = 复用空间布局（B3）
+            item.setSpaceTag(templateItem.getSpaceTag());
             item.setCreatedAt(LocalDateTime.now());
             newItems.add(item);
         }

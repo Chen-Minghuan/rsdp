@@ -210,6 +210,8 @@ class FloorPlanMatchingServiceTest {
         assertThat(createCaptor.getValue().getRoomType()).isEqualTo("LIVING");
         assertThat(createCaptor.getValue().getItems()).hasSize(1);
         assertThat(createCaptor.getValue().getItems().get(0).getRspuId()).isEqualTo("RSPU-FIT");
+        // B4：按目标空间 roomType 映射场景字典码回填 space_tag（LIVING_ROOM → LIVING）
+        assertThat(createCaptor.getValue().getItems().get(0).getSpaceTag()).isEqualTo("LIVING");
         assertThat(createCaptor.getValue().getSchemeName()).startsWith("客厅方案-");
 
         ArgumentCaptor<Scheme> schemeCaptor = ArgumentCaptor.forClass(Scheme.class);
@@ -423,6 +425,10 @@ class FloorPlanMatchingServiceTest {
         assertThat(createCaptor.getValue().getItems())
             .extracting(SchemeItemRequest::getRspuId)
             .containsExactly("RSPU-SF", "RSPU-DT");
+        // B4：逐空间回填 space_tag——客厅 LIVING_ROOM → LIVING；餐厅 DINING_ROOM 无 scene 对应留空
+        assertThat(createCaptor.getValue().getItems())
+            .extracting(SchemeItemRequest::getSpaceTag)
+            .containsExactly("LIVING", null);
         verify(schemeMapper).updateById(org.mockito.ArgumentMatchers
             .argThat((Scheme s) -> "FPA-1".equals(s.getAnalysisId())));
     }

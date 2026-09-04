@@ -155,8 +155,8 @@ public class FloorPlanMatchingService {
      * <p>校验链：analysis 存在 → 归属（平台运营或创建者本人）→ 状态 confirmed →
      * room 属于该 analysis 且有尺寸。方案名自动生成「客厅方案-yyyyMMdd-HHmmss」，
      * 价格快照语义沿用 {@link SchemeService#createScheme}（取 RSKU 当前价落 scheme_item），
-     * scheme.analysis_id 回填溯源；方案项均为 LIVING 场景产品，详情页空间分区标签
-     * 由 scheme 体系按 RSPU 场景自动得出。</p>
+     * scheme.analysis_id 回填溯源；方案项按目标空间 roomType 映射场景字典码回填
+     * scheme_item.space_tag（B4，无对应码时留空跟随产品推导），详情页空间分区按覆盖标签分组。</p>
      *
      * <p>多空间（v3.0 §8 P2）：{@code roomIds} 非空时走
      * {@link #generateMultiRoomScheme}，逐空间按各自模板规则生成候选与 LLM 终审，
@@ -207,7 +207,8 @@ public class FloorPlanMatchingService {
         createRequest.setRoomType(ROOM_TYPE_LIVING);
         createRequest.setProjectId(request.getProjectId());
         createRequest.setBudgetLimit(request.getBudgetLimit());
-        createRequest.setItems(toSchemeItems(matchedItems));
+        // 按目标空间的 roomType 映射场景字典码回填 space_tag（B4；无对应码时留空跟随产品推导）
+        createRequest.setItems(toSchemeItems(matchedItems, roomTypeToSceneCode(room.getRoomType())));
 
         SchemeResponse created = schemeService.createScheme(createRequest);
 
@@ -238,7 +239,7 @@ public class FloorPlanMatchingService {
                                            FloorPlanSchemeRequest request,
                                            List<String> roomIds) {
         String analysisId = analysis.getAnalysisId();
-        List<SchemeItemResponse> mergedItems = new ArrayList<>();
+        List<SchemeItemRequest> mergedItems = new ArrayList<>();
         Set<String> seenRspuIds = new java.util.HashSet<>();
         for (String roomId : roomIds) {
             FloorPlanRoom room = roomMapper.selectById(roomId);
@@ -255,14 +256,20 @@ public class FloorPlanMatchingService {
                 throw new BusinessException(
                     "该空间类型暂不支持搭配（当前支持客厅/餐厅/卧室）: " + room.getRoomType());
             }
+            // 按各空间 roomType 映射场景字典码回填 space_tag（B4；无对应码时留空跟随产品推导）
+            String spaceTag = roomTypeToSceneCode(room.getRoomType());
             for (SchemeItemResponse item : matchRoomItems(room, template, request)) {
                 if (StringUtils.hasText(item.getRspuId()) && seenRspuIds.add(item.getRspuId())) {
-                    mergedItems.add(item);
+                    mergedItems.addAll(toSchemeItems(List.of(item), spaceTag));
                 }
             }
         }
         if (mergedItems.isEmpty()) {
             throw new BusinessException("没有满足各空间尺寸规则与报价要求的产品，无法生成方案");
+        }
+        // 跨空间合并后统一重排 sortOrder
+        for (int i = 0; i < mergedItems.size(); i++) {
+            mergedItems.get(i).setSortOrder(i);
         }
 
         SchemeCreateRequest createRequest = new SchemeCreateRequest();
@@ -270,7 +277,7 @@ public class FloorPlanMatchingService {
         createRequest.setRoomType(null); // 多空间方案不归属单一空间类型
         createRequest.setProjectId(request.getProjectId());
         createRequest.setBudgetLimit(request.getBudgetLimit());
-        createRequest.setItems(toSchemeItems(mergedItems));
+        createRequest.setItems(mergedItems);
 
         SchemeResponse created = schemeService.createScheme(createRequest);
 
@@ -333,8 +340,14 @@ public class FloorPlanMatchingService {
         }
     }
 
-    /** 终审结果 → scheme_item 请求列表（quantity=1，sortOrder 按顺序递增）。 */
-    private List<SchemeItemRequest> toSchemeItems(List<SchemeItemResponse> matchedItems) {
+    /**
+     * 终审结果 → scheme_item 请求列表（quantity=1，sortOrder 按顺序递增）。
+     *
+     * @param matchedItems 终审/兜底后的方案项
+     * @param spaceTag     空间覆盖标签（场景字典码，可空=跟随产品推导；B4 按目标空间回填）
+     * @return scheme_item 请求列表
+     */
+    private List<SchemeItemRequest> toSchemeItems(List<SchemeItemResponse> matchedItems, String spaceTag) {
         List<SchemeItemRequest> items = new ArrayList<>();
         int sortOrder = 0;
         for (SchemeItemResponse matchedItem : matchedItems) {
@@ -343,9 +356,35 @@ public class FloorPlanMatchingService {
             item.setRskuId(matchedItem.getRskuId());
             item.setQuantity(1);
             item.setSortOrder(sortOrder++);
+            item.setSpaceTag(spaceTag);
             items.add(item);
         }
         return items;
+    }
+
+    /**
+     * room_type 字典码 → 场景（scene）字典码映射（B4 户型图搭配回填 space_tag）。
+     *
+     * <p>两套字典码不同源（room_type：LIVING_ROOM/DINING_ROOM 等；scene：LIVING/BEDROOM 等），
+     * scene 字典暂无对应的空间类型（如 DINING_ROOM 餐厅、BAR、OUTDOOR）返回 {@code null}，
+     * 明细留空跟随产品场景推导，待 scene 字典补码后扩展映射。</p>
+     *
+     * @param roomType 户型图空间类型（room_type 字典码，可空）
+     * @return 场景字典码；无对应时返回 {@code null}
+     */
+    private static String roomTypeToSceneCode(String roomType) {
+        if (!StringUtils.hasText(roomType)) {
+            return null;
+        }
+        return switch (roomType) {
+            case "LIVING_ROOM" -> "LIVING";
+            case "BEDROOM" -> "BEDROOM";
+            case "STUDY_ROOM" -> "STUDY";
+            case "CAFE" -> "CAFE";
+            case "OFFICE_EXECUTIVE", "OFFICE_STAFF", "OFFICE_MEETING" -> "OFFICE";
+            case "HOTEL_ROOM" -> "HOTEL";
+            default -> null;
+        };
     }
 
     /** 按候选 ID 顺序回查 RSPU（保持规则引擎输出顺序）。 */

@@ -727,7 +727,8 @@ GET    /api/v1/schemes/{schemeId}
        # Response: SchemeResponse（含 projectId / isTemplate / templateTags）
        # 说明：items[].spaceTag 为生效的空间字典码（scheme_item.space_tag 覆盖优先，
        #   空则回退产品 rspu_scene 首场景码；无空间为 null）；items[].spaceTagName 为显示名
-       #   （覆盖/推导码的场景字典名，码已从字典删除时原样返回码，无空间为 null）
+       #   （覆盖/推导码的场景字典名，码已从字典删除时原样返回码，无空间为 null）；
+       #   items[].spaceTagOverridden 为是否人工覆盖（true=space_tag 非空，false=跟随产品推导）
 
 PUT    /api/v1/schemes/{schemeId}
        # 更新搭配方案（已实现）
@@ -774,7 +775,8 @@ POST   /api/v1/schemes/{schemeId}/copy-from-template
        # Request: { projectId, schemeName? }
        # Response: { scheme: SchemeResponse, priceChanges: [...], skippedRskuIds: [...] }
        # 说明：复制模板方案项，价格取 RSKU 当前最新价；与模板保存价的差异列入
-       #      priceChanges；已失效 RSKU 跳过并列入 skippedRskuIds；模板自身不修改
+       #      priceChanges；已失效 RSKU 跳过并列入 skippedRskuIds；模板自身不修改；
+       #      方案项的空间覆盖标签（space_tag）随明细一并复制（模板价值=复用空间布局）
 ```
 
 ### 设计项目

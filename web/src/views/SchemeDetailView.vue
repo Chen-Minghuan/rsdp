@@ -216,13 +216,6 @@ interface ZoneView {
 /** 前端暂存的空分区（无明细不落库；拖入卡片后随 reorder 生效，刷新后无人分区自然消失） */
 const extraZones = ref<{ code: string; name: string }[]>([])
 
-/**
- * 本次会话内被人工调整过分区的明细（用于「已调整」覆盖标记）。
- * 注意：后端 spaceTag 为生效码（覆盖/推导不可区分），跨会话的持久覆盖标记需后端补字段；
- * 刷新后以服务端数据为准，标记清空。
- */
-const overriddenItemIds = ref<Set<number>>(new Set())
-
 watch(scheme, (value) => {
   orderedItems.value = value ? [...value.items] : []
 }, { immediate: true })
@@ -253,11 +246,9 @@ const zones = computed<ZoneView[]>(() => {
   return [...grouped, ...empties]
 })
 
-function markOverridden(itemId: number, code: string | null) {
-  const next = new Set(overriddenItemIds.value)
-  if (code) next.add(itemId)
-  else next.delete(itemId)
-  overriddenItemIds.value = next
+function markOverridden(item: SchemeItem, code: string | null) {
+  // 乐观更新覆盖标记（持久值以服务端 spaceTagOverridden 为准）
+  item.spaceTagOverridden = code != null
 }
 
 function onDragStart(itemId: number) {
@@ -288,7 +279,7 @@ function onDropOnItem(target: SchemeItem) {
     moved.spaceTag = targetCode
     moved.spaceTagName = targetCode ? (target.spaceTagName ?? targetCode) : null
     spaceTags = { [moved.schemeItemId]: targetCode }
-    markOverridden(moved.schemeItemId, targetCode)
+    markOverridden(moved, targetCode)
   }
   orderedItems.value = list
   saveOrder(spaceTags)
@@ -316,7 +307,7 @@ function onDropOnZone(zone: ZoneView) {
   }
   list.splice(insertAt, 0, moved)
   orderedItems.value = list
-  markOverridden(moved.schemeItemId, zone.code)
+  markOverridden(moved, zone.code)
   saveOrder({ [moved.schemeItemId]: zone.code })
 }
 
@@ -517,9 +508,8 @@ async function loadDetail() {
   errorMessage.value = ''
   try {
     scheme.value = await getSchemeDetail(schemeId.value, { signal })
-    // 重新加载后：会话级空分区与覆盖标记以服务端数据为准
+    // 重新加载后：前端空分区以服务端数据为准
     extraZones.value = []
-    overriddenItemIds.value = new Set()
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载方案详情失败'
   } finally {
@@ -708,7 +698,7 @@ onBeforeRouteUpdate((to) => {
                         <div class="zone-item-name" :title="item.rspuName || item.rspuId">
                           {{ item.rspuName || item.rspuId }}
                           <n-tag
-                            v-if="overriddenItemIds.has(item.schemeItemId)"
+                            v-if="item.spaceTagOverridden"
                             size="tiny"
                             type="warning"
                             style="margin-left: 4px;"

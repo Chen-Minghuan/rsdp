@@ -47,6 +47,8 @@ export interface SchemeItem {
   spaceTag?: string | null
   /** 空间显示名（场景字典名；码已删时为码原文；无空间为 null） */
   spaceTagName?: string | null
+  /** 是否人工覆盖的空间标签（false=跟随产品推导；用于「已调整」标记） */
+  spaceTagOverridden?: boolean
   sortOrder: number
 }
 

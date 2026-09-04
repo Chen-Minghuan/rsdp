@@ -558,6 +558,7 @@ class SchemeServiceTest {
         tplItem.setFactoryCode("F001");
         tplItem.setFactoryPrice(new BigDecimal("2000"));
         tplItem.setQuantity(1);
+        tplItem.setSpaceTag("BEDROOM");
         when(schemeItemMapper.selectList(any())).thenReturn(List.of(tplItem));
 
         RskuSupply rsku = new RskuSupply();
@@ -608,6 +609,11 @@ class SchemeServiceTest {
 
         // 模板自身不被修改
         verify(schemeMapper, never()).updateById(any(Scheme.class));
+
+        // 空间覆盖标签随明细复制（模板价值 = 复用空间布局，B3）
+        ArgumentCaptor<List<SchemeItem>> itemsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(schemeItemMapper).insertBatchSafe(itemsCaptor.capture());
+        assertThat(itemsCaptor.getValue().get(0).getSpaceTag()).isEqualTo("BEDROOM");
     }
 
     @Test
@@ -947,6 +953,7 @@ class SchemeServiceTest {
 
         assertThat(response.getItems().get(0).getSpaceTag()).isEqualTo("BEDROOM");
         assertThat(response.getItems().get(0).getSpaceTagName()).isEqualTo("卧室");
+        assertThat(response.getItems().get(0).isSpaceTagOverridden()).isTrue();
     }
 
     @Test
@@ -961,6 +968,7 @@ class SchemeServiceTest {
 
         assertThat(response.getItems().get(0).getSpaceTag()).isEqualTo("LIVING");
         assertThat(response.getItems().get(0).getSpaceTagName()).isEqualTo("客厅");
+        assertThat(response.getItems().get(0).isSpaceTagOverridden()).isFalse();
     }
 
     @Test
