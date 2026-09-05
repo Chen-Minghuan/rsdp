@@ -55,6 +55,21 @@ export interface SchemeItem {
 }
 
 /**
+ * 搭配画布单项布局（x/y 为 0~1 相对坐标，scale 缩放倍率，z 层级）。
+ */
+export interface CanvasLayoutItem {
+  x: number
+  y: number
+  scale: number
+  z: number
+}
+
+/**
+ * 搭配画布布局（schemeItemId → 布局项）。
+ */
+export type CanvasLayout = Record<string, CanvasLayoutItem>
+
+/**
  * 搭配方案详情。
  */
 export interface Scheme {
@@ -73,6 +88,8 @@ export interface Scheme {
   createdBy: string
   createdAt: string
   items: SchemeItem[]
+  /** 搭配画布布局（后端可能返回 JSON 字符串或已解析对象，前端解析时兼容两种） */
+  canvasLayout?: string | CanvasLayout | null
 }
 
 /**

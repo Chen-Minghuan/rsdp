@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.QuoteItemRequest;
+import com.rsdp.dto.request.SaveCanvasLayoutRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
 import com.rsdp.dto.request.SchemeTemplateRequest;
@@ -50,6 +51,7 @@ import org.springframework.security.core.userdetails.User;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -1150,5 +1152,157 @@ class SchemeServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("不属于本方案");
         verify(schemeItemMapper, never()).update(any(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class));
+    }
+
+    // ==================== 画布布局（搭配画布，V41） ====================
+
+    private SaveCanvasLayoutRequest.CanvasPosition pos(double x, double y, double scale, Integer z) {
+        SaveCanvasLayoutRequest.CanvasPosition p = new SaveCanvasLayoutRequest.CanvasPosition();
+        p.setX(x);
+        p.setY(y);
+        p.setScale(scale);
+        p.setZ(z);
+        return p;
+    }
+
+    private void stubCanvasDetailFixtures(Scheme scheme, List<SchemeItem> items) {
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(items);
+        // 详情回查相关 stub
+        lenient().when(rspuMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(factoryMasterMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(rspuSceneMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(categoryDictMapper.selectList(any())).thenReturn(List.of());
+    }
+
+    @Test
+    void saveCanvasLayout_shouldPersistLayout() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试方案");
+        scheme.setCreatedBy("testuser");
+        stubCanvasDetailFixtures(scheme, List.of(reorderItem(1L), reorderItem(2L)));
+
+        Map<String, SaveCanvasLayoutRequest.CanvasPosition> layout = new java.util.LinkedHashMap<>();
+        layout.put("1", pos(0.12, 0.30, 1.0, 1));
+        layout.put("2", pos(0.50, 0.60, 1.5, 2));
+
+        SchemeResponse response = schemeService.saveCanvasLayout("SCHEME-001", layout, "testuser");
+
+        ArgumentCaptor<Scheme> captor = ArgumentCaptor.forClass(Scheme.class);
+        verify(schemeMapper).updateById(captor.capture());
+        String json = captor.getValue().getCanvasLayout();
+        assertThat(json).contains("\"1\"").contains("\"x\":0.12").contains("\"scale\":1.5");
+        assertThat(response.getCanvasLayout()).isEqualTo(json);
+        verify(auditLogService).logUpdate(eq("scheme"), eq("SCHEME-001"), any(), any(Scheme.class), eq("testuser"));
+    }
+
+    @Test
+    void saveCanvasLayout_shouldRejectUnknownItemKey() {
+        // 布局 key 必须是本方案现存（未软删）明细，否则整体报错不落库
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("testuser");
+        stubCanvasDetailFixtures(scheme, List.of(reorderItem(1L)));
+
+        Map<String, SaveCanvasLayoutRequest.CanvasPosition> layout = new java.util.LinkedHashMap<>();
+        layout.put("1", pos(0.1, 0.1, 1.0, 1));
+        layout.put("99", pos(0.5, 0.5, 1.0, 2));
+
+        assertThatThrownBy(() -> schemeService.saveCanvasLayout("SCHEME-001", layout, "testuser"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不属于本方案");
+        verify(schemeMapper, never()).updateById(any(Scheme.class));
+    }
+
+    @Test
+    void saveCanvasLayout_shouldClearLayoutWhenNullOrEmpty() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("testuser");
+        scheme.setCanvasLayout("{\"1\":{\"x\":0.1,\"y\":0.2,\"scale\":1.0,\"z\":1}}");
+        stubCanvasDetailFixtures(scheme, List.of(reorderItem(1L)));
+
+        // 传 null 清空
+        schemeService.saveCanvasLayout("SCHEME-001", null, "testuser");
+        ArgumentCaptor<Scheme> captor = ArgumentCaptor.forClass(Scheme.class);
+        verify(schemeMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getCanvasLayout()).isNull();
+
+        // 传空 Map 同样清空
+        scheme.setCanvasLayout("{\"1\":{\"x\":0.1}}");
+        schemeService.saveCanvasLayout("SCHEME-001", Map.of(), "testuser");
+        verify(schemeMapper, times(2)).updateById(captor.capture());
+        assertThat(captor.getValue().getCanvasLayout()).isNull();
+    }
+
+    @Test
+    void saveCanvasLayout_shouldRejectNonOwner() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("otheruser");
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+
+        assertThatThrownBy(() -> schemeService.saveCanvasLayout(
+                "SCHEME-001", Map.of("1", pos(0.1, 0.1, 1.0, 1)), "otheruser"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无权操作");
+        verify(schemeMapper, never()).updateById(any(Scheme.class));
+    }
+
+    @Test
+    void saveCanvasLayout_shouldThrowWhenSchemeNotFound() {
+        when(schemeMapper.selectById("SCHEME-NONE")).thenReturn(null);
+
+        assertThatThrownBy(() -> schemeService.saveCanvasLayout("SCHEME-NONE", null, "testuser"))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void updateScheme_shouldClearCanvasLayoutWhenItemsReplaced() {
+        // 删项联动清理（V41）：整体替换明细后旧 scheme_item_id 全部失效，画布布局同步清空
+        Scheme existingScheme = new Scheme();
+        existingScheme.setSchemeId("SCHEME-001");
+        existingScheme.setSchemeName("旧方案");
+        existingScheme.setStatus("active");
+        existingScheme.setCreatedBy("testuser");
+        existingScheme.setCanvasLayout("{\"1\":{\"x\":0.12,\"y\":0.30,\"scale\":1.0,\"z\":1}}");
+
+        SchemeItemRequest itemRequest = new SchemeItemRequest();
+        itemRequest.setRspuId("RSPU-001");
+        itemRequest.setRskuId("RSKU-002");
+
+        SchemeUpdateRequest request = new SchemeUpdateRequest();
+        request.setSchemeName("更新后方案");
+        request.setItems(List.of(itemRequest));
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-002");
+        rsku.setRspuId("RSPU-001");
+        rsku.setFactoryCode("F002");
+
+        SchemeItem savedItem = new SchemeItem();
+        savedItem.setSchemeItemId(2L);
+        savedItem.setSchemeId("SCHEME-001");
+        savedItem.setRspuId("RSPU-001");
+        savedItem.setRskuId("RSKU-002");
+        savedItem.setFactoryCode("F002");
+
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(existingScheme);
+        when(rskuSupplyMapper.selectById("RSKU-002")).thenReturn(rsku);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(savedItem));
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(schemeMapper.selectCount(any())).thenReturn(0L);
+
+        SchemeResponse response = schemeService.updateScheme("SCHEME-001", request);
+
+        assertThat(existingScheme.getCanvasLayout()).isNull();
+        assertThat(response.getCanvasLayout()).isNull();
+        verify(schemeMapper).updateById(existingScheme);
     }
 }

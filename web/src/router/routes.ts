@@ -158,6 +158,12 @@ export const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
   },
   {
+    path: '/schemes/:schemeId/canvas',
+    name: 'SchemeCanvas',
+    component: () => import('@/views/SchemeCanvasView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_READ] }
+  },
+  {
     path: '/schemes/:schemeId',
     name: 'SchemeDetail',
     component: () => import('@/views/SchemeDetailView.vue'),

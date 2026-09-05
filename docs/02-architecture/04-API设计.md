@@ -726,8 +726,10 @@ GET    /api/v1/schemes
 
 GET    /api/v1/schemes/{schemeId}
        # 查询搭配方案详情（已实现）
-       # Response: SchemeResponse（含 projectId / isTemplate / templateTags）
-       # 说明：items[].spaceTag 为生效的空间字典码（scheme_item.space_tag 覆盖优先，
+       # Response: SchemeResponse（含 projectId / isTemplate / templateTags / canvasLayout）
+       # 说明：canvasLayout 为搭配画布布局（V41，{ "<schemeItemId>": { x, y, scale, z } }，
+       #   无布局时为 null，前端首次进入按空间分区自动平铺）；
+       #   items[].spaceTag 为生效的空间字典码（scheme_item.space_tag 覆盖优先，
        #   空则回退产品 rspu_scene 首场景码；无空间为 null）；items[].spaceTagName 为显示名
        #   （覆盖/推导码的场景字典名，码已从字典删除时原样返回码，无空间为 null）；
        #   items[].spaceTagOverridden 为是否人工覆盖（true=space_tag 非空，false=跟随产品推导）
@@ -775,6 +777,16 @@ PUT    /api/v1/schemes/{schemeId}/items/reorder
        #     （兼容纯排序调用）；覆盖码不强制校验字典存在（允许先拖入后建字典的兜底）
        # Response: SchemeResponse（items 按 sort_order 升序，含 spaceTag/spaceTagName 空间分区标签）
        # 说明：排序 + 空间覆盖在同一事务内提交，要么都成功要么整体回滚
+
+PUT    /api/v1/schemes/{schemeId}/canvas-layout
+       # 保存搭配画布布局（V41，需 scheme:update + 方案归属）
+       # Request: { layout: { "<schemeItemId>": { x, y, scale, z } } }
+       #   layout 键必须全部为该方案现存明细 ID，否则报错；空对象/null = 清空画布布局
+       #   x/y 为 0~1 相对画布坐标（换屏幕不变形），scale 缩放（前端钳制 0.3~3），z 层级
+       # Response: SchemeResponse（含 canvasLayout）
+       # 说明：方案项被移除时自动从 canvas_layout 剔除对应 key（联动清理）；
+       #   搭配画布前端页面 /schemes/{schemeId}/canvas 使用
+       #   （白底画布拖拽摆位，首次进入按空间分区自动平铺）
 
 POST   /api/v1/schemes/{schemeId}/copy-from-template
        # 套用模板创建新方案（已实现，需 scheme:create）

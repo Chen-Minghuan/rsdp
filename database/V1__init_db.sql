@@ -430,6 +430,7 @@ CREATE TABLE IF NOT EXISTS scheme (
     is_template BOOLEAN NOT NULL DEFAULT false,      -- 是否为方案模板（V4 并入）
     template_tags TEXT,                              -- 模板标签 JSON 数组（V4 并入）
     analysis_id VARCHAR(64),                         -- 来源户型图分析批次，可空（V36 并入）
+    canvas_layout JSONB,                             -- 画布布局（搭配画布，V41 并入）：{"<schemeItemId>":{x,y,scale,z}}
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,

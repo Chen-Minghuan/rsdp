@@ -599,6 +599,9 @@ onBeforeRouteUpdate((to) => {
           <n-button v-if="canEditScheme" size="small" @click="router.push(`/quotes/build?editSchemeId=${schemeId}`)">
             编辑方案
           </n-button>
+          <n-button size="small" @click="router.push(`/schemes/${schemeId}/canvas`)">
+            搭配画布
+          </n-button>
           <template v-if="scheme">
             <n-button v-if="canEditScheme && !scheme.isTemplate" size="small" @click="openTemplateModal">
               设为模板

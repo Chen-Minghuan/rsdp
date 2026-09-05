@@ -1,5 +1,6 @@
 package com.rsdp.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonRawValue;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -24,6 +25,11 @@ public class SchemeResponse {
     private String projectId;
     private Boolean isTemplate;
     private List<String> templateTags;
+
+    /** 画布布局 JSON（搭配画布，V41）：{"<schemeItemId>":{x,y,scale,z}}，可空=未保存画布布局。 */
+    @JsonRawValue
+    private String canvasLayout;
+
     private String createdBy;
     private LocalDateTime createdAt;
     private List<SchemeItemResponse> items;

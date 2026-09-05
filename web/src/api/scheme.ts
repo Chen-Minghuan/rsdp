@@ -5,7 +5,8 @@ import type {
   SchemeSummary,
   SchemeUpdateRequest,
   CopyFromTemplateRequest,
-  CopyFromTemplateResponse
+  CopyFromTemplateResponse,
+  CanvasLayout
 } from '@/types/scheme'
 import type { PageResult } from '@/types/product'
 import type { QuoteResponse, QuoteMode } from '@/types/quote'
@@ -87,6 +88,17 @@ export async function getSchemeDetail(schemeId: string, options?: ApiOptions): P
  */
 export async function deleteScheme(schemeId: string, options?: ApiOptions): Promise<void> {
   await apiClient.delete<ApiResult<void>>(`/v1/schemes/${schemeId}`, { signal: options?.signal })
+}
+
+/**
+ * 保存方案搭配画布布局（仅保存布局，不动方案明细）。
+ *
+ * @param schemeId 方案 ID
+ * @param layout   画布布局（schemeItemId → {x, y, scale, z}）
+ * @param options  请求选项
+ */
+export async function saveCanvasLayout(schemeId: string, layout: CanvasLayout, options?: ApiOptions): Promise<void> {
+  await apiClient.put<ApiResult<void>>(`/v1/schemes/${schemeId}/canvas-layout`, { layout }, { signal: options?.signal })
 }
 
 /**

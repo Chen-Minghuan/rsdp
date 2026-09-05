@@ -3,6 +3,7 @@ package com.rsdp.controller;
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
+import com.rsdp.dto.request.SaveCanvasLayoutRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemReorderRequest;
 import com.rsdp.dto.request.SchemeQuoteRequest;
@@ -12,6 +13,7 @@ import com.rsdp.dto.response.CopyFromTemplateResponse;
 import com.rsdp.dto.response.QuoteResponse;
 import com.rsdp.dto.response.SchemeResponse;
 import com.rsdp.dto.response.SchemeSummaryResponse;
+import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.SchemeService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -111,6 +113,22 @@ public class SchemeController {
         @PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
         @Valid @RequestBody SchemeItemReorderRequest request) {
         return Result.ok(schemeService.reorderItems(schemeId, request));
+    }
+
+    /**
+     * 保存方案画布布局（搭配画布）：layout 为明细 ID 字符串 → 位置/缩放/层级的映射，
+     * 传 null 或空对象表示清空画布布局。
+     *
+     * @param schemeId 方案 ID
+     * @param request  画布布局请求
+     * @return 更新后的方案详情
+     */
+    @PutMapping("/{schemeId}/canvas-layout")
+    public Result<SchemeResponse> saveCanvasLayout(
+        @PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
+        @Valid @RequestBody SaveCanvasLayoutRequest request) {
+        return Result.ok(schemeService.saveCanvasLayout(
+            schemeId, request.getLayout(), SecurityOperatorContext.currentUsername()));
     }
 
     /**

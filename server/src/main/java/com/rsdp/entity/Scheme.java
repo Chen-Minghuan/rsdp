@@ -38,6 +38,11 @@ public class Scheme {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String templateTags;
 
+    /** 画布布局 JSON（搭配画布，V41）：{"<schemeItemId>":{x,y,scale,z}}，可空=未保存画布布局。 */
+    @JsonRawValue
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String canvasLayout;
+
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

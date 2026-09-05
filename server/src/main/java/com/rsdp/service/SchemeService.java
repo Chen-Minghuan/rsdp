@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.CopyFromTemplateRequest;
 import com.rsdp.dto.request.QuoteItemRequest;
+import com.rsdp.dto.request.SaveCanvasLayoutRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemReorderRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
@@ -303,6 +304,8 @@ public class SchemeService {
         schemeItemMapper.delete(
             new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId)
         );
+        // 联动清理画布布局（V41）：旧明细被整体替换、scheme_item_id 全部失效，剔除失效摆位键
+        pruneCanvasLayout(scheme, Collections.emptySet());
 
         scheme.setSchemeName(request.getSchemeName().trim());
         scheme.setRoomType(request.getRoomType());
@@ -381,6 +384,7 @@ public class SchemeService {
         copy.setStatus(source.getStatus());
         copy.setIsTemplate(source.getIsTemplate());
         copy.setTemplateTags(source.getTemplateTags());
+        copy.setCanvasLayout(source.getCanvasLayout());
         copy.setCreatedBy(source.getCreatedBy());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
@@ -505,6 +509,7 @@ public class SchemeService {
         response.setProjectId(scheme.getProjectId());
         response.setIsTemplate(scheme.getIsTemplate());
         response.setTemplateTags(fromJson(scheme.getTemplateTags()));
+        response.setCanvasLayout(scheme.getCanvasLayout());
         response.setCreatedBy(scheme.getCreatedBy());
         response.setCreatedAt(scheme.getCreatedAt());
         response.setItems(itemResponses);
@@ -584,6 +589,73 @@ public class SchemeService {
         schemeMapper.updateById(scheme);
         auditLogService.logUpdate("scheme", schemeId, oldSnapshot, scheme, currentUsername());
         return getSchemeDetail(schemeId);
+    }
+
+    /**
+     * 保存方案画布布局（搭配画布，V41）：将前端画布摆位持久化到 scheme.canvas_layout。
+     *
+     * <p>layout 的每个 key 必须是该方案现存（未软删）的 scheme_item_id 字符串，
+     * 否则整体报错不落库；layout 为 {@code null} 或空 Map 时清空画布布局。</p>
+     *
+     * @param schemeId 方案 ID
+     * @param layout   画布布局（明细 ID 字符串 → 位置/缩放/层级；可空 = 清空）
+     * @param operator 操作人用户名（审计日志）
+     * @return 更新后的方案详情
+     */
+    @Transactional
+    public SchemeResponse saveCanvasLayout(String schemeId,
+                                           Map<String, SaveCanvasLayoutRequest.CanvasPosition> layout,
+                                           String operator) {
+        Scheme scheme = schemeMapper.selectById(schemeId);
+        if (scheme == null) {
+            throw new ResourceNotFoundException("方案不存在: " + schemeId);
+        }
+        assertSchemeOwnerOrAdmin(scheme);
+        Scheme oldSnapshot = snapshot(scheme);
+
+        if (layout == null || layout.isEmpty()) {
+            // 清空画布布局
+            scheme.setCanvasLayout(null);
+        } else {
+            List<SchemeItem> items = schemeItemMapper.selectList(
+                new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId));
+            Set<String> existingIds = items.stream()
+                .map(item -> String.valueOf(item.getSchemeItemId()))
+                .collect(Collectors.toSet());
+            if (!existingIds.containsAll(layout.keySet())) {
+                throw new BusinessException("画布布局包含不属于本方案的明细");
+            }
+            scheme.setCanvasLayout(toJson(layout));
+        }
+        scheme.setUpdatedAt(LocalDateTime.now());
+        schemeMapper.updateById(scheme);
+        auditLogService.logUpdate("scheme", schemeId, oldSnapshot, scheme, operator);
+        return getSchemeDetail(schemeId);
+    }
+
+    /**
+     * 清理画布布局中的失效摆位键（V41 联动清理）：剔除不在存活明细 ID 集合中的 key，
+     * 清理后为空则置 {@code null}；存量脏数据无法解析时防御性清空。
+     *
+     * @param scheme       方案实体（仅修改内存对象，由调用方负责落库）
+     * @param validItemIds 存活明细 ID 集合（scheme_item_id 字符串）
+     */
+    private void pruneCanvasLayout(Scheme scheme, Set<String> validItemIds) {
+        if (!StringUtils.hasText(scheme.getCanvasLayout())) {
+            return;
+        }
+        try {
+            Map<String, Object> layout = objectMapper.readValue(
+                scheme.getCanvasLayout(), new TypeReference<Map<String, Object>>() {
+                });
+            boolean changed = layout.keySet().removeIf(key -> !validItemIds.contains(key));
+            if (changed) {
+                scheme.setCanvasLayout(layout.isEmpty() ? null : toJson(layout));
+            }
+        } catch (JsonProcessingException e) {
+            // 存量脏数据防御：无法解析的布局直接清空，避免脏数据长期残留
+            scheme.setCanvasLayout(null);
+        }
     }
 
     /**

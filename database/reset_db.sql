@@ -523,6 +523,7 @@ CREATE TABLE IF NOT EXISTS scheme (
     is_template BOOLEAN NOT NULL DEFAULT false,
     template_tags TEXT,
     analysis_id VARCHAR(64),
+    canvas_layout JSONB,        -- 画布布局（搭配画布，V41 并入）
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
