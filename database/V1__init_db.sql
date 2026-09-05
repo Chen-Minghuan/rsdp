@@ -431,6 +431,8 @@ CREATE TABLE IF NOT EXISTS scheme (
     template_tags TEXT,                              -- 模板标签 JSON 数组（V4 并入）
     analysis_id VARCHAR(64),                         -- 来源户型图分析批次，可空（V36 并入）
     canvas_layout JSONB,                             -- 画布布局（搭配画布，V41 并入）：{"<schemeItemId>":{x,y,scale,z}}
+    share_enabled BOOLEAN NOT NULL DEFAULT false,    -- 方案分享开关（V42 并入）
+    share_expire_at TIMESTAMP,                       -- 方案分享过期时间（V42 并入，NULL=永久有效）
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,

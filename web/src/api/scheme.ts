@@ -6,7 +6,9 @@ import type {
   SchemeUpdateRequest,
   CopyFromTemplateRequest,
   CopyFromTemplateResponse,
-  CanvasLayout
+  CanvasLayout,
+  SchemeSharePayload,
+  SchemeShareView
 } from '@/types/scheme'
 import type { PageResult } from '@/types/product'
 import type { QuoteResponse, QuoteMode } from '@/types/quote'
@@ -99,6 +101,41 @@ export async function deleteScheme(schemeId: string, options?: ApiOptions): Prom
  */
 export async function saveCanvasLayout(schemeId: string, layout: CanvasLayout, options?: ApiOptions): Promise<void> {
   await apiClient.put<ApiResult<void>>(`/v1/schemes/${schemeId}/canvas-layout`, { layout }, { signal: options?.signal })
+}
+
+/**
+ * 设置方案分享开关。
+ *
+ * @param schemeId 方案 ID
+ * @param payload  分享开关 + 有效期天数（空=永久）
+ * @returns 更新后的方案
+ */
+export async function updateSchemeShare(schemeId: string, payload: SchemeSharePayload): Promise<Scheme> {
+  const { data: result } = await apiClient.put<ApiResult<Scheme>>(`/v1/schemes/${schemeId}/share`, payload)
+  return result.data
+}
+
+/**
+ * 获取方案分享公开视图（免登录）。
+ *
+ * @param schemeId 方案 ID
+ * @returns 分享视图
+ */
+export async function getSharedScheme(schemeId: string): Promise<SchemeShareView> {
+  const { data: result } = await apiClient.get<ApiResult<SchemeShareView>>(`/v1/public/schemes/${schemeId}`)
+  return result.data
+}
+
+/**
+ * 获取项目分享内的方案公开视图（免登录）。
+ *
+ * @param projectId 项目 ID
+ * @param schemeId  方案 ID
+ * @returns 分享视图
+ */
+export async function getSharedProjectScheme(projectId: string, schemeId: string): Promise<SchemeShareView> {
+  const { data: result } = await apiClient.get<ApiResult<SchemeShareView>>(`/v1/public/projects/${projectId}/schemes/${schemeId}`)
+  return result.data
 }
 
 /**

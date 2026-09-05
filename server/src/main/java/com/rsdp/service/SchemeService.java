@@ -16,6 +16,7 @@ import com.rsdp.dto.request.SaveCanvasLayoutRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemReorderRequest;
 import com.rsdp.dto.request.SchemeItemRequest;
+import com.rsdp.dto.request.SchemeShareRequest;
 import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
 import com.rsdp.dto.response.CopyFromTemplateResponse;
@@ -385,6 +386,8 @@ public class SchemeService {
         copy.setIsTemplate(source.getIsTemplate());
         copy.setTemplateTags(source.getTemplateTags());
         copy.setCanvasLayout(source.getCanvasLayout());
+        copy.setShareEnabled(source.getShareEnabled());
+        copy.setShareExpireAt(source.getShareExpireAt());
         copy.setCreatedBy(source.getCreatedBy());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
@@ -510,6 +513,8 @@ public class SchemeService {
         response.setIsTemplate(scheme.getIsTemplate());
         response.setTemplateTags(fromJson(scheme.getTemplateTags()));
         response.setCanvasLayout(scheme.getCanvasLayout());
+        response.setShareEnabled(scheme.getShareEnabled());
+        response.setShareExpireAt(scheme.getShareExpireAt());
         response.setCreatedBy(scheme.getCreatedBy());
         response.setCreatedAt(scheme.getCreatedAt());
         response.setItems(itemResponses);
@@ -656,6 +661,37 @@ public class SchemeService {
             // 存量脏数据防御：无法解析的布局直接清空，避免脏数据长期残留
             scheme.setCanvasLayout(null);
         }
+    }
+
+    /**
+     * 设置方案分享开关（V42）。仅方案创建人或 ADMIN。
+     *
+     * <p>开启时按 expireDays 计算 share_expire_at（为空=永久有效）；关闭时清空过期时间。
+     * 字段语义与项目分享（ProjectService.updateShare）保持一致。</p>
+     *
+     * @param schemeId 方案 ID
+     * @param request  分享请求（开关 + 有效期天数，空=永久）
+     * @return 更新后的方案详情
+     */
+    @Transactional
+    public SchemeResponse updateSchemeShare(String schemeId, SchemeShareRequest request) {
+        Scheme scheme = schemeMapper.selectById(schemeId);
+        if (scheme == null) {
+            throw new ResourceNotFoundException("方案不存在: " + schemeId);
+        }
+        assertSchemeOwnerOrAdmin(scheme);
+        Scheme oldSnapshot = snapshot(scheme);
+
+        scheme.setShareEnabled(request.getShareEnabled());
+        if (Boolean.TRUE.equals(request.getShareEnabled()) && request.getExpireDays() != null) {
+            scheme.setShareExpireAt(LocalDateTime.now().plusDays(request.getExpireDays()));
+        } else {
+            scheme.setShareExpireAt(null);
+        }
+        scheme.setUpdatedAt(LocalDateTime.now());
+        schemeMapper.updateById(scheme);
+        auditLogService.logUpdate("scheme", schemeId, oldSnapshot, scheme, currentUsername());
+        return getSchemeDetail(schemeId);
     }
 
     /**

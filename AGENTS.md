@@ -312,6 +312,7 @@ make clean
   - `V39__pricing_rule.sql`：价格体系 P3 后端（pricing_rule 品类级加价倍率表[category_code 唯一] + pricing:update 权限点[仅 ADMIN]；售价解析链升级为 retail_price → 成本×品类倍率 → 成本×全局倍率）
   - `V40__scheme_space_tag.sql`：方案项级空间标签（scheme_item.space_tag 空间覆盖标签[场景字典码，可空=跟随产品 rspu_scene 首场景推导] + design_order_item.space_tag 订单空间快照；空间设计画布方案 A，存量为 NULL 行为不变）
   - `V41__scheme_canvas_layout.sql`：方案画布布局（scheme.canvas_layout JSONB，搭配画布摆位持久化：{"<schemeItemId>":{x,y,scale,z}}，存量为 NULL 行为不变）
+  - `V42__scheme_share.sql`：方案级分享（scheme.share_enabled + share_expire_at，免登录公开只读 /api/v1/public/schemes/{schemeId}，有效期 NULL=永久；存量默认关闭行为不变）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **重置脚本**：`database/reset_db.sql`
 - **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。

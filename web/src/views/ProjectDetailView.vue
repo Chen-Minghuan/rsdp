@@ -69,7 +69,7 @@ const selectedTemplateId = ref<string | null>(null)
 const copySchemeName = ref('')
 const copying = ref(false)
 
-// 画布分享弹窗（阶段 9）
+// 项目分享弹窗（阶段 9）
 const showShareModal = ref(false)
 const shareEnabled = ref(false)
 const shareExpireDays = ref<number | null>(null)
@@ -263,7 +263,7 @@ onMounted(async () => {
     <template #actions>
       <n-button @click="router.push('/projects')">返回项目列表</n-button>
       <n-button v-if="canUpdateProject && project" @click="openEditModal">编辑项目</n-button>
-      <n-button v-if="canUpdateProject && project" @click="openShareModal">分享画布</n-button>
+      <n-button v-if="canUpdateProject && project" @click="openShareModal">分享项目</n-button>
     </template>
 
     <n-alert v-if="errorMessage" type="error" :show-icon="true" style="margin-bottom: 12px;">
@@ -316,8 +316,8 @@ onMounted(async () => {
       </template>
     </n-spin>
 
-    <!-- 分享画布弹窗 -->
-    <n-modal v-model:show="showShareModal" preset="card" title="分享画布" style="width: 480px;">
+    <!-- 分享项目弹窗 -->
+    <n-modal v-model:show="showShareModal" preset="card" title="分享项目" style="width: 480px;">
       <n-space vertical :size="12">
         <n-space align="center">
           <span>开启分享</span>
@@ -340,7 +340,7 @@ onMounted(async () => {
             </n-space>
           </div>
           <p style="font-size: 12px; color: var(--rsdp-text-secondary); margin: 0;">
-            访客通过链接可查看项目画布的只读视图（空间分区/产品/数量，不含价格与工厂信息）。
+            访客通过链接可查看项目的只读视图（方案列表与空间分区/产品/数量，不含价格与工厂信息）。
           </p>
         </template>
       </n-space>

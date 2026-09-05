@@ -20,12 +20,13 @@ import {
   NTag,
   NRadioGroup,
   NRadioButton,
+  NSwitch,
   useDialog,
   useMessage,
   type DataTableColumns
 } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
-import { getSchemeDetail, generateQuoteFromScheme, setSchemeTemplate, copyFromTemplate, reorderSchemeItems } from '@/api/scheme'
+import { getSchemeDetail, generateQuoteFromScheme, setSchemeTemplate, copyFromTemplate, reorderSchemeItems, updateSchemeShare } from '@/api/scheme'
 import { exportQuote } from '@/api/quote'
 import { createOrder } from '@/api/order'
 import { listProjects } from '@/api/project'
@@ -99,6 +100,63 @@ async function handleCreateOrder() {
 const showTemplateModal = ref(false)
 const templateTagsInput = ref<string[]>([])
 const templateSaving = ref(false)
+
+// ---------- 方案分享弹窗（仿项目分享弹窗：开关即时保存 + 有效期 + 链接复制） ----------
+const showShareModal = ref(false)
+const shareEnabled = ref(false)
+/** 有效期天数（0=永久） */
+const shareExpireDays = ref<number | null>(null)
+const shareSaving = ref(false)
+
+const shareExpireOptions = [
+  { label: '7 天', value: 7 },
+  { label: '30 天', value: 30 },
+  { label: '90 天', value: 90 },
+  { label: '365 天', value: 365 },
+  { label: '永久有效', value: 0 }
+]
+
+const shareLink = computed(() => `${window.location.origin}/s/schemes/${schemeId.value}`)
+
+function openShareModal() {
+  if (!scheme.value) return
+  shareEnabled.value = scheme.value.shareEnabled === true
+  shareExpireDays.value = null
+  showShareModal.value = true
+}
+
+async function handleSaveShare() {
+  shareSaving.value = true
+  try {
+    const updated = await updateSchemeShare(schemeId.value, {
+      shareEnabled: shareEnabled.value,
+      expireDays: shareEnabled.value && shareExpireDays.value ? shareExpireDays.value : null
+    })
+    if (scheme.value) {
+      scheme.value.shareEnabled = updated.shareEnabled
+      scheme.value.shareExpireAt = updated.shareExpireAt
+    }
+    message.success(shareEnabled.value ? '分享已开启' : '分享已关闭')
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    shareSaving.value = false
+  }
+}
+
+async function copyShareLink() {
+  try {
+    await navigator.clipboard.writeText(shareLink.value)
+    message.success('分享链接已复制')
+  } catch {
+    message.warning('复制失败，请手动复制链接')
+  }
+}
+
+function formatShareExpire(value?: string | null): string {
+  if (!value) return '永久有效'
+  return `有效期至 ${value.replace('T', ' ').slice(0, 16)}`
+}
 
 /** 套用模板弹窗。 */
 const showApplyModal = ref(false)
@@ -602,6 +660,9 @@ onBeforeRouteUpdate((to) => {
           <n-button size="small" @click="router.push(`/schemes/${schemeId}/canvas`)">
             搭配画布
           </n-button>
+          <n-button v-if="canEditScheme && scheme" size="small" @click="openShareModal">
+            分享方案
+          </n-button>
           <template v-if="scheme">
             <n-button v-if="canEditScheme && !scheme.isTemplate" size="small" @click="openTemplateModal">
               设为模板
@@ -905,6 +966,36 @@ onBeforeRouteUpdate((to) => {
           <n-button type="primary" @click="handleAddZone">添加</n-button>
         </n-space>
       </template>
+    </n-modal>
+
+    <!-- 分享方案弹窗 -->
+    <n-modal v-model:show="showShareModal" preset="card" title="分享方案" style="width: 480px;">
+      <n-space vertical :size="12">
+        <n-space align="center">
+          <span>开启分享</span>
+          <n-switch v-model:value="shareEnabled" @update:value="handleSaveShare" :loading="shareSaving" />
+        </n-space>
+        <template v-if="shareEnabled">
+          <div>
+            <div style="margin-bottom: 6px;">有效期</div>
+            <n-select
+              :value="shareExpireDays"
+              :options="shareExpireOptions"
+              @update:value="(v: number | null) => { shareExpireDays = v; handleSaveShare() }"
+            />
+          </div>
+          <div>
+            <div style="margin-bottom: 6px;">分享链接（{{ formatShareExpire(scheme?.shareExpireAt) }}）</div>
+            <n-space align="center">
+              <n-input :value="shareLink" readonly style="width: 300px;" />
+              <n-button type="primary" @click="copyShareLink">复制链接</n-button>
+            </n-space>
+          </div>
+          <p style="font-size: 12px; color: var(--rsdp-text-secondary); margin: 0;">
+            访客通过链接可查看方案的只读视图（空间分区/产品/数量，不含价格与工厂信息）。
+          </p>
+        </template>
+      </n-space>
     </n-modal>
 
     <!-- 转订单弹窗 -->

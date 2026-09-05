@@ -524,6 +524,8 @@ CREATE TABLE IF NOT EXISTS scheme (
     template_tags TEXT,
     analysis_id VARCHAR(64),
     canvas_layout JSONB,        -- 画布布局（搭配画布，V41 并入）
+    share_enabled BOOLEAN NOT NULL DEFAULT false,  -- 方案分享开关（V42 并入）
+    share_expire_at TIMESTAMP,  -- 方案分享过期时间（V42 并入，NULL=永久有效）
     created_by VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,

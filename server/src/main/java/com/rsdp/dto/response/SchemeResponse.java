@@ -30,6 +30,12 @@ public class SchemeResponse {
     @JsonRawValue
     private String canvasLayout;
 
+    /** 方案分享开关（V42） */
+    private Boolean shareEnabled;
+
+    /** 方案分享过期时间（V42，null=永久有效） */
+    private LocalDateTime shareExpireAt;
+
     private String createdBy;
     private LocalDateTime createdAt;
     private List<SchemeItemResponse> items;

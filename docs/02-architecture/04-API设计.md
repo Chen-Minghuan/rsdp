@@ -795,6 +795,24 @@ POST   /api/v1/schemes/{schemeId}/copy-from-template
        # 说明：复制模板方案项，价格取 RSKU 当前最新价；与模板保存价的差异列入
        #      priceChanges；已失效 RSKU 跳过并列入 skippedRskuIds；模板自身不修改；
        #      方案项的空间覆盖标签（space_tag）随明细一并复制（模板价值=复用空间布局）
+
+PUT    /api/v1/schemes/{schemeId}/share
+       # 设置方案分享开关（V42，需 scheme:update + 方案归属或 ADMIN）
+       # Request: { shareEnabled, expireDays? }（有效期 1-365 天，空=永久；关闭时清空过期时间）
+       # Response: SchemeResponse（含 shareEnabled / shareExpireAt）
+```
+
+### 方案分享公开接口（免登录，V42）
+
+```
+GET    /api/v1/public/schemes/{schemeId}
+       # 方案独立分享公开只读视图（校验 scheme.share_enabled + share_expire_at，
+       #   过期时间为空=永久有效，失效返回 404）
+       # Response: { schemeId, schemeName, shareExpireAt,
+       #   items: [{ rspuId, productName, imageId, quantity, spaceTagName, sortOrder }] }
+       # 安全约束：严格白名单组装，只含产品名/主图 imageId/数量/空间名/排序，
+       #   不含工厂/价格/RSKU/成本等敏感字段；
+       #   spaceTagName = space_tag 覆盖优先，回退产品首场景推导，码已删回退码原文
 ```
 
 ### 设计项目
@@ -841,6 +859,11 @@ GET    /api/v1/public/projects/{projectId}
        #   schemes: [{ schemeId, schemeName, itemCount,
        #     items: [{ rspuId, productName, imageId, quantity, spaceTag }] }] }
        # 安全约束：只含空间分区/产品名/图片/数量，不含工厂/价格/RSKU 等敏感字段
+
+GET    /api/v1/public/projects/{projectId}/schemes/{schemeId}
+       # 项目分享页内指定方案的公开只读视图（V42）
+       # 校验：项目分享有效（复用项目公开校验）且 scheme.project_id = projectId，否则 404
+       # Response: SchemeShareResponse（同下方方案分享公开接口）
 ```
 
 ### 运营统计

@@ -51,13 +51,7 @@ public class ProjectShareService {
      * @return 分享视图（只读）
      */
     public ProjectShareResponse getSharedProject(String projectId) {
-        Project project = projectMapper.selectById(projectId);
-        if (project == null || !Boolean.TRUE.equals(project.getShareEnabled())) {
-            throw new ResourceNotFoundException("未开启分享或该页面不存在");
-        }
-        if (project.getShareExpireAt() != null && project.getShareExpireAt().isBefore(LocalDateTime.now())) {
-            throw new ResourceNotFoundException("分享已过期或该页面不存在");
-        }
+        Project project = getValidSharedProject(projectId);
 
         List<Scheme> schemes = schemeMapper.selectList(new QueryWrapper<Scheme>()
             .eq("project_id", projectId)
@@ -72,6 +66,23 @@ public class ProjectShareService {
         response.setShareExpireAt(project.getShareExpireAt());
         response.setSchemes(buildShareSchemes(schemes));
         return response;
+    }
+
+    /**
+     * 校验项目分享有效（分享开关开启 + 未过期），供项目内方案公开访问复用。
+     *
+     * @param projectId 项目 ID
+     * @return 项目实体
+     */
+    public Project getValidSharedProject(String projectId) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null || !Boolean.TRUE.equals(project.getShareEnabled())) {
+            throw new ResourceNotFoundException("未开启分享或该页面不存在");
+        }
+        if (project.getShareExpireAt() != null && project.getShareExpireAt().isBefore(LocalDateTime.now())) {
+            throw new ResourceNotFoundException("分享已过期或该页面不存在");
+        }
+        return project;
     }
 
     private List<ProjectShareResponse.ShareScheme> buildShareSchemes(List<Scheme> schemes) {

@@ -5,35 +5,36 @@
  * 只展示空间分区/产品/数量，不含价格与工厂信息。
  */
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
-import { NAlert, NCard, NEmpty, NImage, NSpin, NTag } from 'naive-ui'
+import { useRoute, useRouter } from 'vue-router'
+import { NAlert, NButton, NCard, NEmpty, NImage, NSpin, NTag } from 'naive-ui'
 import { getSharedProject } from '@/api/project'
 import type { ProjectShareView, ShareViewItem, ShareViewScheme } from '@/types/project'
 
 const route = useRoute()
+const router = useRouter()
 const projectId = computed(() => (route.params.projectId as string) || '')
 
 const loading = ref(false)
 const errorMessage = ref('')
 const share = ref<ProjectShareView | null>(null)
 
-/** 方案明细按空间标签分区。 */
-function zoneGroups(items: ShareViewItem[]): { name: string; items: ShareViewItem[] }[] {
-  const map = new Map<string, ShareViewItem[]>()
-  for (const item of items) {
-    const key = item.spaceTag || '未分区'
-    if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push(item)
-  }
-  return [...map.entries()].map(([name, zoneItems]) => ({ name, items: zoneItems }))
+/** 方案空间数（按空间标签去重，空归「未分区」）。 */
+function schemeZoneCount(scheme: ShareViewScheme): number {
+  const keys = new Set(scheme.items.map(item => item.spaceTag || '未分区'))
+  return keys.size
+}
+
+/** 方案前 4 张有图的产品缩略图。 */
+function schemeThumbs(scheme: ShareViewScheme): ShareViewItem[] {
+  return scheme.items.filter(item => item.imageId).slice(0, 4)
 }
 
 function imageUrl(imageId?: string | null): string {
   return imageId ? `/api/v1/images/${imageId}` : ''
 }
 
-function schemeZones(scheme: ShareViewScheme) {
-  return zoneGroups(scheme.items)
+function gotoScheme(scheme: ShareViewScheme) {
+  router.push(`/s/${projectId.value}/schemes/${scheme.schemeId}`)
 }
 
 function formatExpire(value?: string | null): string {
@@ -79,27 +80,26 @@ onMounted(async () => {
           size="small"
           class="scheme-card"
         >
-          <n-empty v-if="scheme.items.length === 0" description="方案中暂无产品" />
-          <div v-for="zone in schemeZones(scheme)" :key="zone.name" class="zone">
-            <div class="zone-title">{{ zone.name }}（{{ zone.items.length }}）</div>
-            <div class="zone-items">
-              <div v-for="item in zone.items" :key="item.rspuId + item.imageId" class="zone-item">
-                <n-image
-                  v-if="imageUrl(item.imageId)"
-                  :src="imageUrl(item.imageId)"
-                  object-fit="contain"
-                  preview-disabled
-                  class="zone-item-img"
-                />
-                <div v-else class="zone-item-img placeholder">无图</div>
-                <div class="zone-item-body">
-                  <div class="zone-item-name" :title="item.productName || item.rspuId">
-                    {{ item.productName || item.rspuId }}
-                  </div>
-                  <div class="zone-item-meta">x{{ item.quantity ?? 1 }}</div>
-                </div>
-              </div>
+          <template #header-extra>
+            <n-button size="small" type="primary" secondary @click="gotoScheme(scheme)">
+              查看方案
+            </n-button>
+          </template>
+          <div class="scheme-summary">
+            <div class="scheme-stats">
+              {{ scheme.itemCount ?? scheme.items.length }} 件产品 · {{ schemeZoneCount(scheme) }} 个空间
             </div>
+            <div v-if="schemeThumbs(scheme).length > 0" class="scheme-thumbs">
+              <n-image
+                v-for="item in schemeThumbs(scheme)"
+                :key="item.rspuId + item.imageId"
+                :src="imageUrl(item.imageId)"
+                object-fit="contain"
+                preview-disabled
+                class="scheme-thumb"
+              />
+            </div>
+            <n-empty v-if="scheme.items.length === 0" description="方案中暂无产品" />
           </div>
         </n-card>
 
@@ -146,70 +146,29 @@ onMounted(async () => {
   margin-bottom: 16px;
 }
 
-.zone {
-  margin-bottom: 14px;
+.scheme-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.zone-title {
+.scheme-stats {
   font-size: 13px;
-  font-weight: 600;
-  color: var(--rsdp-text);
-  padding-left: 8px;
-  border-left: 3px solid var(--rsdp-primary);
-  margin-bottom: 8px;
+  color: var(--rsdp-text-secondary);
 }
 
-.zone-items {
+.scheme-thumbs {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
 }
 
-.zone-item {
-  display: flex;
-  gap: 10px;
-  width: 240px;
-  padding: 8px;
-  border: 1px solid var(--rsdp-border);
-  border-radius: 10px;
-  background: var(--rsdp-card-bg);
-}
-
-.zone-item-img {
+.scheme-thumb {
   width: 56px;
   height: 56px;
   border-radius: 8px;
   overflow: hidden;
-  flex-shrink: 0;
   background: var(--rsdp-serve-bg);
-}
-
-.zone-item-img.placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
-}
-
-.zone-item-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.zone-item-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--rsdp-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.zone-item-meta {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
 }
 
 .share-footer {

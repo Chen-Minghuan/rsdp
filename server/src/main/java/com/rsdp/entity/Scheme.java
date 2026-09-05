@@ -43,6 +43,12 @@ public class Scheme {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String canvasLayout;
 
+    /** 方案分享开关（V42，开启后公开只读视图 /api/v1/public/schemes/{schemeId} 可访问） */
+    private Boolean shareEnabled;
+
+    /** 方案分享过期时间（V42，null=永久有效；关闭分享时清空） */
+    private LocalDateTime shareExpireAt;
+
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

@@ -1008,6 +1008,101 @@ class SchemeServiceTest {
         return dict;
     }
 
+    // ==================== 方案分享开关（V42） ====================
+
+    @Test
+    void updateSchemeShare_shouldEnableWithExpireDays() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试方案");
+        scheme.setCreatedBy("testuser");
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of());
+
+        com.rsdp.dto.request.SchemeShareRequest request = new com.rsdp.dto.request.SchemeShareRequest();
+        request.setShareEnabled(true);
+        request.setExpireDays(30);
+
+        java.time.LocalDateTime before = java.time.LocalDateTime.now();
+        SchemeResponse response = schemeService.updateSchemeShare("SCHEME-001", request);
+
+        ArgumentCaptor<Scheme> captor = ArgumentCaptor.forClass(Scheme.class);
+        verify(schemeMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getShareEnabled()).isTrue();
+        assertThat(captor.getValue().getShareExpireAt())
+            .isAfter(before.plusDays(29))
+            .isBefore(java.time.LocalDateTime.now().plusDays(31));
+        assertThat(response.getShareEnabled()).isTrue();
+        assertThat(response.getShareExpireAt()).isNotNull();
+        verify(auditLogService).logUpdate(eq("scheme"), eq("SCHEME-001"), any(), any(Scheme.class), any());
+    }
+
+    @Test
+    void updateSchemeShare_shouldBePermanentWhenExpireDaysNull() {
+        // expireDays 为空 = 永久有效
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("testuser");
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of());
+
+        com.rsdp.dto.request.SchemeShareRequest request = new com.rsdp.dto.request.SchemeShareRequest();
+        request.setShareEnabled(true);
+
+        SchemeResponse response = schemeService.updateSchemeShare("SCHEME-001", request);
+
+        assertThat(response.getShareEnabled()).isTrue();
+        assertThat(response.getShareExpireAt()).isNull();
+    }
+
+    @Test
+    void updateSchemeShare_shouldClearExpireAtWhenDisabled() {
+        // 关闭分享时清空过期时间
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("testuser");
+        scheme.setShareEnabled(true);
+        scheme.setShareExpireAt(java.time.LocalDateTime.now().plusDays(10));
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of());
+
+        com.rsdp.dto.request.SchemeShareRequest request = new com.rsdp.dto.request.SchemeShareRequest();
+        request.setShareEnabled(false);
+        request.setExpireDays(30);
+
+        SchemeResponse response = schemeService.updateSchemeShare("SCHEME-001", request);
+
+        assertThat(response.getShareEnabled()).isFalse();
+        assertThat(response.getShareExpireAt()).isNull();
+    }
+
+    @Test
+    void updateSchemeShare_shouldRejectNonOwner() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("otheruser");
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+
+        com.rsdp.dto.request.SchemeShareRequest request = new com.rsdp.dto.request.SchemeShareRequest();
+        request.setShareEnabled(true);
+
+        assertThatThrownBy(() -> schemeService.updateSchemeShare("SCHEME-001", request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无权操作");
+        verify(schemeMapper, never()).updateById(any(Scheme.class));
+    }
+
+    @Test
+    void updateSchemeShare_shouldRejectMissingScheme() {
+        when(schemeMapper.selectById("SCHEME-X")).thenReturn(null);
+
+        com.rsdp.dto.request.SchemeShareRequest request = new com.rsdp.dto.request.SchemeShareRequest();
+        request.setShareEnabled(true);
+
+        assertThatThrownBy(() -> schemeService.updateSchemeShare("SCHEME-X", request))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
     @Test
     void getSchemeDetail_spaceTagOverrideShouldWin() {
         // 覆盖优先：scheme_item.space_tag=BEDROOM 时忽略产品首场景 LIVING

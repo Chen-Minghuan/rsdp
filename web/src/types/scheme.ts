@@ -88,6 +88,10 @@ export interface Scheme {
   createdBy: string
   createdAt: string
   items: SchemeItem[]
+  /** 分享开关 */
+  shareEnabled?: boolean
+  /** 分享过期时间（null/undefined=永久有效） */
+  shareExpireAt?: string | null
   /** 搭配画布布局（后端可能返回 JSON 字符串或已解析对象，前端解析时兼容两种） */
   canvasLayout?: string | CanvasLayout | null
 }
@@ -121,4 +125,28 @@ export interface CopyFromTemplateResponse {
   scheme: Scheme
   priceChanges: PriceChange[]
   skippedRskuIds: string[]
+}
+
+/** 方案分享开关请求 */
+export interface SchemeSharePayload {
+  shareEnabled: boolean
+  /** 有效期天数（1-365；null/undefined=永久） */
+  expireDays?: number | null
+}
+
+/** 方案分享公开视图-明细 */
+export interface SchemeShareViewItem {
+  rspuId: string
+  productName?: string | null
+  imageId?: string | null
+  quantity?: number
+  spaceTagName?: string | null
+  sortOrder?: number
+}
+
+/** 方案分享公开视图（免登录只读） */
+export interface SchemeShareView {
+  schemeName: string
+  shareExpireAt?: string | null
+  items: SchemeShareViewItem[]
 }

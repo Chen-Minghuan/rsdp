@@ -7,6 +7,7 @@ import com.rsdp.dto.request.SaveCanvasLayoutRequest;
 import com.rsdp.dto.request.SchemeCreateRequest;
 import com.rsdp.dto.request.SchemeItemReorderRequest;
 import com.rsdp.dto.request.SchemeQuoteRequest;
+import com.rsdp.dto.request.SchemeShareRequest;
 import com.rsdp.dto.request.SchemeTemplateRequest;
 import com.rsdp.dto.request.SchemeUpdateRequest;
 import com.rsdp.dto.response.CopyFromTemplateResponse;
@@ -129,6 +130,20 @@ public class SchemeController {
         @Valid @RequestBody SaveCanvasLayoutRequest request) {
         return Result.ok(schemeService.saveCanvasLayout(
             schemeId, request.getLayout(), SecurityOperatorContext.currentUsername()));
+    }
+
+    /**
+     * 设置方案分享开关（V42，免登录公开链接 + 有效期限制；仅方案创建人或 ADMIN）。
+     *
+     * @param schemeId 方案 ID
+     * @param request  分享请求（开关 + 有效期天数，空=永久）
+     * @return 更新后的方案详情
+     */
+    @PutMapping("/{schemeId}/share")
+    public Result<SchemeResponse> updateShare(
+        @PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId,
+        @Valid @RequestBody SchemeShareRequest request) {
+        return Result.ok(schemeService.updateSchemeShare(schemeId, request));
     }
 
     /**

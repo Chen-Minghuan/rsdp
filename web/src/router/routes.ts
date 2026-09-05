@@ -11,6 +11,19 @@ export const routes = [
     meta: { public: true, hideHeader: true }
   },
   {
+    // 方案分享公开视图（免登录），与 /s/:projectId 段数不同无匹配冲突
+    path: '/s/schemes/:schemeId',
+    name: 'SchemeShare',
+    component: () => import('@/views/SchemeShareView.vue'),
+    meta: { public: true, hideHeader: true }
+  },
+  {
+    path: '/s/:projectId/schemes/:schemeId',
+    name: 'ProjectSchemeShare',
+    component: () => import('@/views/SchemeShareView.vue'),
+    meta: { public: true, hideHeader: true }
+  },
+  {
     path: '/s/:projectId',
     name: 'ProjectShare',
     component: () => import('@/views/ProjectShareView.vue'),
