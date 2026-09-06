@@ -115,10 +115,11 @@ public class AsyncTaskProcessor {
         // 主图智能裁剪：AI 识别产品主体并替换主图，识别失败时回退原图不影响流程。
         // 命中时向量计算基于裁剪图（保证以图搜图语义一致）；
         // AI 识别走双图模式（裁剪图看形态 + 原图提取 OCR 文字），避免裁剪裁掉品名/尺寸文字。
-        // 文档导入（PDF/PPT）的图片已经过页面级主体裁剪，跳过二次检测。
+        // 文档导入（PDF/PPT）的图片已经过页面级主体裁剪，跳过二次检测；
+        // Excel 导入的图片为表格内嵌/链接直接提取的成品图，直接使用原图，不做 AI 裁剪。
         byte[] originalImageBytes = imageBytes;
         boolean subjectCropped = false;
-        if (!isDocumentImportTask(taskId)) {
+        if (!isDocumentImportTask(taskId) && !isExcelImportTask(taskId)) {
             Optional<byte[]> croppedImage = subjectCropService.cropAndReplacePrimary(
                 imageBytes, rspuId, null, imageId, objectKey);
             if (croppedImage.isPresent()) {
@@ -344,6 +345,25 @@ public class AsyncTaskProcessor {
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
             com.fasterxml.jackson.databind.JsonNode source = root.get("source");
             return source != null && "document_import".equals(source.asText());
+        } catch (Exception e) {
+            log.warn("解析任务 source 失败，按普通录入处理，taskId={}", taskId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 判断任务是否来自 Excel 导入。
+     * Excel 导入的图片为表格内嵌/链接直接提取的成品图，直接使用原图，无需 AI 主体裁剪。
+     */
+    private boolean isExcelImportTask(String taskId) {
+        try {
+            AsyncTask task = asyncTaskMapper.selectById(taskId);
+            if (task == null || !StringUtils.hasText(task.getInputData())) {
+                return false;
+            }
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
+            com.fasterxml.jackson.databind.JsonNode source = root.get("source");
+            return source != null && "excel_import".equals(source.asText());
         } catch (Exception e) {
             log.warn("解析任务 source 失败，按普通录入处理，taskId={}", taskId, e);
             return false;

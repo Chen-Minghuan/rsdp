@@ -4508,7 +4508,9 @@ public class ExcelAiImportService {
                 "rspuId", rspuId,
                 "imageId", imageId,
                 "objectKey", primaryObjectKey,
-                "originalFilename", primaryObjectKey
+                "originalFilename", primaryObjectKey,
+                // Excel 导入图片为表格内嵌/链接直接提取的成品图，不做 AI 主体裁剪
+                "source", "excel_import"
             )));
         } catch (Exception e) {
             log.warn("序列化任务输入失败", e);

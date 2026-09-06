@@ -184,6 +184,37 @@ class AsyncTaskProcessorTest {
     }
 
     @Test
+    void processProductEntry_shouldSkipSubjectCropForExcelImportTask() throws Exception {
+        // Given：Excel 导入任务（inputData.source=excel_import，图片为直接提取的成品图）
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setInputData("{\"rspuId\":\"" + rspuId + "\",\"imageId\":\"" + imageId
+            + "\",\"objectKey\":\"" + objectKey + "\",\"source\":\"excel_import\"}");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f});
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setCategoryCode("FS");
+        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then：不做 AI 主体裁剪，直接使用原图走单图识别
+        verify(subjectCropService, times(0)).cropAndReplacePrimary(any(), any(), any(), any(), any());
+        verify(visionService).recognizeImage(any(), eq("FS"));
+        verify(visionService, times(0)).recognizeImage(any(), any(byte[].class), any());
+    }
+
+    @Test
     void processProductEntry_shouldMarkPartialSuccessWhenChromaDbFails() throws Exception {
         // Given
         when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
