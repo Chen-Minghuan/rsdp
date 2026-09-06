@@ -49,7 +49,7 @@ class RskuServiceTest {
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
         lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
-        lenient().when(rskuCodeService.assignCode(anyString(), anyString(), anyString(), anyString()))
+        lenient().when(rskuCodeService.tryAssignCode(anyString(), anyString(), anyString(), anyString()))
             .thenReturn("FS-MC-001-M-F001-PE-001");
     }
 
@@ -159,8 +159,7 @@ class RskuServiceTest {
     }
 
     @Test
-    void createRsku_shouldInsertWhenValid() {
-        RskuCreateRequest request = new RskuCreateRequest();
+    void createRsku_shouldInsertWhenValid() {        RskuCreateRequest request = new RskuCreateRequest();
         request.setRspuId("RSPU-TEST01");
         request.setFactoryCode("F001");
         request.setVariantId("RSPU-TEST01-V001");
@@ -219,6 +218,42 @@ class RskuServiceTest {
         ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
         verify(rskuSupplyMapper).insert(captor.capture());
         assertThat(captor.getValue().getProductLevel()).isEqualTo("C");
+    }
+
+    @Test
+    void createRsku_shouldCreateWithoutCodeWhenRspuHasNoCode() {
+        // RSPU 未发号（Excel AI 导入风格缺失容错场景）：tryAssignCode 返回 null，
+        // 报价照常创建，rskuCode 为 null，factoryPrice 正常落库，业务编码待补发
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2500"));
+        request.setMaterialCode("PE");
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setProductLevel("S");
+
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        when(rskuCodeService.tryAssignCode(anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(null);
+
+        String rskuId = rskuService.createRsku(request);
+
+        assertThat(rskuId).isNotBlank();
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper, times(1)).insert(captor.capture());
+        assertThat(captor.getValue().getRskuCode()).isNull();
+        assertThat(captor.getValue().getFactoryPrice()).isEqualByComparingTo("2500");
     }
 
     @Test

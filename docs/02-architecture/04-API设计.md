@@ -440,6 +440,8 @@ POST   /api/v1/products/{rspuId}/rsku
        # Request: { factoryCode, variantId（必填）, factorySku?, factoryPrice, materialCode?, materialDescription?,
        #            leadTimeDays?, moq?, warrantyYears?, shippingFrom?, diffNotes?, quoteConfidence? }
        # Response: void
+       # 说明：rsku_code 可空——所属 RSPU 未发号（rspu_code 为空）时报价先创建、编码留空，
+       #       待 AI 补码（补发 rspu_code）后由 RskuCodeService.backfillCodesByRspu 联动补发
 
 PUT    /api/v1/products/{rspuId}/rsku/{rskuId}/price
        # 更新 RSKU 出厂价，自动写入 price_history（已实现）

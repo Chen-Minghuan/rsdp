@@ -54,6 +54,8 @@ class AiRecognitionPersistenceServiceTest {
     @Mock
     private RspuCodeService rspuCodeService;
     @Mock
+    private RskuCodeService rskuCodeService;
+    @Mock
     private com.rsdp.mapper.RspuVariantMapper rspuVariantMapper;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -411,6 +413,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
         when(rspuCodeService.inferSizeCode(any())).thenReturn("M");
         when(rspuCodeService.assignCode("RSPU-TEST01", "FS", "MC", "M")).thenReturn("FS-MC-001-M");
+        when(rskuCodeService.backfillCodesByRspu("RSPU-TEST01")).thenReturn(2);
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
@@ -422,6 +425,8 @@ class AiRecognitionPersistenceServiceTest {
         assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-001-M");
         assertThat(rspu.getReviewStatus()).isNotEqualTo("存疑");
         verify(rspuCodeService).assignCode("RSPU-TEST01", "FS", "MC", "M");
+        // RSPU 补码成功后联动补发该 RSPU 下无码 RSKU 的业务编码
+        verify(rskuCodeService).backfillCodesByRspu("RSPU-TEST01");
     }
 
     @Test
@@ -457,6 +462,8 @@ class AiRecognitionPersistenceServiceTest {
         // 识别主流程不受影响：RSPU 更新与识别记录落库照常执行
         verify(rspuMapper).updateById(rspu);
         verify(aiRecognitionMapper).insert(any(com.rsdp.entity.AiRecognition.class));
+        // RSPU 补码失败，不触发 RSKU 联动补发
+        verify(rskuCodeService, never()).backfillCodesByRspu(any());
     }
 
     @Test
