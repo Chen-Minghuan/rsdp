@@ -21,6 +21,7 @@ public class QuoteItemResponse {
     private String factoryName;
     private String factorySku;
 
+    /** 出厂价（成本）：仅 cost 口径且有出厂价查看权限时返回；sale（对客户）口径恒为 null */
     private BigDecimal factoryPrice;
     private Integer quantity;
     private BigDecimal subtotal;
@@ -32,9 +33,9 @@ public class QuoteItemResponse {
     private String spaceTag;
     /** 空间显示名（场景字典名；码已删时为码原文；无空间为 null） */
     private String spaceTagName;
-    /** 成本价（仅 sale 口径且有出厂价查看权限时返回，绝不向无权限角色泄露） */
+    /** @deprecated sale 口径为对客户报价单，成本/毛利一律不返回（恒为 null）；保留字段仅为兼容 */
     private BigDecimal costPrice;
-    /** 毛利 = 售价 − 成本（仅 sale 口径且有出厂价查看权限时返回） */
+    /** @deprecated 同 costPrice，恒为 null */
     private BigDecimal marginAmount;
     private String priceBand;
     private String materialDescription;

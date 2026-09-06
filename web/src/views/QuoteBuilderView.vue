@@ -550,7 +550,7 @@ function formatPrice(value: number | undefined): string {
   return `¥${value.toFixed(2)}`
 }
 
-/** 报价结果表格列：按生成口径显示「销售价/出厂价」；sale 口径且成本可见时追加「成本」「毛利」列。 */
+/** 报价结果表格列：按生成口径显示「销售价/出厂价」；sale 为对客户口径，不显示成本/毛利。 */
 const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
   const saleMode = quoteResultMode.value === 'sale'
   const columns: DataTableColumns<QuoteItem> = [
@@ -610,23 +610,6 @@ const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
       width: 100,
       render(row: QuoteItem) {
         return row.spaceTagName || '-'
-      }
-    })
-  }
-  if (saleMode && quoteResult.value?.items.some(item => item.costPrice != null)) {
-    columns.push({
-      title: '成本',
-      key: 'costPrice',
-      width: 110,
-      render(row: QuoteItem) {
-        return h('span', { class: 'rsdp-mono' }, formatPrice(row.costPrice))
-      }
-    }, {
-      title: '毛利',
-      key: 'marginAmount',
-      width: 110,
-      render(row: QuoteItem) {
-        return h('span', { class: 'rsdp-mono' }, formatPrice(row.marginAmount))
       }
     })
   }
@@ -852,12 +835,6 @@ onBeforeRouteUpdate((to) => {
               </n-descriptions-item>
               <n-descriptions-item label="最大交期">
                 {{ quoteResult.summary.maxLeadTimeDays || '-' }} 天
-              </n-descriptions-item>
-              <n-descriptions-item v-if="quoteResult.summary.totalCost != null" label="成本合计">
-                ¥{{ quoteResult.summary.totalCost.toFixed(2) }}
-              </n-descriptions-item>
-              <n-descriptions-item v-if="quoteResult.summary.totalMargin != null" label="毛利合计">
-                ¥{{ quoteResult.summary.totalMargin.toFixed(2) }}
               </n-descriptions-item>
             </n-descriptions>
           </n-card>

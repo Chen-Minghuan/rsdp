@@ -687,9 +687,10 @@ POST   /api/v1/quotes/generate
        #   summary: { totalPrice, itemCount, totalQuantity, factoryCount, maxLeadTimeDays },
        #   priceWarning?                    # 仅 sale：售价低于成本的产品名汇总（清库存提示）
        # }
-       # sale 口径新增字段：items[].salePrice/belowCost；有出厂价查看权限时另附
-       #   items[].costPrice/marginAmount 与 summary.totalCost/totalMargin（仅内部，
-       #   无权限角色绝不返回成本字段）；sale 口径 subtotal/totalPrice 为售价口径
+       # sale 口径新增字段：items[].salePrice/belowCost；sale 为对客户口径，
+       #   出厂价/成本/毛利一律不返回（items[].factoryPrice/costPrice/marginAmount
+       #   与 summary.totalCost/totalMargin 恒为 null，与权限无关）；
+       #   sale 口径 subtotal/totalPrice 为售价口径
 
 POST   /api/v1/quotes/export
        # 根据选中的 RSKU 及数量列表导出 Excel 报价单（已实现）

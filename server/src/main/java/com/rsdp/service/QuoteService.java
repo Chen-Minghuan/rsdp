@@ -306,20 +306,14 @@ public class QuoteService {
         item.setFactoryCode(rsku.getFactoryCode());
         item.setFactoryName(factory != null ? factory.getFactoryName() : null);
         item.setFactorySku(rsku.getFactorySku());
-        item.setFactoryPrice(canViewPrice ? rsku.getFactoryPrice() : null);
+        // 出厂价=成本：cost 口径按角色掩码返回；sale（对客户）口径绝不返回，避免成本泄露
+        item.setFactoryPrice(!saleMode && canViewPrice ? rsku.getFactoryPrice() : null);
         item.setQuantity(quantity);
         item.setSubtotal(subtotal);
         if (saleMode) {
-            BigDecimal cost = rsku.getFactoryPrice();
             item.setSalePrice(salePrice);
-            item.setBelowCost(PricingService.isBelowCost(salePrice, cost));
-            // 成本与毛利仅内部可见：无出厂价权限的角色绝不返回
-            if (canViewPrice) {
-                item.setCostPrice(cost);
-                item.setMarginAmount(cost != null
-                    ? salePrice.subtract(cost).setScale(2, java.math.RoundingMode.HALF_UP)
-                    : null);
-            }
+            item.setBelowCost(PricingService.isBelowCost(salePrice, rsku.getFactoryPrice()));
+            // sale 口径为对客户报价单：不返回成本/毛利字段（costPrice/marginAmount 恒为 null）
         }
         item.setPriceBand(rsku.getPriceBand());
         item.setMaterialDescription(rsku.getMaterialDescription());
@@ -359,17 +353,7 @@ public class QuoteService {
         summary.setFactoryCount(factoryCodes.size());
         summary.setMaxLeadTimeDays(maxLeadTimeDays);
 
-        // 毛利汇总（仅 sale 口径且全部明细成本可见，避免部分可见导致误导性合计）
-        if (MODE_SALE.equals(mode) && !items.isEmpty()
-            && items.stream().allMatch(item -> item.getCostPrice() != null)) {
-            BigDecimal totalCost = items.stream()
-                .map(item -> item.getCostPrice().multiply(BigDecimal.valueOf(
-                    item.getQuantity() != null && item.getQuantity() > 0 ? item.getQuantity() : 1)))
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .setScale(2, java.math.RoundingMode.HALF_UP);
-            summary.setTotalCost(totalCost);
-            summary.setTotalMargin(totalPrice.subtract(totalCost).setScale(2, java.math.RoundingMode.HALF_UP));
-        }
+        // sale 口径为对客户报价单：不汇总成本/毛利（totalCost/totalMargin 恒为 null）
         return summary;
     }
 }

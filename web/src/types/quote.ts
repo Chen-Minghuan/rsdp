@@ -44,10 +44,6 @@ export interface QuoteItem {
   spaceTag?: string | null
   /** 空间显示名（场景字典名；无空间为 null） */
   spaceTagName?: string | null
-  /** 成本价（仅 sale 口径且有出厂价查看权限时返回） */
-  costPrice?: number
-  /** 毛利 = 售价 − 成本（仅 sale 口径且有出厂价查看权限时返回） */
-  marginAmount?: number
   priceBand: string
   materialDescription?: string
   leadTimeDays?: number
@@ -62,10 +58,6 @@ export interface QuoteItem {
  */
 export interface QuoteSummary {
   totalPrice: number
-  /** 成本合计（仅 sale 口径且全部明细成本可见时返回） */
-  totalCost?: number
-  /** 毛利合计（仅 sale 口径且全部明细成本可见时返回） */
-  totalMargin?: number
   itemCount: number
   totalQuantity: number
   factoryCount: number
