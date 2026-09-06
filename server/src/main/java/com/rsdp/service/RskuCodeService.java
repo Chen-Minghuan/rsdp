@@ -74,7 +74,7 @@ public class RskuCodeService {
      * @param materialCode 材质码
      * @return 生成的业务编码
      */
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public String assignCode(String rskuId, String rspuId, String factoryCode, String materialCode) {
         if (!StringUtils.hasText(rskuId)) {
             throw new BusinessException("RSKU ID 不能为空");

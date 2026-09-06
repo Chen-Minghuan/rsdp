@@ -67,9 +67,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.NoTransactionException;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
@@ -4010,6 +4012,7 @@ public class ExcelAiImportService {
                         } catch (BusinessException e) {
                             // upsertRsku 已配置 noRollbackFor = BusinessException，
                             // 捕获业务异常后仅跳过当前价格列，不影响同一行其他价格列/变体提交
+                            rethrowIfTransactionPoisoned(e);
                             log.warn("为价格列创建/更新 RSKU 失败，header={}", priceColumn.getHeader(), e);
                             rowIssues.add("工厂报价失败: " + priceColumn.getHeader() + " - " + e.getMessage());
                         }
@@ -4203,9 +4206,33 @@ public class ExcelAiImportService {
             rspuFactoryMappingService.saveMapping(mappingRequest);
         } catch (BusinessException e) {
             // 已存在则不报错
+            rethrowIfTransactionPoisoned(e);
             if (!e.getMessage().contains("已关联此工厂")) {
                 log.warn("创建 RSPU-工厂映射失败，rspuId={}, factoryCode={}", rspuId, factoryCode, e);
             }
+        }
+    }
+
+    /**
+     * 事务污染防御：行事务内捕获业务异常继续执行前，若当前事务已被内层代理标记
+     * rollback-only（内层 @Transactional 漏配 noRollbackFor），直接以真实原因重抛，
+     * 让整行按真实错误失败回滚，避免 commit 时才抛出掩盖根因的 UnexpectedRollbackException。
+     *
+     * <p>注意：行事务是 PlatformTransactionManager 编程式事务，{@link TransactionAspectSupport
+     * #currentTransactionStatus()} 仅对 AOP 代理事务有效，编程式事务下会抛
+     * NoTransactionException——此时无法探测污染，直接跳过（根因修复依赖内层方法
+     * 正确配置 noRollbackFor）。</p>
+     *
+     * @param e 被捕获的业务异常
+     */
+    private void rethrowIfTransactionPoisoned(BusinessException e) {
+        try {
+            if (TransactionAspectSupport.currentTransactionStatus().isRollbackOnly()) {
+                log.error("行事务已被内层异常标记 rollback-only，以真实原因失败: {}", e.getMessage());
+                throw e;
+            }
+        } catch (NoTransactionException ignored) {
+            // 编程式事务无 AOP 事务上下文，跳过污染检查
         }
     }
 

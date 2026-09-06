@@ -529,7 +529,7 @@ public class FactoryService {
      * @param factoryCode 工厂代码
      * @param level       等级代码
      */
-    @Transactional(propagation = Propagation.REQUIRED)
+    @Transactional(propagation = Propagation.REQUIRED, noRollbackFor = BusinessException.class)
     public void extendCapability(String factoryCode, String level) {
         FactoryMaster factory = factoryMasterMapper.selectById(factoryCode);
         if (factory == null) {
