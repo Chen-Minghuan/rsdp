@@ -30,6 +30,7 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { listDicts } from '@/api/dict'
 import {
   deletePricingRule,
@@ -173,10 +174,18 @@ const previewColumns = computed<DataTableColumns<PricingPreviewItem>>(() => {
       title: '产品',
       key: 'productName',
       render(row) {
-        return h('div', [
-          h('div', row.productName || row.rspuId),
-          h('div', { class: 'rsdp-mono', style: { fontSize: '11px', color: 'var(--rsdp-text-secondary)' } },
-            row.rspuId)
+        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
+          h(HoverZoomImage, {
+            src: row.primaryImageUrl,
+            width: 44,
+            height: 44,
+            objectFit: 'contain'
+          }),
+          h('div', [
+            h('div', row.productName || row.rspuId),
+            h('div', { class: 'rsdp-mono', style: { fontSize: '11px', color: 'var(--rsdp-text-secondary)' } },
+              row.rspuId)
+          ])
         ])
       }
     },

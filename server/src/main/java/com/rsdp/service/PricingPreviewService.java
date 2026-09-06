@@ -6,11 +6,13 @@ import com.rsdp.common.PageResult;
 import com.rsdp.dto.response.PricingPreviewItemResponse;
 import com.rsdp.dto.response.PricingPreviewSummaryResponse;
 import com.rsdp.entity.CategoryDict;
+import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.PricingRule;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.CategoryDictMapper;
+import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
@@ -45,6 +47,7 @@ public class PricingPreviewService {
     private final RspuMapper rspuMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
     private final CategoryDictMapper categoryDictMapper;
+    private final ImageAssetsMapper imageAssetsMapper;
     private final PricingService pricingService;
     private final PricingRuleService pricingRuleService;
     private final DataScopeHelper dataScopeHelper;
@@ -73,11 +76,13 @@ public class PricingPreviewService {
         List<RspuMaster> rspus = result.getRecords();
         List<String> rspuIds = rspus.stream().map(RspuMaster::getRspuId).toList();
         Map<String, RskuSupply> minCostRskuMap = batchMinCostRsku(rspuIds);
+        Map<String, String> primaryImageUrls = batchPrimaryImageUrls(rspuIds);
         Map<String, String> categoryNames = batchCategoryNames(rspus.stream()
             .map(RspuMaster::getCategoryCode).toList());
 
         List<PricingPreviewItemResponse> rows = rspus.stream()
-            .map(rspu -> buildRow(rspu, minCostRskuMap.get(rspu.getRspuId()), categoryNames))
+            .map(rspu -> buildRow(rspu, minCostRskuMap.get(rspu.getRspuId()), categoryNames,
+                primaryImageUrls.get(rspu.getRspuId())))
             .toList();
         return PageResult.of(result.getTotal(), page, size, rows);
     }
@@ -117,7 +122,8 @@ public class PricingPreviewService {
      * 组装试算行：成本/毛利率按 factory_price 权限掩码。
      */
     private PricingPreviewItemResponse buildRow(RspuMaster rspu, RskuSupply minCostRsku,
-                                                Map<String, String> categoryNames) {
+                                                Map<String, String> categoryNames,
+                                                String primaryImageUrl) {
         PricingService.SalePriceDetail detail = pricingService.resolveSalePriceDetail(rspu, minCostRsku);
         boolean canViewCost = minCostRsku != null
             && dataScopeHelper.canViewFactoryPrice(minCostRsku.getFactoryCode());
@@ -127,6 +133,7 @@ public class PricingPreviewService {
         row.setRspuCode(rspu.getRspuCode());
         row.setProductName(StringUtils.hasText(rspu.getProductName())
             ? rspu.getProductName() : rspu.getPositioningLabel());
+        row.setPrimaryImageUrl(primaryImageUrl);
         row.setCategoryCode(rspu.getCategoryCode());
         row.setCategoryName(categoryNames.get(rspu.getCategoryCode()));
         row.setSalePrice(detail.salePrice());
@@ -209,6 +216,27 @@ public class PricingPreviewService {
                     Collectors.minBy(Comparator.comparing(RskuSupply::getFactoryPrice)),
                     opt -> opt.orElse(null)
                 )
+            ));
+    }
+
+    /**
+     * 批量查询各 RSPU 的主图 URL（image_assets 主图，组装为 /api/v1/images/{imageId}）。
+     *
+     * @param rspuIds RSPU ID 列表
+     * @return RSPU ID → 主图 URL 映射
+     */
+    private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return Map.of();
+        }
+        return imageAssetsMapper.selectList(new QueryWrapper<ImageAssets>()
+                .in("rspu_id", rspuIds)
+                .eq("is_primary", true))
+            .stream()
+            .collect(Collectors.toMap(
+                ImageAssets::getRspuId,
+                img -> "/api/v1/images/" + img.getImageId(),
+                (a, b) -> a
             ));
     }
 

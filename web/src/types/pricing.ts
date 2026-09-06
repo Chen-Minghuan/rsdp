@@ -35,6 +35,8 @@ export interface PricingPreviewItem {
   rspuId: string
   rspuCode?: string
   productName?: string
+  /** 产品主图 URL（image_assets 主图，可能为空） */
+  primaryImageUrl?: string
   categoryCode?: string
   categoryName?: string
   /** 最低成本 RSKU 的成本价（仅有权限时返回） */

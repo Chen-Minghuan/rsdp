@@ -1178,7 +1178,13 @@ onBeforeRouteUpdate((to, from) => {
           <n-input-number v-model:value="rskuForm.factoryPrice" :min="0" placeholder="出厂价" />
         </n-form-item>
         <n-form-item label="材质编码">
-          <n-input v-model:value="rskuForm.materialCode" placeholder="材质编码" />
+          <n-select
+            v-model:value="rskuForm.materialCode"
+            :options="materialOptions.map(d => ({ label: `${d.dictName}（${d.dictCode}）`, value: d.dictCode }))"
+            placeholder="选择材质编码"
+            clearable
+            filterable
+          />
         </n-form-item>
         <n-form-item label="材质说明">
           <n-input v-model:value="rskuForm.materialDescription" placeholder="材质说明" />
@@ -1268,7 +1274,13 @@ onBeforeRouteUpdate((to, from) => {
           <n-input v-model:value="batchUniformQuote.factorySku" placeholder="各家工厂默认型号（可选）" />
         </n-form-item>
         <n-form-item label="材质编码">
-          <n-input v-model:value="batchUniformQuote.materialCode" placeholder="材质编码" />
+          <n-select
+            v-model:value="batchUniformQuote.materialCode"
+            :options="materialOptions.map(d => ({ label: `${d.dictName}（${d.dictCode}）`, value: d.dictCode }))"
+            placeholder="选择材质编码"
+            clearable
+            filterable
+          />
         </n-form-item>
         <n-form-item label="材质说明">
           <n-input v-model:value="batchUniformQuote.materialDescription" placeholder="材质说明" />
@@ -1334,7 +1346,13 @@ onBeforeRouteUpdate((to, from) => {
             <n-input-number v-model:value="quote.factoryPrice" :min="0" placeholder="出厂价" style="width: 100%;" />
           </n-form-item>
           <n-form-item label="材质编码">
-            <n-input v-model:value="quote.materialCode" placeholder="材质编码" />
+            <n-select
+              v-model:value="quote.materialCode"
+              :options="materialOptions.map(d => ({ label: `${d.dictName}（${d.dictCode}）`, value: d.dictCode }))"
+              placeholder="选择材质编码"
+              clearable
+              filterable
+            />
           </n-form-item>
           <n-form-item label="材质说明">
             <n-input v-model:value="quote.materialDescription" placeholder="材质说明" />

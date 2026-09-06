@@ -11,6 +11,7 @@ import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.SysConfig;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.CategoryDictMapper;
+import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SysConfigMapper;
@@ -50,6 +51,9 @@ class PricingPreviewServiceTest {
     private CategoryDictMapper categoryDictMapper;
 
     @Mock
+    private ImageAssetsMapper imageAssetsMapper;
+
+    @Mock
     private SysConfigMapper sysConfigMapper;
 
     @Mock
@@ -68,10 +72,11 @@ class PricingPreviewServiceTest {
         PricingService pricingService =
             new PricingService(new ConfigService(sysConfigMapper, auditLogService), pricingRuleService);
         previewService = new PricingPreviewService(rspuMapper, rskuSupplyMapper, categoryDictMapper,
-            pricingService, pricingRuleService, dataScopeHelper);
+            imageAssetsMapper, pricingService, pricingRuleService, dataScopeHelper);
         lenient().when(pricingRuleService.listAllRules()).thenReturn(Map.of());
         lenient().when(sysConfigMapper.selectById(ConfigService.MARKUP_GLOBAL_KEY)).thenReturn(null);
         lenient().when(categoryDictMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        lenient().when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
     }
 
     private RspuMaster rspu(String rspuId, String categoryCode, String retailPrice) {

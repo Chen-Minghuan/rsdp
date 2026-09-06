@@ -16,6 +16,8 @@ public class PricingPreviewItemResponse {
     private String rspuId;
     private String rspuCode;
     private String productName;
+    /** 产品主图 URL（image_assets 主图，可能为空） */
+    private String primaryImageUrl;
     private String categoryCode;
     private String categoryName;
     /** 最低成本 RSKU 的成本价（仅有出厂价查看权限时返回） */
