@@ -116,17 +116,11 @@
 │   ├── docker-compose.yml         # 全服务编排
 │   ├── .env.example               # 环境变量模板
 │   └── nginx/nginx.conf           # 反向代理配置
-├── database/                      # 数据库脚本（Vx__ 按版本号顺序执行）
-│   ├── V1__init_db.sql            # PostgreSQL 建表 DDL（V1）
-│   ├── V1__seed_data.sql          # PostgreSQL 字典/权限种子数据（V1）
-│   ├── V2__factory_module.sql     # 工厂模块 + 导入增强（V2）
-│   ├── V3__align_sequences.sql    # 序列对齐（V3）
-│   ├── V4__project_module.sql     # 项目模块 + 收藏夹 + 方案模板化（V4）
-│   ├── V5__order_module.sql       # 订单模块 + 系统配置（V5）
-│   ├── V6__team_module.sql        # 企业团队：sys_user 扩展（V6）
-│   ├── V12__variant_unique_index.sql  # 变体属性组合唯一索引（V12，原 V7 改号）
+├── database/                      # 数据库脚本（目录地图与执行手册见 database/README.md）
+│   ├── schema/                    # 基线 DDL（唯一结构真相，01→99 按域拆分，编号即执行顺序）
+│   ├── ops/reset_db.sql           # 数据库重置脚本（自包含单文件，schema+必需种子镜像）
 │   ├── seed_style_knowledge.sql   # 风格知识库种子数据
-│   └── reset_db.sql               # 数据库重置脚本
+│   └── seed_dev_data.sql          # 开发/演示种子（弱口令测试账号 + 演示工厂/产品，仅开发环境）
 ├── data/                          # 运行数据（uploads 上传文件、style-knowledge 风格素材）
 ├── ops/                           # 运维脚本
 │   └── anchor_encode.sh           # 锚点图批量编码（未完成 stub）
@@ -135,7 +129,7 @@
     ├── test.sh                    # 运行全部测试
     ├── backup_db.sh               # 数据库备份
     ├── start-local / stop-local / restart-backend（.sh/.bat）  # 本地启停
-    ├── seed-demo-data.sh/.sql     # 演示数据导入
+    ├── seed-demo-data.sh          # 演示数据导入（复制样例图 + 执行 database/seed_dev_data.sql）
     ├── check_entity_db_fields.js  # 实体-数据库字段对账
     ├── clean_test_data.sql        # 测试数据清理
     ├── gen-dev-cert.sh            # 开发证书生成
@@ -272,50 +266,12 @@ make clean
 
 ## 八、数据库脚本
 
-- **建表脚本**：`database/V1__init_db.sql`
-- **种子数据**：`database/V1__seed_data.sql`
-- **增量迁移**（按版本号顺序执行）：
-  - `V2__factory_module.sql`：工厂模块 + 导入增强
-  - `V3__align_sequences.sql`：序列对齐
-  - `V4__project_module.sql`：项目模块 + 收藏夹 + 方案模板化
-  - `V5__order_module.sql`：订单模块 + 系统配置（sys_config）
-  - `V6__team_module.sql`：企业团队（sys_user 扩展 company_name/group_name）
-  - `V7__order_price_rate_constraint.sql`：订单折扣率 CHECK 约束 [0,1]
-  - `V8__missing_indexes.sql`：补齐缺失索引
-  - `V9__favorite_permissions.sql`：收藏夹权限种子
-  - `V10__widen_id_columns.sql`：业务主键列宽拓宽至 VARCHAR(64)（完整 UUID）
-  - `V11__quote_confidence_dict.sql`：报价置信度字典种子
-  - `V12__variant_unique_index.sql`：变体属性组合部分唯一索引（防并发导入重复变体，原 V7 改号）
-  - `V13__member_module.sql`：用户中心企业团队完整版（company/member_group/invite_record + sys_user 企业归属/邀请码/认证设计师）
-  - `V14__favorite_template.sql`：收藏夹两级模型（favorite_folder + user_favorite.folder_id）+ 模板标签实体（template_tag）
-  - ~~V15~V18~~：官网 CMS 五表 / 订单增强 / 方案明细 sort_order / 项目分享——**内容已并入 `V1__init_db.sql`，无独立文件**（新环境无需单独执行；保留版本号占用避免重号）
-  - `V19__order_idempotency.sql`：订单幂等键与去重
-  - `V20__business_code.sql`：RSPU/RSKU 业务编码（rspu_code / rsku_code / rsku_code_counter）
-  - `V21__rspu_product_name.sql`：RSPU 商品名称（rspu_master.product_name，产品库列表展示）
-  - `V22__fabric_tags_and_dict_aliases.sql`：面料标签（rspu_master.fabric_tags + fabric 字典）+ 字典别名机制（category_dict.aliases，AI 识别同义词归一）
-  - `V23__dict_update_permission.sql`：字典管理权限（dict:update，授予 ADMIN/EDITOR）
-  - `V24__rspu_external_code_unique.sql`：rspu_master.external_code 部分唯一索引（存量有重复时 WARNING 跳过）
-  - `V25__excel_import_sheet_and_rspu_fields.sql`：excel_import_batch.sheet_index（多 Sheet 逐一导入）+ rspu_master.description/retail_price（长文本描述原文、不加密零售参考价）
-  - `V26__variant_text_and_unresolved.sql`：变体原文列（rspu_variant.size_text/color_text/material_text）+ uk_variant_attrs 唯一索引改"码或原文"语义 + dict_unresolved_value 未归一值采集表
-  - `V27__dict_alias_table.sql`：字典别名表（dict_alias，工厂方言叫法 → 字典码自学习；与 V22 category_dict.aliases 列并存）
-  - `V28__scheme_unique_name.sql`：搭配方案名称唯一性约束（个人方案按创建人去重、项目方案按项目去重；TC-SEC-012 / TC-PERF-003）
-  - `V29__six_dim_dict_seed.sql`：六维字典全品类枚举种子 427 条（9 品类 × A/B/C/D/F，含别名与 remark 判别要点）+ category 补种 DT/BD/LT + category_dict 新增 remark 列（生成器 scripts/generate_six_dim_dict_seed.js；原 main 分支 V24，合并后重编号）
-  - `V30__six_dim_schema.sql`：六维维度定义配置化（six_dim_schema 表 + 10 套维度定义种子，替代前后端双写；原 main 分支 V25，合并后重编号）
-  - `V31__image_content_hash.sql`：图片内容哈希（image_assets.content_hash + 索引，录入按 SHA-256 精确查重同一图片文件）
-  - `V32__widen_import_row_type.sql`：excel_import_row.row_type 拓宽至 VARCHAR(32)（preview_placeholder 占位行）
-  - `V33__excel_import_row_override_images.sql`：Excel 导入行级用户覆盖图片（excel_import_row.override_image_asset_ids，数据清洗页图片编辑；原本地分支 V31，与 main V31 重号后改号）
-  - `V34__create_platform_lead.sql`：官网留资线索表（platform_lead：name/phone/source[ai_match|site_form|design_booking]/intent/budget/status[pending|contacted|done]/assignee/follow_log JSONB，用户端官网留资入口 + 管理端线索跟进）
-  - `V35__scene_dict_cover_image.sql`：官网空间探索场景封面图可手配（category_dict.image_id，仅存 image_assets.image_id 不加 FK/索引；管理端手配优先，无手配走"最新在售产品主图"兜底）
-  - `V36__floor_plan_module.sql`：户型图分析模块（floor_plan_analysis 批次表[含 source admin/public + deleted_at 软删列] + floor_plan_room 空间明细表[OCR/AI估算/人工三级尺寸来源] + scheme.analysis_id 溯源列；管理端 /api/v1/floor-plan/** 链路，设计见 docs/05-status/户型图空间搭配链路完整方案v3.0.md）
-  - `V37__platform_home_content_seed.sql`：官网首页内容种子（platform_content 补 home_trio_cards / home_service_cards 两条 JSON 数组文案，与 website 首页静态兜底一致，消除官网首页 /public/content 404 WARN）
-  - `V38__pricing_model.sql`：价格体系 P1（design_order_item.list_price 标准售价快照明文列 + sys_config 种子 pricing.markup.global=2.5 全局加价倍率；订单计价从"出厂价×折扣率"切换为"标准售价×折扣率"）
-  - `V39__pricing_rule.sql`：价格体系 P3 后端（pricing_rule 品类级加价倍率表[category_code 唯一] + pricing:update 权限点[仅 ADMIN]；售价解析链升级为 retail_price → 成本×品类倍率 → 成本×全局倍率）
-  - `V40__scheme_space_tag.sql`：方案项级空间标签（scheme_item.space_tag 空间覆盖标签[场景字典码，可空=跟随产品 rspu_scene 首场景推导] + design_order_item.space_tag 订单空间快照；空间设计画布方案 A，存量为 NULL 行为不变）
-  - `V41__scheme_canvas_layout.sql`：方案画布布局（scheme.canvas_layout JSONB，搭配画布摆位持久化：{"<schemeItemId>":{x,y,scale,z}}，存量为 NULL 行为不变）
-  - `V42__scheme_share.sql`：方案级分享（scheme.share_enabled + share_expire_at，免登录公开只读 /api/v1/public/schemes/{schemeId}，有效期 NULL=永久；存量默认关闭行为不变）
+- **基线 DDL（唯一结构真相）**：`database/schema/`（01_dict → 12_system 按域拆分 + cross_domain_fk 跨域后置外键，编号即执行顺序；全新初始化唯一建表来源。历史增量 V2~V45 已全部并入并归档删除，演进记录见 git 历史）
+- **必需种子**：`database/schema/zz_seed.sql`（字典/权限，含在 schema/ 内，字母序最后执行，原 V1__seed_data.sql / seed_required_data.sql）
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
-- **重置脚本**：`database/reset_db.sql`
-- **同步约定（重要）**：新增迁移时，`V1__init_db.sql`、`V1__seed_data.sql`、`reset_db.sql` 三处必须同步更新，保证全新初始化和重复执行都幂等安全。
+- **开发/演示种子**：`database/seed_dev_data.sql`（弱口令测试账号 + 演示工厂/产品；仅开发/演示环境 `make seed-dev` 执行，绝不进生产，initdb 不挂载）
+- **重置脚本**：`database/ops/reset_db.sql`（纯开发工具：DROP + 重建 + 必需种子 + 开发测试账号，自包含幂等）
+- **同步约定（重要）**：开发期改结构直接编辑 `database/schema/` 对应域文件 + 同步 `ops/reset_db.sql`（两处必须一致）；种子数据变化直接改 `database/schema/zz_seed.sql`。所有 DDL 语句幂等可重复执行（IF NOT EXISTS / IF EXISTS 守卫）。实体/表结构改动后运行 `node scripts/check_entity_db_fields.js` 对账。历史演进由 git 承载；待首个生产环境出现时再引入版本化迁移工具
 - **开发数据库连接**：`server/src/main/resources/application-dev.yml`
 
 ---

@@ -99,7 +99,7 @@ export function isJsonListPlatformContent(code: string): boolean {
   return metaMap.get(code)?.kind === 'json_list'
 }
 
-/** 新增内容预设模板（示例内容与 database/V37 种子、website 首页静态兜底一致） */
+/** 新增内容预设模板（示例内容与 database/migrations/V37 种子、website 首页静态兜底一致） */
 export interface PlatformContentPreset {
   /** 预设编码（选择后锁定不可改） */
   code: string

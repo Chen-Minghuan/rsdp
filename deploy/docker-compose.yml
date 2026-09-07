@@ -11,11 +11,14 @@ services:
       POSTGRES_DB: rsdp
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # 容器/数据库默认时区：timestamptz 的默认渲染基准（须与后端 JVM 的 TZ 一致，勿随意改）
+      TZ: Asia/Shanghai
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ../database/V1__init_db.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ../database/V1__seed_data.sql:/docker-entrypoint-initdb.d/02-seed.sql
-      - ../database/V2__factory_module.sql:/docker-entrypoint-initdb.d/03-factory-module.sql
+      # 首次启动自动初始化：PG initdb 按字母序执行目录顶层 *.sql
+      # schema/ = 基线 DDL（01_~12_ 数字编号按序 + cross_domain_fk.sql 字母序排最后）
+      # + zz_seed.sql（必需字典/权限种子，zz 前缀保证最后执行），单一目录挂载
+      - ../database/schema:/docker-entrypoint-initdb.d
 
   ollama:
     image: ollama/ollama:0.5.11

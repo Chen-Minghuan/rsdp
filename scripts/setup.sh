@@ -21,13 +21,12 @@ fi
 echo "等待 PostgreSQL 就绪..."
 sleep 5
 
-# 初始化数据库
-echo "初始化 PostgreSQL 数据库..."
-docker exec -i rsdp-postgres psql -U "${POSTGRES_USER:-rsdp}" -d rsdp -f /docker-entrypoint-initdb.d/01-init.sql
-
-# 导入种子数据
-echo "导入种子数据..."
-docker exec -i rsdp-postgres psql -U "${POSTGRES_USER:-rsdp}" -d rsdp -f /docker-entrypoint-initdb.d/02-seed.sql
+# 初始化数据库（schema/ 基线 DDL + 字典种子，按字母序逐文件执行，zz_seed.sql 最后）
+echo "初始化 PostgreSQL 数据库（基线 DDL + 种子数据）..."
+for f in $(docker exec rsdp-postgres ls /docker-entrypoint-initdb.d/*.sql); do
+    echo "执行 $f"
+    docker exec -i rsdp-postgres psql -U "${POSTGRES_USER:-rsdp}" -d rsdp -v ON_ERROR_STOP=1 -f "$f"
+done
 
 echo "=== 环境搭建完成 ==="
 echo "请确认已设置 DASHSCOPE_API_KEY 环境变量（如使用 DashScope）。"

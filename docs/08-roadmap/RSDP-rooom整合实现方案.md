@@ -393,7 +393,7 @@ CREATE INDEX idx_scheme_template ON scheme(is_template) WHERE is_template = true
 
 `project_type` 字典种子（追加 `database/V4__project_module.sql`）：`whole_house` 全屋 / `space` 单空间 / `custom` 定制。
 
-权限种子：`project:read` / `project:create` / `project:update` / `project:delete`，ADMIN + DESIGNER + EDITOR 授予全部，VIEWER 仅 read。
+权限种子：`project:read` / `project:create` / `project:update` / `project:delete`，ADMIN + DESIGNER + EDITOR 授予全部，USER 仅 read。
 
 #### 4.2.2 后端文件
 

@@ -89,7 +89,7 @@ cp deploy/.env.example deploy/.env
 cd deploy && docker compose up -d
 ```
 
-首次启动时，PostgreSQL 会自动执行 `database/V1__init_db.sql`、`database/V1__seed_data.sql` 和 `database/V2__factory_module.sql` 完成数据库初始化。
+首次启动时，PostgreSQL 会自动执行 `database/schema/`（01_~12_ 数字编号基线 DDL → cross_domain_fk.sql 后置外键 → zz_seed.sql 必需种子）完成数据库初始化（目录地图与手工执行手册见 `database/README.md`）。
 
 访问：http://localhost（Nginx 会强转 HTTPS，若使用自签名证书请忽略浏览器安全警告）
 
@@ -121,7 +121,7 @@ cd web && pnpm install && pnpm dev
 
 访问：http://localhost:5173
 
-**开发环境默认登录账号（首次启动或重置数据库后生效）：**
+**开发环境默认登录账号（`make dev` / `make seed-dev` 导入 database/seed_dev_data.sql 后生效；reset_db.sql 重置后亦含）：**
 
 | 账号 | 密码 | 角色 |
 |:---|:---|:---|
@@ -129,7 +129,6 @@ cd web && pnpm install && pnpm dev
 | `editor` | `rsdp-dev-2026!` | EDITOR |
 | `designer` | `rsdp-dev-2026!` | DESIGNER |
 | `factory` | `rsdp-dev-2026!` | FACTORY_ADMIN |
-| `viewer` | `rsdp-dev-2026!` | VIEWER |
 | `user` | `rsdp-dev-2026!` | USER |
 
 > 以上账号仅在开发/演示环境使用，生产环境请务必删除或修改默认密码。

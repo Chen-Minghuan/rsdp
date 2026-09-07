@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # RSDP 本地演示数据一键导入脚本
-# 从本地测试案例图目录复制样例图片，并写入数据库演示记录
+# 从本地测试案例图目录复制样例图片，并写入数据库开发/演示种子数据（database/seed_dev_data.sql）
 #
 # 用法：
 #   scripts/seed-demo-data.sh
@@ -32,7 +32,7 @@ if [ -z "${DEMO_IMAGE_SOURCE:-}" ]; then
 fi
 SOURCE_DIR="$DEMO_IMAGE_SOURCE"
 DEST_DIR="$PROJECT_ROOT/server/data/uploads/images"
-SQL_FILE="$PROJECT_ROOT/scripts/seed-demo-data.sql"
+SQL_FILE="$PROJECT_ROOT/database/seed_dev_data.sql"
 
 if [ ! -d "$SOURCE_DIR" ]; then
     echo "错误：找不到图片源目录 $SOURCE_DIR"
@@ -42,18 +42,17 @@ fi
 
 mkdir -p "$DEST_DIR"
 
-declare -A STYLE_MAP=(
-    ["MC"]="中古风"
-    ["WJ"]="侘寂风"
-    ["CR"]="奶油风"
-    ["MD"]="孟菲斯·多巴胺"
-    ["IO"]="工业风LOFT"
-    ["IL"]="意式极简轻奢"
-    ["ZS"]="新中式·宋式"
-    ["FN"]="法式复古南洋"
-    ["HH"]="混搭风"
-    ["MB"]="现代极简·包豪斯"
-)
+# 风格编码 -> 图片源子目录名（兼容 macOS 自带 bash 3.2：不使用 declare -A 关联数组）
+STYLE_PAIRS="MC:中古风
+WJ:侘寂风
+CR:奶油风
+MD:孟菲斯·多巴胺
+IO:工业风LOFT
+IL:意式极简轻奢
+ZS:新中式·宋式
+FN:法式复古南洋
+HH:混搭风
+MB:现代极简·包豪斯"
 
 copy_first_image() {
     local src_folder="$1"
@@ -84,9 +83,11 @@ echo "图片目标目录: $DEST_DIR"
 echo ""
 
 echo "[1/3] 复制风格样例图片..."
-for code in "${!STYLE_MAP[@]}"; do
-    folder="${STYLE_MAP[$code]}"
-    copy_first_image "$SOURCE_DIR/$folder" "demo-${code,,}-001" || true
+echo "$STYLE_PAIRS" | while IFS=: read -r code folder; do
+    [ -z "$code" ] && continue
+    # bash 3.2 不支持 ${code,,}，用 tr 转小写
+    dest_code=$(echo "$code" | tr '[:upper:]' '[:lower:]')
+    copy_first_image "$SOURCE_DIR/$folder" "demo-${dest_code}-001" || true
 done
 
 echo ""
@@ -95,7 +96,7 @@ copy_first_image "$SOURCE_DIR/中古风" "demo-test-01" || true
 copy_first_image "$SOURCE_DIR/奶油风" "demo-test-02" || true
 
 echo ""
-echo "[3/3] 写入数据库演示数据..."
+echo "[3/3] 写入数据库开发/演示种子数据（database/seed_dev_data.sql）..."
 # 优先使用 Docker 内 psql，避免依赖本地 PostgreSQL 客户端
 if docker ps --format '{{.Names}}' | grep -qx 'rsdp-postgres'; then
     docker exec -i rsdp-postgres psql -U "${POSTGRES_USER:-rsdp}" -d rsdp -f - < "$SQL_FILE"
@@ -110,6 +111,7 @@ echo "=========================================="
 echo " 演示数据导入完成"
 echo "=========================================="
 echo "新增/补充："
+echo "  - 开发测试账号：admin/editor/designer/factory/user（弱口令 rsdp-dev-2026!，仅开发用）"
 echo "  - 工厂：F001、F002，并补全 TEST 工厂资料"
 echo "  - RSPU：10 条（覆盖 10 种风格）"
 echo "  - 变体：10 条、图片：10 张、RSKU：12 条"

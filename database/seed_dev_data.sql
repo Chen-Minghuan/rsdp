@@ -1,6 +1,67 @@
---- RSDP 本地演示数据补充脚本
+-- ============================================================================
+-- RSDP 开发/演示种子数据（seed_dev_data.sql）
+--
+-- ⚠️ 仅开发 / 演示环境使用，绝不进生产！
+--    - 本文件含弱口令测试账号（admin/editor/designer/factory/user，密码统一为 rsdp-dev-2026!）
+--    - 本文件含虚构演示数据（演示工厂 F001/F002、DEMO-* 产品/变体/图片/报价）
+--    - 生产环境初始化只执行 database/schema/（含 zz_seed.sql，docker-compose initdb 即如此）
+--
+-- 前置条件（必须先执行）：
+--    1. database/schema/*.sql      —— 基线 DDL（全部表结构）
+--    2. database/schema/zz_seed.sql —— 必需种子：字典（类别/风格/材质等）、角色权限
+--       依赖明细：sys_role（角色关联）、category_dict 风格码 MC/WJ/CR/MD/IO/IL/ZS/FN/HH/MB、
+--       类别码 SF、材质码 LE/LI/SF/PL/MT/NP/WO/VE 等
+--
+-- 幂等：可重复执行，全部使用 ON CONFLICT DO NOTHING / UPDATE WHERE。
+-- 图片：演示图片文件本身不在数据库内，如需页面展示图片，先运行 scripts/seed-demo-data.sh
+--       （它会复制本地样例图到 server/data/uploads/images/ 并执行本文件）。
+-- ============================================================================
+
+-- =================== 开发测试账号 ===================
+
+-- 测试工厂（演示 RSKU 报价挂在此工厂下）
+INSERT INTO factory_master (factory_code, factory_name, factory_level, region, status) VALUES
+('TEST', '测试工厂', 'A', '广东', 'active')
+ON CONFLICT (factory_code) DO NOTHING;
+
+-- 开发/演示环境测试账号（密码均为：rsdp-dev-2026!）
+-- 生产环境部署后应立即通过管理后台修改或删除这些账号。
+-- DefaultAdminInitializer 仅在新库且无用户时生成随机密码。
+-- 注意：ON CONFLICT 必须 DO NOTHING —— 重复执行种子脚本时绝不能覆盖用户已修改的密码
+-- （否则任何一次 make seed-dev 都会把账号密码回退为公开的开发弱口令，属认证回退风险，
+--  见 docs/07-issues/2026-07-23-全量代码健壮性审查报告.md 问题 #7）。
+INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, group_name, status, view_full_catalog) VALUES
+('USER-ADMIN-00000001', 'admin', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '系统管理员', 'RSDP 平台', '平台运营组', 'active', true),
+('USER-EDITOR-00000001', 'editor', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '编辑员', 'RSDP 平台', '内容编辑组', 'active', true),
+('USER-DESIGNER-00000001', 'designer', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '设计师', '示例设计工作室', '方案一组', 'active', false),
+('USER-FACTORY-00000001', 'factory', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '工厂管理员', '测试家具工厂', '销售部', 'active', false),
+('USER-USER-00000001', 'user', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '普通用户', '示例设计工作室', '方案二组', 'active', false)
+ON CONFLICT (username) DO NOTHING;
+
+-- 测试用户角色关联
+INSERT INTO sys_user_role (user_id, role_id)
+SELECT u.user_id, r.role_id
+FROM sys_user u, sys_role r
+WHERE u.username IN ('admin', 'editor', 'designer', 'factory', 'user')
+  AND r.role_code = CASE u.username
+    WHEN 'admin' THEN 'ADMIN'
+    WHEN 'editor' THEN 'EDITOR'
+    WHEN 'designer' THEN 'DESIGNER'
+    WHEN 'factory' THEN 'FACTORY_ADMIN'
+    WHEN 'user' THEN 'USER'
+  END
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- 工厂管理员绑定测试工厂
+INSERT INTO sys_user_factory (user_id, factory_code)
+SELECT u.user_id, 'TEST'
+FROM sys_user u
+WHERE u.username = 'factory'
+ON CONFLICT (user_id, factory_code) DO NOTHING;
+
+-- =================== 演示数据（演示工厂 / 产品 / 报价） ===================
 -- 前置条件：scripts/seed-demo-data.sh 已将对应图片复制到 server/data/uploads/images/
--- 说明：本脚本幂等，可重复执行（ON CONFLICT DO NOTHING / UPDATE WHERE）
+-- 说明：本段幂等，可重复执行（ON CONFLICT DO NOTHING / UPDATE WHERE）
 
 -- =================== 演示工厂 ===================
 INSERT INTO factory_master (

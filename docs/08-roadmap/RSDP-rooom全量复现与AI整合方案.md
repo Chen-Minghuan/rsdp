@@ -104,13 +104,13 @@ CREATE TABLE invite_record (                    -- 邀请记录
 - 企业 CRUD、变更管理员（`update-owner`）、企业折扣率
 - 分组 CRUD + 启停
 - 成员：按手机号/用户名搜索用户 → 邀请加入企业（`join-company`）、移出、调分组
-- 认证设计师：`PUT /api/v1/member/certified-designer`（VIEWER → 挂 certified_designer + 补 DESIGNER 角色）
+- 认证设计师：`PUT /api/v1/member/certified-designer`（USER → 挂 certified_designer + 补 DESIGNER 角色）
 - 邀请码：注册/创建用户时生成 8 位码；`?inviteCode=` 注册绑定 `invited_by` + 写 invite_record
 - 订单价格计算优先级：企业 price_ratio > 全局 price_rate
 
 **前端**：`UserCenterView` 布局（左菜单 4 子页）：个人中心（资料/改密/认证设计师入口）、企业信息、成员管理、邀请用户（复制链接 + 邀请记录）。登录页支持 inviteCode 参数回填。
 
-**角色映射**：rooom TOURIST → RSDP `VIEWER`；DESIGNER → `DESIGNER`；COMPANY 不是角色而是归属（company_id 非空即企业账号）。顶栏显示账号类型徽标。
+**角色映射**：rooom TOURIST → RSDP `USER`；DESIGNER → `DESIGNER`；COMPANY 不是角色而是归属（company_id 非空即企业账号）。顶栏显示账号类型徽标。
 
 ### 阶段 6：收藏夹升级 + 模板体系增强（约 2 天）
 
@@ -163,7 +163,7 @@ CREATE TABLE invite_record (                    -- 邀请记录
 多租户、member/mall/pay 全家桶与 RSPU/RSKU 双层编码冲突；认证沿用现有 JWT + RBAC + 数据权限，不切换。
 
 ### 4.2 企业 ≠ 角色
-rooom 的 COMPANY 账号本质是「归属企业的用户」。RSDP 用 `sys_user.company_id` 表达归属，角色仍走 VIEWER/DESIGNER/EDITOR/ADMIN/FACTORY_ADMIN，数据权限按 company 维度扩展（DataScope 增加 COMPANY 范围）。
+rooom 的 COMPANY 账号本质是「归属企业的用户」。RSDP 用 `sys_user.company_id` 表达归属，角色仍走 USER/DESIGNER/EDITOR/ADMIN/FACTORY_ADMIN，数据权限按 company 维度扩展（DataScope 增加 COMPANY 范围）。
 
 ### 4.3 物料板不复制独立应用
 board.rooom.vip 是独立微前端 + 硬编码 token，复制成本高且安全模型差。用站内画布增强 + AI 推荐替代，体验更连贯（详见阶段 9）。

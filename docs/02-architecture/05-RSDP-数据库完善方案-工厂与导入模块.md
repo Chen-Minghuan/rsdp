@@ -331,6 +331,8 @@ CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(
 
 ### 3.5 新增: 价格列映射记录表 `rspu_price_column_mapping`
 
+> 注：该表已确认为死表（功能未接线，价格列选择实际存 `excel_import_row.selected_price_columns`），并于 2026-09-07 从 schema 移除。
+
 **用途**: 记录每次 Excel 导入时，识别出的价格列与实际材质版本的映射关系，便于后续追踪和复用。
 
 ```sql

@@ -19,9 +19,8 @@ DROP TABLE IF EXISTS style_case CASCADE;
 DROP TABLE IF EXISTS ai_recognition CASCADE;
 DROP TABLE IF EXISTS image_assets CASCADE;
 DROP TABLE IF EXISTS price_history CASCADE;
+DROP TABLE IF EXISTS rspu_price_summary CASCADE;
 DROP TABLE IF EXISTS rsku_supply CASCADE;
-DROP TABLE IF EXISTS rspu_price_column_mapping CASCADE;
-DROP TABLE IF EXISTS excel_import_price_column CASCADE;
 DROP TABLE IF EXISTS excel_import_row CASCADE;
 DROP TABLE IF EXISTS factory_lead_time_rule CASCADE;
 DROP TABLE IF EXISTS rspu_factory_mapping CASCADE;
@@ -104,8 +103,8 @@ CREATE TABLE IF NOT EXISTS six_dim_schema (
     label         VARCHAR(64)  NOT NULL,
     description   VARCHAR(255) NOT NULL DEFAULT '',
     sort_order    INTEGER      NOT NULL DEFAULT 0,
-    created_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
     CONSTRAINT uk_six_dim_schema UNIQUE (category_code, dim_key)
 );
 
@@ -140,9 +139,9 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     review_comment TEXT,                           -- 复核备注/说明
     aesthetics_confidence VARCHAR(16),
     source_agent_version VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ
 );
 
 -- RSPU 多风格关联表
@@ -151,7 +150,7 @@ CREATE TABLE IF NOT EXISTS rspu_style (
     dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
     style_code VARCHAR(32) NOT NULL,
     is_primary BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (rspu_id, style_code),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
@@ -162,7 +161,7 @@ CREATE TABLE IF NOT EXISTS rspu_code_counter (
     category_code VARCHAR(16) NOT NULL,
     style_code VARCHAR(16) NOT NULL,
     sequence_value BIGINT NOT NULL DEFAULT 1,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (category_code, style_code)
 );
 
@@ -172,7 +171,7 @@ CREATE TABLE IF NOT EXISTS rsku_code_counter (
     factory_code VARCHAR(16) NOT NULL,
     material_code VARCHAR(16) NOT NULL,
     sequence_value BIGINT NOT NULL DEFAULT 1,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (rspu_code, factory_code, material_code)
 );
 
@@ -181,7 +180,7 @@ CREATE TABLE IF NOT EXISTS rspu_scene (
     rspu_id VARCHAR(64) NOT NULL,
     dict_type VARCHAR(32) NOT NULL DEFAULT 'scene',
     scene_code VARCHAR(32) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (rspu_id, scene_code),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (dict_type, scene_code) REFERENCES category_dict(dict_type, dict_code)
@@ -206,9 +205,9 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     reference_price_band VARCHAR(16),
     product_level VARCHAR(8),
     status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
 
@@ -216,7 +215,7 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
 CREATE TABLE IF NOT EXISTS variant_code_counter (
     rspu_id VARCHAR(64) NOT NULL,
     sequence_value BIGINT NOT NULL DEFAULT 1,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (rspu_id),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
@@ -265,9 +264,9 @@ CREATE TABLE IF NOT EXISTS factory_master (
     import_batch_source VARCHAR(32),                 -- 首次来源导入批次
     source_type VARCHAR(16) DEFAULT 'manual',        -- manual/excel_import/api_sync
     status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ
 );
 
 COMMENT ON COLUMN factory_master.factory_level IS '工厂层级: S级战略厂/A级核心厂/B级合作厂/C级备选厂，由 capacity_tier_score 自动计算或手动指定';
@@ -278,11 +277,11 @@ CREATE TABLE IF NOT EXISTS factory_level_capability (
     factory_code VARCHAR(16) NOT NULL,
     level_code VARCHAR(8) NOT NULL,
     is_primary BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     UNIQUE (factory_code, level_code)
 );
-CREATE INDEX IF NOT EXISTS idx_factory_level_capability_factory ON factory_level_capability(factory_code);
+-- idx_factory_level_capability_factory 已于 V41 删除：UNIQUE(factory_code, level_code) 左前缀，冗余
 
 -- 工厂仓库表
 CREATE TABLE IF NOT EXISTS factory_warehouse (
@@ -297,8 +296,8 @@ CREATE TABLE IF NOT EXISTS factory_warehouse (
     contact_phone VARCHAR(32),
     is_default BOOLEAN DEFAULT FALSE,
     status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 
@@ -312,7 +311,7 @@ CREATE TABLE IF NOT EXISTS factory_variant_capacity (
     capacity_unit VARCHAR(16) DEFAULT '件',
     lead_time_batch_days INTEGER,
     notes TEXT,
-    updated_at TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     PRIMARY KEY (factory_code, variant_id),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
@@ -330,8 +329,8 @@ CREATE TABLE IF NOT EXISTS rspu_factory_mapping (
     status VARCHAR(16) DEFAULT 'active',
     notes TEXT,
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id),
@@ -356,13 +355,16 @@ CREATE TABLE IF NOT EXISTS factory_lead_time_rule (
     status VARCHAR(16) DEFAULT 'active',
     notes TEXT,
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
-    UNIQUE (factory_code, category_code, material_grade_code, process_type)
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 CREATE INDEX IF NOT EXISTS idx_lead_time_rule_factory ON factory_lead_time_rule(factory_code, status);
-CREATE INDEX IF NOT EXISTS idx_lead_time_rule_match ON factory_lead_time_rule(factory_code, category_code, material_grade_code, process_type);
+-- 通配规则唯一约束（V41）：category_code/material_grade_code 可空（NULL=通配），
+-- NULLS NOT DISTINCT（PG 15+）让 NULL 参与判重，替代原行内 UNIQUE（NULL 互不相等导致通配规则可重复）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_lead_time_rule_match_v2
+    ON factory_lead_time_rule (factory_code, category_code, material_grade_code, process_type)
+    NULLS NOT DISTINCT;
 
 -- 工厂产能评估历史表（V2 新增）
 CREATE TABLE IF NOT EXISTS factory_capacity_assessment (
@@ -384,7 +386,7 @@ CREATE TABLE IF NOT EXISTS factory_capacity_assessment (
     active_rsku_count INTEGER,
     assessed_by VARCHAR(64),
     notes TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 CREATE INDEX IF NOT EXISTS idx_assessment_factory ON factory_capacity_assessment(factory_code, assessment_period);
@@ -418,9 +420,9 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     quote_confidence VARCHAR(16),
     review_status VARCHAR(16) DEFAULT '待复核',
     price_updated DATE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
@@ -429,13 +431,13 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
 
 -- 价格历史表
 CREATE TABLE IF NOT EXISTS price_history (
-    history_id SERIAL PRIMARY KEY,
+    history_id BIGSERIAL PRIMARY KEY,
     rsku_id VARCHAR(64) NOT NULL,
     old_price TEXT,
     new_price TEXT,
     changed_by VARCHAR(64),
     change_reason TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
 );
 
@@ -457,8 +459,8 @@ CREATE TABLE IF NOT EXISTS image_assets (
     quality_score DECIMAL(5, 4),
     content_hash VARCHAR(64),
     uploaded_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
@@ -474,9 +476,9 @@ CREATE TABLE IF NOT EXISTS rspu_relation (
     sort_order INTEGER DEFAULT 0,
     status VARCHAR(16) DEFAULT 'active',
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
     FOREIGN KEY (anchor_rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (related_rspu_id) REFERENCES rspu_master(rspu_id)
 );
@@ -490,6 +492,8 @@ CREATE TABLE IF NOT EXISTS ai_recognition (
     rspu_id VARCHAR(64),
     task_id VARCHAR(64),
     model_name VARCHAR(64),
+    model_version VARCHAR(64),
+    prompt_version VARCHAR(64),
     recognition_type VARCHAR(16),
     endpoint TEXT,
     input_data JSONB,
@@ -503,7 +507,7 @@ CREATE TABLE IF NOT EXISTS ai_recognition (
     processing_time_ms INTEGER,
     status VARCHAR(16),
     error_message TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (image_id) REFERENCES image_assets(image_id),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
@@ -525,13 +529,14 @@ CREATE TABLE IF NOT EXISTS scheme (
     analysis_id VARCHAR(64),
     canvas_layout JSONB,        -- 画布布局（搭配画布，V41 并入）
     share_enabled BOOLEAN NOT NULL DEFAULT false,  -- 方案分享开关（V42 并入）
-    share_expire_at TIMESTAMP,  -- 方案分享过期时间（V42 并入，NULL=永久有效）
+    share_expire_at TIMESTAMPTZ,  -- 方案分享过期时间（V42 并入，NULL=永久有效）
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    deleted_at TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_scheme_created_by ON scheme(created_by, status);
+CREATE INDEX IF NOT EXISTS idx_scheme_status_created ON scheme(status, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme(project_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_scheme_template ON scheme(is_template) WHERE is_template = true AND deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uk_scheme_name_user_active
@@ -554,14 +559,15 @@ CREATE TABLE IF NOT EXISTS scheme_item (
     quantity INTEGER DEFAULT 1,
     sort_order INTEGER DEFAULT 0,
     space_tag VARCHAR(32),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMPTZ,
     FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);
+CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme_sort ON scheme_item(scheme_id, sort_order, scheme_item_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_scheme_item_rspu ON scheme_item(rspu_id);
 
 -- 异步任务表
@@ -574,8 +580,8 @@ CREATE TABLE IF NOT EXISTS async_task (
     result_data JSONB,
     error_message TEXT,
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMPTZ
 );
 
 -- 户型图分析批次表（V36 并入：一次上传一条）
@@ -590,12 +596,13 @@ CREATE TABLE IF NOT EXISTS floor_plan_analysis (
     source           VARCHAR(16) NOT NULL DEFAULT 'admin',
     error_message    TEXT,
     created_by       VARCHAR(64),
-    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMP,
-    deleted_at       TIMESTAMP,
+    created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMPTZ,
+    deleted_at       TIMESTAMPTZ,
     FOREIGN KEY (image_id) REFERENCES image_assets(image_id)
 );
 CREATE INDEX IF NOT EXISTS idx_fpa_created_by ON floor_plan_analysis(created_by, created_at) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fpa_created ON floor_plan_analysis(created_at DESC) WHERE deleted_at IS NULL;
 
 -- 户型图空间识别明细表（V36 并入）
 CREATE TABLE IF NOT EXISTS floor_plan_room (
@@ -610,9 +617,9 @@ CREATE TABLE IF NOT EXISTS floor_plan_room (
     dimension_confidence VARCHAR(8) DEFAULT 'low',
     dimension_text   VARCHAR(128),
     sort_order       INTEGER DEFAULT 0,
-    deleted_at       TIMESTAMP,
-    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMP,
+    deleted_at       TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMPTZ,
     FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
 );
 CREATE INDEX IF NOT EXISTS idx_fpr_analysis ON floor_plan_room(analysis_id) WHERE deleted_at IS NULL;
@@ -641,13 +648,14 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     data_start_row INTEGER DEFAULT 3,
     import_note TEXT,
     sheet_index INT NOT NULL DEFAULT 0,                 -- 多 Sheet 文件批次解析的工作表索引（V18 并入）
-    processed_at TIMESTAMP,
+    processed_at TIMESTAMPTZ,
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
     -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加
 );
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
+CREATE INDEX IF NOT EXISTS idx_import_batch_stale ON excel_import_batch(updated_at) WHERE status = 'importing';
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_created_by ON excel_import_batch(created_by);
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_factory ON excel_import_batch(factory_code);
 
@@ -672,8 +680,8 @@ CREATE TABLE IF NOT EXISTS excel_import_row (
     image_asset_ids JSONB,
     override_image_asset_ids JSONB,
     ai_task_id VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id),
     FOREIGN KEY (parent_row_id) REFERENCES excel_import_row(row_id),
     FOREIGN KEY (generated_rspu_id) REFERENCES rspu_master(rspu_id),
@@ -685,48 +693,10 @@ CREATE INDEX IF NOT EXISTS idx_import_row_type ON excel_import_row(batch_id, row
 CREATE INDEX IF NOT EXISTS idx_import_row_rspu ON excel_import_row(generated_rspu_id);
 CREATE INDEX IF NOT EXISTS idx_import_row_parent ON excel_import_row(parent_row_id);
 
--- RSPU 价格列映射记录表（V2 新增）
-CREATE TABLE IF NOT EXISTS rspu_price_column_mapping (
-    mapping_id BIGSERIAL PRIMARY KEY,
-    rspu_id VARCHAR(64) NOT NULL,
-    batch_id VARCHAR(64) NOT NULL,
-    price_column_name VARCHAR(64) NOT NULL,
-    material_grade_code VARCHAR(32),
-    material_code VARCHAR(32),
-    factory_price DECIMAL(18,2),
-    factory_code VARCHAR(16),
-    is_selected BOOLEAN DEFAULT TRUE,
-    notes TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
-);
-CREATE INDEX IF NOT EXISTS idx_price_col_mapping_rspu ON rspu_price_column_mapping(rspu_id);
-CREATE INDEX IF NOT EXISTS idx_price_col_mapping_batch ON rspu_price_column_mapping(batch_id);
-
--- 批次价格列识别表（V2 新增）
-CREATE TABLE IF NOT EXISTS excel_import_price_column (
-    column_id BIGSERIAL PRIMARY KEY,
-    batch_id VARCHAR(64) NOT NULL,
-    excel_column_letter VARCHAR(8) NOT NULL,
-    column_header_name VARCHAR(128) NOT NULL,
-    raw_header_name VARCHAR(256),
-    suggested_material_grade VARCHAR(32),
-    is_selected BOOLEAN DEFAULT TRUE,
-    sample_values JSONB,
-    data_type VARCHAR(16),
-    value_count INTEGER,
-    min_value DECIMAL(18,2),
-    max_value DECIMAL(18,2),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id)
-);
-CREATE INDEX IF NOT EXISTS idx_import_price_col_batch ON excel_import_price_column(batch_id);
 
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_log (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     table_name VARCHAR(64) NOT NULL,
     record_id VARCHAR(64) NOT NULL,
     action VARCHAR(16) NOT NULL,
@@ -734,7 +704,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     new_value JSONB,
     operator VARCHAR(64),
     ip_address VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 操作员表
@@ -744,8 +714,8 @@ CREATE TABLE IF NOT EXISTS user_operator (
     real_name VARCHAR(64),
     role VARCHAR(32),
     status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
 );
 
 -- 风格数据库 Skill 表
@@ -766,8 +736,8 @@ CREATE TABLE IF NOT EXISTS style_case (
     negative_lesson TEXT,
     review_status VARCHAR(16) DEFAULT '待复核',
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
@@ -781,7 +751,7 @@ CREATE TABLE IF NOT EXISTS style_element (
     is_primary BOOLEAN DEFAULT FALSE,
     confidence VARCHAR(16),
     notes TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (case_id) REFERENCES style_case(case_id)
 );
 
@@ -800,14 +770,14 @@ CREATE TABLE IF NOT EXISTS style_matching_formula (
     fail_count INTEGER DEFAULT 0,
     status VARCHAR(16) DEFAULT 'active',
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
 -- 产品-风格匹配结果：产品录入后自动计算
 CREATE TABLE IF NOT EXISTS product_style_match (
-    match_id SERIAL PRIMARY KEY,
+    match_id BIGSERIAL PRIMARY KEY,
     rspu_id VARCHAR(64) NOT NULL,
     dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
     style_code VARCHAR(32) NOT NULL,
@@ -815,8 +785,8 @@ CREATE TABLE IF NOT EXISTS product_style_match (
     formula_scores JSONB,
     overall_score DECIMAL(5,4),
     confidence VARCHAR(16),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     UNIQUE (rspu_id, style_code),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
@@ -824,14 +794,14 @@ CREATE TABLE IF NOT EXISTS product_style_match (
 
 -- 推荐反馈：用于后续优化公式
 CREATE TABLE IF NOT EXISTS matching_feedback (
-    feedback_id SERIAL PRIMARY KEY,
+    feedback_id BIGSERIAL PRIMARY KEY,
     rspu_id VARCHAR(64) NOT NULL,
     recommended_rspu_id VARCHAR(64) NOT NULL,
     formula_id VARCHAR(64),
     score DECIMAL(5,4),
     feedback VARCHAR(16),
     reason TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (recommended_rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (formula_id) REFERENCES style_matching_formula(formula_id)
@@ -839,6 +809,8 @@ CREATE TABLE IF NOT EXISTS matching_feedback (
 
 -- =================== 4. 创建索引 ===================
 CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, status);
+CREATE INDEX IF NOT EXISTS idx_rspu_status_created ON rspu_master(status, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_rspu_category_status_created ON rspu_master(category_code, status, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
@@ -848,7 +820,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_external_code ON rspu_master(external_
 
 CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);
 CREATE INDEX IF NOT EXISTS idx_rspu_scene ON rspu_scene(scene_code);
-CREATE INDEX IF NOT EXISTS idx_rspu_style_rspu ON rspu_style(rspu_id, style_code);
 
 CREATE INDEX IF NOT EXISTS idx_variant_rspu ON rspu_variant(rspu_id, status);
 CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);
@@ -866,11 +837,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_variant_attrs
     )
     WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
 
 CREATE INDEX IF NOT EXISTS idx_factory_warehouse_factory ON factory_warehouse(factory_code, status);
 CREATE INDEX IF NOT EXISTS idx_capacity_variant ON factory_variant_capacity(variant_id);
-CREATE INDEX IF NOT EXISTS idx_capacity_factory ON factory_variant_capacity(factory_code);
 
 CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
@@ -880,14 +851,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, varian
 
 CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_at);
 
+-- RSPU 价格投影汇总表：每 RSPU 一行，只存业务允许暴露的聚合指标
+CREATE TABLE IF NOT EXISTS rspu_price_summary (
+    rspu_id            VARCHAR(64) PRIMARY KEY,
+    min_factory_price  NUMERIC(14, 2),
+    max_factory_price  NUMERIC(14, 2),
+    active_rsku_count  INTEGER NOT NULL DEFAULT 0,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rspu_price_summary_min ON rspu_price_summary(min_factory_price);
+
 CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_variant ON image_assets(variant_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_primary ON image_assets(rspu_id, is_primary);
 CREATE INDEX IF NOT EXISTS idx_image_rsku ON image_assets(rsku_id);
-CREATE INDEX IF NOT EXISTS idx_image_content_hash ON image_assets(content_hash);
+CREATE INDEX IF NOT EXISTS idx_image_content_hash ON image_assets(content_hash) WHERE deleted_at IS NULL AND content_hash IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_ai_image ON ai_recognition(image_id, recognition_type);
 CREATE INDEX IF NOT EXISTS idx_ai_rspu ON ai_recognition(rspu_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_recognition_task ON ai_recognition(task_id);
 
 CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
@@ -900,6 +883,7 @@ CREATE INDEX IF NOT EXISTS idx_style_element_type ON style_element(element_type,
 CREATE INDEX IF NOT EXISTS idx_formula_style_room ON style_matching_formula(style_code, room_type, status);
 CREATE INDEX IF NOT EXISTS idx_product_match_rspu ON product_style_match(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_product_match_score ON product_style_match(overall_score DESC);
+CREATE INDEX IF NOT EXISTS idx_matching_feedback_rspu ON matching_feedback(rspu_id);
 
 -- 系统用户表
 CREATE TABLE IF NOT EXISTS sys_user (
@@ -917,12 +901,11 @@ CREATE TABLE IF NOT EXISTS sys_user (
     invite_code VARCHAR(16),
     invited_by VARCHAR(64),
     certified_designer BOOLEAN NOT NULL DEFAULT false,
-    last_login_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP
+    last_login_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_sys_user_username ON sys_user(username);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sys_user_invite_code ON sys_user(invite_code);
 CREATE INDEX IF NOT EXISTS idx_sys_user_company ON sys_user(company_id);
 
@@ -941,9 +924,9 @@ CREATE TABLE IF NOT EXISTS company (
     price_ratio   NUMERIC(5,4) NOT NULL DEFAULT 1,
     owner_id      VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     status        VARCHAR(16) NOT NULL DEFAULT 'active',
-    deleted_at    TIMESTAMP,
-    created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    deleted_at    TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_company_price_ratio CHECK (price_ratio >= 0 AND price_ratio <= 1)
 );
 CREATE INDEX IF NOT EXISTS idx_company_owner ON company(owner_id);
@@ -955,9 +938,9 @@ CREATE TABLE IF NOT EXISTS member_group (
     company_id  VARCHAR(64) NOT NULL REFERENCES company(company_id),
     group_name  VARCHAR(64) NOT NULL,
     enabled     BOOLEAN NOT NULL DEFAULT true,
-    deleted_at  TIMESTAMP,
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    deleted_at  TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_member_group_company ON member_group(company_id) WHERE deleted_at IS NULL;
 
@@ -967,7 +950,7 @@ CREATE TABLE IF NOT EXISTS invite_record (
     inviter_id  VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     invitee_id  VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     invite_code VARCHAR(16) NOT NULL,
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_invite_record_inviter ON invite_record(inviter_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_invite_record_invitee ON invite_record(invitee_id);
@@ -989,8 +972,8 @@ CREATE TABLE IF NOT EXISTS sys_role (
     role_code VARCHAR(32) NOT NULL UNIQUE,
     role_name VARCHAR(64) NOT NULL,
     status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
 );
 
 -- 权限表
@@ -998,7 +981,7 @@ CREATE TABLE IF NOT EXISTS sys_permission (
     permission_id BIGSERIAL PRIMARY KEY,
     permission_code VARCHAR(64) NOT NULL UNIQUE,
     permission_name VARCHAR(128) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 角色权限关联表
@@ -1006,7 +989,7 @@ CREATE TABLE IF NOT EXISTS sys_role_permission (
     id BIGSERIAL PRIMARY KEY,
     role_id BIGINT NOT NULL,
     permission_id BIGINT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (role_id, permission_id),
     FOREIGN KEY (role_id) REFERENCES sys_role(role_id),
     FOREIGN KEY (permission_id) REFERENCES sys_permission(permission_id)
@@ -1017,7 +1000,7 @@ CREATE TABLE IF NOT EXISTS sys_user_role (
     id BIGSERIAL PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL,
     role_id BIGINT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (user_id, role_id),
     FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
     FOREIGN KEY (role_id) REFERENCES sys_role(role_id)
@@ -1028,7 +1011,7 @@ CREATE TABLE IF NOT EXISTS sys_user_factory (
     id BIGSERIAL PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL,
     factory_code VARCHAR(16) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (user_id, factory_code),
     FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
@@ -1041,12 +1024,11 @@ CREATE TABLE IF NOT EXISTS factory_product_capability (
     category_code VARCHAR(16),
     style_code VARCHAR(16),
     material_code VARCHAR(8),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     UNIQUE (factory_code, category_code, style_code, material_code),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
-CREATE INDEX IF NOT EXISTS idx_factory_capability_factory ON factory_product_capability(factory_code);
 CREATE INDEX IF NOT EXISTS idx_factory_capability_keys ON factory_product_capability(category_code, style_code, material_code);
 
 -- 产品集（管理员维护的主流搭配集合）
@@ -1062,8 +1044,8 @@ CREATE TABLE IF NOT EXISTS product_collection (
     sort_order INT DEFAULT 0,
     status VARCHAR(20) DEFAULT 'ACTIVE',
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_product_collection_status ON product_collection(status);
@@ -1075,7 +1057,7 @@ CREATE TABLE IF NOT EXISTS product_collection_item (
     collection_id UUID NOT NULL,
     rspu_id VARCHAR(64) NOT NULL,
     sort_order INT DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (collection_id, rspu_id),
     FOREIGN KEY (collection_id) REFERENCES product_collection(collection_id) ON DELETE CASCADE,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
@@ -1085,7 +1067,7 @@ CREATE INDEX IF NOT EXISTS idx_collection_item_rspu ON product_collection_item(r
 
 -- 设计师画像
 CREATE TABLE IF NOT EXISTS designer_profile (
-    profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    profile_id VARCHAR(64) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL UNIQUE,
     real_name VARCHAR(64),
     avatar_url TEXT,
@@ -1101,11 +1083,10 @@ CREATE TABLE IF NOT EXISTS designer_profile (
     default_budget_max DECIMAL(18,2),
     is_public BOOLEAN DEFAULT false,
     status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (user_id) REFERENCES sys_user(user_id)
 );
-CREATE INDEX IF NOT EXISTS idx_designer_profile_user ON designer_profile(user_id);
 CREATE INDEX IF NOT EXISTS idx_designer_profile_status ON designer_profile(status);
 
 -- 推荐打分配置
@@ -1118,11 +1099,10 @@ CREATE TABLE IF NOT EXISTS recommendation_score_config (
     is_default BOOLEAN DEFAULT false,
     is_active BOOLEAN DEFAULT true,
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
 );
-CREATE INDEX IF NOT EXISTS idx_recommendation_config_key ON recommendation_score_config(config_key);
 CREATE INDEX IF NOT EXISTS idx_recommendation_config_default ON recommendation_score_config(is_default, is_active);
 
 -- AI 推荐候选清单
@@ -1136,8 +1116,8 @@ CREATE TABLE IF NOT EXISTS scheme_candidate (
     match_factors JSONB,
     status VARCHAR(16) DEFAULT 'pending',
     created_by VARCHAR(64),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
 );
@@ -1152,7 +1132,7 @@ CREATE TABLE IF NOT EXISTS user_favorite (
     rspu_id VARCHAR(64) NOT NULL REFERENCES rspu_master(rspu_id),
     group_name VARCHAR(64),
     folder_id VARCHAR(64),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, rspu_id)
 );
 CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
@@ -1164,9 +1144,9 @@ CREATE TABLE IF NOT EXISTS favorite_folder (
     user_id     VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
     folder_name VARCHAR(64) NOT NULL,
     sort_order  INT NOT NULL DEFAULT 0,
-    deleted_at  TIMESTAMP,
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    deleted_at  TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_favorite_folder_user ON favorite_folder(user_id) WHERE deleted_at IS NULL;
 
@@ -1181,8 +1161,8 @@ CREATE TABLE IF NOT EXISTS template_tag (
     tag_name   VARCHAR(64) NOT NULL UNIQUE,
     sort_order INT NOT NULL DEFAULT 0,
     enabled    BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 设计项目（V4 并入）
@@ -1195,10 +1175,10 @@ CREATE TABLE IF NOT EXISTS project (
     status VARCHAR(20) NOT NULL DEFAULT 'active',
     remark VARCHAR(512),
     share_enabled BOOLEAN NOT NULL DEFAULT false,
-    share_expire_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    share_expire_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
 
@@ -1224,14 +1204,14 @@ CREATE TABLE IF NOT EXISTS design_order (
     expected_lead_time INT,
     remark VARCHAR(512),
     invite_token_hash VARCHAR(128),
-    invite_expire_at TIMESTAMP,
-    invite_confirmed_at TIMESTAMP,
+    invite_expire_at TIMESTAMPTZ,
+    invite_confirmed_at TIMESTAMPTZ,
     contract_file_id VARCHAR(64),
     idempotency_key VARCHAR(64),
     created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    deleted_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
@@ -1244,7 +1224,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_design_order_idempotency
 CREATE TABLE IF NOT EXISTS order_no_counter (
     date_part VARCHAR(16) PRIMARY KEY,
     sequence_value BIGINT NOT NULL DEFAULT 1,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 订单明细（V5 并入）
@@ -1264,8 +1244,8 @@ CREATE TABLE IF NOT EXISTS design_order_item (
     list_price NUMERIC(12,2),                        -- 标准售价快照（明文，对客户可见；区别于上面三列 TEXT 存 AES 密文，V38 并入）
     space_tag VARCHAR(32),                           -- 空间快照（由方案复制冻结，V40 并入）
     factory_code VARCHAR(16),
-    snapshot_json TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    snapshot_json JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 COMMENT ON COLUMN design_order_item.list_price IS '标准售价快照（明文 NUMERIC：售价对客户可见不敏感，且便于 SQL 分析；刻意区别于 original_price/final_price/adjust_price 三列 TEXT 存 AES 密文）';
 COMMENT ON COLUMN design_order_item.space_tag IS '空间快照（由方案生成订单时从 scheme_item.space_tag 复制冻结；为空=未指定空间/存量订单，邀请页平铺展示兜底）';
@@ -1278,7 +1258,7 @@ CREATE TABLE IF NOT EXISTS sys_config (
     config_key VARCHAR(64) PRIMARY KEY,
     config_value TEXT,
     remark VARCHAR(256),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 品类级加价倍率（V39 并入）：标准售价 = 成本 × 品类倍率（retail_price 优先；无规则回退全局 pricing.markup.global）
@@ -1287,8 +1267,8 @@ CREATE TABLE IF NOT EXISTS pricing_rule (
     category_code VARCHAR(16) NOT NULL,
     markup_multiplier NUMERIC(6,3) NOT NULL CHECK (markup_multiplier > 0),
     remark VARCHAR(255),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uk_pricing_rule_category ON pricing_rule(category_code);
 
@@ -1300,7 +1280,7 @@ CREATE TABLE IF NOT EXISTS dict_alias (
     dict_code   VARCHAR(16) NOT NULL,
     source      VARCHAR(16) NOT NULL DEFAULT 'ai_confirmed',
     created_by  VARCHAR(64),
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uk_dict_alias UNIQUE (dict_type, alias_name)
 );
 CREATE INDEX IF NOT EXISTS idx_dict_alias_type ON dict_alias(dict_type);
@@ -1311,14 +1291,14 @@ CREATE TABLE IF NOT EXISTS dict_unresolved_value (
     dict_type VARCHAR(32) NOT NULL,
     raw_value VARCHAR(128) NOT NULL,
     occurrence_count INT NOT NULL DEFAULT 1,
-    first_seen_at TIMESTAMP NOT NULL DEFAULT now(),
-    last_seen_at TIMESTAMP NOT NULL DEFAULT now(),
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_batch_id VARCHAR(64),
     last_username VARCHAR(64),
     status VARCHAR(16) NOT NULL DEFAULT 'pending',
     resolved_code VARCHAR(16),
     resolved_by VARCHAR(64),
-    resolved_at TIMESTAMP,
+    resolved_at TIMESTAMPTZ,
     CONSTRAINT uk_dict_unresolved UNIQUE (dict_type, raw_value)
 );
 CREATE INDEX IF NOT EXISTS idx_dict_unresolved_status ON dict_unresolved_value(status, dict_type);
@@ -2282,7 +2262,7 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- ============================================================
--- RBAC 与开发测试账号种子（同步自 database/V1__seed_data.sql）
+-- RBAC 与开发测试账号种子（同步自 database/schema/zz_seed.sql）
 -- 注意：缺少本段会导致重置后所有角色零权限，登录后全部接口 403。
 -- ============================================================
 
@@ -2290,7 +2270,6 @@ ON CONFLICT (dict_type, dict_code) DO NOTHING;
 INSERT INTO sys_role (role_code, role_name) VALUES
 ('ADMIN', '系统管理员'),
 ('EDITOR', '编辑员'),
-('VIEWER', '浏览者'),
 ('FACTORY_ADMIN', '工厂管理员'),
 ('DESIGNER', '设计师'),
 ('USER', '普通用户')
@@ -2363,14 +2342,6 @@ WHERE r.role_code = 'EDITOR'
   AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill', 'recommendation:score:config:read', 'recommendation:score:config:update', 'pricing:update')
 ON CONFLICT DO NOTHING;
 
--- VIEWER：只读
-INSERT INTO sys_role_permission (role_id, permission_id)
-SELECT r.role_id, p.permission_id
-FROM sys_role r, sys_permission p
-WHERE r.role_code = 'VIEWER'
-  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
-ON CONFLICT DO NOTHING;
-
 -- FACTORY_ADMIN：自己工厂产品 + 工厂资料维护 + 报价相关 + 只读
 INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
@@ -2426,11 +2397,11 @@ WHERE r.role_code IN ('ADMIN', 'EDITOR')
   AND p.permission_code LIKE 'project:%'
 ON CONFLICT DO NOTHING;
 
--- VIEWER / USER：项目只读
+-- USER：项目只读
 INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
-WHERE r.role_code IN ('VIEWER', 'USER')
+WHERE r.role_code = 'USER'
   AND p.permission_code = 'project:read'
 ON CONFLICT DO NOTHING;
 
@@ -2494,7 +2465,6 @@ ON CONFLICT (factory_code) DO NOTHING;
 INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, group_name, status, view_full_catalog) VALUES
 ('USER-ADMIN-00000001', 'admin', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '系统管理员', 'RSDP 平台', '平台运营组', 'active', true),
 ('USER-EDITOR-00000001', 'editor', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '编辑员', 'RSDP 平台', '内容编辑组', 'active', true),
-('USER-VIEWER-00000001', 'viewer', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '浏览者', 'RSDP 平台', '平台运营组', 'active', false),
 ('USER-DESIGNER-00000001', 'designer', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '设计师', '示例设计工作室', '方案一组', 'active', false),
 ('USER-FACTORY-00000001', 'factory', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '工厂管理员', '测试家具工厂', '销售部', 'active', false),
 ('USER-USER-00000001', 'user', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '普通用户', '示例设计工作室', '方案二组', 'active', false)
@@ -2504,11 +2474,10 @@ ON CONFLICT (username) DO NOTHING;
 INSERT INTO sys_user_role (user_id, role_id)
 SELECT u.user_id, r.role_id
 FROM sys_user u, sys_role r
-WHERE u.username IN ('admin', 'editor', 'viewer', 'designer', 'factory', 'user')
+WHERE u.username IN ('admin', 'editor', 'designer', 'factory', 'user')
   AND r.role_code = CASE u.username
     WHEN 'admin' THEN 'ADMIN'
     WHEN 'editor' THEN 'EDITOR'
-    WHEN 'viewer' THEN 'VIEWER'
     WHEN 'designer' THEN 'DESIGNER'
     WHEN 'factory' THEN 'FACTORY_ADMIN'
     WHEN 'user' THEN 'USER'
@@ -2610,8 +2579,8 @@ CREATE TABLE IF NOT EXISTS platform_banner (
     link_value  VARCHAR(512),
     sort_order  INT NOT NULL DEFAULT 0,
     status      VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_platform_banner_position ON platform_banner(position, status, sort_order);
 
@@ -2622,8 +2591,8 @@ CREATE TABLE IF NOT EXISTS platform_case (
     content        TEXT,
     sort_order     INT NOT NULL DEFAULT 0,
     status         VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_platform_case_status ON platform_case(status, sort_order);
 
@@ -2634,8 +2603,8 @@ CREATE TABLE IF NOT EXISTS platform_content (
     content_type VARCHAR(16) NOT NULL DEFAULT 'rich_text',
     content      TEXT,
     status       VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS platform_custom_dict (
@@ -2643,8 +2612,8 @@ CREATE TABLE IF NOT EXISTS platform_custom_dict (
     dict_name  VARCHAR(64) NOT NULL,
     dict_type  VARCHAR(32) NOT NULL,
     status     VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (dict_type, dict_name)
 );
 
@@ -2656,8 +2625,8 @@ CREATE TABLE IF NOT EXISTS platform_customized (
     link_value     VARCHAR(512),
     sort_order     INT NOT NULL DEFAULT 0,
     status         VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_platform_customized_status ON platform_customized(status, sort_order);
 
@@ -2672,8 +2641,8 @@ CREATE TABLE IF NOT EXISTS platform_lead (
     status      VARCHAR(16)  NOT NULL DEFAULT 'pending',
     assignee    VARCHAR(64),
     follow_log  JSONB,
-    created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_platform_lead_status ON platform_lead(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_platform_lead_source ON platform_lead(source, created_at);
