@@ -20,7 +20,7 @@ POST   /api/v1/auth/register
        # 公开注册（免登录，可携带邀请码归因）
        # Request:  { username, password, nickname?, inviteCode? }
        # Response: { userId, username, nickname, inviteCode }
-       # 说明：默认 VIEWER 角色（rooom TOURIST 映射）；inviteCode 有效时绑定
+       # 说明：默认 USER 角色（只读）；inviteCode 有效时绑定
        #      invited_by 并写 invite_record，无效码/自邀请返回业务错误
 
 GET    /api/v1/auth/me
@@ -1141,7 +1141,7 @@ PUT    /api/v1/admin/users/{userId}/status
 PUT    /api/v1/member/certified-designer
        # 认证设计师（当前用户一键升级）
        # Response: void
-       # 说明：挂 certified_designer 标记；VIEWER/USER 角色补 DESIGNER 角色并
+       # 说明：挂 certified_designer 标记；USER 角色补 DESIGNER 角色并
        #      递增 token_version（需重新登录）；已是 DESIGNER/ADMIN/EDITOR 只挂标记
 
 GET    /api/v1/member/company

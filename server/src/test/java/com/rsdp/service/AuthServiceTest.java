@@ -198,7 +198,7 @@ class AuthServiceTest {
         assertThat(captor.getValue().getInviteCode()).isEqualTo("ABCD2345");
         assertThat(captor.getValue().getCertifiedDesigner()).isFalse();
         assertThat(captor.getValue().getNickname()).isEqualTo("newbie");
-        verify(userRoleService).assignRoleByCode(any(), eq("VIEWER"));
+        verify(userRoleService).assignRoleByCode(any(), eq("USER"));
         verify(inviteService, never()).bindInviter(any(), any());
         verify(auditLogService).logCreate(eq("sys_user"), any(), any(SysUser.class), eq("newbie"));
         assertThat(response.getInviteCode()).isEqualTo("ABCD2345");

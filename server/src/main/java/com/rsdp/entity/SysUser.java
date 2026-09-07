@@ -40,7 +40,7 @@ public class SysUser {
     /** 邀请人 user_id（注册归因，不携带权限） */
     private String invitedBy;
 
-    /** 认证设计师标记（VIEWER 一键升级时置位并补 DESIGNER 角色） */
+    /** 认证设计师标记（USER 一键升级时置位并补 DESIGNER 角色） */
     private Boolean certifiedDesigner;
 
     private String status;

@@ -31,8 +31,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AuthService {
 
-    /** 公开注册默认角色（rooom TOURIST 映射）。 */
-    private static final String DEFAULT_REGISTER_ROLE = "VIEWER";
+    /** 公开注册默认角色（rooom TOURIST 映射，只读）。 */
+    private static final String DEFAULT_REGISTER_ROLE = "USER";
 
     /** 用户名/邀请码唯一冲突重试上限。 */
     private static final int MAX_INSERT_ATTEMPTS = 3;
@@ -110,7 +110,7 @@ public class AuthService {
     }
 
     /**
-     * 公开注册：创建 VIEWER 角色账号，生成永久邀请码；携带有效邀请码时绑定邀请归因。
+     * 公开注册：创建 USER（普通用户，只读）角色账号，生成永久邀请码；携带有效邀请码时绑定邀请归因。
      *
      * @param request 注册请求
      * @return 注册响应（含新用户自己的邀请码）

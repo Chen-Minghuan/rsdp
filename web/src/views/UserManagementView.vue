@@ -88,7 +88,6 @@ const resetPasswordRules = {
 const roleOptions = [
   { label: '系统管理员', value: 'ADMIN' },
   { label: '编辑员', value: 'EDITOR' },
-  { label: '浏览者', value: 'VIEWER' },
   { label: '工厂管理员', value: 'FACTORY_ADMIN' },
   { label: '设计师', value: 'DESIGNER' },
   { label: '普通用户', value: 'USER' }

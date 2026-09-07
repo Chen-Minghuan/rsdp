@@ -86,7 +86,6 @@ const isDev = import.meta.env.DEV
 const quickAccounts = [
   { username: 'admin', password: 'rsdp-dev-2026!', label: '系统管理员' },
   { username: 'editor', password: 'rsdp-dev-2026!', label: '编辑员' },
-  { username: 'viewer', password: 'rsdp-dev-2026!', label: '浏览者' },
   { username: 'designer', password: 'rsdp-dev-2026!', label: '设计师' },
   { username: 'factory', password: 'rsdp-dev-2026!', label: '工厂管理员' },
   { username: 'user', password: 'rsdp-dev-2026!', label: '普通用户' }

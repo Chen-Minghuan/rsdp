@@ -58,7 +58,7 @@ public class MemberController {
     }
 
     /**
-     * 认证设计师：当前用户一键升级（挂标记，VIEWER/USER 补 DESIGNER 角色）。
+     * 认证设计师：当前用户一键升级（挂标记，只读角色 USER 补 DESIGNER 角色）。
      *
      * @return 空结果
      */

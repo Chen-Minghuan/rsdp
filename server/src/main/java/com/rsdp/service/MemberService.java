@@ -203,7 +203,7 @@ public class MemberService {
 
     /**
      * 认证设计师：当前用户一键升级（rooom TOURIST → DESIGNER 映射）。
-     * 挂 certified_designer 标记；当前角色为 VIEWER/USER 时补 DESIGNER 角色并使旧 token 失效。
+     * 挂 certified_designer 标记；只读角色（USER）补 DESIGNER 角色并使旧 token 失效。
      */
     @Transactional
     public void certifiedDesigner() {

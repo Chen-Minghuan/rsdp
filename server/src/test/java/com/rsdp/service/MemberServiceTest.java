@@ -153,7 +153,7 @@ class MemberServiceTest {
         target.setStatus("active");
         when(sysUserMapper.selectById("user-9")).thenReturn(target);
         when(memberGroupMapper.selectById("GRP-1")).thenReturn(group("GRP-1", true));
-        when(userRoleService.getRoleCodesByUserId("user-9")).thenReturn(List.of("VIEWER"));
+        when(userRoleService.getRoleCodesByUserId("user-9")).thenReturn(List.of("USER"));
 
         JoinCompanyRequest request = new JoinCompanyRequest();
         request.setUserId("user-9");
@@ -283,7 +283,7 @@ class MemberServiceTest {
         user.setPasswordHash("$2a$10$bcryptHashValue");
         user.setTokenVersion(0);
         when(sysUserMapper.selectById("user-1")).thenReturn(user);
-        when(userRoleService.getRoleCodesByUserId("user-1")).thenReturn(List.of("VIEWER"));
+        when(userRoleService.getRoleCodesByUserId("user-1")).thenReturn(List.of("USER"));
 
         try (var ignored = mockStatic(SecurityOperatorContext.class)) {
             when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
