@@ -21,6 +21,8 @@ public class SchemeItemResponse {
     private String factorySku;
 
     private BigDecimal factoryPrice;
+    /** 参考售价（销售价口径：该 RSPU 候选 RSKU 的最低标准售价，全角色可见；未定价为 null）。 */
+    private BigDecimal salePrice;
     private Integer quantity;
     private BigDecimal subtotal;
     private Integer leadTimeDays;

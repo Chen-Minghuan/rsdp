@@ -8,8 +8,8 @@ import java.util.List;
 /**
  * 方案分享公开视图（免登录只读，V42）。
  *
- * <p>安全边界：严格白名单组装，只含产品名/主图 imageId/数量/空间名/排序，
- * 不含工厂/价格/RSKU/成本等敏感信息。</p>
+ * <p>安全边界：严格白名单组装，只含产品名/主图 imageId/数量/空间名/排序/标准售价，
+ * 不含工厂/成本/RSKU 等敏感信息（标准售价为对客价格，可公开）。</p>
  */
 @Data
 public class SchemeShareResponse {
@@ -30,6 +30,8 @@ public class SchemeShareResponse {
         /** 产品主图 image_id（image_assets 主图 is_primary） */
         private String imageId;
         private Integer quantity;
+        /** 标准售价（对客价格；未定价为 null） */
+        private java.math.BigDecimal salePrice;
         /** 空间标签显示名（space_tag 覆盖优先，回退产品首场景推导，码已删回退码原文） */
         private String spaceTagName;
         private Integer sortOrder;

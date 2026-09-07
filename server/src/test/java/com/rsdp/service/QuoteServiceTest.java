@@ -262,7 +262,7 @@ class QuoteServiceTest {
     }
 
     @Test
-    void generateQuote_saleMode_shouldPriceBySalePriceWithMargin() {
+    void generateQuote_saleMode_shouldPriceBySalePriceWithoutCostFields() {
         stubSaleModeFixtures();
         when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
         // 标准售价 6000（建议销售价或成本×倍率由 PricingService 决定）
@@ -275,13 +275,13 @@ class QuoteServiceTest {
         assertThat(item.getSalePrice()).isEqualByComparingTo(new BigDecimal("6000"));
         assertThat(item.getSubtotal()).isEqualByComparingTo(new BigDecimal("12000.00"));
         assertThat(item.isBelowCost()).isFalse();
-        // 有出厂价权限：附成本与毛利（仅内部）
-        assertThat(item.getCostPrice()).isEqualByComparingTo(new BigDecimal("2500"));
-        assertThat(item.getMarginAmount()).isEqualByComparingTo(new BigDecimal("3500.00"));
-        // 汇总：成本合计 5000，毛利合计 7000
+        // sale 为对客户口径：即使有出厂价权限也绝不返回出厂价/成本/毛利
+        assertThat(item.getFactoryPrice()).isNull();
+        assertThat(item.getCostPrice()).isNull();
+        assertThat(item.getMarginAmount()).isNull();
         assertThat(response.getSummary().getTotalPrice()).isEqualByComparingTo(new BigDecimal("12000.00"));
-        assertThat(response.getSummary().getTotalCost()).isEqualByComparingTo(new BigDecimal("5000.00"));
-        assertThat(response.getSummary().getTotalMargin()).isEqualByComparingTo(new BigDecimal("7000.00"));
+        assertThat(response.getSummary().getTotalCost()).isNull();
+        assertThat(response.getSummary().getTotalMargin()).isNull();
         assertThat(response.getPriceWarning()).isNull();
     }
 
@@ -327,7 +327,8 @@ class QuoteServiceTest {
 
         var item = response.getItems().get(0);
         assertThat(item.isBelowCost()).isTrue();
-        assertThat(item.getMarginAmount()).isEqualByComparingTo(new BigDecimal("-500.00"));
+        // sale 口径不返回毛利金额（对客户不可见），仅保留 belowCost 预警标记
+        assertThat(item.getMarginAmount()).isNull();
         assertThat(response.getPriceWarning())
             .contains("售价低于成本")
             .contains("中古风")
@@ -342,15 +343,18 @@ class QuoteServiceTest {
     }
 
     @Test
-    void generateQuote_costMode_shouldNotReturnSaleFields() {
+    void generateQuote_costMode_shouldReturnSalePriceForAllRoles() {
         stubSaleModeFixtures();
         when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
+        // 标准售价三级链可解析时，cost 口径同样返回售价（全角色可见，解决设计师报价单价格列全空）
+        when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("6250"));
 
         var response = quoteService.generateQuote(List.of(req("RSKU-001", 2)), "cost");
 
         var item = response.getItems().get(0);
         assertThat(item.getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
-        assertThat(item.getSalePrice()).isNull();
+        assertThat(item.getSalePrice()).isEqualByComparingTo(new BigDecimal("6250"));
+        assertThat(item.getFactoryPrice()).isEqualByComparingTo(new BigDecimal("2500"));
         assertThat(item.getCostPrice()).isNull();
         assertThat(item.getMarginAmount()).isNull();
         assertThat(response.getSummary().getTotalCost()).isNull();

@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.BusinessException;
@@ -12,6 +13,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+
+import java.util.List;
 
 /**
  * RSKU 业务编码生成服务。
@@ -74,7 +77,7 @@ public class RskuCodeService {
      * @param materialCode 材质码
      * @return 生成的业务编码
      */
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public String assignCode(String rskuId, String rspuId, String factoryCode, String materialCode) {
         if (!StringUtils.hasText(rskuId)) {
             throw new BusinessException("RSKU ID 不能为空");
@@ -108,5 +111,59 @@ public class RskuCodeService {
             rskuSupplyMapper.updateById(rsku);
         }
         return code;
+    }
+
+    /**
+     * 容错发号：为指定 RSKU 生成并写入业务编码，失败不抛异常。
+     *
+     * <p>内部调用 {@link #assignCode}，捕获 {@link BusinessException} 后记录告警并返回 null，
+     * 供创建链路使用（如 Excel AI 导入时所属 RSPU 尚未发号的容错场景）。</p>
+     *
+     * @param rskuId       RSKU ID
+     * @param rspuId       所属 RSPU ID
+     * @param factoryCode  工厂代码
+     * @param materialCode 材质码
+     * @return 生成的业务编码；返回 null 表示暂无法发号，rsku_code 留空待补发
+     *         （由 {@link #backfillCodesByRspu} 在 RSPU 补码后联动补发）
+     */
+    public String tryAssignCode(String rskuId, String rspuId, String factoryCode, String materialCode) {
+        try {
+            return assignCode(rskuId, rspuId, factoryCode, materialCode);
+        } catch (BusinessException e) {
+            log.warn("RSKU 业务编码暂无法发号，留空待补发，rskuId={}，rspuId={}，factoryCode={}，原因={}",
+                rskuId, rspuId, factoryCode, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 为指定 RSPU 下所有未软删且 rsku_code 为空的 RSKU 补发业务编码。
+     *
+     * <p>用于 RSPU 补发 rspu_code（如 AI 异步识别补全风格/尺寸后发号）后的联动补偿：
+     * 此前因 RSPU 无码而以"无码创建"方式入库的工厂报价，在此逐个补发并落库。
+     * 单条补发失败仅记录告警、继续处理其余记录，不中断整体补偿。
+     * 该方法在调用方事务内执行，保持与 {@link #assignCode} 一致的
+     * noRollbackFor = BusinessException 语义（单条失败不回滚调用方事务）。</p>
+     *
+     * @param rspuId RSPU ID
+     * @return 实际补发成功的 RSKU 数量
+     */
+    @Transactional(noRollbackFor = BusinessException.class)
+    public int backfillCodesByRspu(String rspuId) {
+        List<RskuSupply> pending = rskuSupplyMapper.selectList(new QueryWrapper<RskuSupply>()
+            .eq("rspu_id", rspuId)
+            .isNull("rsku_code"));
+        int backfilled = 0;
+        for (RskuSupply rsku : pending) {
+            try {
+                assignCode(rsku.getRskuId(), rspuId, rsku.getFactoryCode(), rsku.getMaterialCode());
+                backfilled++;
+            } catch (BusinessException e) {
+                // 单条失败不阻断：记录告警后继续补发其余记录
+                log.warn("RSKU 业务编码补发失败，跳过该条，rskuId={}，rspuId={}，原因={}",
+                    rsku.getRskuId(), rspuId, e.getMessage());
+            }
+        }
+        return backfilled;
     }
 }

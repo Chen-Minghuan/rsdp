@@ -48,6 +48,7 @@ public class AiRecognitionPersistenceService {
     private final DictResolverService dictResolverService;
     private final RspuCodeService rspuCodeService;
     private final RspuVariantMapper rspuVariantMapper;
+    private final RskuCodeService rskuCodeService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -259,6 +260,11 @@ public class AiRecognitionPersistenceService {
             // assignCode 内部已落库；同步到当前实体，避免后续 updateById 用旧快照覆盖
             rspu.setRspuCode(code);
             log.info("AI 识别补全风格后补发 RSPU 业务编码成功，rspuId={}，rspuCode={}", rspu.getRspuId(), code);
+            // RSPU 发号成功，联动补发此前因无 rspu_code 而"无码创建"的 RSKU 业务编码
+            int backfilled = rskuCodeService.backfillCodesByRspu(rspu.getRspuId());
+            if (backfilled > 0) {
+                log.info("RSPU 补码后联动补发 RSKU 业务编码，rspuId={}，补发数量={}", rspu.getRspuId(), backfilled);
+            }
         } catch (BusinessException e) {
             log.warn("AI 识别后生成 RSPU 业务编码失败，rspuId={}，原因={}", rspu.getRspuId(), e.getMessage());
             rspu.setReviewStatus("存疑");

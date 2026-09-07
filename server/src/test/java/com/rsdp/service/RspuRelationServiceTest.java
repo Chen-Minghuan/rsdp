@@ -15,6 +15,7 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,6 +24,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -66,6 +70,11 @@ class RspuRelationServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(dataScopeHelper.canAccessRspu(any())).thenReturn(true);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
     }
 
     @Test
@@ -255,6 +264,8 @@ class RspuRelationServiceTest {
 
     @Test
     void toResponse_shouldFillMinPriceAndImageUrl() {
+        // 最低出厂价仅平台运营可见：以 ADMIN 视角断言透出
+        authenticateWithRoles("admin", "ADMIN");
         lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
 
 
@@ -288,5 +299,46 @@ class RspuRelationServiceTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getTargetImageUrl()).isEqualTo("/api/v1/images/IMG-001");
         assertThat(result.get(0).getTargetMinPrice()).isEqualTo(new BigDecimal("1500"));
+    }
+
+    @Test
+    void toResponse_nonPlatformStaff_shouldMaskTargetMinPrice() {
+        // 设计师视角：targetMinPrice 掩码为 null，其余字段正常透出
+        authenticateWithRoles("designer", "DESIGNER");
+        lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
+
+        RspuRelation relation = new RspuRelation();
+        relation.setRelationId("REL-001");
+        relation.setAnchorRspuId("RSPU-BED");
+        relation.setRelatedRspuId("RSPU-MATTRESS");
+        relation.setRelationType("official");
+        relation.setStatus("active");
+
+        RspuMaster related = new RspuMaster();
+        related.setRspuId("RSPU-MATTRESS");
+        related.setCategoryPath("家具/卧室/床垫");
+
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRspuId("RSPU-MATTRESS");
+        rsku.setFactoryPrice(new BigDecimal("1500"));
+
+        when(rspuMapper.selectById("RSPU-BED")).thenReturn(new RspuMaster());
+        when(relationMapper.selectList(any())).thenReturn(List.of(relation));
+        when(rspuMapper.selectBatchIds(List.of("RSPU-MATTRESS"))).thenReturn(List.of(related));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
+
+        List<RspuRelationResponse> result = relationService.listByAnchor("RSPU-BED");
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getTargetMinPrice()).isNull();
+        assertThat(result.get(0).getTargetRspuId()).isEqualTo("RSPU-MATTRESS");
+    }
+
+    private void authenticateWithRoles(String username, String... roles) {
+        SecurityContextHolder.clearContext();
+        var user = User.withUsername(username).password("").roles(roles).build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
     }
 }

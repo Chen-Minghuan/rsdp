@@ -6,11 +6,13 @@ import { NSelect, NTag, NInput, NUpload, NButton, NSpace, useMessage, type DataT
 import { VxeTable, VxeColumn } from 'vxe-table'
 import 'vxe-table/lib/style.css'
 import { listDicts } from '@/api/dict'
+import { listFactories } from '@/api/factory'
 import { getExcelAiImportRows, getExcelAiPreviewRowImages, getExcelAiPreviewImageUrl } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
 import StatusPill from '@/components/StatusPill.vue'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
+import type { Factory } from '@/types/factory'
 import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow, UnmappedColumnInfo, PreviewRowImage } from '@/types/product'
 
 const router = useRouter()
@@ -77,6 +79,14 @@ const STANDARD_FIELDS = [
 const categoryOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
 const materialOptions = ref<DictItem[]>([])
+const factoryOptions = ref<Factory[]>([])
+
+/** 存在「出厂价」角色的价格列时，默认工厂编码必填（与后端 confirmAndImport 校验一致） */
+const factoryRequired = computed(() =>
+  (mappingResponse.value?.priceColumns ?? []).some(
+    col => (priceColumnRoles.value[col.header] ?? 'factory') === 'factory'
+  )
+)
 
 /** 价格列导入模式选项：出厂价/销售价/不导入 */
 const priceRoleOptions: { label: string; value: PriceColumnImportMode }[] = [
@@ -112,6 +122,14 @@ async function loadMaterialDicts() {
   }
 }
 
+async function loadFactories() {
+  try {
+    factoryOptions.value = await listFactories()
+  } catch (e) {
+    console.error('加载工厂列表失败', e)
+  }
+}
+
 function handleBeforeUnload(e: BeforeUnloadEvent) {
   if (uploading.value || pendingTaskCount.value > 0) {
     e.preventDefault()
@@ -123,6 +141,7 @@ onMounted(() => {
   loadCategoryDicts()
   loadProductLevelDicts()
   loadMaterialDicts()
+  loadFactories()
   // 从其他页面返回时，如仍有进行中的识别任务，恢复轮询展示进度
   if (pendingTaskCount.value > 0) {
     store.ensurePolling()
@@ -862,25 +881,48 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
         </n-card>
 
         <n-card title="默认工厂信息" size="small">
-          <n-space>
-            <n-input v-model:value="defaultFactoryCode" placeholder="默认工厂编码" style="width: 160px;" />
-            <n-input v-model:value="defaultShippingFrom" placeholder="默认发货地" style="width: 160px;" />
-            <n-input-number v-model:value="defaultMoq" placeholder="默认 MOQ" :min="1" style="width: 120px;" />
-            <n-select
-              v-model:value="defaultProductLevel"
-              :options="productLevelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-              placeholder="默认产品等级"
-              clearable
-              style="width: 200px;"
-            />
-            <n-select
-              v-model:value="defaultMaterialCode"
-              :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-              placeholder="默认材质"
-              clearable
-              filterable
-              style="width: 200px;"
-            />
+          <n-space vertical :size="12">
+            <n-space align="center" wrap>
+              <span class="factory-field-label">
+                <span v-if="factoryRequired" class="required-star">*</span>工厂编码
+              </span>
+              <n-select
+                v-model:value="defaultFactoryCode"
+                :options="factoryOptions.map(f => ({ label: `${f.factoryName}（${f.factoryCode}）`, value: f.factoryCode }))"
+                placeholder="请选择工厂"
+                clearable
+                filterable
+                style="width: 260px;"
+              />
+              <n-text v-if="factoryRequired" depth="3" style="font-size: 12px;">
+                存在出厂价价格列时必填（用于生成工厂报价 RSKU）
+              </n-text>
+            </n-space>
+            <n-space align="center" wrap>
+              <span class="factory-field-label">发货地</span>
+              <n-input v-model:value="defaultShippingFrom" placeholder="默认发货地（可选）" style="width: 180px;" />
+              <span class="factory-field-label">MOQ</span>
+              <n-input-number v-model:value="defaultMoq" placeholder="默认 MOQ（可选）" :min="1" style="width: 140px;" />
+            </n-space>
+            <n-space align="center" wrap>
+              <span class="factory-field-label">产品等级</span>
+              <n-select
+                v-model:value="defaultProductLevel"
+                :options="productLevelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+                placeholder="默认产品等级（可选）"
+                clearable
+                style="width: 200px;"
+              />
+              <span class="factory-field-label">默认材质</span>
+              <n-select
+                v-model:value="defaultMaterialCode"
+                :options="materialOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
+                placeholder="默认材质（可选）"
+                clearable
+                filterable
+                style="width: 200px;"
+              />
+            </n-space>
             <n-text depth="3" style="font-size: 12px;">
               默认产品等级：行内无产品等级时使用，报价（RSKU）创建必填等级；默认材质：价格列与行内材质均无法识别时使用
             </n-text>
@@ -1047,3 +1089,17 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
     </n-modal>
   </n-space>
 </template>
+
+<style scoped>
+.factory-field-label {
+  display: inline-block;
+  min-width: 64px;
+  font-size: 13px;
+  color: var(--rsdp-text);
+}
+
+.required-star {
+  color: var(--rsdp-error, #d03050);
+  margin-right: 2px;
+}
+</style>

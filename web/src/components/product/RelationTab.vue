@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { NButton, NEmpty, NTag } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
+import { useUserStore } from '@/stores/user'
 import type { RelatedProduct } from '@/types/product'
 
 /**
@@ -22,6 +24,10 @@ const emit = defineEmits<{
   (e: 'delete-relation', relationId: string): void
   (e: 'open-product', rspuId: string): void
 }>()
+
+const userStore = useUserStore()
+/** 搭配最低价（跨厂聚合最低出厂价）仅平台运营可见，后端已同步掩码为 null */
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 
 const relationTypeTextMap: Record<string, string> = {
   official: '官方搭配',
@@ -78,8 +84,8 @@ function handleDelete(relationId: string, event: MouseEvent) {
               <n-tag size="small" :type="relationTypeTagType(item.relationType)">
                 {{ relationTypeText(item.relationType) }}
               </n-tag>
-              <span class="relation-card-price">
-                {{ item.targetMinPrice !== undefined ? `¥${item.targetMinPrice}` : '' }}
+              <span v-if="isPlatformStaff" class="relation-card-price">
+                {{ item.targetMinPrice != null ? `¥${item.targetMinPrice}` : '' }}
               </span>
             </div>
             <div v-if="item.reason" class="relation-card-reason">{{ item.reason }}</div>
@@ -128,8 +134,8 @@ function handleDelete(relationId: string, event: MouseEvent) {
               <n-tag size="small" :type="relationTypeTagType(item.relationType)">
                 {{ relationTypeText(item.relationType) }}
               </n-tag>
-              <span class="relation-card-price">
-                {{ item.targetMinPrice !== undefined ? `¥${item.targetMinPrice}` : '' }}
+              <span v-if="isPlatformStaff" class="relation-card-price">
+                {{ item.targetMinPrice != null ? `¥${item.targetMinPrice}` : '' }}
               </span>
             </div>
             <div v-if="item.reason" class="relation-card-reason">{{ item.reason }}</div>

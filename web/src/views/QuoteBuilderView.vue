@@ -188,7 +188,7 @@ const addingProducts = ref(false)
 /** 已在构建器中的产品 ID（弹窗中禁选防重复） */
 const existingIds = computed(() => new Set(products.value.map((p) => p.rspu.rspuId)))
 
-const addColumns: DataTableColumns<ProductSummary> = [
+const baseAddColumns: DataTableColumns<ProductSummary> = [
   { type: 'selection', disabled: (row: ProductSummary) => existingIds.value.has(row.rspuId) },
   {
     title: '图片',
@@ -209,6 +209,14 @@ const addColumns: DataTableColumns<ProductSummary> = [
     render: (row) => (row.minFactoryPrice != null ? `¥${row.minFactoryPrice.toFixed(2)}` : '暂无报价')
   }
 ]
+
+// 「最低出厂价」列仅平台运营（ADMIN/EDITOR）可见；数据源与产品库列表同接口，
+// 后端已将 minFactoryPrice 掩码为 null，此处隐藏列为体验层。
+const addColumns = computed<DataTableColumns<ProductSummary>>(() =>
+  userStore.isPlatformStaff
+    ? baseAddColumns
+    : baseAddColumns.filter((c) => (c as { key?: string }).key !== 'minFactoryPrice')
+)
 
 function openAddModal() {
   addKeyword.value = ''
@@ -550,14 +558,18 @@ function formatPrice(value: number | undefined): string {
   return `¥${value.toFixed(2)}`
 }
 
-/** 报价结果表格列：按生成口径显示「销售价/出厂价」；sale 口径且成本可见时追加「成本」「毛利」列。 */
+/** 报价结果表格列：图片 + 售价口径全角色可见；出厂价/成本小计仅平台员工（cost 口径）。 */
 const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
   const saleMode = quoteResultMode.value === 'sale'
+  const isPlatform = userStore.isPlatformStaff
   const columns: DataTableColumns<QuoteItem> = [
     {
       title: '产品',
       key: 'productName',
-      render: (row: QuoteItem) => row.productName || row.rspuName
+      render: (row: QuoteItem) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
+        h(HoverZoomImage, { src: row.primaryImageUrl, width: 44, height: 44, objectFit: 'contain' }),
+        h('span', row.productName || row.rspuName)
+      ])
     },
     {
       title: 'RSKU ID',
@@ -568,23 +580,15 @@ const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
       }
     },
     { title: '工厂', key: 'factoryName' },
-    saleMode
-      ? {
-        title: '销售价',
-        key: 'salePrice',
-        width: 120,
-        render(row: QuoteItem) {
-          return h('span', { class: 'rsdp-mono' }, formatPrice(row.salePrice))
-        }
+    // 售价列全角色可见（sale 口径=计价单价；cost 口径=参考售价），设计师不再面对空列
+    {
+      title: saleMode ? '销售价' : '售价',
+      key: 'salePrice',
+      width: 120,
+      render(row: QuoteItem) {
+        return h('span', { class: 'rsdp-mono' }, formatPrice(row.salePrice))
       }
-      : {
-        title: '出厂价',
-        key: 'factoryPrice',
-        width: 120,
-        render(row: QuoteItem) {
-          return h('span', { class: 'rsdp-mono' }, formatPrice(row.factoryPrice))
-        }
-      },
+    },
     {
       title: '数量',
       key: 'quantity',
@@ -594,14 +598,34 @@ const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
       }
     },
     {
-      title: '小计',
+      title: '小计(售价)',
+      key: 'saleSubtotal',
+      width: 120,
+      render(row: QuoteItem) {
+        return row.salePrice != null
+          ? h('span', { class: 'rsdp-mono' }, formatPrice(row.salePrice * (row.quantity || 1)))
+          : '-'
+      }
+    }
+  ]
+  // 成本口径仅平台员工可见（cost 模式）
+  if (!saleMode && isPlatform) {
+    columns.push({
+      title: '出厂价',
+      key: 'factoryPrice',
+      width: 120,
+      render(row: QuoteItem) {
+        return h('span', { class: 'rsdp-mono' }, formatPrice(row.factoryPrice))
+      }
+    }, {
+      title: '小计(成本)',
       key: 'subtotal',
       width: 120,
       render(row: QuoteItem) {
         return h('span', { class: 'rsdp-mono' }, formatPrice(row.subtotal))
       }
-    }
-  ]
+    })
+  }
   if (quoteResult.value?.items.some(item => item.spaceTagName)) {
     // 方案语境报价附带空间信息时才显示「空间」列（独立构建器恒空不出现）
     columns.push({
@@ -610,23 +634,6 @@ const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
       width: 100,
       render(row: QuoteItem) {
         return row.spaceTagName || '-'
-      }
-    })
-  }
-  if (saleMode && quoteResult.value?.items.some(item => item.costPrice != null)) {
-    columns.push({
-      title: '成本',
-      key: 'costPrice',
-      width: 110,
-      render(row: QuoteItem) {
-        return h('span', { class: 'rsdp-mono' }, formatPrice(row.costPrice))
-      }
-    }, {
-      title: '毛利',
-      key: 'marginAmount',
-      width: 110,
-      render(row: QuoteItem) {
-        return h('span', { class: 'rsdp-mono' }, formatPrice(row.marginAmount))
       }
     })
   }
@@ -852,12 +859,6 @@ onBeforeRouteUpdate((to) => {
               </n-descriptions-item>
               <n-descriptions-item label="最大交期">
                 {{ quoteResult.summary.maxLeadTimeDays || '-' }} 天
-              </n-descriptions-item>
-              <n-descriptions-item v-if="quoteResult.summary.totalCost != null" label="成本合计">
-                ¥{{ quoteResult.summary.totalCost.toFixed(2) }}
-              </n-descriptions-item>
-              <n-descriptions-item v-if="quoteResult.summary.totalMargin != null" label="毛利合计">
-                ¥{{ quoteResult.summary.totalMargin.toFixed(2) }}
               </n-descriptions-item>
             </n-descriptions>
           </n-card>

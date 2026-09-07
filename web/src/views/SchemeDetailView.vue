@@ -47,6 +47,8 @@ const message = useMessage()
 const schemeId = computed(() => route.params.schemeId as string)
 
 const isAdmin = computed(() => userStore.hasRole(ROLES.ADMIN))
+/** 平台员工（ADMIN/EDITOR）：可见成本口径总价（仅内部） */
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const currentUsername = computed(() => userStore.userInfo?.username || '')
 const canEditScheme = computed(() => {
   if (!userStore.hasPermission(PERMISSIONS.SCHEME_UPDATE)) return false
@@ -452,81 +454,134 @@ function formatPrice(value: number | undefined): string {
   return `¥${value.toFixed(2)}`
 }
 
-const itemColumns: DataTableColumns<SchemeItem> = [
-  {
-    title: '图片',
-    key: 'image',
-    width: 100,
-    render(row: SchemeItem) {
-      return h(HoverZoomImage, {
-        src: row.primaryImageUrl,
-        width: 80,
-        height: 80,
-        objectFit: 'contain'
-      })
+const itemColumns = computed<DataTableColumns<SchemeItem>>(() => {
+  const columns: DataTableColumns<SchemeItem> = [
+    {
+      title: '图片',
+      key: 'image',
+      width: 100,
+      render(row: SchemeItem) {
+        return h(HoverZoomImage, {
+          src: row.primaryImageUrl,
+          width: 80,
+          height: 80,
+          objectFit: 'contain'
+        })
+      }
+    },
+    { title: 'RSPU', key: 'rspuId', width: 160 },
+    { title: '名称', key: 'rspuName' },
+    {
+      title: '空间',
+      key: 'spaceTagName',
+      width: 120,
+      render(row: SchemeItem) {
+        return h('span', [
+          row.spaceTagName || '-',
+          row.spaceTagOverridden
+            ? h(NTag, { size: 'tiny', type: 'warning', style: 'margin-left: 4px;' }, { default: () => '已调整' })
+            : null
+        ])
+      }
+    },
+    { title: '工厂', key: 'factoryName' },
+    {
+      title: '售价',
+      key: 'salePrice',
+      width: 110,
+      render(row: SchemeItem) {
+        return formatPrice(row.salePrice ?? undefined)
+      }
+    },
+    { title: '数量', key: 'quantity', width: 80 },
+    {
+      title: '小计(售价)',
+      key: 'saleSubtotal',
+      width: 120,
+      render(row: SchemeItem) {
+        return row.salePrice != null ? formatPrice(row.salePrice * (row.quantity || 1)) : '-'
+      }
     }
-  },
-  { title: 'RSPU', key: 'rspuId', width: 160 },
-  { title: '名称', key: 'rspuName' },
-  {
-    title: '空间',
-    key: 'spaceTagName',
-    width: 120,
-    render(row: SchemeItem) {
-      return h('span', [
-        row.spaceTagName || '-',
-        row.spaceTagOverridden
-          ? h(NTag, { size: 'tiny', type: 'warning', style: 'margin-left: 4px;' }, { default: () => '已调整' })
-          : null
-      ])
-    }
-  },
-  { title: '工厂', key: 'factoryName' },
-  {
-    title: '出厂价',
-    key: 'factoryPrice',
-    width: 120,
-    render(row: SchemeItem) {
-      return formatPrice(row.factoryPrice)
-    }
-  },
-  { title: '数量', key: 'quantity', width: 80 },
-  {
-    title: '小计',
-    key: 'subtotal',
-    width: 120,
-    render(row: SchemeItem) {
-      return formatPrice(row.subtotal)
-    }
-  },
-  { title: '交期(天)', key: 'leadTimeDays', width: 100 },
-  { title: 'MOQ', key: 'moq', width: 100 }
-]
+  ]
+  // 成本口径（出厂价/成本小计）仅平台员工可见；设计师只见售价口径
+  if (isPlatformStaff.value) {
+    columns.push({
+      title: '出厂价',
+      key: 'factoryPrice',
+      width: 120,
+      render(row: SchemeItem) {
+        return formatPrice(row.factoryPrice)
+      }
+    }, {
+      title: '小计(成本)',
+      key: 'subtotal',
+      width: 120,
+      render(row: SchemeItem) {
+        return formatPrice(row.subtotal)
+      }
+    })
+  }
+  columns.push(
+    { title: '交期(天)', key: 'leadTimeDays', width: 100 },
+    { title: 'MOQ', key: 'moq', width: 100 }
+  )
+  return columns
+})
 
-const quoteColumns: DataTableColumns<QuoteItem> = [
-  { title: '产品', key: 'rspuName', render: (row: QuoteItem) => row.productName || row.rspuName },
-  { title: 'RSKU ID', key: 'rskuId', width: 160 },
-  { title: '工厂', key: 'factoryName' },
-  {
-    title: '出厂价',
-    key: 'factoryPrice',
-    width: 120,
-    render(row: QuoteItem) {
-      return formatPrice(row.factoryPrice)
+/** 报价结果表格列：图片 + 售价口径全角色可见；出厂价/成本小计仅平台员工。 */
+const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
+  const columns: DataTableColumns<QuoteItem> = [
+    {
+      title: '产品',
+      key: 'rspuName',
+      render: (row: QuoteItem) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
+        h(HoverZoomImage, { src: row.primaryImageUrl, width: 44, height: 44, objectFit: 'contain' }),
+        h('span', row.productName || row.rspuName)
+      ])
+    },
+    { title: 'RSKU ID', key: 'rskuId', width: 160 },
+    { title: '工厂', key: 'factoryName' },
+    {
+      title: '售价',
+      key: 'salePrice',
+      width: 120,
+      render(row: QuoteItem) {
+        return formatPrice(row.salePrice)
+      }
+    },
+    { title: '数量', key: 'quantity', width: 80 },
+    {
+      title: '小计(售价)',
+      key: 'saleSubtotal',
+      width: 120,
+      render(row: QuoteItem) {
+        return row.salePrice != null ? formatPrice(row.salePrice * (row.quantity || 1)) : '-'
+      }
     }
-  },
-  { title: '数量', key: 'quantity', width: 80 },
-  {
-    title: '小计',
-    key: 'subtotal',
-    width: 120,
-    render(row: QuoteItem) {
-      return formatPrice(row.subtotal)
-    }
-  },
-  { title: '交期(天)', key: 'leadTimeDays', width: 100 },
-  { title: 'MOQ', key: 'moq', width: 100 }
-]
+  ]
+  if (isPlatformStaff.value) {
+    columns.push({
+      title: '出厂价',
+      key: 'factoryPrice',
+      width: 120,
+      render(row: QuoteItem) {
+        return formatPrice(row.factoryPrice)
+      }
+    }, {
+      title: '小计(成本)',
+      key: 'subtotal',
+      width: 120,
+      render(row: QuoteItem) {
+        return formatPrice(row.subtotal)
+      }
+    })
+  }
+  columns.push(
+    { title: '交期(天)', key: 'leadTimeDays', width: 100 },
+    { title: 'MOQ', key: 'moq', width: 100 }
+  )
+  return columns
+})
 
 // ---------- 报价结果空间分组（方案 A 步骤 6：任一报价项带空间信息时按空间分组展示） ----------
 const quoteHasSpaceGroups = computed(() => (quoteResult.value?.items ?? []).some(item => item.spaceTagName))
@@ -702,8 +757,11 @@ onBeforeRouteUpdate((to) => {
             <n-descriptions-item label="总数量">
               {{ scheme.items.reduce((sum, item) => sum + (item.quantity ?? 1), 0) }}
             </n-descriptions-item>
-            <n-descriptions-item label="总价">
-              ¥{{ (scheme.totalPrice ?? 0).toFixed(2) }}
+            <n-descriptions-item label="销售价合计">
+              ¥{{ (scheme.totalSalePrice ?? 0).toFixed(2) }}
+            </n-descriptions-item>
+            <n-descriptions-item v-if="isPlatformStaff && scheme.totalPrice != null" label="成本合计（仅内部）">
+              ¥{{ scheme.totalPrice.toFixed(2) }}
             </n-descriptions-item>
             <n-descriptions-item label="涉及工厂">
               {{ scheme.factoryCount }} 家
@@ -801,8 +859,8 @@ onBeforeRouteUpdate((to) => {
                           x{{ item.quantity ?? 1 }}
                           <span v-if="item.factoryName"> · {{ item.factoryName }}</span>
                         </div>
-                        <div v-if="item.subtotal != null" class="zone-item-price">
-                          ¥{{ item.subtotal.toFixed(2) }}
+                        <div v-if="item.salePrice != null" class="zone-item-price">
+                          ¥{{ (item.salePrice * (item.quantity ?? 1)).toFixed(2) }}
                         </div>
                       </div>
                     </div>

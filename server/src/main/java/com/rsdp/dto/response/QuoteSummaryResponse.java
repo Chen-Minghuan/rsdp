@@ -11,9 +11,9 @@ import java.math.BigDecimal;
 public class QuoteSummaryResponse {
 
     private BigDecimal totalPrice;
-    /** 成本合计（仅 sale 口径且全部明细有出厂价查看权限时返回） */
+    /** @deprecated sale 口径为对客户报价单，成本合计一律不返回（恒为 null）；保留字段仅为兼容 */
     private BigDecimal totalCost;
-    /** 毛利合计 = 售价总价 − 成本合计（仅 sale 口径且全部明细有出厂价查看权限时返回） */
+    /** @deprecated 同 totalCost，恒为 null */
     private BigDecimal totalMargin;
     private int itemCount;
     private int totalQuantity;

@@ -12,6 +12,7 @@ import com.rsdp.entity.SchemeItem;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.CategoryDictMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.SchemeItemMapper;
@@ -47,6 +48,9 @@ class SchemeShareServiceTest {
     private RspuMapper rspuMapper;
 
     @Mock
+    private RskuSupplyMapper rskuSupplyMapper;
+
+    @Mock
     private ImageAssetsMapper imageAssetsMapper;
 
     @Mock
@@ -57,6 +61,9 @@ class SchemeShareServiceTest {
 
     @Mock
     private ProjectShareService projectShareService;
+
+    @Mock
+    private SchemeSalePriceService schemeSalePriceService;
 
     @InjectMocks
     private SchemeShareService schemeShareService;
@@ -81,7 +88,7 @@ class SchemeShareServiceTest {
         return item;
     }
 
-    /** 装配分享视图查询夹具：1 个明细 + 产品 + 主图，空间标签与场景字典由用例自行 stub。 */
+    /** 装配分享视图查询夹具：1 个明细 + 产品 + 主图 + 售价，空间标签与场景字典由用例自行 stub。 */
     private void stubShareFixtures(Scheme scheme, SchemeItem item) {
         when(schemeMapper.selectById("SCHEME-1")).thenReturn(scheme);
         when(schemeItemMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(item));
@@ -93,6 +100,8 @@ class SchemeShareServiceTest {
         image.setImageId("IMG-001");
         image.setRspuId("RSPU-001");
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(image));
+        org.mockito.Mockito.lenient().when(schemeSalePriceService.salePriceOf(any(), any()))
+            .thenReturn(new java.math.BigDecimal("1999.00"));
     }
 
     private CategoryDict sceneDict(String code, String name) {
@@ -121,6 +130,7 @@ class SchemeShareServiceTest {
         assertThat(shareItem.getProductName()).isEqualTo("北欧布艺沙发");
         assertThat(shareItem.getImageId()).isEqualTo("IMG-001");
         assertThat(shareItem.getQuantity()).isEqualTo(2);
+        assertThat(shareItem.getSalePrice()).isEqualByComparingTo("1999.00");
         assertThat(shareItem.getSpaceTagName()).isEqualTo("客厅");
         assertThat(shareItem.getSortOrder()).isEqualTo(1);
     }
@@ -217,7 +227,7 @@ class SchemeShareServiceTest {
 
     @Test
     void shareResponseShouldNotLeakSensitiveFields() throws Exception {
-        // 严格白名单：公开响应序列化后不含工厂/价格/RSKU 等敏感字段
+        // 严格白名单：公开响应序列化后不含工厂/成本/RSKU 等敏感字段（标准售价 salePrice 为对客价格，允许出现）
         Scheme scheme = sharedScheme();
         stubShareFixtures(scheme, baseItem());
         when(rspuSceneMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
@@ -230,7 +240,7 @@ class SchemeShareServiceTest {
         assertThat(json).doesNotContain("factoryName");
         assertThat(json).doesNotContain("rskuId");
         assertThat(json).doesNotContain("factory");
-        assertThat(json).doesNotContain("price");
-        assertThat(json).doesNotContain("Price");
+        assertThat(json).doesNotContain("costPrice");
+        assertThat(json).contains("salePrice");
     }
 }

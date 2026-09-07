@@ -10,6 +10,7 @@ import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuPriceSummary;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.SysUser;
@@ -48,6 +49,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
@@ -1051,6 +1053,102 @@ class ProductQueryServiceTest {
         assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-TEST01", request))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("非法的销售状态");
+    }
+
+    @Test
+    void listProducts_admin_shouldExposeMinFactoryPrice() {
+        // 默认安全上下文为 ADMIN（@BeforeEach），平台运营可见最低出厂价
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        RspuPriceSummary summary = new RspuPriceSummary();
+        summary.setRspuId("RSPU-TEST01");
+        summary.setMinFactoryPrice(new java.math.BigDecimal("800.00"));
+        summary.setActiveRskuCount(1);
+        when(rspuPriceSummaryService.batchSummaries(List.of("RSPU-TEST01")))
+            .thenReturn(Map.of("RSPU-TEST01", summary));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows().get(0).getMinFactoryPrice())
+            .isEqualByComparingTo("800.00");
+    }
+
+    @Test
+    void listProducts_designer_shouldMaskMinFactoryPriceAndSkipPriceQuery() {
+        authenticateWithRoles("designer", "DESIGNER");
+        when(userFactoryService.getFactoryCodesByUsername("designer")).thenReturn(List.of());
+
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        // 非平台员工：最低出厂价掩码为 null，且不发起价格投影查询（出厂价泄露封堵口径）
+        assertThat(result.getRows().get(0).getMinFactoryPrice()).isNull();
+        verify(rspuPriceSummaryService, never()).batchSummaries(anyList());
+    }
+
+    @Test
+    void listProducts_user_shouldMaskMinFactoryPrice() {
+        authenticateWithRoles("user", "USER");
+        when(userFactoryService.getFactoryCodesByUsername("user")).thenReturn(List.of());
+
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows().get(0).getMinFactoryPrice()).isNull();
+        // 非平台员工不发起最低出厂价查询：仅 1 次工厂代码聚合查询，且无 factory_price 条件
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<com.rsdp.entity.RskuSupply>> captor =
+            ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rskuSupplyMapper, times(1)).selectList(captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).doesNotContain("factory_price");
+    }
+
+    private void authenticateWithRoles(String username, String... roles) {
+        SecurityContextHolder.clearContext();
+        var user = User.withUsername(username).password("").roles(roles).build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
     private void authenticateFactoryAdmin(String username) {        SecurityContextHolder.clearContext();

@@ -84,6 +84,7 @@ public class SchemeService {
     private final DataScopeHelper dataScopeHelper;
     private final ProjectService projectService;
     private final TemplateTagService templateTagService;
+    private final SchemeSalePriceService schemeSalePriceService;
     private final ObjectMapper objectMapper;
     private final AuditLogService auditLogService;
 
@@ -415,18 +416,23 @@ public class SchemeService {
             wrapper.like("template_tags", "\"" + tag + "\"");
         }
         Page<Scheme> result = schemeMapper.selectPage(Page.of(page, size), wrapper);
+        // 售价合计（销售价口径改造，方式 A）：批量实时换算，避免逐方案循环单查
+        Map<String, BigDecimal> saleTotals = schemeSalePriceService.batchTotalSalePrices(
+            result.getRecords().stream().map(Scheme::getSchemeId).toList());
         List<SchemeSummaryResponse> rows = result.getRecords().stream()
-            .map(this::toSummary)
+            .map(s -> toSummary(s, saleTotals.getOrDefault(s.getSchemeId(), BigDecimal.ZERO)))
             .collect(Collectors.toList());
         return PageResult.of(result.getTotal(), page, size, rows);
     }
 
-    private SchemeSummaryResponse toSummary(Scheme s) {
+    private SchemeSummaryResponse toSummary(Scheme s, BigDecimal totalSalePrice) {
         SchemeSummaryResponse summary = new SchemeSummaryResponse();
         summary.setSchemeId(s.getSchemeId());
         summary.setSchemeName(s.getSchemeName());
         summary.setItemCount(s.getItemCount());
-        summary.setTotalPrice(s.getTotalPrice());
+        // 成本口径总价仅平台员工可见；其他角色用 totalSalePrice（销售价合计，全角色可见）
+        summary.setTotalPrice(SecurityOperatorContext.isPlatformStaff() ? s.getTotalPrice() : null);
+        summary.setTotalSalePrice(totalSalePrice);
         summary.setCreatedBy(s.getCreatedBy());
         summary.setCreatedAt(s.getCreatedAt());
         summary.setIsTemplate(s.getIsTemplate());
@@ -454,6 +460,8 @@ public class SchemeService {
 
         List<String> rspuIds = items.stream().map(SchemeItem::getRspuId).distinct().toList();
         List<String> rskuIds = items.stream().map(SchemeItem::getRskuId).distinct().toList();
+        // 售价合计口径与 scheme.total_price 一致（含全部明细），在数据范围过滤前保留全量明细
+        List<SchemeItem> allItems = items;
         // 数据权限过滤：只返回当前用户可见工厂的项
         items = items.stream()
             .filter(item -> dataScopeHelper.canAccessRskuFactory(item.getFactoryCode()))
@@ -504,7 +512,10 @@ public class SchemeService {
         response.setSchemeName(scheme.getSchemeName());
         response.setRoomType(scheme.getRoomType());
         response.setBudgetLimit(scheme.getBudgetLimit());
-        response.setTotalPrice(scheme.getTotalPrice());
+        // 成本口径总价仅平台员工可见；销售价合计（方式 A 响应层实时换算）全角色可见
+        response.setTotalPrice(SecurityOperatorContext.isPlatformStaff() ? scheme.getTotalPrice() : null);
+        response.setTotalSalePrice(
+            schemeSalePriceService.sumItemsSalePrice(allItems, rspuMap, rskuMap));
         response.setFactoryCount(scheme.getFactoryCount());
         response.setMaxLeadTimeDays(scheme.getMaxLeadTimeDays());
         response.setItemCount(scheme.getItemCount());
@@ -1052,6 +1063,8 @@ public class SchemeService {
         if (canViewPrice && item.getFactoryPrice() != null) {
             response.setSubtotal(item.getFactoryPrice().multiply(BigDecimal.valueOf(quantity)));
         }
+        // 标准售价全角色可见（设计师端方案明细按售价查看，与出厂价掩码互不影响）
+        response.setSalePrice(schemeSalePriceService.salePriceOf(rspu, rsku));
         response.setLeadTimeDays(item.getLeadTimeDays());
         response.setMoq(item.getMoq());
         response.setSortOrder(item.getSortOrder());

@@ -418,6 +418,12 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       .map(([header, role]) => ({ header, role }))
     selectedPriceColumns.value = priceColumnSelections.map(p => p.header)
 
+    // 存在出厂价价格列时默认工厂编码必填（与后端 confirmAndImport 校验一致，前置拦截友好提示）
+    if (priceColumnSelections.some(p => p.role === 'factory') && !defaultFactoryCode.value) {
+      errorMessage.value = '存在出厂价价格列，必须选择默认工厂编码'
+      return
+    }
+
     errorMessage.value = ''
     uploading.value = true
     stopPolling()

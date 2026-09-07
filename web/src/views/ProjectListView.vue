@@ -164,7 +164,7 @@ function formatTime(value?: string): string {
   return value.replace('T', ' ').slice(0, 16)
 }
 
-function formatPrice(value?: number): string {
+function formatPrice(value?: number | null): string {
   if (value == null) return '¥0'
   return `¥${Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 }
@@ -228,7 +228,7 @@ onMounted(async () => {
             <div v-if="isAdmin && scope === 'all'" class="card-owner">负责人：{{ project.ownerId }}</div>
             <div class="card-stats">
               <span>{{ project.schemeCount }} 个方案</span>
-              <span class="card-price">{{ formatPrice(project.totalPrice) }}</span>
+              <span class="card-price">{{ formatPrice(project.totalSalePrice) }}</span>
             </div>
             <div class="card-footer">
               <span class="card-time">更新于 {{ formatTime(project.updatedAt) }}</span>

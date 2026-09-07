@@ -52,8 +52,18 @@ class ProjectServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private SchemeSalePriceService schemeSalePriceService;
+
     @InjectMocks
     private ProjectService projectService;
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUp() {
+        // 售价合计服务默认返回空映射，具体用例按需覆盖存根
+        org.mockito.Mockito.lenient().when(schemeSalePriceService.batchTotalSalePrices(any()))
+            .thenReturn(java.util.Map.of());
+    }
 
     private Project ownedProject() {
         Project project = new Project();
@@ -156,12 +166,126 @@ class ProjectServiceTest {
         try (var ignored = mockStatic(SecurityOperatorContext.class)) {
             when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
             when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+            // 平台员工可见成本口径总价
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
 
             ProjectDetailResponse detail = projectService.detail("PROJ-1");
 
             assertThat(detail.getSchemes()).hasSize(1);
             assertThat(detail.getSchemeCount()).isEqualTo(1);
             assertThat(detail.getTotalPrice()).isEqualByComparingTo("12000.00");
+        }
+    }
+
+    @Test
+    void detailShouldExposeSaleTotalAndMaskCostTotalForNonStaff() {
+        when(projectMapper.selectById("PROJ-1")).thenReturn(ownedProject());
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCH-1");
+        scheme.setSchemeName("客厅方案");
+        scheme.setTotalPrice(new BigDecimal("12000.00"));
+        when(schemeMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(scheme));
+        when(schemeSalePriceService.batchTotalSalePrices(any()))
+            .thenReturn(java.util.Map.of("SCH-1", new BigDecimal("30000.00")));
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+
+            ProjectDetailResponse detail = projectService.detail("PROJ-1");
+
+            // 销售价合计全角色可见；成本口径总价对非平台员工掩码（项目级与方案卡一致）
+            assertThat(detail.getTotalSalePrice()).isEqualByComparingTo("30000.00");
+            assertThat(detail.getTotalPrice()).isNull();
+            assertThat(detail.getSchemes().get(0).getTotalSalePrice()).isEqualByComparingTo("30000.00");
+            assertThat(detail.getSchemes().get(0).getTotalPrice()).isNull();
+        }
+    }
+
+    @Test
+    void detailShouldExposeBothTotalsForPlatformStaff() {
+        when(projectMapper.selectById("PROJ-1")).thenReturn(ownedProject());
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCH-1");
+        scheme.setSchemeName("客厅方案");
+        scheme.setTotalPrice(new BigDecimal("12000.00"));
+        when(schemeMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(scheme));
+        when(schemeSalePriceService.batchTotalSalePrices(any()))
+            .thenReturn(java.util.Map.of("SCH-1", new BigDecimal("30000.00")));
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("admin-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(true);
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+
+            ProjectDetailResponse detail = projectService.detail("PROJ-1");
+
+            // 平台员工双口径皆有
+            assertThat(detail.getTotalPrice()).isEqualByComparingTo("12000.00");
+            assertThat(detail.getTotalSalePrice()).isEqualByComparingTo("30000.00");
+            assertThat(detail.getSchemes().get(0).getTotalPrice()).isEqualByComparingTo("12000.00");
+            assertThat(detail.getSchemes().get(0).getTotalSalePrice()).isEqualByComparingTo("30000.00");
+        }
+    }
+
+    @Test
+    void listShouldExposeSaleTotalAndMaskCostTotalForNonStaff() {
+        Page<Project> page = Page.of(1, 10);
+        page.setRecords(List.of(ownedProject()));
+        page.setTotal(1);
+        when(projectMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+        when(schemeMapper.selectMaps(any(QueryWrapper.class))).thenReturn(List.of(
+            java.util.Map.of("project_id", "PROJ-1", "scheme_count", 1,
+                "total_price", new BigDecimal("12000.00"))));
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCH-1");
+        scheme.setProjectId("PROJ-1");
+        when(schemeMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(scheme));
+        when(schemeSalePriceService.batchTotalSalePrices(any()))
+            .thenReturn(java.util.Map.of("SCH-1", new BigDecimal("30000.00")));
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(false);
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+
+            PageResult<ProjectResponse> result = projectService.list(null, null, 1, 10);
+
+            // 销售价合计全角色可见；成本口径总价对非平台员工掩码
+            ProjectResponse row = result.getRows().get(0);
+            assertThat(row.getTotalSalePrice()).isEqualByComparingTo("30000.00");
+            assertThat(row.getTotalPrice()).isNull();
+        }
+    }
+
+    @Test
+    void listShouldExposeBothTotalsForPlatformStaff() {
+        Page<Project> page = Page.of(1, 10);
+        page.setRecords(List.of(ownedProject()));
+        page.setTotal(1);
+        when(projectMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+        when(schemeMapper.selectMaps(any(QueryWrapper.class))).thenReturn(List.of(
+            java.util.Map.of("project_id", "PROJ-1", "scheme_count", 1,
+                "total_price", new BigDecimal("12000.00"))));
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCH-1");
+        scheme.setProjectId("PROJ-1");
+        when(schemeMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(scheme));
+        when(schemeSalePriceService.batchTotalSalePrices(any()))
+            .thenReturn(java.util.Map.of("SCH-1", new BigDecimal("30000.00")));
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("admin-1");
+            when(SecurityOperatorContext.isCurrentUserAdmin()).thenReturn(true);
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+
+            PageResult<ProjectResponse> result = projectService.list(null, "all", 1, 10);
+
+            // 平台员工双口径皆有
+            ProjectResponse row = result.getRows().get(0);
+            assertThat(row.getTotalPrice()).isEqualByComparingTo("12000.00");
+            assertThat(row.getTotalSalePrice()).isEqualByComparingTo("30000.00");
         }
     }
 

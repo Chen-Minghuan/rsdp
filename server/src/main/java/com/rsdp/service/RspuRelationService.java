@@ -296,7 +296,12 @@ public class RspuRelationService {
         response.setTargetDisplayName(buildDisplayName(target));
         response.setTargetCategoryPath(formatCategoryPath(target.getCategoryPath()));
         response.setTargetImageUrl(imageUrlMap.get(targetRspuId));
-        response.setTargetMinPrice(minPriceMap.get(targetRspuId));
+        // 最低出厂价仅平台运营人员可见：该值是跨厂聚合最低价，无法逐厂归属，
+        // 且工厂角色看到的可能是友商价格，故对非平台员工一律掩码。
+        response.setTargetMinPrice(
+            SecurityOperatorContext.isPlatformStaff()
+                ? minPriceMap.get(targetRspuId)
+                : null);
         return response;
     }
 

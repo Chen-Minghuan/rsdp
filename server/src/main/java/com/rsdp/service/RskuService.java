@@ -18,6 +18,7 @@ import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +42,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * RSKU 报价服务。
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class RskuService {
@@ -177,8 +179,13 @@ public class RskuService {
         rsku.setCreatedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
 
-        // 生成并写入 RSKU 业务编码
-        String rskuCode = rskuCodeService.assignCode(rskuId, request.getRspuId(), request.getFactoryCode(), materialCode);
+        // 生成并写入 RSKU 业务编码（容错发号：所属 RSPU 未发号等原因导致发号失败时不阻断创建，
+        // 价格等供应数据先入库，业务编码待 RSPU 发号后由 RskuCodeService.backfillCodesByRspu 补发）
+        String rskuCode = rskuCodeService.tryAssignCode(rskuId, request.getRspuId(), request.getFactoryCode(), materialCode);
+        if (rskuCode == null) {
+            log.warn("RSKU 无码创建，rsku_code 留空待补发，rskuId={}，rspuId={}，factoryCode={}（所属 RSPU 无 rspu_code 或发号失败）",
+                rskuId, request.getRspuId(), request.getFactoryCode());
+        }
         rsku.setRskuCode(rskuCode);
 
         try {

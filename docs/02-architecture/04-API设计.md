@@ -148,6 +148,9 @@ GET    /api/v1/products
        #     仅当用户拥有 `view_full_catalog=true` 或对应权限时可用
        #   - statusTab=recycled 时走独立回收站查询（绕过逻辑删除过滤），
        #     其他搜索条件不叠加，行内最低出厂价/供应商编码为空
+       #   - ProductSummary.minFactoryPrice（跨厂聚合最低出厂价）仅平台运营
+       #     （ADMIN/EDITOR）可见，其余角色掩码为 null（2026-09-06 起，
+       #     含 DESIGNER/FACTORY_ADMIN；工厂看本厂报价走 RSKU 详情按厂掩码）
 
 GET    /api/v1/products/status-counts
        # 商城商品列表状态页签统计（已实现）
@@ -168,6 +171,9 @@ GET    /api/v1/products/{rspuId}
 GET    /api/v1/products/{rspuId}/relations
        # 查询某产品作为锚点的搭配关系列表（已实现）
        # Response: [RspuRelationResponse...]
+       # 说明：RspuRelationResponse.targetMinPrice（目标产品跨厂聚合最低出厂价）
+       #       仅平台运营（ADMIN/EDITOR）可见，其余角色掩码为 null（2026-09-06 起）；
+       #       canAccessRskuFactory 数据范围过滤保留（控制 RSKU 可见性，与价格掩码独立）
 
 POST   /api/v1/products/{rspuId}/relations
        # 为某产品创建搭配关系（已实现）
@@ -440,6 +446,8 @@ POST   /api/v1/products/{rspuId}/rsku
        # Request: { factoryCode, variantId（必填）, factorySku?, factoryPrice, materialCode?, materialDescription?,
        #            leadTimeDays?, moq?, warrantyYears?, shippingFrom?, diffNotes?, quoteConfidence? }
        # Response: void
+       # 说明：rsku_code 可空——所属 RSPU 未发号（rspu_code 为空）时报价先创建、编码留空，
+       #       待 AI 补码（补发 rspu_code）后由 RskuCodeService.backfillCodesByRspu 联动补发
 
 PUT    /api/v1/products/{rspuId}/rsku/{rskuId}/price
        # 更新 RSKU 出厂价，自动写入 price_history（已实现）
@@ -464,11 +472,23 @@ GET    /api/v1/sku/compare/{rspuId}
 ```
 POST   /api/v1/matching/room-scheme
        # 按空间类型一键生成搭配方案（已实现，接入 DashScope qwen3-vl-plus）
+       # 预算口径（批次 2 起）：prompt 与响应均为销售价口径——候选行「参考售价」=
+       # 该 RSPU 候选 RSKU 经 PricingService.resolveSalePrice 解析的最低标准售价，
+       # 无售价候选标注「价格待定」不阻止入选；预算上限指客户应付的销售价总额；
+       # 出厂价数值与字样不再进 prompt（红线）
        # Request: { roomType: "LIVING_ROOM", budgetLimit: 30000, stylePreference?: "MC" }
-       # Response: { roomType, budgetLimit, totalPrice, itemCount, reasoning, items: [SchemeItem...] }
+       # Response: { roomType, budgetLimit,
+       #             totalPrice（成本口径，仅平台运营/本厂管理员可见，其他角色 null；
+       #                        前端新代码应使用 totalSalePrice）,
+       #             totalSalePrice（销售价口径合计，全角色可见，未定价产品跳过求和）,
+       #             hasUnpricedItems（是否存在未定价产品）, itemCount, reasoning,
+       #             items: [SchemeItem + salePrice（参考售价，全角色可见，未定价 null）...] }
+       # SchemeItem.factoryPrice/subtotal 维持角色掩码不变
 
 POST   /api/v1/matching/recommend
        # 以某个产品为锚点推荐搭配产品（已实现）
+       # 候选行价格口径同 room-scheme（参考售价，无售价标注「价格待定」）；
+       # items 同样带 salePrice（全角色可见），factoryPrice/subtotal 掩码不变
        # Request: { existingRspuId, targetCategoryCode }
        # Response: { existingRspuId, targetCategoryCode, reasoning, items: [SchemeItem...] }
 ```
@@ -687,9 +707,13 @@ POST   /api/v1/quotes/generate
        #   summary: { totalPrice, itemCount, totalQuantity, factoryCount, maxLeadTimeDays },
        #   priceWarning?                    # 仅 sale：售价低于成本的产品名汇总（清库存提示）
        # }
-       # sale 口径新增字段：items[].salePrice/belowCost；有出厂价查看权限时另附
-       #   items[].costPrice/marginAmount 与 summary.totalCost/totalMargin（仅内部，
-       #   无权限角色绝不返回成本字段）；sale 口径 subtotal/totalPrice 为售价口径
+       # sale 口径新增字段：items[].salePrice/belowCost；sale 为对客户口径，
+       #   出厂价/成本/毛利一律不返回（items[].factoryPrice/costPrice/marginAmount
+       #   与 summary.totalCost/totalMargin 恒为 null，与权限无关）；
+       #   sale 口径 subtotal/totalPrice 为售价口径；
+       #   items[].salePrice 自 2026-09-07 起双口径均返回（cost 口径同样填充，
+       #   全角色可见，未定价为 null）——设计师报价单按售价查看；
+       #   items[].primaryImageUrl 为产品主图（前端报价结果表图片列使用）
 
 POST   /api/v1/quotes/export
        # 根据选中的 RSKU 及数量列表导出 Excel 报价单（已实现）
@@ -722,11 +746,21 @@ GET    /api/v1/schemes
        # Query: isTemplate? (true 仅查模板), tag? (模板标签筛选),
        #        page? (默认 1), size? (默认 10，上限 100)
        # Response: PageResult<SchemeSummary> { total, page, size, rows }（行含 isTemplate / templateTags）
+       # 价格口径（销售价口径改造，方式 A 响应层实时换算，无 DB 变更）：
+       #   totalSalePrice = Σ标准售价×数量（PricingService.resolveSalePrice 三级链实时换算，
+       #     全角色可见，未定价项跳过求和）；
+       #   totalPrice = scheme.total_price 成本口径原值，仅平台员工（ADMIN/EDITOR）可见，
+       #     其他角色为 null；前端展示应使用 totalSalePrice
        # 说明：模板选择弹窗等需要全量小列表的场景传 size=100
 
 GET    /api/v1/schemes/{schemeId}
        # 查询搭配方案详情（已实现）
-       # Response: SchemeResponse（含 projectId / isTemplate / templateTags / canvasLayout）
+       # Response: SchemeResponse（含 projectId / isTemplate / templateTags / canvasLayout /
+       #   totalSalePrice）
+       # 价格口径：totalSalePrice（销售价合计，全角色可见，含方案全部明细的实时换算）；
+       #   items[].salePrice 为标准售价（全角色可见，未定价为 null）——设计师端方案明细
+       #   按售价查看；items[].factoryPrice/subtotal 成本口径仍按 canViewFactoryPrice 掩码；
+       #   totalPrice（成本口径）仅平台员工可见，其他角色为 null
        # 说明：canvasLayout 为搭配画布布局（V41，{ "<schemeItemId>": { x, y, scale, z } }，
        #   无布局时为 null，前端首次进入按空间分区自动平铺）；
        #   items[].spaceTag 为生效的空间字典码（scheme_item.space_tag 覆盖优先，
@@ -809,9 +843,9 @@ GET    /api/v1/public/schemes/{schemeId}
        # 方案独立分享公开只读视图（校验 scheme.share_enabled + share_expire_at，
        #   过期时间为空=永久有效，失效返回 404）
        # Response: { schemeId, schemeName, shareExpireAt,
-       #   items: [{ rspuId, productName, imageId, quantity, spaceTagName, sortOrder }] }
-       # 安全约束：严格白名单组装，只含产品名/主图 imageId/数量/空间名/排序，
-       #   不含工厂/价格/RSKU/成本等敏感字段；
+       #   items: [{ rspuId, productName, imageId, quantity, salePrice, spaceTagName, sortOrder }] }
+       # 安全约束：严格白名单组装，只含产品名/主图 imageId/数量/标准售价/空间名/排序，
+       #   不含工厂/成本/RSKU 等敏感字段（salePrice 标准售价为对客价格，可公开，未定价为 null）；
        #   spaceTagName = space_tag 覆盖优先，回退产品首场景推导，码已删回退码原文
 ```
 
@@ -823,7 +857,11 @@ GET    /api/v1/projects
        # Query: keyword?, scope? (all=全部，仅 ADMIN 生效；mine=仅自己的), page=1, size=10
        # Response: PageResult<ProjectResponse>
        #   { projectId, projectName, projectType, companyName, ownerId, status,
-       #     remark, schemeCount, totalPrice, createdAt, updatedAt }
+       #     remark, schemeCount, totalPrice, totalSalePrice, createdAt, updatedAt }
+       # 价格口径（销售价口径改造，方式 A 响应层实时换算）：
+       #   totalSalePrice = 项目下各方案售价合计之和（全角色可见）；
+       #   totalPrice = Σscheme.total_price 成本口径，仅平台员工（ADMIN/EDITOR）可见，
+       #     其他角色为 null；前端展示应使用 totalSalePrice
 
 POST   /api/v1/projects
        # 创建设计项目（需 project:create）
@@ -834,6 +872,8 @@ POST   /api/v1/projects
 GET    /api/v1/projects/{projectId}
        # 查询项目详情（需 project:read + 归属或 ADMIN）
        # Response: ProjectDetailResponse（含 schemes: [SchemeSummary...]）
+       # 价格口径：项目级与内嵌方案卡 schemes[] 均为 totalSalePrice 全角色可见、
+       #   totalPrice 成本口径仅平台员工可见（其他角色 null）
 
 PUT    /api/v1/projects/{projectId}
        # 更新设计项目（需 project:update + 归属或 ADMIN）
@@ -1477,8 +1517,10 @@ POST   /api/v1/public/ai-match/scheme
        # widthMm/depthMm 提供时尺寸硬规则 R1~R5 生效——面积分档/沙发长度上限/
        # 进深链式校验，官网不再推荐放不下的沙发；缺失时退化为原 AI 选品行为。
        # LLM 终审空返回时规则兜底（每品类取风格分最高者），永远有结果。
-       # 预算缺省 999999；红线：绝不透传 factoryCode/factoryName/factoryPrice/totalPrice，
-       # totalRetailPrice 为零售参考价 retail_price 求和）
+       # 预算缺省 999999；红线：绝不透传 factoryCode/factoryName/factoryPrice/totalPrice；
+       # 价格口径（批次 2 起）：retailPrice/totalRetailPrice 字段名不变，取值统一为
+       # 方案项 salePrice（PricingService 标准售价解析口径），消除零售参考价与
+       # 标准售价双口径漂移；未定价条目为 null 且不计入合计）
        # Request: { stylePreference?, budgetLimit?(≥0), widthMm?(≥1), depthMm?(≥1) }
        # Response: { reasoning, totalRetailPrice,
        #            items: [{ rspuId, productName, categoryPath, positioningLabel,
@@ -1535,7 +1577,9 @@ POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
        # 尺寸硬规则 R1~R5（rsdp.floor-plan.rules 配置）→ LLM 终审（prompt 注入空间尺寸
        # 上下文）→ LLM 空返回规则兜底。落 scheme + scheme_item（价格快照语义沿用
        # SchemeService.createScheme，方案项均为 LIVING 场景产品），scheme.analysis_id
-       # 回填溯源，方案名自动生成「客厅方案-yyyyMMdd-HHmmss」
+       # 回填溯源，方案名自动生成「客厅方案-yyyyMMdd-HHmmss」。
+       # 预算口径（批次 2 起）：终审 prompt 候选价格为参考售价（销售价口径），
+       # 预算上限指客户应付的销售价总额；规则兜底分支同走 buildResponse，口径一致
        # sofaWall（P1）：沙发墙朝向，width=开间方向墙（默认，缺省按 width）、
        # depth=进深方向墙；影响 R2 沙发/电视柜长度上限的墙长取值与 R3 链式校验方向
        # （depth 时 R2 按进深墙长、R3 沿开间方向核算）；非法值 400 中文提示

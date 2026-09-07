@@ -48,7 +48,7 @@ const schemeColumns: DataTableColumns<AiSchemeItem> = [
   { title: 'RSPU', key: 'rspuName' },
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
-  { title: '出厂价', key: 'factoryPrice', width: 120 },
+  { title: '参考售价', key: 'salePrice', width: 120 },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 }
 ]
 
@@ -163,7 +163,7 @@ onMounted(() => {
                 ¥{{ (scheme.budgetLimit ?? 0).toFixed(2) }}
               </n-descriptions-item>
               <n-descriptions-item label="方案总价">
-                ¥{{ (scheme.totalPrice ?? 0).toFixed(2) }}
+                ¥{{ (scheme.totalSalePrice ?? 0).toFixed(2) }}{{ scheme.hasUnpricedItems ? '（含价格待定产品）' : '' }}
               </n-descriptions-item>
               <n-descriptions-item label="产品数量">
                 {{ scheme.itemCount }}

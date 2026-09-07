@@ -43,6 +43,8 @@ export interface SchemeItem {
   factoryPrice: number
   quantity: number
   subtotal?: number
+  /** 标准售价（全角色可见；未定价为 null） */
+  salePrice?: number | null
   leadTimeDays?: number
   moq?: number
   /** 生效的空间字典码（scheme_item.space_tag 覆盖优先，空回退产品首场景码；无空间为 null，归「未分区」） */
@@ -77,7 +79,10 @@ export interface Scheme {
   schemeName: string
   roomType?: string
   budgetLimit?: number
-  totalPrice: number
+  /** 成本口径总价：仅平台员工可见，其他角色为 null；前端展示应使用 totalSalePrice */
+  totalPrice?: number | null
+  /** 销售价合计（Σ标准售价×数量，全角色可见；未定价项未计入） */
+  totalSalePrice?: number | null
   factoryCount: number
   maxLeadTimeDays: number
   itemCount: number
@@ -103,7 +108,10 @@ export interface SchemeSummary {
   schemeId: string
   schemeName: string
   itemCount: number
-  totalPrice: number
+  /** 成本口径总价：仅平台员工可见，其他角色为 null；前端展示应使用 totalSalePrice */
+  totalPrice?: number | null
+  /** 销售价合计（Σ标准售价×数量，全角色可见；未定价项未计入） */
+  totalSalePrice?: number | null
   createdBy: string
   createdAt: string
   isTemplate?: boolean
@@ -140,6 +148,8 @@ export interface SchemeShareViewItem {
   productName?: string | null
   imageId?: string | null
   quantity?: number
+  /** 标准售价（对客价格；未定价为 null） */
+  salePrice?: number | null
   spaceTagName?: string | null
   sortOrder?: number
 }

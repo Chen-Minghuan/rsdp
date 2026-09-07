@@ -137,8 +137,12 @@ public class ProductQueryService {
         List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
-        // 当页最低价与报价数取自价格投影表（V44），不再批量查 RSKU 实体解密聚合
-        Map<String, RspuPriceSummary> priceSummaryMap = rspuPriceSummaryService.batchSummaries(rspuIds);
+        // 当页最低价与报价数取自价格投影表（V44），不再批量查 RSKU 实体解密聚合。
+        // 最低出厂价仅平台运营人员可见（toSummary 响应层掩码），非平台员工不发起查询，
+        // 与出厂价泄露封堵口径一致；报价数全角色可见，故掩码只影响 minPriceMap。
+        Map<String, RspuPriceSummary> priceSummaryMap = SecurityOperatorContext.isPlatformStaff()
+            ? rspuPriceSummaryService.batchSummaries(rspuIds)
+            : Map.of();
         Map<String, BigDecimal> minPriceMap = priceSummaryMap.entrySet().stream()
             .filter(e -> e.getValue().getMinFactoryPrice() != null)
             .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().getMinFactoryPrice()));
@@ -534,6 +538,7 @@ public class ProductQueryService {
     }
 
     /**
+
      * 查询产品详情。
      *
      * @param rspuId RSPU ID
@@ -1114,7 +1119,14 @@ public class ProductQueryService {
         summary.setReviewStatus(rspu.getReviewStatus());
         summary.setAestheticsConfidence(rspu.getAestheticsConfidence());
         summary.setProductLevel(rspu.getProductLevel());
-        summary.setMinFactoryPrice(minPriceMap.get(rspu.getRspuId()));
+        // 最低出厂价仅平台运营人员可见。
+        // 注意：该值是跨厂聚合的最低价，无法归属单一工厂做 canViewFactoryPrice 逐厂判断，
+        // 且 FACTORY_ADMIN 看到的可能是友商价格，因此对工厂角色同样掩码；
+        // 工厂查看本厂报价走 RSKU 详情（已有按厂掩码）。
+        summary.setMinFactoryPrice(
+            SecurityOperatorContext.isPlatformStaff()
+                ? minPriceMap.get(rspu.getRspuId())
+                : null);
         summary.setRetailPrice(rspu.getRetailPrice());
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());

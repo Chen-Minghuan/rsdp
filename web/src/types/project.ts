@@ -15,8 +15,10 @@ export interface Project {
   shareExpireAt?: string | null
   /** 项目下方案数量 */
   schemeCount: number
-  /** 项目下方案总价合计 */
-  totalPrice: number
+  /** 项目下方案成本总价合计：仅平台员工可见，其他角色为 null；前端展示应使用 totalSalePrice */
+  totalPrice?: number | null
+  /** 项目下方案销售价合计（全角色可见） */
+  totalSalePrice?: number | null
   createdAt: string
   updatedAt: string
 }
@@ -38,7 +40,10 @@ export interface ProjectSchemeSummary {
   schemeId: string
   schemeName: string
   itemCount?: number
-  totalPrice?: number
+  /** 成本口径总价：仅平台员工可见，其他角色为 null；前端展示应使用 totalSalePrice */
+  totalPrice?: number | null
+  /** 销售价合计（全角色可见） */
+  totalSalePrice?: number | null
   createdBy?: string
   createdAt?: string
 }
