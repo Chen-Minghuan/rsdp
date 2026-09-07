@@ -2,8 +2,8 @@
 /**
  * 方案分享公开内容（免登录只读）。
  *
- * 支持「按空间分区」（默认）/「列表」两种模式切换，只展示空间分区/产品/数量，
- * 不含价格与工厂信息。页面壳（居中容器/loading/错误态/页脚）由 SchemeShareView 提供。
+ * 支持「按空间分区」（默认）/「列表」两种模式切换，展示空间分区/产品/数量/售价，
+ * 不含成本与工厂信息。页面壳（居中容器/loading/错误态/页脚）由 SchemeShareView 提供。
  */
 import { ref, computed } from 'vue'
 import { NEmpty, NImage, NRadioButton, NRadioGroup, NTag } from 'naive-ui'
@@ -86,7 +86,12 @@ function formatExpire(value?: string | null): string {
               <div class="zone-item-name" :title="item.productName || item.rspuId">
                 {{ item.productName || item.rspuId }}
               </div>
-              <div class="zone-item-meta">x{{ item.quantity ?? 1 }}</div>
+              <div class="zone-item-meta">
+                x{{ item.quantity ?? 1 }}
+                <span v-if="item.salePrice != null" class="item-price">
+                  ¥{{ (item.salePrice * (item.quantity ?? 1)).toFixed(2) }}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -111,6 +116,9 @@ function formatExpire(value?: string | null): string {
           <div class="list-item-meta">
             <span>{{ item.spaceTagName || '未分区' }}</span>
             <span>x{{ item.quantity ?? 1 }}</span>
+            <span v-if="item.salePrice != null" class="item-price">
+              ¥{{ (item.salePrice * (item.quantity ?? 1)).toFixed(2) }}
+            </span>
           </div>
         </div>
       </div>
@@ -207,6 +215,12 @@ function formatExpire(value?: string | null): string {
   margin-top: 2px;
   font-size: 12px;
   color: var(--rsdp-text-secondary);
+}
+
+.item-price {
+  margin-left: 6px;
+  font-weight: 600;
+  color: var(--rsdp-text);
 }
 
 .item-list {

@@ -148,6 +148,8 @@ export interface SchemeShareViewItem {
   productName?: string | null
   imageId?: string | null
   quantity?: number
+  /** 标准售价（对客价格；未定价为 null） */
+  salePrice?: number | null
   spaceTagName?: string | null
   sortOrder?: number
 }

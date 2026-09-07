@@ -343,15 +343,18 @@ class QuoteServiceTest {
     }
 
     @Test
-    void generateQuote_costMode_shouldNotReturnSaleFields() {
+    void generateQuote_costMode_shouldReturnSalePriceForAllRoles() {
         stubSaleModeFixtures();
         when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
+        // 标准售价三级链可解析时，cost 口径同样返回售价（全角色可见，解决设计师报价单价格列全空）
+        when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("6250"));
 
         var response = quoteService.generateQuote(List.of(req("RSKU-001", 2)), "cost");
 
         var item = response.getItems().get(0);
         assertThat(item.getSubtotal()).isEqualByComparingTo(new BigDecimal("5000"));
-        assertThat(item.getSalePrice()).isNull();
+        assertThat(item.getSalePrice()).isEqualByComparingTo(new BigDecimal("6250"));
+        assertThat(item.getFactoryPrice()).isEqualByComparingTo(new BigDecimal("2500"));
         assertThat(item.getCostPrice()).isNull();
         assertThat(item.getMarginAmount()).isNull();
         assertThat(response.getSummary().getTotalCost()).isNull();

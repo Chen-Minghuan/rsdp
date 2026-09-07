@@ -6,11 +6,13 @@ import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
+import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.Scheme;
 import com.rsdp.entity.SchemeItem;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.CategoryDictMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.SchemeItemMapper;
@@ -30,7 +32,8 @@ import java.util.stream.Collectors;
  *
  * <p>两种公开入口：方案独立分享（校验 scheme.share_enabled + share_expire_at）与
  * 项目分享页内的方案（校验项目分享有效且方案属于该项目）。
- * 返回内容严格白名单组装，不含工厂/价格/RSKU 等敏感信息。</p>
+ * 返回内容严格白名单组装：仅产品名/主图/数量/空间名/排序/标准售价，
+ * 不含工厂/成本/RSKU 等敏感信息（标准售价为对客价格，可公开）。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -39,10 +42,12 @@ public class SchemeShareService {
     private final SchemeMapper schemeMapper;
     private final SchemeItemMapper schemeItemMapper;
     private final RspuMapper rspuMapper;
+    private final RskuSupplyMapper rskuSupplyMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final RspuSceneMapper rspuSceneMapper;
     private final CategoryDictMapper categoryDictMapper;
     private final ProjectShareService projectShareService;
+    private final SchemeSalePriceService schemeSalePriceService;
 
     /**
      * 获取方案独立分享公开视图（校验分享开关 + 过期时间，过期时间为空=永久有效）。
@@ -80,7 +85,7 @@ public class SchemeShareService {
     }
 
     /**
-     * 组装方案分享视图（严格白名单：产品名/主图/数量/空间名/排序）。
+     * 组装方案分享视图（严格白名单：产品名/主图/数量/空间名/排序/标准售价）。
      *
      * @param scheme 方案实体
      * @return 分享视图
@@ -92,6 +97,8 @@ public class SchemeShareService {
 
         List<String> rspuIds = items.stream().map(SchemeItem::getRspuId).distinct().toList();
         Map<String, RspuMaster> rspuMap = batchRspuMap(rspuIds);
+        Map<String, RskuSupply> rskuMap = batchRskuMap(
+            items.stream().map(SchemeItem::getRskuId).distinct().toList());
         Map<String, String> imageMap = batchPrimaryImageIds(rspuIds);
         // 空间标签：scheme_item.space_tag 覆盖优先，空则回退产品 rspu_scene 首场景码
         Map<String, String> derivedCodes = batchDerivedSpaceCodes(rspuIds);
@@ -115,6 +122,8 @@ public class SchemeShareService {
             shareItem.setProductName(rspu != null ? rspu.getPositioningLabel() : null);
             shareItem.setImageId(imageMap.get(item.getRspuId()));
             shareItem.setQuantity(item.getQuantity());
+            // 标准售价（对客价格，可公开；未定价为 null）
+            shareItem.setSalePrice(schemeSalePriceService.salePriceOf(rspu, rskuMap.get(item.getRskuId())));
             String code = StringUtils.hasText(item.getSpaceTag())
                 ? item.getSpaceTag()
                 : derivedCodes.get(item.getRspuId());
@@ -132,6 +141,14 @@ public class SchemeShareService {
         }
         return rspuMapper.selectList(new QueryWrapper<RspuMaster>().in("rspu_id", rspuIds))
             .stream().collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+    }
+
+    private Map<String, RskuSupply> batchRskuMap(List<String> rskuIds) {
+        if (rskuIds.isEmpty()) {
+            return Map.of();
+        }
+        return rskuSupplyMapper.selectList(new QueryWrapper<RskuSupply>().in("rsku_id", rskuIds))
+            .stream().collect(Collectors.toMap(RskuSupply::getRskuId, r -> r, (a, b) -> a));
     }
 
     private Map<String, String> batchPrimaryImageIds(List<String> rspuIds) {

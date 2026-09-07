@@ -281,10 +281,10 @@ public class QuoteService {
         boolean saleMode = MODE_SALE.equals(mode);
 
         // 售价口径：标准售价（建议销售价优先，否则成本 × 全局加价倍率），未定价整单拦截
-        BigDecimal salePrice = null;
+        // 标准售价双口径均填充（全角色可见）：sale 口径为计价单价；cost 口径供设计师查看售价（未定价为 null 不拦截）
+        BigDecimal salePrice = pricingService.resolveSalePrice(rspu, rsku);
         BigDecimal subtotal;
         if (saleMode) {
-            salePrice = pricingService.resolveSalePrice(rspu, rsku);
             if (salePrice == null) {
                 throw new BusinessException("产品未定价（无建议销售价且无出厂价）: " + rsku.getRspuId());
             }
@@ -310,8 +310,8 @@ public class QuoteService {
         item.setFactoryPrice(!saleMode && canViewPrice ? rsku.getFactoryPrice() : null);
         item.setQuantity(quantity);
         item.setSubtotal(subtotal);
+        item.setSalePrice(salePrice);
         if (saleMode) {
-            item.setSalePrice(salePrice);
             item.setBelowCost(PricingService.isBelowCost(salePrice, rsku.getFactoryPrice()));
             // sale 口径为对客户报价单：不返回成本/毛利字段（costPrice/marginAmount 恒为 null）
         }

@@ -710,7 +710,10 @@ POST   /api/v1/quotes/generate
        # sale 口径新增字段：items[].salePrice/belowCost；sale 为对客户口径，
        #   出厂价/成本/毛利一律不返回（items[].factoryPrice/costPrice/marginAmount
        #   与 summary.totalCost/totalMargin 恒为 null，与权限无关）；
-       #   sale 口径 subtotal/totalPrice 为售价口径
+       #   sale 口径 subtotal/totalPrice 为售价口径；
+       #   items[].salePrice 自 2026-09-07 起双口径均返回（cost 口径同样填充，
+       #   全角色可见，未定价为 null）——设计师报价单按售价查看；
+       #   items[].primaryImageUrl 为产品主图（前端报价结果表图片列使用）
 
 POST   /api/v1/quotes/export
        # 根据选中的 RSKU 及数量列表导出 Excel 报价单（已实现）
@@ -840,9 +843,9 @@ GET    /api/v1/public/schemes/{schemeId}
        # 方案独立分享公开只读视图（校验 scheme.share_enabled + share_expire_at，
        #   过期时间为空=永久有效，失效返回 404）
        # Response: { schemeId, schemeName, shareExpireAt,
-       #   items: [{ rspuId, productName, imageId, quantity, spaceTagName, sortOrder }] }
-       # 安全约束：严格白名单组装，只含产品名/主图 imageId/数量/空间名/排序，
-       #   不含工厂/价格/RSKU/成本等敏感字段；
+       #   items: [{ rspuId, productName, imageId, quantity, salePrice, spaceTagName, sortOrder }] }
+       # 安全约束：严格白名单组装，只含产品名/主图 imageId/数量/标准售价/空间名/排序，
+       #   不含工厂/成本/RSKU 等敏感字段（salePrice 标准售价为对客价格，可公开，未定价为 null）；
        #   spaceTagName = space_tag 覆盖优先，回退产品首场景推导，码已删回退码原文
 ```
 

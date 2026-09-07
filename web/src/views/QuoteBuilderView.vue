@@ -558,14 +558,18 @@ function formatPrice(value: number | undefined): string {
   return `¥${value.toFixed(2)}`
 }
 
-/** 报价结果表格列：按生成口径显示「销售价/出厂价」；sale 为对客户口径，不显示成本/毛利。 */
+/** 报价结果表格列：图片 + 售价口径全角色可见；出厂价/成本小计仅平台员工（cost 口径）。 */
 const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
   const saleMode = quoteResultMode.value === 'sale'
+  const isPlatform = userStore.isPlatformStaff
   const columns: DataTableColumns<QuoteItem> = [
     {
       title: '产品',
       key: 'productName',
-      render: (row: QuoteItem) => row.productName || row.rspuName
+      render: (row: QuoteItem) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
+        h(HoverZoomImage, { src: row.primaryImageUrl, width: 44, height: 44, objectFit: 'contain' }),
+        h('span', row.productName || row.rspuName)
+      ])
     },
     {
       title: 'RSKU ID',
@@ -576,23 +580,15 @@ const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
       }
     },
     { title: '工厂', key: 'factoryName' },
-    saleMode
-      ? {
-        title: '销售价',
-        key: 'salePrice',
-        width: 120,
-        render(row: QuoteItem) {
-          return h('span', { class: 'rsdp-mono' }, formatPrice(row.salePrice))
-        }
+    // 售价列全角色可见（sale 口径=计价单价；cost 口径=参考售价），设计师不再面对空列
+    {
+      title: saleMode ? '销售价' : '售价',
+      key: 'salePrice',
+      width: 120,
+      render(row: QuoteItem) {
+        return h('span', { class: 'rsdp-mono' }, formatPrice(row.salePrice))
       }
-      : {
-        title: '出厂价',
-        key: 'factoryPrice',
-        width: 120,
-        render(row: QuoteItem) {
-          return h('span', { class: 'rsdp-mono' }, formatPrice(row.factoryPrice))
-        }
-      },
+    },
     {
       title: '数量',
       key: 'quantity',
@@ -602,14 +598,34 @@ const quoteColumns = computed<DataTableColumns<QuoteItem>>(() => {
       }
     },
     {
-      title: '小计',
+      title: '小计(售价)',
+      key: 'saleSubtotal',
+      width: 120,
+      render(row: QuoteItem) {
+        return row.salePrice != null
+          ? h('span', { class: 'rsdp-mono' }, formatPrice(row.salePrice * (row.quantity || 1)))
+          : '-'
+      }
+    }
+  ]
+  // 成本口径仅平台员工可见（cost 模式）
+  if (!saleMode && isPlatform) {
+    columns.push({
+      title: '出厂价',
+      key: 'factoryPrice',
+      width: 120,
+      render(row: QuoteItem) {
+        return h('span', { class: 'rsdp-mono' }, formatPrice(row.factoryPrice))
+      }
+    }, {
+      title: '小计(成本)',
       key: 'subtotal',
       width: 120,
       render(row: QuoteItem) {
         return h('span', { class: 'rsdp-mono' }, formatPrice(row.subtotal))
       }
-    }
-  ]
+    })
+  }
   if (quoteResult.value?.items.some(item => item.spaceTagName)) {
     // 方案语境报价附带空间信息时才显示「空间」列（独立构建器恒空不出现）
     columns.push({
