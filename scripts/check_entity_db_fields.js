@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// 对账：MyBatis-Plus 实体字段 vs PostgreSQL 表列（自动按版本号读取 database/ 下全部 V{数字}__*.sql 迁移脚本）
+// 对账：MyBatis-Plus 实体字段 vs PostgreSQL 表列
+// 扫描源：database/schema/*.sql（基线 DDL，按文件名序读取；migrations/ 历史增量已并入基线并归档至 git 历史，不再扫描）
 // 找出“DB 有 / 实体缺”与“实体有 / DB 无”的字段。
 // 用法：node scripts/check_entity_db_fields.js
 const fs = require("fs");
@@ -8,16 +9,14 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 const ENTITY_DIR = path.join(ROOT, "server/src/main/java/com/rsdp/entity");
 
-// 自动按版本号排序读取 database/V{数字}__*.sql 迁移脚本
-const DATABASE_DIR = path.join(ROOT, "database");
-const SQL_FILES = fs.readdirSync(DATABASE_DIR)
-  .filter((f) => /^V\d+__.*\.sql$/.test(f))
-  .sort((a, b) => {
-    const numA = parseInt(a.match(/^V(\d+)__/)[1], 10);
-    const numB = parseInt(b.match(/^V(\d+)__/)[1], 10);
-    return numA - numB;
-  })
-  .map((f) => path.join(DATABASE_DIR, f));
+// 基线 DDL：database/schema/*.sql，编号即执行顺序，按文件名序读取
+const SCHEMA_DIR = path.join(ROOT, "database", "schema");
+const SCHEMA_FILES = fs.readdirSync(SCHEMA_DIR)
+  .filter((f) => f.endsWith(".sql"))
+  .sort()
+  .map((f) => path.join(SCHEMA_DIR, f));
+
+const SQL_FILES = SCHEMA_FILES;
 
 function camelToSnake(name) {
   return name

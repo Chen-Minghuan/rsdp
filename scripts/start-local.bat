@@ -103,7 +103,7 @@ echo 前端地址: http://localhost:5173
 echo 日志目录: %LOG_DIR%
 echo.
 echo 开发环境默认登录账号（密码均为 rsdp-dev-2026!）：
-echo   admin / editor / designer / factory / viewer / user
+echo   admin / editor / designer / factory / user
 echo.
 echo 关闭服务请直接关闭对应的 CMD 窗口，或运行 scripts/stop-local.bat
 echo.

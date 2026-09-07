@@ -16,11 +16,11 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 # 读取 .env 前，先保存关键环境变量的当前值（允许用户通过系统环境变量覆盖 .env 占位符）
+# 兼容 macOS 自带 bash 3.2：不使用 declare -A 关联数组
 REQUIRED_VARS=("RSDP_ENCRYPTION_KEY" "RSDP_JWT_SECRET" "DASHSCOPE_API_KEY")
-declare -A ORIGINAL_ENV
-for var in "${REQUIRED_VARS[@]}"; do
-    ORIGINAL_ENV[$var]="${!var:-}"
-done
+ORIGINAL_RSDP_ENCRYPTION_KEY="${RSDP_ENCRYPTION_KEY:-}"
+ORIGINAL_RSDP_JWT_SECRET="${RSDP_JWT_SECRET:-}"
+ORIGINAL_DASHSCOPE_API_KEY="${DASHSCOPE_API_KEY:-}"
 
 # 读取 .env 文件中的变量（兼容 Windows CRLF）
 set -a
@@ -43,8 +43,9 @@ is_placeholder() {
 # 如果 .env 把某个关键变量写成了占位符，但系统环境变量已经提供了真实值，则恢复系统值
 for var in "${REQUIRED_VARS[@]}"; do
     value="${!var:-}"
-    if is_placeholder "$value" && [ -n "${ORIGINAL_ENV[$var]:-}" ]; then
-        export "$var=${ORIGINAL_ENV[$var]}"
+    eval "original=\"\${ORIGINAL_${var}:-}\""
+    if is_placeholder "$value" && [ -n "$original" ]; then
+        export "$var=$original"
     fi
 done
 
@@ -78,7 +79,9 @@ stop_backend_by_port() {
     *)
       # Linux / macOS / WSL
       pkill -f "mvn spring-boot:run" || true
-      pkill -f "rsdp-server" || true
+      pkill -f "RsdpApplication" || true
+      # 兜底按端口杀：jvmArguments 会 fork 出独立 java 子进程，其命令行不含固定标识
+      lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
       ;;
   esac
 }

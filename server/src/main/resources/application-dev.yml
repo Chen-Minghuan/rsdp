@@ -11,8 +11,6 @@ spring:
       database: 0
       enabled: false
 
-# 开发环境 AES-256 密钥必须通过 RSDP_ENCRYPTION_KEY 环境变量注入
-# 切勿提交真实密钥到版本控制
 rsdp:
   encryption:
     key: ${RSDP_ENCRYPTION_KEY}
@@ -23,18 +21,19 @@ rsdp:
       batch-size: 100
 
   ai:
-    # 开发环境默认关闭 AI Mock；如需使用真实模型，请确保 DASHSCOPE_API_KEY 已配置
+    api-key: ${DASHSCOPE_API_KEY}
+    # 本机无真实 DashScope Key 时可启用 AI Mock，避免外部 AI 调用失败。
     mock:
-      enabled: false
+      enabled: ${RSDP_AI_MOCK_ENABLED:false}
 
   jwt:
+    secret: ${RSDP_JWT_SECRET}
     # 本地开发使用 HTTP，必须关闭 Secure 属性，否则浏览器拒绝存储 Cookie
     # SameSite=Lax 允许跨端口（5173 → 8081）携带 Cookie
     cookie-secure: false
     cookie-same-site: Lax
 
   order:
-    # 开发环境必须通过 RSDP_ORDER_INVITE_SECRET 注入，禁止硬编码默认值
     invite-secret: ${RSDP_ORDER_INVITE_SECRET}
 
   import:
