@@ -1,5 +1,7 @@
 FROM eclipse-temurin:21-jre-alpine
 
+ENV TZ=Asia/Shanghai
+
 WORKDIR /app
 
 COPY target/rsdp-server-*.jar app.jar

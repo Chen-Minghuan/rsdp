@@ -16,6 +16,8 @@ spring:
       max-file-size: 200MB
       max-request-size: 200MB
   jackson:
+    # JSON 时间渲染时区（TIMESTAMPTZ 列统一按 Asia/Shanghai 输出，与 JVM/DB 会话时区一致）
+    time-zone: Asia/Shanghai
     serialization:
       write-dates-as-timestamps: false
     date-format: yyyy-MM-dd'T'HH:mm:ss

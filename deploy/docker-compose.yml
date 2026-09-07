@@ -78,6 +78,8 @@ services:
       - "127.0.0.1:8081:8081"
     environment:
       - SPRING_PROFILES_ACTIVE=prod
+      # JVM/PostgreSQL 会话时区：TIMESTAMPTZ 按该时区渲染（必须与写入侧一致，勿随意改）
+      - TZ=Asia/Shanghai
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=rsdp
