@@ -528,6 +528,11 @@ public class ExcelAiImportService {
         // 保存批次级工厂/发货地信息
         applyBatchFactoryInfo(batch, request);
 
+        // 批次级预加载（消除行循环 N+1）：AI 解析在映射/预览确认阶段已完成，
+        // 导入循环内不再调用大模型，行内 externalCode 由映射列 + 复合列拆分确定性得出，
+        // 可在循环前一把 in 查询收集；未命中编码行内 miss 时仍实时单查回填
+        BatchImportCache importCache = preloadBatchCache(rawDataRows, mapping);
+
         int rowIndex = 1; // 第 1 行为表头
         int dataRowOrdinal = 0;
         ProductGroup currentGroup = null;
@@ -568,7 +573,8 @@ public class ExcelAiImportService {
                 }
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
                     selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
-                    currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId());
+                    currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId(),
+                    importCache);
                 if (rowResult.rspuId != null) {
                     rspuIds.add(rowResult.rspuId);
                     excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
@@ -2620,6 +2626,94 @@ public class ExcelAiImportService {
         return list == null ? List.of() : list;
     }
 
+    /**
+     * 批次级预加载（消除行循环 N+1）：本批次出现过的全部 external_code 一把 in 查询
+     * 建立「编码 → RSPU」缓存，并对命中的 RSPU 各用一把 in 查询批量预载变体与图片快照。
+     *
+     * <p>AI 解析（字段映射/品类猜测）在预览确认阶段已完成，导入行循环不再调用大模型；
+     * 行内 externalCode 由映射列取值 + 复合「型号品名」拆分确定性得出，可在循环前收集。
+     * 预加载未命中的编码不写入缓存（不预写 negative），行内 miss 时仍实时单查回填，
+     * 与原实现的并发可见性保持一致。</p>
+     *
+     * @param rawDataRows 数据行（已完成 forward fill / 预览编辑 / 跳过行过滤）
+     * @param mapping     表头 → 标准字段映射
+     * @return 批次导入缓存
+     */
+    private BatchImportCache preloadBatchCache(List<Map<String, String>> rawDataRows,
+                                               Map<String, String> mapping) {
+        BatchImportCache cache = new BatchImportCache();
+        Set<String> codes = new LinkedHashSet<>();
+        for (Map<String, String> dataRow : rawDataRows) {
+            String code = resolveRowExternalCode(dataRow, mapping);
+            if (StringUtils.hasText(code)) {
+                codes.add(code);
+            }
+        }
+        if (codes.isEmpty()) {
+            return cache;
+        }
+        List<RspuMaster> existing = rspuMapper.selectList(
+            new QueryWrapper<RspuMaster>().in("external_code", codes));
+        List<String> hitRspuIds = new ArrayList<>();
+        for (RspuMaster rspu : existing) {
+            String key = trim(rspu.getExternalCode());
+            // 同编码重复行保留先返回者（V24 唯一索引下不会重复，此处仅为防御）
+            if (key != null && !cache.rspuByExternalCode.containsKey(key)) {
+                cache.rspuByExternalCode.put(key, rspu);
+                hitRspuIds.add(rspu.getRspuId());
+            }
+        }
+        if (hitRspuIds.isEmpty()) {
+            return cache;
+        }
+        // 无变体/图片的命中 RSPU 也初始化为空快照，避免行内首次触碰时再单查
+        hitRspuIds.forEach(id -> {
+            cache.variantsByRspuId.put(id, new ArrayList<>());
+            cache.imagesByRspuId.put(id, new ArrayList<>());
+        });
+        rspuVariantMapper.selectList(new QueryWrapper<RspuVariant>().in("rspu_id", hitRspuIds))
+            .forEach(v -> cache.variantsByRspuId.get(v.getRspuId()).add(v));
+        imageAssetsMapper.selectList(new QueryWrapper<ImageAssets>().in("rspu_id", hitRspuIds))
+            .forEach(img -> cache.imagesByRspuId.get(img.getRspuId()).add(img));
+        return cache;
+    }
+
+    /**
+     * 预加载用：按 {@link #buildProductImportRow} 同款逻辑解析行 externalCode
+     * （映射取值 + 复合「型号品名」拆分），仅供循环前收集编码，不影响行内真实解析；
+     * 个别边界情形未收集到时由行内 miss 单查兜底，不影响正确性。
+     *
+     * @param dataRow 数据行（表头 → 值）
+     * @param mapping 表头 → 标准字段映射
+     * @return 行 externalCode（trim 后），无值时为 null
+     */
+    private String resolveRowExternalCode(Map<String, String> dataRow, Map<String, String> mapping) {
+        Map<String, String> standardValues = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : dataRow.entrySet()) {
+            String standardField = mapping.get(entry.getKey());
+            if (!StringUtils.hasText(standardField)) {
+                continue;
+            }
+            if (standardField.contains(",")) {
+                for (String field : standardField.split(",")) {
+                    standardValues.put(field.trim(), entry.getValue());
+                }
+            } else {
+                standardValues.put(standardField, entry.getValue());
+            }
+        }
+        String externalCode = getValue(standardValues, "externalCode");
+        String productName = getValue(standardValues, "productName");
+        // 与 splitExternalCodeAndProductName 同语义：复合列值等于品名时拆分取型号段
+        if (externalCode != null && externalCode.equals(productName)) {
+            int idx = findSplitIndex(externalCode);
+            if (idx > 0) {
+                externalCode = externalCode.substring(0, idx).trim();
+            }
+        }
+        return externalCode;
+    }
+
     private RowResult processRowInTransaction(Map<String, String> dataRow, Map<String, String> mapping,
                                               String categoryHint,
                                               List<PriceColumnInfo> priceColumns,
@@ -2629,7 +2723,7 @@ public class ExcelAiImportService {
                                               Long importRowId, Integer physicalRowIndex,
                                               ProductGroup currentGroup, PhysicalLayout physicalLayout,
                                               int sheetIndex, String sheetName, String categoryGuess,
-                                              String batchId) {
+                                              String batchId, BatchImportCache importCache) {
         // 事务外预处理：行构建/校验、URL 图片下载、内嵌图提取。
         // 网络与文件 IO 耗时可达数十秒，绝不放入 DB 事务（长事务占用连接池会拖垮全系统）；
         // 同时 MinIO 不参与 DB 事务，先存文件、事务内只登记元数据。
@@ -2662,8 +2756,10 @@ public class ExcelAiImportService {
         TransactionStatus status = transactionManager.getTransaction(def);
         try {
             RowResult result = persistRow(prep, storedProductImages, storedVariantImages,
-                dataRow, priceColumns, request, dictCache, rowIndex, importRowId, currentGroup);
+                dataRow, priceColumns, request, dictCache, rowIndex, importRowId, currentGroup, importCache);
             transactionManager.commit(status);
+            // 提交成功后才把本行新建的 RSPU 并入批次缓存（回滚行的幻影数据不得被后续行命中）
+            importCache.commitRow();
             return result;
         } catch (Exception e) {
             // commit 失败（如内层事务已标 rollback-only）时 status 已完成，
@@ -2671,6 +2767,8 @@ public class ExcelAiImportService {
             if (!status.isCompleted()) {
                 transactionManager.rollback(status);
             }
+            // 逐出本行触碰的缓存条目（脏实体/幻影变体与图片），后续行重查对齐原实时单查语义
+            importCache.rollbackRow();
             if (e instanceof BusinessException be) {
                 throw be;
             }
@@ -2767,7 +2865,8 @@ public class ExcelAiImportService {
                                  List<StoredImage> storedVariantImages,
                                  Map<String, String> dataRow, List<PriceColumnInfo> priceColumns,
                                  ExcelAiMappingRequest request, Map<String, List<CategoryDict>> dictCache,
-                                 int rowIndex, Long importRowId, ProductGroup currentGroup) {
+                                 int rowIndex, Long importRowId, ProductGroup currentGroup,
+                                 BatchImportCache importCache) {
         ProductImportRow row = prep.row();
         List<String> rowIssues = prep.rowIssues();
         String groupKey = prep.groupKey();
@@ -2786,7 +2885,7 @@ public class ExcelAiImportService {
             log.debug("第 {} 行与上一产品同型号（{}），归入已有 RSPU {}", rowIndex, groupKey, rspuId);
         } else {
             // updateIfExists 开关：externalCode 已存在（未软删）时，true 复用并更新已有 RSPU，false 跳过该行
-            RspuMaster existing = findRspuByExternalCode(groupKey);
+            RspuMaster existing = findRspuByExternalCode(groupKey, importCache);
             if (existing != null && !request.isUpdateIfExists()) {
                 log.debug("第 {} 行外部编码 {} 已存在，按配置跳过", rowIndex, groupKey);
                 return RowResult.skipped("已存在，跳过: " + groupKey);
@@ -2798,7 +2897,7 @@ public class ExcelAiImportService {
                 createdNewRspu = false;
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
-                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel);
+                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache);
                 saveStylesAndScenes(rspuId, row, dictCache);
                 createdNewRspu = true;
             }
@@ -2806,13 +2905,14 @@ public class ExcelAiImportService {
         // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）
         excelImportRowService.updateStage(importRowId, "create_factory_mapping");
         VariantRskuOutcome variantRskuOutcome = createRspuFactoryMappingAndVariants(rspuId, dataRow, row,
-            priceColumns, request, dictCache, importRowId, rowIssues, defaultProductLevel, defaultMaterialCode);
+            priceColumns, request, dictCache, importRowId, rowIssues, defaultProductLevel, defaultMaterialCode,
+            importCache);
         String variantId = variantRskuOutcome.firstVariantId();
 
         // 登记图片元数据（文件已在事务外写入对象存储）
         String primaryObjectKey = registerImages(rspuId, null, storedProductImages,
-            prep.allowPrimary(), prep.strictPrimary());
-        registerImages(rspuId, variantId, storedVariantImages, false, false);
+            prep.allowPrimary(), prep.strictPrimary(), importCache);
+        registerImages(rspuId, variantId, storedVariantImages, false, false, importCache);
 
         excelImportRowService.updateStage(importRowId, "create_async_task");
         String taskId = null;
@@ -3608,7 +3708,8 @@ public class ExcelAiImportService {
     }
 
     private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
-                              List<String> rowIssues, String defaultProductLevel) {
+                              List<String> rowIssues, String defaultProductLevel,
+                              BatchImportCache importCache) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -3648,6 +3749,12 @@ public class ExcelAiImportService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+        // 暂存行事务内新建的 RSPU，提交成功后并入批次缓存——同批次后序同编码行
+        // 才能复用本行产品（对齐原实现"同事务后续行单查可见已提交插入"的语义）；
+        // 行回滚时 pending 随 rollbackRow 丢弃，不产生幻影缓存
+        if (StringUtils.hasText(rspu.getExternalCode())) {
+            importCache.pendingNewRspu.put(rspu.getExternalCode(), rspu);
+        }
 
         // 业务编码生成失败不阻断整行导入：风格/职级码无效时跳过发号（rspu_code 留空、记行级警告），
         // 与 AI 识别路径语义对齐；不再 try/catch assignCode 的 BusinessException，
@@ -3741,7 +3848,8 @@ public class ExcelAiImportService {
 
     private String createVariantIfNeeded(String rspuId, ProductImportRow row,
                                          Map<String, List<CategoryDict>> dictCache,
-                                         SizeSpecParser.SizeSpec spec, String defaultProductLevel) {
+                                         SizeSpecParser.SizeSpec spec, String defaultProductLevel,
+                                         BatchImportCache importCache) {
         boolean hasVariantInfo = spec != null
             || StringUtils.hasText(row.getVariantDisplayName())
             || StringUtils.hasText(row.getSizeCode()) || StringUtils.hasText(row.getSizeText())
@@ -3788,7 +3896,8 @@ public class ExcelAiImportService {
         // 重复/更新导入与组内重复属性：同"码或原文"组合的变体直接复用，
         // 不触发 uk_variant_attrs 唯一索引冲突导致整行失败（与价格列分支同语义）
         String existingVariantId = findExistingVariantId(rspuId, sizeCode, sizeText,
-            request.getColorCode(), row.getColorText(), request.getMaterialCode(), row.getMaterialText());
+            request.getColorCode(), row.getColorText(), request.getMaterialCode(), row.getMaterialText(),
+            importCache);
         if (existingVariantId != null) {
             return existingVariantId;
         }
@@ -3797,6 +3906,7 @@ public class ExcelAiImportService {
         if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
             throw new BusinessException("创建默认变体失败");
         }
+        cacheCreatedVariant(importCache, rspuId, variantResponse.getVariantId(), request);
         return variantResponse.getVariantId();
     }
 
@@ -3846,7 +3956,8 @@ public class ExcelAiImportService {
                                                         Long importRowId,
                                                         List<String> rowIssues,
                                                         String defaultProductLevel,
-                                                        String defaultMaterialCode) {
+                                                        String defaultMaterialCode,
+                                                        BatchImportCache importCache) {
         String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
             ? request.getDefaultFactoryCode()
             : null;
@@ -3958,7 +4069,7 @@ public class ExcelAiImportService {
                     // 避免变体属性组合唯一索引冲突导致整行回滚丢价格；
                     // 价格列变体携带行级已解析的尺寸/颜色（三码容错解析已在 prepareRow 完成）
                     String variantId = findExistingVariantId(rspuId, rowSizeCode, specSizeText,
-                        rowColorCode, baseRow.getColorText(), materialCode, materialText);
+                        rowColorCode, baseRow.getColorText(), materialCode, materialText, importCache);
                     if (variantId == null) {
                         RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
                         variantRequest.setDisplayName(buildVariantDisplayName(specSizeText, materialName));
@@ -3980,6 +4091,7 @@ public class ExcelAiImportService {
                             continue;
                         }
                         variantId = variantResponse.getVariantId();
+                        cacheCreatedVariant(importCache, rspuId, variantId, variantRequest);
                     }
                     if (firstVariantId == null) {
                         firstVariantId = variantId;
@@ -4020,7 +4132,8 @@ public class ExcelAiImportService {
             // 没有价格列时创建变体（RSPU + 变体 + 图片，不建 RSKU）：
             // 识别到多尺寸规格时按尺寸各建一个变体，否则维持单默认变体
             for (SizeSpecParser.SizeSpec spec : specLoop) {
-                String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache, spec, defaultProductLevel);
+                String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache, spec, defaultProductLevel,
+                    importCache);
                 if (firstVariantId == null) {
                     firstVariantId = variantId;
                 }
@@ -4070,16 +4183,17 @@ public class ExcelAiImportService {
      * @param colorText    颜色原文（可空）
      * @param materialCode 材质码（可空）
      * @param materialText 材质原文（可空）
+     * @param importCache  批次导入缓存（变体快照按 rspu_id 缓存，miss 时单查回填）
      * @return 已有变体 ID，不存在时为 null
      */
     private String findExistingVariantId(String rspuId, String sizeCode, String sizeText,
                                          String colorCode, String colorText,
-                                         String materialCode, String materialText) {
+                                         String materialCode, String materialText,
+                                         BatchImportCache importCache) {
         String effSize = effectiveOf(sizeCode, sizeText);
         String effColor = effectiveOf(colorCode, colorText);
         String effMaterial = effectiveOf(materialCode, materialText);
-        List<RspuVariant> existing = rspuVariantMapper.selectList(
-            new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId));
+        List<RspuVariant> existing = loadVariantsCached(rspuId, importCache);
         return existing.stream()
             .filter(v -> effSize.equals(effectiveOf(v.getSizeCode(), v.getSizeText()))
                 && effColor.equals(effectiveOf(v.getColorCode(), v.getColorText()))
@@ -4087,6 +4201,44 @@ public class ExcelAiImportService {
             .map(RspuVariant::getVariantId)
             .findFirst()
             .orElse(null);
+    }
+
+    /**
+     * 按 RSPU 取变体快照：批次缓存命中直接用，miss 时单查回填（每个 RSPU 每批次最多一次查询，
+     * 替代原实现每价格列 × 每尺寸规格一次的重复 selectList）。
+     *
+     * @param rspuId      RSPU ID
+     * @param importCache 批次导入缓存
+     * @return 变体快照（可变列表，同事务新建变体由 {@link #cacheCreatedVariant} 追加）
+     */
+    private List<RspuVariant> loadVariantsCached(String rspuId, BatchImportCache importCache) {
+        importCache.touchedRspuIds.add(rspuId);
+        return importCache.variantsByRspuId.computeIfAbsent(rspuId,
+            id -> new ArrayList<>(rspuVariantMapper.selectList(new QueryWrapper<RspuVariant>().eq("rspu_id", id))));
+    }
+
+    /**
+     * 把同事务内新建的变体追加进批次缓存（仅判重所需字段），保持与原实现
+     * 「同事务 selectList 可查回本行先前插入」一致的可见性；行回滚时由
+     * {@link BatchImportCache#rollbackRow()} 按 touchedRspuIds 逐出，不留幻影。
+     *
+     * @param importCache 批次导入缓存
+     * @param rspuId      所属 RSPU
+     * @param variantId   新建变体 ID
+     * @param request     变体创建请求（判重字段来源）
+     */
+    private void cacheCreatedVariant(BatchImportCache importCache, String rspuId, String variantId,
+                                     RspuVariantCreateRequest request) {
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId(variantId);
+        variant.setRspuId(rspuId);
+        variant.setSizeCode(request.getSizeCode());
+        variant.setSizeText(request.getSizeText());
+        variant.setColorCode(request.getColorCode());
+        variant.setColorText(request.getColorText());
+        variant.setMaterialCode(request.getMaterialCode());
+        variant.setMaterialText(request.getMaterialText());
+        loadVariantsCached(rspuId, importCache).add(variant);
     }
 
     /** 有效判重值：码优先，无码取原文，均无则为空串（与唯一索引 COALESCE 语义一致）。 */
@@ -4100,16 +4252,28 @@ public class ExcelAiImportService {
     /**
      * 按外部编码查询未软删的 RSPU（@TableLogic 自动过滤已删除记录）。
      *
+     * <p>批次缓存优先（含预加载命中与 negative cache）；miss 时保持原实现的实时单查并回填，
+     * 不牺牲对并发导入新建数据的可见性。行内对缓存实体的修改（updateExistingRspu）若随
+     * 事务回滚，由 {@link BatchImportCache#rollbackRow()} 逐出避免脏实体残留。</p>
+     *
      * @param externalCode 外部编码
+     * @param importCache  批次导入缓存
      * @return 已有 RSPU，不存在或编码为空时为 null
      */
-    private RspuMaster findRspuByExternalCode(String externalCode) {
+    private RspuMaster findRspuByExternalCode(String externalCode, BatchImportCache importCache) {
         if (!StringUtils.hasText(externalCode)) {
             return null;
         }
+        String key = externalCode.trim();
+        importCache.touchedCodes.add(key);
+        if (importCache.rspuByExternalCode.containsKey(key)) {
+            return importCache.rspuByExternalCode.get(key);
+        }
         List<RspuMaster> list = rspuMapper.selectList(
             new QueryWrapper<RspuMaster>().eq("external_code", externalCode.trim()));
-        return list.isEmpty() ? null : list.get(0);
+        RspuMaster found = list.isEmpty() ? null : list.get(0);
+        importCache.rspuByExternalCode.put(key, found);
+        return found;
     }
 
     /**
@@ -4408,19 +4572,26 @@ public class ExcelAiImportService {
      *                      true 时只有标记为 primary 的图（产品图样列的图）才能成为主图，
      *                      规格模块示例图等不再兜底升主图，行内无产品图样图则该产品无主图；
      *                      false 时保持旧行为（无 primary 标记则首图升主图）
+     * @param importCache   批次导入缓存（查重快照按 rspu_id 缓存，miss 时单查回填）
      * @return 主图 objectKey，未产生主图时为 null
      */
     private String registerImages(String rspuId, String variantId, List<StoredImage> images,
-                                  boolean allowPrimary, boolean strictPrimary) {
+                                  boolean allowPrimary, boolean strictPrimary,
+                                  BatchImportCache importCache) {
         if (images == null || images.isEmpty()) {
             return null;
         }
         // 跨导入查重（V31 content_hash）：同 RSPU 已登记同内容图片时跳过重复登记——
         // 重复/更新导入、跨行锚定组合图分发不再产生图片副本；
-        // 库中已有主图时本轮不再设新主图（防多主图并存），主图 objectKey 直接复用库中值
-        List<ImageAssets> existingImages = imageAssetsMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ImageAssets>()
-                .eq("rspu_id", rspuId));
+        // 库中已有主图时本轮不再设新主图（防多主图并存），主图 objectKey 直接复用库中值。
+        // 快照按 rspu_id 进批次缓存：原实现每次调用都 selectList，同一产品组的模块行
+        // 会重复查同一 RSPU 的全部图片；本行新登记图片追加回缓存，保证同行第二次调用
+        // （变体图）与后续同组行可见，对齐原"同事务/已提交 re-select"语义
+        importCache.touchedRspuIds.add(rspuId);
+        List<ImageAssets> existingImages = importCache.imagesByRspuId.computeIfAbsent(rspuId,
+            id -> new ArrayList<>(imageAssetsMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ImageAssets>()
+                    .eq("rspu_id", id))));
         Map<String, ImageAssets> existingByHash = new HashMap<>();
         String existingPrimaryKey = null;
         for (ImageAssets existing : existingImages) {
@@ -4434,6 +4605,7 @@ public class ExcelAiImportService {
 
         String primaryObjectKey = existingPrimaryKey;
         boolean hasPrimary = images.stream().anyMatch(StoredImage::primary);
+        List<ImageAssets> newAssets = new ArrayList<>();
         for (int i = 0; i < images.size(); i++) {
             StoredImage stored = images.get(i);
             if (StringUtils.hasText(stored.contentHash()) && existingByHash.containsKey(stored.contentHash())) {
@@ -4455,8 +4627,7 @@ public class ExcelAiImportService {
             imageAsset.setContentHash(stored.contentHash());
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
-            imageAssetsMapper.insert(imageAsset);
-            auditLogService.logCreate("image_assets", stored.imageId(), imageAsset, SecurityOperatorContext.currentUsername());
+            newAssets.add(imageAsset);
             if (StringUtils.hasText(stored.contentHash())) {
                 existingByHash.put(stored.contentHash(), imageAsset);
             }
@@ -4464,6 +4635,17 @@ public class ExcelAiImportService {
             if (isPrimary) {
                 primaryObjectKey = stored.objectKey();
             }
+        }
+        if (!newAssets.isEmpty()) {
+            // 批量插入（ImageAssetsMapper.insertBatch，与 ProductService 录入路径同一惯例）；
+            // 审计保持逐条：审计粒度为每个新建实体一条 audit_log，且 AuditLogService 经
+            // AuditLogWriter 异步落库，不占用导入线程的数据库往返
+            imageAssetsMapper.insertBatch(newAssets);
+            for (ImageAssets imageAsset : newAssets) {
+                auditLogService.logCreate("image_assets", imageAsset.getImageId(), imageAsset,
+                    SecurityOperatorContext.currentUsername());
+            }
+            existingImages.addAll(newAssets);
         }
         return primaryObjectKey;
     }
@@ -4666,6 +4848,48 @@ public class ExcelAiImportService {
         boolean hasAiTask;
         /** 已为本产品组写入对象存储的图片内容哈希，避免跨行锚定的同一张图重复存储/登记。 */
         final Set<String> storedImageHashes = new HashSet<>();
+    }
+
+    /**
+     * 批次级导入缓存（消除行循环 N+1），生命周期 = 单次 confirmImport。
+     *
+     * <p>一致性约定：行级事务内新建的 RSPU 先落 {@link #pendingNewRspu}，事务提交后
+     * （{@link #commitRow()}）才并入主缓存；事务回滚（{@link #rollbackRow()}）时逐出本行
+     * 触碰的条目（{@link #touchedCodes} / {@link #touchedRspuIds}），避免脏实体
+     * （updateExistingRspu 原地修改缓存对象）与幻影变体/图片被后续行命中——
+     * 与原来「每行实时单查」的可见性语义保持一致。</p>
+     */
+    private static class BatchImportCache {
+        /** external_code（trim 后）→ 未软删 RSPU；value 为 null 表示本批次已确认不存在（negative cache） */
+        final Map<String, RspuMaster> rspuByExternalCode = new HashMap<>();
+        /** 行事务内新建、尚未提交的 RSPU（key 同主缓存），commitRow 时并入 */
+        final Map<String, RspuMaster> pendingNewRspu = new HashMap<>();
+        /** rspu_id → 变体快照（含同事务内新建追加）；key 不存在 = 尚未加载 */
+        final Map<String, List<RspuVariant>> variantsByRspuId = new HashMap<>();
+        /** rspu_id → 已登记图片快照（含同事务内新建追加）；key 不存在 = 尚未加载 */
+        final Map<String, List<ImageAssets>> imagesByRspuId = new HashMap<>();
+        /** 本行读/写过的 external_code，回滚时逐出 */
+        final Set<String> touchedCodes = new HashSet<>();
+        /** 本行加载/追加过快照的 rspu_id，回滚时逐出 */
+        final Set<String> touchedRspuIds = new HashSet<>();
+
+        /** 行事务提交成功：并入本行新建 RSPU，清空行级追踪。 */
+        void commitRow() {
+            rspuByExternalCode.putAll(pendingNewRspu);
+            pendingNewRspu.clear();
+            touchedCodes.clear();
+            touchedRspuIds.clear();
+        }
+
+        /** 行事务回滚：逐出本行触碰的条目，后续行重查对齐原实时单查语义。 */
+        void rollbackRow() {
+            touchedCodes.forEach(rspuByExternalCode::remove);
+            touchedRspuIds.forEach(variantsByRspuId::remove);
+            touchedRspuIds.forEach(imagesByRspuId::remove);
+            pendingNewRspu.clear();
+            touchedCodes.clear();
+            touchedRspuIds.clear();
+        }
     }
 
     /**

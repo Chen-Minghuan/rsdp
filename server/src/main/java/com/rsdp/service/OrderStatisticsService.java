@@ -98,6 +98,8 @@ public class OrderStatisticsService {
             }
             wrapper.in("created_by", inviteeIds);
         }
+        // 字段裁剪：统计只需到手价与创建人，避免整实体映射连带解密 original_total_price
+        wrapper.select("order_id", "created_by", "final_total_price");
         List<DesignOrder> orders = designOrderMapper.selectList(wrapper);
         if (orders.isEmpty()) {
             return List.of();
@@ -280,8 +282,12 @@ public class OrderStatisticsService {
             return List.of();
         }
         List<String> orderIds = orders.stream().map(DesignOrder::getOrderId).toList();
+        // 字段裁剪：统计只需数量/到手价/归属列，避免整实体映射连带解密
+        // original_price/adjust_price 及解析 snapshot_json（MyBatis 对未选中列不调用 TypeHandler）
         return designOrderItemMapper.selectList(
-            new QueryWrapper<DesignOrderItem>().in("order_id", orderIds));
+            new QueryWrapper<DesignOrderItem>()
+                .select("order_id", "rspu_id", "product_name", "image_id", "quantity", "final_price", "factory_code")
+                .in("order_id", orderIds));
     }
 
     /**

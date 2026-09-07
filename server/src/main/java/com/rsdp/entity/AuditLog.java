@@ -18,7 +18,7 @@ import java.util.Map;
 public class AuditLog {
 
     @TableId(type = IdType.AUTO)
-    private Integer id;
+    private Long id;
 
     /**
      * 操作表名，如 rspu_master / rsku_supply / factory_master。

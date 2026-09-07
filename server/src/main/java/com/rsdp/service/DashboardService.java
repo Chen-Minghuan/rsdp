@@ -67,11 +67,13 @@ public class DashboardService {
      * 本月订单额：到手价合计，不含已取消订单。
      *
      * <p>final_total_price 为 AES 加密列，无法 SQL 聚合，查实体后 Java 内存求和
-     * （与 OrderStatisticsService 同一模式）。</p>
+     * （与 OrderStatisticsService 同一模式）。字段裁剪只取 final_total_price，
+     * 避免整实体映射连带解密 original_total_price（MyBatis 对未选中列不调用 TypeHandler）。</p>
      */
     private BigDecimal monthOrderAmount() {
         LocalDate monthStart = LocalDate.now().withDayOfMonth(1);
         List<DesignOrder> orders = designOrderMapper.selectList(new QueryWrapper<DesignOrder>()
+            .select("order_id", "final_total_price")
             .ne("status", OrderService.STATUS_CANCELLED)
             .ge("created_at", monthStart.atStartOfDay()));
         return orders.stream()

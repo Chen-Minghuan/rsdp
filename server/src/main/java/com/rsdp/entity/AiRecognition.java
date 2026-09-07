@@ -17,6 +17,10 @@ public class AiRecognition {
     private String rspuId;
     private String taskId;
     private String modelName;
+    /** 识别模型版本（V43），用于识别结果溯源与重识别。 */
+    private String modelVersion;
+    /** 提示词模板版本（V43），用于提示词迭代效果对比。 */
+    private String promptVersion;
     private String recognitionType;
     private String endpoint;
 

@@ -113,14 +113,19 @@ public class StatisticsService {
     public List<FactoryStatResponse> factories(int months) {
         int clampedMonths = Math.max(1, Math.min(months, 24));
         LocalDate startDate = LocalDate.now().minusMonths(clampedMonths).withDayOfMonth(1);
+        // 字段裁剪：schemes 只需 scheme_id；items 只需聚合三列（factory_price 为加密列，
+        // 仍需实体级解密，但裁剪后不再映射无关列）
         List<Scheme> schemes = schemeMapper.selectList(schemeScope()
+            .select("scheme_id")
             .ge("created_at", startDate.atStartOfDay()));
         if (schemes.isEmpty()) {
             return List.of();
         }
         List<String> schemeIds = schemes.stream().map(Scheme::getSchemeId).toList();
         List<SchemeItem> items = schemeItemMapper.selectList(
-            new QueryWrapper<SchemeItem>().in("scheme_id", schemeIds));
+            new QueryWrapper<SchemeItem>()
+                .select("factory_code", "quantity", "factory_price")
+                .in("scheme_id", schemeIds));
 
         Map<String, BigDecimal> amountByFactory = new HashMap<>();
         Map<String, Integer> countByFactory = new HashMap<>();

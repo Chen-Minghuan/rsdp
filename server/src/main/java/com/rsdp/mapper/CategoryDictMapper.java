@@ -1,6 +1,6 @@
 package com.rsdp.mapper;
 
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.entity.CategoryDict;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -10,9 +10,54 @@ import java.util.List;
 
 /**
  * 字典表 Mapper。
+ *
+ * <p>category_dict 为 (dict_type, dict_code) 复合主键表，继承 {@link CompositeKeyMapper}
+ * 禁用按伪主键单列的 updateById/deleteById/selectById；单行读写请使用下方复合键方法，
+ * 部分列更新按复合条件构造 UpdateWrapper（参照 DictService.updateDict）。</p>
  */
 @Mapper
-public interface CategoryDictMapper extends BaseMapper<CategoryDict> {
+public interface CategoryDictMapper extends CompositeKeyMapper<CategoryDict> {
+
+    /**
+     * 按复合主键 (dict_type, dict_code) 查询单条字典。
+     *
+     * @param dictType 字典类型
+     * @param dictCode 字典码
+     * @return 字典实体，不存在时为 null
+     */
+    default CategoryDict selectByCompositeKey(String dictType, String dictCode) {
+        return selectOne(new QueryWrapper<CategoryDict>()
+            .eq("dict_type", dictType)
+            .eq("dict_code", dictCode));
+    }
+
+    /**
+     * 按复合主键 (dict_type, dict_code) 更新（SET 取实体非空字段）。
+     *
+     * <p>只需更新个别列时，应改用 {@code update(null, UpdateWrapper)} 显式指定列，
+     * 避免覆盖并发写入的其他列。</p>
+     *
+     * @param entity 字典实体，dictType/dictCode 定位行
+     * @return 影响行数
+     */
+    default int updateByCompositeKey(CategoryDict entity) {
+        return update(entity, new QueryWrapper<CategoryDict>()
+            .eq("dict_type", entity.getDictType())
+            .eq("dict_code", entity.getDictCode()));
+    }
+
+    /**
+     * 按复合主键 (dict_type, dict_code) 删除单条字典。
+     *
+     * @param dictType 字典类型
+     * @param dictCode 字典码
+     * @return 影响行数
+     */
+    default int deleteByCompositeKey(String dictType, String dictCode) {
+        return delete(new QueryWrapper<CategoryDict>()
+            .eq("dict_type", dictType)
+            .eq("dict_code", dictCode));
+    }
 
     /**
      * 按类型查询有效字典项。

@@ -1356,8 +1356,10 @@ class ExcelAiImportServiceTest {
         assertEquals("MJ-S96", rspuCaptor.getAllValues().get(0).getExternalCode());
         assertEquals("MJ-S97", rspuCaptor.getAllValues().get(1).getExternalCode());
 
-        // 变体按「行 × 价格列」创建：行1（2）+ 行2（1）+ 行3（2）= 5 个
-        verify(rspuVariantService, times(5)).createVariant(anyString(), any());
+        // 变体按「行 × 价格列」去重创建：行1（A级布/AA级布 2 个）+ 行3（2 个）= 4 个；
+        // 行2 与行1 同属 MJ-S96 且 A级布属性组合相同，复用行1 已建变体（与真实库中
+        // selectList 查回前序行已提交变体的语义一致，缓存替代了逐次 re-select）
+        verify(rspuVariantService, times(4)).createVariant(anyString(), any());
 
         // RSKU：行1（2 个价格）+ 行2（1 个价格，AA级布为空跳过）+ 行3（2 个价格）= 5 个
         verify(rskuService, times(5)).upsertRsku(any());
@@ -1432,10 +1434,10 @@ class ExcelAiImportServiceTest {
         verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
 
         // 图片：共 2 张入库（PNG1 主图 + PNG2 详情图），col5 的 logo 被过滤
-        ArgumentCaptor<com.rsdp.entity.ImageAssets> imageCaptor =
-            ArgumentCaptor.forClass(com.rsdp.entity.ImageAssets.class);
-        verify(imageAssetsMapper, times(2)).insert(imageCaptor.capture());
-        var savedImages = imageCaptor.getAllValues();
+        // （图片登记为批量插入 insertBatch，逐行各一批）
+        ArgumentCaptor<List<com.rsdp.entity.ImageAssets>> imageCaptor = ArgumentCaptor.forClass(List.class);
+        verify(imageAssetsMapper, times(2)).insertBatch(imageCaptor.capture());
+        var savedImages = imageCaptor.getAllValues().stream().flatMap(List::stream).toList();
         assertTrue(savedImages.get(0).getPrimary(), "行 1 图片应成为组主图");
         assertEquals("white_bg", savedImages.get(0).getImageType());
         assertEquals(Boolean.FALSE, savedImages.get(1).getPrimary(), "行 2 模块图应降级为详情图，不覆盖组主图");
@@ -1513,13 +1515,13 @@ class ExcelAiImportServiceTest {
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
 
-        // 示例图入库但必须是详情图，不能升为主图
-        ArgumentCaptor<com.rsdp.entity.ImageAssets> imageCaptor =
-            ArgumentCaptor.forClass(com.rsdp.entity.ImageAssets.class);
-        verify(imageAssetsMapper, times(1)).insert(imageCaptor.capture());
-        assertEquals(Boolean.FALSE, imageCaptor.getValue().getPrimary(), "模块示例图不得升为主图");
-        assertEquals("detail", imageCaptor.getValue().getImageType());
-        assertEquals("V-A", imageCaptor.getValue().getVariantId(), "模块示例图应挂到本行变体");
+        // 示例图入库但必须是详情图，不能升为主图（图片登记为批量插入 insertBatch）
+        ArgumentCaptor<List<com.rsdp.entity.ImageAssets>> imageCaptor = ArgumentCaptor.forClass(List.class);
+        verify(imageAssetsMapper, times(1)).insertBatch(imageCaptor.capture());
+        com.rsdp.entity.ImageAssets savedImage = imageCaptor.getValue().get(0);
+        assertEquals(Boolean.FALSE, savedImage.getPrimary(), "模块示例图不得升为主图");
+        assertEquals("detail", savedImage.getImageType());
+        assertEquals("V-A", savedImage.getVariantId(), "模块示例图应挂到本行变体");
 
         // 无主图 → 不建 AI 识别任务
         verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
@@ -3932,10 +3934,10 @@ class ExcelAiImportServiceTest {
         ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
-        ArgumentCaptor<com.rsdp.entity.ImageAssets> imageCaptor =
-            ArgumentCaptor.forClass(com.rsdp.entity.ImageAssets.class);
-        verify(imageAssetsMapper, times(2)).insert(imageCaptor.capture());
-        var savedImages = imageCaptor.getAllValues();
+        // 同一行两张产品图合并为一批插入（insertBatch）
+        ArgumentCaptor<List<com.rsdp.entity.ImageAssets>> imageCaptor = ArgumentCaptor.forClass(List.class);
+        verify(imageAssetsMapper, times(1)).insertBatch(imageCaptor.capture());
+        var savedImages = imageCaptor.getValue();
         long primaryCount = savedImages.stream().filter(img -> Boolean.TRUE.equals(img.getPrimary())).count();
         assertEquals(1, primaryCount, "同一 RSPU 只能有一条主图: " + savedImages);
         assertEquals("white_bg", savedImages.get(0).getImageType());
@@ -4049,9 +4051,9 @@ class ExcelAiImportServiceTest {
         ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
-        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
-        verify(imageAssetsMapper, times(1)).insert(imageCaptor.capture());
-        org.junit.jupiter.api.Assertions.assertFalse(imageCaptor.getValue().getPrimary(),
+        ArgumentCaptor<List<ImageAssets>> imageCaptor = ArgumentCaptor.forClass(List.class);
+        verify(imageAssetsMapper, times(1)).insertBatch(imageCaptor.capture());
+        org.junit.jupiter.api.Assertions.assertFalse(imageCaptor.getValue().get(0).getPrimary(),
             "库中已有主图时新登记图片不得再置主图");
     }
 
