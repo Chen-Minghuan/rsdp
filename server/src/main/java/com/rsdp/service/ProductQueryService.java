@@ -17,7 +17,6 @@ import com.rsdp.dto.response.ProductStyleMatchResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.CategoryDict;
-import com.rsdp.entity.FactoryProductCapability;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuRelation;
@@ -25,6 +24,7 @@ import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.RspuFactoryMapping;
+import com.rsdp.entity.RspuPriceSummary;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.SysUser;
 import com.rsdp.entity.UserFavorite;
@@ -32,7 +32,6 @@ import com.rsdp.event.RspuDeletedEvent;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
-import com.rsdp.mapper.FactoryProductCapabilityMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.ProductPurgeMapper;
@@ -62,12 +61,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -92,7 +87,6 @@ public class ProductQueryService {
     private final RspuRelationService rspuRelationService;
     private final ApplicationEventPublisher eventPublisher;
     private final UserFactoryService userFactoryService;
-    private final FactoryProductCapabilityMapper capabilityMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
     private final SysUserMapper sysUserMapper;
     private final DataScopeHelper dataScopeHelper;
@@ -101,6 +95,7 @@ public class ProductQueryService {
     private final UserFavoriteMapper userFavoriteMapper;
     private final StorageService storageService;
     private final ProductPurgeMapper productPurgeMapper;
+    private final RspuPriceSummaryService rspuPriceSummaryService;
 
     /**
      * 分页查询产品列表。
@@ -130,11 +125,9 @@ public class ProductQueryService {
         }
 
         if (isFullView) {
-            // 全库去重视图：先按常规条件查询全部候选，再后过滤去重并手动分页
-            wrapper.orderByDesc("created_at");
-            List<RspuMaster> candidates = rspuMapper.selectList(wrapper);
-            List<RspuMaster> filtered = applyFullViewFilter(candidates, userFactoryCodes);
-            return paginateAndSummarize(filtered, request.getPage(), request.getSize());
+            // 全库去重视图：自有 RSKU / 工厂能力覆盖条件下推到 SQL，由分页插件在库内分页，
+            // 不再 selectList 全量候选进 JVM 后手工过滤分页（见 applyFullViewFilter）
+            applyFullViewFilter(wrapper, userFactoryCodes);
         }
 
         Page<RspuMaster> pageParam = new Page<>(request.getPage(), request.getSize());
@@ -144,8 +137,16 @@ public class ProductQueryService {
         List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
-        Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(rspuIds);
-        Map<String, Long> rskuCountMap = batchRskuCounts(rspuIds);
+        // 当页最低价与报价数取自价格投影表（V44），不再批量查 RSKU 实体解密聚合
+        Map<String, RspuPriceSummary> priceSummaryMap = rspuPriceSummaryService.batchSummaries(rspuIds);
+        Map<String, BigDecimal> minPriceMap = priceSummaryMap.entrySet().stream()
+            .filter(e -> e.getValue().getMinFactoryPrice() != null)
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().getMinFactoryPrice()));
+        Map<String, Long> rskuCountMap = priceSummaryMap.entrySet().stream()
+            .collect(Collectors.toMap(
+                Map.Entry::getKey,
+                e -> (long) e.getValue().getActiveRskuCount(),
+                (a, b) -> a));
 
         List<ProductSummaryResponse> rows = page.getRecords().stream()
             .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap))
@@ -433,140 +434,58 @@ public class ProductQueryService {
         }
     }
 
-    private List<RspuMaster> applyFullViewFilter(List<RspuMaster> candidates, List<String> userFactoryCodes) {
-        if (candidates.isEmpty() || userFactoryCodes.isEmpty()) {
-            return candidates;
-        }
-
-        Set<String> ownRspuIds = findOwnRspuIds(userFactoryCodes);
-        CapabilityMatcher matcher = buildCapabilityMatcher(userFactoryCodes);
-
-        return candidates.stream()
-            .filter(rspu -> ownRspuIds.contains(rspu.getRspuId()) || !matcher.isCovered(rspu))
-            .collect(Collectors.toList());
-    }
-
-    private Set<String> findOwnRspuIds(List<String> factoryCodes) {
-        List<RskuSupply> ownRskus = rskuSupplyMapper.selectList(
-            new QueryWrapper<RskuSupply>()
-                .in("factory_code", factoryCodes)
-                .isNull("deleted_at")
-        );
-        return ownRskus.stream()
-            .map(RskuSupply::getRspuId)
-            .collect(Collectors.toSet());
-    }
-
-    private CapabilityMatcher buildCapabilityMatcher(List<String> factoryCodes) {
-        List<FactoryProductCapability> capabilities = capabilityMapper.selectList(
-            new QueryWrapper<FactoryProductCapability>()
-                .in("factory_code", factoryCodes)
-        );
-        return new CapabilityMatcher(capabilities, objectMapper);
-    }
-
-    private PageResult<ProductSummaryResponse> paginateAndSummarize(List<RspuMaster> records, long page, long size) {
-        long total = records.size();
-        long from = (page - 1) * size;
-        if (from >= total) {
-            return PageResult.of(total, page, size, List.of());
-        }
-        long to = Math.min(from + size, total);
-        List<RspuMaster> pageRecords = records.subList((int) from, (int) to);
-
-        List<String> pageRspuIds = pageRecords.stream().map(RspuMaster::getRspuId).toList();
-        Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(pageRspuIds);
-        Map<String, List<String>> factoryCodeMap = batchFactoryCodes(pageRspuIds);
-        Map<String, BigDecimal> minPriceMap = batchMinFactoryPrices(pageRspuIds);
-        Map<String, Long> rskuCountMap = batchRskuCounts(pageRspuIds);
-
-        List<ProductSummaryResponse> rows = pageRecords.stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap))
-            .collect(Collectors.toList());
-
-        return PageResult.of(total, page, size, rows);
+    /**
+     * 全库去重视图过滤（条件下推 SQL，配合分页插件在库内分页）。
+     *
+     * <p>保留两类产品，其余（被本工厂能力覆盖且非自有）剔除：
+     * <ul>
+     *   <li>自有产品：存在本工厂任一未删除 RSKU（EXISTS rsku_supply）；</li>
+     *   <li>未被能力覆盖的产品（NOT EXISTS factory_product_capability），覆盖判定为三级通配：
+     *     <ul>
+     *       <li>品类级：能力行 style_code 为空即覆盖整个品类（material_code 忽略，与历史 Java 实现一致）；</li>
+     *       <li>品类+风格级：style_code 命中且 material_code 为空；</li>
+     *       <li>精确级：style_code 命中且 material_code 命中 material_tags JSONB 数组任一元素。</li>
+     *     </ul>
+     *   </li>
+     * </ul>
+     *
+     * <p>边界语义与历史 Java 实现（CapabilityMatcher）对齐：能力行 category_code 为空（NULL/空白）
+     * 时该行不参与覆盖；产品 positioning_label 为 NULL 时风格级/精确级比较不成立（SQL NULL 比较
+     * 结果为 UNKNOWN，与 Java hasText 判空后跳过一致）；material_tags 非法 JSON 在 Java 实现中
+     * 视为空数组，SQL 中 JSONB 列类型保证存储即合法 JSON，非数组值 @> 不命中，结果一致。</p>
+     *
+     * @param wrapper      查询构造器
+     * @param factoryCodes 当前用户关联的工厂编码（full 视图入口已保证非空，见 isFullViewEligible）
+     */
+    private void applyFullViewFilter(QueryWrapper<RspuMaster> wrapper, List<String> factoryCodes) {
+        String factoryIn = toSqlInList(factoryCodes);
+        String coveredByCapability =
+            "SELECT 1 FROM factory_product_capability cap"
+                + " WHERE cap.factory_code IN (" + factoryIn + ")"
+                + " AND NULLIF(BTRIM(cap.category_code), '') IS NOT NULL"
+                + " AND cap.category_code = rspu_master.category_code"
+                + " AND (NULLIF(BTRIM(cap.style_code), '') IS NULL"
+                + " OR (cap.style_code = rspu_master.positioning_label"
+                + " AND (NULLIF(BTRIM(cap.material_code), '') IS NULL"
+                + " OR rspu_master.material_tags @> jsonb_build_array(cap.material_code))))";
+        wrapper.and(w -> w
+            .exists("SELECT 1 FROM rsku_supply rs WHERE rs.rspu_id = rspu_master.rspu_id"
+                + " AND rs.factory_code IN (" + factoryIn + ") AND rs.deleted_at IS NULL")
+            .or()
+            .notExists(coveredByCapability));
     }
 
     /**
-     * 能力键匹配器。
+     * 拼接 SQL IN 片段（单引号成对转义）。仅用于工厂编码等来自数据归属的内部编码，
+     * 不用于用户自由文本。
      *
-     * <p>支持三级通配：
-     * <ul>
-     *   <li>(category, null, null)：覆盖整个品类。</li>
-     *   <li>(category, style, null)：覆盖该品类下指定风格。</li>
-     *   <li>(category, style, material)：覆盖该品类/风格/材质组合。</li>
-     * </ul>
+     * @param values 编码列表（非空）
+     * @return 形如 {@code 'A001', 'A002'} 的 IN 片段
      */
-    private class CapabilityMatcher {
-
-        private final Set<String> exactKeys = new HashSet<>();
-        private final Set<String> categoryStyleKeys = new HashSet<>();
-        private final Set<String> categoryKeys = new HashSet<>();
-        private final ObjectMapper mapper;
-
-        CapabilityMatcher(List<FactoryProductCapability> capabilities, ObjectMapper mapper) {
-            this.mapper = mapper;
-            for (FactoryProductCapability cap : capabilities) {
-                String category = cap.getCategoryCode();
-                String style = cap.getStyleCode();
-                String material = cap.getMaterialCode();
-                if (!StringUtils.hasText(category)) {
-                    continue;
-                }
-                boolean hasStyle = StringUtils.hasText(style);
-                boolean hasMaterial = StringUtils.hasText(material);
-                if (hasStyle && hasMaterial) {
-                    exactKeys.add(key(category, style, material));
-                } else if (hasStyle) {
-                    categoryStyleKeys.add(key(category, style));
-                } else {
-                    categoryKeys.add(category);
-                }
-            }
-        }
-
-        boolean isCovered(RspuMaster rspu) {
-            String category = rspu.getCategoryCode();
-            String style = rspu.getPositioningLabel();
-            if (!StringUtils.hasText(category)) {
-                return false;
-            }
-            List<String> materials = parseMaterialTags(rspu.getMaterialTags());
-
-            // 品类级覆盖
-            if (categoryKeys.contains(category)) {
-                return true;
-            }
-            if (!StringUtils.hasText(style)) {
-                return false;
-            }
-            // 品类+风格级覆盖
-            if (categoryStyleKeys.contains(key(category, style))) {
-                return true;
-            }
-            // 精确匹配：任意材质命中
-            for (String material : materials) {
-                if (exactKeys.contains(key(category, style, material))) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private List<String> parseMaterialTags(String materialTagsJson) {
-            if (!StringUtils.hasText(materialTagsJson)) {
-                return List.of();
-            }
-            try {
-                return mapper.readValue(materialTagsJson, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
-            } catch (Exception e) {
-                return List.of();
-            }
-        }
-
-        private static String key(String... parts) {
-            return String.join(":", parts);
-        }
+    private String toSqlInList(List<String> values) {
+        return values.stream()
+            .map(v -> "'" + v.replace("'", "''") + "'")
+            .collect(Collectors.joining(", "));
     }
 
     private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
@@ -589,6 +508,8 @@ public class ProductQueryService {
     /**
      * 批量查询 RSPU 关联的工厂编码列表（用于列表项展示与前端删除权限判断）。
      *
+     * <p>只取 rspu_id/factory_code 两列，避免整实体映射触发 factory_price 解密。</p>
+     *
      * @param rspuIds RSPU ID 列表
      * @return RSPU ID -> 工厂编码列表（去重）
      */
@@ -598,6 +519,7 @@ public class ProductQueryService {
         }
         List<RskuSupply> rskus = rskuSupplyMapper.selectList(
             new QueryWrapper<RskuSupply>()
+                .select("rspu_id", "factory_code")
                 .in("rspu_id", rspuIds)
                 .isNull("deleted_at")
         );
@@ -607,33 +529,6 @@ public class ProductQueryService {
                 Collectors.mapping(
                     RskuSupply::getFactoryCode,
                     Collectors.collectingAndThen(Collectors.toSet(), ArrayList::new)
-                )
-            ));
-    }
-
-    /**
-     * 批量查询 RSPU 的最低出厂价（用于产品列表价格展示）。
-     *
-     * @param rspuIds RSPU ID 列表
-     * @return RSPU ID -> 最低出厂价；无报价返回空 Map
-     */
-    private Map<String, BigDecimal> batchMinFactoryPrices(List<String> rspuIds) {
-        if (rspuIds == null || rspuIds.isEmpty()) {
-            return Map.of();
-        }
-        List<RskuSupply> rskus = rskuSupplyMapper.selectList(
-            new QueryWrapper<RskuSupply>()
-                .in("rspu_id", rspuIds)
-                .isNotNull("factory_price")
-                .isNull("deleted_at")
-        );
-        return rskus.stream()
-            .filter(r -> r.getFactoryPrice() != null)
-            .collect(Collectors.groupingBy(
-                RskuSupply::getRspuId,
-                Collectors.collectingAndThen(
-                    Collectors.minBy(Comparator.comparing(RskuSupply::getFactoryPrice)),
-                    opt -> opt.map(RskuSupply::getFactoryPrice).orElse(null)
                 )
             ));
     }
@@ -793,6 +688,8 @@ public class ProductQueryService {
     private void cascadeDeleteAssociations(String rspuId) {
         rspuVariantMapper.delete(new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId));
         rskuSupplyMapper.delete(new QueryWrapper<RskuSupply>().eq("rspu_id", rspuId));
+        // RSKU 级联软删后重算价格投影（归 0/NULL），回收站还原时 restoreProduct 会再次重算
+        rspuPriceSummaryService.recalculate(rspuId);
         imageAssetsMapper.delete(new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId));
         rspuRelationMapper.delete(new QueryWrapper<RspuRelation>()
             .and(w -> w.eq("anchor_rspu_id", rspuId).or().eq("related_rspu_id", rspuId)));
@@ -823,6 +720,8 @@ public class ProductQueryService {
         rspuMapper.restoreById(rspuId);
         rspuVariantMapper.restoreByRspuId(rspuId);
         rskuSupplyMapper.restoreByRspuId(rspuId);
+        // RSKU 级联还原后重算价格投影
+        rspuPriceSummaryService.recalculate(rspuId);
         imageAssetsMapper.restoreByRspuId(rspuId);
         rspuRelationMapper.restoreByRspuId(rspuId);
 
@@ -872,7 +771,6 @@ public class ProductQueryService {
         productPurgeMapper.deleteMatchingFeedback(rspuId);
         productPurgeMapper.deleteCollectionItems(rspuId);
         productPurgeMapper.deleteSchemeCandidates(rspuId);
-        productPurgeMapper.deletePriceColumnMappings(rspuId);
         // ④ 变体/RSKU 的子表
         productPurgeMapper.deleteFactoryVariantCapacity(rspuId);
         productPurgeMapper.deletePriceHistory(rspuId);
@@ -888,6 +786,8 @@ public class ProductQueryService {
         rspuFactoryMappingMapper.delete(new QueryWrapper<RspuFactoryMapping>().eq("rspu_id", rspuId));
         userFavoriteMapper.delete(new QueryWrapper<UserFavorite>().eq("rspu_id", rspuId));
         productPurgeMapper.deleteVariantCodeCounter(rspuId);
+        // 价格投影行（引用 rspu_master，须先于主表删除）
+        productPurgeMapper.deletePriceSummary(rspuId);
         // ⑦ 主表
         rspuMapper.physicalDeleteById(rspuId);
 
@@ -1222,27 +1122,6 @@ public class ProductQueryService {
         summary.setFactoryCodes(factoryCodeMap.getOrDefault(rspu.getRspuId(), List.of()));
         summary.setRskuCount(rskuCountMap.getOrDefault(rspu.getRspuId(), 0L));
         return summary;
-    }
-
-    /**
-     * 批量统计 RSPU 的 RSKU 报价数（工作台「报价×N」chip）。
-     *
-     * @param rspuIds RSPU ID 列表
-     * @return RSPU ID -> 报价数
-     */
-    private Map<String, Long> batchRskuCounts(List<String> rspuIds) {
-        if (rspuIds == null || rspuIds.isEmpty()) {
-            return Map.of();
-        }
-        List<Map<String, Object>> rows = rskuSupplyMapper.selectMaps(new QueryWrapper<RskuSupply>()
-            .select("rspu_id", "COUNT(*) AS cnt")
-            .in("rspu_id", rspuIds)
-            .groupBy("rspu_id"));
-        Map<String, Long> result = new HashMap<>();
-        for (Map<String, Object> row : rows) {
-            result.put((String) row.get("rspu_id"), ((Number) row.get("cnt")).longValue());
-        }
-        return result;
     }
 
     private String buildImageUrl(String imageId) {

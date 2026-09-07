@@ -56,6 +56,7 @@ public class RskuService {
     private final DataScopeHelper dataScopeHelper;
     private final PlatformTransactionManager transactionManager;
     private final RskuCodeService rskuCodeService;
+    private final RspuPriceSummaryService rspuPriceSummaryService;
 
     /**
      * 查询某 RSPU 下的所有 RSKU 报价。
@@ -195,6 +196,7 @@ public class RskuService {
         }
 
         auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
+        rspuPriceSummaryService.recalculate(rsku.getRspuId());
         return rsku.getRskuId();
     }
 
@@ -266,6 +268,7 @@ public class RskuService {
 
         auditLogService.logUpdate("rsku_supply", existing.getRskuId(), oldSnapshot, existing,
             SecurityOperatorContext.currentUsername());
+        rspuPriceSummaryService.recalculate(existing.getRspuId());
         return existing.getRskuId();
     }
 
@@ -385,6 +388,7 @@ public class RskuService {
         }
 
         auditLogService.logDelete("rsku_supply", rskuId, oldSnapshot, SecurityOperatorContext.currentUsername());
+        rspuPriceSummaryService.recalculate(rsku.getRspuId());
     }
 
     /**
@@ -432,6 +436,7 @@ public class RskuService {
         priceHistoryMapper.insert(history);
 
         auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, rsku, SecurityOperatorContext.currentUsername());
+        rspuPriceSummaryService.recalculate(rspuId);
     }
 
     private RskuSupply snapshot(RskuSupply source) {

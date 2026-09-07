@@ -67,6 +67,7 @@ public class RskuImportService {
     private final RskuCodeService rskuCodeService;
     private final DataScopeHelper dataScopeHelper;
     private final PlatformTransactionManager transactionManager;
+    private final RspuPriceSummaryService rspuPriceSummaryService;
 
     /**
      * 批量导入 RSKU 报价。
@@ -108,6 +109,7 @@ public class RskuImportService {
         List<CategoryDict> finalMaterials = materials != null ? materials : List.of();
 
         Set<String> processedKeys = new HashSet<>();
+        Set<String> affectedRspuIds = new HashSet<>();
         TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
 
         int rowIndex = 1; // Excel 行号，第 1 行为表头，数据从第 2 行开始
@@ -145,6 +147,7 @@ public class RskuImportService {
                             return null;
                         });
                         result.setSuccessCount(result.getSuccessCount() + 1);
+                        affectedRspuIds.add(row.getRspuId());
                     } else {
                         result.getFailures().add(new RskuImportFailure(rowIndex, row.getRspuId(), row.getFactoryCode(), row.getVariantId(), "该工厂对该变体已有报价，已跳过"));
                     }
@@ -161,6 +164,7 @@ public class RskuImportService {
                         return null;
                     });
                     result.setSuccessCount(result.getSuccessCount() + 1);
+                    affectedRspuIds.add(row.getRspuId());
                 }
             } catch (DataIntegrityViolationException e) {
                 log.warn("导入报价冲突: {} - {}", row.getFactoryCode(), row.getVariantId(), e);
@@ -182,6 +186,8 @@ public class RskuImportService {
         }
 
         result.setFailedCount(result.getFailures().size());
+        // 行级事务均已提交，统一重算受影响 RSPU 的价格投影（避免逐行重算放大开销）
+        rspuPriceSummaryService.recalculateBatch(affectedRspuIds);
         return result;
     }
 

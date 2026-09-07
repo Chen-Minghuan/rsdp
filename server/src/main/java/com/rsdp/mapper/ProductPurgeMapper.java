@@ -97,15 +97,6 @@ public interface ProductPurgeMapper {
     int deletePriceHistory(String rspuId);
 
     /**
-     * 物理删除价格列映射。
-     *
-     * @param rspuId RSPU ID
-     * @return 影响行数
-     */
-    @Delete("DELETE FROM rspu_price_column_mapping WHERE rspu_id = #{rspuId}")
-    int deletePriceColumnMappings(String rspuId);
-
-    /**
      * 物理删除变体编码计数器。
      *
      * @param rspuId RSPU ID
@@ -113,4 +104,13 @@ public interface ProductPurgeMapper {
      */
     @Delete("DELETE FROM variant_code_counter WHERE rspu_id = #{rspuId}")
     int deleteVariantCodeCounter(String rspuId);
+
+    /**
+     * 物理删除 RSPU 价格投影行（V44，引用 rspu_master，须先于主表删除）。
+     *
+     * @param rspuId RSPU ID
+     * @return 影响行数
+     */
+    @Delete("DELETE FROM rspu_price_summary WHERE rspu_id = #{rspuId}")
+    int deletePriceSummary(String rspuId);
 }

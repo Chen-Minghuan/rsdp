@@ -8,7 +8,6 @@ import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
-import com.rsdp.entity.FactoryProductCapability;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
@@ -17,7 +16,6 @@ import com.rsdp.entity.SysUser;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.AiRecognitionMapper;
-import com.rsdp.mapper.FactoryProductCapabilityMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -119,9 +117,6 @@ class ProductQueryServiceTest {
     private UserFactoryService userFactoryService;
 
     @Mock
-    private FactoryProductCapabilityMapper capabilityMapper;
-
-    @Mock
     private RskuSupplyMapper rskuSupplyMapper;
 
     @Mock
@@ -144,6 +139,9 @@ class ProductQueryServiceTest {
 
     @Mock
     private com.rsdp.mapper.ProductPurgeMapper productPurgeMapper;
+
+    @Mock
+    private RspuPriceSummaryService rspuPriceSummaryService;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -747,7 +745,6 @@ class ProductQueryServiceTest {
         verify(productPurgeMapper).deleteMatchingFeedback("RSPU-DEL01");
         verify(productPurgeMapper).deleteCollectionItems("RSPU-DEL01");
         verify(productPurgeMapper).deleteSchemeCandidates("RSPU-DEL01");
-        verify(productPurgeMapper).deletePriceColumnMappings("RSPU-DEL01");
         verify(productPurgeMapper).deleteFactoryVariantCapacity("RSPU-DEL01");
         verify(productPurgeMapper).deletePriceHistory("RSPU-DEL01");
         verify(productPurgeMapper).deleteVariantCodeCounter("RSPU-DEL01");
@@ -873,7 +870,7 @@ class ProductQueryServiceTest {
     }
 
     @Test
-    void listProducts_viewModeFull_shouldHideCoveredProductsAndKeepOwn() {
+    void listProducts_viewModeFull_shouldPushDownFactoryScopeAndCapabilityFilterToSql() {
         authenticateFactoryAdmin("factory");
         when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
 
@@ -886,46 +883,33 @@ class ProductQueryServiceTest {
         request.setViewMode("full");
         request.setSize(10L);
 
-        // 覆盖产品：品类 FS + 风格 MC + 材质 PE 命中能力
-        RspuMaster covered = new RspuMaster();
-        covered.setRspuId("RSPU-COVERED");
-        covered.setCategoryCode("FS");
-        covered.setPositioningLabel("MC");
-        covered.setMaterialTags("[\"PE\"]");
-        covered.setReviewStatus("已确认");
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-UNCOVERED");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("BA");
+        rspu.setReviewStatus("已确认");
 
-        // 未覆盖产品：风格不同
-        RspuMaster uncovered = new RspuMaster();
-        uncovered.setRspuId("RSPU-UNCOVERED");
-        uncovered.setCategoryCode("FS");
-        uncovered.setPositioningLabel("BA");
-        uncovered.setMaterialTags("[\"PE\"]");
-        uncovered.setReviewStatus("已确认");
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
 
-        // 自己产品：即使被覆盖也保留
-        RspuMaster own = new RspuMaster();
-        own.setRspuId("RSPU-OWN");
-        own.setCategoryCode("FS");
-        own.setPositioningLabel("MC");
-        own.setMaterialTags("[\"PE\"]");
-        own.setReviewStatus("已确认");
-
-        when(rspuMapper.selectList(any())).thenReturn(List.of(covered, uncovered, own));
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
         when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
-        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(ownRsku("RSPU-OWN", "F001")));
-
-        FactoryProductCapability capability = new FactoryProductCapability();
-        capability.setFactoryCode("F001");
-        capability.setCategoryCode("FS");
-        capability.setStyleCode("MC");
-        capability.setMaterialCode("PE");
-        when(capabilityMapper.selectList(any())).thenReturn(List.of(capability));
 
         PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
 
-        List<String> ids = result.getRows().stream().map(ProductSummaryResponse::getRspuId).toList();
-        assertThat(ids).containsExactlyInAnyOrder("RSPU-UNCOVERED", "RSPU-OWN");
-        assertThat(ids).doesNotContain("RSPU-COVERED");
+        assertThat(result.getRows()).hasSize(1);
+        // 全库视图不再拉全量候选进 JVM：自有 RSKU 与能力覆盖条件下推到分页 SQL
+        verify(rspuMapper, never()).selectList(any());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        assertThat(sqlSegment).contains("EXISTS");
+        assertThat(sqlSegment).contains("rsku_supply");
+        assertThat(sqlSegment).contains("NOT EXISTS");
+        assertThat(sqlSegment).contains("factory_product_capability");
+        assertThat(sqlSegment).contains("'F001'");
     }
 
     @Test
@@ -1073,12 +1057,5 @@ class ProductQueryServiceTest {
         var user = User.withUsername(username).password("").roles("FACTORY_ADMIN").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
-    }
-
-    private com.rsdp.entity.RskuSupply ownRsku(String rspuId, String factoryCode) {
-        com.rsdp.entity.RskuSupply rsku = new com.rsdp.entity.RskuSupply();
-        rsku.setRspuId(rspuId);
-        rsku.setFactoryCode(factoryCode);
-        return rsku;
     }
 }

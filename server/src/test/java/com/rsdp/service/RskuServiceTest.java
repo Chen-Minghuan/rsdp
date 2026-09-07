@@ -88,6 +88,9 @@ class RskuServiceTest {
     @Mock
     private RskuCodeService rskuCodeService;
 
+    @Mock
+    private RspuPriceSummaryService rspuPriceSummaryService;
+
     @InjectMocks
     private RskuService rskuService;
 

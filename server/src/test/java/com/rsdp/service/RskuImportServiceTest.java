@@ -93,6 +93,9 @@ class RskuImportServiceTest {
     @Mock
     private PlatformTransactionManager transactionManager;
 
+    @Mock
+    private RspuPriceSummaryService rspuPriceSummaryService;
+
     @InjectMocks
     private RskuImportService rskuImportService;
 
