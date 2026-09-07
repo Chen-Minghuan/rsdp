@@ -34,7 +34,8 @@ import java.util.stream.Collectors;
  * 官网 AI 户型搭配公开服务（免登录）。
  *
  * <p>红线：响应绝不包含 RSKU 工厂报价字段（factoryCode/factoryName/factoryPrice），
- * 价格仅为零售参考价 retail_price（不加密列）。</p>
+ * 价格仅为参考售价（批次 2 起统一走 {@link PricingService#resolveSalePrice} 标准售价解析，
+ * 由上游 {@link FloorPlanMatchingService} 方案项带出，不再直接使用 retail_price 列）。</p>
  */
 @Slf4j
 @Service
@@ -130,10 +131,11 @@ public class PublicAiMatchService {
      * <p>统一走 {@link FloorPlanMatchingService#matchRoomScheme}（双端唯一出口）：
      * widthMm/depthMm 提供时尺寸硬规则 R1~R5 生效（修复此前组装内部请求时丢弃尺寸的
      * 现网缺陷），缺失时退化为原 AI 选品行为。再将方案项回查 RSPU 展示字段与主图后
-     * 脱敏输出（仅零售参考价，绝不含工厂字段）。</p>
+     * 脱敏输出（价格取方案项参考售价 salePrice，即 PricingService 标准售价解析口径，
+     * 绝不含工厂字段）。</p>
      *
      * @param request 搭配请求（风格/预算/尺寸均可空）
-     * @return 公开搭配方案（仅零售参考价，无工厂字段）
+     * @return 公开搭配方案（仅参考售价，无工厂字段）
      */
     public PublicAiMatchSchemeResponse generateScheme(PublicAiMatchSchemeRequest request) {
         RoomSchemeResponse scheme = floorPlanMatchingService.matchRoomScheme(
@@ -166,11 +168,13 @@ public class PublicAiMatchService {
             item.setProductName(rspu.getProductName());
             item.setCategoryPath(rspu.getCategoryPath());
             item.setPositioningLabel(rspu.getPositioningLabel());
-            item.setRetailPrice(rspu.getRetailPrice());
+            // 参考售价：统一取方案项 salePrice（PricingService 标准售价解析口径，
+            // 消除 retail_price 与标准售价双口径漂移），未定价为 null
+            item.setRetailPrice(schemeItem.getSalePrice());
             item.setPrimaryImageUrl(imageUrlMap.get(rspu.getRspuId()));
             items.add(item);
-            if (rspu.getRetailPrice() != null) {
-                totalRetailPrice = totalRetailPrice.add(rspu.getRetailPrice());
+            if (schemeItem.getSalePrice() != null) {
+                totalRetailPrice = totalRetailPrice.add(schemeItem.getSalePrice());
             }
         }
 

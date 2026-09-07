@@ -18,7 +18,10 @@ export interface AiSchemeItem {
   factoryCode: string
   factoryName?: string
   factorySku?: string
-  factoryPrice: number
+  /** 出厂价（成本口径，仅平台运营/本厂管理员可见，其他角色为 null） */
+  factoryPrice?: number
+  /** 参考售价（销售价口径，全角色可见；未定价为 null） */
+  salePrice?: number
   quantity?: number
   leadTimeDays?: number
   moq?: number
@@ -30,7 +33,12 @@ export interface AiSchemeItem {
 export interface RoomSchemeResponse {
   roomType: string
   budgetLimit: number
-  totalPrice: number
+  /** 方案总价（成本口径，仅平台/本厂可见；新代码应使用 totalSalePrice） */
+  totalPrice?: number
+  /** 方案参考售价合计（销售价口径，全角色可见；未定价产品跳过求和） */
+  totalSalePrice?: number
+  /** 是否存在未定价产品（未计入 totalSalePrice） */
+  hasUnpricedItems?: boolean
   itemCount: number
   reasoning: string
   items: AiSchemeItem[]

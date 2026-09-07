@@ -218,21 +218,26 @@ class PublicAiMatchServiceTest {
     // ---------- generateScheme ----------
 
     @Test
-    void generateScheme_shouldSanitizeFactoryFieldsAndSumRetailPrice() throws Exception {
-        // 内部方案项带敏感工厂字段，公开响应必须全部丢弃
+    void generateScheme_shouldSanitizeFactoryFieldsAndSumSalePrice() throws Exception {
+        // 内部方案项带敏感工厂字段，公开响应必须全部丢弃；
+        // 批次 2：公开价格统一取方案项 salePrice（PricingService 标准售价解析口径），
+        // 不再使用 RSPU 的 retail_price 列（此处故意给不同的 retailPrice 证明口径来源）
         SchemeItemResponse item1 = new SchemeItemResponse();
         item1.setRspuId("RSPU-001");
         item1.setFactoryCode("A004");
         item1.setFactoryName("某工厂");
         item1.setFactoryPrice(new BigDecimal("1200.00"));
+        item1.setSalePrice(new BigDecimal("3999.00"));
         SchemeItemResponse item2 = new SchemeItemResponse();
         item2.setRspuId("RSPU-002");
         item2.setFactoryCode("A005");
         item2.setFactoryPrice(new BigDecimal("800.00"));
+        item2.setSalePrice(new BigDecimal("1299.00"));
 
         RoomSchemeResponse scheme = new RoomSchemeResponse();
         scheme.setRoomType("LIVING");
         scheme.setTotalPrice(new BigDecimal("2000.00"));
+        scheme.setTotalSalePrice(new BigDecimal("5298.00"));
         scheme.setReasoning("现代简约客厅搭配");
         scheme.setItems(List.of(item1, item2));
         when(floorPlanMatchingService.matchRoomScheme(isNull(), isNull(), eq("MC"), any()))
@@ -243,13 +248,13 @@ class PublicAiMatchServiceTest {
         rspu1.setProductName("云朵沙发");
         rspu1.setCategoryPath("家具/沙发");
         rspu1.setPositioningLabel("现代简约");
-        rspu1.setRetailPrice(new BigDecimal("3999.00"));
+        rspu1.setRetailPrice(new BigDecimal("1111.00"));
         RspuMaster rspu2 = new RspuMaster();
         rspu2.setRspuId("RSPU-002");
         rspu2.setProductName("岩板茶几");
         rspu2.setCategoryPath("家具/茶几");
         rspu2.setPositioningLabel("现代简约");
-        rspu2.setRetailPrice(new BigDecimal("1299.00"));
+        rspu2.setRetailPrice(new BigDecimal("2222.00"));
         when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(rspu1, rspu2));
 
         ImageAssets image = new ImageAssets();
@@ -266,6 +271,7 @@ class PublicAiMatchServiceTest {
             isNull(), isNull(), eq("MC"), eq(new BigDecimal("999999")));
 
         assertThat(response.getReasoning()).isEqualTo("现代简约客厅搭配");
+        // 合计取方案项 salePrice（3999 + 1299），而非 RSPU retail_price（1111 + 2222）
         assertThat(response.getTotalRetailPrice()).isEqualByComparingTo(new BigDecimal("5298.00"));
         assertThat(response.getItems()).hasSize(2);
         assertThat(response.getItems().get(0).getRspuId()).isEqualTo("RSPU-001");

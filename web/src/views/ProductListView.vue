@@ -480,7 +480,7 @@ const purgeableSelectedKeys = computed(() => {
   return selectedRowKeys.value
 })
 
-const columns: DataTableColumns<ProductSummary> = [
+const baseColumns: DataTableColumns<ProductSummary> = [
   {
     type: 'selection'
   },
@@ -695,6 +695,14 @@ const columns: DataTableColumns<ProductSummary> = [
     }
   }
 ]
+
+// 「出厂价」列仅平台运营（ADMIN/EDITOR）可见：后端已将 minFactoryPrice 掩码为 null（兜底层），
+// 前端隐藏列为体验层，两层并存。
+const columns = computed<DataTableColumns<ProductSummary>>(() =>
+  isPlatformStaff.value
+    ? baseColumns
+    : baseColumns.filter((c) => (c as { key?: string }).key !== 'minFactoryPrice')
+)
 
 // ---------- 交互动作 ----------
 function handleToggleStatus(row: ProductSummary, target: boolean) {

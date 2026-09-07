@@ -614,10 +614,15 @@ public class ProductQueryService {
     /**
      * 批量查询 RSPU 的最低出厂价（用于产品列表价格展示）。
      *
+     * <p>最低出厂价仅平台运营人员可见：非平台员工直接返回空 Map，不发起查询。</p>
+     *
      * @param rspuIds RSPU ID 列表
-     * @return RSPU ID -> 最低出厂价；无报价返回空 Map
+     * @return RSPU ID -> 最低出厂价；无报价或非平台员工返回空 Map
      */
     private Map<String, BigDecimal> batchMinFactoryPrices(List<String> rspuIds) {
+        if (!SecurityOperatorContext.isPlatformStaff()) {
+            return Map.of();
+        }
         if (rspuIds == null || rspuIds.isEmpty()) {
             return Map.of();
         }
@@ -1214,7 +1219,14 @@ public class ProductQueryService {
         summary.setReviewStatus(rspu.getReviewStatus());
         summary.setAestheticsConfidence(rspu.getAestheticsConfidence());
         summary.setProductLevel(rspu.getProductLevel());
-        summary.setMinFactoryPrice(minPriceMap.get(rspu.getRspuId()));
+        // 最低出厂价仅平台运营人员可见。
+        // 注意：该值是跨厂聚合的最低价，无法归属单一工厂做 canViewFactoryPrice 逐厂判断，
+        // 且 FACTORY_ADMIN 看到的可能是友商价格，因此对工厂角色同样掩码；
+        // 工厂查看本厂报价走 RSKU 详情（已有按厂掩码）。
+        summary.setMinFactoryPrice(
+            SecurityOperatorContext.isPlatformStaff()
+                ? minPriceMap.get(rspu.getRspuId())
+                : null);
         summary.setRetailPrice(rspu.getRetailPrice());
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());

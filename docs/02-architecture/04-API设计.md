@@ -148,6 +148,9 @@ GET    /api/v1/products
        #     仅当用户拥有 `view_full_catalog=true` 或对应权限时可用
        #   - statusTab=recycled 时走独立回收站查询（绕过逻辑删除过滤），
        #     其他搜索条件不叠加，行内最低出厂价/供应商编码为空
+       #   - ProductSummary.minFactoryPrice（跨厂聚合最低出厂价）仅平台运营
+       #     （ADMIN/EDITOR）可见，其余角色掩码为 null（2026-09-06 起，
+       #     含 DESIGNER/FACTORY_ADMIN；工厂看本厂报价走 RSKU 详情按厂掩码）
 
 GET    /api/v1/products/status-counts
        # 商城商品列表状态页签统计（已实现）
@@ -168,6 +171,9 @@ GET    /api/v1/products/{rspuId}
 GET    /api/v1/products/{rspuId}/relations
        # 查询某产品作为锚点的搭配关系列表（已实现）
        # Response: [RspuRelationResponse...]
+       # 说明：RspuRelationResponse.targetMinPrice（目标产品跨厂聚合最低出厂价）
+       #       仅平台运营（ADMIN/EDITOR）可见，其余角色掩码为 null（2026-09-06 起）；
+       #       canAccessRskuFactory 数据范围过滤保留（控制 RSKU 可见性，与价格掩码独立）
 
 POST   /api/v1/products/{rspuId}/relations
        # 为某产品创建搭配关系（已实现）
@@ -466,11 +472,23 @@ GET    /api/v1/sku/compare/{rspuId}
 ```
 POST   /api/v1/matching/room-scheme
        # 按空间类型一键生成搭配方案（已实现，接入 DashScope qwen3-vl-plus）
+       # 预算口径（批次 2 起）：prompt 与响应均为销售价口径——候选行「参考售价」=
+       # 该 RSPU 候选 RSKU 经 PricingService.resolveSalePrice 解析的最低标准售价，
+       # 无售价候选标注「价格待定」不阻止入选；预算上限指客户应付的销售价总额；
+       # 出厂价数值与字样不再进 prompt（红线）
        # Request: { roomType: "LIVING_ROOM", budgetLimit: 30000, stylePreference?: "MC" }
-       # Response: { roomType, budgetLimit, totalPrice, itemCount, reasoning, items: [SchemeItem...] }
+       # Response: { roomType, budgetLimit,
+       #             totalPrice（成本口径，仅平台运营/本厂管理员可见，其他角色 null；
+       #                        前端新代码应使用 totalSalePrice）,
+       #             totalSalePrice（销售价口径合计，全角色可见，未定价产品跳过求和）,
+       #             hasUnpricedItems（是否存在未定价产品）, itemCount, reasoning,
+       #             items: [SchemeItem + salePrice（参考售价，全角色可见，未定价 null）...] }
+       # SchemeItem.factoryPrice/subtotal 维持角色掩码不变
 
 POST   /api/v1/matching/recommend
        # 以某个产品为锚点推荐搭配产品（已实现）
+       # 候选行价格口径同 room-scheme（参考售价，无售价标注「价格待定」）；
+       # items 同样带 salePrice（全角色可见），factoryPrice/subtotal 掩码不变
        # Request: { existingRspuId, targetCategoryCode }
        # Response: { existingRspuId, targetCategoryCode, reasoning, items: [SchemeItem...] }
 ```
@@ -1480,8 +1498,10 @@ POST   /api/v1/public/ai-match/scheme
        # widthMm/depthMm 提供时尺寸硬规则 R1~R5 生效——面积分档/沙发长度上限/
        # 进深链式校验，官网不再推荐放不下的沙发；缺失时退化为原 AI 选品行为。
        # LLM 终审空返回时规则兜底（每品类取风格分最高者），永远有结果。
-       # 预算缺省 999999；红线：绝不透传 factoryCode/factoryName/factoryPrice/totalPrice，
-       # totalRetailPrice 为零售参考价 retail_price 求和）
+       # 预算缺省 999999；红线：绝不透传 factoryCode/factoryName/factoryPrice/totalPrice；
+       # 价格口径（批次 2 起）：retailPrice/totalRetailPrice 字段名不变，取值统一为
+       # 方案项 salePrice（PricingService 标准售价解析口径），消除零售参考价与
+       # 标准售价双口径漂移；未定价条目为 null 且不计入合计）
        # Request: { stylePreference?, budgetLimit?(≥0), widthMm?(≥1), depthMm?(≥1) }
        # Response: { reasoning, totalRetailPrice,
        #            items: [{ rspuId, productName, categoryPath, positioningLabel,
@@ -1538,7 +1558,9 @@ POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
        # 尺寸硬规则 R1~R5（rsdp.floor-plan.rules 配置）→ LLM 终审（prompt 注入空间尺寸
        # 上下文）→ LLM 空返回规则兜底。落 scheme + scheme_item（价格快照语义沿用
        # SchemeService.createScheme，方案项均为 LIVING 场景产品），scheme.analysis_id
-       # 回填溯源，方案名自动生成「客厅方案-yyyyMMdd-HHmmss」
+       # 回填溯源，方案名自动生成「客厅方案-yyyyMMdd-HHmmss」。
+       # 预算口径（批次 2 起）：终审 prompt 候选价格为参考售价（销售价口径），
+       # 预算上限指客户应付的销售价总额；规则兜底分支同走 buildResponse，口径一致
        # sofaWall（P1）：沙发墙朝向，width=开间方向墙（默认，缺省按 width）、
        # depth=进深方向墙；影响 R2 沙发/电视柜长度上限的墙长取值与 R3 链式校验方向
        # （depth 时 R2 按进深墙长、R3 沿开间方向核算）；非法值 400 中文提示

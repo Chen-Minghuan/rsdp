@@ -46,6 +46,7 @@ public class AiMatchingService {
     private final VisionService visionService;
     private final ObjectMapper objectMapper;
     private final DataScopeHelper dataScopeHelper;
+    private final PricingService pricingService;
 
     private static final int MAX_CANDIDATES = 30;
 
@@ -252,9 +253,7 @@ public class AiMatchingService {
     private String buildPrompt(String roomTypeName, String roomType, BigDecimal budgetLimit,
                                String styleName, List<RspuMaster> candidates,
                                Integer widthMm, Integer depthMm) {
-        Map<String, BigDecimal> minPriceMap = batchMinPrices(
-            candidates.stream().map(RspuMaster::getRspuId).toList()
-        );
+        Map<String, BigDecimal> minSalePriceMap = batchMinSalePrices(candidates);
 
         boolean withDimension = widthMm != null && depthMm != null;
         StringBuilder sb = new StringBuilder();
@@ -268,14 +267,16 @@ public class AiMatchingService {
             sb.append("请从候选产品列表中挑选一套").append(compositionHint(roomType)).append("。\n");
             sb.append("候选产品均已通过尺寸校验，你只需判断风格、颜色、材质的搭配协调性。\n");
         }
-        sb.append("预算上限：").append(budgetLimit).append(" 元\n");
+        // 预算口径：客户应付的销售价总额（批次 2，出厂价不再进 prompt）
+        sb.append("预算上限：").append(budgetLimit)
+            .append(" 元（指客户应付的销售价总额，请确保所选产品参考售价之和不超过预算）\n");
         if (styleName != null && !styleName.isBlank()) {
             sb.append("风格偏好：").append(styleName).append("\n");
         }
         sb.append("\n候选产品（请从中挑选）：\n");
 
         for (RspuMaster rspu : candidates) {
-            BigDecimal minPrice = minPriceMap.get(rspu.getRspuId());
+            BigDecimal salePrice = minSalePriceMap.get(rspu.getRspuId());
             sb.append("- ").append(rspu.getRspuId());
             if (withDimension) {
                 sb.append(" | 品类：").append(rspu.getCategoryCode());
@@ -283,9 +284,13 @@ public class AiMatchingService {
             sb.append(" | 风格：").append(rspu.getPositioningLabel())
                 .append(" | 主色：").append(rspu.getColorPrimaryName())
                 .append(" | 材质：").append(rspu.getMaterialTags())
-                .append(" | 适用场景：").append(rspu.getSceneTags())
-                .append(" | 最低报价：").append(minPrice != null ? minPrice : "无")
-                .append(" 元\n");
+                .append(" | 适用场景：").append(rspu.getSceneTags());
+            // 无售价候选标注「价格待定」，不阻止入选（硬性拦截在报价单/订单环节）
+            if (salePrice != null) {
+                sb.append(" | 参考售价：").append(salePrice).append(" 元\n");
+            } else {
+                sb.append(" | 参考售价：价格待定\n");
+            }
         }
 
         sb.append("\n请输出 JSON 格式的推荐结果。");
@@ -355,24 +360,40 @@ public class AiMatchingService {
         };
     }
 
-    private Map<String, BigDecimal> batchMinPrices(List<String> rspuIds) {
-        if (rspuIds.isEmpty()) {
+    /**
+     * 批量解析候选 RSPU 的最低参考售价（销售价口径，批次 2）。
+     *
+     * <p>口径：复用 {@code selectCapableByRspuIds} + {@code canAccessFactory} 数据范围过滤
+     * 拿到候选 RSKU，每个 RSPU 取其所有候选 RSKU 经
+     * {@link PricingService#resolveSalePrice(RspuMaster, RskuSupply)} 解析出的最低标准售价
+     * （即各候选 RSKU 售价中的最小值，而非最低成本者的售价）；三级解析链
+     * （建议销售价 → 倍率计价 → 全局倍率兜底）都解析不出（null）时该 RSPU 不进 Map，
+     * prompt 侧标注「价格待定」不阻止入选。出厂价仅作为倍率计价的内部输入，
+     * 不作为数值透出给 prompt/响应。</p>
+     *
+     * @param candidates 候选产品（resolveSalePrice 需要 RSPU 的建议销售价与品类）
+     * @return RSPU ID → 最低参考售价
+     */
+    private Map<String, BigDecimal> batchMinSalePrices(List<RspuMaster> candidates) {
+        if (candidates.isEmpty()) {
             return Map.of();
         }
-        List<RskuSupply> capableRskus = rskuSupplyMapper.selectCapableByRspuIds(rspuIds);
-        return capableRskus.stream()
-            .filter(r -> r.getFactoryPrice() != null)
-            .filter(r -> dataScopeHelper.canAccessFactory(r.getFactoryCode()))
-            .collect(Collectors.groupingBy(
-                RskuSupply::getRspuId,
-                Collectors.mapping(
-                    RskuSupply::getFactoryPrice,
-                    Collectors.minBy(Comparator.naturalOrder())
-                )
-            ))
-            .entrySet().stream()
-            .filter(e -> e.getValue().isPresent())
-            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().get()));
+        Map<String, RspuMaster> rspuMap = candidates.stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+        List<RskuSupply> capableRskus = rskuSupplyMapper.selectCapableByRspuIds(
+            candidates.stream().map(RspuMaster::getRspuId).toList());
+        Map<String, BigDecimal> result = new java.util.HashMap<>();
+        for (RskuSupply rsku : capableRskus) {
+            if (!dataScopeHelper.canAccessFactory(rsku.getFactoryCode())) {
+                continue;
+            }
+            BigDecimal salePrice = pricingService.resolveSalePrice(rspuMap.get(rsku.getRspuId()), rsku);
+            if (salePrice == null) {
+                continue;
+            }
+            result.merge(rsku.getRspuId(), salePrice, (a, b) -> a.compareTo(b) <= 0 ? a : b);
+        }
+        return result;
     }
 
     private AiSchemeRecommendation parseRecommendation(String aiJson) {
@@ -402,9 +423,14 @@ public class AiMatchingService {
         Map<String, String> imageUrlMap = batchPrimaryImageUrls(selectedIds);
         Map<String, FactoryMaster> factoryMap = batchFactoryMap(cheapestRskuMap.values().stream()
             .map(RskuSupply::getFactoryCode).distinct().toList());
+        // 销售价口径（批次 2）：与 prompt 同一个 batchMinSalePrices，全角色可见
+        Map<String, BigDecimal> minSalePriceMap = batchMinSalePrices(
+            selectedIds.stream().map(rspuMap::get).filter(java.util.Objects::nonNull).toList());
 
         List<SchemeItemResponse> items = new ArrayList<>();
         BigDecimal totalPrice = BigDecimal.ZERO;
+        BigDecimal totalSalePrice = BigDecimal.ZERO;
+        boolean hasUnpricedItems = false;
         // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见；任一厂不可见则总价同步隐藏
         boolean canViewAllPrices = true;
 
@@ -431,17 +457,27 @@ public class AiMatchingService {
             item.setFactoryPrice(canViewPrice ? cheapest.getFactoryPrice() : null);
             item.setQuantity(1);
             item.setSubtotal(canViewPrice ? cheapest.getFactoryPrice() : null);
+            // 参考售价（销售价口径，全角色可见；未定价为 null 且不计入 totalSalePrice）
+            BigDecimal salePrice = minSalePriceMap.get(rspuId);
+            item.setSalePrice(salePrice);
             item.setLeadTimeDays(cheapest.getLeadTimeDays());
             item.setMoq(cheapest.getMoq());
             items.add(item);
 
             totalPrice = totalPrice.add(cheapest.getFactoryPrice());
+            if (salePrice != null) {
+                totalSalePrice = totalSalePrice.add(salePrice);
+            } else {
+                hasUnpricedItems = true;
+            }
         }
 
         RoomSchemeResponse response = new RoomSchemeResponse();
         response.setRoomType(roomType);
         response.setBudgetLimit(budgetLimit);
         response.setTotalPrice(canViewAllPrices ? totalPrice : null);
+        response.setTotalSalePrice(totalSalePrice);
+        response.setHasUnpricedItems(hasUnpricedItems);
         response.setItemCount(items.size());
         response.setReasoning(recommendation.getReasoning());
         response.setItems(items);
@@ -449,10 +485,10 @@ public class AiMatchingService {
     }
 
     private String buildAnchorPrompt(RspuMaster anchor, List<RspuMaster> candidates) {
-        List<String> allRspuIds = new ArrayList<>(candidates.size() + 1);
-        allRspuIds.add(anchor.getRspuId());
-        allRspuIds.addAll(candidates.stream().map(RspuMaster::getRspuId).toList());
-        Map<String, BigDecimal> minPriceMap = batchMinPrices(allRspuIds);
+        List<RspuMaster> all = new ArrayList<>(candidates.size() + 1);
+        all.add(anchor);
+        all.addAll(candidates);
+        Map<String, BigDecimal> minSalePriceMap = batchMinSalePrices(all);
 
         StringBuilder sb = new StringBuilder();
         sb.append("锚点产品信息：\n");
@@ -460,24 +496,31 @@ public class AiMatchingService {
             .append(" | 风格：").append(anchor.getPositioningLabel())
             .append(" | 主色：").append(anchor.getColorPrimaryName())
             .append(" | 材质：").append(anchor.getMaterialTags())
-            .append(" | 场景：").append(anchor.getSceneTags())
-            .append(" | 最低报价：").append(minPriceMap.get(anchor.getRspuId()) != null ? minPriceMap.get(anchor.getRspuId()) : "无")
-            .append(" 元\n\n");
+            .append(" | 场景：").append(anchor.getSceneTags());
+        appendSalePrice(sb, minSalePriceMap.get(anchor.getRspuId()));
+        sb.append("\n");
 
         sb.append("目标品类候选产品（请从中挑选 1~3 个最搭配的）：\n");
         for (RspuMaster rspu : candidates) {
-            BigDecimal minPrice = minPriceMap.get(rspu.getRspuId());
             sb.append("- ").append(rspu.getRspuId())
                 .append(" | 风格：").append(rspu.getPositioningLabel())
                 .append(" | 主色：").append(rspu.getColorPrimaryName())
                 .append(" | 材质：").append(rspu.getMaterialTags())
-                .append(" | 场景：").append(rspu.getSceneTags())
-                .append(" | 最低报价：").append(minPrice != null ? minPrice : "无")
-                .append(" 元\n");
+                .append(" | 场景：").append(rspu.getSceneTags());
+            appendSalePrice(sb, minSalePriceMap.get(rspu.getRspuId()));
         }
 
         sb.append("\n请输出 JSON 格式的推荐结果。");
         return sb.toString();
+    }
+
+    /** 候选行追加参考售价（销售价口径）；无售价标注「价格待定」，不阻止入选。 */
+    private static void appendSalePrice(StringBuilder sb, BigDecimal salePrice) {
+        if (salePrice != null) {
+            sb.append(" | 参考售价：").append(salePrice).append(" 元\n");
+        } else {
+            sb.append(" | 参考售价：价格待定\n");
+        }
     }
 
     private AnchorMatchingResponse buildAnchorResponse(String existingRspuId, String targetCategoryCode,
@@ -496,6 +539,9 @@ public class AiMatchingService {
         Map<String, String> imageUrlMap = batchPrimaryImageUrls(selectedIds);
         Map<String, FactoryMaster> factoryMap = batchFactoryMap(cheapestRskuMap.values().stream()
             .map(RskuSupply::getFactoryCode).distinct().toList());
+        // 销售价口径（批次 2）：与锚点 prompt 同一个 batchMinSalePrices，全角色可见
+        Map<String, BigDecimal> minSalePriceMap = batchMinSalePrices(
+            selectedIds.stream().map(rspuMap::get).filter(java.util.Objects::nonNull).toList());
 
         List<SchemeItemResponse> items = new ArrayList<>();
         for (String rspuId : selectedIds) {
@@ -520,6 +566,8 @@ public class AiMatchingService {
             item.setFactoryPrice(canViewPrice ? cheapest.getFactoryPrice() : null);
             item.setQuantity(1);
             item.setSubtotal(canViewPrice ? cheapest.getFactoryPrice() : null);
+            // 参考售价（销售价口径，全角色可见；未定价为 null）
+            item.setSalePrice(minSalePriceMap.get(rspuId));
             item.setLeadTimeDays(cheapest.getLeadTimeDays());
             item.setMoq(cheapest.getMoq());
             items.add(item);

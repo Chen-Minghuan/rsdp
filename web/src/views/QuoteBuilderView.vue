@@ -188,7 +188,7 @@ const addingProducts = ref(false)
 /** 已在构建器中的产品 ID（弹窗中禁选防重复） */
 const existingIds = computed(() => new Set(products.value.map((p) => p.rspu.rspuId)))
 
-const addColumns: DataTableColumns<ProductSummary> = [
+const baseAddColumns: DataTableColumns<ProductSummary> = [
   { type: 'selection', disabled: (row: ProductSummary) => existingIds.value.has(row.rspuId) },
   {
     title: '图片',
@@ -209,6 +209,14 @@ const addColumns: DataTableColumns<ProductSummary> = [
     render: (row) => (row.minFactoryPrice != null ? `¥${row.minFactoryPrice.toFixed(2)}` : '暂无报价')
   }
 ]
+
+// 「最低出厂价」列仅平台运营（ADMIN/EDITOR）可见；数据源与产品库列表同接口，
+// 后端已将 minFactoryPrice 掩码为 null，此处隐藏列为体验层。
+const addColumns = computed<DataTableColumns<ProductSummary>>(() =>
+  userStore.isPlatformStaff
+    ? baseAddColumns
+    : baseAddColumns.filter((c) => (c as { key?: string }).key !== 'minFactoryPrice')
+)
 
 function openAddModal() {
   addKeyword.value = ''

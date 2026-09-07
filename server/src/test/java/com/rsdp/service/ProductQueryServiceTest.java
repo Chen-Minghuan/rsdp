@@ -1069,6 +1069,106 @@ class ProductQueryServiceTest {
             .hasMessageContaining("非法的销售状态");
     }
 
+    @Test
+    void listProducts_admin_shouldExposeMinFactoryPrice() {
+        // 默认安全上下文为 ADMIN（@BeforeEach），平台运营可见最低出厂价
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        com.rsdp.entity.RskuSupply rsku = ownRsku("RSPU-TEST01", "F001");
+        rsku.setFactoryPrice(new java.math.BigDecimal("800.00"));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(rsku));
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows().get(0).getMinFactoryPrice())
+            .isEqualByComparingTo("800.00");
+    }
+
+    @Test
+    void listProducts_designer_shouldMaskMinFactoryPriceAndSkipPriceQuery() {
+        authenticateWithRoles("designer", "DESIGNER");
+        when(userFactoryService.getFactoryCodesByUsername("designer")).thenReturn(List.of());
+
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(ownRsku("RSPU-TEST01", "F001")));
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        // 非平台员工：最低出厂价掩码为 null
+        assertThat(result.getRows().get(0).getMinFactoryPrice()).isNull();
+        // batchMinFactoryPrices 入口短路：rsku_supply 仅发起 1 次查询（工厂代码聚合），
+        // 且不存在带 factory_price 条件的最低出厂价查询
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<com.rsdp.entity.RskuSupply>> captor =
+            ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rskuSupplyMapper, times(1)).selectList(captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).doesNotContain("factory_price");
+    }
+
+    @Test
+    void listProducts_user_shouldMaskMinFactoryPrice() {
+        authenticateWithRoles("user", "USER");
+        when(userFactoryService.getFactoryCodesByUsername("user")).thenReturn(List.of());
+
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setStatus("active");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows().get(0).getMinFactoryPrice()).isNull();
+        // 非平台员工不发起最低出厂价查询：仅 1 次工厂代码聚合查询，且无 factory_price 条件
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<com.rsdp.entity.RskuSupply>> captor =
+            ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rskuSupplyMapper, times(1)).selectList(captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).doesNotContain("factory_price");
+    }
+
+    private void authenticateWithRoles(String username, String... roles) {
+        SecurityContextHolder.clearContext();
+        var user = User.withUsername(username).password("").roles(roles).build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
     private void authenticateFactoryAdmin(String username) {        SecurityContextHolder.clearContext();
         var user = User.withUsername(username).password("").roles("FACTORY_ADMIN").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
