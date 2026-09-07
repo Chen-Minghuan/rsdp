@@ -43,6 +43,8 @@ export interface SchemeItem {
   factoryPrice: number
   quantity: number
   subtotal?: number
+  /** 标准售价（全角色可见；未定价为 null） */
+  salePrice?: number | null
   leadTimeDays?: number
   moq?: number
   /** 生效的空间字典码（scheme_item.space_tag 覆盖优先，空回退产品首场景码；无空间为 null，归「未分区」） */

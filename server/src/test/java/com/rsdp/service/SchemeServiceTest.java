@@ -326,14 +326,20 @@ class SchemeServiceTest {
     void getSchemeDetail_designerShouldSeeSaleTotalButNotCostTotal() {
         // 默认 setUp 身份为 DESIGNER（非平台员工）
         stubDetailTotalFixtures();
+        // 设计师无出厂价查看权限：覆盖 setUp 的默认存根
+        when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(false);
         when(schemeSalePriceService.sumItemsSalePrice(any(), any(), any()))
             .thenReturn(new BigDecimal("6250.00"));
+        when(schemeSalePriceService.salePriceOf(any(), any())).thenReturn(new BigDecimal("2500.00"));
 
         SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
 
         // 销售价合计全角色可见；成本口径总价对设计师掩码为 null
         assertThat(response.getTotalSalePrice()).isEqualByComparingTo("6250.00");
         assertThat(response.getTotalPrice()).isNull();
+        // item 级售价对设计师可见，出厂价仍掩码
+        assertThat(response.getItems().get(0).getSalePrice()).isEqualByComparingTo("2500.00");
+        assertThat(response.getItems().get(0).getFactoryPrice()).isNull();
     }
 
     @Test

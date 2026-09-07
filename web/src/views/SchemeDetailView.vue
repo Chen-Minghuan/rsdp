@@ -454,56 +454,79 @@ function formatPrice(value: number | undefined): string {
   return `¥${value.toFixed(2)}`
 }
 
-const itemColumns: DataTableColumns<SchemeItem> = [
-  {
-    title: '图片',
-    key: 'image',
-    width: 100,
-    render(row: SchemeItem) {
-      return h(HoverZoomImage, {
-        src: row.primaryImageUrl,
-        width: 80,
-        height: 80,
-        objectFit: 'contain'
-      })
+const itemColumns = computed<DataTableColumns<SchemeItem>>(() => {
+  const columns: DataTableColumns<SchemeItem> = [
+    {
+      title: '图片',
+      key: 'image',
+      width: 100,
+      render(row: SchemeItem) {
+        return h(HoverZoomImage, {
+          src: row.primaryImageUrl,
+          width: 80,
+          height: 80,
+          objectFit: 'contain'
+        })
+      }
+    },
+    { title: 'RSPU', key: 'rspuId', width: 160 },
+    { title: '名称', key: 'rspuName' },
+    {
+      title: '空间',
+      key: 'spaceTagName',
+      width: 120,
+      render(row: SchemeItem) {
+        return h('span', [
+          row.spaceTagName || '-',
+          row.spaceTagOverridden
+            ? h(NTag, { size: 'tiny', type: 'warning', style: 'margin-left: 4px;' }, { default: () => '已调整' })
+            : null
+        ])
+      }
+    },
+    { title: '工厂', key: 'factoryName' },
+    {
+      title: '售价',
+      key: 'salePrice',
+      width: 110,
+      render(row: SchemeItem) {
+        return formatPrice(row.salePrice ?? undefined)
+      }
+    },
+    { title: '数量', key: 'quantity', width: 80 },
+    {
+      title: '小计(售价)',
+      key: 'saleSubtotal',
+      width: 120,
+      render(row: SchemeItem) {
+        return row.salePrice != null ? formatPrice(row.salePrice * (row.quantity || 1)) : '-'
+      }
     }
-  },
-  { title: 'RSPU', key: 'rspuId', width: 160 },
-  { title: '名称', key: 'rspuName' },
-  {
-    title: '空间',
-    key: 'spaceTagName',
-    width: 120,
-    render(row: SchemeItem) {
-      return h('span', [
-        row.spaceTagName || '-',
-        row.spaceTagOverridden
-          ? h(NTag, { size: 'tiny', type: 'warning', style: 'margin-left: 4px;' }, { default: () => '已调整' })
-          : null
-      ])
-    }
-  },
-  { title: '工厂', key: 'factoryName' },
-  {
-    title: '出厂价',
-    key: 'factoryPrice',
-    width: 120,
-    render(row: SchemeItem) {
-      return formatPrice(row.factoryPrice)
-    }
-  },
-  { title: '数量', key: 'quantity', width: 80 },
-  {
-    title: '小计',
-    key: 'subtotal',
-    width: 120,
-    render(row: SchemeItem) {
-      return formatPrice(row.subtotal)
-    }
-  },
-  { title: '交期(天)', key: 'leadTimeDays', width: 100 },
-  { title: 'MOQ', key: 'moq', width: 100 }
-]
+  ]
+  // 成本口径（出厂价/成本小计）仅平台员工可见；设计师只见售价口径
+  if (isPlatformStaff.value) {
+    columns.push({
+      title: '出厂价',
+      key: 'factoryPrice',
+      width: 120,
+      render(row: SchemeItem) {
+        return formatPrice(row.factoryPrice)
+      }
+    }, {
+      title: '小计(成本)',
+      key: 'subtotal',
+      width: 120,
+      render(row: SchemeItem) {
+        return formatPrice(row.subtotal)
+      }
+    })
+  }
+  columns.push(
+    { title: '交期(天)', key: 'leadTimeDays', width: 100 },
+    { title: 'MOQ', key: 'moq', width: 100 }
+  )
+  return columns
+})
 
 const quoteColumns: DataTableColumns<QuoteItem> = [
   { title: '产品', key: 'rspuName', render: (row: QuoteItem) => row.productName || row.rspuName },
@@ -806,8 +829,8 @@ onBeforeRouteUpdate((to) => {
                           x{{ item.quantity ?? 1 }}
                           <span v-if="item.factoryName"> · {{ item.factoryName }}</span>
                         </div>
-                        <div v-if="item.subtotal != null" class="zone-item-price">
-                          ¥{{ item.subtotal.toFixed(2) }}
+                        <div v-if="item.salePrice != null" class="zone-item-price">
+                          ¥{{ (item.salePrice * (item.quantity ?? 1)).toFixed(2) }}
                         </div>
                       </div>
                     </div>

@@ -1063,6 +1063,8 @@ public class SchemeService {
         if (canViewPrice && item.getFactoryPrice() != null) {
             response.setSubtotal(item.getFactoryPrice().multiply(BigDecimal.valueOf(quantity)));
         }
+        // 标准售价全角色可见（设计师端方案明细按售价查看，与出厂价掩码互不影响）
+        response.setSalePrice(schemeSalePriceService.salePriceOf(rspu, rsku));
         response.setLeadTimeDays(item.getLeadTimeDays());
         response.setMoq(item.getMoq());
         response.setSortOrder(item.getSortOrder());

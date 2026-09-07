@@ -95,6 +95,17 @@ public class SchemeSalePriceService {
     }
 
     /**
+     * 解析单个方案明细项的标准售价（全角色可见）。
+     *
+     * @param rspu 产品主档（可空）
+     * @param rsku 供应单元（可空）
+     * @return 标准售价；三级链均解析不出时返回 null（未定价）
+     */
+    public BigDecimal salePriceOf(RspuMaster rspu, RskuSupply rsku) {
+        return pricingService.resolveSalePrice(rspu, rsku);
+    }
+
+    /**
      * 有效数量：空或小于等于 0 时按 1 计（与方案创建/更新时的聚合口径一致）。
      *
      * @param item 方案明细

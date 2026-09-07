@@ -755,6 +755,8 @@ GET    /api/v1/schemes/{schemeId}
        # Response: SchemeResponse（含 projectId / isTemplate / templateTags / canvasLayout /
        #   totalSalePrice）
        # 价格口径：totalSalePrice（销售价合计，全角色可见，含方案全部明细的实时换算）；
+       #   items[].salePrice 为标准售价（全角色可见，未定价为 null）——设计师端方案明细
+       #   按售价查看；items[].factoryPrice/subtotal 成本口径仍按 canViewFactoryPrice 掩码；
        #   totalPrice（成本口径）仅平台员工可见，其他角色为 null
        # 说明：canvasLayout 为搭配画布布局（V41，{ "<schemeItemId>": { x, y, scale, z } }，
        #   无布局时为 null，前端首次进入按空间分区自动平铺）；
