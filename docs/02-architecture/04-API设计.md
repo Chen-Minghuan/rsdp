@@ -743,11 +743,19 @@ GET    /api/v1/schemes
        # Query: isTemplate? (true 仅查模板), tag? (模板标签筛选),
        #        page? (默认 1), size? (默认 10，上限 100)
        # Response: PageResult<SchemeSummary> { total, page, size, rows }（行含 isTemplate / templateTags）
+       # 价格口径（销售价口径改造，方式 A 响应层实时换算，无 DB 变更）：
+       #   totalSalePrice = Σ标准售价×数量（PricingService.resolveSalePrice 三级链实时换算，
+       #     全角色可见，未定价项跳过求和）；
+       #   totalPrice = scheme.total_price 成本口径原值，仅平台员工（ADMIN/EDITOR）可见，
+       #     其他角色为 null；前端展示应使用 totalSalePrice
        # 说明：模板选择弹窗等需要全量小列表的场景传 size=100
 
 GET    /api/v1/schemes/{schemeId}
        # 查询搭配方案详情（已实现）
-       # Response: SchemeResponse（含 projectId / isTemplate / templateTags / canvasLayout）
+       # Response: SchemeResponse（含 projectId / isTemplate / templateTags / canvasLayout /
+       #   totalSalePrice）
+       # 价格口径：totalSalePrice（销售价合计，全角色可见，含方案全部明细的实时换算）；
+       #   totalPrice（成本口径）仅平台员工可见，其他角色为 null
        # 说明：canvasLayout 为搭配画布布局（V41，{ "<schemeItemId>": { x, y, scale, z } }，
        #   无布局时为 null，前端首次进入按空间分区自动平铺）；
        #   items[].spaceTag 为生效的空间字典码（scheme_item.space_tag 覆盖优先，
@@ -844,7 +852,11 @@ GET    /api/v1/projects
        # Query: keyword?, scope? (all=全部，仅 ADMIN 生效；mine=仅自己的), page=1, size=10
        # Response: PageResult<ProjectResponse>
        #   { projectId, projectName, projectType, companyName, ownerId, status,
-       #     remark, schemeCount, totalPrice, createdAt, updatedAt }
+       #     remark, schemeCount, totalPrice, totalSalePrice, createdAt, updatedAt }
+       # 价格口径（销售价口径改造，方式 A 响应层实时换算）：
+       #   totalSalePrice = 项目下各方案售价合计之和（全角色可见）；
+       #   totalPrice = Σscheme.total_price 成本口径，仅平台员工（ADMIN/EDITOR）可见，
+       #     其他角色为 null；前端展示应使用 totalSalePrice
 
 POST   /api/v1/projects
        # 创建设计项目（需 project:create）
@@ -855,6 +867,8 @@ POST   /api/v1/projects
 GET    /api/v1/projects/{projectId}
        # 查询项目详情（需 project:read + 归属或 ADMIN）
        # Response: ProjectDetailResponse（含 schemes: [SchemeSummary...]）
+       # 价格口径：项目级与内嵌方案卡 schemes[] 均为 totalSalePrice 全角色可见、
+       #   totalPrice 成本口径仅平台员工可见（其他角色 null）
 
 PUT    /api/v1/projects/{projectId}
        # 更新设计项目（需 project:update + 归属或 ADMIN）

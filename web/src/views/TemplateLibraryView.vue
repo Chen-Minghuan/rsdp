@@ -154,7 +154,7 @@ async function handleApply() {
   }
 }
 
-function formatPrice(value?: number): string {
+function formatPrice(value?: number | null): string {
   if (value == null) return '-'
   return `¥${value.toFixed(2)}`
 }
@@ -216,7 +216,7 @@ const itemColumns = [
                 <n-card hoverable class="template-card" @click="openDetail(template)">
                   <div class="template-name" :title="template.schemeName">{{ template.schemeName }}</div>
                   <div class="template-meta">
-                    {{ template.itemCount }} 件产品 · {{ formatPrice(template.totalPrice) }}
+                    {{ template.itemCount }} 件产品 · {{ formatPrice(template.totalSalePrice) }}
                   </div>
                   <n-space v-if="template.templateTags?.length" :size="4" style="margin-top: 8px;">
                     <n-tag v-for="tag in template.templateTags" :key="tag" size="small" :bordered="false">
@@ -260,7 +260,7 @@ const itemColumns = [
           <n-data-table :columns="itemColumns" :data="detail.items" :pagination="false" size="small" />
           <n-space justify="space-between" align="center" style="margin-top: 16px;">
             <span style="color: var(--rsdp-text-secondary);">
-              共 {{ detail.itemCount }} 件 · 合计 {{ formatPrice(detail.totalPrice) }}
+              共 {{ detail.itemCount }} 件 · 销售价合计 {{ formatPrice(detail.totalSalePrice) }}
             </span>
             <n-button v-if="canUseTemplate" type="primary" @click="() => openApply()">选用模板</n-button>
           </n-space>

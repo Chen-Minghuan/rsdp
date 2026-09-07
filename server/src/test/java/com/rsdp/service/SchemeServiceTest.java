@@ -114,6 +114,9 @@ class SchemeServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private SchemeSalePriceService schemeSalePriceService;
+
     @InjectMocks
     private SchemeService schemeService;
 
@@ -122,6 +125,9 @@ class SchemeServiceTest {
         lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
         lenient().when(dataScopeHelper.canAccessFactory(any())).thenReturn(true);
         lenient().when(dataScopeHelper.canViewFactoryPrice(any())).thenReturn(true);
+        // 售价合计服务默认返回空/0，具体用例按需覆盖存根
+        lenient().when(schemeSalePriceService.batchTotalSalePrices(any())).thenReturn(Map.of());
+        lenient().when(schemeSalePriceService.sumItemsSalePrice(any(), any(), any())).thenReturn(BigDecimal.ZERO);
         var user = User.withUsername("testuser").password("").authorities("ROLE_DESIGNER", "scheme:read", "scheme:create", "scheme:update", "scheme:delete").build();
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
@@ -130,6 +136,17 @@ class SchemeServiceTest {
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
+    }
+
+    /**
+     * 以指定角色重新认证当前用户（仿 ProductQueryServiceTest 范式），
+     * 用于覆盖 setUp 默认的 DESIGNER 身份。
+     */
+    private void authenticateWithRoles(String username, String... roles) {
+        SecurityContextHolder.clearContext();
+        var user = User.withUsername(username).password("").roles(roles).build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
     @Test
@@ -303,6 +320,61 @@ class SchemeServiceTest {
         assertThat(response.getItems()).hasSize(1);
         assertThat(response.getItems().get(0).getQuantity()).isEqualTo(3);
         assertThat(response.getItems().get(0).getSubtotal()).isEqualByComparingTo(new BigDecimal("7500"));
+    }
+
+    @Test
+    void getSchemeDetail_designerShouldSeeSaleTotalButNotCostTotal() {
+        // 默认 setUp 身份为 DESIGNER（非平台员工）
+        stubDetailTotalFixtures();
+        when(schemeSalePriceService.sumItemsSalePrice(any(), any(), any()))
+            .thenReturn(new BigDecimal("6250.00"));
+
+        SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
+
+        // 销售价合计全角色可见；成本口径总价对设计师掩码为 null
+        assertThat(response.getTotalSalePrice()).isEqualByComparingTo("6250.00");
+        assertThat(response.getTotalPrice()).isNull();
+    }
+
+    @Test
+    void getSchemeDetail_adminShouldSeeBothCostAndSaleTotals() {
+        authenticateWithRoles("admin", "ADMIN");
+        stubDetailTotalFixtures();
+        when(schemeSalePriceService.sumItemsSalePrice(any(), any(), any()))
+            .thenReturn(new BigDecimal("6250.00"));
+
+        SchemeResponse response = schemeService.getSchemeDetail("SCHEME-001");
+
+        // 平台员工双口径皆有：成本总价 + 销售价合计
+        assertThat(response.getTotalPrice()).isEqualByComparingTo("2500");
+        assertThat(response.getTotalSalePrice()).isEqualByComparingTo("6250.00");
+    }
+
+    /**
+     * 方案详情总价用例的公共夹具：1 个明细，scheme.total_price=2500（成本口径）。
+     */
+    private void stubDetailTotalFixtures() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试方案");
+        scheme.setTotalPrice(new BigDecimal("2500"));
+        scheme.setItemCount(1);
+
+        SchemeItem item = new SchemeItem();
+        item.setSchemeItemId(1L);
+        item.setSchemeId("SCHEME-001");
+        item.setRspuId("RSPU-001");
+        item.setRskuId("RSKU-001");
+        item.setFactoryCode("F001");
+        item.setFactoryPrice(new BigDecimal("2500"));
+        item.setQuantity(1);
+
+        when(schemeMapper.selectById("SCHEME-001")).thenReturn(scheme);
+        when(schemeItemMapper.selectList(any())).thenReturn(List.of(item));
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+        when(rskuSupplyMapper.selectList(any())).thenReturn(List.of());
+        when(factoryMasterMapper.selectList(any())).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
     }
 
     @Test
@@ -610,6 +682,8 @@ class SchemeServiceTest {
 
     @Test
     void copyFromTemplate_shouldCopyItemsWithLatestPricesAndKeepTemplateUntouched() {
+        // 成本口径总价仅平台员工可见：以 ADMIN 身份断言 totalPrice
+        authenticateWithRoles("admin", "ADMIN");
         Scheme template = new Scheme();
         template.setSchemeId("SCHEME-TPL");
         template.setSchemeName("现代客厅模板");
@@ -687,6 +761,8 @@ class SchemeServiceTest {
 
     @Test
     void copyFromTemplate_shouldMaskPriceChangesWhenFactoryPriceNotVisible() {
+        // 出厂价可见性由 dataScopeHelper mock 控制；身份用 ADMIN 以便断言成本口径 totalPrice
+        authenticateWithRoles("admin", "ADMIN");
         // 出厂价不可见角色：套用模板的价格变动条目整体不返回，防止 oldPrice/newPrice 旁路泄露
         Scheme template = new Scheme();
         template.setSchemeId("SCHEME-TPL");
@@ -887,6 +963,54 @@ class SchemeServiceTest {
         assertThat(captor.getValue().getSqlSegment()).contains("status");
         // 分页查询不应走全量 selectList
         verify(schemeMapper, never()).selectList(any(QueryWrapper.class));
+    }
+
+    @Test
+    void listSchemes_designerShouldMaskCostTotalAndExposeSaleTotal() {
+        // 默认 setUp 身份为 DESIGNER（非平台员工）
+        Scheme s1 = new Scheme();
+        s1.setSchemeId("SCHEME-1");
+        s1.setSchemeName("方案一");
+        s1.setStatus("active");
+        s1.setTotalPrice(new BigDecimal("1000"));
+
+        Page<Scheme> page = Page.of(1, 10);
+        page.setRecords(List.of(s1));
+        page.setTotal(1);
+        when(schemeMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+        when(schemeSalePriceService.batchTotalSalePrices(any()))
+            .thenReturn(Map.of("SCHEME-1", new BigDecimal("2500")));
+
+        PageResult<SchemeSummaryResponse> result = schemeService.listSchemes(null, null, 1, 10);
+
+        // 销售价合计全角色可见；成本口径总价对设计师掩码为 null
+        SchemeSummaryResponse row = result.getRows().get(0);
+        assertThat(row.getTotalSalePrice()).isEqualByComparingTo("2500");
+        assertThat(row.getTotalPrice()).isNull();
+    }
+
+    @Test
+    void listSchemes_adminShouldSeeBothCostAndSaleTotals() {
+        authenticateWithRoles("admin", "ADMIN");
+        Scheme s1 = new Scheme();
+        s1.setSchemeId("SCHEME-1");
+        s1.setSchemeName("方案一");
+        s1.setStatus("active");
+        s1.setTotalPrice(new BigDecimal("1000"));
+
+        Page<Scheme> page = Page.of(1, 10);
+        page.setRecords(List.of(s1));
+        page.setTotal(1);
+        when(schemeMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+        when(schemeSalePriceService.batchTotalSalePrices(any()))
+            .thenReturn(Map.of("SCHEME-1", new BigDecimal("2500")));
+
+        PageResult<SchemeSummaryResponse> result = schemeService.listSchemes(null, null, 1, 10);
+
+        // 平台员工双口径皆有
+        SchemeSummaryResponse row = result.getRows().get(0);
+        assertThat(row.getTotalPrice()).isEqualByComparingTo("1000");
+        assertThat(row.getTotalSalePrice()).isEqualByComparingTo("2500");
     }
 
     @Test

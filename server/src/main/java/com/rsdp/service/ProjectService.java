@@ -42,6 +42,7 @@ public class ProjectService {
     private final SchemeMapper schemeMapper;
     private final SysUserMapper sysUserMapper;
     private final AuditLogService auditLogService;
+    private final SchemeSalePriceService schemeSalePriceService;
 
     /**
      * 分页查询项目列表。
@@ -128,13 +129,24 @@ public class ProjectService {
             .eq("project_id", projectId)
             .orderByDesc("created_at"));
 
+        // 售价合计（销售价口径改造，方式 A）：批量实时换算各方案售价合计，项目级为其求和
+        Map<String, BigDecimal> saleByScheme = schemeSalePriceService.batchTotalSalePrices(
+            schemes.stream().map(Scheme::getSchemeId).toList());
+
         ProjectDetailResponse response = new ProjectDetailResponse();
         copyBaseFields(toResponse(project, null), response);
-        response.setSchemes(schemes.stream().map(this::toSchemeSummary).toList());
+        response.setSchemes(schemes.stream()
+            .map(s -> toSchemeSummary(s, saleByScheme.getOrDefault(s.getSchemeId(), BigDecimal.ZERO)))
+            .toList());
         response.setSchemeCount(schemes.size());
-        response.setTotalPrice(schemes.stream()
-            .map(Scheme::getTotalPrice)
-            .filter(java.util.Objects::nonNull)
+        // 成本口径总价仅平台员工可见；销售价合计全角色可见
+        response.setTotalPrice(SecurityOperatorContext.isPlatformStaff()
+            ? schemes.stream()
+                .map(Scheme::getTotalPrice)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+            : null);
+        response.setTotalSalePrice(saleByScheme.values().stream()
             .reduce(BigDecimal.ZERO, BigDecimal::add));
         return response;
     }
@@ -268,7 +280,11 @@ public class ProjectService {
         response.setShareEnabled(project.getShareEnabled());
         response.setShareExpireAt(project.getShareExpireAt());
         response.setSchemeCount(stats != null ? stats.count() : 0);
-        response.setTotalPrice(stats != null ? stats.totalPrice() : BigDecimal.ZERO);
+        // 成本口径总价仅平台员工可见；销售价合计全角色可见
+        response.setTotalPrice(SecurityOperatorContext.isPlatformStaff()
+            ? (stats != null ? stats.totalPrice() : BigDecimal.ZERO)
+            : null);
+        response.setTotalSalePrice(stats != null ? stats.totalSalePrice() : BigDecimal.ZERO);
         response.setCreatedAt(project.getCreatedAt());
         response.setUpdatedAt(project.getUpdatedAt());
         return response;
@@ -286,12 +302,14 @@ public class ProjectService {
         target.setUpdatedAt(source.getUpdatedAt());
     }
 
-    private SchemeSummaryResponse toSchemeSummary(Scheme scheme) {
+    private SchemeSummaryResponse toSchemeSummary(Scheme scheme, BigDecimal totalSalePrice) {
         SchemeSummaryResponse summary = new SchemeSummaryResponse();
         summary.setSchemeId(scheme.getSchemeId());
         summary.setSchemeName(scheme.getSchemeName());
         summary.setItemCount(scheme.getItemCount());
-        summary.setTotalPrice(scheme.getTotalPrice());
+        // 成本口径总价仅平台员工可见；其他角色用 totalSalePrice（销售价合计，全角色可见）
+        summary.setTotalPrice(SecurityOperatorContext.isPlatformStaff() ? scheme.getTotalPrice() : null);
+        summary.setTotalSalePrice(totalSalePrice);
         summary.setCreatedBy(scheme.getCreatedBy());
         summary.setCreatedAt(scheme.getCreatedAt());
         return summary;
@@ -305,15 +323,43 @@ public class ProjectService {
             .select("project_id", "COUNT(*) AS scheme_count", "COALESCE(SUM(total_price), 0) AS total_price")
             .in("project_id", projectIds)
             .groupBy("project_id"));
+        // 售价合计（销售价口径，方式 A 响应层实时换算）：按项目聚合各方案售价合计
+        Map<String, BigDecimal> saleByProject = batchProjectSaleTotals(projectIds);
         return rows.stream().collect(Collectors.toMap(
             row -> (String) row.get("project_id"),
             row -> new SchemeStats(
                 ((Number) row.get("scheme_count")).intValue(),
-                row.get("total_price") instanceof BigDecimal bd ? bd : new BigDecimal(row.get("total_price").toString())),
+                row.get("total_price") instanceof BigDecimal bd ? bd : new BigDecimal(row.get("total_price").toString()),
+                saleByProject.getOrDefault((String) row.get("project_id"), BigDecimal.ZERO)),
             (a, b) -> a
         ));
     }
 
-    private record SchemeStats(int count, BigDecimal totalPrice) {
+    /**
+     * 批量聚合项目销售价合计：项目下各方案售价合计（{@link SchemeSalePriceService} 实时换算）求和。
+     *
+     * @param projectIds 项目 ID 列表
+     * @return projectId → 销售价合计（无方案或无已定价项的项目不出现）
+     */
+    private Map<String, BigDecimal> batchProjectSaleTotals(List<String> projectIds) {
+        List<Scheme> schemes = schemeMapper.selectList(new QueryWrapper<Scheme>()
+            .select("scheme_id", "project_id")
+            .in("project_id", projectIds));
+        if (schemes.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, BigDecimal> saleByScheme = schemeSalePriceService.batchTotalSalePrices(
+            schemes.stream().map(Scheme::getSchemeId).toList());
+        Map<String, BigDecimal> result = new java.util.HashMap<>();
+        for (Scheme scheme : schemes) {
+            BigDecimal saleTotal = saleByScheme.get(scheme.getSchemeId());
+            if (saleTotal != null) {
+                result.merge(scheme.getProjectId(), saleTotal, BigDecimal::add);
+            }
+        }
+        return result;
+    }
+
+    private record SchemeStats(int count, BigDecimal totalPrice, BigDecimal totalSalePrice) {
     }
 }

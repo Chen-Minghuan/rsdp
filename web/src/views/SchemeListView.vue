@@ -80,11 +80,11 @@ const columns: DataTableColumns<SchemeSummary> = [
   { title: '方案名称', key: 'schemeName', ellipsis: { tooltip: true } },
   { title: '项数', key: 'itemCount', width: 100 },
   {
-    title: '总价',
-    key: 'totalPrice',
+    title: '销售价合计',
+    key: 'totalSalePrice',
     width: 140,
     render(row: SchemeSummary) {
-      return h('span', { class: 'rsdp-mono' }, `¥${(row.totalPrice ?? 0).toFixed(2)}`)
+      return h('span', { class: 'rsdp-mono' }, `¥${(row.totalSalePrice ?? 0).toFixed(2)}`)
     }
   },
   {

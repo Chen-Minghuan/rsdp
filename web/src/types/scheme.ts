@@ -77,7 +77,10 @@ export interface Scheme {
   schemeName: string
   roomType?: string
   budgetLimit?: number
-  totalPrice: number
+  /** 成本口径总价：仅平台员工可见，其他角色为 null；前端展示应使用 totalSalePrice */
+  totalPrice?: number | null
+  /** 销售价合计（Σ标准售价×数量，全角色可见；未定价项未计入） */
+  totalSalePrice?: number | null
   factoryCount: number
   maxLeadTimeDays: number
   itemCount: number
@@ -103,7 +106,10 @@ export interface SchemeSummary {
   schemeId: string
   schemeName: string
   itemCount: number
-  totalPrice: number
+  /** 成本口径总价：仅平台员工可见，其他角色为 null；前端展示应使用 totalSalePrice */
+  totalPrice?: number | null
+  /** 销售价合计（Σ标准售价×数量，全角色可见；未定价项未计入） */
+  totalSalePrice?: number | null
   createdBy: string
   createdAt: string
   isTemplate?: boolean

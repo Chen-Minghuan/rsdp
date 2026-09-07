@@ -42,6 +42,8 @@ const projectId = computed(() => (route.params.projectId as string) || '')
 const canCreateScheme = computed(() => userStore.hasPermission(PERMISSIONS.SCHEME_CREATE))
 const canUpdateProject = computed(() => userStore.hasPermission(PERMISSIONS.PROJECT_UPDATE))
 const canAiMatch = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_READ))
+/** 平台员工（ADMIN/EDITOR）：可见成本口径总价（仅内部） */
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -243,7 +245,7 @@ function formatTime(value?: string): string {
   return value.replace('T', ' ').slice(0, 16)
 }
 
-function formatPrice(value?: number): string {
+function formatPrice(value?: number | null): string {
   if (value == null) return '¥0'
   return `¥${Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 }
@@ -283,7 +285,10 @@ onMounted(async () => {
           <div v-if="project.remark" class="info-remark">{{ project.remark }}</div>
           <n-space style="margin-top: 14px;" :size="24">
             <span class="stat-item">{{ project.schemeCount }} 个方案</span>
-            <span class="stat-price">{{ formatPrice(project.totalPrice) }}</span>
+            <span class="stat-price">销售价合计 {{ formatPrice(project.totalSalePrice) }}</span>
+            <span v-if="isPlatformStaff && project.totalPrice != null" class="stat-item">
+              成本合计（仅内部）{{ formatPrice(project.totalPrice) }}
+            </span>
           </n-space>
         </n-card>
 
@@ -307,7 +312,10 @@ onMounted(async () => {
               <div class="scheme-title" :title="scheme.schemeName">{{ scheme.schemeName }}</div>
               <div class="scheme-stats">
                 <span>{{ scheme.itemCount ?? 0 }} 项商品</span>
-                <span class="scheme-price">{{ formatPrice(scheme.totalPrice) }}</span>
+                <span class="scheme-price">{{ formatPrice(scheme.totalSalePrice) }}</span>
+              </div>
+              <div v-if="isPlatformStaff && scheme.totalPrice != null" class="scheme-time">
+                成本合计（仅内部）{{ formatPrice(scheme.totalPrice) }}
               </div>
               <div class="scheme-time">创建于 {{ formatTime(scheme.createdAt) }}</div>
             </n-card>

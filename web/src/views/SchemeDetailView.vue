@@ -47,6 +47,8 @@ const message = useMessage()
 const schemeId = computed(() => route.params.schemeId as string)
 
 const isAdmin = computed(() => userStore.hasRole(ROLES.ADMIN))
+/** 平台员工（ADMIN/EDITOR）：可见成本口径总价（仅内部） */
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const currentUsername = computed(() => userStore.userInfo?.username || '')
 const canEditScheme = computed(() => {
   if (!userStore.hasPermission(PERMISSIONS.SCHEME_UPDATE)) return false
@@ -702,8 +704,11 @@ onBeforeRouteUpdate((to) => {
             <n-descriptions-item label="总数量">
               {{ scheme.items.reduce((sum, item) => sum + (item.quantity ?? 1), 0) }}
             </n-descriptions-item>
-            <n-descriptions-item label="总价">
-              ¥{{ (scheme.totalPrice ?? 0).toFixed(2) }}
+            <n-descriptions-item label="销售价合计">
+              ¥{{ (scheme.totalSalePrice ?? 0).toFixed(2) }}
+            </n-descriptions-item>
+            <n-descriptions-item v-if="isPlatformStaff && scheme.totalPrice != null" label="成本合计（仅内部）">
+              ¥{{ scheme.totalPrice.toFixed(2) }}
             </n-descriptions-item>
             <n-descriptions-item label="涉及工厂">
               {{ scheme.factoryCount }} 家
