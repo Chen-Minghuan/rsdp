@@ -586,7 +586,11 @@ public class ExcelAiImportService {
                         failures.add(new ExcelAiImportFailure(displayRowIndex, issue));
                     }
                     // 行提交成功后更新产品组状态（回滚行不影响组）
-                    if (rowResult.createdNewRspu) {
+                    // update 模式命中已有 RSPU 的行（createdNewRspu=false 但型号与当前组不同）
+                    // 同样开启新组，否则同一产品的后续模块行会对照上一组的 externalCode，
+                    // 分组失效 → 每个模块行重复建 AI 任务、重复 updateExistingRspu（0.2 修复）
+                    if (rowResult.createdNewRspu || currentGroup == null
+                            || !Objects.equals(rowResult.groupKey, currentGroup.externalCode)) {
                         currentGroup = new ProductGroup();
                         currentGroup.externalCode = rowResult.groupKey;
                         currentGroup.rspuId = rowResult.rspuId;
@@ -595,7 +599,7 @@ public class ExcelAiImportService {
                         if (rowResult.imageHashes() != null) {
                             currentGroup.storedImageHashes.addAll(rowResult.imageHashes());
                         }
-                    } else if (currentGroup != null) {
+                    } else {
                         currentGroup.hasPrimaryImage |= rowResult.primaryImageSaved;
                         currentGroup.hasAiTask |= rowResult.taskId != null;
                         if (rowResult.imageHashes() != null) {
@@ -2912,14 +2916,18 @@ public class ExcelAiImportService {
         String variantId = variantRskuOutcome.firstVariantId();
 
         // 登记图片元数据（文件已在事务外写入对象存储）
-        String primaryObjectKey = registerImages(rspuId, null, storedProductImages,
+        ImageRegistration productImageReg = registerImages(rspuId, null, storedProductImages,
             prep.allowPrimary(), prep.strictPrimary(), importCache);
         registerImages(rspuId, variantId, storedVariantImages, false, false, importCache);
+        String primaryObjectKey = productImageReg != null ? productImageReg.primaryObjectKey() : null;
+        boolean newPrimaryRegistered = productImageReg != null && productImageReg.newPrimaryRegistered();
 
         excelImportRowService.updateStage(importRowId, "create_async_task");
         String taskId = null;
-        if (primaryObjectKey != null) {
-            // 同组行仅在组内尚无 AI 任务时补建（主图后至的场景），避免重复识别
+        // 仅当本行有新的主图入库时才允许创建 AI 识别任务：重导入（updateIfExists）行
+        // 图片被 content_hash 查重跳过、主图复用库中值时不再重复烧识别调用（0.2 修复）；
+        // 同组行仅在组内尚无 AI 任务时补建（主图后至的场景），避免重复识别
+        if (newPrimaryRegistered) {
             boolean needTask = !prep.sameProduct() || !currentGroup.hasAiTask;
             if (needTask) {
                 taskId = createAsyncTask(rspuId, primaryObjectKey);
@@ -4600,11 +4608,11 @@ public class ExcelAiImportService {
      *                      规格模块示例图等不再兜底升主图，行内无产品图样图则该产品无主图；
      *                      false 时保持旧行为（无 primary 标记则首图升主图）
      * @param importCache   批次导入缓存（查重快照按 rspu_id 缓存，miss 时单查回填）
-     * @return 主图 objectKey，未产生主图时为 null
+     * @return 登记结果：主图 objectKey + 本次是否新登记了主图；未登记任何图片时为 null
      */
-    private String registerImages(String rspuId, String variantId, List<StoredImage> images,
-                                  boolean allowPrimary, boolean strictPrimary,
-                                  BatchImportCache importCache) {
+    private ImageRegistration registerImages(String rspuId, String variantId, List<StoredImage> images,
+                                             boolean allowPrimary, boolean strictPrimary,
+                                             BatchImportCache importCache) {
         if (images == null || images.isEmpty()) {
             return null;
         }
@@ -4631,6 +4639,9 @@ public class ExcelAiImportService {
         }
 
         String primaryObjectKey = existingPrimaryKey;
+        // 本行是否新登记了主图：库中已有主图（existingPrimaryKey 复用）不算，
+        // 供调用方区分「本行新主图入库」与「库中已有主图」，避免重导入重复创建 AI 识别任务（0.2 修复）
+        boolean newPrimaryRegistered = false;
         boolean hasPrimary = images.stream().anyMatch(StoredImage::primary);
         List<ImageAssets> newAssets = new ArrayList<>();
         for (int i = 0; i < images.size(); i++) {
@@ -4661,6 +4672,7 @@ public class ExcelAiImportService {
 
             if (isPrimary) {
                 primaryObjectKey = stored.objectKey();
+                newPrimaryRegistered = true;
             }
         }
         if (!newAssets.isEmpty()) {
@@ -4674,7 +4686,7 @@ public class ExcelAiImportService {
             }
             existingImages.addAll(newAssets);
         }
-        return primaryObjectKey;
+        return new ImageRegistration(primaryObjectKey, newPrimaryRegistered);
     }
 
     private String createAsyncTask(String rspuId, String primaryObjectKey) {
@@ -4817,8 +4829,15 @@ public class ExcelAiImportService {
     private record ProcessedMapping(Map<String, String> mapping, List<PriceColumnInfo> priceColumns) {
     }
 
+    /**
+     * 图片登记结果：主图 objectKey + 本次调用是否新登记了主图
+     * （库中已有主图复用时 newPrimaryRegistered=false，用于决定是否触发 AI 识别任务）。
+     */
+    private record ImageRegistration(String primaryObjectKey, boolean newPrimaryRegistered) {
+    }
+
     private record RowResult(String rspuId, String variantId, List<String> rskuIds,
-                              Integer imageCount, List<String> imageAssetIds,
+                             Integer imageCount, List<String> imageAssetIds,
                               String taskId, boolean skipped, String skipReason,
                               String groupKey, boolean createdNewRspu, boolean primaryImageSaved,
                               List<String> issues, List<String> imageHashes) {

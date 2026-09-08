@@ -302,8 +302,19 @@ public class ProductImportService {
             connection.setConnectTimeout(10000);
             connection.setReadTimeout(30000);
             String contentType = connection.getContentType();
+            // Content-Length 预检 + 限量读取：先判大小再下载，避免恶意 URL 用超大响应撑爆堆内存
+            //（与 ExcelAiImportService.downloadImage 同一防护口径）
+            long contentLength = connection.getContentLengthLong();
+            if (contentLength > MAX_IMAGE_SIZE) {
+                log.warn("图片超过大小上限（{} 字节），已跳过: {}", contentLength, trimmedUrl);
+                if (connection instanceof HttpURLConnection httpConnection) {
+                    httpConnection.disconnect();
+                }
+                return null;
+            }
             try (InputStream in = connection.getInputStream()) {
-                byte[] bytes = in.readAllBytes();
+                // 多读 1 字节用于判断是否超限，无需 readAllBytes 全量加载
+                byte[] bytes = in.readNBytes(MAX_IMAGE_SIZE + 1);
                 if (bytes.length == 0) {
                     log.warn("图片 URL 返回空内容: {}", trimmedUrl);
                     return null;

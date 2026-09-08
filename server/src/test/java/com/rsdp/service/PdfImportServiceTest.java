@@ -48,7 +48,7 @@ class PdfImportServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         setField("maxFileSizeMb", 50);
-        setField("maxPages", 200);
+        setField("maxPages", 50);
         setField("renderDpi", 72f);
         setField("detectBatchSize", 5);
         setField("outputQuality", 0.9f);

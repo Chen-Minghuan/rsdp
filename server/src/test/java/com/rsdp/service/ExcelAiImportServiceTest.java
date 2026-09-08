@@ -2218,6 +2218,8 @@ class ExcelAiImportServiceTest {
         verify(rspuMapper, times(1)).updateById(any(RspuMaster.class));
         verify(auditLogService, times(1)).logUpdate(eq("rspu_master"), eq("RSPU-EXIST"), any(), any(), any());
         verify(rspuVariantService, times(1)).createVariant(eq("RSPU-EXIST"), any());
+        // 无图行不建 AI 识别任务
+        verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
     }
 
     @Test
@@ -4055,6 +4057,98 @@ class ExcelAiImportServiceTest {
         verify(imageAssetsMapper, times(1)).insertBatch(imageCaptor.capture());
         org.junit.jupiter.api.Assertions.assertFalse(imageCaptor.getValue().get(0).getPrimary(),
             "库中已有主图时新登记图片不得再置主图");
+    }
+
+    @Test
+    void confirmAndImport_updateModeWithoutNewImage_shouldNotCreateAiTask() throws IOException {
+        // 0.2 修复：update 模式重导入，行图片被 content_hash 查重跳过（无新图入库）时，
+        // 不得因复用库中已有主图而重复创建 AI 识别任务
+        byte[] pngBytes = createPng(0xFFAA00);
+        byte[] excelBytes = createExcelWithEmbeddedImage(pngBytes);
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"类别\":\"categoryCode\",\"型号\":\"externalCode,productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+        stubCommonDicts();
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        // 已有 RSPU（externalCode 与 Excel 行一致）+ 库中已登记同内容主图
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-EXIST");
+        existing.setExternalCode("WG-TEST-001");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+
+        ImageAssets existingImage = new ImageAssets();
+        existingImage.setImageId("IMG-OLD");
+        existingImage.setRspuId("RSPU-EXIST");
+        existingImage.setContentHash(com.rsdp.util.ContentHashes.sha256Hex(pngBytes));
+        existingImage.setPrimary(true);
+        existingImage.setStoragePath("images/IMG-OLD.png");
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(existingImage));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("类别", "categoryCode", "型号", "externalCode,productName"));
+        request.setCategoryHint("FS");
+        request.setUpdateIfExists(true);
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        assertEquals(List.of("RSPU-EXIST"), result.getRspuIds(), "应复用已有 RSPU");
+        verify(imageAssetsMapper, never()).insertBatch(any());
+        // 无新主图入库 → 不建 AI 识别任务
+        verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
+        assertTrue(result.getTaskIds().isEmpty());
+    }
+
+    @Test
+    void confirmAndImport_updateModeSameProductRows_shouldGroupAndCreateTaskOnce() throws IOException {
+        // 0.2 修复：update 模式命中已有 RSPU 的行同样开启新产品组——
+        // 同一产品的连续模块行正确归组，行 1 新登记主图建一次任务，行 2 同组不再建，
+        // 且行 2 不再重复 updateExistingRspu
+        byte[] excelBytes = createExcelWithModuleImagesAndLogo();
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"型号品名\":\"externalCode\",\"规格/模块\":\"variantDisplayName\",\"价格\":\"__PRICE__:A级布\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithModuleImagesAndLogo()));
+        stubCommonDicts();
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-EXIST");
+        existing.setExternalCode("MJ-S96");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(previewMappingForUpdate(savedBatch));
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+        request.setUpdateIfExists(true);
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(2, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        assertEquals(List.of("RSPU-EXIST", "RSPU-EXIST"), result.getRspuIds(), "两个模块行应复用同一已有 RSPU");
+        verify(rspuMapper, never()).insert(any(RspuMaster.class));
+        // 归组生效：行 2 与行 1 同产品（sameProduct），不再重复更新已有 RSPU
+        verify(rspuMapper, times(1)).updateById(any(RspuMaster.class));
+        // 行 1 新登记主图 → 建一次 AI 识别任务；行 2 同组且未产生新主图 → 不再建
+        verify(asyncTaskMapper, times(1)).insert(any(com.rsdp.entity.AsyncTask.class));
+        assertEquals(1, result.getTaskIds().size());
+    }
+
+    private Map<String, String> previewMappingForUpdate(ExcelImportBatch savedBatch) {
+        return Map.of("型号品名", "externalCode", "规格/模块", "variantDisplayName", "价格", "__PRICE__:A级布");
     }
 
     private byte[] createExcelWithEmbeddedImage(byte[] pngBytes) {

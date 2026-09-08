@@ -689,6 +689,71 @@ class ProductImportServiceTest {
     }
 
     @Test
+    void importProducts_shouldRejectImageWithOversizedContentLength() throws IOException {
+        // Content-Length 预检：声明超限长度直接拒绝，不读取正文（防恶意 URL 超大响应撑爆堆内存）
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/big.jpg", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                exchange.getResponseHeaders().set("Content-Type", "image/jpeg");
+                // 声明 25MB Content-Length 但不发送正文：预检应直接拒绝
+                exchange.sendResponseHeaders(200, 25L * 1024 * 1024);
+                exchange.close();
+            }
+        });
+        server.start();
+        try {
+            ProductImportRow row = createValidRow();
+            row.setPrimaryImageUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/big.jpg");
+            MockMultipartFile file = createExcelFile(List.of(row));
+
+            when(rspuMapper.selectList(any())).thenReturn(List.of());
+
+            ProductImportResult result = productImportService.importProducts(file, false);
+
+            assertThat(result.getSuccessCount()).isEqualTo(1);
+            assertThat(result.getFailedCount()).isEqualTo(1);
+            assertThat(result.getFailures().get(0).getReason()).contains("主图下载失败");
+            assertThat(insertedImages).isEmpty();
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void importProducts_shouldRejectImageWhenBodyExceedsSizeLimit() throws IOException {
+        // 限量读取兜底：Content-Length 缺失/谎报（chunked）时，readNBytes 读到超过上限即拒绝
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/huge.jpg", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                exchange.getResponseHeaders().set("Content-Type", "image/jpeg");
+                // responseLength=0：chunked 传输，不带 Content-Length，绕过预检
+                exchange.sendResponseHeaders(200, 0);
+                exchange.getResponseBody().write(new byte[20 * 1024 * 1024 + 1]);
+                exchange.close();
+            }
+        });
+        server.start();
+        try {
+            ProductImportRow row = createValidRow();
+            row.setPrimaryImageUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/huge.jpg");
+            MockMultipartFile file = createExcelFile(List.of(row));
+
+            when(rspuMapper.selectList(any())).thenReturn(List.of());
+
+            ProductImportResult result = productImportService.importProducts(file, false);
+
+            assertThat(result.getSuccessCount()).isEqualTo(1);
+            assertThat(result.getFailedCount()).isEqualTo(1);
+            assertThat(result.getFailures().get(0).getReason()).contains("主图下载失败");
+            assertThat(insertedImages).isEmpty();
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void importProducts_updateMode_shouldNotCreateSecondPrimaryImage() throws IOException {
         // Given：更新模式追加图片，该 RSPU 已存在主图
         startImageServer();

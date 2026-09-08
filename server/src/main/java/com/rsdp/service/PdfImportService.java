@@ -44,7 +44,9 @@ public class PdfImportService {
     @Value("${rsdp.document-import.pdf.max-file-size-mb:50}")
     private int maxFileSizeMb;
 
-    @Value("${rsdp.document-import.pdf.max-pages:200}")
+    // 默认页数上限 50：PDF 导入为同步全页位图渲染（页图驻留堆内存），页数过多有 OOM 风险；
+    // 待导入流程正式异步化/流式化后再评估上调。可通过 rsdp.document-import.pdf.max-pages 配置覆盖
+    @Value("${rsdp.document-import.pdf.max-pages:50}")
     private int maxPages;
 
     @Value("${rsdp.document-import.pdf.render-dpi:200}")
