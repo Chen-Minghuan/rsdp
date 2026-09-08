@@ -8,6 +8,7 @@ import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
+import com.rsdp.dto.response.SchemeRefInfo;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuPriceSummary;
@@ -775,11 +776,44 @@ class ProductQueryServiceTest {
         when(rspuMapper.selectAnyById("RSPU-DEL01")).thenReturn(deleted);
         when(imageAssetsMapper.selectAnyByRspuId("RSPU-DEL01")).thenReturn(List.of());
         when(productPurgeMapper.countSchemeItemRefs("RSPU-DEL01")).thenReturn(2L);
+        // 混合场景：一个使用中方案 + 一个已软删方案
+        SchemeRefInfo inUse = new SchemeRefInfo();
+        inUse.setSchemeId("SCHEME-A");
+        inUse.setSchemeName("客厅方案");
+        inUse.setInUse(true);
+        SchemeRefInfo softDeleted = new SchemeRefInfo();
+        softDeleted.setSchemeId("SCHEME-B");
+        softDeleted.setSchemeName("测试3");
+        softDeleted.setInUse(false);
+        when(productPurgeMapper.listSchemeRefsByRspu("RSPU-DEL01")).thenReturn(List.of(inUse, softDeleted));
 
         assertThatThrownBy(() -> productQueryService.permanentDeleteProduct("RSPU-DEL01"))
             .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("方案明细引用");
+            .hasMessageContaining("引用方案：「客厅方案」（使用中）、「测试3」（已删除，可在方案回收站彻底删除）")
+            .hasMessageContaining("使用中方案请先删除方案或移除明细");
         // 任何物理删除都不应发生
+        verify(rspuMapper, never()).physicalDeleteById(any());
+    }
+
+    @Test
+    void permanentDeleteProduct_shouldOmitInUseHintWhenAllRefSchemesDeleted() {
+        RspuMaster deleted = new RspuMaster();
+        deleted.setRspuId("RSPU-DEL01");
+        deleted.setDeletedAt(java.time.LocalDateTime.now());
+        when(rspuMapper.selectAnyById("RSPU-DEL01")).thenReturn(deleted);
+        when(imageAssetsMapper.selectAnyByRspuId("RSPU-DEL01")).thenReturn(List.of());
+        when(productPurgeMapper.countSchemeItemRefs("RSPU-DEL01")).thenReturn(1L);
+        // 全部为已软删方案：引导到方案回收站彻底删除，不出现"使用中方案"提示
+        SchemeRefInfo softDeleted = new SchemeRefInfo();
+        softDeleted.setSchemeId("SCHEME-B");
+        softDeleted.setSchemeName("测试3");
+        softDeleted.setInUse(false);
+        when(productPurgeMapper.listSchemeRefsByRspu("RSPU-DEL01")).thenReturn(List.of(softDeleted));
+
+        assertThatThrownBy(() -> productQueryService.permanentDeleteProduct("RSPU-DEL01"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("「测试3」（已删除，可在方案回收站彻底删除）")
+            .hasMessageNotContaining("使用中");
         verify(rspuMapper, never()).physicalDeleteById(any());
     }
 

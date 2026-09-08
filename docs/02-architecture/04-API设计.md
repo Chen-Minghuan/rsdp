@@ -217,7 +217,8 @@ DELETE /api/v1/products/{rspuId}/permanent
        # Response: void
        # 说明：仅回收站中（已软删）的产品可彻底删除；物理删除主表与全部关联行（含工厂映射/风格匹配/收藏条目），
        #       事务提交后清理存储图片文件并幂等清理残留向量；订单/方案明细为快照语义保留；
-       #       产品被方案明细（scheme_item）引用时拒绝彻底删除（返回 400 并提示引用数），需先处理相关方案
+       #       产品被方案明细（scheme_item）引用时拒绝彻底删除（返回 400，提示列出具体引用方案，
+       #       区分使用中/已删除并引导到方案回收站彻底删除），需先处理相关方案
 
 GET    /api/v1/products/import-template
        # 下载产品批量导入 Excel 模板（已实现，文件名「产品导入模板.xlsx」）
@@ -782,7 +783,20 @@ PUT    /api/v1/schemes/{schemeId}
        #   （前端编辑模式回传原覆盖码，防止删旧建新丢失空间覆盖）
 
 DELETE /api/v1/schemes/{schemeId}
-       # 删除搭配方案（已实现）
+       # 删除搭配方案（已实现，软删除，级联软删方案明细；需 scheme:delete + 方案归属或 ADMIN）
+
+GET    /api/v1/schemes/recycle-bin
+       # 分页查询回收站中的方案（已实现，需 scheme:read；仅已软删除方案，按删除时间倒序）
+       # Query: page? (默认 1), size? (默认 10，上限 100)
+       # Response: PageResult<SchemeSummary>（行含 deletedAt；价格口径同活动列表）
+
+DELETE /api/v1/schemes/{schemeId}/purge
+       # 彻底删除回收站中的方案（已实现，物理删除不可恢复；需 scheme:delete + 方案归属或 ADMIN）
+       # 前置约束：① 方案必须已软删除（未软删返回 400 提示先执行删除）；
+       #   ② 被订单引用（design_order.scheme_id，含软删订单）返回 400
+       #     "方案已生成订单，属于业务凭证，不能彻底删除"；
+       #   ③ 项目内方案同样允许（project_id 仅逻辑关联，project 表无 FK 到 scheme）
+       # 物理删除顺序（同事务）：先 scheme_item 全部明细（含软删）→ 再 scheme 行，记审计日志
 
 POST   /api/v1/schemes/{schemeId}/quote
        # 根据搭配方案生成报价单（已实现）

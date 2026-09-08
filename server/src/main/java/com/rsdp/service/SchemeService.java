@@ -40,12 +40,14 @@ import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.CategoryDictMapper;
+import com.rsdp.mapper.DesignOrderMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.SchemeItemMapper;
 import com.rsdp.mapper.SchemeMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -67,6 +69,7 @@ import com.rsdp.util.IdGenerator;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SchemeService {
 
     /** 单个方案允许的最大明细项数量（性能与安全阈值）。 */
@@ -74,6 +77,7 @@ public class SchemeService {
 
     private final SchemeMapper schemeMapper;
     private final SchemeItemMapper schemeItemMapper;
+    private final DesignOrderMapper designOrderMapper;
     private final RspuSceneMapper rspuSceneMapper;
     private final CategoryDictMapper categoryDictMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
@@ -392,6 +396,7 @@ public class SchemeService {
         copy.setCreatedBy(source.getCreatedBy());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
+        copy.setDeletedAt(source.getDeletedAt());
         return copy;
     }
 
@@ -435,6 +440,7 @@ public class SchemeService {
         summary.setTotalSalePrice(totalSalePrice);
         summary.setCreatedBy(s.getCreatedBy());
         summary.setCreatedAt(s.getCreatedAt());
+        summary.setDeletedAt(s.getDeletedAt());
         summary.setIsTemplate(s.getIsTemplate());
         summary.setTemplateTags(fromJson(s.getTemplateTags()));
         return summary;
@@ -552,6 +558,59 @@ public class SchemeService {
         // 级联软删除方案明细（@TableLogic → UPDATE deleted_at），避免残留孤儿记录
         schemeItemMapper.delete(new QueryWrapper<SchemeItem>().eq("scheme_id", schemeId));
         auditLogService.logDelete("scheme", schemeId, oldSnapshot, currentUsername());
+    }
+
+    /**
+     * 分页查询回收站中的方案（已软删除，绕过 @TableLogic 自动过滤）。
+     *
+     * @param page 页码（从 1 开始）
+     * @param size 每页条数
+     * @return 方案摘要分页结果（含 deletedAt）
+     */
+    public PageResult<SchemeSummaryResponse> listDeletedSchemes(long page, long size) {
+        Page<Scheme> result = schemeMapper.selectDeletedPage(Page.of(page, size));
+        // 售价合计口径与活动列表一致：批量实时换算，避免逐方案循环单查
+        Map<String, BigDecimal> saleTotals = schemeSalePriceService.batchTotalSalePrices(
+            result.getRecords().stream().map(Scheme::getSchemeId).toList());
+        List<SchemeSummaryResponse> rows = result.getRecords().stream()
+            .map(s -> toSummary(s, saleTotals.getOrDefault(s.getSchemeId(), BigDecimal.ZERO)))
+            .collect(Collectors.toList());
+        return PageResult.of(result.getTotal(), page, size, rows);
+    }
+
+    /**
+     * 彻底删除方案（物理删除）：先物理删除全部明细（含软删），再物理删除方案行，同事务。
+     *
+     * <p>前置约束：
+     * ① 方案必须已软删除（回收站中），未软删的先走删除入口；
+     * ② 被订单（design_order.scheme_id，含软删订单）引用时拒绝——订单是业务凭证；
+     * ③ 仅方案创建人或 ADMIN（与软删除一致的归属校验）。
+     * 项目内方案同样允许：project_id 仅逻辑关联，project 表无外键指向 scheme。</p>
+     *
+     * @param schemeId 方案 ID
+     * @param operator 操作人用户名（审计日志）
+     */
+    @Transactional
+    public void purgeScheme(String schemeId, String operator) {
+        // selectById 受 @TableLogic 影响查不到软删行，须用含软删的自定义查询
+        Scheme scheme = schemeMapper.selectAnyById(schemeId);
+        if (scheme == null) {
+            throw new ResourceNotFoundException("方案不存在: " + schemeId);
+        }
+        assertSchemeOwnerOrAdmin(scheme);
+        if (scheme.getDeletedAt() == null) {
+            throw new BusinessException("仅回收站中的方案可彻底删除，请先执行删除: " + schemeId);
+        }
+        long orderRefs = designOrderMapper.countSchemeRefsAny(schemeId);
+        if (orderRefs > 0) {
+            throw new BusinessException("方案已生成订单，属于业务凭证，不能彻底删除: " + schemeId);
+        }
+
+        Scheme oldSnapshot = snapshot(scheme);
+        schemeItemMapper.physicalDeleteBySchemeId(schemeId);
+        schemeMapper.physicalDeleteById(schemeId);
+        auditLogService.logDelete("scheme", schemeId, oldSnapshot, operator);
+        log.info("方案已彻底删除（物理），schemeId={}，operator={}", schemeId, operator);
     }
 
     /**

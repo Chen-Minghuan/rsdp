@@ -147,6 +147,21 @@ public class SchemeController {
     }
 
     /**
+     * 分页查询回收站中的方案（已软删除）。
+     *
+     * @param page 页码（从 1 开始）
+     * @param size 每页条数（上限 100）
+     * @return 已软删方案摘要分页结果
+     */
+    @GetMapping("/recycle-bin")
+    public Result<PageResult<SchemeSummaryResponse>> recycleBin(
+        @RequestParam(defaultValue = "1") long page,
+        @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页数量不能小于 1")
+        @Max(value = 100, message = "每页数量不能超过 100") long size) {
+        return Result.ok(schemeService.listDeletedSchemes(page, size));
+    }
+
+    /**
      * 查询方案详情。
      *
      * @param schemeId 方案 ID
@@ -179,6 +194,20 @@ public class SchemeController {
     @DeleteMapping("/{schemeId}")
     public Result<Void> delete(@PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId) {
         schemeService.deleteScheme(schemeId);
+        return Result.ok();
+    }
+
+    /**
+     * 彻底删除回收站中的方案（物理删除，不可恢复；权限与软删除一致：方案创建人或 ADMIN）。
+     *
+     * <p>被订单引用的方案属于业务凭证，拒绝删除。</p>
+     *
+     * @param schemeId 方案 ID
+     * @return 空结果
+     */
+    @DeleteMapping("/{schemeId}/purge")
+    public Result<Void> purge(@PathVariable @NotBlank(message = "方案 ID 不能为空") String schemeId) {
+        schemeService.purgeScheme(schemeId, SecurityOperatorContext.currentUsername());
         return Result.ok();
     }
 

@@ -15,6 +15,7 @@ import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductStatusCountsResponse;
 import com.rsdp.dto.response.ProductStyleMatchResponse;
 import com.rsdp.dto.response.ProductSummaryResponse;
+import com.rsdp.dto.response.SchemeRefInfo;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
@@ -760,10 +761,27 @@ public class ProductQueryService {
             .map(ImageAssets::getStoragePath).filter(StringUtils::hasText).toList();
         List<String> imageIds = images.stream().map(ImageAssets::getImageId).toList();
 
-        // 方案明细是业务凭证，被引用时禁止彻底删除（含软删引用——外键不看 deleted_at）
+        // 方案明细是业务凭证，被引用时禁止彻底删除（含软删引用——外键不看 deleted_at）；
+        // 拦截提示列出具体引用方案，软删方案引导到方案回收站彻底删除
         long schemeRefs = productPurgeMapper.countSchemeItemRefs(rspuId);
         if (schemeRefs > 0) {
-            throw new BusinessException("产品仍被 " + schemeRefs + " 个方案明细引用，无法彻底删除；请先删除相关方案: " + rspuId);
+            List<SchemeRefInfo> refSchemes = productPurgeMapper.listSchemeRefsByRspu(rspuId);
+            StringBuilder detail = new StringBuilder();
+            boolean hasInUse = false;
+            for (SchemeRefInfo ref : refSchemes) {
+                if (detail.length() > 0) {
+                    detail.append("、");
+                }
+                if (Boolean.TRUE.equals(ref.getInUse())) {
+                    hasInUse = true;
+                    detail.append("「").append(ref.getSchemeName()).append("」（使用中）");
+                } else {
+                    detail.append("「").append(ref.getSchemeName()).append("」（已删除，可在方案回收站彻底删除）");
+                }
+            }
+            throw new BusinessException("产品仍被方案明细引用，无法彻底删除。引用方案：" + detail
+                + (hasInUse ? "；使用中方案请先删除方案或移除明细" : "")
+                + ": " + rspuId);
         }
 
         // 按外键依赖顺序物理删除关联行（风格/场景关联在软删时已清除，此处幂等补刀）：

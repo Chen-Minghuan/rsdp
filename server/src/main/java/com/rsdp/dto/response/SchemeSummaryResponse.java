@@ -21,6 +21,8 @@ public class SchemeSummaryResponse {
     private BigDecimal totalSalePrice;
     private String createdBy;
     private LocalDateTime createdAt;
+    /** 软删除时间（回收站列表返回；活动列表恒为 null）。 */
+    private LocalDateTime deletedAt;
     private Boolean isTemplate;
     private List<String> templateTags;
 }

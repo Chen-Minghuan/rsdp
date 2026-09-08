@@ -93,6 +93,27 @@ export async function deleteScheme(schemeId: string, options?: ApiOptions): Prom
 }
 
 /**
+ * 分页查询回收站中的方案（已软删除）。
+ */
+export async function listDeletedSchemes(
+  params?: { page?: number; size?: number },
+  options?: ApiOptions
+): Promise<PageResult<SchemeSummary>> {
+  const { data: result } = await apiClient.get<ApiResult<PageResult<SchemeSummary>>>('/v1/schemes/recycle-bin', {
+    params,
+    signal: options?.signal
+  })
+  return result.data
+}
+
+/**
+ * 彻底删除回收站中的方案（物理删除，不可恢复；被订单引用时后端拒绝）。
+ */
+export async function purgeScheme(schemeId: string, options?: ApiOptions): Promise<void> {
+  await apiClient.delete<ApiResult<void>>(`/v1/schemes/${schemeId}/purge`, { signal: options?.signal })
+}
+
+/**
  * 保存方案搭配画布布局（仅保存布局，不动方案明细）。
  *
  * @param schemeId 方案 ID

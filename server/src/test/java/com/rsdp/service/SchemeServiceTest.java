@@ -30,6 +30,7 @@ import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.CategoryDictMapper;
+import com.rsdp.mapper.DesignOrderMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
@@ -77,6 +78,9 @@ class SchemeServiceTest {
 
     @Mock
     private SchemeItemMapper schemeItemMapper;
+
+    @Mock
+    private DesignOrderMapper designOrderMapper;
 
     @Mock
     private RskuSupplyMapper rskuSupplyMapper;
@@ -399,6 +403,84 @@ class SchemeServiceTest {
         // 级联软删除方案明细，避免残留孤儿记录
         verify(schemeItemMapper).delete(argThat((QueryWrapper<SchemeItem> w) ->
             w != null && String.valueOf(w.getSqlSegment()).contains("scheme_id")));
+    }
+
+    @Test
+    void purgeScheme_shouldPhysicallyDeleteSoftDeletedSchemeAndItems() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setSchemeName("测试3");
+        scheme.setStatus("active");
+        scheme.setCreatedBy("testuser");
+        scheme.setDeletedAt(java.time.LocalDateTime.now());
+
+        when(schemeMapper.selectAnyById("SCHEME-001")).thenReturn(scheme);
+        when(designOrderMapper.countSchemeRefsAny("SCHEME-001")).thenReturn(0L);
+
+        schemeService.purgeScheme("SCHEME-001", "testuser");
+
+        // 先物理清除全部明细（含软删），再物理删除方案行
+        verify(schemeItemMapper).physicalDeleteBySchemeId("SCHEME-001");
+        verify(schemeMapper).physicalDeleteById("SCHEME-001");
+        verify(auditLogService).logDelete(eq("scheme"), eq("SCHEME-001"), any(), eq("testuser"));
+    }
+
+    @Test
+    void purgeScheme_shouldRejectWhenNotSoftDeleted() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("testuser");
+        // deletedAt 为空 = 未软删，未进回收站
+
+        when(schemeMapper.selectAnyById("SCHEME-001")).thenReturn(scheme);
+
+        assertThatThrownBy(() -> schemeService.purgeScheme("SCHEME-001", "testuser"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("请先执行删除");
+        verify(schemeMapper, never()).physicalDeleteById(any());
+        verify(schemeItemMapper, never()).physicalDeleteBySchemeId(any());
+    }
+
+    @Test
+    void purgeScheme_shouldRejectWhenReferencedByOrder() {
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("testuser");
+        scheme.setDeletedAt(java.time.LocalDateTime.now());
+
+        when(schemeMapper.selectAnyById("SCHEME-001")).thenReturn(scheme);
+        when(designOrderMapper.countSchemeRefsAny("SCHEME-001")).thenReturn(1L);
+
+        assertThatThrownBy(() -> schemeService.purgeScheme("SCHEME-001", "testuser"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("业务凭证");
+        verify(schemeMapper, never()).physicalDeleteById(any());
+        verify(schemeItemMapper, never()).physicalDeleteBySchemeId(any());
+    }
+
+    @Test
+    void purgeScheme_shouldRejectWhenNotOwner() {
+        // 非归属且非 ADMIN：与软删除一致的归属校验
+        authenticateWithRoles("otheruser", "DESIGNER");
+        Scheme scheme = new Scheme();
+        scheme.setSchemeId("SCHEME-001");
+        scheme.setCreatedBy("testuser");
+        scheme.setDeletedAt(java.time.LocalDateTime.now());
+
+        when(schemeMapper.selectAnyById("SCHEME-001")).thenReturn(scheme);
+
+        assertThatThrownBy(() -> schemeService.purgeScheme("SCHEME-001", "otheruser"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无权操作该方案");
+        verify(schemeMapper, never()).physicalDeleteById(any());
+    }
+
+    @Test
+    void purgeScheme_shouldThrowWhenNotFound() {
+        when(schemeMapper.selectAnyById("SCHEME-MISSING")).thenReturn(null);
+
+        assertThatThrownBy(() -> schemeService.purgeScheme("SCHEME-MISSING", "testuser"))
+            .isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test

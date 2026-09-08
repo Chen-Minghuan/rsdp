@@ -16,7 +16,7 @@ import {
   NTag,
   type DataTableColumns
 } from 'naive-ui'
-import { listSchemes, deleteScheme } from '@/api/scheme'
+import { listSchemes, deleteScheme, listDeletedSchemes, purgeScheme } from '@/api/scheme'
 import { listSimpleTemplateTags } from '@/api/templateTag'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
@@ -40,6 +40,8 @@ const total = ref(0)
 
 /** 模板筛选：仅看模板 + 标签筛选。 */
 const templateOnly = ref(false)
+/** 回收站模式：展示已软删除方案，可彻底删除（参照产品列表页回收站模式）。 */
+const recycleBin = ref(false)
 const tagFilter = ref<string | null>(null)
 /** 模板标签选项：来自受控标签字典 simple-list（阶段 6，替代拉全量模板提取的 hack）。 */
 const allTemplateTags = ref<string[]>([])
@@ -76,7 +78,8 @@ function formatDateTime(value: string | undefined): string {
   })
 }
 
-const columns: DataTableColumns<SchemeSummary> = [
+/** 活动方案列表列定义。 */
+const activeColumns: DataTableColumns<SchemeSummary> = [
   { title: '方案名称', key: 'schemeName', ellipsis: { tooltip: true } },
   { title: '项数', key: 'itemCount', width: 100 },
   {
@@ -154,16 +157,54 @@ const columns: DataTableColumns<SchemeSummary> = [
   }
 ]
 
+/** 回收站列定义：方案名称/项数/创建人/删除时间/彻底删除。 */
+const recycleColumns: DataTableColumns<SchemeSummary> = [
+  { title: '方案名称', key: 'schemeName', ellipsis: { tooltip: true } },
+  { title: '项数', key: 'itemCount', width: 100 },
+  { title: '创建人', key: 'createdBy', width: 120 },
+  {
+    title: '删除时间',
+    key: 'deletedAt',
+    width: 180,
+    render(row: SchemeSummary) {
+      return h('span', { class: 'rsdp-mono' }, formatDateTime(row.deletedAt ?? undefined))
+    }
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 140,
+    render(row: SchemeSummary) {
+      // 彻底删除复用软删除的归属判定（scheme:delete + 归属人或 ADMIN）
+      if (!canDeleteScheme(row)) return null
+      return h(
+        NPopconfirm,
+        { onPositiveClick: () => handlePurge(row.schemeId) },
+        {
+          trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '彻底删除' }),
+          default: () => '彻底删除为物理删除，不可恢复；若方案已生成订单将被拒绝。确定彻底删除该方案吗？'
+        }
+      )
+    }
+  }
+]
+
+const columns = computed<DataTableColumns<SchemeSummary>>(() =>
+  recycleBin.value ? recycleColumns : activeColumns
+)
+
 async function loadSchemes() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const result = await listSchemes({
-      isTemplate: templateOnly.value || undefined,
-      tag: tagFilter.value || undefined,
-      page: page.value,
-      size: pageSize.value
-    })
+    const result = recycleBin.value
+      ? await listDeletedSchemes({ page: page.value, size: pageSize.value })
+      : await listSchemes({
+          isTemplate: templateOnly.value || undefined,
+          tag: tagFilter.value || undefined,
+          page: page.value,
+          size: pageSize.value
+        })
     schemes.value = result.rows
     total.value = result.total
   } catch (e) {
@@ -173,7 +214,7 @@ async function loadSchemes() {
   }
 }
 
-watch([templateOnly, tagFilter], () => {
+watch([templateOnly, tagFilter, recycleBin], () => {
   page.value = 1
   loadSchemes()
 })
@@ -198,6 +239,15 @@ async function handleDelete(schemeId: string) {
   }
 }
 
+async function handlePurge(schemeId: string) {
+  try {
+    await purgeScheme(schemeId)
+    await loadSchemes()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '彻底删除失败'
+  }
+}
+
 onMounted(() => {
   loadSchemes()
   loadTemplateTagOptions()
@@ -214,17 +264,23 @@ onMounted(() => {
         </n-space>
 
         <n-space align="center">
-          <n-switch v-model:value="templateOnly">
-            <template #checked>仅看模板</template>
-            <template #unchecked>仅看模板</template>
+          <n-switch v-model:value="recycleBin">
+            <template #checked>回收站</template>
+            <template #unchecked>回收站</template>
           </n-switch>
-          <n-select
-            v-model:value="tagFilter"
-            :options="tagOptions"
-            clearable
-            placeholder="按模板标签筛选"
-            style="width: 200px;"
-          />
+          <template v-if="!recycleBin">
+            <n-switch v-model:value="templateOnly">
+              <template #checked>仅看模板</template>
+              <template #unchecked>仅看模板</template>
+            </n-switch>
+            <n-select
+              v-model:value="tagFilter"
+              :options="tagOptions"
+              clearable
+              placeholder="按模板标签筛选"
+              style="width: 200px;"
+            />
+          </template>
         </n-space>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
@@ -242,7 +298,7 @@ onMounted(() => {
           :single-line="false"
         >
           <template #empty>
-            <n-empty description="暂无搭配方案，去产品库选择产品生成报价单后保存" />
+            <n-empty :description="recycleBin ? '回收站为空' : '暂无搭配方案，去产品库选择产品生成报价单后保存'" />
           </template>
         </n-data-table>
 

@@ -1,9 +1,12 @@
 package com.rsdp.mapper;
 
+import com.rsdp.dto.response.SchemeRefInfo;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+
+import java.util.List;
 
 /**
  * 产品彻底删除（回收站物理清除）的级联清理 Mapper。
@@ -23,6 +26,19 @@ public interface ProductPurgeMapper {
      */
     @Select("SELECT COUNT(*) FROM scheme_item WHERE rspu_id = #{rspuId}")
     long countSchemeItemRefs(String rspuId);
+
+    /**
+     * 查询引用指定 RSPU 的方案清单（含软删方案与软删明细——外键不看 deleted_at，
+     * 自定义 SQL 需显式不带 deleted_at 过滤），用于彻底删除拦截提示。
+     *
+     * @param rspuId RSPU ID
+     * @return 引用该产品的方案列表（去重，按方案名排序）
+     */
+    @Select("SELECT DISTINCT s.scheme_id AS schemeId, s.scheme_name AS schemeName,"
+        + " (s.deleted_at IS NULL) AS inUse"
+        + " FROM scheme_item si JOIN scheme s ON s.scheme_id = si.scheme_id"
+        + " WHERE si.rspu_id = #{rspuId} ORDER BY s.scheme_name")
+    List<SchemeRefInfo> listSchemeRefsByRspu(String rspuId);
 
     /**
      * 导入行记录的生成结果引用置空（保留导入历史，断开外键）。

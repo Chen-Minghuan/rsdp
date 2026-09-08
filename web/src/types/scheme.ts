@@ -114,6 +114,8 @@ export interface SchemeSummary {
   totalSalePrice?: number | null
   createdBy: string
   createdAt: string
+  /** 软删除时间（回收站列表返回；活动列表为空） */
+  deletedAt?: string | null
   isTemplate?: boolean
   templateTags?: string[]
 }
