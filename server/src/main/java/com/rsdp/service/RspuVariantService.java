@@ -54,12 +54,41 @@ public class RspuVariantService {
      */
     @Transactional(noRollbackFor = BusinessException.class)
     public RspuVariantResponse createVariant(String rspuId, RspuVariantCreateRequest request) {
+        loadRspuOrThrow(rspuId);
+        dataScopeHelper.assertCanAccessRspu(rspuId);
+        return doCreateVariant(rspuId, request);
+    }
+
+    /**
+     * 为新 RSPU 首次建档创建变体（录入场景专用内部入口）。
+     *
+     * <p><b>仅用于新 RSPU 首次建档场景</b>：RSPU 由当前用户在同一事务内刚创建，
+     * 数据归属隐含成立，故跳过 {@link DataScopeHelper#assertCanAccessRspu} 数据权限校验
+     *（该校验依赖已存在的 RSKU 报价记录，对"刚创建"的新 RSPU 必然误伤）。
+     * 其他任何场景禁止调用本方法，请使用 {@link #createVariant}。</p>
+     *
+     * @param rspuId  RSPU ID
+     * @param request 变体创建请求
+     * @return 创建后的变体响应
+     */
+    public RspuVariantResponse createVariantForEntry(String rspuId, RspuVariantCreateRequest request) {
+        loadRspuOrThrow(rspuId);
+        return doCreateVariant(rspuId, request);
+    }
+
+    /** 加载 RSPU，不存在时抛出 ResourceNotFoundException。 */
+    private RspuMaster loadRspuOrThrow(String rspuId) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
-        dataScopeHelper.assertCanAccessRspu(rspuId);
+        return rspu;
+    }
 
+    /**
+     * 创建变体主体逻辑：码值解析、判重、编码生成、落库与审计（不含数据权限校验）。
+     */
+    private RspuVariantResponse doCreateVariant(String rspuId, RspuVariantCreateRequest request) {
         validateVariantCodes(request);
         if (StringUtils.hasText(request.getProductLevel())) {
             validateDictCode("factory_level", request.getProductLevel(), "产品等级");

@@ -363,7 +363,7 @@ public class ProductService {
     }
 
     /**
-     * 为新 RSPU 创建默认变体。
+     * 为新 RSPU 创建默认变体（录入场景专用：RSPU 由当前用户在同一事务内刚创建，跳过数据权限校验）。
      */
     private String createDefaultVariantForEntry(String rspuId, String productLevel, String displayName,
                                                 String sizeCode, String dimensions, String colorCode,
@@ -376,7 +376,7 @@ public class ProductService {
         variantRequest.setMaterialCode(materialCode);
         variantRequest.setMaterialMix(materialMix);
         variantRequest.setProductLevel(productLevel);
-        return rspuVariantService.createVariant(rspuId, variantRequest).getVariantId();
+        return rspuVariantService.createVariantForEntry(rspuId, variantRequest).getVariantId();
     }
 
     /**
@@ -392,9 +392,13 @@ public class ProductService {
         for (int i = 0; i < images.size(); i++) {
             MultipartFile image = images.get(i);
             imageUploadValidator.validate(image, maxSize);
+            // 本地磁盘存储的 store(MultipartFile) 内部走 transferTo 会移走 Tomcat 上传临时文件，
+            // 之后再读内容会 NoSuchFileException；先一次性读入字节，存储与主图裁剪共用
+            byte[] imageBytes = image.getBytes();
             String imageId = IdGenerator.imageId();
             String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
-            String storagePath = storageService.store(image, objectKey);
+            String storagePath = storageService.store(
+                new ByteArrayInputStream(imageBytes), objectKey, imageBytes.length, image.getContentType());
             storedObjectKeys.add(storagePath);
 
             boolean isPrimary = i == 0;
@@ -406,7 +410,7 @@ public class ProductService {
             imageAsset.setStoragePath(storagePath);
             imageAsset.setPrimary(isPrimary);
             imageAsset.setAiProcessed(false);
-            imageAsset.setFileSize(image.getSize());
+            imageAsset.setFileSize((long) imageBytes.length);
             imageAsset.setFormat(getExtension(image.getOriginalFilename()));
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
@@ -416,7 +420,7 @@ public class ProductService {
 
             // 主图智能裁剪：AI 识别产品主体并替换主图存储与元数据，失败时回退原图
             if (isPrimary) {
-                subjectCropService.cropAndReplacePrimary(image.getBytes(), rspuId, variantId, imageId, storagePath);
+                subjectCropService.cropAndReplacePrimary(imageBytes, rspuId, variantId, imageId, storagePath);
             }
         }
         registerStorageRollbackCleanup(storedObjectKeys);

@@ -77,6 +77,12 @@ class ProductServiceTest {
     private RspuVariantService rspuVariantService;
 
     @Mock
+    private RskuService rskuService;
+
+    @Mock
+    private UserFactoryService userFactoryService;
+
+    @Mock
     private ProductSubjectCropService subjectCropService;
 
     @Mock
@@ -419,7 +425,7 @@ class ProductServiceTest {
         when(dictService.listByType("category")).thenReturn(categoryDicts());
         com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
         variantResponse.setVariantId("VAR-001");
-        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
 
         com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
         request.setCategoryCode("FS");
@@ -443,7 +449,9 @@ class ProductServiceTest {
         assertThat(rspuCaptor.getValue().getProductLevel()).isEqualTo("A");
 
         verify(rspuCodeService, times(1)).assignCode(anyString(), eq("FS"), eq("MC"), isNull());
-        verify(rspuVariantService, times(1)).createVariant(anyString(), any());
+        // 录入场景必须走 createVariantForEntry（跳过数据权限校验），禁止走 createVariant
+        verify(rspuVariantService, times(1)).createVariantForEntry(anyString(), any());
+        verify(rspuVariantService, never()).createVariant(anyString(), any());
         verify(auditLogService, times(1)).logCreate(eq("rspu_master"), anyString(), any(), any());
     }
 
@@ -453,10 +461,10 @@ class ProductServiceTest {
             "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
         );
         when(dictService.listByType("category")).thenReturn(categoryDicts());
-        when(storageService.store(any(), anyString())).thenReturn("images/IMG-MANUAL.jpg");
+        when(storageService.store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString())).thenReturn("images/IMG-MANUAL.jpg");
         com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
         variantResponse.setVariantId("VAR-002");
-        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
 
         com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
         request.setCategoryCode("FS");
@@ -489,6 +497,37 @@ class ProductServiceTest {
         assertThatThrownBy(() -> productService.createManualEntry(request, null))
             .isInstanceOf(BusinessException.class);
         verify(rspuMapper, never()).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void createFactoryEntry_shouldUseCreateVariantForEntry() throws Exception {
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(userFactoryService.getFactoryCodesByUsername(anyString())).thenReturn(List.of("A004"));
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-F01");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+        when(rskuService.createRsku(any())).thenReturn("RSKU-F01");
+
+        com.rsdp.dto.request.FactoryProductEntryRequest request = new com.rsdp.dto.request.FactoryProductEntryRequest();
+        request.setFactoryCode("A004");
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("工厂标准版");
+        request.setVariantMaterialCode("WO");
+        request.setFactoryPrice(new java.math.BigDecimal("1234.56"));
+
+        Map<String, Object> result = productService.createFactoryEntry(request, null);
+
+        assertThat(result).containsKeys("rspuId", "variantId", "rskuId", "imageIds", "message");
+        assertThat(result.get("variantId")).isEqualTo("VAR-F01");
+        assertThat(result.get("rskuId")).isEqualTo("RSKU-F01");
+
+        // 录入场景必须走 createVariantForEntry（跳过数据权限校验），禁止走 createVariant
+        verify(rspuVariantService, times(1)).createVariantForEntry(anyString(), any());
+        verify(rspuVariantService, never()).createVariant(anyString(), any());
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        verify(rskuService, times(1)).createRsku(any());
     }
 
     @Test

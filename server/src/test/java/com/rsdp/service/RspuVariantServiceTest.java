@@ -335,6 +335,65 @@ class RspuVariantServiceTest {
     }
 
     @Test
+    void createVariantForEntry_shouldSkipDataScopeCheck() {
+        // 录入场景专用入口：RSPU 由当前用户同事务刚创建，不触达数据权限校验
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(variantCodeMapper.allocateSequence(rspuId)).thenReturn(1L);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("工厂录入默认变体");
+        request.setMaterialCode("LI");
+
+        RspuVariantResponse response = variantService.createVariantForEntry(rspuId, request);
+
+        assertNotNull(response);
+        assertEquals("RSPU-TEST01-V001", response.getVariantId());
+        assertEquals("active", response.getStatus());
+        verify(dataScopeHelper, never()).assertCanAccessRspu(any());
+        verify(auditLogService).logCreate(any(), any(), any(), any());
+    }
+
+    @Test
+    void createVariantForEntry_shouldThrow_whenRspuNotFound() {
+        when(rspuMapper.selectById(rspuId)).thenReturn(null);
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("测试变体");
+
+        assertThrows(ResourceNotFoundException.class, () -> variantService.createVariantForEntry(rspuId, request));
+        verify(variantMapper, never()).insert(any(RspuVariant.class));
+    }
+
+    @Test
+    void createVariantForEntry_shouldThrow_whenDuplicateDimensions() {
+        // 判重逻辑与 createVariant 一致
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+        RspuVariant existing = new RspuVariant();
+        existing.setVariantId("V-EXIST");
+        existing.setRspuId(rspuId);
+        existing.setMaterialCode("LI");
+        when(variantMapper.selectList(any())).thenReturn(List.of(existing));
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("重复维度变体");
+        request.setMaterialCode("LI");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+            () -> variantService.createVariantForEntry(rspuId, request));
+        assertEquals("相同尺寸/颜色/材质的变体已存在", ex.getMessage());
+        verify(variantMapper, never()).insert(any(RspuVariant.class));
+        verify(dataScopeHelper, never()).assertCanAccessRspu(any());
+    }
+
+    @Test
     void initializeDefaultVariant_shouldExpandMultiSizeDimensionText() {
         // OCR 尺寸文字明确写了 3 组尺寸 → 展开建 3 个尺寸变体
         ReflectionTestUtils.setField(variantService, "objectMapper", objectMapper);
