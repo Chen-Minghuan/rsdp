@@ -54,6 +54,14 @@ database/
 
 注意 reset_db.sql 是纯开发工具，其内容 = **schema 基线 + 必需种子（zz_seed.sql 镜像）+ 开发测试账号**（重置开发库后可直接用弱口令账号登录），但**不含**演示工厂 F001/F002 与 DEMO-* 产品数据（需要时再执行 `seed_dev_data.sql` 或 `make seed-dev`）。
 
+### 3. ⚠️ 存量库升级（重要）
+
+`schema/` 基线脚本**仅保证全新初始化正确与重复执行不报错**（全部 IF NOT EXISTS / ON CONFLICT 幂等），但 `CREATE TABLE IF NOT EXISTS` 对已存在的旧表会整体跳过——**不会补新列、不会改字段类型、不会删死表与冗余索引**。因此：
+
+- **在已有旧库上重跑 schema/ ≠ 升级**，结构会静默漂移（对账脚本只比对字段名，发现不了）。
+- 开发库、数据可丢 → 直接跑 `ops/reset_db.sql` 一步收敛到基线。
+- 数据要保留 → 先 `pg_dump` 备份，再按 git 历史中的增量提交手工补差异（ALTER 补列/改类型/DROP 死表），最后跑 `node scripts/check_entity_db_fields.js` 对账。
+
 ## 同步约定（重要）
 
 新增/修改表结构时，两处必须同步更新，保证全新初始化和重复执行都幂等安全：

@@ -82,11 +82,31 @@ rsdp:
   dedup:
     # 同款检测：向量相似度阈值（0~1），录入新品与库内产品相似度超过该值时标记"存疑-疑似同款"
     similar-threshold: 0.95
+  # 户型图分析（户型图 → 空间尺寸 → 产品搭配 链路）
+  floor-plan:
+    detect-image-max-edge: 2688
+    max-file-size-mb: 10
+    pdf-render-dpi: 200           # PDF 户型图首页渲染 DPI（P2，与 PDF 导入链路既有默认一致）
+    rules:                        # 尺寸硬规则，可运维调整（P0-B 规则引擎消费）
+      sofa-wall-ratio: 0.75       # 沙发长度 ≤ 沙发墙 × 0.75
+      sofa-tea-min-mm: 350        # 沙发→茶几最小通道
+      sofa-tea-max-mm: 450
+      walkway-min-mm: 600         # 茶几→电视柜最小过人通道
+      tv-cabinet-wall-ratio: 0.8
+      small-living-area-m2: 12    # 小客厅分界
+      small-living-sofa-max-mm: 2200
+      large-living-area-m2: 20
   chromadb:
     base-url: ${CHROMADB_URL:http://localhost:8000}
     collection: rsdp_products
     # 向量维度，需与 embedding 模型输出一致（multimodal-embedding-v1 为 1024）
     dimension: 1024
+  rate-limit:
+    # 公开免登录接口 IP 限流（PublicRateLimitFilter）：防脚本刷付费 AI 额度/灌留资表
+    enabled: ${RSDP_RATE_LIMIT_ENABLED:true}
+    ai-match-permits: ${RSDP_RATE_LIMIT_AI_MATCH:10}   # AI 户型搭配 每 IP 每窗口次数
+    leads-permits: ${RSDP_RATE_LIMIT_LEADS:5}          # 留资提交 每 IP 每窗口次数
+    window-seconds: ${RSDP_RATE_LIMIT_WINDOW_SECONDS:60}
     timeout-seconds: 10
     max-retries: 2
     # ChromaDB Token 认证凭证；留空表示不启用认证

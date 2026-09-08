@@ -22,7 +22,7 @@ TRUNCATE TABLE ai_recognition CASCADE;
 TRUNCATE TABLE image_assets CASCADE;
 TRUNCATE TABLE price_history CASCADE;
 TRUNCATE TABLE rsku_supply CASCADE;
-TRUNCATE TABLE excel_import_price_column CASCADE;
+TRUNCATE TABLE rspu_price_summary CASCADE;
 TRUNCATE TABLE excel_import_row CASCADE;
 TRUNCATE TABLE factory_lead_time_rule CASCADE;
 TRUNCATE TABLE rspu_factory_mapping CASCADE;
