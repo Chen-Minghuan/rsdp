@@ -78,7 +78,9 @@ public class SixDimNormalizationMigration {
             for (Map<String, Object> row : rows) {
                 String rspuId = (String) row.get("rspu_id");
                 String categoryCode = (String) row.get("category_code");
-                String rawTags = (String) row.get("six_dim_tags");
+                Object rawTagsObj = row.get("six_dim_tags");
+                // jsonb 列经 JDBC 读出为 PGobject，toString() 即 JSON 文本
+                String rawTags = rawTagsObj == null ? null : rawTagsObj.toString();
                 if (rawTags == null || rawTags.isBlank()) {
                     continue;
                 }
