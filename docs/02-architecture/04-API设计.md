@@ -91,7 +91,8 @@ POST   /api/v1/products/factory-entry
        #   price?: number (出厂价)
        #   moq?: number (最小起订量)
        #   leadTimeDays?: number (交期天数)
-       # Response: { rspuId, variantId, rskuId, imageIds: string[] }
+       # Response: { rspuId, variantId, rskuId, imageIds: string[], rspuCode: string|null }
+       #           （rspuCode 为发放的 RSPU 业务编码；未传 sizeCode 等发号失败时为 null，录入照常成功）
        # 说明：
        #   - 仅 `FACTORY_ADMIN` 或拥有 `product:create` 权限的用户可调用
        #   - 必须属于 `factoryCode` 指定工厂，否则返回 403
@@ -105,7 +106,8 @@ POST   /api/v1/products/manual-entry
        #                   variantDisplayName, sizeCode?, dimensions?, colorCode?,
        #                   variantMaterialCode, materialMix? }
        #   images: File[] (可选, 第一张为主图, 单张 ≤10MB)
-       # Response: { rspuId, variantId, imageIds: string[] }
+       # Response: { rspuId, variantId, imageIds: string[], rspuCode: string|null }
+       #           （rspuCode 为发放的 RSPU 业务编码；未传 sizeCode 等发号失败时为 null，录入照常成功）
        # 说明：
        #   - 需 `product:create` 权限（不限工厂管理员角色）
        #   - RSPU 创建为 active + 待复核，自动分配 rspu_code 业务编码

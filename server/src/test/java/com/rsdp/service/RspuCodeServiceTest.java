@@ -135,6 +135,47 @@ class RspuCodeServiceTest {
     }
 
     @Test
+    void tryAssignCode_shouldReturnCode_whenAssignSucceeds() {
+        stubDicts();
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setRspuCode(null);
+        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
+        when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(3L);
+
+        String code = rspuCodeService.tryAssignCode("RSPU-001", "FS", "MC", "M");
+
+        assertThat(code).isEqualTo("FS-MC-003-M");
+        assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-003-M");
+    }
+
+    @Test
+    void tryAssignCode_shouldReturnNullAndNotThrow_whenAssignCodeThrowsBusinessException() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setRspuCode(null);
+        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
+
+        // 尺寸码为空 → assignCode 抛 BusinessException，tryAssignCode 容错返回 null 且不外抛
+        String code = rspuCodeService.tryAssignCode("RSPU-001", "FS", "MC", null);
+
+        assertThat(code).isNull();
+        assertThat(rspu.getRspuCode()).isNull();
+    }
+
+    @Test
+    void tryAssignCode_shouldReturnExistingCode_whenAlreadyAssigned() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setRspuCode("FS-MC-001-M");
+        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
+
+        String code = rspuCodeService.tryAssignCode("RSPU-001", "FS", "MC", "M");
+
+        assertThat(code).isEqualTo("FS-MC-001-M");
+    }
+
+    @Test
     void generateNextCode_shouldThrow_WhenSequenceExceedsLimit() {
         stubDicts();
         when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(1000L);

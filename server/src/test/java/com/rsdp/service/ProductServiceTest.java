@@ -448,7 +448,7 @@ class ProductServiceTest {
         assertThat(rspuCaptor.getValue().getPositioningLabel()).isEqualTo("MC");
         assertThat(rspuCaptor.getValue().getProductLevel()).isEqualTo("A");
 
-        verify(rspuCodeService, times(1)).assignCode(anyString(), eq("FS"), eq("MC"), isNull());
+        verify(rspuCodeService, times(1)).tryAssignCode(anyString(), eq("FS"), eq("MC"), isNull());
         // 录入场景必须走 createVariantForEntry（跳过数据权限校验），禁止走 createVariant
         verify(rspuVariantService, times(1)).createVariantForEntry(anyString(), any());
         verify(rspuVariantService, never()).createVariant(anyString(), any());
@@ -497,6 +497,80 @@ class ProductServiceTest {
         assertThatThrownBy(() -> productService.createManualEntry(request, null))
             .isInstanceOf(BusinessException.class);
         verify(rspuMapper, never()).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void createManualEntry_withoutSizeCode_shouldSucceedAndReturnNullRspuCode() throws Exception {
+        // 不传 sizeCode：tryAssignCode 容错返回 null，录入照常成功、响应含 rspuCode=null
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(rspuCodeService.tryAssignCode(anyString(), anyString(), anyString(), isNull())).thenReturn(null);
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-003");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+
+        Map<String, Object> result = productService.createManualEntry(request, null);
+
+        assertThat(result).containsKey("rspuCode");
+        assertThat(result.get("rspuCode")).isNull();
+        assertThat(result.get("message")).isEqualTo("手工录入产品成功");
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void createManualEntry_withSizeCode_shouldReturnRspuCode() throws Exception {
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(rspuCodeService.tryAssignCode(anyString(), eq("FS"), eq("MC"), eq("M"))).thenReturn("FS-MC-001-M");
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-004");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+        request.setSizeCode("m");
+
+        Map<String, Object> result = productService.createManualEntry(request, null);
+
+        assertThat(result.get("rspuCode")).isEqualTo("FS-MC-001-M");
+    }
+
+    @Test
+    void createFactoryEntry_withoutSizeCode_shouldSucceedAndReturnNullRspuCode() throws Exception {
+        // 工厂录入不传 sizeCode：录入照常成功、响应含 rspuCode=null
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(userFactoryService.getFactoryCodesByUsername(anyString())).thenReturn(List.of("A004"));
+        when(rspuCodeService.tryAssignCode(anyString(), anyString(), anyString(), isNull())).thenReturn(null);
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-F02");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+        when(rskuService.createRsku(any())).thenReturn("RSKU-F02");
+
+        com.rsdp.dto.request.FactoryProductEntryRequest request = new com.rsdp.dto.request.FactoryProductEntryRequest();
+        request.setFactoryCode("A004");
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("工厂标准版");
+        request.setVariantMaterialCode("WO");
+        request.setFactoryPrice(new java.math.BigDecimal("999.00"));
+
+        Map<String, Object> result = productService.createFactoryEntry(request, null);
+
+        assertThat(result).containsKey("rspuCode");
+        assertThat(result.get("rspuCode")).isNull();
+        assertThat(result.get("message")).isEqualTo("工厂产品录入成功");
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        verify(rskuService, times(1)).createRsku(any());
     }
 
     @Test

@@ -110,6 +110,31 @@ public class RspuCodeService {
     }
 
     /**
+     * 容错发号：为指定 RSPU 生成并写入业务编码，失败不抛异常。
+     *
+     * <p>内部调用 {@link #assignCode}，捕获 {@link BusinessException} 后记录告警并返回 null，
+     * 供手工录入 / 工厂录入等"尺寸码可选、不调 AI"的创建链路使用：
+     * 缺尺寸码等校验失败时 rspu_code 留空、录入照常成功，后续可经补码链路补发。
+     * {@link #assignCode} 的事务注解含 noRollbackFor = BusinessException，
+     * 捕获后不回滚外层录入事务。</p>
+     *
+     * @param rspuId             RSPU ID
+     * @param categoryCode       品类码
+     * @param styleOrGradeCode   风格/职级码
+     * @param sizeCode           尺寸码（可为空）
+     * @return 发放的编码；返回 null 表示暂无法发号，rspu_code 留空
+     */
+    public String tryAssignCode(String rspuId, String categoryCode, String styleOrGradeCode, String sizeCode) {
+        try {
+            return assignCode(rspuId, categoryCode, styleOrGradeCode, sizeCode);
+        } catch (BusinessException e) {
+            log.warn("RSPU 业务编码暂无法发号，留空待补发，rspuId={}，categoryCode={}，原因={}",
+                rspuId, categoryCode, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 根据 AI 识别结果推断尺寸码。
      *
      * <p>优先使用 OCR 解析出的长宽高最大值，按阈值映射为 S/M/L/X；

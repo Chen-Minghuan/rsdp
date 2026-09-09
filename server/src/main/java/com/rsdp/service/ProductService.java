@@ -236,7 +236,7 @@ public class ProductService {
      *
      * @param request 工厂录入请求
      * @param images  产品图片，可选
-     * @return 创建结果，包含 rspuId、variantId、rskuId
+     * @return 创建结果，包含 rspuId、variantId、rskuId、rspuCode（发号失败为 null）
      * @throws IOException 图片存储失败
      */
     @Transactional
@@ -249,7 +249,7 @@ public class ProductService {
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), request.getSixDimTags(),
             request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs(),
             request.getProductName());
-        assignRspuCode(rspu, request.getSizeCode());
+        String rspuCode = assignRspuCode(rspu, request.getSizeCode());
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
             request.getSizeCode(), request.getDimensions(), request.getColorCode(),
@@ -275,13 +275,14 @@ public class ProductService {
         rskuRequest.setAutoExtendCapability(request.getAutoExtendCapability());
         String rskuId = rskuService.createRsku(rskuRequest);
 
-        return Map.of(
-            "rspuId", rspu.getRspuId(),
-            "variantId", variantId,
-            "rskuId", rskuId,
-            "imageIds", imageIds,
-            "message", "工厂产品录入成功"
-        );
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("rspuId", rspu.getRspuId());
+        result.put("variantId", variantId);
+        result.put("rskuId", rskuId);
+        result.put("imageIds", imageIds);
+        result.put("rspuCode", rspuCode);
+        result.put("message", "工厂产品录入成功");
+        return result;
     }
 
     /**
@@ -292,7 +293,7 @@ public class ProductService {
      *
      * @param request 手工录入请求
      * @param images  产品图片，可选
-     * @return 创建结果，包含 rspuId、variantId
+     * @return 创建结果，包含 rspuId、variantId、rspuCode（发号失败为 null）
      * @throws IOException 图片存储失败
      */
     @Transactional
@@ -304,19 +305,20 @@ public class ProductService {
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), null,
             request.getProductLevel(), request.getWarrantyYears(), null,
             request.getProductName());
-        assignRspuCode(rspu, request.getSizeCode());
+        String rspuCode = assignRspuCode(rspu, request.getSizeCode());
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
             request.getSizeCode(), request.getDimensions(), request.getColorCode(),
             request.getVariantMaterialCode(), request.getMaterialMix());
         List<String> imageIds = storeEntryImages(rspu.getRspuId(), variantId, images);
 
-        return Map.of(
-            "rspuId", rspu.getRspuId(),
-            "variantId", variantId,
-            "imageIds", imageIds,
-            "message", "手工录入产品成功"
-        );
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("rspuId", rspu.getRspuId());
+        result.put("variantId", variantId);
+        result.put("imageIds", imageIds);
+        result.put("rspuCode", rspuCode);
+        result.put("message", "手工录入产品成功");
+        return result;
     }
 
     /**
@@ -353,13 +355,17 @@ public class ProductService {
     }
 
     /**
-     * 生成并写入 RSPU 业务编码（rspu_code）。
+     * 容错生成并写入 RSPU 业务编码（rspu_code）。
+     *
+     * <p>手工/工厂录入链路不调 AI，尺寸码可选：发号失败（如未传尺寸码）仅留空不中断录入。</p>
+     *
+     * @return 发放的编码；null 表示发号失败，rspu_code 留空
      */
-    private void assignRspuCode(RspuMaster rspu, String rawSizeCode) {
+    private String assignRspuCode(RspuMaster rspu, String rawSizeCode) {
         String sizeCode = StringUtils.hasText(rawSizeCode)
             ? rawSizeCode.trim().toUpperCase()
             : null;
-        rspuCodeService.assignCode(rspu.getRspuId(), rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+        return rspuCodeService.tryAssignCode(rspu.getRspuId(), rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
     }
 
     /**
