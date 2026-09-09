@@ -133,9 +133,7 @@ public class ProductService {
                 }
                 ImageAssets duplicate = imageAssetsMapper.selectByContentHash(hash);
                 if (duplicate != null) {
-                    throw new BusinessException("图片「" + images.get(i).getOriginalFilename()
-                        + "」已录入过，对应产品：" + describeDuplicateProduct(duplicate)
-                        + "。如确认是不同产品，请使用「仍然导入」");
+                    throw new BusinessException(buildDuplicateEntryMessage(images.get(i).getOriginalFilename(), duplicate));
                 }
             }
         }
@@ -679,6 +677,25 @@ public class ProductService {
                 }
             }
         });
+    }
+
+    /**
+     * 构造图片查重命中的报错文案。
+     *
+     * <p>跨数据归属脱敏口径：非平台员工（DESIGNER/FACTORY_ADMIN 等）仅返回不含已有产品
+     * 品名/编码的中性表述，避免泄露他厂产品信息；平台员工（ADMIN/EDITOR）保留带定位信息
+     * （品名 + 业务编码/RSPU ID）的文案，便于排查重复。</p>
+     *
+     * @param filename  本次上传的文件名（用户自己的文件，可保留）
+     * @param duplicate 哈希命中的图片资产
+     * @return 报错文案
+     */
+    private String buildDuplicateEntryMessage(String filename, ImageAssets duplicate) {
+        if (!SecurityOperatorContext.isPlatformStaff()) {
+            return "图片「" + filename + "」已录入过系统，如确属新品请使用「仍然导入」";
+        }
+        return "图片「" + filename + "」已录入过，对应产品：" + describeDuplicateProduct(duplicate)
+            + "。如确认是不同产品，请使用「仍然导入」";
     }
 
     /**

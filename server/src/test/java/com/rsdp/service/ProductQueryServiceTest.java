@@ -949,6 +949,75 @@ class ProductQueryServiceTest {
     }
 
     @Test
+    void listProducts_viewModeFull_withoutViewFullCatalog_shouldFallbackToOwn() {
+        // 口径（决策点①）：未开启 view_full_catalog 的工厂账号请求 full，服务端强制回退 own 视图
+        authenticateFactoryAdmin("factory");
+        when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
+
+        SysUser user = new SysUser();
+        user.setUsername("factory");
+        user.setViewFullCatalog(false);
+        when(sysUserMapper.selectByUsername("factory")).thenReturn(user);
+
+        ProductListRequest request = new ProductListRequest();
+        request.setViewMode("full");
+        request.setSize(10L);
+
+        when(rskuSupplyMapper.selectObjs(any())).thenReturn(List.of("RSPU-OWN01"));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-OWN01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("MC");
+        rspu.setReviewStatus("待复核");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows()).hasSize(1);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        // 回退 own：按本厂 RSKU 的 rspu_id 过滤，且不附加全库能力覆盖条件、不强制已确认复核状态
+        verify(rskuSupplyMapper, times(1)).selectObjs(any());
+        assertThat(sqlSegment).contains("rspu_id");
+        assertThat(sqlSegment).doesNotContain("factory_product_capability");
+        assertThat(sqlSegment).doesNotContain("review_status");
+    }
+
+    @Test
+    void listProducts_viewModeFull_forPlatformStaff_shouldKeepFullCatalog() {
+        // 平台员工（ADMIN）请求 full 不受 view_full_catalog 开关影响，始终保留全库视图
+        ProductListRequest request = new ProductListRequest();
+        request.setViewMode("full");
+        request.setSize(10L);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setCategoryCode("FS");
+        rspu.setReviewStatus("已确认");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows()).hasSize(1);
+        // 平台员工不回退 own：不查询自有 RSKU 候选
+        verify(rskuSupplyMapper, never()).selectObjs(any());
+    }
+
+    @Test
     void updateProduct_nonOwnerFactoryAdmin_shouldThrow() {
         authenticateFactoryAdmin("factory");
 

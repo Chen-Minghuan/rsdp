@@ -105,7 +105,8 @@ public class ProductQueryService {
      * <ul>
      *   <li>{@code viewMode=own}：仅返回当前用户关联工厂已录入 RSKU 的产品。</li>
      *   <li>{@code viewMode=full}：在 {@code view_full_catalog=true} 时返回全库中
-     *       未被本工厂能力覆盖的产品（始终保留自己已有的产品）。</li>
+     *       未被本工厂能力覆盖的产品（始终保留自己已有的产品）；未开启该开关的工厂账号
+     *       请求 {@code full} 时服务端强制回退为 {@code own} 视图（默认严格隔离口径）。</li>
      * </ul>
      *
      * @param request 查询条件
@@ -118,6 +119,11 @@ public class ProductQueryService {
         List<String> userFactoryCodes = resolveUserFactoryCodes(request.getFactoryCode());
         String viewMode = resolveViewMode(request.getViewMode());
         boolean isFullView = "full".equals(viewMode) && isFullViewEligible(userFactoryCodes);
+        if ("full".equals(viewMode) && !isFullView && SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
+            // 口径（决策点①）：默认严格隔离——未开启 view_full_catalog 的工厂账号忽略
+            // viewMode=full，服务端强制回退 own 视图，避免无任何归属过滤看到全库
+            viewMode = "own";
+        }
 
         QueryWrapper<RspuMaster> wrapper = buildListWrapper(request, viewMode);
 
