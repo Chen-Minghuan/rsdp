@@ -210,6 +210,8 @@ public class ProductSubjectCropService {
             primary.setFormat("jpg");
             primary.setFileSize((long) cropped.length);
             fillDimensions(primary, cropped);
+            // 内容版本递增：主图内容已变更，防旧向量（基于裁剪前内容编码）回写覆盖
+            primary.setContentRevision(primary.getContentRevision() == null ? 2L : primary.getContentRevision() + 1);
             imageAssetsMapper.updateById(primary);
 
             log.info("主图已替换为 AI 裁剪图，imageId={}，rspuId={}", primaryImageId, rspuId);

@@ -207,6 +207,8 @@ class ProductSubjectCropServiceTest {
         assertThat(primary.getStoragePath()).isEqualTo("images/IMG-1.jpg");
         assertThat(primary.getFormat()).isEqualTo("jpg");
         assertThat(primary.getWidth()).isNotNull();
+        // 内容版本递增（原值 null 按 1 处理 → 2），防旧向量回写
+        assertThat(primary.getContentRevision()).isEqualTo(2L);
         verify(imageAssetsMapper).updateById(primary);
         // 原图文件不删除
         verify(storageService, never()).delete(anyString());
@@ -222,12 +224,15 @@ class ProductSubjectCropServiceTest {
         primary.setImageId("IMG-1");
         primary.setRspuId("RSPU-1");
         primary.setStoragePath("images/IMG-1.png");
+        primary.setContentRevision(5L);
         when(imageAssetsMapper.selectById("IMG-1")).thenReturn(primary);
 
         Optional<byte[]> result = cropService.cropAndReplacePrimary(
             imageBytes, "RSPU-1", null, "IMG-1", "images/IMG-1.png");
 
         assertThat(result).isPresent();
+        // 内容版本在原有值上递增（5 → 6）
+        assertThat(primary.getContentRevision()).isEqualTo(6L);
         verify(storageService).delete("images/IMG-1.png");
         verify(imageAssetsMapper, never()).insert(any(ImageAssets.class));
     }

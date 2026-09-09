@@ -96,11 +96,6 @@ rsdp:
       small-living-area-m2: 12    # 小客厅分界
       small-living-sofa-max-mm: 2200
       large-living-area-m2: 20
-  chromadb:
-    base-url: ${CHROMADB_URL:http://localhost:8000}
-    collection: rsdp_products
-    # 向量维度，需与 embedding 模型输出一致（multimodal-embedding-v1 为 1024）
-    dimension: 1024
   rate-limit:
     # 公开免登录接口 IP 限流（PublicRateLimitFilter）：防脚本刷付费 AI 额度/灌留资表
     enabled: ${RSDP_RATE_LIMIT_ENABLED:true}
@@ -109,8 +104,6 @@ rsdp:
     window-seconds: ${RSDP_RATE_LIMIT_WINDOW_SECONDS:60}
     timeout-seconds: 10
     max-retries: 2
-    # ChromaDB Token 认证凭证；留空表示不启用认证
-    auth-token: ${CHROMADB_AUTH_TOKEN:${CHROMA_AUTH_CREDENTIALS:}}
   encryption:
     # Base64 编码的 32 字节 AES-256 密钥，生产环境必须通过 RSDP_ENCRYPTION_KEY 注入
     key: ${RSDP_ENCRYPTION_KEY:}

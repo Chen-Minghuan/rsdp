@@ -17,6 +17,7 @@ DROP TABLE IF EXISTS style_element CASCADE;
 DROP TABLE IF EXISTS style_matching_formula CASCADE;
 DROP TABLE IF EXISTS style_case CASCADE;
 DROP TABLE IF EXISTS ai_recognition CASCADE;
+DROP TABLE IF EXISTS product_image_embedding CASCADE;
 DROP TABLE IF EXISTS image_assets CASCADE;
 DROP TABLE IF EXISTS price_history CASCADE;
 DROP TABLE IF EXISTS rspu_price_summary CASCADE;
@@ -458,6 +459,7 @@ CREATE TABLE IF NOT EXISTS image_assets (
     ai_processed BOOLEAN DEFAULT FALSE,
     quality_score DECIMAL(5, 4),
     content_hash VARCHAR(64),
+    content_revision BIGINT NOT NULL DEFAULT 1,
     uploaded_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMPTZ,
@@ -861,6 +863,21 @@ CREATE TABLE IF NOT EXISTS rspu_price_summary (
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
 CREATE INDEX IF NOT EXISTS idx_rspu_price_summary_min ON rspu_price_summary(min_factory_price);
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 图片向量表（P0）：与 database/schema/04_image_ai.sql 保持同步
+CREATE TABLE IF NOT EXISTS product_image_embedding (
+    image_id VARCHAR(64) PRIMARY KEY REFERENCES image_assets(image_id) ON DELETE CASCADE,
+    profile_id VARCHAR(64) NOT NULL,
+    source_revision BIGINT NOT NULL CHECK (source_revision > 0),
+    input_hash VARCHAR(64) NOT NULL,
+    embedding vector(1024) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_product_image_embedding_hnsw
+    ON product_image_embedding USING hnsw (embedding vector_cosine_ops);
 
 CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
 CREATE INDEX IF NOT EXISTS idx_image_variant ON image_assets(variant_id, image_type);

@@ -7,11 +7,11 @@ help: ## 显示可用命令
 	@echo "RSDP 可用命令："
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-infra: ## 启动基础设施（PostgreSQL + ChromaDB + Redis + MinIO），不含后端/前端/AI
-	docker compose -f deploy/docker-compose.yml up -d postgres chromadb redis minio
+infra: ## 启动基础设施（PostgreSQL + Redis + MinIO），不含后端/前端/AI
+	docker compose -f deploy/docker-compose.yml up -d postgres redis minio
 
 infra-ai: ## 启动包含 Ollama 的基础设施（需要 NVIDIA GPU）
-	docker compose -f deploy/docker-compose.yml up -d postgres ollama chromadb redis minio
+	docker compose -f deploy/docker-compose.yml up -d postgres ollama redis minio
 
 init-db: ## 初始化 PostgreSQL 数据库（需先启动 postgres；schema/ 基线 + 字典种子按字母序逐文件执行）
 	@for f in $$(docker exec rsdp-postgres ls /docker-entrypoint-initdb.d/*.sql); do \

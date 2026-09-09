@@ -1,9 +1,12 @@
 -- ============================================================
 -- RSDP 基线 DDL · 04 图片与AI识别域（04_image_ai.sql）
--- 包含表：image_assets, ai_recognition, async_task
+-- 包含表：image_assets, product_image_embedding, ai_recognition, async_task
 -- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
 -- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
 -- ============================================================
+-- pgvector 扩展：图片向量存储（P0 向量库收口，随本域最先建表前安装）
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- 图片资源表
 CREATE TABLE IF NOT EXISTS image_assets (
     image_id VARCHAR(64) PRIMARY KEY,
@@ -21,6 +24,7 @@ CREATE TABLE IF NOT EXISTS image_assets (
     ai_processed BOOLEAN DEFAULT FALSE,
     quality_score DECIMAL(5, 4),
     content_hash VARCHAR(64),                        -- 图片内容 SHA-256（录入查重，V31）
+    content_revision BIGINT NOT NULL DEFAULT 1,      -- 图片内容版本：替换/裁剪覆盖时递增，向量按版本防旧写（P0）
     uploaded_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMPTZ,
@@ -28,6 +32,20 @@ CREATE TABLE IF NOT EXISTS image_assets (
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
 );
+
+-- 图片向量表（P0）：一张图片一条当前向量，编码配置标识见 ProductVectorProfile（模型+维度+预处理+距离）
+-- 商品归属经 image_assets 关联，不冗余可变业务事实；图片物理删除级联清向量
+CREATE TABLE IF NOT EXISTS product_image_embedding (
+    image_id VARCHAR(64) PRIMARY KEY REFERENCES image_assets(image_id) ON DELETE CASCADE,
+    profile_id VARCHAR(64) NOT NULL,
+    source_revision BIGINT NOT NULL CHECK (source_revision > 0),
+    input_hash VARCHAR(64) NOT NULL,                 -- 实际送入 embedding API 的字节 SHA-256（缩放后）
+    embedding vector(1024) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_product_image_embedding_hnsw
+    ON product_image_embedding USING hnsw (embedding vector_cosine_ops);
 
 -- AI 识别记录表
 CREATE TABLE IF NOT EXISTS ai_recognition (

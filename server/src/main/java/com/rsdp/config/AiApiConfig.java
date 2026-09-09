@@ -23,12 +23,6 @@ public class AiApiConfig {
     @Value("${rsdp.ai.embedding-base-url}")
     private String embeddingBaseUrl;
 
-    @Value("${rsdp.chromadb.base-url}")
-    private String chromaBaseUrl;
-
-    @Value("${rsdp.chromadb.auth-token:}")
-    private String chromaAuthToken;
-
     @Value("${rsdp.ai.timeout-seconds:60}")
     private int aiTimeoutSeconds;
 
@@ -40,12 +34,6 @@ public class AiApiConfig {
 
     @Value("${rsdp.ai.embedding-max-retries:2}")
     private int embeddingMaxRetries;
-
-    @Value("${rsdp.chromadb.timeout-seconds:10}")
-    private int chromaTimeoutSeconds;
-
-    @Value("${rsdp.chromadb.max-retries:2}")
-    private int chromaMaxRetries;
 
     @Value("${rsdp.ai.mock.enabled:false}")
     private boolean mockEnabled;
@@ -91,18 +79,6 @@ public class AiApiConfig {
             .requestFactory(requestFactory(embeddingTimeoutSeconds))
             .requestInterceptor(new RetryInterceptor(embeddingMaxRetries))
             .build();
-    }
-
-    @Bean
-    public RestClient chromaRestClient() {
-        RestClient.Builder builder = RestClient.builder()
-            .baseUrl(chromaBaseUrl)
-            .requestFactory(requestFactory(chromaTimeoutSeconds))
-            .requestInterceptor(new RetryInterceptor(chromaMaxRetries));
-        if (chromaAuthToken != null && !chromaAuthToken.isBlank()) {
-            builder.defaultHeader("Authorization", "Bearer " + chromaAuthToken);
-        }
-        return builder.build();
     }
 
     private ClientHttpRequestFactory requestFactory(int timeoutSeconds) {

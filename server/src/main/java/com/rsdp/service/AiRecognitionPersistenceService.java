@@ -52,16 +52,6 @@ public class AiRecognitionPersistenceService {
     private final ObjectMapper objectMapper;
 
     /**
-     * 查询 RSPU 主表记录（事务外读，仅用于向量 metadata 组装）。
-     *
-     * @param rspuId RSPU ID
-     * @return RSPU 记录，不存在时返回 null
-     */
-    public RspuMaster getRspu(String rspuId) {
-        return rspuMapper.selectById(rspuId);
-    }
-
-    /**
      * 在独立事务中保存 AI 识别成功结果。
      *
      * @param taskId         任务 ID
@@ -71,13 +61,12 @@ public class AiRecognitionPersistenceService {
      * @param modelName      模型名称
      * @param labels         AI 识别标签
      * @param processingTime 处理耗时（毫秒）
-     * @param embedding      图片 embedding（可为空）
      * @return 最终生效的产品名称（OCR 品名或品类回退名；无则 null）
      */
     @Transactional
     public String saveSuccess(String taskId, String rspuId, String imageId,
                               String recognitionId, String modelName,
-                              AiLabels labels, int processingTime, float[] embedding) {
+                              AiLabels labels, int processingTime) {
         String styleCode = dictResolverService.resolveCodeByName("style", labels.getStyle());
         List<String> secondaryStyleCodes = dictResolverService.resolveCodesByNames("style", labels.getSecondaryStyles());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
@@ -91,7 +80,7 @@ public class AiRecognitionPersistenceService {
         List<String> materialCodes = dictResolverService.resolveCodesByNames("material", materialCandidates);
         List<String> fabricCodes = dictResolverService.resolveCodesByNames("fabric", labels.getFabricTags());
 
-        String productName = updateRspu(rspuId, labels, styleCode, materialCodes, fabricCodes, sceneCodes, embedding, modelName);
+        String productName = updateRspu(rspuId, labels, styleCode, materialCodes, fabricCodes, sceneCodes, modelName);
         refreshStyleAssociations(rspuId, styleCode, secondaryStyleCodes);
         refreshSceneAssociations(rspuId, sceneCodes);
         markImageProcessed(imageId);
@@ -118,7 +107,7 @@ public class AiRecognitionPersistenceService {
 
     private String updateRspu(String rspuId, AiLabels labels, String styleCode,
                             List<String> materialCodes, List<String> fabricCodes, List<String> sceneCodes,
-                            float[] embedding, String modelName) {
+                            String modelName) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
             log.warn("保存识别结果时 RSPU 不存在，rspuId={}", rspuId);
@@ -165,10 +154,8 @@ public class AiRecognitionPersistenceService {
         if (isEmptyJson(rspu.getSceneTags(), "[]")) {
             rspu.setSceneTags(toJson(sceneCodes));
         }
-        // 向量与置信度是 AI 识别产物（无人工来源），始终更新
-        if (embedding != null) {
-            rspu.setStyleVector(toJson(embedding));
-        }
+        // 置信度是 AI 识别产物（无人工来源），始终更新；
+        // 图片向量不再写 style_vector（已由 pgvector 向量存储接管，见 ProductVectorStore）
         rspu.setAestheticsConfidence(labels.getConfidence());
         rspu.setSourceAgentVersion(modelName);
         rspu.setStatus("active");

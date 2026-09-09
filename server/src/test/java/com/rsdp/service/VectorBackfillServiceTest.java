@@ -2,17 +2,18 @@ package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.service.vector.ExistingVector;
+import com.rsdp.service.vector.ProductVectorProfile;
+import com.rsdp.service.vector.ProductVectorStore;
+import com.rsdp.service.vector.VectorStaleImageException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -20,21 +21,22 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link VectorBackfillService} 单元测试。
+ * {@link VectorBackfillService} 单元测试（pgvector 逐图片重建口径）。
  */
 @ExtendWith(MockitoExtension.class)
 class VectorBackfillServiceTest {
@@ -49,7 +51,7 @@ class VectorBackfillServiceTest {
     private EmbeddingService embeddingService;
 
     @Mock
-    private ChromaDbClient chromaDbClient;
+    private ProductVectorStore productVectorStore;
 
     @Mock
     private StorageService storageService;
@@ -57,184 +59,198 @@ class VectorBackfillServiceTest {
     @InjectMocks
     private VectorBackfillService vectorBackfillService;
 
-    private ObjectMapper objectMapper = new ObjectMapper();
+    private ImageAssets image;
+    private RspuMaster rspu;
 
     @BeforeEach
-    void setUp() throws Exception {
-        java.lang.reflect.Field field = VectorBackfillService.class.getDeclaredField("objectMapper");
-        field.setAccessible(true);
-        field.set(vectorBackfillService, objectMapper);
-    }
-
-    @Test
-    void backfill_shouldUpdatePgAfterChromaDbSuccess() throws Exception {
-        // Given
-        ImageAssets image = new ImageAssets();
+    void setUp() {
+        image = new ImageAssets();
         image.setImageId("IMG-001");
         image.setRspuId("RSPU-001");
         image.setStoragePath("images/IMG-001.jpg");
         image.setAiProcessed(true);
 
-        Page<ImageAssets> page = new Page<>(1, 100);
-        page.setRecords(List.of(image));
-        when(imageAssetsMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
-
-        RspuMaster rspu = new RspuMaster();
+        rspu = new RspuMaster();
         rspu.setRspuId("RSPU-001");
         rspu.setStatus("active");
-        doReturn(List.of(rspu)).when(rspuMapper).selectBatchIds(anyCollection());
+    }
 
-        when(storageService.get("images/IMG-001.jpg")).thenReturn(new ByteArrayInputStream("fake".getBytes()));
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f, 0.3f});
+    /**
+     * 正常路径：读取源图 → 统一编码 → upsert 向量，计入成功数。
+     */
+    @Test
+    void backfill_shouldEncodeAndUpsert() throws Exception {
+        mockPage(List.of(image));
+        mockRspuMap(rspu);
+        when(productVectorStore.findExisting(anyList())).thenReturn(Map.of());
+        when(storageService.get("images/IMG-001.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake".getBytes()));
+        when(embeddingService.embedImageWithHash(any()))
+            .thenReturn(new EmbeddingService.ImageEmbedding(new float[]{0.1f, 0.2f, 0.3f}, "hash-1"));
 
-        // When
         VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
 
-        // Then
         assertThat(result.successCount()).isEqualTo(1);
         assertThat(result.failedCount()).isEqualTo(0);
-
-        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
-        verify(rspuMapper).updateById(rspuCaptor.capture());
-        assertThat(rspuCaptor.getValue().getStyleVector()).isEqualTo("[0.1,0.2,0.3]");
-
-        ArgumentCaptor<List<Map<String, Object>>> metadataCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chromaDbClient).upsert(eq(List.of("IMG-001")), any(), metadataCaptor.capture(), eq(null));
-        Map<String, Object> metadata = metadataCaptor.getValue().get(0);
-        assertThat(metadata).containsEntry("rspu_id", "RSPU-001");
-        assertThat(metadata).containsEntry("status", "active");
-        assertThat(metadata).containsKey("category_code");
-        assertThat(metadata).containsKey("positioning_label");
-        assertThat(metadata).containsKey("color_primary_name");
-        assertThat(metadata).containsKey("material_tags");
-        assertThat(metadata).containsKey("scene_tags");
-        assertThat(metadata).containsEntry("image_size", 0L);
+        verify(productVectorStore).upsert(eq("IMG-001"), eq(1L), eq("hash-1"), any(float[].class));
     }
 
+    /**
+     * 已存在当前配置同内容版本的向量：幂等跳过，不计成功/失败，不重新编码。
+     */
     @Test
-    void backfill_shouldNotUpdatePgWhenChromaDbFails() throws Exception {
-        // Given
-        ImageAssets image = new ImageAssets();
-        image.setImageId("IMG-001");
-        image.setRspuId("RSPU-001");
-        image.setStoragePath("images/IMG-001.jpg");
-        image.setAiProcessed(true);
+    void backfill_shouldSkipWhenProfileAndRevisionMatch() throws Exception {
+        image.setContentRevision(3L);
+        mockPage(List.of(image));
+        mockRspuMap(rspu);
+        when(productVectorStore.findExisting(anyList()))
+            .thenReturn(Map.of("IMG-001",
+                new ExistingVector("IMG-001", ProductVectorProfile.CURRENT, 3L)));
 
-        Page<ImageAssets> page = new Page<>(1, 100);
-        page.setRecords(List.of(image));
-        when(imageAssetsMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-001");
-        rspu.setStatus("active");
-        doReturn(List.of(rspu)).when(rspuMapper).selectBatchIds(anyCollection());
-
-        when(storageService.get("images/IMG-001.jpg")).thenReturn(new ByteArrayInputStream("fake".getBytes()));
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f, 0.3f});
-        doThrow(new RuntimeException("ChromaDB 异常")).when(chromaDbClient).upsert(any(), any(), any(), any());
-
-        // When
         VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
 
-        // Then
-        assertThat(result.successCount()).isEqualTo(0);
-        assertThat(result.failedCount()).isEqualTo(1);
-        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
-    }
-
-    @Test
-    void backfill_shouldSkipWhenStyleVectorAlreadyExists() throws Exception {
-        // Given
-        ImageAssets image = new ImageAssets();
-        image.setImageId("IMG-001");
-        image.setRspuId("RSPU-001");
-        image.setStoragePath("images/IMG-001.jpg");
-        image.setAiProcessed(true);
-
-        Page<ImageAssets> page = new Page<>(1, 100);
-        page.setRecords(List.of(image));
-        when(imageAssetsMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-001");
-        rspu.setStyleVector("[0.9,0.8,0.7]");
-        doReturn(List.of(rspu)).when(rspuMapper).selectBatchIds(anyCollection());
-
-        // ChromaDB 中向量真实存在，才跳过
-        when(chromaDbClient.getExistingIds(List.of("IMG-001"))).thenReturn(Set.of("IMG-001"));
-
-        // When
-        VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
-
-        // Then
         assertThat(result.successCount()).isEqualTo(0);
         assertThat(result.failedCount()).isEqualTo(0);
-        verify(embeddingService, never()).embedImage(any());
-        verify(chromaDbClient, never()).upsert(any(), any(), any(), any());
-        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+        verify(embeddingService, never()).embedImageWithHash(any());
+        verify(productVectorStore, never()).upsert(any(), eq(3L), any(), any());
     }
 
+    /**
+     * 编码配置不匹配：重新编码并覆盖写入。
+     */
     @Test
-    void backfill_shouldRepairWhenPgHasVectorButChromaMissing() throws Exception {
-        // Given：PG 有向量但 ChromaDB 缺失（死区记录），应复用存量向量补偿回填
-        ImageAssets image = new ImageAssets();
-        image.setImageId("IMG-001");
-        image.setRspuId("RSPU-001");
-        image.setStoragePath("images/IMG-001.jpg");
-        image.setAiProcessed(true);
+    void backfill_shouldReencodeWhenProfileMismatch() throws Exception {
+        image.setContentRevision(3L);
+        mockPage(List.of(image));
+        mockRspuMap(rspu);
+        when(productVectorStore.findExisting(anyList()))
+            .thenReturn(Map.of("IMG-001", new ExistingVector("IMG-001", "old-profile", 3L)));
+        when(storageService.get("images/IMG-001.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake".getBytes()));
+        when(embeddingService.embedImageWithHash(any()))
+            .thenReturn(new EmbeddingService.ImageEmbedding(new float[]{0.1f}, "hash-2"));
 
-        Page<ImageAssets> page = new Page<>(1, 100);
-        page.setRecords(List.of(image));
-        when(imageAssetsMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-001");
-        rspu.setStyleVector("[0.9,0.8,0.7]");
-        doReturn(List.of(rspu)).when(rspuMapper).selectBatchIds(anyCollection());
-
-        when(chromaDbClient.getExistingIds(List.of("IMG-001"))).thenReturn(Set.of());
-
-        // When
         VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
 
-        // Then：补偿 upsert 成功，不重新调用 embedding API，也不重复写 PG
         assertThat(result.successCount()).isEqualTo(1);
-        assertThat(result.failedCount()).isEqualTo(0);
-        verify(embeddingService, never()).embedImage(any());
-        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
-
-        ArgumentCaptor<List<float[]>> embeddingCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chromaDbClient).upsert(eq(List.of("IMG-001")), embeddingCaptor.capture(), any(), eq(null));
-        assertThat(embeddingCaptor.getValue().get(0)).containsExactly(0.9f, 0.8f, 0.7f);
+        verify(productVectorStore).upsert(eq("IMG-001"), eq(3L), eq("hash-2"), any(float[].class));
     }
 
+    /**
+     * 内容版本不匹配（图片已更新）：重新编码并写入新版本向量。
+     */
     @Test
-    void backfill_shouldCompensateDeleteChromaWhenPgUpdateFails() throws Exception {
-        // Given：ChromaDB 写入成功但 PG 更新失败，应补偿删除 ChromaDB 向量
-        ImageAssets image = new ImageAssets();
-        image.setImageId("IMG-001");
-        image.setRspuId("RSPU-001");
-        image.setStoragePath("images/IMG-001.jpg");
-        image.setAiProcessed(true);
+    void backfill_shouldReencodeWhenRevisionMismatch() throws Exception {
+        image.setContentRevision(4L);
+        mockPage(List.of(image));
+        mockRspuMap(rspu);
+        when(productVectorStore.findExisting(anyList()))
+            .thenReturn(Map.of("IMG-001",
+                new ExistingVector("IMG-001", ProductVectorProfile.CURRENT, 3L)));
+        when(storageService.get("images/IMG-001.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake".getBytes()));
+        when(embeddingService.embedImageWithHash(any()))
+            .thenReturn(new EmbeddingService.ImageEmbedding(new float[]{0.1f}, "hash-3"));
 
-        Page<ImageAssets> page = new Page<>(1, 100);
-        page.setRecords(List.of(image));
-        when(imageAssetsMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-001");
-        doReturn(List.of(rspu)).when(rspuMapper).selectBatchIds(anyCollection());
-
-        when(storageService.get("images/IMG-001.jpg")).thenReturn(new ByteArrayInputStream("fake".getBytes()));
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f, 0.3f});
-        doThrow(new RuntimeException("PG 异常")).when(rspuMapper).updateById(any(RspuMaster.class));
-
-        // When
         VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
 
-        // Then
+        assertThat(result.successCount()).isEqualTo(1);
+        verify(productVectorStore).upsert(eq("IMG-001"), eq(4L), eq("hash-3"), any(float[].class));
+    }
+
+    /**
+     * 编码期间图片被更新/删除（VectorStaleImageException）：跳过，不计失败。
+     */
+    @Test
+    void backfill_shouldSkipWhenImageStale() throws Exception {
+        mockPage(List.of(image));
+        mockRspuMap(rspu);
+        when(productVectorStore.findExisting(anyList())).thenReturn(Map.of());
+        when(storageService.get("images/IMG-001.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake".getBytes()));
+        when(embeddingService.embedImageWithHash(any()))
+            .thenReturn(new EmbeddingService.ImageEmbedding(new float[]{0.1f}, "hash-4"));
+        doThrow(new VectorStaleImageException("图片已更新"))
+            .when(productVectorStore).upsert(any(), anyLong(), any(), any());
+
+        VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
+
+        assertThat(result.successCount()).isEqualTo(0);
+        assertThat(result.failedCount()).isEqualTo(0);
+    }
+
+    /**
+     * 编码/读取异常：计入失败数。
+     */
+    @Test
+    void backfill_shouldCountFailedWhenEmbedThrows() throws Exception {
+        mockPage(List.of(image));
+        mockRspuMap(rspu);
+        when(productVectorStore.findExisting(anyList())).thenReturn(Map.of());
+        when(storageService.get("images/IMG-001.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake".getBytes()));
+        when(embeddingService.embedImageWithHash(any()))
+            .thenThrow(new RuntimeException("Embedding API 异常"));
+
+        VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
+
         assertThat(result.successCount()).isEqualTo(0);
         assertThat(result.failedCount()).isEqualTo(1);
-        verify(chromaDbClient).delete(List.of("IMG-001"));
+        verify(productVectorStore, never()).upsert(any(), anyLong(), any(), any());
+    }
+
+    /**
+     * 边界：batchSize {@code <=0} 或 {@code >1000} 归一为 100（归一后才会发起扫描）。
+     */
+    @Test
+    void backfill_shouldNormalizeInvalidBatchSize() throws Exception {
+        mockPage(List.of(image));
+        mockRspuMap(rspu);
+        when(productVectorStore.findExisting(anyList())).thenReturn(Map.of());
+        when(storageService.get("images/IMG-001.jpg"))
+            .thenReturn(new ByteArrayInputStream("fake".getBytes()));
+        when(embeddingService.embedImageWithHash(any()))
+            .thenReturn(new EmbeddingService.ImageEmbedding(new float[]{0.1f}, "hash-5"));
+
+        VectorBackfillService.BackfillResult zero = vectorBackfillService.backfill(0);
+        assertThat(zero.successCount()).isEqualTo(1);
+        verify(imageAssetsMapper, org.mockito.Mockito.times(1))
+            .selectPage(any(Page.class), any(QueryWrapper.class));
+
+        VectorBackfillService.BackfillResult oversized = vectorBackfillService.backfill(1001);
+        assertThat(oversized.successCount()).isEqualTo(1);
+        verify(imageAssetsMapper, org.mockito.Mockito.times(2))
+            .selectPage(any(Page.class), any(QueryWrapper.class));
+    }
+
+    /**
+     * 所属 RSPU 已删除（rspuMap 中缺失）：跳过，不计成功/失败。
+     */
+    @Test
+    void backfill_shouldSkipWhenRspuMissing() throws Exception {
+        mockPage(List.of(image));
+        mockRspuMap(); // 空 RSPU 列表
+        when(productVectorStore.findExisting(anyList())).thenReturn(Map.of());
+
+        VectorBackfillService.BackfillResult result = vectorBackfillService.backfill(100);
+
+        assertThat(result.successCount()).isEqualTo(0);
+        assertThat(result.failedCount()).isEqualTo(0);
+        verify(embeddingService, never()).embedImageWithHash(any());
+    }
+
+    /**
+     * 模拟一页候选图片（记录数不足页大小 → 扫描一轮后候选集耗尽）。
+     */
+    private void mockPage(List<ImageAssets> records) {
+        Page<ImageAssets> page = new Page<>(1, 200);
+        page.setRecords(records);
+        // lenient：batchSize 归一测试中会多次触发
+        lenient().when(imageAssetsMapper.selectPage(any(Page.class), any(QueryWrapper.class)))
+            .thenReturn(page);
+    }
+
+    private void mockRspuMap(RspuMaster... rspus) {
+        lenient().doReturn(List.of(rspus)).when(rspuMapper).selectBatchIds(anyCollection());
     }
 }

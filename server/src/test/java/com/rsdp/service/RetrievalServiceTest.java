@@ -10,7 +10,8 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.ExternalServiceException;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.service.chroma.ChromaDbClient;
+import com.rsdp.service.vector.ProductVectorStore;
+import com.rsdp.service.vector.VectorHit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,7 +45,7 @@ class RetrievalServiceTest {
     private EmbeddingService embeddingService;
 
     @Mock
-    private ChromaDbClient chromaDbClient;
+    private ProductVectorStore productVectorStore;
 
     @Mock
     private RspuMapper rspuMapper;
@@ -72,7 +74,7 @@ class RetrievalServiceTest {
         // 构造函数注入真实 ObjectMapper 与默认配置（六维 rerank 开关默认关），避免反射设值
         retrievalProperties = new RetrievalProperties();
         retrievalService = new RetrievalService(
-            embeddingService, chromaDbClient, rspuMapper, imageAssetsMapper,
+            embeddingService, productVectorStore, rspuMapper, imageAssetsMapper,
             new ObjectMapper(), visionService, rspuStyleMapper, dictService,
             dictResolverService, retrievalProperties);
         var user = User.withUsername("admin").password("").roles("ADMIN").build();
@@ -94,16 +96,11 @@ class RetrievalServiceTest {
 
         when(embeddingService.embedText("中古风实木沙发")).thenReturn(new float[]{0.1f, 0.2f});
 
-        Map<String, Object> response = Map.of(
-            "ids", List.of(List.of("IMG-001", "IMG-002", "IMG-003")),
-            "distances", List.of(List.of(0.1, 0.2, 0.15)),
-            "metadatas", List.of(List.of(
-                Map.of("rspu_id", "RSPU-001", "category_code", "FS", "positioning_label", "MC"),
-                Map.of("rspu_id", "RSPU-001", "category_code", "FS", "positioning_label", "MC"),
-                Map.of("rspu_id", "RSPU-002", "category_code", "FS", "positioning_label", "CR")
-            ))
-        );
-        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+        when(productVectorStore.search(any(), anyInt(), any(), eq(true))).thenReturn(List.of(
+            new VectorHit("IMG-001", "RSPU-001", 0.1),
+            new VectorHit("IMG-002", "RSPU-001", 0.2),
+            new VectorHit("IMG-003", "RSPU-002", 0.15)
+        ));
 
         ImageAssets img1 = new ImageAssets();
         img1.setImageId("IMG-001");
@@ -147,16 +144,11 @@ class RetrievalServiceTest {
         labels.setSixDimTags(Map.of("A", "直线条", "B", "高靠背"));
         when(visionService.recognizeImage(any())).thenReturn(labels);
 
-        Map<String, Object> response = Map.of(
-            "ids", List.of(List.of("IMG-001", "IMG-002", "IMG-003")),
-            "distances", List.of(List.of(0.1, 0.2, 0.15)),
-            "metadatas", List.of(List.of(
-                Map.of("rspu_id", "RSPU-001", "category_code", "FS", "positioning_label", "MC"),
-                Map.of("rspu_id", "RSPU-002", "category_code", "FS", "positioning_label", "CR"),
-                Map.of("rspu_id", "RSPU-003", "category_code", "FS", "positioning_label", "MC")
-            ))
-        );
-        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+        when(productVectorStore.search(any(), anyInt(), any(), eq(true))).thenReturn(List.of(
+            new VectorHit("IMG-001", "RSPU-001", 0.1),
+            new VectorHit("IMG-002", "RSPU-002", 0.2),
+            new VectorHit("IMG-003", "RSPU-003", 0.15)
+        ));
 
         ImageAssets img1 = new ImageAssets();
         img1.setImageId("IMG-001");
@@ -199,14 +191,9 @@ class RetrievalServiceTest {
         when(embeddingService.embedImage(any())).thenReturn(new float[]{0.3f, 0.4f});
         when(visionService.recognizeImage(any())).thenThrow(new ExternalServiceException("AI 识别失败"));
 
-        Map<String, Object> response = Map.of(
-            "ids", List.of(List.of("IMG-001")),
-            "distances", List.of(List.of(0.1)),
-            "metadatas", List.of(List.of(
-                Map.of("rspu_id", "RSPU-001", "category_code", "FS", "positioning_label", "MC")
-            ))
-        );
-        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+        when(productVectorStore.search(any(), anyInt(), any(), eq(true))).thenReturn(List.of(
+            new VectorHit("IMG-001", "RSPU-001", 0.1)
+        ));
 
         ImageAssets img1 = new ImageAssets();
         img1.setImageId("IMG-001");
@@ -245,14 +232,9 @@ class RetrievalServiceTest {
 
         when(embeddingService.embedText("奶油风沙发")).thenReturn(new float[]{0.1f, 0.2f});
 
-        Map<String, Object> response = Map.of(
-            "ids", List.of(List.of("IMG-001")),
-            "distances", List.of(List.of(0.1)),
-            "metadatas", List.of(List.of(
-                Map.of("rspu_id", "RSPU-001", "category_code", "FS", "positioning_label", "MC")
-            ))
-        );
-        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+        when(productVectorStore.search(any(), anyInt(), any(), eq(true))).thenReturn(List.of(
+            new VectorHit("IMG-001", "RSPU-001", 0.1)
+        ));
 
         ImageAssets img1 = new ImageAssets();
         img1.setImageId("IMG-001");
@@ -290,16 +272,11 @@ class RetrievalServiceTest {
 
         when(embeddingService.embedText("未知产品")).thenReturn(new float[]{0.1f, 0.2f});
 
-        Map<String, Object> response = Map.of(
-            "ids", List.of(List.of("IMG-001", "IMG-002", "IMG-003")),
-            "distances", List.of(List.of(0.1, 0.2, 0.3)),
-            "metadatas", List.of(List.of(
-                Map.of("rspu_id", "RSPU-A"),
-                Map.of("rspu_id", "RSPU-B"),
-                Map.of("rspu_id", "RSPU-C")
-            ))
-        );
-        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+        when(productVectorStore.search(any(), anyInt(), any(), eq(true))).thenReturn(List.of(
+            new VectorHit("IMG-001", "RSPU-A", 0.1),
+            new VectorHit("IMG-002", "RSPU-B", 0.2),
+            new VectorHit("IMG-003", "RSPU-C", 0.3)
+        ));
 
         when(imageAssetsMapper.selectBatchIds(any())).thenReturn(List.of());
 
@@ -330,14 +307,9 @@ class RetrievalServiceTest {
         labels.setSixDimTags(Map.of("A", "直线条", "B", "高靠背"));
         when(visionService.recognizeImage(any())).thenReturn(labels);
 
-        Map<String, Object> response = Map.of(
-            "ids", List.of(List.of("IMG-001")),
-            "distances", List.of(List.of(0.1)),
-            "metadatas", List.of(List.of(
-                Map.of("rspu_id", "RSPU-001", "category_code", "SF", "positioning_label", "MC")
-            ))
-        );
-        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+        when(productVectorStore.search(any(), anyInt(), any(), eq(true))).thenReturn(List.of(
+            new VectorHit("IMG-001", "RSPU-001", 0.1)
+        ));
 
         ImageAssets img1 = new ImageAssets();
         img1.setImageId("IMG-001");
@@ -372,14 +344,9 @@ class RetrievalServiceTest {
         labels.setSixDimTags(Map.of("A", "一字型"));
         when(visionService.recognizeImage(any())).thenReturn(labels);
 
-        Map<String, Object> response = Map.of(
-            "ids", List.of(List.of("IMG-001")),
-            "distances", List.of(List.of(0.1)),
-            "metadatas", List.of(List.of(
-                Map.of("rspu_id", "RSPU-001", "category_code", "SF", "positioning_label", "MC")
-            ))
-        );
-        when(chromaDbClient.query(any(), anyInt(), any())).thenReturn(new ChromaDbClient.QueryResult(response));
+        when(productVectorStore.search(any(), anyInt(), any(), eq(true))).thenReturn(List.of(
+            new VectorHit("IMG-001", "RSPU-001", 0.1)
+        ));
 
         ImageAssets img1 = new ImageAssets();
         img1.setImageId("IMG-001");

@@ -1,6 +1,6 @@
 package com.rsdp.event;
 
-import com.rsdp.service.chroma.ChromaDbClient;
+import com.rsdp.service.vector.ProductVectorStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -19,7 +19,7 @@ import static org.mockito.Mockito.verify;
 class RspuDeletedEventListenerTest {
 
     @Mock
-    private ChromaDbClient chromaDbClient;
+    private ProductVectorStore productVectorStore;
 
     @InjectMocks
     private RspuDeletedEventListener listener;
@@ -30,7 +30,7 @@ class RspuDeletedEventListenerTest {
 
         listener.onRspuDeleted(event);
 
-        verify(chromaDbClient).delete(List.of("IMG-01", "IMG-02"));
+        verify(productVectorStore).deleteByImageIds(List.of("IMG-01", "IMG-02"));
     }
 
     @Test
@@ -39,6 +39,6 @@ class RspuDeletedEventListenerTest {
 
         listener.onRspuDeleted(event);
 
-        verify(chromaDbClient, times(0)).delete(List.of());
+        verify(productVectorStore, times(0)).deleteByImageIds(List.of());
     }
 }
