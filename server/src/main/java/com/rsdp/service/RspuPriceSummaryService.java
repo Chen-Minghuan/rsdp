@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
  * 查该 RSPU 有效 RSKU → 解密 factory_price → min/max/count → upsert。</p>
  *
  * <p>刻意不用领域事件异步维护：投影与 RSKU 写在同一库，同事务同步重算最简单可靠，
- * 避免提交后异步窗口内列表价与报价不一致（项目既有事件机制用于 ChromaDB 等外部系统清理）。</p>
+ * 避免提交后异步窗口内列表价与报价不一致（项目既有事件机制用于 pgvector 向量清理）。</p>
  */
 @Slf4j
 @Service

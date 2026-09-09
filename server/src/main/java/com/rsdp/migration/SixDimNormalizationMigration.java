@@ -1,11 +1,10 @@
 package com.rsdp.migration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rsdp.config.properties.SixDimNormalizationProperties;
+import com.rsdp.config.properties.DataFixProperties;
 import com.rsdp.service.DictResolverService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -30,29 +29,29 @@ import java.util.Map;
  * （总数 / 归一率 / 未命中清单文件，供字典运营补充枚举或别名后重跑）。
  * E 维（表面材质）不枚举，不参与归一。</p>
  *
- * <p>通过 {@code rsdp.migration.six-dim-normalization.enabled=true} 开启，默认关闭。</p>
+ * <p>启动期数据修正任务：由 DatabaseMigrationRunner 在应用启动后按序调用一次；
+ * 幂等可安全重入（已处理记录自动跳过）。</p>
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class SixDimNormalizationMigration implements CommandLineRunner {
+public class SixDimNormalizationMigration {
 
     /** 参与归一的维度（E 维表面材质为自由文本，不枚举）。 */
     private static final List<String> DIM_KEYS = List.of("A", "B", "C", "D", "F");
 
-    private final SixDimNormalizationProperties properties;
+    private final DataFixProperties properties;
     private final JdbcTemplate jdbcTemplate;
     private final DictResolverService dictResolverService;
     private final ObjectMapper objectMapper;
 
-    @Override
-    public void run(String... args) {
-        if (!properties.isEnabled()) {
-            log.info("存量六维标签归一迁移已禁用（rsdp.migration.six-dim-normalization.enabled=false）");
-            return;
-        }
 
-        log.info("开始存量六维标签归一迁移，每批 {} 条", properties.getBatchSize());
+
+
+
+    /** 执行存量六维标签归一（幂等，已是字典码的值跳过）。 */
+    public void execute() {
+        log.info("开始存量六维标签归一迁移，每批 {} 条", properties.getSixDimBatchSize());
         migrate();
         log.info("存量六维标签归一迁移完成");
     }
@@ -65,7 +64,7 @@ public class SixDimNormalizationMigration implements CommandLineRunner {
         int totalMigrated = 0;
         int totalFailed = 0;
         List<String> unmatchedLines = new ArrayList<>();
-        int batchSize = properties.getBatchSize();
+        int batchSize = properties.getSixDimBatchSize();
 
         while (true) {
             String pagedSql = "SELECT rspu_id, category_code, six_dim_tags FROM rspu_master "

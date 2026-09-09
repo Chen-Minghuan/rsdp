@@ -31,6 +31,16 @@ public class EmbeddingService {
     private String embeddingModel;
 
     /**
+     * 图片 embedding 结果：向量 + 实际送入 API 字节的 SHA-256。
+     *
+     * @param vector    浮点向量（维度取决于当前编码配置）
+     * @param inputHash 实际送入 embedding API 的字节 SHA-256 hex（缩放后），
+     *                  用于向量重建时识别"输入未变化、无需重编码"
+     */
+    public record ImageEmbedding(float[] vector, String inputHash) {
+    }
+
+    /**
      * 根据图片流生成 embedding 向量。
      *
      * <p>送 Embedding API 前会将长边超过 1024px 的图片等比缩放为 JPEG，
@@ -40,16 +50,46 @@ public class EmbeddingService {
      * @return 浮点向量
      */
     public float[] embedImage(InputStream imageStream) {
+        return embedImageWithHash(imageStream).vector();
+    }
+
+    /**
+     * 根据图片流生成 embedding 向量，并返回实际送入 API 字节的 SHA-256。
+     *
+     * <p>送 Embedding API 前会将长边超过 1024px 的图片等比缩放为 JPEG，
+     * 减少传输体积；缩放失败时降级使用原图，不阻断流程。
+     * {@code inputHash} 针对缩放后的实际字节计算，保证与向量输入严格一致。</p>
+     *
+     * @param imageStream 图片输入流
+     * @return 向量与输入哈希的封装
+     */
+    public ImageEmbedding embedImageWithHash(InputStream imageStream) {
         try (imageStream) {
             byte[] bytes = imageStream.readAllBytes();
             if (bytes.length == 0) {
                 throw new ExternalServiceException("图片流为空");
             }
-            String base64 = Base64.getEncoder().encodeToString(resizeIfNecessary(bytes));
-            return embedImageBase64(base64);
+            byte[] actualBytes = resizeIfNecessary(bytes);
+            String inputHash = sha256Hex(actualBytes);
+            String base64 = Base64.getEncoder().encodeToString(actualBytes);
+            return new ImageEmbedding(embedImageBase64(base64), inputHash);
         } catch (IOException e) {
             log.error("读取图片流失败", e);
             throw new ExternalServiceException("读取图片流失败", e);
+        }
+    }
+
+    /** 计算字节数组的 SHA-256 hex（小写）。 */
+    private String sha256Hex(byte[] bytes) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest.digest(bytes)) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 算法不可用", e);
         }
     }
 

@@ -271,7 +271,9 @@ make clean
 - **风格知识库种子**：`database/seed_style_knowledge.sql`
 - **开发/演示种子**：`database/seed_dev_data.sql`（弱口令测试账号 + 演示工厂/产品；仅开发/演示环境 `make seed-dev` 执行，绝不进生产，initdb 不挂载）
 - **重置脚本**：`database/ops/reset_db.sql`（纯开发工具：DROP + 重建 + 必需种子 + 开发测试账号，自包含幂等）
-- **同步约定（重要）**：开发期改结构直接编辑 `database/schema/` 对应域文件 + 同步 `ops/reset_db.sql`（两处必须一致）；种子数据变化直接改 `database/schema/zz_seed.sql`。所有 DDL 语句幂等可重复执行（IF NOT EXISTS / IF EXISTS 守卫）。实体/表结构改动后运行 `node scripts/check_entity_db_fields.js` 对账。历史演进由 git 承载；待首个生产环境出现时再引入版本化迁移工具
+- **结构版本治理（Flyway，仅结构演进）**：标准 Spring Boot 自动配置，上下文初始化期自动执行（`flyway_schema_history` 表为唯一水位，脚本不可变，变更只能新增版本）。V 纯 SQL 脚本在 `server/src/main/resources/db/migration/`（V1 = schema/ 全量基线）。存量环境自动 baseline（`baseline-on-migrate`），全新环境从 V1 顺序执行。**数据修正不走 Flyway**：启动期幂等数据修正任务（价格加密/投影重算/六维归一）由 `DatabaseMigrationRunner` 按序调度一次；可重复长任务（向量重建）走 async_task 业务进度体系
+- **同步约定（重要）**：开发期改结构 = 编辑 `database/schema/` 对应域文件 + 同步 `ops/reset_db.sql` + **新增 V 增量脚本**（schema/ 与 V1+ 合并结果必须一致，发布前跑 `make check-migration-sync` 强制校验）；种子数据变化直接改 `database/schema/zz_seed.sql`。所有 DDL 语句幂等可重复执行（IF NOT EXISTS / IF EXISTS 守卫）。实体/表结构改动后运行 `node scripts/check_entity_db_fields.js` 对账
+- **迁移失败恢复**：迁移失败会阻断启动并留 failed 记录，恢复动作：修复根因 → `flyway repair`（或删除 flyway_schema_history 中 failed 行）→ 重启。详见 `docs/02-architecture/03-数据库实现说明.md`
 - **开发数据库连接**：`server/src/main/resources/application-dev.yml`
 
 ---

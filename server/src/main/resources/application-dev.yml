@@ -14,11 +14,6 @@ spring:
 rsdp:
   encryption:
     key: ${RSDP_ENCRYPTION_KEY}
-  migration:
-    encrypt-prices:
-      # 开发环境默认关闭；需要测试迁移时临时设为 true
-      enabled: false
-      batch-size: 100
 
   ai:
     api-key: ${DASHSCOPE_API_KEY}

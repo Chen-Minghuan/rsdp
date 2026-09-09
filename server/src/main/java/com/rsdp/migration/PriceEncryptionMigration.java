@@ -1,10 +1,9 @@
 package com.rsdp.migration;
 
-import com.rsdp.config.properties.MigrationProperties;
+import com.rsdp.config.properties.DataFixProperties;
 import com.rsdp.util.AesEncryptionUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -20,24 +19,24 @@ import java.util.Map;
  * {@code design_order_item.original_price/final_price} 中的明文价格批量加密为
  * AES-256-GCM Base64 密文。已加密记录会自动跳过，支持幂等执行。</p>
  *
- * <p>通过 {@code rsdp.migration.encrypt-prices.enabled=true} 开启，默认关闭。</p>
+ * <p>启动期数据修正任务：由 DatabaseMigrationRunner 在应用启动后按序调用一次；
+ * 幂等可安全重入（已处理记录自动跳过）。</p>
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class PriceEncryptionMigration implements CommandLineRunner {
+public class PriceEncryptionMigration {
 
-    private final MigrationProperties properties;
+    private final DataFixProperties properties;
     private final JdbcTemplate jdbcTemplate;
 
-    @Override
-    public void run(String... args) {
-        if (!properties.isEnabled()) {
-            log.info("历史价格加密迁移已禁用（rsdp.migration.encrypt-prices.enabled=false）");
-            return;
-        }
 
-        log.info("开始历史价格加密迁移，每批 {} 条", properties.getBatchSize());
+
+
+
+    /** 执行历史价格加密批处理（幂等，已加密记录自动跳过）。 */
+    public void execute() {
+        log.info("开始历史价格加密迁移，每批 {} 条", properties.getEncryptBatchSize());
         migrateRskuSupply();
         migrateSchemeItem();
         migrateDesignOrderItem();
@@ -71,7 +70,7 @@ public class PriceEncryptionMigration implements CommandLineRunner {
         int totalAlreadyEncrypted = 0;
         int totalMigrated = 0;
         int totalFailed = 0;
-        int batchSize = properties.getBatchSize();
+        int batchSize = properties.getEncryptBatchSize();
 
         while (true) {
             String pagedSql = selectSql + " ORDER BY " + idColumn + " LIMIT " + batchSize + " OFFSET " + offset;

@@ -1,7 +1,7 @@
 package com.rsdp.migration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rsdp.config.properties.SixDimNormalizationProperties;
+import com.rsdp.config.properties.DataFixProperties;
 import com.rsdp.service.DictResolverService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,7 +35,7 @@ class SixDimNormalizationMigrationTest {
     private JdbcTemplate jdbcTemplate;
 
     @Mock
-    private SixDimNormalizationProperties properties;
+    private DataFixProperties properties;
 
     @Mock
     private DictResolverService dictResolverService;
@@ -52,18 +52,8 @@ class SixDimNormalizationMigrationTest {
     }
 
     @Test
-    void run_whenDisabled_shouldNotQuery() {
-        when(properties.isEnabled()).thenReturn(false);
-
-        migration.run();
-
-        verify(jdbcTemplate, never()).queryForList(anyString());
-    }
-
-    @Test
     void run_shouldNormalizeFreeTextAndSkipAlreadyNormalized() {
-        when(properties.isEnabled()).thenReturn(true);
-        when(properties.getBatchSize()).thenReturn(100);
+        when(properties.getSixDimBatchSize()).thenReturn(100);
         when(properties.getReportDir()).thenReturn(reportDir.toString());
 
         when(jdbcTemplate.queryForList(anyString()))
@@ -77,7 +67,7 @@ class SixDimNormalizationMigrationTest {
         when(dictResolverService.resolveSixDimCode("A", "SF", "一字型")).thenReturn("SF-一字型");
         when(dictResolverService.resolveSixDimCode("B", "SF", "SF-高靠背")).thenReturn("SF-高靠背");
 
-        migration.run();
+        migration.execute();
 
         // 仅 RSPU-1 有变化：A 维自由文本归一为字典码，B 维已是字典码原样保留
         ArgumentCaptor<String> tagsCaptor = ArgumentCaptor.forClass(String.class);
@@ -92,8 +82,7 @@ class SixDimNormalizationMigrationTest {
 
     @Test
     void run_shouldKeepUnmatchedAndWriteReport() throws Exception {
-        when(properties.isEnabled()).thenReturn(true);
-        when(properties.getBatchSize()).thenReturn(100);
+        when(properties.getSixDimBatchSize()).thenReturn(100);
         when(properties.getReportDir()).thenReturn(reportDir.toString());
 
         when(jdbcTemplate.queryForList(anyString()))
@@ -104,7 +93,7 @@ class SixDimNormalizationMigrationTest {
             .thenReturn(List.of());
         when(dictResolverService.resolveSixDimCode("C", "SF", "某种奇怪扶手")).thenReturn(null);
 
-        migration.run();
+        migration.execute();
 
         // 未命中保留原文、不更新；E 维不参与归一（不调用解析）
         verify(jdbcTemplate, never()).update(anyString(), any(), any());
@@ -122,8 +111,7 @@ class SixDimNormalizationMigrationTest {
 
     @Test
     void run_shouldSkipBlankAndInvalidJson() {
-        when(properties.isEnabled()).thenReturn(true);
-        when(properties.getBatchSize()).thenReturn(100);
+        when(properties.getSixDimBatchSize()).thenReturn(100);
         when(properties.getReportDir()).thenReturn(reportDir.toString());
 
         when(jdbcTemplate.queryForList(anyString()))
@@ -133,7 +121,7 @@ class SixDimNormalizationMigrationTest {
             ))
             .thenReturn(List.of());
 
-        migration.run();
+        migration.execute();
 
         verify(jdbcTemplate, never()).update(anyString(), any(), any());
     }

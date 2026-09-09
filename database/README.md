@@ -1,8 +1,8 @@
 # database/ 目录地图与执行手册
 
-RSDP 数据库脚本按域组织：**schema/ 是基线 DDL，也是当前库结构的唯一真相**
+RSDP 数据库脚本按域组织：**schema/ 是基线 DDL 的开发态全貌**。结构执行的**唯一真相是 Flyway 迁移**（`server/src/main/resources/db/migration/`，`flyway_schema_history` 为唯一水位），两者一致性由 `make check-migration-sync` 强制校验
 > **时间列约定**：所有时间列统一为 `TIMESTAMPTZ`（存 UTC、按会话时区渲染），不要新增无时区的 `TIMESTAMP` 列。写入/读取由后端 `PgLocalDateTimeTypeHandler` 完成（JVM 默认时区必须与业务时区一致，compose/Dockerfile 已固定 `TZ=Asia/Shanghai`）。
-（由原 V1__init_db.sql 按域拆分而来，历史增量 V2~V45 已全部并入并随归档删除，演进记录见 git 历史），**ops/ 是运维脚本**。开发期没有"存量环境升级"负担，改结构直接改对应域文件 + 同步 reset_db.sql 即可。
+（由原 V1__init_db.sql 按域拆分而来，历史增量 V2~V45 已全部并入并随归档删除，演进记录见 git 历史），**ops/ 是运维脚本**。改结构 = 编辑对应域文件 + 同步 reset_db.sql + **新增 Flyway V 增量脚本**（三者一致，发布前必跑 `make check-migration-sync`）。
 
 ## 目录地图
 
@@ -23,7 +23,7 @@ database/
 │   ├── 11_platform.sql          # 官网平台域：platform_banner/case/content/custom_dict/customized/lead
 │   ├── 12_system.sql            # 系统域：audit_log + 跨域自增序列对齐（setval）段
 │   ├── cross_domain_fk.sql      # 跨域/循环引用后置外键 ALTER（字母序排数字域文件之后执行）
-│   └── zz_seed.sql              # 必需字典/权限种子（zz 前缀保证最后执行，原 seed_required_data.sql）：原文件已有的循环引用后置（excel_import_batch.created_by、sys_user↔company/member_group/invited_by、user_favorite.folder_id、scheme.project_id）+ 按域拆分后的跨域执行序后置（rsku_supply→factory_master/factory_warehouse；user_favorite/favorite_folder/product_collection/project/design_order/recommendation_score_config→sys_user）
+│   └── zz_seed.sql              # 必需字典/权限种子（zz 前缀保证最后执行，原 seed_required_data.sql）
 ├── ops/
 │   └── reset_db.sql             # 数据库重置脚本（自包含单文件：DROP + 重建 + 必需种子 + 开发测试账号 + 序列对齐）
 ├── seed_style_knowledge.sql     # 风格知识库种子数据
@@ -69,6 +69,6 @@ database/
 1. **schema/ 对应域文件**（唯一结构真相；新表按 FK 拓扑序归入所属域，循环引用及跨域执行序冲突的外键放 cross_domain_fk.sql）；
 2. **ops/reset_db.sql**（重置脚本镜像）。
 
-开发期工作流：直接编辑 schema/ 域文件 → 对开发库执行变更语句（或整文件重跑，全部语句幂等）→ 同步 reset_db.sql → 跑 `node scripts/check_entity_db_fields.js` 对账。历史演进记录由 git 承载，不再维护独立迁移文件；待首个生产环境出现时再引入版本化迁移工具。
+开发期工作流：直接编辑 schema/ 域文件 → 对开发库执行变更语句（或整文件重跑，全部语句幂等）→ 同步 reset_db.sql → **新增 `server/src/main/resources/db/migration/Vn__xxx.sql` 增量脚本**（纯 SQL，不可修改已发布的 V 脚本）→ 跑 `make check-migration-sync`（schema/ 重放 vs Flyway 全量执行零差异）+ `node scripts/check_entity_db_fields.js` 对账。Flyway 仅管结构演进（标准 Boot 自动配置）；启动期数据修正任务（价格加密/投影重算/六维归一，均幂等）由 `DatabaseMigrationRunner` 按序调度，可重复触发的长任务（如向量重建）走 async_task 业务进度体系。失败恢复 playbook 见 `docs/02-architecture/03-数据库实现说明.md` 第七节。
 
 种子数据变化直接改 `schema/zz_seed.sql`（reset_db.sql 内嵌镜像需同步）。

@@ -15,7 +15,8 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.mapper.RspuMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.rsdp.service.chroma.ChromaDbClient;
+import com.rsdp.service.vector.ProductVectorStore;
+import com.rsdp.service.vector.VectorHit;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -37,13 +38,14 @@ import java.util.stream.Collectors;
 
 /**
  * 相似产品检索服务。
- * <p>三层检索：向量召回 → 元数据过滤 → 规则重排。</p>
+ * <p>三层检索：pgvector 向量召回 → 查询时 JOIN 过滤（品类/在售状态） → 规则重排。</p>
  *
  * <p>图片查询时，会通过 {@link VisionService} 提取查询图的视觉标签（风格、主色、材质、场景、六维），
  * 与候选 RSPU 的标签做匹配加成，实现更接近“同款判定”的精排。</p>
  *
- * <p>若业务后续出现 inactive/下架等非删除状态，需要在状态变更时同步更新 ChromaDB metadata
- * 中的 status 字段，或在检索后二次校验 PostgreSQL 状态，避免返回已下架商品。</p>
+ * <p>在售状态与品类不在向量表中冗余，检索 SQL 经 JOIN rspu_master 实时过滤；
+ * 图片内容版本一致性（source_revision = content_revision）由
+ * {@link ProductVectorStore#search} 固定保证，状态变更无需额外同步。</p>
  */
 @Slf4j
 @Service
@@ -51,7 +53,7 @@ import java.util.stream.Collectors;
 public class RetrievalService {
 
     private final EmbeddingService embeddingService;
-    private final ChromaDbClient chromaDbClient;
+    private final ProductVectorStore productVectorStore;
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final ObjectMapper objectMapper;
@@ -73,15 +75,16 @@ public class RetrievalService {
         AiLabels queryLabels = extractQueryLabels(imageBytes, request);
 
         int topK = request.getTopK() != null && request.getTopK() > 0 ? request.getTopK() : 20;
-        Map<String, Object> where = buildWhereClause(request);
+        String categoryCode = request.getCategoryCode() != null && !request.getCategoryCode().isBlank()
+            ? request.getCategoryCode().trim() : null;
 
         // 扩大候选池，为去重和重排留出空间
-        ChromaDbClient.QueryResult result = chromaDbClient.query(queryEmbedding, topK * 5, where);
-        if (result == null || result.getIds() == null || result.getIds().isEmpty()) {
+        List<VectorHit> hits = productVectorStore.search(queryEmbedding, topK * 5, categoryCode, true);
+        if (hits == null || hits.isEmpty()) {
             return Collections.emptyList();
         }
 
-        List<SimilarProductResponse> candidates = aggregateByRspu(result, topK * 5);
+        List<SimilarProductResponse> candidates = aggregateByRspu(hits, topK * 5);
         candidates = filterByReviewStatus(candidates);
         candidates = rerank(candidates, request, queryLabels);
 
@@ -127,48 +130,13 @@ public class RetrievalService {
         }
     }
 
-    private Map<String, Object> buildWhereClause(SimilarProductRequest request) {
-        List<Map<String, Object>> conditions = new ArrayList<>();
-        conditions.add(Map.of("status", "active"));
-
-        if (request.getCategoryCode() != null && !request.getCategoryCode().isBlank()) {
-            conditions.add(Map.of("category_code", request.getCategoryCode().trim()));
-        }
-        // 风格/定位不在 ChromaDB 层硬过滤，避免 code/name 不一致导致空结果；
-        // 偏好通过重排阶段的风格匹配加成体现（matchesAnyStyle）。
-
-        if (conditions.size() == 1) {
-            return conditions.get(0);
-        }
-
-        Map<String, Object> where = new HashMap<>();
-        where.put("$and", conditions);
-        return where;
-    }
-
-    private List<SimilarProductResponse> aggregateByRspu(ChromaDbClient.QueryResult result, int limit) {
-        List<List<String>> idsList = result.getIds();
-        List<List<Double>> distancesList = result.getDistances();
-        List<List<Map<String, Object>>> metadatasList = result.getMetadatas();
-
-        if (idsList == null || idsList.isEmpty()
-            || distancesList == null || distancesList.isEmpty()
-            || metadatasList == null || metadatasList.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        // 取第一批查询结果（单查询向量只有一批）
-        List<String> ids = idsList.get(0);
-        List<Double> distances = distancesList.get(0);
-        List<Map<String, Object>> metadatas = metadatasList.get(0);
-
-        if (ids == null || distances == null || metadatas == null
-            || ids.size() != distances.size() || ids.size() != metadatas.size()) {
+    private List<SimilarProductResponse> aggregateByRspu(List<VectorHit> hits, int limit) {
+        if (hits == null || hits.isEmpty()) {
             return Collections.emptyList();
         }
 
         // 批量查询图片 URL，避免 N+1
-        List<String> imageIds = ids.stream().distinct().collect(Collectors.toList());
+        List<String> imageIds = hits.stream().map(VectorHit::imageId).distinct().collect(Collectors.toList());
         Map<String, String> imageUrlMap = imageIds.isEmpty()
             ? Map.of()
             : imageAssetsMapper.selectBatchIds(imageIds).stream()
@@ -176,25 +144,21 @@ public class RetrievalService {
 
         // 按 RSPU 聚合，取相似度最高的图片
         Map<String, SimilarProductResponse> bestByRspu = new LinkedHashMap<>();
-        for (int i = 0; i < ids.size(); i++) {
-            String imageId = ids.get(i);
-            double distance = distances.get(i);
-            Map<String, Object> metadata = metadatas.get(i);
-            String rspuId = metadata != null ? (String) metadata.get("rspu_id") : null;
+        for (VectorHit hit : hits) {
+            String rspuId = hit.rspuId();
             if (rspuId == null || rspuId.isBlank()) {
                 continue;
             }
+            double distance = hit.distance();
 
-            // ChromaDB cosine distance 范围 [0, 2]，映射到 [0, 1]
+            // pgvector cosine distance 范围 [0, 2]，映射到 [0, 1]
             double score = Math.max(0.0, Math.min(1.0, 1.0 - distance / 2.0));
             SimilarProductResponse existing = bestByRspu.get(rspuId);
             if (existing == null || score > existing.getVectorScore()) {
                 SimilarProductResponse response = new SimilarProductResponse();
                 response.setRspuId(rspuId);
-                response.setCategoryCode((String) metadata.get("category_code"));
-                response.setPositioningLabel((String) metadata.get("positioning_label"));
                 response.setVectorScore(score);
-                response.setMainImageUrl(imageUrlMap.get(imageId));
+                response.setMainImageUrl(imageUrlMap.get(hit.imageId()));
                 response.setFinalScore(score);
                 bestByRspu.put(rspuId, response);
             }
@@ -265,6 +229,7 @@ public class RetrievalService {
 
             RspuMaster rspu = rspuMap.get(candidate.getRspuId());
             if (rspu != null) {
+                candidate.setCategoryCode(rspu.getCategoryCode());
                 candidate.setPositioningLabel(rspu.getPositioningLabel());
                 candidate.setAestheticsConfidence(rspu.getAestheticsConfidence());
 

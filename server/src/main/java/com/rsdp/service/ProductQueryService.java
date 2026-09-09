@@ -620,7 +620,7 @@ public class ProductQueryService {
     /**
      * 软删除产品。
      *
-     * <p>数据库软删除和审计日志在事务内完成；ChromaDB 向量清理通过
+     * <p>数据库软删除和审计日志在事务内完成；pgvector 向量清理通过
      * {@link RspuDeletedEvent} 异步解耦执行，避免外部 IO 拖长事务。</p>
      *
      * @param rspuId RSPU ID
@@ -637,7 +637,7 @@ public class ProductQueryService {
         }
 
         RspuMaster oldSnapshot = snapshot(rspu);
-        // 先收集图片 ID 用于 ChromaDB 向量清理（级联软删后图片将查询不可见）
+        // 先收集图片 ID 用于 pgvector 向量清理（级联软删后图片将查询不可见）
         List<String> imageIds = imageAssetsMapper.selectList(
             new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId)
         ).stream().map(ImageAssets::getImageId).toList();
@@ -707,7 +707,7 @@ public class ProductQueryService {
      * 从回收站恢复产品（连带恢复级联软删的变体/报价/图片/搭配关系）。
      *
      * <p>注意：风格、场景关联在删除时已物理清除，无法恢复——恢复后需重新触发
-     * AI 识别或手工补充。图片文件本体与 ChromaDB 向量在软删时已清理/保留情况
+     * AI 识别或手工补充。图片文件本体与 pgvector 向量在软删时已清理/保留情况
      * 不变（向量已清，恢复后如需以图搜图可走向量回填）。</p>
      *
      * @param rspuId RSPU ID
@@ -738,7 +738,7 @@ public class ProductQueryService {
 
     /**
      * 彻底删除回收站中的产品：物理删除主表与全部关联行，
-     * 事务提交后清理存储文件与 ChromaDB 残留向量（幂等补刀）。
+     * 事务提交后清理存储文件与 pgvector 残留向量（幂等补刀）。
      *
      * <p>仅限已软删除（回收站中）的产品；正常产品须先软删除。风格/场景关联、
      * 工厂映射、风格匹配结果、收藏条目一并物理清除；订单/方案明细为快照语义保留。</p>

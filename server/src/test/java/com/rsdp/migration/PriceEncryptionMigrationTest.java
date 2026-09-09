@@ -1,6 +1,6 @@
 package com.rsdp.migration;
 
-import com.rsdp.config.properties.MigrationProperties;
+import com.rsdp.config.properties.DataFixProperties;
 import com.rsdp.util.AesEncryptionUtil;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,7 +36,7 @@ class PriceEncryptionMigrationTest {
     private JdbcTemplate jdbcTemplate;
 
     @Mock
-    private MigrationProperties properties;
+    private DataFixProperties properties;
 
     private PriceEncryptionMigration migration;
 
@@ -56,18 +56,8 @@ class PriceEncryptionMigrationTest {
     }
 
     @Test
-    void run_whenDisabled_shouldNotQuery() {
-        when(properties.isEnabled()).thenReturn(false);
-
-        migration.run();
-
-        verify(jdbcTemplate, never()).queryForList(anyString());
-    }
-
-    @Test
     void run_shouldEncryptPlainPricesAndSkipEncrypted() {
-        when(properties.isEnabled()).thenReturn(true);
-        when(properties.getBatchSize()).thenReturn(100);
+        when(properties.getEncryptBatchSize()).thenReturn(100);
 
         String encryptedPrice = AesEncryptionUtil.encrypt(new BigDecimal("999.00"));
 
@@ -80,7 +70,7 @@ class PriceEncryptionMigrationTest {
             .thenReturn(List.of())
             .thenReturn(List.of());
 
-        migration.run();
+        migration.execute();
 
         ArgumentCaptor<String> priceCaptor = ArgumentCaptor.forClass(String.class);
         verify(jdbcTemplate).update(
@@ -102,8 +92,7 @@ class PriceEncryptionMigrationTest {
 
     @Test
     void run_shouldSkipInvalidPrices() {
-        when(properties.isEnabled()).thenReturn(true);
-        when(properties.getBatchSize()).thenReturn(100);
+        when(properties.getEncryptBatchSize()).thenReturn(100);
 
         when(jdbcTemplate.queryForList(anyString()))
             .thenReturn(List.of(
@@ -113,15 +102,14 @@ class PriceEncryptionMigrationTest {
             .thenReturn(List.of())
             .thenReturn(List.of());
 
-        migration.run();
+        migration.execute();
 
         verify(jdbcTemplate, never()).update(eq("UPDATE rsku_supply SET factory_price = ? WHERE rsku_id = ?"), any(), any());
     }
 
     @Test
     void run_shouldEncryptSchemeItemPlainPrices() {
-        when(properties.isEnabled()).thenReturn(true);
-        when(properties.getBatchSize()).thenReturn(100);
+        when(properties.getEncryptBatchSize()).thenReturn(100);
 
         when(jdbcTemplate.queryForList(anyString()))
             .thenReturn(List.of())
@@ -130,7 +118,7 @@ class PriceEncryptionMigrationTest {
             ))
             .thenReturn(List.of());
 
-        migration.run();
+        migration.execute();
 
         ArgumentCaptor<String> priceCaptor = ArgumentCaptor.forClass(String.class);
         verify(jdbcTemplate).update(
@@ -144,8 +132,7 @@ class PriceEncryptionMigrationTest {
 
     @Test
     void run_shouldEncryptDesignOrderItemPrices() {
-        when(properties.isEnabled()).thenReturn(true);
-        when(properties.getBatchSize()).thenReturn(100);
+        when(properties.getEncryptBatchSize()).thenReturn(100);
 
         when(jdbcTemplate.queryForList(anyString()))
             .thenReturn(List.of())  // rsku_supply
@@ -159,7 +146,7 @@ class PriceEncryptionMigrationTest {
             ))
             .thenReturn(List.of()); // design_order_item.final_price 下一页
 
-        migration.run();
+        migration.execute();
 
         ArgumentCaptor<String> originalCaptor = ArgumentCaptor.forClass(String.class);
         verify(jdbcTemplate).update(

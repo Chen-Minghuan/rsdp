@@ -1,6 +1,6 @@
 package com.rsdp.migration;
 
-import com.rsdp.config.properties.PriceSummaryBackfillProperties;
+import com.rsdp.config.properties.DataFixProperties;
 import com.rsdp.service.RspuPriceSummaryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,7 +15,6 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,35 +31,24 @@ class PriceSummaryBackfillMigrationTest {
     private RspuPriceSummaryService rspuPriceSummaryService;
 
     @Mock
-    private PriceSummaryBackfillProperties properties;
+    private DataFixProperties properties;
 
     @InjectMocks
     private PriceSummaryBackfillMigration migration;
 
     @BeforeEach
     void setUp() {
-        org.mockito.Mockito.lenient().when(properties.getBatchSize()).thenReturn(100);
-    }
-
-    @Test
-    void skipsWhenDisabled() {
-        when(properties.isEnabled()).thenReturn(false);
-
-        migration.run();
-
-        verify(jdbcTemplate, never()).queryForList(anyString(), eq(String.class), anyInt(), anyInt());
-        verify(rspuPriceSummaryService, never()).recalculate(anyString());
+        org.mockito.Mockito.lenient().when(properties.getPriceSummaryBatchSize()).thenReturn(100);
     }
 
     @Test
     @SuppressWarnings("unchecked")
-    void recalculatesEveryRspuWhenEnabled() {
-        when(properties.isEnabled()).thenReturn(true);
+    void recalculatesEveryRspu() {
         when(jdbcTemplate.queryForList(anyString(), eq(String.class), anyInt(), anyInt()))
             .thenReturn(List.of("RSPU-1", "RSPU-2"))
             .thenReturn(List.of());
 
-        migration.run();
+        migration.execute();
 
         verify(rspuPriceSummaryService).recalculate("RSPU-1");
         verify(rspuPriceSummaryService).recalculate("RSPU-2");
@@ -69,14 +57,13 @@ class PriceSummaryBackfillMigrationTest {
     @Test
     @SuppressWarnings("unchecked")
     void continuesWhenSingleRspuFails() {
-        when(properties.isEnabled()).thenReturn(true);
         when(jdbcTemplate.queryForList(anyString(), eq(String.class), anyInt(), anyInt()))
             .thenReturn(List.of("RSPU-BAD", "RSPU-OK"))
             .thenReturn(List.of());
         org.mockito.Mockito.doThrow(new RuntimeException("boom"))
             .when(rspuPriceSummaryService).recalculate("RSPU-BAD");
 
-        migration.run();
+        migration.execute();
 
         verify(rspuPriceSummaryService).recalculate("RSPU-OK");
     }

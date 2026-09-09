@@ -20,10 +20,15 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
-# 读取 .env 文件中的变量（兼容 Windows CRLF）
+# 读取 .env 文件中的变量（兼容 Windows CRLF）。
+# 注意：必须经临时文件 source——macOS 自带 bash 3.2 的 `source <(cmd)`
+# 进程替换形式会静默不执行（变量全部读不到），导致密钥校验误报未设置。
+ENV_TMP="$(mktemp)"
+trap 'rm -f "$ENV_TMP"' EXIT
+sed 's/\r$//' "$ENV_FILE" > "$ENV_TMP"
 set -a
 # shellcheck source=/dev/null
-source <(sed 's/\r$//' "$ENV_FILE")
+source "$ENV_TMP"
 set +a
 
 # 本地开发使用 http，必须关闭 Cookie 的 Secure 属性，否则浏览器不会发送 Cookie

@@ -12,9 +12,13 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.FloorPlanAnalysisMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.service.chroma.ChromaDbClient;
-import com.rsdp.service.chroma.ChromaMetadataBuilder;
+import com.rsdp.entity.ImageAssets;
+import com.rsdp.service.EmbeddingService.ImageEmbedding;
+import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.service.vector.ProductVectorStore;
+import com.rsdp.service.vector.VectorHit;
+import com.rsdp.service.vector.VectorStaleImageException;
 import com.rsdp.util.OcrPostProcessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +32,6 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.IdGenerator;
@@ -48,7 +51,8 @@ public class AsyncTaskProcessor {
     private final RspuMapper rspuMapper;
     private final VisionService visionService;
     private final EmbeddingService embeddingService;
-    private final ChromaDbClient chromaDbClient;
+    private final ProductVectorStore productVectorStore;
+    private final ImageAssetsMapper imageAssetsMapper;
     private final StorageService storageService;
     private final AiRecognitionPersistenceService persistenceService;
     private final StyleMatchingService styleMatchingService;
@@ -60,6 +64,8 @@ public class AsyncTaskProcessor {
      */
     private final ObjectProvider<FloorPlanService> floorPlanServiceProvider;
     private final ObjectMapper objectMapper;
+    /** 向量重建服务（Worker D 提供）：重编码图片向量并写入 pgvector。 */
+    private final VectorRebuildService vectorRebuildService;
 
     @Value("${rsdp.ai.model}")
     private String aiModel;
@@ -110,6 +116,25 @@ public class AsyncTaskProcessor {
             safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
             return;
+        }
+
+        // 读取图片当前内容版本（向量防旧写保护：编码期间内容被更新则丢弃向量，
+        // 由重建任务重新编码）；行不存在或版本为空按 1 处理
+        long currentRevision = 1L;
+        LocalDateTime imageDeletedAt = null;
+        try {
+            ImageAssets imageAsset = imageAssetsMapper.selectById(imageId);
+            if (imageAsset != null) {
+                if (imageAsset.getContentRevision() != null) {
+                    currentRevision = imageAsset.getContentRevision();
+                }
+                imageDeletedAt = imageAsset.getDeletedAt();
+            }
+        } catch (Exception e) {
+            log.warn("读取图片内容版本失败，按 1 处理，imageId={}", imageId, e);
+        }
+        if (imageDeletedAt != null) {
+            log.warn("图片已删除仍继续识别流程，向量写入将被丢弃，imageId={}", imageId);
         }
 
         // 主图智能裁剪：AI 识别产品主体并替换主图，识别失败时回退原图不影响流程。
@@ -175,10 +200,11 @@ public class AsyncTaskProcessor {
 
             updateTaskStatus(taskId, "processing", 60, null, null);
 
-            float[] embedding = embedImageSafely(rspuId, imageBytes);
+            ImageEmbedding imageEmbedding = embedImageSafely(rspuId, imageBytes);
+            float[] embedding = imageEmbedding != null ? imageEmbedding.vector() : null;
 
             String productName = persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
-                labels, processingTime, embedding);
+                labels, processingTime);
             successSaved = true;
 
             // 同款检测（写入向量前召回比对）：相似度超阈值时把新品标记"存疑-疑似同款"，
@@ -203,10 +229,12 @@ public class AsyncTaskProcessor {
             }
 
             boolean vectorPersisted = false;
-            if (embedding != null) {
-                vectorPersisted = persistVector(imageId, rspuId, embedding, imageBytes.length);
-                if (!vectorPersisted) {
-                    degradeError = "AI 识别完成，但向量写入 ChromaDB 失败，以图搜图功能可能不可用";
+            if (imageEmbedding != null) {
+                // 失败时返回降级文案（区分"存储故障"与"图片已更新被丢弃"），成功返回 null
+                String vectorError = persistVector(imageId, currentRevision, imageEmbedding);
+                vectorPersisted = vectorError == null;
+                if (vectorError != null) {
+                    degradeError = vectorError;
                 }
             } else {
                 degradeError = "AI 识别完成，但生成图片向量失败，以图搜图功能可能不可用";
@@ -501,9 +529,9 @@ public class AsyncTaskProcessor {
         }
     }
 
-    private float[] embedImageSafely(String rspuId, byte[] imageBytes) {
+    private ImageEmbedding embedImageSafely(String rspuId, byte[] imageBytes) {
         try {
-            return embeddingService.embedImage(new ByteArrayInputStream(imageBytes));
+            return embeddingService.embedImageWithHash(new ByteArrayInputStream(imageBytes));
         } catch (Exception e) {
             log.error("生成图片 embedding 失败，rspuId={}", rspuId, e);
             return null;
@@ -544,33 +572,24 @@ public class AsyncTaskProcessor {
     }
 
     /**
-     * 同款检测：用本次 embedding 在 ChromaDB 召回，找到其他 RSPU 且相似度超阈值时，
+     * 同款检测：用本次 embedding 在向量存储召回，找到其他 RSPU 且相似度超阈值时，
      * 把当前产品标记为"存疑-疑似同款"（仅当仍为"待复核"，不覆盖人工/其他流程的复核结论）。
      *
      * @param rspuId    当前 RSPU ID
      * @param embedding 本次主图向量
      */
     private void flagDuplicateSuspect(String rspuId, float[] embedding) {
-        ChromaDbClient.QueryResult result = chromaDbClient.query(embedding, 5, null);
-        if (result == null || result.getIds() == null || result.getIds().isEmpty()
-            || result.getDistances() == null || result.getDistances().isEmpty()
-            || result.getMetadatas() == null || result.getMetadatas().isEmpty()) {
+        List<VectorHit> hits = productVectorStore.search(embedding, 5, null, false);
+        if (hits == null || hits.isEmpty()) {
             return;
         }
-        List<String> ids = result.getIds().get(0);
-        List<Double> distances = result.getDistances().get(0);
-        List<Map<String, Object>> metadatas = result.getMetadatas().get(0);
-        if (ids == null || distances == null || metadatas == null) {
-            return;
-        }
-        for (int i = 0; i < ids.size(); i++) {
-            Map<String, Object> meta = metadatas.get(i);
-            Object dupRspu = meta != null ? meta.get("rspu_id") : null;
-            if (dupRspu == null || rspuId.equals(dupRspu.toString())) {
+        for (VectorHit hit : hits) {
+            String dupRspu = hit.rspuId();
+            if (dupRspu == null || rspuId.equals(dupRspu)) {
                 continue;
             }
-            // ChromaDB cosine distance [0,2] 映射相似度 [0,1]；结果按距离升序，低于阈值即终止
-            double similarity = Math.max(0.0, Math.min(1.0, 1.0 - distances.get(i) / 2.0));
+            // cosine distance [0,2] 映射相似度 [0,1]；结果按距离升序，低于阈值即终止
+            double similarity = Math.max(0.0, Math.min(1.0, 1.0 - hit.distance() / 2.0));
             if (similarity < duplicateSimilarThreshold) {
                 return;
             }
@@ -594,27 +613,37 @@ public class AsyncTaskProcessor {
         }
     }
 
-    private boolean persistVector(String imageId, String rspuId, float[] embedding, int imageSize) {
+    /**
+     * 向量写入 pgvector（幂等，冲突覆盖）。写入时由存储层核验图片内容版本，
+     * 编码期间图片被更新/删除则丢弃本次向量，由重建任务重新编码。
+     *
+     * @param imageId         图片 ID
+     * @param currentRevision 编码前读取到的图片内容版本
+     * @param embed           embedding 结果（向量 + 输入哈希）
+     * @return 成功返回 null；失败返回降级文案（区分存储故障与图片已更新）
+     */
+    private String persistVector(String imageId, long currentRevision, ImageEmbedding embed) {
         try {
-            RspuMaster rspu = persistenceService.getRspu(rspuId);
-            if (rspu == null) {
-                log.warn("写入向量时 RSPU 不存在，rspuId={}", rspuId);
-                return false;
-            }
-
-            Map<String, Object> metadata = ChromaMetadataBuilder.buildProductMetadata(rspu, imageSize);
-
-            chromaDbClient.upsert(
-                List.of(imageId),
-                List.of(embedding),
-                List.of(metadata),
-                null
-            );
-            log.info("向量已写入 ChromaDB，imageId={}", imageId);
-            return true;
+            productVectorStore.upsert(imageId, currentRevision, embed.inputHash(), embed.vector());
+            log.info("向量已写入向量存储，imageId={}", imageId);
+            return null;
+        } catch (VectorStaleImageException e) {
+            log.warn("图片内容已更新，向量已丢弃，将由重建任务重新编码，imageId={}", imageId, e);
+            return "AI 识别完成，但图片内容已更新，向量已丢弃，将由重建任务重新编码";
         } catch (Exception e) {
-            log.error("写入 ChromaDB 失败，imageId={}", imageId, e);
-            return false;
+            log.error("写入向量存储失败，imageId={}", imageId, e);
+            return "AI 识别完成，但向量写入向量存储失败，以图搜图功能可能不可用";
         }
+    }
+
+    /**
+     * 异步处理向量重建任务：重编码图片向量并写入 pgvector。
+     *
+     * @param taskId 任务 ID
+     */
+    @Async("taskExecutor")
+    public void processVectorRebuild(String taskId) {
+        log.info("开始异步处理向量重建任务，taskId={}", taskId);
+        vectorRebuildService.executeRebuildTask(taskId);
     }
 }

@@ -1,87 +1,19 @@
--- RSDP 数据库重置脚本（PostgreSQL）
--- 用途：清空当前 rsdp 数据库并重新初始化表结构 + 种子数据
--- 执行方式：在 IDEA 数据库插件的 rsdp@localhost Console 中全选执行
+-- =============================================================================
+-- V1 baseline：由 database/schema/*.sql 全量拼接生成（治理体系采纳时点的结构真相）
+--
+-- ⚠️ 本文件不可变：任何结构变更必须新增 V2+ 增量脚本，禁止修改本文件。
+--    schema/ 目录仍是"当前全貌"的维护形态（含其后 V2+ 的合并预览），
+--    一致性由 scripts/check_flyway_schema_sync.sh 强制校验。
+-- =============================================================================
 
--- 环境守卫：防止误在其他数据库执行
-DO $$
-BEGIN
-    IF current_database() != 'rsdp' THEN
-        RAISE EXCEPTION '此脚本只能在 rsdp 数据库中执行，当前数据库: %', current_database();
-    END IF;
-END $$;
-
--- =================== 1. 清理旧表 ===================
-DROP TABLE IF EXISTS matching_feedback CASCADE;
-DROP TABLE IF EXISTS product_style_match CASCADE;
-DROP TABLE IF EXISTS style_element CASCADE;
-DROP TABLE IF EXISTS style_matching_formula CASCADE;
-DROP TABLE IF EXISTS style_case CASCADE;
-DROP TABLE IF EXISTS ai_recognition CASCADE;
-DROP TABLE IF EXISTS product_image_embedding CASCADE;
-DROP TABLE IF EXISTS image_assets CASCADE;
-DROP TABLE IF EXISTS price_history CASCADE;
-DROP TABLE IF EXISTS rspu_price_summary CASCADE;
-DROP TABLE IF EXISTS rsku_supply CASCADE;
-DROP TABLE IF EXISTS excel_import_row CASCADE;
-DROP TABLE IF EXISTS factory_lead_time_rule CASCADE;
-DROP TABLE IF EXISTS rspu_factory_mapping CASCADE;
-DROP TABLE IF EXISTS factory_capacity_assessment CASCADE;
-DROP TABLE IF EXISTS factory_variant_capacity CASCADE;
-DROP TABLE IF EXISTS factory_warehouse CASCADE;
-DROP TABLE IF EXISTS factory_level_capability CASCADE;
-DROP TABLE IF EXISTS variant_code_counter CASCADE;
-DROP TABLE IF EXISTS rspu_variant CASCADE;
-DROP TABLE IF EXISTS rspu_relation CASCADE;
-DROP TABLE IF EXISTS factory_master CASCADE;
-DROP TABLE IF EXISTS rspu_scene CASCADE;
-DROP TABLE IF EXISTS rspu_code_counter CASCADE;
-DROP TABLE IF EXISTS rsku_code_counter CASCADE;
-DROP TABLE IF EXISTS rspu_style CASCADE;
-DROP TABLE IF EXISTS rspu_master CASCADE;
-DROP TABLE IF EXISTS excel_import_batch CASCADE;
-DROP TABLE IF EXISTS async_task CASCADE;
-DROP TABLE IF EXISTS audit_log CASCADE;
-DROP TABLE IF EXISTS user_operator CASCADE;
-DROP TABLE IF EXISTS category_dict CASCADE;
-DROP TABLE IF EXISTS dict_alias CASCADE;
-DROP TABLE IF EXISTS dict_unresolved_value CASCADE;
-DROP TABLE IF EXISTS six_dim_schema CASCADE;
-DROP TABLE IF EXISTS scheme_item CASCADE;
-DROP TABLE IF EXISTS scheme CASCADE;
-DROP TABLE IF EXISTS scheme_candidate CASCADE;
-DROP TABLE IF EXISTS recommendation_score_config CASCADE;
-DROP TABLE IF EXISTS designer_profile CASCADE;
-DROP TABLE IF EXISTS product_collection_item CASCADE;
-DROP TABLE IF EXISTS product_collection CASCADE;
-DROP TABLE IF EXISTS user_favorite CASCADE;
-DROP TABLE IF EXISTS favorite_folder CASCADE;
-DROP TABLE IF EXISTS template_tag CASCADE;
-DROP TABLE IF EXISTS platform_banner CASCADE;
-DROP TABLE IF EXISTS platform_case CASCADE;
-DROP TABLE IF EXISTS platform_content CASCADE;
-DROP TABLE IF EXISTS platform_custom_dict CASCADE;
-DROP TABLE IF EXISTS platform_customized CASCADE;
-DROP TABLE IF EXISTS platform_lead CASCADE;
-DROP TABLE IF EXISTS floor_plan_room CASCADE;
-DROP TABLE IF EXISTS floor_plan_analysis CASCADE;
-DROP TABLE IF EXISTS project CASCADE;
-DROP TABLE IF EXISTS design_order_item CASCADE;
-DROP TABLE IF EXISTS design_order CASCADE;
-DROP TABLE IF EXISTS order_no_counter CASCADE;
-DROP TABLE IF EXISTS sys_config CASCADE;
-DROP TABLE IF EXISTS pricing_rule CASCADE;
-DROP TABLE IF EXISTS factory_product_capability CASCADE;
-DROP TABLE IF EXISTS sys_user_factory CASCADE;
-DROP TABLE IF EXISTS sys_user_role CASCADE;
-DROP TABLE IF EXISTS sys_role_permission CASCADE;
-DROP TABLE IF EXISTS sys_permission CASCADE;
-DROP TABLE IF EXISTS sys_role CASCADE;
-DROP TABLE IF EXISTS invite_record CASCADE;
-DROP TABLE IF EXISTS member_group CASCADE;
-DROP TABLE IF EXISTS company CASCADE;
-DROP TABLE IF EXISTS sys_user CASCADE;
-
--- =================== 2. 创建字典表 ===================
+-- ---------- 来源: database/schema/01_dict.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 01 字典域（01_dict.sql）
+-- 包含表：category_dict, dict_alias, dict_unresolved_value, six_dim_schema
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- 字典表（先创建，后续表的外键依赖它）
 CREATE TABLE IF NOT EXISTS category_dict (
     dict_type VARCHAR(32) NOT NULL,
     dict_code VARCHAR(32) NOT NULL,
@@ -90,11 +22,43 @@ CREATE TABLE IF NOT EXISTS category_dict (
     parent_code VARCHAR(32),
     sort_order INTEGER,
     status VARCHAR(16) DEFAULT 'active',
-    aliases TEXT,
-    remark TEXT,
-    image_id VARCHAR(64),
+    aliases TEXT,                            -- 同义词别名 JSON 数组（V22）
+    remark TEXT,                             -- 备注；六维字典存视觉判别要点（V29）
+    image_id VARCHAR(64),                    -- 场景封面图 image_assets.image_id，仅 dict_type=scene 使用（V35）
     PRIMARY KEY (dict_type, dict_code)
 );
+
+-- 字典别名表（V16 并入）：工厂方言叫法 → 字典码的持久化映射（导入确认后自学习积累）
+CREATE TABLE IF NOT EXISTS dict_alias (
+    id          BIGSERIAL PRIMARY KEY,
+    dict_type   VARCHAR(32) NOT NULL,
+    alias_name  VARCHAR(64) NOT NULL,
+    dict_code   VARCHAR(16) NOT NULL,
+    source      VARCHAR(16) NOT NULL DEFAULT 'ai_confirmed',
+    created_by  VARCHAR(64),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uk_dict_alias UNIQUE (dict_type, alias_name)
+);
+CREATE INDEX IF NOT EXISTS idx_dict_alias_type ON dict_alias(dict_type);
+
+-- 未归一值采集表（V19 并入）：导入时字典解析未命中的工厂原文自动计数采集，
+-- 供运营在治理页面归并（写 dict_alias 自学习）或忽略
+CREATE TABLE IF NOT EXISTS dict_unresolved_value (
+    id BIGSERIAL PRIMARY KEY,
+    dict_type VARCHAR(32) NOT NULL,                 -- 字典类型：size/color/material（可扩展 style 等）
+    raw_value VARCHAR(128) NOT NULL,                -- 未归一的工厂原文
+    occurrence_count INT NOT NULL DEFAULT 1,        -- 累计出现次数
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_batch_id VARCHAR(64),                      -- 最近出现的导入批次
+    last_username VARCHAR(64),                      -- 最近操作人
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending/resolved/ignored
+    resolved_code VARCHAR(16),                      -- 归并后的字典码（resolved 时填写）
+    resolved_by VARCHAR(64),
+    resolved_at TIMESTAMPTZ,
+    CONSTRAINT uk_dict_unresolved UNIQUE (dict_type, raw_value)
+);
+CREATE INDEX IF NOT EXISTS idx_dict_unresolved_status ON dict_unresolved_value(status, dict_type);
 
 -- 六维标签维度定义表（V30）：品类 × A-F 维度键 → 标签/说明，替代前后端双写
 CREATE TABLE IF NOT EXISTS six_dim_schema (
@@ -109,43 +73,48 @@ CREATE TABLE IF NOT EXISTS six_dim_schema (
     CONSTRAINT uk_six_dim_schema UNIQUE (category_code, dim_key)
 );
 
--- =================== 3. 创建业务表 ===================
-
--- RSPU 设计原型主表（款式概念）
+-- ---------- 来源: database/schema/02_product.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 02 产品域（02_product.sql）
+-- 包含表：rspu_master, rspu_style, rspu_scene, rspu_variant, rspu_relation, rspu_code_counter, rsku_code_counter, variant_code_counter, rsku_supply, price_history, rspu_price_summary
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- RSPU 设计原型主表（款式概念，不含工厂/价格/SKU 信息）
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
     external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
     rspu_code VARCHAR(32) UNIQUE,                    -- 业务编码，如 FS-MC-001-M
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
-    positioning_label VARCHAR(64) NOT NULL,
-    product_name VARCHAR(256),
+    positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
+    product_name VARCHAR(256),                     -- 商品名称（AI OCR/录入表单/Excel导入填充，可空）
     description TEXT,                                -- 长文本描述原文（Excel 导入材质解析/功能配置等，V18 并入）
     retail_price NUMERIC(14,2),                      -- 零售参考价（销售价/含税价，不加密，V18 并入）
-    six_dim_tags JSONB,
-    style_vector JSONB,
-    color_primary_name VARCHAR(64),
-    color_primary_hsv JSONB,
-    color_secondary VARCHAR(64),
-    material_tags JSONB,
-    fabric_tags JSONB DEFAULT '[]',
-    scene_tags JSONB,
-    reference_price_band VARCHAR(16),
+    six_dim_tags JSONB,                            -- 六维标签 JSON：{"A":"A字架形","B":"编织镂空",...}
+    style_vector JSONB,                            -- 512维向量备份：由 SpringBoot 调用 Ollama /api/embeddings 生成
+    color_primary_name VARCHAR(64),                -- AI识别主色名称
+    color_primary_hsv JSONB,                       -- AI识别主色HSV值 [H,S,V]
+    color_secondary VARCHAR(64),                   -- AI识别辅色名称
+    material_tags JSONB,                           -- AI识别材质标签
+    fabric_tags JSONB DEFAULT '[]',                -- 面料标签字典码 JSON 数组（V22），如 ["LI","KJ"]
+    scene_tags JSONB,                              -- AI识别适用场景标签
+    reference_price_band VARCHAR(16),              -- 参考价格带 low/mid/high
     product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华
-    budget_range JSONB,
-    warranty_years INTEGER,
-    key_specs JSONB,
-    status VARCHAR(16) DEFAULT 'active',
-    review_status VARCHAR(16) DEFAULT '待复核',
+    budget_range JSONB,                            -- 预算区间 [800, 3500]
+    warranty_years INTEGER,                        -- 款式级典型质保年限
+    key_specs JSONB,                               -- 关键规格：框架材质、海绵密度等
+    status VARCHAR(16) DEFAULT 'active',           -- active/discontinued/draft
+    review_status VARCHAR(16) DEFAULT '待复核',     -- 待复核/已确认/存疑
     review_comment TEXT,                           -- 复核备注/说明
-    aesthetics_confidence VARCHAR(16),
-    source_agent_version VARCHAR(64),
+    aesthetics_confidence VARCHAR(16),             -- high/mid/low
+    source_agent_version VARCHAR(64),              -- Ollama 模型版本
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ
 );
 
--- RSPU 多风格关联表
+-- RSPU 多风格关联表（一个款式可属于多个风格）
 CREATE TABLE IF NOT EXISTS rspu_style (
     rspu_id VARCHAR(64) NOT NULL,
     dict_type VARCHAR(32) NOT NULL DEFAULT 'style',
@@ -157,7 +126,7 @@ CREATE TABLE IF NOT EXISTS rspu_style (
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
--- RSPU 编码流水计数器
+-- RSPU 编码流水计数器（按品类+风格维度生成流水号）
 CREATE TABLE IF NOT EXISTS rspu_code_counter (
     category_code VARCHAR(16) NOT NULL,
     style_code VARCHAR(16) NOT NULL,
@@ -166,7 +135,7 @@ CREATE TABLE IF NOT EXISTS rspu_code_counter (
     PRIMARY KEY (category_code, style_code)
 );
 
--- RSKU 编码流水计数器
+-- RSKU 编码流水计数器（按 RSPU 业务编码+工厂+材质维度生成流水号）
 CREATE TABLE IF NOT EXISTS rsku_code_counter (
     rspu_code VARCHAR(32) NOT NULL,
     factory_code VARCHAR(16) NOT NULL,
@@ -176,7 +145,7 @@ CREATE TABLE IF NOT EXISTS rsku_code_counter (
     PRIMARY KEY (rspu_code, factory_code, material_code)
 );
 
--- RSPU 多场景关联表
+-- RSPU 多场景关联表（一个款式可适用于多个场景）
 CREATE TABLE IF NOT EXISTS rspu_scene (
     rspu_id VARCHAR(64) NOT NULL,
     dict_type VARCHAR(32) NOT NULL DEFAULT 'scene',
@@ -187,24 +156,24 @@ CREATE TABLE IF NOT EXISTS rspu_scene (
     FOREIGN KEY (dict_type, scene_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
--- RSPU 变体表
+-- RSPU 变体表（尺寸 × 颜色 × 材质 的具体组合）
 -- 建议变体编码使用无业务含义顺序号，如 {rspu_id}-V001，避免尺寸/材质变化导致编码变更
 -- 可读名称存入 display_name 字段，尺寸/材质等业务属性存入对应字段
 CREATE TABLE IF NOT EXISTS rspu_variant (
     variant_id VARCHAR(64) PRIMARY KEY,            -- 建议格式：{rspu_id}-V001/V002，不嵌入尺寸/材质
     rspu_id VARCHAR(64) NOT NULL,
     display_name VARCHAR(128),                     -- 变体显示名称，如"兰卡沙发 2450mm A级布"
-    variant_code VARCHAR(32),
-    size_code VARCHAR(32),
-    size_text VARCHAR(64),
-    dimensions JSONB,
-    color_code VARCHAR(32),
-    color_text VARCHAR(64),
-    material_code VARCHAR(32),
-    material_text VARCHAR(128),
-    material_mix JSONB,
-    reference_price_band VARCHAR(16),
-    product_level VARCHAR(8),
+    variant_code VARCHAR(32),                      -- 业务变体编码，如 单人位/S/M/L
+    size_code VARCHAR(32),                         -- 尺寸码（可空；归一化索引字段，非身份字段）
+    size_text VARCHAR(64),                         -- 尺寸/规格原文（工厂方言，如 "贵妃A位"）
+    dimensions JSONB,                              -- 具体尺寸 {"w":560,"d":580,"h":780,"unit":"mm"}
+    color_code VARCHAR(32),                        -- 颜色码（可空；归一化索引字段）
+    color_text VARCHAR(64),                        -- 颜色原文（工厂方言）
+    material_code VARCHAR(32),                     -- 主材质码（可空；归一化索引字段）
+    material_text VARCHAR(128),                    -- 材质原文（工厂方言，如 "A级布" "半皮"）
+    material_mix JSONB,                            -- 多种材质组合 ["实木框架","布艺座包"]
+    reference_price_band VARCHAR(16),              -- 该变体的参考价格带
+    product_level VARCHAR(8),                      -- 产品等级，继承/覆盖 RSPU 等级
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
@@ -212,7 +181,7 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
 
--- 变体编码流水计数器
+-- 变体编码流水计数器（按 RSPU 维度生成变体顺序号）
 CREATE TABLE IF NOT EXISTS variant_code_counter (
     rspu_id VARCHAR(64) NOT NULL,
     sequence_value BIGINT NOT NULL DEFAULT 1,
@@ -221,6 +190,147 @@ CREATE TABLE IF NOT EXISTS variant_code_counter (
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
 
+-- RSKU 供应单元子表（工厂对某变体的报价）
+CREATE TABLE IF NOT EXISTS rsku_supply (
+    rsku_id VARCHAR(64) PRIMARY KEY,
+    rsku_code VARCHAR(64) UNIQUE,                    -- 业务编码，如 FS-MC-001-M-A004-PE-001
+    rspu_id VARCHAR(64) NOT NULL,
+    variant_id VARCHAR(64),                        -- 关联具体变体
+    factory_code VARCHAR(16) NOT NULL,
+    factory_sku VARCHAR(64),                       -- 工厂原始编码
+    factory_price TEXT,                              -- 出厂价（AES 加密存储）
+    price_band VARCHAR(16),                        -- low/mid/high
+    product_level VARCHAR(8),                      -- 产品等级，继承自 RSPU/变体
+    material_code VARCHAR(8),                      -- 材质版本码
+    material_description TEXT,                     -- 工厂提供的详细材质说明
+    lead_time_days INTEGER,                        -- 交期
+    moq INTEGER,                                   -- 最小起订量
+    warranty_years INTEGER,                        -- 工厂对该变体的质保年限
+    shipping_from VARCHAR(128),                    -- 发货地（省/市，快速展示用）
+    shipping_warehouse_id VARCHAR(64),             -- 关联 factory_warehouse
+    structure_strength_rating VARCHAR(32),         -- 家用结构/商用结构/需验证
+    flame_retardant_capability VARCHAR(32),        -- 可做有案例/可做无案例/不可做
+    factory_photo_path TEXT,                       -- 该厂实拍图路径
+    factory_credit_score INTEGER,                  -- 履约评分 0-100
+    on_time_rate DECIMAL(5, 4),                    -- 准时率
+    quality_return_rate DECIMAL(5, 4),             -- 退货率
+    diff_notes TEXT,                               -- 差异备注：旋转底座、加宽 2cm 等
+    quote_confidence VARCHAR(16),                  -- high/mid/low
+    review_status VARCHAR(16) DEFAULT '待复核',
+    price_updated DATE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
+    -- factory_code / shipping_warehouse_id 外键跨域（03_factory 在 02 之后执行），在 cross_domain_fk.sql 补加
+);
+
+-- 价格历史表
+CREATE TABLE IF NOT EXISTS price_history (
+    history_id BIGSERIAL PRIMARY KEY,
+    rsku_id VARCHAR(64) NOT NULL,
+    old_price TEXT,                                  -- AES 加密后密文
+    new_price TEXT,                                  -- AES 加密后密文
+    changed_by VARCHAR(64),
+    change_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
+);
+
+-- RSPU 关系表（原厂搭配 / AI 确认搭配 / 互斥排除）
+CREATE TABLE IF NOT EXISTS rspu_relation (
+    relation_id VARCHAR(64) PRIMARY KEY,
+    anchor_rspu_id VARCHAR(64) NOT NULL,
+    related_rspu_id VARCHAR(64) NOT NULL,
+    relation_type VARCHAR(16) NOT NULL,              -- official / ai_verified / exclude
+    reason TEXT,
+    sort_order INTEGER DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'active',
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    FOREIGN KEY (anchor_rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (related_rspu_id) REFERENCES rspu_master(rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu_id, relation_type, status);
+CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, relation_type, status);
+
+-- =================== 索引 ===================
+
+-- RSPU 索引
+CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, status);
+-- 核心分页索引（V43）：产品列表 orderByDesc created_at，常见过滤 status / category_code
+CREATE INDEX IF NOT EXISTS idx_rspu_status_created ON rspu_master(status, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_rspu_category_status_created ON rspu_master(category_code, status, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
+CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
+CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
+-- 外部编码部分唯一索引（V17 并入）：防并发导入产生重复外部编码，仅约束未软删除且非空记录
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL AND external_code IS NOT NULL;
+
+-- 多值标签索引
+CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);
+CREATE INDEX IF NOT EXISTS idx_rspu_scene ON rspu_scene(scene_code);
+-- idx_rspu_style_rspu 已于 V43 删除：与 rspu_style 复合 PK (rspu_id, style_code) 完全同列，冗余
+
+-- 变体表索引
+CREATE INDEX IF NOT EXISTS idx_variant_rspu ON rspu_variant(rspu_id, status);
+CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);
+CREATE INDEX IF NOT EXISTS idx_variant_material ON rspu_variant(material_code);
+CREATE INDEX IF NOT EXISTS idx_variant_size ON rspu_variant(size_code);
+
+-- 变体属性组合唯一约束（防并发导入产生重复变体；NULL 归一为空串；仅约束未软删除记录）
+-- V19 起改为"码或原文"语义：COALESCE(code, text, '')，有码按码、无码按工厂原文判重
+CREATE UNIQUE INDEX IF NOT EXISTS uk_variant_attrs
+    ON rspu_variant (
+        rspu_id,
+        COALESCE(size_code, size_text, ''),
+        COALESCE(color_code, color_text, ''),
+        COALESCE(material_code, material_text, '')
+    )
+    WHERE deleted_at IS NULL;
+
+-- RSKU 索引
+CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
+CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
+CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code) WHERE deleted_at IS NULL;
+
+-- 价格历史索引
+CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_at);
+
+-- JSONB GIN 索引（按需启用，可加速标签查询）
+CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
+-- 材质标签 GIN（V43）：ProductQueryService / PublicCatalogService 均用 material_tags @> {0}::jsonb
+CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
+
+-- RSPU 价格投影汇总表（V44 并入）：每 RSPU 一行，只存业务允许暴露的聚合指标
+-- （min/max 出厂价、有效 RSKU 数）。安全口径：产品列表对工厂管理员/平台人员本就展示
+-- RSPU 级最低出厂价，该聚合值属业务允许暴露；单 RSKU 精确报价仍只存于
+-- rsku_supply.factory_price 加密列。由 RSKU 写路径 Java 侧重算 upsert 维护，
+-- 存量由 PriceSummaryBackfillMigration 回填。
+CREATE TABLE IF NOT EXISTS rspu_price_summary (
+    rspu_id            VARCHAR(64) PRIMARY KEY,
+    min_factory_price  NUMERIC(14, 2),              -- 有效 RSKU 最低出厂价（明文聚合值）
+    max_factory_price  NUMERIC(14, 2),              -- 有效 RSKU 最高出厂价
+    active_rsku_count  INTEGER NOT NULL DEFAULT 0,  -- 有效（未软删）RSKU 数
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rspu_price_summary_min ON rspu_price_summary(min_factory_price);
+
+-- ---------- 来源: database/schema/03_factory.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 03 工厂域（03_factory.sql）
+-- 包含表：factory_master, factory_level_capability, factory_warehouse, factory_variant_capacity, rspu_factory_mapping, factory_lead_time_rule, factory_capacity_assessment, factory_product_capability
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
 -- 工厂档案表
 CREATE TABLE IF NOT EXISTS factory_master (
     factory_code VARCHAR(16) PRIMARY KEY,
@@ -259,6 +369,7 @@ CREATE TABLE IF NOT EXISTS factory_master (
     auditor_signature VARCHAR(64),
     -- 工厂图片
     factory_images JSONB,
+    -- 产能评估与来源（V2 并入）
     capacity_tier_score DECIMAL(5,2),                -- 最新综合评分
     last_assessment_period VARCHAR(16),              -- 最近评估周期
     last_assessment_date DATE,                       -- 最近评估日期
@@ -272,7 +383,7 @@ CREATE TABLE IF NOT EXISTS factory_master (
 
 COMMENT ON COLUMN factory_master.factory_level IS '工厂层级: S级战略厂/A级核心厂/B级合作厂/C级备选厂，由 capacity_tier_score 自动计算或手动指定';
 
--- 工厂能力等级表
+-- 工厂能力等级表（记录工厂可承接的所有等级，其中主评级标记为 is_primary = true）
 CREATE TABLE IF NOT EXISTS factory_level_capability (
     id BIGSERIAL PRIMARY KEY,
     factory_code VARCHAR(16) NOT NULL,
@@ -282,9 +393,9 @@ CREATE TABLE IF NOT EXISTS factory_level_capability (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     UNIQUE (factory_code, level_code)
 );
--- idx_factory_level_capability_factory 已于 V41 删除：UNIQUE(factory_code, level_code) 左前缀，冗余
+-- idx_factory_level_capability_factory 已于 V43 删除：UNIQUE(factory_code, level_code) 左前缀，冗余
 
--- 工厂仓库表
+-- 工厂仓库表（一个工厂可有多个发货仓库）
 CREATE TABLE IF NOT EXISTS factory_warehouse (
     warehouse_id VARCHAR(64) PRIMARY KEY,
     factory_code VARCHAR(16) NOT NULL,
@@ -302,15 +413,15 @@ CREATE TABLE IF NOT EXISTS factory_warehouse (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 
--- 工厂-变体产能表
+-- 工厂-变体产能表（记录工厂对某变体的产能能力）
 CREATE TABLE IF NOT EXISTS factory_variant_capacity (
     factory_code VARCHAR(16) NOT NULL,
     variant_id VARCHAR(64) NOT NULL,
-    monthly_capacity INTEGER,
-    current_booked INTEGER DEFAULT 0,
-    max_batch_size INTEGER,
-    capacity_unit VARCHAR(16) DEFAULT '件',
-    lead_time_batch_days INTEGER,
+    monthly_capacity INTEGER,                      -- 月产能（件）
+    current_booked INTEGER DEFAULT 0,              -- 已占用产能
+    max_batch_size INTEGER,                        -- 单次最大接单量
+    capacity_unit VARCHAR(16) DEFAULT '件',         -- 件 / 套 / 立方米
+    lead_time_batch_days INTEGER,                  -- 大批量额外交期
     notes TEXT,
     updated_at TIMESTAMPTZ,
     PRIMARY KEY (factory_code, variant_id),
@@ -318,17 +429,17 @@ CREATE TABLE IF NOT EXISTS factory_variant_capacity (
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
 );
 
--- RSPU-工厂多对多关联表（V2 新增）
+-- RSPU-工厂多对多关联表（V2 并入）
 CREATE TABLE IF NOT EXISTS rspu_factory_mapping (
     mapping_id BIGSERIAL PRIMARY KEY,
     rspu_id VARCHAR(64) NOT NULL,
     factory_code VARCHAR(16) NOT NULL,
-    is_primary BOOLEAN DEFAULT FALSE,
-    shipping_warehouse_id VARCHAR(64),
-    moq INTEGER,
-    base_lead_time_days INTEGER,
-    status VARCHAR(16) DEFAULT 'active',
-    notes TEXT,
+    is_primary BOOLEAN DEFAULT FALSE,              -- 是否主供工厂
+    shipping_warehouse_id VARCHAR(64),             -- 默认发货仓库
+    moq INTEGER,                                    -- 该工厂对此款的MOQ
+    base_lead_time_days INTEGER,                   -- 基础交期（天数）
+    status VARCHAR(16) DEFAULT 'active',           -- active/paused/discontinued
+    notes TEXT,                                     -- 备注：如"专做皮版"、"仅做布艺"
     created_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
@@ -341,18 +452,18 @@ CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_rspu ON rspu_factory_mapping
 CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_factory ON rspu_factory_mapping(factory_code, status);
 CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_warehouse ON rspu_factory_mapping(shipping_warehouse_id);
 
--- 工厂交期规则表（V2 新增）
+-- 工厂交期规则表（V2 并入）
 CREATE TABLE IF NOT EXISTS factory_lead_time_rule (
     rule_id BIGSERIAL PRIMARY KEY,
     factory_code VARCHAR(16) NOT NULL,
-    category_code VARCHAR(16),
-    material_grade_code VARCHAR(32),
-    process_type VARCHAR(32) DEFAULT 'standard',
-    base_days INTEGER NOT NULL DEFAULT 30,
-    batch_size_threshold INTEGER,
-    batch_extra_days INTEGER DEFAULT 0,
-    material_switch_extra_days INTEGER DEFAULT 0,
-    priority INTEGER DEFAULT 100,
+    category_code VARCHAR(16),                    -- NULL=通配所有品类
+    material_grade_code VARCHAR(32),              -- NULL=通配所有材质等级
+    process_type VARCHAR(32) DEFAULT 'standard',  -- standard/modular/custom/irregular
+    base_days INTEGER NOT NULL DEFAULT 30,        -- 基础交期天数
+    batch_size_threshold INTEGER,                 -- 大批量阈值（超过此数量额外加期）
+    batch_extra_days INTEGER DEFAULT 0,           -- 大批量额外交期
+    material_switch_extra_days INTEGER DEFAULT 0, -- 换材质额外准备期
+    priority INTEGER DEFAULT 100,                 -- 优先级，数字越小越优先
     status VARCHAR(16) DEFAULT 'active',
     notes TEXT,
     created_by VARCHAR(64),
@@ -361,30 +472,30 @@ CREATE TABLE IF NOT EXISTS factory_lead_time_rule (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 CREATE INDEX IF NOT EXISTS idx_lead_time_rule_factory ON factory_lead_time_rule(factory_code, status);
--- 通配规则唯一约束（V41）：category_code/material_grade_code 可空（NULL=通配），
+-- 通配规则唯一约束（V43）：category_code/material_grade_code 可空（NULL=通配），
 -- NULLS NOT DISTINCT（PG 15+）让 NULL 参与判重，替代原行内 UNIQUE（NULL 互不相等导致通配规则可重复）
 CREATE UNIQUE INDEX IF NOT EXISTS uk_lead_time_rule_match_v2
     ON factory_lead_time_rule (factory_code, category_code, material_grade_code, process_type)
     NULLS NOT DISTINCT;
 
--- 工厂产能评估历史表（V2 新增）
+-- 工厂产能评估历史表（V2 并入）
 CREATE TABLE IF NOT EXISTS factory_capacity_assessment (
     assessment_id BIGSERIAL PRIMARY KEY,
     factory_code VARCHAR(16) NOT NULL,
-    assessment_period VARCHAR(16) NOT NULL,
-    score_capacity_scale INTEGER,
-    score_on_time_rate INTEGER,
-    score_quality INTEGER,
-    score_equipment INTEGER,
-    score_staffing INTEGER,
-    score_flexibility INTEGER,
-    tier_score DECIMAL(5,2) NOT NULL,
-    calculated_tier VARCHAR(8),
-    monthly_capacity_avg INTEGER,
-    on_time_rate DECIMAL(5,4),
-    quality_return_rate DECIMAL(5,4),
-    active_rspu_count INTEGER,
-    active_rsku_count INTEGER,
+    assessment_period VARCHAR(16) NOT NULL,        -- 评估周期，如 2025Q2
+    score_capacity_scale INTEGER,                  -- 产能规模得分
+    score_on_time_rate INTEGER,                    -- 准时交付得分
+    score_quality INTEGER,                         -- 质量合格率得分
+    score_equipment INTEGER,                       -- 设备水平得分
+    score_staffing INTEGER,                        -- 人员规模/稳定性得分
+    score_flexibility INTEGER,                     -- 柔性生产能力得分
+    tier_score DECIMAL(5,2) NOT NULL,              -- 综合评分
+    calculated_tier VARCHAR(8),                    -- 计算出的层级 S/A/B/C
+    monthly_capacity_avg INTEGER,                  -- 月均产能
+    on_time_rate DECIMAL(5,4),                     -- 准时率
+    quality_return_rate DECIMAL(5,4),              -- 退货率
+    active_rspu_count INTEGER,                     -- 在产款式数
+    active_rsku_count INTEGER,                     -- 在产报价数
     assessed_by VARCHAR(64),
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -393,62 +504,45 @@ CREATE TABLE IF NOT EXISTS factory_capacity_assessment (
 CREATE INDEX IF NOT EXISTS idx_assessment_factory ON factory_capacity_assessment(factory_code, assessment_period);
 CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(assessment_period);
 
--- RSKU 供应单元子表
-CREATE TABLE IF NOT EXISTS rsku_supply (
-    rsku_id VARCHAR(64) PRIMARY KEY,
-    rsku_code VARCHAR(64) UNIQUE,                    -- 业务编码，如 FS-MC-001-M-A004-PE-001
-    rspu_id VARCHAR(64) NOT NULL,
-    variant_id VARCHAR(64),
+-- 工厂仓库索引
+CREATE INDEX IF NOT EXISTS idx_factory_warehouse_factory ON factory_warehouse(factory_code, status);
+
+-- 工厂产能索引
+CREATE INDEX IF NOT EXISTS idx_capacity_variant ON factory_variant_capacity(variant_id);
+-- idx_capacity_factory 已于 V43 删除：PK (factory_code, variant_id) 左前缀，冗余
+
+-- 工厂产品能力档案（用于全产品库去重）
+CREATE TABLE IF NOT EXISTS factory_product_capability (
+    id BIGSERIAL PRIMARY KEY,
     factory_code VARCHAR(16) NOT NULL,
-    factory_sku VARCHAR(64),
-    factory_price TEXT,
-    price_band VARCHAR(16),
-    product_level VARCHAR(8),
+    category_code VARCHAR(16),
+    style_code VARCHAR(16),
     material_code VARCHAR(8),
-    material_description TEXT,
-    lead_time_days INTEGER,
-    moq INTEGER,
-    warranty_years INTEGER,
-    shipping_from VARCHAR(128),
-    shipping_warehouse_id VARCHAR(64),
-    structure_strength_rating VARCHAR(32),
-    flame_retardant_capability VARCHAR(32),
-    factory_photo_path TEXT,
-    factory_credit_score INTEGER,
-    on_time_rate DECIMAL(5, 4),
-    quality_return_rate DECIMAL(5, 4),
-    diff_notes TEXT,
-    quote_confidence VARCHAR(16),
-    review_status VARCHAR(16) DEFAULT '待复核',
-    price_updated DATE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
-    deleted_at TIMESTAMPTZ,
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
-    FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id)
+    UNIQUE (factory_code, category_code, style_code, material_code),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
+-- idx_factory_capability_factory 已于 V43 删除：UNIQUE(factory_code, ...) 左前缀，冗余
+CREATE INDEX IF NOT EXISTS idx_factory_capability_keys ON factory_product_capability(category_code, style_code, material_code);
 
--- 价格历史表
-CREATE TABLE IF NOT EXISTS price_history (
-    history_id BIGSERIAL PRIMARY KEY,
-    rsku_id VARCHAR(64) NOT NULL,
-    old_price TEXT,
-    new_price TEXT,
-    changed_by VARCHAR(64),
-    change_reason TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
-);
+-- ---------- 来源: database/schema/04_image_ai.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 04 图片与AI识别域（04_image_ai.sql）
+-- 包含表：image_assets, product_image_embedding, ai_recognition, async_task
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- pgvector 扩展：图片向量存储（P0 向量库收口，随本域最先建表前安装）
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- 图片资源表
 CREATE TABLE IF NOT EXISTS image_assets (
     image_id VARCHAR(64) PRIMARY KEY,
     rspu_id VARCHAR(64),
-    variant_id VARCHAR(64),
-    rsku_id VARCHAR(64),
-    image_type VARCHAR(32) NOT NULL,
+    variant_id VARCHAR(64),                        -- 变体专属图
+    rsku_id VARCHAR(64),                           -- 工厂实拍图
+    image_type VARCHAR(32) NOT NULL,               -- white_bg/factory_photo/detail/original
     storage_path TEXT NOT NULL,
     storage_url TEXT,
     file_size BIGINT,
@@ -458,8 +552,8 @@ CREATE TABLE IF NOT EXISTS image_assets (
     is_primary BOOLEAN DEFAULT FALSE,
     ai_processed BOOLEAN DEFAULT FALSE,
     quality_score DECIMAL(5, 4),
-    content_hash VARCHAR(64),
-    content_revision BIGINT NOT NULL DEFAULT 1,
+    content_hash VARCHAR(64),                        -- 图片内容 SHA-256（录入查重，V31）
+    content_revision BIGINT NOT NULL DEFAULT 1,      -- 图片内容版本：替换/裁剪覆盖时递增，向量按版本防旧写（P0）
     uploaded_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMPTZ,
@@ -468,24 +562,19 @@ CREATE TABLE IF NOT EXISTS image_assets (
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
 );
 
--- RSPU 关系表
-CREATE TABLE IF NOT EXISTS rspu_relation (
-    relation_id VARCHAR(64) PRIMARY KEY,
-    anchor_rspu_id VARCHAR(64) NOT NULL,
-    related_rspu_id VARCHAR(64) NOT NULL,
-    relation_type VARCHAR(16) NOT NULL,
-    reason TEXT,
-    sort_order INTEGER DEFAULT 0,
-    status VARCHAR(16) DEFAULT 'active',
-    created_by VARCHAR(64),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ,
-    deleted_at TIMESTAMPTZ,
-    FOREIGN KEY (anchor_rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (related_rspu_id) REFERENCES rspu_master(rspu_id)
+-- 图片向量表（P0）：一张图片一条当前向量，编码配置标识见 ProductVectorProfile（模型+维度+预处理+距离）
+-- 商品归属经 image_assets 关联，不冗余可变业务事实；图片物理删除级联清向量
+CREATE TABLE IF NOT EXISTS product_image_embedding (
+    image_id VARCHAR(64) PRIMARY KEY REFERENCES image_assets(image_id) ON DELETE CASCADE,
+    profile_id VARCHAR(64) NOT NULL,
+    source_revision BIGINT NOT NULL CHECK (source_revision > 0),
+    input_hash VARCHAR(64) NOT NULL,                 -- 实际送入 embedding API 的字节 SHA-256（缩放后）
+    embedding vector(1024) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu_id, relation_type, status);
-CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, relation_type, status);
+CREATE INDEX IF NOT EXISTS idx_product_image_embedding_hnsw
+    ON product_image_embedding USING hnsw (embedding vector_cosine_ops);
 
 -- AI 识别记录表
 CREATE TABLE IF NOT EXISTS ai_recognition (
@@ -494,9 +583,9 @@ CREATE TABLE IF NOT EXISTS ai_recognition (
     rspu_id VARCHAR(64),
     task_id VARCHAR(64),
     model_name VARCHAR(64),
-    model_version VARCHAR(64),
-    prompt_version VARCHAR(64),
-    recognition_type VARCHAR(16),
+    model_version VARCHAR(64),                   -- 识别模型版本（V43）
+    prompt_version VARCHAR(64),                  -- 提示词模板版本（V43）
+    recognition_type VARCHAR(16),                  -- encode/label/judge
     endpoint TEXT,
     input_data JSONB,
     output_data JSONB,
@@ -514,64 +603,6 @@ CREATE TABLE IF NOT EXISTS ai_recognition (
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
 
--- 搭配方案主表
-CREATE TABLE IF NOT EXISTS scheme (
-    scheme_id VARCHAR(64) PRIMARY KEY,
-    scheme_name VARCHAR(128) NOT NULL,
-    room_type VARCHAR(32),
-    budget_limit DECIMAL(18, 2),
-    total_price DECIMAL(18, 2),
-    factory_count INTEGER,
-    max_lead_time_days INTEGER,
-    item_count INTEGER,
-    status VARCHAR(16) DEFAULT 'active',
-    project_id VARCHAR(64),
-    is_template BOOLEAN NOT NULL DEFAULT false,
-    template_tags TEXT,
-    analysis_id VARCHAR(64),
-    canvas_layout JSONB,        -- 画布布局（搭配画布，V41 并入）
-    share_enabled BOOLEAN NOT NULL DEFAULT false,  -- 方案分享开关（V42 并入）
-    share_expire_at TIMESTAMPTZ,  -- 方案分享过期时间（V42 并入，NULL=永久有效）
-    created_by VARCHAR(64),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ,
-    deleted_at TIMESTAMPTZ
-);
-CREATE INDEX IF NOT EXISTS idx_scheme_created_by ON scheme(created_by, status);
-CREATE INDEX IF NOT EXISTS idx_scheme_status_created ON scheme(status, created_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme(project_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_scheme_template ON scheme(is_template) WHERE is_template = true AND deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uk_scheme_name_user_active
-    ON scheme(scheme_name, created_by)
-    WHERE project_id IS NULL AND status = 'active' AND deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uk_scheme_name_project_active
-    ON scheme(scheme_name, project_id)
-    WHERE project_id IS NOT NULL AND status = 'active' AND deleted_at IS NULL;
-
--- 搭配方案项表
-CREATE TABLE IF NOT EXISTS scheme_item (
-    scheme_item_id BIGSERIAL PRIMARY KEY,
-    scheme_id VARCHAR(64) NOT NULL,
-    rspu_id VARCHAR(64) NOT NULL,
-    rsku_id VARCHAR(64) NOT NULL,
-    factory_code VARCHAR(16) NOT NULL,
-    factory_price TEXT,
-    lead_time_days INTEGER,
-    moq INTEGER,
-    quantity INTEGER DEFAULT 1,
-    sort_order INTEGER DEFAULT 0,
-    space_tag VARCHAR(32),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMPTZ,
-    FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
-);
-CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);
-CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme_sort ON scheme_item(scheme_id, sort_order, scheme_item_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_scheme_item_rspu ON scheme_item(rspu_id);
-
 -- 异步任务表
 CREATE TABLE IF NOT EXISTS async_task (
     task_id VARCHAR(64) PRIMARY KEY,
@@ -586,46 +617,28 @@ CREATE TABLE IF NOT EXISTS async_task (
     completed_at TIMESTAMPTZ
 );
 
--- 户型图分析批次表（V36 并入：一次上传一条）
-CREATE TABLE IF NOT EXISTS floor_plan_analysis (
-    analysis_id      VARCHAR(64) PRIMARY KEY,
-    image_id         VARCHAR(64) NOT NULL,
-    status           VARCHAR(16) NOT NULL DEFAULT 'pending',
-    task_id          VARCHAR(64),
-    raw_result       JSONB,
-    confirmed_rooms  JSONB,
-    scale_ratio      DECIMAL(10,4),
-    source           VARCHAR(16) NOT NULL DEFAULT 'admin',
-    error_message    TEXT,
-    created_by       VARCHAR(64),
-    created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMPTZ,
-    deleted_at       TIMESTAMPTZ,
-    FOREIGN KEY (image_id) REFERENCES image_assets(image_id)
-);
-CREATE INDEX IF NOT EXISTS idx_fpa_created_by ON floor_plan_analysis(created_by, created_at) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_fpa_created ON floor_plan_analysis(created_at DESC) WHERE deleted_at IS NULL;
+-- 图片索引
+CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
+CREATE INDEX IF NOT EXISTS idx_image_variant ON image_assets(variant_id, image_type);
+CREATE INDEX IF NOT EXISTS idx_image_primary ON image_assets(rspu_id, is_primary);
+CREATE INDEX IF NOT EXISTS idx_image_rsku ON image_assets(rsku_id);
+-- 内容哈希部分索引（V43 收窄）：唯一查询入口按 content_hash = ? AND deleted_at IS NULL 查重，存量 NULL 行无查询价值
+CREATE INDEX IF NOT EXISTS idx_image_content_hash ON image_assets(content_hash) WHERE deleted_at IS NULL AND content_hash IS NOT NULL;
 
--- 户型图空间识别明细表（V36 并入）
-CREATE TABLE IF NOT EXISTS floor_plan_room (
-    room_id          VARCHAR(64) PRIMARY KEY,
-    analysis_id      VARCHAR(64) NOT NULL,
-    room_type        VARCHAR(32) NOT NULL,
-    bbox             JSONB,
-    width_mm         INTEGER,
-    depth_mm         INTEGER,
-    area_m2          DECIMAL(8,2),
-    dimension_source VARCHAR(16),
-    dimension_confidence VARCHAR(8) DEFAULT 'low',
-    dimension_text   VARCHAR(128),
-    sort_order       INTEGER DEFAULT 0,
-    deleted_at       TIMESTAMPTZ,
-    created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMPTZ,
-    FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
-);
-CREATE INDEX IF NOT EXISTS idx_fpr_analysis ON floor_plan_room(analysis_id) WHERE deleted_at IS NULL;
+-- AI 识别索引
+CREATE INDEX IF NOT EXISTS idx_ai_image ON ai_recognition(image_id, recognition_type);
+CREATE INDEX IF NOT EXISTS idx_ai_rspu ON ai_recognition(rspu_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_recognition_task ON ai_recognition(task_id);
 
+CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
+
+-- ---------- 来源: database/schema/05_excel_import.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 05 Excel导入域（05_excel_import.sql）
+-- 包含表：excel_import_batch, excel_import_row
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
 -- Excel AI 辅助导入批次表
 CREATE TABLE IF NOT EXISTS excel_import_batch (
     batch_id VARCHAR(64) PRIMARY KEY,
@@ -639,6 +652,7 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     preview_rows JSONB,
     price_columns JSONB,
     failures JSONB,
+    -- 工厂关联、发货地、交期/MOQ、导入元数据（V2 并入）
     factory_code VARCHAR(16),
     factory_name VARCHAR(128),
     shipping_warehouse_id VARCHAR(64),
@@ -657,31 +671,32 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加
 );
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
+-- 僵死批次收割索引（V43）：reapStaleImporting WHERE status='importing' AND (updated_at IS NULL OR updated_at < ?)
 CREATE INDEX IF NOT EXISTS idx_import_batch_stale ON excel_import_batch(updated_at) WHERE status = 'importing';
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_created_by ON excel_import_batch(created_by);
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_factory ON excel_import_batch(factory_code);
 
--- Excel 行级导入记录表（V2 新增）
+-- Excel 行级导入记录表（V2 并入）
 CREATE TABLE IF NOT EXISTS excel_import_row (
     row_id BIGSERIAL PRIMARY KEY,
     batch_id VARCHAR(64) NOT NULL,
-    excel_row_number INTEGER NOT NULL,
-    row_type VARCHAR(32) NOT NULL,
-    parent_row_id BIGINT,
-    raw_data JSONB NOT NULL,
-    mapped_fields JSONB,
-    selected_price_columns JSONB,
-    status VARCHAR(16) DEFAULT 'pending',
-    processing_stage VARCHAR(32),
-    generated_rspu_id VARCHAR(64),
-    generated_variant_id VARCHAR(64),
-    generated_rsku_ids JSONB,
-    failure_reason TEXT,
-    failure_stage VARCHAR(32),
-    extracted_image_count INTEGER DEFAULT 0,
-    image_asset_ids JSONB,
-    override_image_asset_ids JSONB,
-    ai_task_id VARCHAR(64),
+    excel_row_number INTEGER NOT NULL,             -- Excel中的原始行号
+    row_type VARCHAR(32) NOT NULL,                 -- product/module/header/unknown/preview_placeholder
+    parent_row_id BIGINT,                          -- 模块行关联到产品型号行
+    raw_data JSONB NOT NULL,                       -- 原始数据快照
+    mapped_fields JSONB,                           -- AI映射后的字段
+    selected_price_columns JSONB,                  -- 识别的价格列
+    status VARCHAR(16) DEFAULT 'pending',          -- pending/processing/success/failed/skipped
+    processing_stage VARCHAR(32),                  -- 当前处理阶段
+    generated_rspu_id VARCHAR(64),                 -- 生成的RSPU ID
+    generated_variant_id VARCHAR(64),              -- 生成的变体ID
+    generated_rsku_ids JSONB,                      -- ["RSKU-001", "RSKU-002"]
+    failure_reason TEXT,                           -- 失败原因描述
+    failure_stage VARCHAR(32),                     -- 在哪个阶段失败
+    extracted_image_count INTEGER DEFAULT 0,       -- 提取到的图片数量
+    image_asset_ids JSONB,                         -- ["IMG-001", "IMG-002"]
+    override_image_asset_ids JSONB,                -- 用户在数据清洗页编辑后的图片 asset ID 列表（V33）
+    ai_task_id VARCHAR(64),                        -- 关联的异步AI识别任务
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
     FOREIGN KEY (batch_id) REFERENCES excel_import_batch(batch_id),
@@ -695,20 +710,347 @@ CREATE INDEX IF NOT EXISTS idx_import_row_type ON excel_import_row(batch_id, row
 CREATE INDEX IF NOT EXISTS idx_import_row_rspu ON excel_import_row(generated_rspu_id);
 CREATE INDEX IF NOT EXISTS idx_import_row_parent ON excel_import_row(parent_row_id);
 
+-- ---------- 来源: database/schema/06_floor_plan.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 06 户型图域（06_floor_plan.sql）
+-- 包含表：floor_plan_analysis, floor_plan_room
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- 户型图分析批次表（V36 并入：一次上传一条）
+CREATE TABLE IF NOT EXISTS floor_plan_analysis (
+    analysis_id      VARCHAR(64) PRIMARY KEY,
+    image_id         VARCHAR(64) NOT NULL,             -- 户型原图，指向 image_assets
+    status           VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending/analyzing/awaiting_confirm/confirmed/failed
+    task_id          VARCHAR(64),                      -- 关联 async_task
+    raw_result       JSONB,                            -- AI 原始识别结果（不动，留档）
+    confirmed_rooms  JSONB,                            -- 人工校正后的空间列表（最终生效数据）
+    scale_ratio      DECIMAL(10,4),                    -- 识别/人工确认的比例尺（像素:实际mm），可空
+    source           VARCHAR(16) NOT NULL DEFAULT 'admin',  -- admin（管理端）/ public（官网匿名）
+    error_message    TEXT,
+    created_by       VARCHAR(64),                      -- 官网匿名来源可空
+    created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMPTZ,
+    deleted_at       TIMESTAMPTZ,
+    FOREIGN KEY (image_id) REFERENCES image_assets(image_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fpa_created_by ON floor_plan_analysis(created_by, created_at) WHERE deleted_at IS NULL;
+-- 平台运营列表索引（V43）：运营查询无 created_by 条件、仅 orderByDesc created_at，左前缀索引用不上
+CREATE INDEX IF NOT EXISTS idx_fpa_created ON floor_plan_analysis(created_at DESC) WHERE deleted_at IS NULL;
 
--- 审计日志表
-CREATE TABLE IF NOT EXISTS audit_log (
+-- 户型图空间识别明细表（V36 并入：每个识别出的空间一行，人工校正就地更新）
+CREATE TABLE IF NOT EXISTS floor_plan_room (
+    room_id          VARCHAR(64) PRIMARY KEY,
+    analysis_id      VARCHAR(64) NOT NULL,
+    room_type        VARCHAR(32) NOT NULL,             -- 引用 room_type 字典（LIVING_ROOM/BEDROOM/...）
+    bbox             JSONB,                            -- {x, y, w, h} 归一化坐标 [0,1]
+    width_mm         INTEGER,                          -- 开间（人工校正后为准）
+    depth_mm         INTEGER,                          -- 进深
+    area_m2          DECIMAL(8,2),
+    dimension_source VARCHAR(16),                      -- ocr_text / scale_calc / ai_estimate / manual
+    dimension_confidence VARCHAR(8) DEFAULT 'low',     -- high/mid/low
+    dimension_text   VARCHAR(128),                     -- 图上尺寸标注原文
+    sort_order       INTEGER DEFAULT 0,
+    deleted_at       TIMESTAMPTZ,                        -- 人工删除误识别空间
+    created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMPTZ,
+    FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fpr_analysis ON floor_plan_room(analysis_id) WHERE deleted_at IS NULL;
+
+-- ---------- 来源: database/schema/07_project_scheme.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 07 项目与方案域（07_project_scheme.sql）
+-- 包含表：project, scheme, scheme_item, scheme_candidate, favorite_folder, user_favorite, template_tag, product_collection, product_collection_item
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- 搭配方案主表
+CREATE TABLE IF NOT EXISTS scheme (
+    scheme_id VARCHAR(64) PRIMARY KEY,
+    scheme_name VARCHAR(128) NOT NULL,
+    room_type VARCHAR(32),                           -- 空间类型字典码
+    budget_limit DECIMAL(18, 2),                     -- 预算上限
+    total_price DECIMAL(18, 2),                      -- 方案总价
+    factory_count INTEGER,                           -- 涉及工厂数
+    max_lead_time_days INTEGER,                      -- 最长交期
+    item_count INTEGER,                              -- 方案项数
+    status VARCHAR(16) DEFAULT 'active',
+    project_id VARCHAR(64),                          -- 所属设计项目（V4 并入）
+    is_template BOOLEAN NOT NULL DEFAULT false,      -- 是否为方案模板（V4 并入）
+    template_tags TEXT,                              -- 模板标签 JSON 数组（V4 并入）
+    analysis_id VARCHAR(64),                         -- 来源户型图分析批次，可空（V36 并入）
+    canvas_layout JSONB,                             -- 画布布局（搭配画布，V41 并入）：{"<schemeItemId>":{x,y,scale,z}}
+    share_enabled BOOLEAN NOT NULL DEFAULT false,    -- 方案分享开关（V42 并入）
+    share_expire_at TIMESTAMPTZ,                       -- 方案分享过期时间（V42 并入，NULL=永久有效）
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_scheme_created_by ON scheme(created_by, status);
+-- 方案列表索引（V43）：listSchemes eq status + orderByDesc created_at，部分谓词与 @TableLogic 软删一致
+CREATE INDEX IF NOT EXISTS idx_scheme_status_created ON scheme(status, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_scheme_project ON scheme(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_scheme_template ON scheme(is_template) WHERE is_template = true AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_scheme_name_user_active
+    ON scheme(scheme_name, created_by)
+    WHERE project_id IS NULL AND status = 'active' AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_scheme_name_project_active
+    ON scheme(scheme_name, project_id)
+    WHERE project_id IS NOT NULL AND status = 'active' AND deleted_at IS NULL;
+
+-- 搭配方案项表
+CREATE TABLE IF NOT EXISTS scheme_item (
+    scheme_item_id BIGSERIAL PRIMARY KEY,
+    scheme_id VARCHAR(64) NOT NULL,
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+    factory_price TEXT,                              -- 加密存储
+    lead_time_days INTEGER,
+    moq INTEGER,
+    quantity INTEGER DEFAULT 1,
+    sort_order INTEGER DEFAULT 0,
+    space_tag VARCHAR(32),                                  -- 空间覆盖标签（场景字典码，可空=跟随产品场景推导，V40 并入）
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMPTZ,
+    FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
+    CONSTRAINT chk_scheme_item_quantity CHECK (quantity >= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);
+-- 方案明细排序索引（V43）：getSchemeDetail eq scheme_id + orderByAsc sort_order；
+-- (scheme_id, sort_order) 无唯一约束、sort_order 可重复，加主键 scheme_item_id 第三列保证排序稳定
+CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme_sort ON scheme_item(scheme_id, sort_order, scheme_item_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_scheme_item_rspu ON scheme_item(rspu_id);
+
+-- 产品集（管理员维护的主流搭配集合）
+CREATE TABLE IF NOT EXISTS product_collection (
+    collection_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    collection_code VARCHAR(32) UNIQUE,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    category_codes JSONB,
+    style_codes JSONB,
+    target_segments JSONB,
+    is_featured BOOLEAN DEFAULT false,
+    sort_order INT DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+    -- created_by 外键跨域（09_user_team 在 07 之后执行），在 cross_domain_fk.sql 补加
+);
+CREATE INDEX IF NOT EXISTS idx_product_collection_status ON product_collection(status);
+CREATE INDEX IF NOT EXISTS idx_product_collection_featured ON product_collection(is_featured, sort_order);
+
+-- 产品集与 RSPU 关联
+CREATE TABLE IF NOT EXISTS product_collection_item (
     id BIGSERIAL PRIMARY KEY,
-    table_name VARCHAR(64) NOT NULL,
-    record_id VARCHAR(64) NOT NULL,
-    action VARCHAR(16) NOT NULL,
-    old_value JSONB,
-    new_value JSONB,
-    operator VARCHAR(64),
-    ip_address VARCHAR(64),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    collection_id UUID NOT NULL,
+    rspu_id VARCHAR(64) NOT NULL,
+    sort_order INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (collection_id, rspu_id),
+    FOREIGN KEY (collection_id) REFERENCES product_collection(collection_id) ON DELETE CASCADE,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_collection_item_collection ON product_collection_item(collection_id);
+CREATE INDEX IF NOT EXISTS idx_collection_item_rspu ON product_collection_item(rspu_id);
+
+-- AI 推荐候选清单
+CREATE TABLE IF NOT EXISTS scheme_candidate (
+    candidate_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    recommend_request_id UUID NOT NULL,
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64),
+    score DECIMAL(5,4),
+    ai_reason TEXT,
+    match_factors JSONB,
+    status VARCHAR(16) DEFAULT 'pending',
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
+);
+CREATE INDEX IF NOT EXISTS idx_scheme_candidate_request ON scheme_candidate(recommend_request_id, status);
+CREATE INDEX IF NOT EXISTS idx_scheme_candidate_rspu ON scheme_candidate(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(created_by, status);
+
+-- 收藏夹（V4 并入）：用户级产品收藏，支持分组
+CREATE TABLE IF NOT EXISTS user_favorite (
+    favorite_id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,                       -- sys_user 外键跨域（09 在 07 之后执行），在 cross_domain_fk.sql 补加
+    rspu_id VARCHAR(64) NOT NULL REFERENCES rspu_master(rspu_id),
+    group_name VARCHAR(64),
+    folder_id VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_favorite_folder ON user_favorite(folder_id);
+
+-- 收藏夹文件夹（V14 并入）
+CREATE TABLE IF NOT EXISTS favorite_folder (
+    folder_id   VARCHAR(64) PRIMARY KEY,
+    user_id     VARCHAR(64) NOT NULL,                       -- sys_user 外键跨域（09 在 07 之后执行），在 cross_domain_fk.sql 补加
+    folder_name VARCHAR(64) NOT NULL,
+    sort_order  INT NOT NULL DEFAULT 0,
+    deleted_at  TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_folder_user ON favorite_folder(user_id) WHERE deleted_at IS NULL;
+
+-- 模板标签（V14 并入）：受控字典，scheme.template_tags 存名称 JSON，以名称为业务键
+CREATE TABLE IF NOT EXISTS template_tag (
+    tag_id     VARCHAR(64) PRIMARY KEY,
+    tag_name   VARCHAR(64) NOT NULL UNIQUE,
+    sort_order INT NOT NULL DEFAULT 0,
+    enabled    BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 设计项目（V4 并入）
+CREATE TABLE IF NOT EXISTS project (
+    project_id VARCHAR(64) PRIMARY KEY,
+    project_name VARCHAR(128) NOT NULL,
+    project_type VARCHAR(32),
+    company_name VARCHAR(128),
+    owner_id VARCHAR(64) NOT NULL,                       -- sys_user 外键跨域（09 在 07 之后执行），在 cross_domain_fk.sql 补加
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    remark VARCHAR(512),
+    share_enabled BOOLEAN NOT NULL DEFAULT false,
+    share_expire_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
+
+-- ---------- 来源: database/schema/08_order_pricing.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 08 订单与定价域（08_order_pricing.sql）
+-- 包含表：design_order, design_order_item, order_no_counter, sys_config, pricing_rule, recommendation_score_config
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- 推荐打分配置
+CREATE TABLE IF NOT EXISTS recommendation_score_config (
+    config_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    config_key VARCHAR(64) NOT NULL UNIQUE,
+    name VARCHAR(128) NOT NULL,
+    description TEXT,
+    weights JSONB NOT NULL,
+    is_default BOOLEAN DEFAULT false,
+    is_active BOOLEAN DEFAULT true,
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+    -- created_by 外键跨域（09_user_team 在 08 之后执行），在 cross_domain_fk.sql 补加
+);
+-- idx_recommendation_config_key 已于 V43 删除：被 config_key 行内 UNIQUE 覆盖，冗余
+CREATE INDEX IF NOT EXISTS idx_recommendation_config_default ON recommendation_score_config(is_default, is_active);
+
+-- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
+CREATE TABLE IF NOT EXISTS design_order (
+    order_id VARCHAR(64) PRIMARY KEY,
+    order_no VARCHAR(32) NOT NULL UNIQUE,
+    project_id VARCHAR(64) REFERENCES project(project_id),
+    scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
+    receiver_name VARCHAR(64),
+    receiver_phone VARCHAR(32),
+    receiver_area VARCHAR(128),
+    receiver_address VARCHAR(256),
+    original_total_price TEXT,
+    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1 CHECK (price_rate >= 0 AND price_rate <= 1),
+    final_total_price TEXT,
+    item_count INT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    expected_lead_time INT,
+    remark VARCHAR(512),
+    invite_token_hash VARCHAR(128),
+    invite_expire_at TIMESTAMPTZ,
+    invite_confirmed_at TIMESTAMPTZ,
+    contract_file_id VARCHAR(64),
+    idempotency_key VARCHAR(64),
+    created_by VARCHAR(64) NOT NULL,                       -- sys_user 外键跨域（09 在 08 之后执行），在 cross_domain_fk.sql 补加
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_design_order_project ON design_order(project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_design_order_scheme ON design_order(scheme_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_design_order_idempotency
+    ON design_order(created_by, idempotency_key) WHERE deleted_at IS NULL;
+
+-- 订单号每日序号计数器（解决 COUNT+1 在软删除下与唯一索引冲突的问题）
+CREATE TABLE IF NOT EXISTS order_no_counter (
+    date_part VARCHAR(16) PRIMARY KEY,
+    sequence_value BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 订单明细（V5 并入）
+CREATE TABLE IF NOT EXISTS design_order_item (
+    id BIGSERIAL PRIMARY KEY,
+    order_id VARCHAR(64) NOT NULL REFERENCES design_order(order_id),
+    rspu_id VARCHAR(64) NOT NULL,
+    rsku_id VARCHAR(64),
+    variant_id VARCHAR(64),
+    product_name VARCHAR(256),
+    model VARCHAR(128),
+    image_id VARCHAR(64),
+    quantity INT NOT NULL DEFAULT 1,
+    original_price TEXT,
+    final_price TEXT,
+    adjust_price TEXT,
+    list_price NUMERIC(12,2),                        -- 标准售价快照（明文，对客户可见；区别于上面三列 TEXT 存 AES 密文，V38 并入）
+    space_tag VARCHAR(32),                           -- 空间快照（由方案复制冻结，V40 并入）
+    factory_code VARCHAR(16),
+    snapshot_json JSONB,                             -- 订单明细快照（V43 由 TEXT 改 JSONB，实体用 JsonbTypeHandler）
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_design_order_item_quantity CHECK (quantity >= 1)
+);
+COMMENT ON COLUMN design_order_item.list_price IS '标准售价快照（明文 NUMERIC：售价对客户可见不敏感，且便于 SQL 分析；刻意区别于 original_price/final_price/adjust_price 三列 TEXT 存 AES 密文）';
+COMMENT ON COLUMN design_order_item.space_tag IS '空间快照（由方案生成订单时从 scheme_item.space_tag 复制冻结；为空=未指定空间/存量订单，邀请页平铺展示兜底）';
+CREATE INDEX IF NOT EXISTS idx_order_item_order ON design_order_item(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_rspu ON design_order_item(rspu_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_factory ON design_order_item(factory_code);
+
+-- 轻量配置表（V5 并入）
+CREATE TABLE IF NOT EXISTS sys_config (
+    config_key VARCHAR(64) PRIMARY KEY,
+    config_value TEXT,
+    remark VARCHAR(256),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 品类级加价倍率（V39 并入）：标准售价 = 成本 × 品类倍率（retail_price 优先；无规则回退全局 pricing.markup.global）
+CREATE TABLE IF NOT EXISTS pricing_rule (
+    rule_id VARCHAR(64) PRIMARY KEY,
+    category_code VARCHAR(16) NOT NULL,
+    markup_multiplier NUMERIC(6,3) NOT NULL CHECK (markup_multiplier > 0),
+    remark VARCHAR(255),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_pricing_rule_category ON pricing_rule(category_code);
+
+-- ---------- 来源: database/schema/09_user_team.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 09 用户与团队域（09_user_team.sql）
+-- 包含表：sys_user, sys_role, sys_permission, sys_user_role, sys_role_permission, sys_user_factory, company, member_group, invite_record, designer_profile, user_operator
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
 -- 操作员表
 CREATE TABLE IF NOT EXISTS user_operator (
     user_id VARCHAR(64) PRIMARY KEY,
@@ -720,7 +1062,154 @@ CREATE TABLE IF NOT EXISTS user_operator (
     updated_at TIMESTAMPTZ
 );
 
--- 风格数据库 Skill 表
+-- 系统用户表
+CREATE TABLE IF NOT EXISTS sys_user (
+    user_id VARCHAR(64) PRIMARY KEY,
+    username VARCHAR(64) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    nickname VARCHAR(64),
+    company_name VARCHAR(128),
+    group_name VARCHAR(64),
+    status VARCHAR(16) DEFAULT 'active',
+    token_version INT DEFAULT 0,
+    view_full_catalog BOOLEAN NOT NULL DEFAULT false,
+    company_id VARCHAR(64),
+    group_id VARCHAR(64),
+    invite_code VARCHAR(16),
+    invited_by VARCHAR(64),
+    certified_designer BOOLEAN NOT NULL DEFAULT false,
+    last_login_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+);
+
+-- idx_sys_user_username 已于 V43 删除：被 username 行内 UNIQUE 覆盖，冗余
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sys_user_invite_code ON sys_user(invite_code);
+CREATE INDEX IF NOT EXISTS idx_sys_user_company ON sys_user(company_id);
+
+-- 企业表（V13 并入）
+CREATE TABLE IF NOT EXISTS company (
+    company_id    VARCHAR(64) PRIMARY KEY,
+    company_name  VARCHAR(128) NOT NULL,
+    logo_image_id VARCHAR(64),
+    price_ratio   NUMERIC(5,4) NOT NULL DEFAULT 1,
+    owner_id      VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    status        VARCHAR(16) NOT NULL DEFAULT 'active',
+    deleted_at    TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_company_price_ratio CHECK (price_ratio >= 0 AND price_ratio <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_company_owner ON company(owner_id);
+CREATE INDEX IF NOT EXISTS idx_company_name ON company(company_name) WHERE deleted_at IS NULL;
+
+-- 企业内分组/部门表（V13 并入）
+CREATE TABLE IF NOT EXISTS member_group (
+    group_id    VARCHAR(64) PRIMARY KEY,
+    company_id  VARCHAR(64) NOT NULL REFERENCES company(company_id),
+    group_name  VARCHAR(64) NOT NULL,
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    deleted_at  TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_member_group_company ON member_group(company_id) WHERE deleted_at IS NULL;
+
+-- 邀请记录表（V13 并入）
+CREATE TABLE IF NOT EXISTS invite_record (
+    id          BIGSERIAL PRIMARY KEY,
+    inviter_id  VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    invitee_id  VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
+    invite_code VARCHAR(16) NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_invite_record_inviter ON invite_record(inviter_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_invite_record_invitee ON invite_record(invitee_id);
+
+-- 角色表
+CREATE TABLE IF NOT EXISTS sys_role (
+    role_id BIGSERIAL PRIMARY KEY,
+    role_code VARCHAR(32) NOT NULL UNIQUE,
+    role_name VARCHAR(64) NOT NULL,
+    status VARCHAR(16) DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+);
+
+-- 权限表
+CREATE TABLE IF NOT EXISTS sys_permission (
+    permission_id BIGSERIAL PRIMARY KEY,
+    permission_code VARCHAR(64) NOT NULL UNIQUE,
+    permission_name VARCHAR(128) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 角色权限关联表
+CREATE TABLE IF NOT EXISTS sys_role_permission (
+    id BIGSERIAL PRIMARY KEY,
+    role_id BIGINT NOT NULL,
+    permission_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (role_id, permission_id),
+    FOREIGN KEY (role_id) REFERENCES sys_role(role_id),
+    FOREIGN KEY (permission_id) REFERENCES sys_permission(permission_id)
+);
+
+-- 用户角色关联表
+CREATE TABLE IF NOT EXISTS sys_user_role (
+    id BIGSERIAL PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    role_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, role_id),
+    FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
+    FOREIGN KEY (role_id) REFERENCES sys_role(role_id)
+);
+
+-- 用户工厂关联表（用于厂商业务员数据权限）
+CREATE TABLE IF NOT EXISTS sys_user_factory (
+    id BIGSERIAL PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, factory_code),
+    FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
+    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
+);
+
+-- 设计师画像
+CREATE TABLE IF NOT EXISTS designer_profile (
+    profile_id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL UNIQUE,
+    real_name VARCHAR(64),
+    avatar_url TEXT,
+    specialties JSONB,
+    preferred_styles JSONB,
+    preferred_categories JSONB,
+    price_sensitivity VARCHAR(16),
+    location VARCHAR(64),
+    company_name VARCHAR(128),
+    contact_phone VARCHAR(32),
+    bio TEXT,
+    default_budget_min DECIMAL(18,2),
+    default_budget_max DECIMAL(18,2),
+    is_public BOOLEAN DEFAULT false,
+    status VARCHAR(16) DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    FOREIGN KEY (user_id) REFERENCES sys_user(user_id)
+);
+-- idx_designer_profile_user 已于 V43 删除：被 user_id 行内 UNIQUE 覆盖，冗余
+CREATE INDEX IF NOT EXISTS idx_designer_profile_status ON designer_profile(status);
+
+-- ---------- 来源: database/schema/10_style_knowledge.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 10 风格知识库域（10_style_knowledge.sql）
+-- 包含表：style_case, style_element, style_matching_formula, product_style_match, matching_feedback
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- =================== 风格数据库 Skill 表 ===================
 
 -- 案例库：成功/失败的设计案例
 CREATE TABLE IF NOT EXISTS style_case (
@@ -809,89 +1298,6 @@ CREATE TABLE IF NOT EXISTS matching_feedback (
     FOREIGN KEY (formula_id) REFERENCES style_matching_formula(formula_id)
 );
 
--- =================== 4. 创建索引 ===================
-CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, status);
-CREATE INDEX IF NOT EXISTS idx_rspu_status_created ON rspu_master(status, created_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_rspu_category_status_created ON rspu_master(category_code, status, created_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
-CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
-CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
--- 外部编码部分唯一索引（V17 并入）：防并发导入产生重复外部编码，仅约束未软删除且非空记录
-CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL AND external_code IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);
-CREATE INDEX IF NOT EXISTS idx_rspu_scene ON rspu_scene(scene_code);
-
-CREATE INDEX IF NOT EXISTS idx_variant_rspu ON rspu_variant(rspu_id, status);
-CREATE INDEX IF NOT EXISTS idx_variant_color ON rspu_variant(color_code);
-CREATE INDEX IF NOT EXISTS idx_variant_material ON rspu_variant(material_code);
-CREATE INDEX IF NOT EXISTS idx_variant_size ON rspu_variant(size_code);
-
--- 变体属性组合唯一约束（防并发导入产生重复变体；NULL 归一为空串；仅约束未软删除记录）
--- V19 起改为"码或原文"语义：COALESCE(code, text, '')，有码按码、无码按工厂原文判重
-CREATE UNIQUE INDEX IF NOT EXISTS uk_variant_attrs
-    ON rspu_variant (
-        rspu_id,
-        COALESCE(size_code, size_text, ''),
-        COALESCE(color_code, color_text, ''),
-        COALESCE(material_code, material_text, '')
-    )
-    WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
-
-CREATE INDEX IF NOT EXISTS idx_factory_warehouse_factory ON factory_warehouse(factory_code, status);
-CREATE INDEX IF NOT EXISTS idx_capacity_variant ON factory_variant_capacity(variant_id);
-
-CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
-CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
-CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
-CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code) WHERE deleted_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_at);
-
--- RSPU 价格投影汇总表：每 RSPU 一行，只存业务允许暴露的聚合指标
-CREATE TABLE IF NOT EXISTS rspu_price_summary (
-    rspu_id            VARCHAR(64) PRIMARY KEY,
-    min_factory_price  NUMERIC(14, 2),
-    max_factory_price  NUMERIC(14, 2),
-    active_rsku_count  INTEGER NOT NULL DEFAULT 0,
-    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
-);
-CREATE INDEX IF NOT EXISTS idx_rspu_price_summary_min ON rspu_price_summary(min_factory_price);
-
-CREATE EXTENSION IF NOT EXISTS vector;
-
--- 图片向量表（P0）：与 database/schema/04_image_ai.sql 保持同步
-CREATE TABLE IF NOT EXISTS product_image_embedding (
-    image_id VARCHAR(64) PRIMARY KEY REFERENCES image_assets(image_id) ON DELETE CASCADE,
-    profile_id VARCHAR(64) NOT NULL,
-    source_revision BIGINT NOT NULL CHECK (source_revision > 0),
-    input_hash VARCHAR(64) NOT NULL,
-    embedding vector(1024) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_product_image_embedding_hnsw
-    ON product_image_embedding USING hnsw (embedding vector_cosine_ops);
-
-CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);
-CREATE INDEX IF NOT EXISTS idx_image_variant ON image_assets(variant_id, image_type);
-CREATE INDEX IF NOT EXISTS idx_image_primary ON image_assets(rspu_id, is_primary);
-CREATE INDEX IF NOT EXISTS idx_image_rsku ON image_assets(rsku_id);
-CREATE INDEX IF NOT EXISTS idx_image_content_hash ON image_assets(content_hash) WHERE deleted_at IS NULL AND content_hash IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_ai_image ON ai_recognition(image_id, recognition_type);
-CREATE INDEX IF NOT EXISTS idx_ai_rspu ON ai_recognition(rspu_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_ai_recognition_task ON ai_recognition(task_id);
-
-CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
-
 -- 风格数据库索引
 CREATE INDEX IF NOT EXISTS idx_style_case_style ON style_case(style_code, is_success);
 CREATE INDEX IF NOT EXISTS idx_style_case_room ON style_case(room_type, is_success);
@@ -900,77 +1306,149 @@ CREATE INDEX IF NOT EXISTS idx_style_element_type ON style_element(element_type,
 CREATE INDEX IF NOT EXISTS idx_formula_style_room ON style_matching_formula(style_code, room_type, status);
 CREATE INDEX IF NOT EXISTS idx_product_match_rspu ON product_style_match(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_product_match_score ON product_style_match(overall_score DESC);
+-- 推荐反馈清理索引（V43）：产品删除时按 rspu_id 清理 matching_feedback
 CREATE INDEX IF NOT EXISTS idx_matching_feedback_rspu ON matching_feedback(rspu_id);
 
--- 系统用户表
-CREATE TABLE IF NOT EXISTS sys_user (
-    user_id VARCHAR(64) PRIMARY KEY,
-    username VARCHAR(64) NOT NULL UNIQUE,
-    password_hash VARCHAR(255) NOT NULL,
-    nickname VARCHAR(64),
-    company_name VARCHAR(128),
-    group_name VARCHAR(64),
-    status VARCHAR(16) DEFAULT 'active',
-    token_version INT DEFAULT 0,
-    view_full_catalog BOOLEAN NOT NULL DEFAULT false,
-    company_id VARCHAR(64),
-    group_id VARCHAR(64),
-    invite_code VARCHAR(16),
-    invited_by VARCHAR(64),
-    certified_designer BOOLEAN NOT NULL DEFAULT false,
-    last_login_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ
+-- ---------- 来源: database/schema/11_platform.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 11 官网平台域（11_platform.sql）
+-- 包含表：platform_banner, platform_case, platform_content, platform_custom_dict, platform_customized, platform_lead
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- ============================================================
+-- 官网 CMS（V15 并入）：Banner / 落地案例 / 内容配置 / 自定义字典 / 产品定制
+-- ============================================================
+CREATE TABLE IF NOT EXISTS platform_banner (
+    banner_id   VARCHAR(64) PRIMARY KEY,
+    position    VARCHAR(32) NOT NULL DEFAULT 'home_top',
+    title       VARCHAR(128),
+    image_id    VARCHAR(64) NOT NULL,
+    link_type   VARCHAR(16) NOT NULL DEFAULT 'none',
+    link_value  VARCHAR(512),
+    sort_order  INT NOT NULL DEFAULT 0,
+    status      VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_banner_position ON platform_banner(position, status, sort_order);
+
+CREATE TABLE IF NOT EXISTS platform_case (
+    case_id        VARCHAR(64) PRIMARY KEY,
+    title          VARCHAR(128) NOT NULL,
+    cover_image_id VARCHAR(64),
+    content        TEXT,
+    sort_order     INT NOT NULL DEFAULT 0,
+    status         VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_case_status ON platform_case(status, sort_order);
+
+CREATE TABLE IF NOT EXISTS platform_content (
+    content_id   VARCHAR(64) PRIMARY KEY,
+    code         VARCHAR(64) NOT NULL UNIQUE,
+    title        VARCHAR(128),
+    content_type VARCHAR(16) NOT NULL DEFAULT 'rich_text',
+    content      TEXT,
+    status       VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sys_user_invite_code ON sys_user(invite_code);
-CREATE INDEX IF NOT EXISTS idx_sys_user_company ON sys_user(company_id);
+CREATE TABLE IF NOT EXISTS platform_custom_dict (
+    dict_id    VARCHAR(64) PRIMARY KEY,
+    dict_name  VARCHAR(64) NOT NULL,
+    dict_type  VARCHAR(32) NOT NULL,
+    status     VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (dict_type, dict_name)
+);
 
+CREATE TABLE IF NOT EXISTS platform_customized (
+    customized_id  VARCHAR(64) PRIMARY KEY,
+    title          VARCHAR(128) NOT NULL,
+    cover_image_id VARCHAR(64),
+    description    VARCHAR(512),
+    link_value     VARCHAR(512),
+    sort_order     INT NOT NULL DEFAULT 0,
+    status         VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_customized_status ON platform_customized(status, sort_order);
+
+-- 官网留资线索表（V34 并入）：用户端 CTA/表单/AI 搭配入口留资，管理端分配跟进
+CREATE TABLE IF NOT EXISTS platform_lead (
+    lead_id     VARCHAR(64) PRIMARY KEY,
+    name        VARCHAR(64)  NOT NULL,
+    phone       VARCHAR(32)  NOT NULL,
+    source      VARCHAR(32)  NOT NULL,
+    intent      TEXT,
+    budget      VARCHAR(32),
+    status      VARCHAR(16)  NOT NULL DEFAULT 'pending',
+    assignee    VARCHAR(64),
+    follow_log  JSONB,
+    created_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_platform_lead_status ON platform_lead(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_platform_lead_source ON platform_lead(source, created_at);
+
+-- ---------- 来源: database/schema/12_system.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 12 系统域（12_system.sql）
+-- 包含表：audit_log（另含跨域自增序列对齐 setval 段，须在所有域表创建后执行）
+-- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
+-- 审计日志表
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    table_name VARCHAR(64) NOT NULL,
+    record_id VARCHAR(64) NOT NULL,
+    action VARCHAR(16) NOT NULL,
+    old_value JSONB,
+    new_value JSONB,
+    operator VARCHAR(64),
+    ip_address VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 审计日志索引
+CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id, created_at);
+
+-- ============================================================
+-- 自增序列对齐（V3 并入，原随 V2 迁移下发）
+-- 背景：以下 8 张表的主键实体使用 IdType.AUTO，由数据库自增序列生成主键。
+--       本段保证初始化后序列与当前 MAX(id) 一致，避免后续自增值与已有主键冲突。
+--       幂等：可重复执行；空表对齐到 1，非空表对齐到 MAX(id)。
+-- ============================================================
+SELECT setval('sys_role_role_id_seq',                 COALESCE((SELECT MAX(role_id) FROM sys_role), 1),                 (SELECT MAX(role_id) IS NOT NULL FROM sys_role));
+SELECT setval('sys_permission_permission_id_seq',     COALESCE((SELECT MAX(permission_id) FROM sys_permission), 1),     (SELECT MAX(permission_id) IS NOT NULL FROM sys_permission));
+SELECT setval('sys_role_permission_id_seq',           COALESCE((SELECT MAX(id) FROM sys_role_permission), 1),           (SELECT MAX(id) IS NOT NULL FROM sys_role_permission));
+SELECT setval('sys_user_role_id_seq',                 COALESCE((SELECT MAX(id) FROM sys_user_role), 1),                 (SELECT MAX(id) IS NOT NULL FROM sys_user_role));
+SELECT setval('sys_user_factory_id_seq',              COALESCE((SELECT MAX(id) FROM sys_user_factory), 1),              (SELECT MAX(id) IS NOT NULL FROM sys_user_factory));
+SELECT setval('rspu_factory_mapping_mapping_id_seq',  COALESCE((SELECT MAX(mapping_id) FROM rspu_factory_mapping), 1),  (SELECT MAX(mapping_id) IS NOT NULL FROM rspu_factory_mapping));
+SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_id) FROM factory_lead_time_rule), 1),   (SELECT MAX(rule_id) IS NOT NULL FROM factory_lead_time_rule));
+SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));
+SELECT setval('dict_alias_id_seq',                    COALESCE((SELECT MAX(id) FROM dict_alias), 1),                    (SELECT MAX(id) IS NOT NULL FROM dict_alias));
+SELECT setval('dict_unresolved_value_id_seq',         COALESCE((SELECT MAX(id) FROM dict_unresolved_value), 1),         (SELECT MAX(id) IS NOT NULL FROM dict_unresolved_value));
+
+-- ---------- 来源: database/schema/cross_domain_fk.sql ----------
+-- ============================================================
+-- RSDP 基线 DDL · 跨域后置外键（cross_domain_fk.sql，无数字编号）
+-- 包含表：（无新表）后置外键 ALTER——原文件已有的循环引用后置（excel_import_batch.created_by、sys_user↔company/member_group/invited_by、user_favorite.folder_id、scheme.project_id）+ 按域拆分后跨域执行序后置（rsku_supply↔factory_master/factory_warehouse、user_favorite/favorite_folder/product_collection/project/design_order/recommendation_score_config→sys_user）
+-- 执行顺序：schema/ 目录按文件名字母序执行（01_~12_ 数字编号域文件在前，本文件字母开头排最后，zz_seed.sql 种子殿后）
+-- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
+-- ============================================================
 -- 补齐 excel_import_batch 外键（该表在 sys_user 之前创建）
 ALTER TABLE excel_import_batch
     DROP CONSTRAINT IF EXISTS fk_excel_import_batch_created_by;
 ALTER TABLE excel_import_batch
     ADD CONSTRAINT fk_excel_import_batch_created_by
         FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
-
--- 企业表（V13 并入）
-CREATE TABLE IF NOT EXISTS company (
-    company_id    VARCHAR(64) PRIMARY KEY,
-    company_name  VARCHAR(128) NOT NULL,
-    logo_image_id VARCHAR(64),
-    price_ratio   NUMERIC(5,4) NOT NULL DEFAULT 1,
-    owner_id      VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    status        VARCHAR(16) NOT NULL DEFAULT 'active',
-    deleted_at    TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_company_price_ratio CHECK (price_ratio >= 0 AND price_ratio <= 1)
-);
-CREATE INDEX IF NOT EXISTS idx_company_owner ON company(owner_id);
-CREATE INDEX IF NOT EXISTS idx_company_name ON company(company_name) WHERE deleted_at IS NULL;
-
--- 企业内分组/部门表（V13 并入）
-CREATE TABLE IF NOT EXISTS member_group (
-    group_id    VARCHAR(64) PRIMARY KEY,
-    company_id  VARCHAR(64) NOT NULL REFERENCES company(company_id),
-    group_name  VARCHAR(64) NOT NULL,
-    enabled     BOOLEAN NOT NULL DEFAULT true,
-    deleted_at  TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_member_group_company ON member_group(company_id) WHERE deleted_at IS NULL;
-
--- 邀请记录表（V13 并入）
-CREATE TABLE IF NOT EXISTS invite_record (
-    id          BIGSERIAL PRIMARY KEY,
-    inviter_id  VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    invitee_id  VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    invite_code VARCHAR(16) NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_invite_record_inviter ON invite_record(inviter_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_invite_record_invitee ON invite_record(invitee_id);
 
 -- 补齐 sys_user 企业/邀请外键（company/member_group 在 sys_user 之后创建，循环引用需后置）
 ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_company;
@@ -983,344 +1461,54 @@ ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_invited_by;
 ALTER TABLE sys_user
     ADD CONSTRAINT fk_sys_user_invited_by FOREIGN KEY (invited_by) REFERENCES sys_user(user_id);
 
--- 角色表
-CREATE TABLE IF NOT EXISTS sys_role (
-    role_id BIGSERIAL PRIMARY KEY,
-    role_code VARCHAR(32) NOT NULL UNIQUE,
-    role_name VARCHAR(64) NOT NULL,
-    status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ
-);
-
--- 权限表
-CREATE TABLE IF NOT EXISTS sys_permission (
-    permission_id BIGSERIAL PRIMARY KEY,
-    permission_code VARCHAR(64) NOT NULL UNIQUE,
-    permission_name VARCHAR(128) NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-
--- 角色权限关联表
-CREATE TABLE IF NOT EXISTS sys_role_permission (
-    id BIGSERIAL PRIMARY KEY,
-    role_id BIGINT NOT NULL,
-    permission_id BIGINT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (role_id, permission_id),
-    FOREIGN KEY (role_id) REFERENCES sys_role(role_id),
-    FOREIGN KEY (permission_id) REFERENCES sys_permission(permission_id)
-);
-
--- 用户角色关联表
-CREATE TABLE IF NOT EXISTS sys_user_role (
-    id BIGSERIAL PRIMARY KEY,
-    user_id VARCHAR(64) NOT NULL,
-    role_id BIGINT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (user_id, role_id),
-    FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
-    FOREIGN KEY (role_id) REFERENCES sys_role(role_id)
-);
-
--- 用户工厂关联表（用于厂商业务员数据权限）
-CREATE TABLE IF NOT EXISTS sys_user_factory (
-    id BIGSERIAL PRIMARY KEY,
-    user_id VARCHAR(64) NOT NULL,
-    factory_code VARCHAR(16) NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (user_id, factory_code),
-    FOREIGN KEY (user_id) REFERENCES sys_user(user_id),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
-);
-
--- 工厂产品能力档案（用于全产品库去重）
-CREATE TABLE IF NOT EXISTS factory_product_capability (
-    id BIGSERIAL PRIMARY KEY,
-    factory_code VARCHAR(16) NOT NULL,
-    category_code VARCHAR(16),
-    style_code VARCHAR(16),
-    material_code VARCHAR(8),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ,
-    UNIQUE (factory_code, category_code, style_code, material_code),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
-);
-CREATE INDEX IF NOT EXISTS idx_factory_capability_keys ON factory_product_capability(category_code, style_code, material_code);
-
--- 产品集（管理员维护的主流搭配集合）
-CREATE TABLE IF NOT EXISTS product_collection (
-    collection_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    collection_code VARCHAR(32) UNIQUE,
-    name VARCHAR(100) NOT NULL,
-    description TEXT,
-    category_codes JSONB,
-    style_codes JSONB,
-    target_segments JSONB,
-    is_featured BOOLEAN DEFAULT false,
-    sort_order INT DEFAULT 0,
-    status VARCHAR(20) DEFAULT 'ACTIVE',
-    created_by VARCHAR(64),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ,
-    FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_product_collection_status ON product_collection(status);
-CREATE INDEX IF NOT EXISTS idx_product_collection_featured ON product_collection(is_featured, sort_order);
-
--- 产品集与 RSPU 关联
-CREATE TABLE IF NOT EXISTS product_collection_item (
-    id BIGSERIAL PRIMARY KEY,
-    collection_id UUID NOT NULL,
-    rspu_id VARCHAR(64) NOT NULL,
-    sort_order INT DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (collection_id, rspu_id),
-    FOREIGN KEY (collection_id) REFERENCES product_collection(collection_id) ON DELETE CASCADE,
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
-);
-CREATE INDEX IF NOT EXISTS idx_collection_item_collection ON product_collection_item(collection_id);
-CREATE INDEX IF NOT EXISTS idx_collection_item_rspu ON product_collection_item(rspu_id);
-
--- 设计师画像
-CREATE TABLE IF NOT EXISTS designer_profile (
-    profile_id VARCHAR(64) PRIMARY KEY,
-    user_id VARCHAR(64) NOT NULL UNIQUE,
-    real_name VARCHAR(64),
-    avatar_url TEXT,
-    specialties JSONB,
-    preferred_styles JSONB,
-    preferred_categories JSONB,
-    price_sensitivity VARCHAR(16),
-    location VARCHAR(64),
-    company_name VARCHAR(128),
-    contact_phone VARCHAR(32),
-    bio TEXT,
-    default_budget_min DECIMAL(18,2),
-    default_budget_max DECIMAL(18,2),
-    is_public BOOLEAN DEFAULT false,
-    status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ,
-    FOREIGN KEY (user_id) REFERENCES sys_user(user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_designer_profile_status ON designer_profile(status);
-
--- 推荐打分配置
-CREATE TABLE IF NOT EXISTS recommendation_score_config (
-    config_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    config_key VARCHAR(64) NOT NULL UNIQUE,
-    name VARCHAR(128) NOT NULL,
-    description TEXT,
-    weights JSONB NOT NULL,
-    is_default BOOLEAN DEFAULT false,
-    is_active BOOLEAN DEFAULT true,
-    created_by VARCHAR(64),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ,
-    FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_recommendation_config_default ON recommendation_score_config(is_default, is_active);
-
--- AI 推荐候选清单
-CREATE TABLE IF NOT EXISTS scheme_candidate (
-    candidate_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    recommend_request_id UUID NOT NULL,
-    rspu_id VARCHAR(64) NOT NULL,
-    rsku_id VARCHAR(64),
-    score DECIMAL(5,4),
-    ai_reason TEXT,
-    match_factors JSONB,
-    status VARCHAR(16) DEFAULT 'pending',
-    created_by VARCHAR(64),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ,
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
-);
-CREATE INDEX IF NOT EXISTS idx_scheme_candidate_request ON scheme_candidate(recommend_request_id, status);
-CREATE INDEX IF NOT EXISTS idx_scheme_candidate_rspu ON scheme_candidate(rspu_id);
-CREATE INDEX IF NOT EXISTS idx_scheme_candidate_created_by ON scheme_candidate(created_by, status);
-
--- 收藏夹（V4 并入）：用户级产品收藏，支持分组
-CREATE TABLE IF NOT EXISTS user_favorite (
-    favorite_id VARCHAR(64) PRIMARY KEY,
-    user_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    rspu_id VARCHAR(64) NOT NULL REFERENCES rspu_master(rspu_id),
-    group_name VARCHAR(64),
-    folder_id VARCHAR(64),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, rspu_id)
-);
-CREATE INDEX IF NOT EXISTS idx_favorite_user ON user_favorite(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_user_favorite_folder ON user_favorite(folder_id);
-
--- 收藏夹文件夹（V14 并入）
-CREATE TABLE IF NOT EXISTS favorite_folder (
-    folder_id   VARCHAR(64) PRIMARY KEY,
-    user_id     VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    folder_name VARCHAR(64) NOT NULL,
-    sort_order  INT NOT NULL DEFAULT 0,
-    deleted_at  TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_favorite_folder_user ON favorite_folder(user_id) WHERE deleted_at IS NULL;
-
 -- 补齐 user_favorite 文件夹外键（favorite_folder 在 user_favorite 之后创建）
 ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_folder;
 ALTER TABLE user_favorite
     ADD CONSTRAINT fk_user_favorite_folder FOREIGN KEY (folder_id) REFERENCES favorite_folder(folder_id);
 
--- 模板标签（V14 并入）：受控字典，scheme.template_tags 存名称 JSON，以名称为业务键
-CREATE TABLE IF NOT EXISTS template_tag (
-    tag_id     VARCHAR(64) PRIMARY KEY,
-    tag_name   VARCHAR(64) NOT NULL UNIQUE,
-    sort_order INT NOT NULL DEFAULT 0,
-    enabled    BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 设计项目（V4 并入）
-CREATE TABLE IF NOT EXISTS project (
-    project_id VARCHAR(64) PRIMARY KEY,
-    project_name VARCHAR(128) NOT NULL,
-    project_type VARCHAR(32),
-    company_name VARCHAR(128),
-    owner_id VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    status VARCHAR(20) NOT NULL DEFAULT 'active',
-    remark VARCHAR(512),
-    share_enabled BOOLEAN NOT NULL DEFAULT false,
-    share_expire_at TIMESTAMPTZ,
-    deleted_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_at IS NULL;
-
 -- scheme.project_id 外键（表创建顺序约束，单独补加）
 ALTER TABLE scheme DROP CONSTRAINT IF EXISTS fk_scheme_project;
 ALTER TABLE scheme ADD CONSTRAINT fk_scheme_project FOREIGN KEY (project_id) REFERENCES project(project_id);
 
--- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
-CREATE TABLE IF NOT EXISTS design_order (
-    order_id VARCHAR(64) PRIMARY KEY,
-    order_no VARCHAR(32) NOT NULL UNIQUE,
-    project_id VARCHAR(64) REFERENCES project(project_id),
-    scheme_id VARCHAR(64) REFERENCES scheme(scheme_id),
-    receiver_name VARCHAR(64),
-    receiver_phone VARCHAR(32),
-    receiver_area VARCHAR(128),
-    receiver_address VARCHAR(256),
-    original_total_price TEXT,
-    price_rate NUMERIC(5, 4) NOT NULL DEFAULT 1 CHECK (price_rate >= 0 AND price_rate <= 1),
-    final_total_price TEXT,
-    item_count INT NOT NULL DEFAULT 0,
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
-    expected_lead_time INT,
-    remark VARCHAR(512),
-    invite_token_hash VARCHAR(128),
-    invite_expire_at TIMESTAMPTZ,
-    invite_confirmed_at TIMESTAMPTZ,
-    contract_file_id VARCHAR(64),
-    idempotency_key VARCHAR(64),
-    created_by VARCHAR(64) NOT NULL REFERENCES sys_user(user_id),
-    deleted_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_order_creator ON design_order(created_by) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_order_status ON design_order(status) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_design_order_project ON design_order(project_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_design_order_scheme ON design_order(scheme_id) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uk_design_order_idempotency
-    ON design_order(created_by, idempotency_key) WHERE deleted_at IS NULL;
+-- ============================================================
+-- 按域拆分后的跨域外键后置（02_product 在 03_factory 之前、07/08 在 09_user_team 之前执行，
+-- 建表时目标表尚不存在，FK 统一在此补加；与既有循环引用后置同一模式）
+-- ============================================================
 
--- 订单号每日序号计数器（解决 COUNT+1 在软删除下与唯一索引冲突的问题）
-CREATE TABLE IF NOT EXISTS order_no_counter (
-    date_part VARCHAR(16) PRIMARY KEY,
-    sequence_value BIGINT NOT NULL DEFAULT 1,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
+-- 02_product → 03_factory：rsku_supply 工厂/仓库外键
+ALTER TABLE rsku_supply DROP CONSTRAINT IF EXISTS fk_rsku_supply_factory;
+ALTER TABLE rsku_supply
+    ADD CONSTRAINT fk_rsku_supply_factory FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code);
+ALTER TABLE rsku_supply DROP CONSTRAINT IF EXISTS fk_rsku_supply_warehouse;
+ALTER TABLE rsku_supply
+    ADD CONSTRAINT fk_rsku_supply_warehouse FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id);
 
--- 订单明细（V5 并入）
-CREATE TABLE IF NOT EXISTS design_order_item (
-    id BIGSERIAL PRIMARY KEY,
-    order_id VARCHAR(64) NOT NULL REFERENCES design_order(order_id),
-    rspu_id VARCHAR(64) NOT NULL,
-    rsku_id VARCHAR(64),
-    variant_id VARCHAR(64),
-    product_name VARCHAR(256),
-    model VARCHAR(128),
-    image_id VARCHAR(64),
-    quantity INT NOT NULL DEFAULT 1,
-    original_price TEXT,
-    final_price TEXT,
-    adjust_price TEXT,
-    list_price NUMERIC(12,2),                        -- 标准售价快照（明文，对客户可见；区别于上面三列 TEXT 存 AES 密文，V38 并入）
-    space_tag VARCHAR(32),                           -- 空间快照（由方案复制冻结，V40 并入）
-    factory_code VARCHAR(16),
-    snapshot_json JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-COMMENT ON COLUMN design_order_item.list_price IS '标准售价快照（明文 NUMERIC：售价对客户可见不敏感，且便于 SQL 分析；刻意区别于 original_price/final_price/adjust_price 三列 TEXT 存 AES 密文）';
-COMMENT ON COLUMN design_order_item.space_tag IS '空间快照（由方案生成订单时从 scheme_item.space_tag 复制冻结；为空=未指定空间/存量订单，邀请页平铺展示兜底）';
-CREATE INDEX IF NOT EXISTS idx_order_item_order ON design_order_item(order_id);
-CREATE INDEX IF NOT EXISTS idx_order_item_rspu ON design_order_item(rspu_id);
-CREATE INDEX IF NOT EXISTS idx_order_item_factory ON design_order_item(factory_code);
+-- 07_project_scheme → 09_user_team：收藏/产品集/项目用户外键
+ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_user;
+ALTER TABLE user_favorite
+    ADD CONSTRAINT fk_user_favorite_user FOREIGN KEY (user_id) REFERENCES sys_user(user_id);
+ALTER TABLE favorite_folder DROP CONSTRAINT IF EXISTS fk_favorite_folder_user;
+ALTER TABLE favorite_folder
+    ADD CONSTRAINT fk_favorite_folder_user FOREIGN KEY (user_id) REFERENCES sys_user(user_id);
+ALTER TABLE product_collection DROP CONSTRAINT IF EXISTS fk_product_collection_created_by;
+ALTER TABLE product_collection
+    ADD CONSTRAINT fk_product_collection_created_by FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
+ALTER TABLE project DROP CONSTRAINT IF EXISTS fk_project_owner;
+ALTER TABLE project
+    ADD CONSTRAINT fk_project_owner FOREIGN KEY (owner_id) REFERENCES sys_user(user_id);
 
--- 轻量配置表（V5 并入）
-CREATE TABLE IF NOT EXISTS sys_config (
-    config_key VARCHAR(64) PRIMARY KEY,
-    config_value TEXT,
-    remark VARCHAR(256),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- 08_order_pricing → 09_user_team：订单/推荐配置用户外键
+ALTER TABLE design_order DROP CONSTRAINT IF EXISTS fk_design_order_created_by;
+ALTER TABLE design_order
+    ADD CONSTRAINT fk_design_order_created_by FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
+ALTER TABLE recommendation_score_config DROP CONSTRAINT IF EXISTS fk_recommendation_config_created_by;
+ALTER TABLE recommendation_score_config
+    ADD CONSTRAINT fk_recommendation_config_created_by FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
 
--- 品类级加价倍率（V39 并入）：标准售价 = 成本 × 品类倍率（retail_price 优先；无规则回退全局 pricing.markup.global）
-CREATE TABLE IF NOT EXISTS pricing_rule (
-    rule_id VARCHAR(64) PRIMARY KEY,
-    category_code VARCHAR(16) NOT NULL,
-    markup_multiplier NUMERIC(6,3) NOT NULL CHECK (markup_multiplier > 0),
-    remark VARCHAR(255),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uk_pricing_rule_category ON pricing_rule(category_code);
-
--- 字典别名表（V16 并入）：工厂方言叫法 → 字典码的持久化映射（导入确认后自学习积累）
-CREATE TABLE IF NOT EXISTS dict_alias (
-    id          BIGSERIAL PRIMARY KEY,
-    dict_type   VARCHAR(32) NOT NULL,
-    alias_name  VARCHAR(64) NOT NULL,
-    dict_code   VARCHAR(16) NOT NULL,
-    source      VARCHAR(16) NOT NULL DEFAULT 'ai_confirmed',
-    created_by  VARCHAR(64),
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uk_dict_alias UNIQUE (dict_type, alias_name)
-);
-CREATE INDEX IF NOT EXISTS idx_dict_alias_type ON dict_alias(dict_type);
-
--- 未归一值采集表（V19 并入）
-CREATE TABLE IF NOT EXISTS dict_unresolved_value (
-    id BIGSERIAL PRIMARY KEY,
-    dict_type VARCHAR(32) NOT NULL,
-    raw_value VARCHAR(128) NOT NULL,
-    occurrence_count INT NOT NULL DEFAULT 1,
-    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_batch_id VARCHAR(64),
-    last_username VARCHAR(64),
-    status VARCHAR(16) NOT NULL DEFAULT 'pending',
-    resolved_code VARCHAR(16),
-    resolved_by VARCHAR(64),
-    resolved_at TIMESTAMPTZ,
-    CONSTRAINT uk_dict_unresolved UNIQUE (dict_type, raw_value)
-);
-CREATE INDEX IF NOT EXISTS idx_dict_unresolved_status ON dict_unresolved_value(status, dict_type);
-
--- =================== 5. 插入种子数据 ===================
+-- ---------- 来源: database/schema/zz_seed.sql ----------
+-- RSDP 字典表种子数据（PostgreSQL 版本）
+-- 风格数据库的案例/元素/公式种子数据见 database/seed_style_knowledge.sql
+-- 后续可根据实际业务扩展
 
 -- 产品类别
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
@@ -1335,7 +1523,7 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'LT', '灯具', 9)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 家装风格（扩展为 11 个独立风格 + 6 个基础风格，保留 2 位编码）
+-- 家装风格（扩展为 11 个独立风格，保留 2 位编码）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('style', 'MC', '中古风', 1),
 ('style', 'BA', '包豪斯', 2),
@@ -1374,12 +1562,12 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('material', 'SU', '磨砂皮', 5),
 ('material', 'MA', '马鞍皮', 6),
 ('material', 'LI', '亚麻/棉麻', 7),
-('material', 'SF', '羊羔绒/泰迪绒', 8),
-('material', 'VE', '天鹅绒/绒布', 9),
-('material', 'WO', '实木', 10),
-('material', 'RK', '藤编+实木混血', 11),
-('material', 'MT', '金属/不锈钢/黄铜', 12),
-('material', 'WL', '羊毛', 13),
+('material', 'WL', '羊毛', 8),
+('material', 'SF', '羊羔绒/泰迪绒', 9),
+('material', 'VE', '天鹅绒/绒布', 10),
+('material', 'WO', '实木', 11),
+('material', 'RK', '藤编+实木混血', 12),
+('material', 'MT', '金属/不锈钢/黄铜', 13),
 ('material', 'GL', '玻璃', 14),
 ('material', 'ST', '天然石材/大理石/洞石/岩板', 15),
 ('material', 'CE', '水泥/混凝土/微水泥', 16),
@@ -2223,65 +2411,7 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('room_type', 'OUTDOOR', '户外', 11)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- =================== V2 新增字典（工厂模块 + 导入增强） ===================
-
--- 材质等级字典（对应Excel中的价格列名）
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('material_grade', 'FABRIC_A', 'A级布', 1),
-('material_grade', 'FABRIC_AA', 'AA级布', 2),
-('material_grade', 'FABRIC_S', 'S级布', 3),
-('material_grade', 'FABRIC_SS', 'SS级进口布', 4),
-('material_grade', 'LEATHER_HALF', '半皮', 10),
-('material_grade', 'LEATHER_A', 'A级全皮', 11),
-('material_grade', 'LEATHER_AA', 'AA级全皮', 12),
-('material_grade', 'LEATHER_S', 'S级全皮', 13),
-('material_grade', 'LEATHER_SS', 'SS级全皮', 14)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
--- 工艺类型字典
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('process_type', 'STANDARD', '标准工艺', 1),
-('process_type', 'MODULAR', '模块化组合', 2),
-('process_type', 'CUSTOM', '非标定制', 3),
-('process_type', 'IRREGULAR', '异形/特殊', 4),
-('process_type', 'QUICK', '快单/现货', 5)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
--- 导入行状态字典
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('import_row_status', 'PENDING', '待处理', 1),
-('import_row_status', 'PROCESSING', '处理中', 2),
-('import_row_status', 'SUCCESS', '成功', 3),
-('import_row_status', 'FAILED', '失败', 4),
-('import_row_status', 'SKIPPED', '已跳过', 5)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
--- 映射状态字典
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('mapping_status', 'ACTIVE', '生效中', 1),
-('mapping_status', 'PAUSED', '暂停', 2),
-('mapping_status', 'DISCONTINUED', '已终止', 3)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
--- 工厂来源类型字典
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('factory_source_type', 'MANUAL', '手动录入', 1),
-('factory_source_type', 'EXCEL_IMPORT', 'Excel导入', 2),
-('factory_source_type', 'API_SYNC', '接口同步', 3)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
--- 导入行类型字典
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('import_row_type', 'PRODUCT', '产品型号行', 1),
-('import_row_type', 'MODULE', '模块行', 2),
-('import_row_type', 'HEADER', '表头行', 3),
-('import_row_type', 'UNKNOWN', '未知', 4)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
--- ============================================================
--- RBAC 与开发测试账号种子（同步自 database/schema/zz_seed.sql）
--- 注意：缺少本段会导致重置后所有角色零权限，登录后全部接口 403。
--- ============================================================
+-- =================== 系统权限与角色 ===================
 
 -- 角色
 INSERT INTO sys_role (role_code, role_name) VALUES
@@ -2359,12 +2489,12 @@ WHERE r.role_code = 'EDITOR'
   AND p.permission_code NOT IN ('user:read', 'user:create', 'user:update', 'user:delete', 'user:reset-password', 'admin:async-metrics', 'admin:vector-backfill', 'recommendation:score:config:read', 'recommendation:score:config:update', 'pricing:update')
 ON CONFLICT DO NOTHING;
 
--- FACTORY_ADMIN：自己工厂产品 + 工厂资料维护 + 报价相关 + 导入 + 只读
+-- FACTORY_ADMIN：自己工厂产品 + 工厂资料维护 + 报价相关 + 只读
 INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'FACTORY_ADMIN'
-  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'product:import', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
+  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
 ON CONFLICT DO NOTHING;
 
 -- DESIGNER：方案/报价 + 只读
@@ -2382,6 +2512,66 @@ FROM sys_role r, sys_permission p
 WHERE r.role_code = 'USER'
   AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'scheme:read', 'collection:read', 'capability:read')
 ON CONFLICT DO NOTHING;
+
+-- =================== 开发测试账号已移至 database/seed_dev_data.sql ===================
+-- 本文件只保留生产必需的种子；弱口令测试账号与演示数据（含 TEST 测试工厂）
+-- 统一在 database/seed_dev_data.sql，开发/演示环境用 make seed-dev 导入。
+-- （ops/reset_db.sql 作为纯开发重置工具，仍内嵌一份测试账号，重置后可直接登录。）
+
+-- =================== V2 新增字典（工厂模块 + 导入增强，并入） ===================
+
+-- 材质等级字典（对应Excel中的价格列名）
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('material_grade', 'FABRIC_A', 'A级布', 1),
+('material_grade', 'FABRIC_AA', 'AA级布', 2),
+('material_grade', 'FABRIC_S', 'S级布', 3),
+('material_grade', 'FABRIC_SS', 'SS级进口布', 4),
+('material_grade', 'LEATHER_HALF', '半皮', 10),
+('material_grade', 'LEATHER_A', 'A级全皮', 11),
+('material_grade', 'LEATHER_AA', 'AA级全皮', 12),
+('material_grade', 'LEATHER_S', 'S级全皮', 13),
+('material_grade', 'LEATHER_SS', 'SS级全皮', 14)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 工艺类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('process_type', 'STANDARD', '标准工艺', 1),
+('process_type', 'MODULAR', '模块化组合', 2),
+('process_type', 'CUSTOM', '非标定制', 3),
+('process_type', 'IRREGULAR', '异形/特殊', 4),
+('process_type', 'QUICK', '快单/现货', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 导入行状态字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('import_row_status', 'PENDING', '待处理', 1),
+('import_row_status', 'PROCESSING', '处理中', 2),
+('import_row_status', 'SUCCESS', '成功', 3),
+('import_row_status', 'FAILED', '失败', 4),
+('import_row_status', 'SKIPPED', '已跳过', 5)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 映射状态字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('mapping_status', 'ACTIVE', '生效中', 1),
+('mapping_status', 'PAUSED', '暂停', 2),
+('mapping_status', 'DISCONTINUED', '已终止', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 工厂来源类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('factory_source_type', 'MANUAL', '手动录入', 1),
+('factory_source_type', 'EXCEL_IMPORT', 'Excel导入', 2),
+('factory_source_type', 'API_SYNC', '接口同步', 3)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
+
+-- 导入行类型字典
+INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
+('import_row_type', 'PRODUCT', '产品型号行', 1),
+('import_row_type', 'MODULE', '模块行', 2),
+('import_row_type', 'HEADER', '表头行', 3),
+('import_row_type', 'UNKNOWN', '未知', 4)
+ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 项目类型字典（V4 并入）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
@@ -2468,46 +2658,6 @@ FROM sys_role r, sys_permission p
 WHERE p.permission_code IN ('favorite:read', 'favorite:write')
 ON CONFLICT DO NOTHING;
 
--- =================== 开发测试账号（仅在开发/演示环境使用） ===================
-
--- 测试工厂
-INSERT INTO factory_master (factory_code, factory_name, factory_level, region, status) VALUES
-('TEST', '测试工厂', 'A', '广东', 'active')
-ON CONFLICT (factory_code) DO NOTHING;
-
--- 开发/演示环境测试账号（密码均为：rsdp-dev-2026!）
--- 生产环境部署后应立即通过管理后台修改或删除这些账号。
--- DefaultAdminInitializer 仅在新库且无用户时生成随机密码。
--- 注意：ON CONFLICT 必须 DO NOTHING —— 重复执行时绝不能覆盖用户已修改的密码（认证回退风险）。
-INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, group_name, status, view_full_catalog) VALUES
-('USER-ADMIN-00000001', 'admin', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '系统管理员', 'RSDP 平台', '平台运营组', 'active', true),
-('USER-EDITOR-00000001', 'editor', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '编辑员', 'RSDP 平台', '内容编辑组', 'active', true),
-('USER-DESIGNER-00000001', 'designer', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '设计师', '示例设计工作室', '方案一组', 'active', false),
-('USER-FACTORY-00000001', 'factory', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '工厂管理员', '测试家具工厂', '销售部', 'active', false),
-('USER-USER-00000001', 'user', '$2a$10$sxt6z8NitIDSWB7BJQS0VeZIP52b35tsDpL7RDWGMhqB42X85cp/6', '普通用户', '示例设计工作室', '方案二组', 'active', false)
-ON CONFLICT (username) DO NOTHING;
-
--- 测试用户角色关联
-INSERT INTO sys_user_role (user_id, role_id)
-SELECT u.user_id, r.role_id
-FROM sys_user u, sys_role r
-WHERE u.username IN ('admin', 'editor', 'designer', 'factory', 'user')
-  AND r.role_code = CASE u.username
-    WHEN 'admin' THEN 'ADMIN'
-    WHEN 'editor' THEN 'EDITOR'
-    WHEN 'designer' THEN 'DESIGNER'
-    WHEN 'factory' THEN 'FACTORY_ADMIN'
-    WHEN 'user' THEN 'USER'
-  END
-ON CONFLICT (user_id, role_id) DO NOTHING;
-
--- 工厂管理员绑定测试工厂
-INSERT INTO sys_user_factory (user_id, factory_code)
-SELECT u.user_id, 'TEST'
-FROM sys_user u
-WHERE u.username = 'factory'
-ON CONFLICT (user_id, factory_code) DO NOTHING;
-
 -- 企业实体迁移（V13 并入，幂等）：company_name/group_name 文本 → 实体（同名企业合并）
 INSERT INTO company (company_id, company_name, owner_id)
 SELECT 'COM-' || gen_random_uuid()::text,
@@ -2540,27 +2690,7 @@ WHERE u.group_id IS NULL
   AND u.company_name = c.company_name
   AND u.group_name = g.group_name;
 
-
--- ============================================================
--- 自增序列对齐（接入自 database/V3__align_sequences.sql）
--- 背景：以下 8 张表的主键实体已改为 IdType.AUTO，由数据库自增序列生成主键。
---       本段保证重置后序列与当前 MAX(id) 一致，避免后续自增值与已有主键冲突。
---       幂等：可重复执行；空表对齐到 1，非空表对齐到 MAX(id)。
--- ============================================================
-SELECT setval('sys_role_role_id_seq',                 COALESCE((SELECT MAX(role_id) FROM sys_role), 1),                 (SELECT MAX(role_id) IS NOT NULL FROM sys_role));
-SELECT setval('sys_permission_permission_id_seq',     COALESCE((SELECT MAX(permission_id) FROM sys_permission), 1),     (SELECT MAX(permission_id) IS NOT NULL FROM sys_permission));
-SELECT setval('sys_role_permission_id_seq',           COALESCE((SELECT MAX(id) FROM sys_role_permission), 1),           (SELECT MAX(id) IS NOT NULL FROM sys_role_permission));
-SELECT setval('sys_user_role_id_seq',                 COALESCE((SELECT MAX(id) FROM sys_user_role), 1),                 (SELECT MAX(id) IS NOT NULL FROM sys_user_role));
-SELECT setval('sys_user_factory_id_seq',              COALESCE((SELECT MAX(id) FROM sys_user_factory), 1),              (SELECT MAX(id) IS NOT NULL FROM sys_user_factory));
-SELECT setval('rspu_factory_mapping_mapping_id_seq',  COALESCE((SELECT MAX(mapping_id) FROM rspu_factory_mapping), 1),  (SELECT MAX(mapping_id) IS NOT NULL FROM rspu_factory_mapping));
-SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_id) FROM factory_lead_time_rule), 1),   (SELECT MAX(rule_id) IS NOT NULL FROM factory_lead_time_rule));
-SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));
-SELECT setval('dict_alias_id_seq',                    COALESCE((SELECT MAX(id) FROM dict_alias), 1),                    (SELECT MAX(id) IS NOT NULL FROM dict_alias));
-SELECT setval('dict_unresolved_value_id_seq',         COALESCE((SELECT MAX(id) FROM dict_unresolved_value), 1),         (SELECT MAX(id) IS NOT NULL FROM dict_unresolved_value));
-
--- ============================================================
--- 收藏夹文件夹/模板标签迁移（V14 并入，幂等；重置后一般为空库，迁移为 no-op）
--- ============================================================
+-- 收藏夹文件夹迁移（V14 并入，幂等）：group_name 文本 → 文件夹实体（按用户+名称合并）
 INSERT INTO favorite_folder (folder_id, user_id, folder_name)
 SELECT 'FAVD-' || gen_random_uuid()::text, d.user_id, d.group_name
 FROM (SELECT DISTINCT user_id, group_name FROM user_favorite
@@ -2574,6 +2704,7 @@ WHERE uf.folder_id IS NULL
   AND uf.user_id = f.user_id
   AND uf.group_name = f.folder_name;
 
+-- 模板标签迁移（V14 并入，幂等）：scheme.template_tags JSON → 标签实体
 INSERT INTO template_tag (tag_id, tag_name)
 SELECT 'TAG-' || gen_random_uuid()::text, t.tag_name
 FROM (
@@ -2583,86 +2714,6 @@ FROM (
 ) t
 WHERE btrim(t.tag_name) <> ''
 ON CONFLICT (tag_name) DO NOTHING;
-
--- ============================================================
--- 官网 CMS（V15 并入）：Banner / 落地案例 / 内容配置 / 自定义字典 / 产品定制
--- ============================================================
-CREATE TABLE IF NOT EXISTS platform_banner (
-    banner_id   VARCHAR(64) PRIMARY KEY,
-    position    VARCHAR(32) NOT NULL DEFAULT 'home_top',
-    title       VARCHAR(128),
-    image_id    VARCHAR(64) NOT NULL,
-    link_type   VARCHAR(16) NOT NULL DEFAULT 'none',
-    link_value  VARCHAR(512),
-    sort_order  INT NOT NULL DEFAULT 0,
-    status      VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_platform_banner_position ON platform_banner(position, status, sort_order);
-
-CREATE TABLE IF NOT EXISTS platform_case (
-    case_id        VARCHAR(64) PRIMARY KEY,
-    title          VARCHAR(128) NOT NULL,
-    cover_image_id VARCHAR(64),
-    content        TEXT,
-    sort_order     INT NOT NULL DEFAULT 0,
-    status         VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_platform_case_status ON platform_case(status, sort_order);
-
-CREATE TABLE IF NOT EXISTS platform_content (
-    content_id   VARCHAR(64) PRIMARY KEY,
-    code         VARCHAR(64) NOT NULL UNIQUE,
-    title        VARCHAR(128),
-    content_type VARCHAR(16) NOT NULL DEFAULT 'rich_text',
-    content      TEXT,
-    status       VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS platform_custom_dict (
-    dict_id    VARCHAR(64) PRIMARY KEY,
-    dict_name  VARCHAR(64) NOT NULL,
-    dict_type  VARCHAR(32) NOT NULL,
-    status     VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (dict_type, dict_name)
-);
-
-CREATE TABLE IF NOT EXISTS platform_customized (
-    customized_id  VARCHAR(64) PRIMARY KEY,
-    title          VARCHAR(128) NOT NULL,
-    cover_image_id VARCHAR(64),
-    description    VARCHAR(512),
-    link_value     VARCHAR(512),
-    sort_order     INT NOT NULL DEFAULT 0,
-    status         VARCHAR(16) NOT NULL DEFAULT 'active',
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_platform_customized_status ON platform_customized(status, sort_order);
-
--- 官网留资线索表（V34 并入）：用户端 CTA/表单/AI 搭配入口留资，管理端分配跟进
-CREATE TABLE IF NOT EXISTS platform_lead (
-    lead_id     VARCHAR(64) PRIMARY KEY,
-    name        VARCHAR(64)  NOT NULL,
-    phone       VARCHAR(32)  NOT NULL,
-    source      VARCHAR(32)  NOT NULL,
-    intent      TEXT,
-    budget      VARCHAR(32),
-    status      VARCHAR(16)  NOT NULL DEFAULT 'pending',
-    assignee    VARCHAR(64),
-    follow_log  JSONB,
-    created_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_platform_lead_status ON platform_lead(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_platform_lead_source ON platform_lead(source, created_at);
 
 -- 官网内容种子（V15 并入）：服务协议 + 客服咨询（占位文案，运营可在管理端修改）
 INSERT INTO platform_content (content_id, code, title, content_type, content) VALUES

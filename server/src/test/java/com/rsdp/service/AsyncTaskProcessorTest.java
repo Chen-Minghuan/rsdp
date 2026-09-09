@@ -4,11 +4,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
 import com.rsdp.dto.OcrResult;
 import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.ImageAssets;
+import com.rsdp.service.EmbeddingService.ImageEmbedding;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.service.chroma.ChromaDbClient;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.service.vector.ProductVectorStore;
+import com.rsdp.service.vector.VectorHit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,10 +24,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -48,7 +52,13 @@ class AsyncTaskProcessorTest {
     private EmbeddingService embeddingService;
 
     @Mock
-    private ChromaDbClient chromaDbClient;
+    private ProductVectorStore productVectorStore;
+
+    @Mock
+    private ImageAssetsMapper imageAssetsMapper;
+
+    @Mock
+    private VectorRebuildService vectorRebuildService;
 
     @Mock
     private StorageService storageService;
@@ -98,6 +108,11 @@ class AsyncTaskProcessorTest {
         lenient().when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
         // 默认任务可被认领（pending → processing）；认领失败场景在单个用例中覆盖为 0
         lenient().when(asyncTaskMapper.claimPendingTask(anyString())).thenReturn(1);
+        // 默认图片内容版本 1（个别用例覆盖为其他版本以验证向量写入携带的版本）
+        ImageAssets defaultImageAsset = new ImageAssets();
+        defaultImageAsset.setImageId(imageId);
+        defaultImageAsset.setContentRevision(1L);
+        lenient().when(imageAssetsMapper.selectById(imageId)).thenReturn(defaultImageAsset);
     }
 
     @Test
@@ -111,19 +126,25 @@ class AsyncTaskProcessorTest {
         // Then：不再读取图片、不调用 AI、不更新任务状态
         verify(asyncTaskMapper, times(0)).updateById(any(AsyncTask.class));
         verify(persistenceService, times(0)).saveSuccess(anyString(), anyString(), anyString(),
-            anyString(), anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), any());
+            anyString(), anyString(), any(), org.mockito.ArgumentMatchers.anyInt());
         verify(persistenceService, times(0)).saveFailure(anyString(), anyString(), anyString(),
             anyString(), anyString(), any());
         verify(visionService, times(0)).recognizeImage(any(), any());
     }
 
     @Test
-    void processProductEntry_shouldCallPersistenceServiceAndChromaDb() throws Exception {
+    void processProductEntry_shouldCallPersistenceServiceAndVectorStore() throws Exception {
         // Given
         when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
 
         InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
         when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        // 图片内容版本 3：向量写入必须携带编码时读取到的该版本（防旧写保护）
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId(imageId);
+        imageAsset.setContentRevision(3L);
+        when(imageAssetsMapper.selectById(imageId)).thenReturn(imageAsset);
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
@@ -134,46 +155,21 @@ class AsyncTaskProcessorTest {
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
         float[] embedding = new float[]{0.1f, 0.2f, 0.3f};
-        when(embeddingService.embedImage(any())).thenReturn(embedding);
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setCategoryCode("FS");
-        rspu.setPositioningLabel("MC");
-        rspu.setMaterialTags("[\"WO\",\"LI\"]");
-        rspu.setSceneTags("[\"LIVING\",\"STUDY\"]");
-        rspu.setStatus("active");
-        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(embedding, "hash-abc"));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
 
         // Then
         ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
-        ArgumentCaptor<float[]> embeddingCaptor = ArgumentCaptor.forClass(float[].class);
         verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
             anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
-            org.mockito.ArgumentMatchers.anyInt(), embeddingCaptor.capture());
+            org.mockito.ArgumentMatchers.anyInt());
         assertThat(labelsCaptor.getValue().getStyle()).isEqualTo("中古风");
-        assertThat(embeddingCaptor.getValue()).containsExactly(0.1f, 0.2f, 0.3f);
         verify(rspuVariantService).initializeDefaultVariant(eq(rspuId), any(AiLabels.class));
 
-        ArgumentCaptor<List<String>> idsCaptor = ArgumentCaptor.forClass(List.class);
-        ArgumentCaptor<List<float[]>> embeddingsCaptor = ArgumentCaptor.forClass(List.class);
-        ArgumentCaptor<List<Map<String, Object>>> metadataCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chromaDbClient).upsert(idsCaptor.capture(), embeddingsCaptor.capture(), metadataCaptor.capture(), any());
-        assertThat(idsCaptor.getValue()).containsExactly(imageId);
-        assertThat(embeddingsCaptor.getValue()).hasSize(1);
-        assertThat(embeddingsCaptor.getValue().get(0)).containsExactly(0.1f, 0.2f, 0.3f);
-        assertThat(metadataCaptor.getValue().get(0)).containsEntry("rspu_id", rspuId);
-        Map<String, Object> metadata = metadataCaptor.getValue().get(0);
-        assertThat(metadata).containsEntry("category_code", "FS");
-        assertThat(metadata).containsEntry("positioning_label", "MC");
-        assertThat(metadata).containsEntry("material_tags", "[\"WO\",\"LI\"]");
-        assertThat(metadata).containsEntry("scene_tags", "[\"LIVING\",\"STUDY\"]");
-        assertThat(metadata).containsEntry("status", "active");
-        assertThat(metadata).containsEntry("image_size", 10L);
-        assertThat(metadata).containsKey("color_primary_name");
+        // 向量写入向量存储：携带编码时读取到的内容版本与输入哈希
+        verify(productVectorStore).upsert(eq(imageId), eq(3L), eq("hash-abc"), eq(embedding));
 
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper, times(2)).updateById(taskCaptor.capture());
@@ -198,12 +194,7 @@ class AsyncTaskProcessorTest {
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f});
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setCategoryCode("FS");
-        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f, 0.2f}, "hash-abc"));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -215,7 +206,7 @@ class AsyncTaskProcessorTest {
     }
 
     @Test
-    void processProductEntry_shouldMarkPartialSuccessWhenChromaDbFails() throws Exception {
+    void processProductEntry_shouldMarkPartialSuccessWhenVectorStoreFails() throws Exception {
         // Given
         when(asyncTaskMapper.selectById(anyString())).thenReturn(new AsyncTask());
 
@@ -227,14 +218,10 @@ class AsyncTaskProcessorTest {
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
         float[] embedding = new float[]{0.1f, 0.2f, 0.3f};
-        when(embeddingService.embedImage(any())).thenReturn(embedding);
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(embedding, "hash-abc"));
 
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setStatus("active");
-        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
-
-        doThrow(new RuntimeException("ChromaDB 写入失败")).when(chromaDbClient).upsert(any(), any(), any(), any());
+        doThrow(new RuntimeException("向量存储写入失败")).when(productVectorStore)
+            .upsert(anyString(), anyLong(), anyString(), any());
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -248,7 +235,7 @@ class AsyncTaskProcessorTest {
         AsyncTask finalTask = taskCaptor.getValue();
         assertThat(finalTask.getStatus()).isEqualTo("partial_success");
         assertThat(finalTask.getProgress()).isEqualTo(100);
-        assertThat(finalTask.getErrorMessage()).contains("向量写入 ChromaDB 失败");
+        assertThat(finalTask.getErrorMessage()).contains("向量写入向量存储失败");
         assertThat(finalTask.getCompletedAt()).isNotNull();
     }
 
@@ -264,14 +251,14 @@ class AsyncTaskProcessorTest {
         labels.setStyle("中古风");
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
-        when(embeddingService.embedImage(any())).thenThrow(new RuntimeException("Embedding 服务异常"));
+        when(embeddingService.embedImageWithHash(any())).thenThrow(new RuntimeException("Embedding 服务异常"));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
 
         // Then
         verify(rspuVariantService).initializeDefaultVariant(eq(rspuId), any(AiLabels.class));
-        verify(chromaDbClient, times(0)).upsert(any(), any(), any(), any());
+        verify(productVectorStore, times(0)).upsert(anyString(), anyLong(), anyString(), any());
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper, times(2)).updateById(taskCaptor.capture());
         AsyncTask finalTask = taskCaptor.getValue();
@@ -297,12 +284,7 @@ class AsyncTaskProcessorTest {
         labels.setOcr(ocr);
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setStatus("active");
-        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f}, "hash-abc"));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -311,7 +293,7 @@ class AsyncTaskProcessorTest {
         ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
         verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
             anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
-            org.mockito.ArgumentMatchers.anyInt(), any());
+            org.mockito.ArgumentMatchers.anyInt());
         assertThat(labelsCaptor.getValue().getMaterialTags())
             .containsExactly("头层牛皮", "金属框架");
     }
@@ -330,12 +312,7 @@ class AsyncTaskProcessorTest {
         labels.setOcr(new OcrResult());
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setStatus("active");
-        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f}, "hash-abc"));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -344,7 +321,7 @@ class AsyncTaskProcessorTest {
         ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
         verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
             anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
-            org.mockito.ArgumentMatchers.anyInt(), any());
+            org.mockito.ArgumentMatchers.anyInt());
         assertThat(labelsCaptor.getValue().getMaterialTags()).containsExactly("布艺");
     }
 
@@ -363,7 +340,7 @@ class AsyncTaskProcessorTest {
         // Then
         verify(persistenceService).saveFailure(eq(taskId), eq(rspuId), eq(imageId),
             anyString(), eq("qwen3-vl-plus"), eq("AI 服务异常"));
-        verify(chromaDbClient, times(0)).upsert(any(), any(), any(), any());
+        verify(productVectorStore, times(0)).upsert(anyString(), anyLong(), anyString(), any());
     }
 
     @Test
@@ -389,7 +366,7 @@ class AsyncTaskProcessorTest {
         AiLabels labels = new AiLabels();
         labels.setStyle("侘寂");
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f, 0.2f});
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f, 0.2f}, "hash-abc"));
 
         RspuMaster current = new RspuMaster();
         current.setRspuId(rspuId);
@@ -401,19 +378,14 @@ class AsyncTaskProcessorTest {
         dup.setProductName("扶摇沙发");
         when(rspuMapper.selectById(rspuId)).thenReturn(current);
         when(rspuMapper.selectById("RSPU-DUP01")).thenReturn(dup);
-        when(persistenceService.getRspu(rspuId)).thenReturn(current);
 
         java.lang.reflect.Field thresholdField = AsyncTaskProcessor.class.getDeclaredField("duplicateSimilarThreshold");
         thresholdField.setAccessible(true);
         thresholdField.set(asyncTaskProcessor, 0.95);
 
         // 距离 0.06 → 相似度 0.97 ≥ 0.95
-        Map<String, Object> raw = Map.of(
-            "ids", List.of(List.of("IMG-OTHER")),
-            "distances", List.of(List.of(0.06)),
-            "metadatas", List.of(List.of(Map.of("rspu_id", "RSPU-DUP01"))));
-        when(chromaDbClient.query(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
-            .thenReturn(new ChromaDbClient.QueryResult(raw));
+        when(productVectorStore.search(any(), org.mockito.ArgumentMatchers.anyInt(), any(), eq(false)))
+            .thenReturn(List.of(new VectorHit("IMG-OTHER", "RSPU-DUP01", 0.06)));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -434,25 +406,20 @@ class AsyncTaskProcessorTest {
         AiLabels labels = new AiLabels();
         labels.setStyle("侘寂");
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f}, "hash-abc"));
 
         RspuMaster current = new RspuMaster();
         current.setRspuId(rspuId);
         current.setCategoryCode("FS");
         current.setReviewStatus("待复核");
         when(rspuMapper.selectById(rspuId)).thenReturn(current);
-        when(persistenceService.getRspu(rspuId)).thenReturn(current);
 
         java.lang.reflect.Field thresholdField = AsyncTaskProcessor.class.getDeclaredField("duplicateSimilarThreshold");
         thresholdField.setAccessible(true);
         thresholdField.set(asyncTaskProcessor, 0.95);
 
-        Map<String, Object> raw = Map.of(
-            "ids", List.of(List.of("IMG-OTHER")),
-            "distances", List.of(List.of(0.5)),
-            "metadatas", List.of(List.of(Map.of("rspu_id", "RSPU-OTHER"))));
-        when(chromaDbClient.query(any(), org.mockito.ArgumentMatchers.anyInt(), any()))
-            .thenReturn(new ChromaDbClient.QueryResult(raw));
+        when(productVectorStore.search(any(), org.mockito.ArgumentMatchers.anyInt(), any(), eq(false)))
+            .thenReturn(List.of(new VectorHit("IMG-OTHER", "RSPU-OTHER", 0.5)));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -485,12 +452,7 @@ class AsyncTaskProcessorTest {
         labels.setOcr(cropOcr);
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setStatus("active");
-        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f}, "hash-abc"));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -499,7 +461,7 @@ class AsyncTaskProcessorTest {
         ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
         verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
             anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
-            org.mockito.ArgumentMatchers.anyInt(), any());
+            org.mockito.ArgumentMatchers.anyInt());
         OcrResult merged = labelsCaptor.getValue().getOcr();
         assertThat(merged.getProductName()).isEqualTo("页面品名");
         assertThat(merged.getModelNumber()).isEqualTo("LK-2450");
@@ -521,12 +483,7 @@ class AsyncTaskProcessorTest {
         labels.setStyle("中古风");
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
 
-        when(embeddingService.embedImage(any())).thenReturn(new float[]{0.1f});
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId(rspuId);
-        rspu.setStatus("active");
-        when(persistenceService.getRspu(rspuId)).thenReturn(rspu);
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f}, "hash-abc"));
 
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
@@ -535,7 +492,7 @@ class AsyncTaskProcessorTest {
         ArgumentCaptor<AiLabels> labelsCaptor = ArgumentCaptor.forClass(AiLabels.class);
         verify(persistenceService).saveSuccess(eq(taskId), eq(rspuId), eq(imageId),
             anyString(), eq("qwen3-vl-plus"), labelsCaptor.capture(),
-            org.mockito.ArgumentMatchers.anyInt(), any());
+            org.mockito.ArgumentMatchers.anyInt());
         OcrResult merged = labelsCaptor.getValue().getOcr();
         assertThat(merged.getProductName()).isEqualTo("页面品名");
         assertThat(merged.getRawText()).isEqualTo("页面原始文字");

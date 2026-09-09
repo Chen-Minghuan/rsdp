@@ -105,7 +105,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setSecondaryStyles(List.of("奶油风", "中古风", "北欧风"));
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         // rspu_style 三条：MC 主；CR、NC 辅（与主重复的 MC 被过滤）；无记录时直接插入
         ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
@@ -136,7 +136,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setStyle("中古风");
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         // 无备选风格：保持旧行为，只写一条主风格
         ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
@@ -173,7 +173,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setConfidence("high");
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         // 人工提供的字段全部保持原值
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
@@ -209,7 +209,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setOcr(ocr);
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getProductName()).isEqualTo("云朵沙发");
     }
@@ -236,7 +236,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setOcr(ocr);
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getProductName()).isEqualTo("人工命名沙发");
     }
@@ -262,7 +262,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setOcr(new com.rsdp.dto.OcrResult());
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getProductName()).isEqualTo("座椅");
     }
@@ -290,7 +290,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setOcr(ocr);
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getProductName()).isEqualTo("座椅");
     }
@@ -315,7 +315,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setStyle("中古风");
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
         verify(rspuStyleMapper, times(1)).insert(any(RspuStyle.class));
@@ -348,7 +348,7 @@ class AiRecognitionPersistenceServiceTest {
         ));
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         // 命中 → 前缀码；未命中 → 原文；E 维度 → 原样不归一
         java.util.Map<String, String> stored = objectMapper.readValue(rspu.getSixDimTags(),
@@ -386,7 +386,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setSixDimTags(java.util.Map.of("A", "一字型", "E", "皮革"));
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         // 材质标签归一为字典码；六维 E 与材质同源（取归一材质码的中文名）
         assertThat(rspu.getMaterialTags()).isEqualTo("[\"LE\"]");
@@ -419,7 +419,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setStyle("中古风");
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
         assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-001-M");
@@ -453,7 +453,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setStyle("中古风");
 
         String productName = persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getRspuCode()).isNull();
         assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
@@ -494,7 +494,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setStyle("中古风");
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-001-M");
         assertThat(rspu.getReviewStatus()).isNotEqualTo("存疑");
@@ -524,7 +524,7 @@ class AiRecognitionPersistenceServiceTest {
         labels.setStyle("中古风");
 
         persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
-            "qwen3-vl-plus", labels, 100, null);
+            "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getRspuCode()).isNull();
         assertThat(rspu.getReviewStatus()).isEqualTo("存疑");

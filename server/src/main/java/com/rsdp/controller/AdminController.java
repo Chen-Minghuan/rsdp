@@ -3,8 +3,10 @@ package com.rsdp.controller;
 import com.rsdp.common.Result;
 import com.rsdp.config.LoggingRejectedExecutionHandler;
 import com.rsdp.dto.response.AsyncMetricsResponse;
+import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.VectorBackfillService;
 import com.rsdp.service.VectorBackfillService.BackfillResult;
+import com.rsdp.service.VectorRebuildService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
@@ -33,6 +35,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 public class AdminController {
 
     private final VectorBackfillService vectorBackfillService;
+    private final VectorRebuildService vectorRebuildService;
 
     @Autowired
     @Qualifier("taskExecutor")
@@ -54,6 +57,25 @@ public class AdminController {
                                                   int batchSize) {
         BackfillResult result = vectorBackfillService.backfill(batchSize);
         return Result.ok(result);
+    }
+
+    /**
+     * 提交存量图片向量重建异步任务（pgvector 逐图片重建）。
+     *
+     * <p>授权：URL 级规则 {@code /api/v1/admin/**} 要求 ADMIN 角色（见 SecurityConfig）。
+     * 返回任务 ID，进度与结果通过 async_task 表查询。</p>
+     *
+     * @param batchSize 每轮回填数量，默认 500
+     * @return 任务 ID
+     */
+    @PostMapping("/vectors/rebuild")
+    @Operation(summary = "向量重建任务", description = "提交异步任务，按源图逐图片重建 pgvector 向量")
+    public Result<String> rebuildVectors(@RequestParam(defaultValue = "500")
+                                         @Min(value = 1, message = "batchSize 不能小于 1")
+                                         @Max(value = 1000, message = "batchSize 不能超过 1000")
+                                         int batchSize) {
+        String taskId = vectorRebuildService.submitRebuildTask(batchSize, SecurityOperatorContext.currentUsername());
+        return Result.ok(taskId);
     }
 
     /**

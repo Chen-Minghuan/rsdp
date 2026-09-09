@@ -2,13 +2,14 @@ package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.service.chroma.ChromaDbClient;
-import com.rsdp.service.chroma.ChromaMetadataBuilder;
+import com.rsdp.service.vector.ExistingVector;
+import com.rsdp.service.vector.ProductVectorProfile;
+import com.rsdp.service.vector.ProductVectorStore;
+import com.rsdp.service.vector.VectorStaleImageException;
 import com.rsdp.service.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,7 +22,11 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 向量回填服务：为存量图片生成 embedding 并写入 ChromaDB。
+ * 向量回填服务：为存量图片按源图重新生成 embedding 并写入 pgvector。
+ *
+ * <p>数据来源为最终保存的产品图（image_assets.storage_path），经 EmbeddingService
+ * 统一编码（multimodal-embedding-v1，1024 维，cosine）；本服务不重复执行识别/同款审核。
+ * 向量随图片内容版本（content_revision）幂等：已存在同配置同版本向量时直接跳过。</p>
  */
 @Slf4j
 @Service
@@ -31,9 +36,8 @@ public class VectorBackfillService {
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final EmbeddingService embeddingService;
-    private final ChromaDbClient chromaDbClient;
+    private final ProductVectorStore productVectorStore;
     private final StorageService storageService;
-    private final ObjectMapper objectMapper;
 
     /** 单次扫描页大小（游标翻页，避免大页内存压力） */
     private static final int SCAN_PAGE_SIZE = 200;
@@ -41,15 +45,17 @@ public class VectorBackfillService {
     /**
      * 回填指定数量的存量图片向量。
      *
-     * <p>对应 RSPU 已写入 style_vector 且 ChromaDB 中向量存在的图片会跳过，避免重复调用
-     * embedding API；PG 有向量但 ChromaDB 缺失的记录会直接复用存量向量补偿回填。</p>
+     * <p>候选范围：已 AI 处理（ai_processed=true）、已关联 RSPU（rspu_id 非空）、
+     * storage_path 非空且未逻辑删除的图片，且所属 RSPU 未软删。幂等跳过：向量库中
+     * 已存在当前编码配置（{@link ProductVectorProfile#CURRENT}）且内容版本一致的
+     * 向量时不重新编码（跳过不计成功/失败）。</p>
      *
      * <p>分页使用 created_at + image_id 游标：已完成的图片仍满足过滤条件，固定取第一页
      * 会导致每次调用都扫到同一批记录、永远无法推进。游标翻页让每次调用跳过已完成项，
      * 持续向后扫描直到实际处理满 batchSize（成功+失败计数，跳过不计）或候选集耗尽。</p>
      *
-     * @param batchSize 本次处理数量
-     * @return 处理结果统计
+     * @param batchSize 本次处理数量（{@code <=0} 或 {@code >1000} 时归一为 100）
+     * @return 处理结果统计（successCount / failedCount，跳过不计入）
      */
     public BackfillResult backfill(int batchSize) {
         if (batchSize <= 0 || batchSize > 1000) {
@@ -78,7 +84,7 @@ public class VectorBackfillService {
                 break;
             }
 
-            // 批量加载 RSPU，减少 N+1
+            // 批量加载 RSPU，减少 N+1；selectBatchIds 已按 @TableLogic 过滤软删记录
             Set<String> rspuIds = images.stream()
                 .map(ImageAssets::getRspuId)
                 .collect(Collectors.toSet());
@@ -86,18 +92,22 @@ public class VectorBackfillService {
                 rspuMapper.selectBatchIds(rspuIds).stream()
                     .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r));
 
-            // 批量检查「PG 已有向量」的图片在 ChromaDB 中是否真实存在，修复 PG 有/Chroma 缺的死区
-            Set<String> chromaExistingIds = queryChromaExistingIds(images, rspuMap);
+            // 批量查询向量库已存在项，做幂等跳过判断
+            List<String> imageIds = images.stream().map(ImageAssets::getImageId).toList();
+            Map<String, ExistingVector> existingMap = imageIds.isEmpty() ? Map.of() :
+                productVectorStore.findExisting(imageIds);
 
             for (ImageAssets image : images) {
                 if (success + failed >= batchSize) {
                     break;
                 }
                 try {
-                    RspuMaster rspu = rspuMap.get(image.getRspuId());
-                    if (processImage(image, rspu, chromaExistingIds)) {
+                    if (processImage(image, rspuMap.get(image.getRspuId()), existingMap)) {
                         success++;
                     }
+                } catch (VectorStaleImageException e) {
+                    // 编码期间图片被更新/删除，属正常并发结果：丢弃本次结果，由后续流程重编码
+                    log.info("图片在编码期间已更新或删除，跳过向量化，imageId={}", image.getImageId());
                 } catch (Exception e) {
                     failed++;
                     log.error("回填向量失败，imageId={}", image.getImageId(), e);
@@ -116,53 +126,28 @@ public class VectorBackfillService {
     }
 
     /**
-     * 批量查询 PG 已有向量的图片在 ChromaDB 中的现存 ID；查询失败时按「全部缺失」处理，
-     * 走存量向量补偿 upsert（幂等且无需重新调用 embedding API），保证自愈。
+     * 处理单张图片：RSPU 缺失或向量已是最新时跳过（不计数）；否则读取源图、
+     * 统一编码并写入向量库。
+     *
+     * @param image       图片记录
+     * @param rspu        所属 RSPU（可能为 null，表示不存在或已软删）
+     * @param existingMap 本页已向量的存在性查询结果
+     * @return true=本次成功编码写入；false=跳过
+     * @throws Exception 编码或写入失败
      */
-    private Set<String> queryChromaExistingIds(List<ImageAssets> images, Map<String, RspuMaster> rspuMap) {
-        List<String> candidateIds = images.stream()
-            .filter(image -> {
-                RspuMaster rspu = rspuMap.get(image.getRspuId());
-                return rspu != null && rspu.getStyleVector() != null && !rspu.getStyleVector().isBlank();
-            })
-            .map(ImageAssets::getImageId)
-            .toList();
-        if (candidateIds.isEmpty()) {
-            return Set.of();
-        }
-        try {
-            return chromaDbClient.getExistingIds(candidateIds);
-        } catch (Exception e) {
-            log.warn("批量检查 ChromaDB 现存向量失败，按缺失处理并走补偿回填: {}", e.getMessage());
-            return Set.of();
-        }
-    }
-
-    private boolean processImage(ImageAssets image, RspuMaster rspu, Set<String> chromaExistingIds) throws Exception {
+    private boolean processImage(ImageAssets image, RspuMaster rspu, Map<String, ExistingVector> existingMap) throws Exception {
         if (rspu == null) {
             log.warn("RSPU 不存在或已删除，跳过 imageId={}", image.getImageId());
             return false;
         }
 
-        String existingVector = rspu.getStyleVector();
-        if (existingVector != null && !existingVector.isBlank()) {
-            // ChromaDB 中向量真实存在才跳过，避免重复调用 API
-            if (chromaExistingIds.contains(image.getImageId())) {
-                log.debug("RSPU 已存在向量，跳过 imageId={}", image.getImageId());
-                return false;
-            }
-            // PG 有向量但 ChromaDB 缺失：直接复用存量向量补偿回填，无需重新调用 embedding API
-            float[] embedding = objectMapper.readValue(existingVector, float[].class);
-            Map<String, Object> metadata = ChromaMetadataBuilder.buildProductMetadata(rspu,
-                image.getFileSize() != null ? image.getFileSize() : 0);
-            chromaDbClient.upsert(
-                List.of(image.getImageId()),
-                List.of(embedding),
-                List.of(metadata),
-                null
-            );
-            log.info("ChromaDB 缺失向量补偿回填完成，imageId={}", image.getImageId());
-            return true;
+        long revision = image.getContentRevision() == null ? 1L : image.getContentRevision();
+        ExistingVector existing = existingMap.get(image.getImageId());
+        if (existing != null
+            && ProductVectorProfile.CURRENT.equals(existing.profileId())
+            && existing.sourceRevision() == revision) {
+            log.debug("向量已存在且内容版本一致，跳过 imageId={}", image.getImageId());
+            return false;
         }
 
         String objectKey = image.getStoragePath();
@@ -171,36 +156,13 @@ public class VectorBackfillService {
             return false;
         }
 
-        float[] embedding;
+        EmbeddingService.ImageEmbedding embedding;
         try (InputStream stream = storageService.get(objectKey)) {
-            embedding = embeddingService.embedImage(stream);
+            embedding = embeddingService.embedImageWithHash(stream);
         }
 
-        // 先写 ChromaDB，成功后再更新 PG，避免 PG 已改但向量库缺失导致不一致
-        Map<String, Object> metadata = ChromaMetadataBuilder.buildProductMetadata(rspu,
-            image.getFileSize() != null ? image.getFileSize() : 0);
-        chromaDbClient.upsert(
-            List.of(image.getImageId()),
-            List.of(embedding),
-            List.of(metadata),
-            null
-        );
-
-        // ChromaDB 写入成功后，再更新 RSPU style_vector
-        rspu.setStyleVector(objectMapper.writeValueAsString(embedding));
-        try {
-            rspuMapper.updateById(rspu);
-        } catch (Exception e) {
-            // PG 写入失败时补偿删除 ChromaDB 中刚写入的向量，避免孤儿记录
-            try {
-                chromaDbClient.delete(List.of(image.getImageId()));
-            } catch (Exception compensateEx) {
-                log.error("补偿删除 ChromaDB 向量失败，imageId={}", image.getImageId(), compensateEx);
-            }
-            throw e;
-        }
-
-        log.info("存量向量回填完成，imageId={}", image.getImageId());
+        productVectorStore.upsert(image.getImageId(), revision, embedding.inputHash(), embedding.vector());
+        log.info("存量图片向量重建完成，imageId={}", image.getImageId());
         return true;
     }
 
