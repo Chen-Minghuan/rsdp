@@ -22,6 +22,15 @@ spring:
       max-lifetime: ${RSDP_HIKARI_MAX_LIFETIME:1200000}
       leak-detection-threshold: ${RSDP_HIKARI_LEAK_DETECTION_THRESHOLD:60000}
       pool-name: RSDP-HikariCP
+  flyway:
+    # 结构版本治理：Flyway 为唯一迁移状态源（V 脚本不可变，变更只能新增版本）。
+    # 仅承载结构演进（纯 SQL）；数据修正任务由 DatabaseMigrationRunner 调度，不在此列。
+    locations: classpath:db/migration
+    # 存量环境（已有业务表、无迁移历史）首次启动时自动以 V1 为基线，不重复执行基线脚本
+    baseline-on-migrate: true
+    baseline-version: 1
+    # 启动时校验迁移脚本 checksum 与顺序，被篡改或缺失时阻断启动
+    validate-on-migrate: true
   servlet:
     multipart:
       max-file-size: 200MB
@@ -107,16 +116,11 @@ rsdp:
   encryption:
     # Base64 编码的 32 字节 AES-256 密钥，生产环境必须通过 RSDP_ENCRYPTION_KEY 注入
     key: ${RSDP_ENCRYPTION_KEY:}
-  migration:
-    encrypt-prices:
-      # 历史价格字段加密迁移开关，默认关闭；需要迁移时设为 true 并重启应用
-      enabled: false
-      batch-size: 100
-    price-summary-backfill:
-      # RSPU 价格投影（rspu_price_summary）存量回填开关，默认关闭；
-      # V44 上线后必须设为 true 并重启执行一次（幂等），否则产品列表最低出厂价/报价数显示为空
-      enabled: false
-      batch-size: 100
+  data-fix:
+    # 启动期数据修正任务批次大小（DatabaseMigrationRunner 调度，幂等；见 com.rsdp.migration）
+    encrypt-batch-size: 100
+    price-summary-batch-size: 100
+    six-dim-batch-size: 200
   async:
     core-pool-size: 4
     max-pool-size: 16

@@ -56,6 +56,9 @@ backend: ## 启动后端（需先启动 infra）
 frontend: ## 启动前端开发服务器
 	cd web && pnpm install && pnpm dev
 
+check-migration-sync: ## 校验 schema/ 重放与 Flyway V1+ 执行结果零差异（发布前必跑）
+	./scripts/check_flyway_schema_sync.sh
+
 test: ## 运行全部测试
 	cd server && mvn test
 	cd web && pnpm install && pnpm type-check && pnpm lint

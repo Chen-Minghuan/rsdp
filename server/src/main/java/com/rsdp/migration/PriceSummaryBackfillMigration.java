@@ -1,10 +1,9 @@
 package com.rsdp.migration;
 
-import com.rsdp.config.properties.PriceSummaryBackfillProperties;
+import com.rsdp.config.properties.DataFixProperties;
 import com.rsdp.service.RspuPriceSummaryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -19,32 +18,29 @@ import java.util.List;
  * 重算为幂等 upsert，可重复执行；含已软删 RSPU（重算后投影行为 0/NULL，
  * 回收站还原时写路径会再次重算）。</p>
  *
- * <p>通过 {@code rsdp.migration.price-summary-backfill.enabled=true} 开启，
- * 默认关闭（与 migration 包既有约定一致：启用后重启执行一次即可）。
- * 注意：V44 上线后若未执行本回填，产品列表最低出厂价/报价数将显示为空/0，
- * 部署时必须开启一次。</p>
+ * <p>启动期数据修正任务：由 DatabaseMigrationRunner 在应用启动后按序调用一次；
+ * 幂等可安全重入（已处理记录自动跳过）。</p>
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class PriceSummaryBackfillMigration implements CommandLineRunner {
+public class PriceSummaryBackfillMigration {
 
-    private final PriceSummaryBackfillProperties properties;
+    private final DataFixProperties properties;
     private final JdbcTemplate jdbcTemplate;
     private final RspuPriceSummaryService rspuPriceSummaryService;
 
-    @Override
-    public void run(String... args) {
-        if (!properties.isEnabled()) {
-            log.info("RSPU 价格投影回填已禁用（rsdp.migration.price-summary-backfill.enabled=false）");
-            return;
-        }
 
-        log.info("开始 RSPU 价格投影回填，每批 {} 条", properties.getBatchSize());
+
+
+
+    /** 执行 RSPU 价格投影回填（幂等重算）。 */
+    public void execute() {
+        log.info("开始 RSPU 价格投影回填，每批 {} 条", properties.getPriceSummaryBatchSize());
         int offset = 0;
         int total = 0;
         int failed = 0;
-        int batchSize = properties.getBatchSize();
+        int batchSize = properties.getPriceSummaryBatchSize();
 
         while (true) {
             List<String> rspuIds = jdbcTemplate.queryForList(

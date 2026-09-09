@@ -153,6 +153,16 @@
             <version>3.9.1</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Flyway：数据库结构版本治理（唯一迁移状态源，V 脚本不可变，版本由 Spring Boot BOM 管理） -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
