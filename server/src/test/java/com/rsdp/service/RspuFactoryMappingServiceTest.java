@@ -209,6 +209,74 @@ class RspuFactoryMappingServiceTest {
     }
 
     @Test
+    void saveMappingForEntry_shouldCreateWithoutDataScopeCheck() {
+        // 录入旁路（阶段 1.3）：新 RSPU 首次建档跳过 assertCanAccessRspu，其余流程与 saveMapping 一致
+        RspuFactoryMappingRequest request = new RspuFactoryMappingRequest();
+        request.setRspuId("RSPU-NEW");
+        request.setFactoryCode("F001");
+        request.setIsPrimary(true);
+        request.setMoq(10);
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+
+        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+        when(mappingMapper.selectCount(any())).thenReturn(0L);
+        when(mappingMapper.insert(any(RspuFactoryMapping.class))).thenAnswer(inv -> {
+            RspuFactoryMapping m = inv.getArgument(0);
+            m.setMappingId(3L);
+            return 1;
+        });
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.currentUsername()).thenReturn("工厂管理员");
+
+            Long id = mappingService.saveMappingForEntry(request);
+
+            assertThat(id).isEqualTo(3L);
+        }
+
+        // 核心差异：不触发 RSPU 数据权限断言
+        verify(dataScopeHelper, never()).assertCanAccessRspu(anyString());
+        ArgumentCaptor<RspuFactoryMapping> captor = ArgumentCaptor.forClass(RspuFactoryMapping.class);
+        verify(mappingMapper, times(1)).insert(captor.capture());
+        assertThat(captor.getValue().getRspuId()).isEqualTo("RSPU-NEW");
+        assertThat(captor.getValue().getFactoryCode()).isEqualTo("F001");
+    }
+
+    @Test
+    void saveMappingForEntry_shouldThrowWhenFactoryNotExists() {
+        // 录入旁路仍保留工厂存在性校验
+        RspuFactoryMappingRequest request = new RspuFactoryMappingRequest();
+        request.setRspuId("RSPU-NEW");
+        request.setFactoryCode("F999");
+
+        when(factoryMasterMapper.selectById("F999")).thenReturn(null);
+
+        assertThatThrownBy(() -> mappingService.saveMappingForEntry(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("工厂不存在");
+    }
+
+    @Test
+    void saveMappingForEntry_shouldThrowWhenDuplicate() {
+        // 录入旁路仍保留重复关联校验
+        RspuFactoryMappingRequest request = new RspuFactoryMappingRequest();
+        request.setRspuId("RSPU-NEW");
+        request.setFactoryCode("F001");
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+        when(mappingMapper.selectCount(any())).thenReturn(1L);
+
+        assertThatThrownBy(() -> mappingService.saveMappingForEntry(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("已关联此工厂");
+    }
+
+    @Test
     void listByRspu_shouldFilterByProvince() {
         FactoryWarehouse warehouse = new FactoryWarehouse();
         warehouse.setWarehouseId("W001");

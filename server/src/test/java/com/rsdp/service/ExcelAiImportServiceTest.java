@@ -16,6 +16,8 @@ import com.rsdp.entity.ExcelImportBatch;
 import com.rsdp.entity.ExcelImportRow;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuScene;
+import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ForbiddenException;
@@ -28,6 +30,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScope;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
@@ -150,6 +153,13 @@ class ExcelAiImportServiceTest {
         // previewMapping 的 saveBatch 使用编程式事务（P1-7），单测中事务管理器全部 mock
         lenient().when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
         lenient().when(dataScopeHelper.canAccessFactory(anyString())).thenReturn(true);
+        // 默认按平台员工（ALL）数据范围：现有用例维持全量更新共享字段的原行为；
+        // 工厂身份用例覆盖为 FACTORY_LIST（阶段 1.3 归属收窄）
+        lenient().when(dataScopeHelper.currentDataScope()).thenReturn(DataScope.ALL);
+        // 阶段 1.3：新建 RSPU 行的变体创建改走 createVariantForEntry 录入旁路；
+        // 委托到 createVariant 桩，既有用例的 thenReturn/thenAnswer 与 verify 计数语义保持不变
+        lenient().when(rspuVariantService.createVariantForEntry(anyString(), any()))
+            .thenAnswer(inv -> rspuVariantService.createVariant(inv.getArgument(0), inv.getArgument(1)));
         // 默认工厂编码存在；个别测试可覆盖为 null 模拟填错编码
         lenient().when(factoryMasterMapper.selectById(anyString()))
             .thenReturn(new com.rsdp.entity.FactoryMaster());
@@ -2223,6 +2233,322 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void confirmAndImport_factoryIdentityShouldUseEntryBypassForNewRspu() throws IOException {
+        // 阶段 1.3-B：工厂身份（FACTORY_LIST）新建 RSPU 行——变体走 createVariantForEntry、
+        // 工厂映射走 saveMappingForEntry（跳过对"刚创建尚无本厂 RSKU"必然误伤的 assertCanAccessRspu），
+        // RSKU 正常 upsert
+        byte[] excelBytes = createExcelWithSinglePriceColumnAndMaterial();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"材质说明\":\"materialTags\",\"出厂价\":\"__PRICE__:出厂价\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithSinglePriceColumnAndMaterial()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "座椅")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of(createDict("material", "WO", "实木")));
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        // 新建 RSPU 行不经过 currentDataScope 归属分流，无需覆盖默认 ALL 桩
+
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        // createVariantForEntry 经 setUp 委托到 createVariant 桩返回变体
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-NEW");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+        when(rskuService.upsertRsku(any())).thenReturn("RSKU-1");
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+        request.setSelectedPriceColumns(List.of("出厂价"));
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        // rspuId 由 IdGenerator 在 insert 前生成，捕获实际值用于交叉断言
+        ArgumentCaptor<String> rspuIdCaptor = ArgumentCaptor.forClass(String.class);
+        verify(rspuVariantService, times(1)).createVariantForEntry(rspuIdCaptor.capture(), any());
+        String generatedRspuId = rspuIdCaptor.getValue();
+        assertTrue(generatedRspuId.startsWith("RSPU-"), "应为生成的 RSPU ID: " + generatedRspuId);
+        ArgumentCaptor<com.rsdp.dto.request.RspuFactoryMappingRequest> mappingCaptor =
+            ArgumentCaptor.forClass(com.rsdp.dto.request.RspuFactoryMappingRequest.class);
+        verify(rspuFactoryMappingService, times(1)).saveMappingForEntry(mappingCaptor.capture());
+        assertEquals(generatedRspuId, mappingCaptor.getValue().getRspuId());
+        assertEquals("F001", mappingCaptor.getValue().getFactoryCode());
+        verify(rspuFactoryMappingService, never()).saveMapping(any());
+        verify(rskuService, times(1)).upsertRsku(any());
+    }
+
+    @Test
+    void confirmAndImport_factoryIdentityShouldSkipSharedUpdateForOtherFactoryRspu() throws IOException {
+        // 阶段 1.3-C：工厂身份 updateIfExists 命中他厂 RSPU——共享字段不更新、记 rowIssue，
+        // 但本厂 RSKU 仍正常 upsert（复用已有变体）
+        byte[] excelBytes = createExcelWithSinglePriceColumnAndMaterial();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"材质说明\":\"materialTags\",\"出厂价\":\"__PRICE__:出厂价\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithSinglePriceColumnAndMaterial()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "座椅")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of(createDict("material", "WO", "实木")));
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(dataScopeHelper.currentDataScope()).thenReturn(DataScope.FACTORY_LIST);
+        // 他厂产品：本厂无 RSKU 报价记录，不可维护共享信息
+        when(dataScopeHelper.canAccessRspu("RSPU-OTHER")).thenReturn(false);
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-OTHER");
+        existing.setExternalCode("ABC-001");
+        existing.setProductName("平台维护名称");
+        existing.setCategoryCode("SF");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+
+        // 已有变体（材质 WO、无尺寸/颜色），本行价格列回退行级材质 WO 后命中复用
+        RspuVariant existingVariant = new RspuVariant();
+        existingVariant.setVariantId("V-OTHER");
+        existingVariant.setRspuId("RSPU-OTHER");
+        existingVariant.setMaterialCode("WO");
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of(existingVariant));
+        when(rskuService.upsertRsku(any())).thenReturn("RSKU-OWN");
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setUpdateIfExists(true);
+        request.setDefaultFactoryCode("F001");
+        request.setSelectedPriceColumns(List.of("出厂价"));
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        assertEquals(List.of("RSPU-OTHER"), result.getRspuIds(), "应复用已有 RSPU");
+        // 共享字段不更新：rspu_master 不写、风格/场景关联不动
+        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+        verify(rspuMapper, never()).insert(any(RspuMaster.class));
+        verify(rspuStyleMapper, never()).insert(any(RspuStyle.class));
+        // 行内记 issue，用户可见
+        assertTrue(result.getFailures().stream()
+                        .anyMatch(f -> f.getReason() != null && f.getReason().contains("非本厂已报价产品")),
+            "应记录非本厂已报价产品的行内提示，实际: " + result.getFailures());
+        // 本厂 RSKU 仍 upsert（复用已有变体，不新建变体）
+        verify(rspuVariantService, never()).createVariant(anyString(), any());
+        verify(rspuVariantService, never()).createVariantForEntry(anyString(), any());
+        ArgumentCaptor<com.rsdp.dto.request.RskuCreateRequest> rskuCaptor =
+            ArgumentCaptor.forClass(com.rsdp.dto.request.RskuCreateRequest.class);
+        verify(rskuService, times(1)).upsertRsku(rskuCaptor.capture());
+        assertEquals("RSPU-OTHER", rskuCaptor.getValue().getRspuId());
+        assertEquals("F001", rskuCaptor.getValue().getFactoryCode());
+    }
+
+    @Test
+    void confirmAndImport_factoryIdentityShouldFillOnlyGapsForOwnCoManagedRspu() throws IOException {
+        // 阶段 1.3-C：工厂身份命中本厂已报价的共管 RSPU——仅补空缺：已有品名/分类不覆盖，
+        // 为空的风格字段补齐；风格/场景关联表（先删后插的覆盖语义）不动
+        byte[] excelBytes = createExcelWithCodeNameAndStyle();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号\":\"externalCode\",\"名称\":\"productName\",\"风格\":\"positioningLabel\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithCodeNameAndStyle()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "座椅")));
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(dataScopeHelper.currentDataScope()).thenReturn(DataScope.FACTORY_LIST);
+        // 本厂已报价的共管产品
+        when(dataScopeHelper.canAccessRspu("RSPU-CO")).thenReturn(true);
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-CO");
+        existing.setExternalCode("ABC-001");
+        existing.setProductName("原有名称");
+        existing.setCategoryCode("SF");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+
+        RspuVariant existingVariant = new RspuVariant();
+        existingVariant.setVariantId("V-1");
+        existingVariant.setRspuId("RSPU-CO");
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of(existingVariant));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setUpdateIfExists(true);
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper, times(1)).updateById(captor.capture());
+        RspuMaster updated = captor.getValue();
+        assertEquals("原有名称", updated.getProductName(), "已有品名不应被覆盖");
+        assertEquals("SF", updated.getCategoryCode(), "categoryCode 不允许非平台身份修改");
+        assertEquals("MC", updated.getPositioningLabel(), "空缺的风格字段应补齐");
+        // 风格/场景关联表不动（覆盖语义会清空平台/他厂维护的共享标签）
+        verify(rspuStyleMapper, never()).insert(any(RspuStyle.class));
+        verify(rspuSceneMapper, never()).insert(any(RspuScene.class));
+    }
+
+    @Test
+    void confirmAndImport_platformIdentityShouldOverwriteSharedFieldsAsBefore() throws IOException {
+        // 阶段 1.3-C：平台员工（ALL）行为不变——命中已有 RSPU 全量覆盖共享字段，
+        // 不经过 canAccessRspu 归属校验
+        byte[] excelBytes = createExcelWithCodeNameAndStyle();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号\":\"externalCode\",\"名称\":\"productName\",\"风格\":\"positioningLabel\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithCodeNameAndStyle()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "座椅")));
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-EXIST");
+        existing.setExternalCode("ABC-001");
+        existing.setProductName("原有名称");
+        existing.setCategoryCode("SF");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+
+        RspuVariant existingVariant = new RspuVariant();
+        existingVariant.setVariantId("V-1");
+        existingVariant.setRspuId("RSPU-EXIST");
+        when(rspuVariantMapper.selectList(any())).thenReturn(List.of(existingVariant));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setUpdateIfExists(true);
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper, times(1)).updateById(captor.capture());
+        RspuMaster updated = captor.getValue();
+        assertEquals("休闲椅 A", updated.getProductName(), "平台身份应全量覆盖品名");
+        assertEquals("FS", updated.getCategoryCode(), "平台身份应可更新 categoryCode");
+        assertEquals("MC", updated.getPositioningLabel());
+        // 平台身份不经归属校验，且风格关联表照常重建
+        verify(dataScopeHelper, never()).canAccessRspu(anyString());
+        verify(rspuStyleMapper, times(1)).insert(any(RspuStyle.class));
+    }
+
+    @Test
     void confirmAndImport_shouldRejectWhenBatchClaimFails() {
         // P1-6：原子抢占失败（并发导入或已完成）→ 业务异常，不进入行处理
         ExcelImportBatch batch = new ExcelImportBatch();
@@ -2937,6 +3263,25 @@ class ExcelAiImportServiceTest {
             var data = sheet.createRow(1);
             data.createCell(0).setCellValue("ABC-001");
             data.createCell(1).setCellValue("休闲椅 A");
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithCodeNameAndStyle() {
+        try (var out = new java.io.ByteArrayOutputStream();
+             org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("型号");
+            header.createCell(1).setCellValue("名称");
+            header.createCell(2).setCellValue("风格");
+            var data = sheet.createRow(1);
+            data.createCell(0).setCellValue("ABC-001");
+            data.createCell(1).setCellValue("休闲椅 A");
+            data.createCell(2).setCellValue("中古风");
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {

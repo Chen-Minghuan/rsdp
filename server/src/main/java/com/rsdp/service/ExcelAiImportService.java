@@ -46,6 +46,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.datascope.DataScope;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
@@ -2898,8 +2899,20 @@ public class ExcelAiImportService {
             }
             if (existing != null) {
                 rspuId = existing.getRspuId();
-                updateExistingRspu(existing, row, dictCache);
-                saveStylesAndScenes(rspuId, row, dictCache);
+                // 归属分流（阶段 1.3）：平台员工（ALL）保持全量更新共享字段；
+                // 非 ALL（FACTORY_LIST 等）命中已有 RSPU 时按归属收窄——
+                // 本厂已报价的共管产品仅补空缺（不覆盖已有值，categoryCode 不可改）；
+                // 非本厂已报价产品跳过共享信息更新，仅继续本行本厂 RSKU 报价登记
+                if (dataScopeHelper.currentDataScope() == DataScope.ALL) {
+                    updateExistingRspu(existing, row, dictCache);
+                    saveStylesAndScenes(rspuId, row, dictCache);
+                } else if (dataScopeHelper.canAccessRspu(rspuId)) {
+                    fillExistingRspuGaps(existing, row, dictCache);
+                    // 风格/场景关联表是"先删后插"的覆盖语义，非平台身份下不做，
+                    // 避免清空平台/他厂维护的共享标签
+                } else {
+                    rowIssues.add("该产品非本厂已报价产品，跳过更新共享信息，仅登记本厂报价");
+                }
                 createdNewRspu = false;
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
@@ -2908,11 +2921,13 @@ public class ExcelAiImportService {
                 createdNewRspu = true;
             }
         }
-        // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）
+        // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）；
+        // createdNewRspu 行（本次事务刚 insert 的 RSPU）走录入旁路入口，跳过对
+        // "刚创建、尚无本厂 RSKU"的新 RSPU 必然误伤的 assertCanAccessRspu 校验
         excelImportRowService.updateStage(importRowId, "create_factory_mapping");
         VariantRskuOutcome variantRskuOutcome = createRspuFactoryMappingAndVariants(rspuId, dataRow, row,
             priceColumns, request, dictCache, importRowId, rowIssues, defaultProductLevel, defaultMaterialCode,
-            importCache);
+            importCache, createdNewRspu);
         String variantId = variantRskuOutcome.firstVariantId();
 
         // 登记图片元数据（文件已在事务外写入对象存储）
@@ -3859,7 +3874,7 @@ public class ExcelAiImportService {
     private String createVariantIfNeeded(String rspuId, ProductImportRow row,
                                          Map<String, List<CategoryDict>> dictCache,
                                          SizeSpecParser.SizeSpec spec, String defaultProductLevel,
-                                         BatchImportCache importCache) {
+                                         BatchImportCache importCache, boolean createdNewRspu) {
         boolean hasVariantInfo = spec != null
             || StringUtils.hasText(row.getVariantDisplayName())
             || StringUtils.hasText(row.getSizeCode()) || StringUtils.hasText(row.getSizeText())
@@ -3912,7 +3927,11 @@ public class ExcelAiImportService {
             return existingVariantId;
         }
 
-        var variantResponse = rspuVariantService.createVariant(rspuId, request);
+        // 新建 RSPU 首次建档走录入旁路（跳过 assertCanAccessRspu）；
+        // 更新已有 RSPU 的行不旁路，保留原数据权限校验
+        var variantResponse = createdNewRspu
+            ? rspuVariantService.createVariantForEntry(rspuId, request)
+            : rspuVariantService.createVariant(rspuId, request);
         if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
             throw new BusinessException("创建默认变体失败");
         }
@@ -3967,7 +3986,8 @@ public class ExcelAiImportService {
                                                         List<String> rowIssues,
                                                         String defaultProductLevel,
                                                         String defaultMaterialCode,
-                                                        BatchImportCache importCache) {
+                                                        BatchImportCache importCache,
+                                                        boolean createdNewRspu) {
         String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
             ? request.getDefaultFactoryCode()
             : null;
@@ -3986,7 +4006,7 @@ public class ExcelAiImportService {
                 ? baseRow.getLeadTimeDays()
                 : request.getDefaultLeadTimeDays();
             createRspuFactoryMapping(rspuId, factoryCode, shippingWarehouseId, moq,
-                mappingLeadTimeDays, importRowId);
+                mappingLeadTimeDays, importRowId, createdNewRspu);
         }
 
         String firstVariantId = null;
@@ -4094,7 +4114,11 @@ public class ExcelAiImportService {
                         variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
                             ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
                             : defaultProductLevel);
-                        var variantResponse = rspuVariantService.createVariant(rspuId, variantRequest);
+                        // 新建 RSPU 首次建档走录入旁路（跳过 assertCanAccessRspu）；
+                        // 更新已有 RSPU 的行不旁路，保留原数据权限校验
+                        var variantResponse = createdNewRspu
+                            ? rspuVariantService.createVariantForEntry(rspuId, variantRequest)
+                            : rspuVariantService.createVariant(rspuId, variantRequest);
                         if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
                             log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
                             rowIssues.add("创建变体失败: " + priceColumn.getHeader());
@@ -4144,7 +4168,7 @@ public class ExcelAiImportService {
             // 识别到多尺寸规格时按尺寸各建一个变体，否则维持单默认变体
             for (SizeSpecParser.SizeSpec spec : specLoop) {
                 String variantId = createVariantIfNeeded(rspuId, baseRow, dictCache, spec, defaultProductLevel,
-                    importCache);
+                    importCache, createdNewRspu);
                 if (firstVariantId == null) {
                     firstVariantId = variantId;
                 }
@@ -4351,6 +4375,66 @@ public class ExcelAiImportService {
     }
 
     /**
+     * 非平台身份（FACTORY_LIST 等）命中本厂已报价的共管 RSPU 时的「仅补空缺」更新：
+     * 只填 RSPU 上为空的字段，已有值一律不覆盖；categoryCode/categoryPath 属分类主数据，
+     * 非平台身份下即使本行有值也不允许修改。
+     *
+     * @param rspu      已有 RSPU 实体
+     * @param row       本行数据
+     * @param dictCache 字典缓存
+     */
+    private void fillExistingRspuGaps(RspuMaster rspu, ProductImportRow row,
+                                      Map<String, List<CategoryDict>> dictCache) {
+        RspuMaster oldSnapshot = snapshotRspu(rspu);
+        // 品名取值与 createRspu 一致：productName 优先，缺失时回退变体显示名
+        String productName = StringUtils.hasText(row.getProductName())
+            ? row.getProductName()
+            : row.getVariantDisplayName();
+        if (!StringUtils.hasText(rspu.getProductName()) && StringUtils.hasText(productName)) {
+            rspu.setProductName(productName.trim());
+        }
+        if (!StringUtils.hasText(rspu.getDescription()) && StringUtils.hasText(row.getDescription())) {
+            rspu.setDescription(row.getDescription().trim());
+        }
+        if (rspu.getRetailPrice() == null && row.getRetailPrice() != null) {
+            rspu.setRetailPrice(row.getRetailPrice());
+        }
+        // categoryCode / categoryPath 不补不改：分类属共享主数据，非平台身份无权变更
+        String primaryStyleName = splitCsv(row.getPositioningLabel()).stream().findFirst().orElse(null);
+        if (!StringUtils.hasText(rspu.getPositioningLabel()) && StringUtils.hasText(primaryStyleName)) {
+            rspu.setPositioningLabel(normalizeDictCode(primaryStyleName, dictCache.get("style")));
+        }
+        if (!StringUtils.hasText(rspu.getColorPrimaryName()) && StringUtils.hasText(row.getColorPrimaryName())) {
+            rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
+        }
+        if (!StringUtils.hasText(rspu.getMaterialTags()) && StringUtils.hasText(row.getMaterialTags())) {
+            rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
+        }
+        if (!StringUtils.hasText(rspu.getSceneTags()) && StringUtils.hasText(row.getSceneTags())) {
+            rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
+        }
+        if (!StringUtils.hasText(rspu.getSixDimTags()) && StringUtils.hasText(row.getSixDimTags())) {
+            rspu.setSixDimTags(trim(row.getSixDimTags()));
+        }
+        if (!StringUtils.hasText(rspu.getReferencePriceBand()) && StringUtils.hasText(row.getReferencePriceBand())) {
+            rspu.setReferencePriceBand(row.getReferencePriceBand().trim().toLowerCase());
+        }
+        if (!StringUtils.hasText(rspu.getProductLevel()) && StringUtils.hasText(row.getProductLevel())) {
+            rspu.setProductLevel(normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level")));
+        }
+        if (rspu.getWarrantyYears() == null && row.getWarrantyYears() != null) {
+            rspu.setWarrantyYears(row.getWarrantyYears());
+        }
+        if (!StringUtils.hasText(rspu.getKeySpecs()) && StringUtils.hasText(row.getKeySpecs())) {
+            rspu.setKeySpecs(trim(row.getKeySpecs()));
+        }
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.updateById(rspu);
+        auditLogService.logUpdate("rspu_master", rspu.getRspuId(), oldSnapshot, rspu,
+            SecurityOperatorContext.currentUsername());
+    }
+
+    /**
      * 生成 RSPU 更新前快照（用于审计日志）。
      * 实体中 JSONB 字段以 String + @JsonRawValue 存储，无法做 Jackson 序列化/反序列化往返，
      * 因此使用浅拷贝（字段均为不可变类型 String/Integer/LocalDateTime 等，浅拷贝即安全）。
@@ -4365,7 +4449,8 @@ public class ExcelAiImportService {
     }
 
     private void createRspuFactoryMapping(String rspuId, String factoryCode, String shippingWarehouseId,
-                                          Integer moq, Integer baseLeadTimeDays, Long importRowId) {
+                                          Integer moq, Integer baseLeadTimeDays, Long importRowId,
+                                          boolean createdNewRspu) {
         try {
             RspuFactoryMappingRequest mappingRequest = new RspuFactoryMappingRequest();
             mappingRequest.setRspuId(rspuId);
@@ -4375,7 +4460,13 @@ public class ExcelAiImportService {
             mappingRequest.setMoq(moq);
             mappingRequest.setBaseLeadTimeDays(baseLeadTimeDays);
             mappingRequest.setStatus("active");
-            rspuFactoryMappingService.saveMapping(mappingRequest);
+            // 新建 RSPU 首次建档走录入旁路（跳过 assertCanAccessRspu，该校验依赖已存在的
+            // 本厂 RSKU，对刚创建的新 RSPU 必然误伤）；更新已有 RSPU 的行不旁路
+            if (createdNewRspu) {
+                rspuFactoryMappingService.saveMappingForEntry(mappingRequest);
+            } else {
+                rspuFactoryMappingService.saveMapping(mappingRequest);
+            }
         } catch (BusinessException e) {
             // 已存在则不报错
             rethrowIfTransactionPoisoned(e);

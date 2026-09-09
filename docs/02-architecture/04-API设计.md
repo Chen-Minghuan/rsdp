@@ -378,6 +378,20 @@ POST   /api/v1/products/excel-ai-import/import
        #   - previewEdits：导入前全量预览（数据清洗）阶段用户对原始单元格的编辑；
        #     后端在 forwardFillKeyColumns 之后应用，按 rowIndex + header 覆盖对应单元格；
        #     找不到的行/列仅记日志跳过，不阻断导入
+       #   - 工厂身份（FACTORY_ADMIN，数据范围 FACTORY_LIST）导入的归属规则（阶段 1.3）：
+       #     1) 新建 RSPU 行（本行事务刚 insert）：变体创建走录入旁路 createVariantForEntry、
+       #        工厂映射走 saveMappingForEntry，跳过对"刚创建尚无本厂 RSKU"必然误伤的
+       #        assertCanAccessRspu；更新已有 RSPU 的行不旁路，保留原校验
+       #     2) updateIfExists 命中已有 RSPU 时按数据范围分流：
+       #        平台员工（ALL）行为不变（全量覆盖共享字段 + 风格/场景重建）；
+       #        非 ALL 先校验 canAccessRspu——非本厂已报价产品：记 failures
+       #        「该产品非本厂已报价产品，跳过更新共享信息，仅登记本厂报价」，
+       #        rspu_master 共享字段与风格/场景关联均不动，本厂 RSKU 报价照常 upsert
+       #        （RskuService 自有 canAccessRskuFactory 校验，仅本厂编码可通过）；
+       #        本厂已报价的共管产品：「仅补空缺」——只填 RSPU 上为空的字段不覆盖已有值，
+       #        categoryCode/categoryPath 一律不改；风格/场景关联表（先删后插的覆盖语义）不动
+       #     3) confirm 前置校验：defaultFactoryCode 必须存在且 canAccessFactory 通过
+       #        （工厂身份只能使用本厂编码），否则 400
 
 GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
        # Excel AI 导入前全量预览（数据清洗用，已实现）

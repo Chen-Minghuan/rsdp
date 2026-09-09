@@ -49,6 +49,36 @@ public class RspuFactoryMappingService {
     @Transactional(noRollbackFor = BusinessException.class)
     public Long saveMapping(RspuFactoryMappingRequest request) {
         dataScopeHelper.assertCanAccessRspu(request.getRspuId());
+        return doSaveMapping(request);
+    }
+
+    /**
+     * 为新 RSPU 首次建档创建 RSPU-工厂关联（录入场景专用内部入口）。
+     *
+     * <p><b>仅用于新 RSPU 首次建档场景</b>：RSPU 由当前用户在同一事务内刚创建，
+     * 数据归属隐含成立，故跳过 {@link DataScopeHelper#assertCanAccessRspu} 数据权限校验
+     * （该校验依赖已存在的 RSKU 报价记录，对"刚创建"的新 RSPU 必然误伤）。
+     * 其余校验（工厂存在、仓库归属、重复关联）与 {@link #saveMapping} 完全一致。
+     * 其他任何场景禁止调用本方法，请使用 {@link #saveMapping}。</p>
+     *
+     * <p>noRollbackFor：校验类业务异常（如工厂不存在、重复关联）被 Excel 导入链路捕获为
+     * 软错误继续处理，不能让它们把外层行事务标记为 rollback-only。</p>
+     *
+     * @param request 关联请求
+     * @return 关联 ID
+     */
+    @Transactional(noRollbackFor = BusinessException.class)
+    public Long saveMappingForEntry(RspuFactoryMappingRequest request) {
+        return doSaveMapping(request);
+    }
+
+    /**
+     * 保存 RSPU-工厂关联主体逻辑（不含数据权限校验）：参数校验、判重、落库与审计。
+     *
+     * @param request 关联请求
+     * @return 关联 ID
+     */
+    private Long doSaveMapping(RspuFactoryMappingRequest request) {
         validateRequest(request);
 
         RspuFactoryMapping mapping;
