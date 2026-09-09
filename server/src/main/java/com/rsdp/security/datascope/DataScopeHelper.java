@@ -23,6 +23,16 @@ public class DataScopeHelper {
     private final RskuSupplyMapper rskuSupplyMapper;
 
     /**
+     * 获取当前登录用户的数据范围（委托 {@link DataScopeContext#currentDataScope()}，
+     * 带请求级缓存）。
+     *
+     * @return 数据范围
+     */
+    public DataScope currentDataScope() {
+        return dataScopeContext.currentDataScope();
+    }
+
+    /**
      * 对 RSKU 查询应用数据权限。
      *
      * @param wrapper QueryWrapper

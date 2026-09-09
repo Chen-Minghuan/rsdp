@@ -19,6 +19,7 @@ import {
   NSpace,
   NSwitch,
   NTag,
+  NText,
   useDialog,
   useMessage,
   type DataTableColumns
@@ -1058,6 +1059,7 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
           :disabled="viewMode === 'full'"
         />
         <n-switch
+          v-if="isPlatformStaff || viewFullCatalog"
           :value="viewFullCatalog"
           :loading="savingPreference"
           @update:value="toggleFullCatalog"
@@ -1065,6 +1067,9 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
           <template #checked>全库去重视图</template>
           <template #unchecked>仅自己的产品</template>
         </n-switch>
+        <n-text v-else depth="3" style="font-size: 12px;">
+          仅自己的产品（全库视图需平台开启）
+        </n-text>
       </n-space>
 
       <n-alert v-if="errorMessage" type="error" :show-icon="true" style="margin-top: 12px;">

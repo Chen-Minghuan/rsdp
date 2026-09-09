@@ -17,6 +17,7 @@ const viewFullCatalog = ref(false)
 
 const userInfo = computed(() => userStore.userInfo)
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 
 onMounted(async () => {
   if (!isFactoryAdmin.value) {
@@ -85,15 +86,17 @@ function goToProducts() {
           <div>
             <div style="font-weight: 500;">显示全产品库（去重）</div>
             <div style="color: #999; font-size: 12px; margin-top: 4px;">
-              开启后，产品库将展示全平台产品，并自动隐藏你所在工厂已有能力覆盖的产品
+              开启后，产品库将展示全平台产品，并自动隐藏你所在工厂已有能力覆盖的产品；该开关仅平台运营人员可开启
             </div>
           </div>
           <n-switch
+            v-if="isPlatformStaff || viewFullCatalog"
             :value="viewFullCatalog"
             :loading="saving"
             :disabled="!isFactoryAdmin || loading"
             @update:value="handleToggle"
           />
+          <span v-else style="color: #999; font-size: 12px;">未开启（需平台运营人员开启）</span>
         </n-space>
       </n-card>
 

@@ -45,7 +45,9 @@ PUT    /api/v1/auth/me/preferences
        # 更新当前登录用户偏好设置（需认证）
        # Request: { viewFullCatalog: boolean }
        # Response: UserResponse
-       # 说明：当前仅支持「显示全产品库（去重）」开关；工厂管理员可在账号设置页自更新
+       # 说明：当前仅支持「显示全产品库（去重）」开关；口径（2026-09-09 决策点①）：
+       #      默认严格隔离，仅平台运营人员可通过用户管理接口为用户开启，
+       #      非平台员工不可自助开启（尝试开启返回业务错误），已开启者可自行关闭
 ```
 
 ## 核心 API 端点设计
@@ -63,6 +65,9 @@ POST   /api/v1/products/entry
        # 说明：AI 识别完成后会自动写入 rspu_style / rspu_scene 关联表，
        #      positioning_label 保存风格码（如 MC），material_tags 保存材质码（如 WO）
        # 查重：图片 SHA-256 命中已有图片时返回 400 并注明对应产品（2026-08-06）；
+       #      报错文案脱敏（2026-09-09）：非平台员工（DESIGNER/FACTORY_ADMIN 等）仅返回
+       #      中性表述「该图片已录入过系统，如确属新品请使用仍然导入」，不暴露已有产品的
+       #      品名/业务编码（跨数据归属防泄露）；平台员工（ADMIN/EDITOR）保留带定位信息的文案；
        #      AI 识别后与库内产品向量相似度 ≥0.95 时新品标记"存疑-疑似同款"
 
 POST   /api/v1/products/entry/detect-regions
@@ -147,7 +152,10 @@ GET    /api/v1/products
        #   - own：仅返回当前用户所属工厂已录入 RSKU 的 RSPU（工厂管理员/业务员）
        #   - full：平台全量 RSPU，按 `factory_product_capability` 能力覆盖去重，
        #     对已被本厂能力覆盖且本厂未报价的 RSPU 进行折叠隐藏；
-       #     仅当用户拥有 `view_full_catalog=true` 或对应权限时可用
+       #     口径（2026-09-09 决策点①，默认严格隔离）：仅工厂管理员且平台已为其
+       #     显式开启 `sys_user.view_full_catalog=true` 时生效；未开启的工厂账号
+       #     传 viewMode=full 时服务端强制回退 own 视图（忽略 full，不返回全库数据）；
+       #     平台运营人员（ADMIN/EDITOR）/设计师不受该开关影响，始终全库视图
        #   - statusTab=recycled 时走独立回收站查询（绕过逻辑删除过滤），
        #     其他搜索条件不叠加，行内最低出厂价/供应商编码为空
        #   - ProductSummary.minFactoryPrice（跨厂聚合最低出厂价）仅平台运营
@@ -378,6 +386,20 @@ POST   /api/v1/products/excel-ai-import/import
        #   - previewEdits：导入前全量预览（数据清洗）阶段用户对原始单元格的编辑；
        #     后端在 forwardFillKeyColumns 之后应用，按 rowIndex + header 覆盖对应单元格；
        #     找不到的行/列仅记日志跳过，不阻断导入
+       #   - 工厂身份（FACTORY_ADMIN，数据范围 FACTORY_LIST）导入的归属规则（阶段 1.3）：
+       #     1) 新建 RSPU 行（本行事务刚 insert）：变体创建走录入旁路 createVariantForEntry、
+       #        工厂映射走 saveMappingForEntry，跳过对"刚创建尚无本厂 RSKU"必然误伤的
+       #        assertCanAccessRspu；更新已有 RSPU 的行不旁路，保留原校验
+       #     2) updateIfExists 命中已有 RSPU 时按数据范围分流：
+       #        平台员工（ALL）行为不变（全量覆盖共享字段 + 风格/场景重建）；
+       #        非 ALL 先校验 canAccessRspu——非本厂已报价产品：记 failures
+       #        「该产品非本厂已报价产品，跳过更新共享信息，仅登记本厂报价」，
+       #        rspu_master 共享字段与风格/场景关联均不动，本厂 RSKU 报价照常 upsert
+       #        （RskuService 自有 canAccessRskuFactory 校验，仅本厂编码可通过）；
+       #        本厂已报价的共管产品：「仅补空缺」——只填 RSPU 上为空的字段不覆盖已有值，
+       #        categoryCode/categoryPath 一律不改；风格/场景关联表（先删后插的覆盖语义）不动
+       #     3) confirm 前置校验：defaultFactoryCode 必须存在且 canAccessFactory 通过
+       #        （工厂身份只能使用本厂编码），否则 400
 
 GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
        # Excel AI 导入前全量预览（数据清洗用，已实现）

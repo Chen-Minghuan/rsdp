@@ -14,6 +14,7 @@ import com.rsdp.entity.SysUserFactory;
 import com.rsdp.entity.SysUserRole;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.SysRoleMapper;
+import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.SecurityUser;
 import com.rsdp.mapper.SysUserFactoryMapper;
 import com.rsdp.mapper.SysUserMapper;
@@ -190,7 +191,9 @@ public class UserService {
     /**
      * 更新当前登录用户的偏好设置。
      *
-     * <p>当前仅支持修改「显示全产品库（去重）」开关。</p>
+     * <p>当前仅支持修改「显示全产品库（去重）」开关。口径（决策点①）：默认严格隔离，
+     * 全库视图仅平台运营人员可通过用户管理接口为用户显式开启，非平台员工不可自助开启
+     * （已开启者可自行关闭）。</p>
      *
      * @param userId  当前登录用户 ID
      * @param request 偏好更新请求
@@ -204,6 +207,11 @@ public class UserService {
             throw new BusinessException("用户不存在");
         }
         if (request.getViewFullCatalog() != null) {
+            if (Boolean.TRUE.equals(request.getViewFullCatalog())
+                    && !Boolean.TRUE.equals(user.getViewFullCatalog())
+                    && !SecurityOperatorContext.isPlatformStaff()) {
+                throw new BusinessException("全库视图需由平台运营人员开启");
+            }
             user.setViewFullCatalog(request.getViewFullCatalog());
         }
         user.setUpdatedAt(LocalDateTime.now());

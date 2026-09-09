@@ -11,6 +11,7 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.ImageUploadValidator;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,6 +20,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -148,22 +152,44 @@ class ProductServiceTest {
         return dict;
     }
 
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private void authenticateWithRoles(String username, String... roles) {
+        SecurityContextHolder.clearContext();
+        var user = User.withUsername(username).password("").roles(roles).build();
+        var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    private ImageAssets duplicateImageAsset() {
+        ImageAssets dup = new ImageAssets();
+        dup.setImageId("IMG-DUP");
+        dup.setRspuId("RSPU-DUP");
+        return dup;
+    }
+
+    private RspuMaster duplicateRspu() {
+        RspuMaster dupRspu = new RspuMaster();
+        dupRspu.setRspuId("RSPU-DUP");
+        dupRspu.setProductName("扶摇沙发");
+        dupRspu.setRspuCode("FS-WJ-001-M");
+        return dupRspu;
+    }
+
     @Test
     void createEntry_shouldRejectDuplicateImageByContentHash() throws Exception {
+        // 平台员工（ADMIN）视角：查重报错保留品名 + 业务编码定位信息
+        authenticateWithRoles("admin", "ADMIN");
         MockMultipartFile image = new MockMultipartFile(
             "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
         );
         when(dictService.listByType("category")).thenReturn(categoryDicts());
         // 库内已有同内容图片（对应已有产品）
-        ImageAssets dup = new ImageAssets();
-        dup.setImageId("IMG-DUP");
-        dup.setRspuId("RSPU-DUP");
-        when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(dup);
-        RspuMaster dupRspu = new RspuMaster();
-        dupRspu.setRspuId("RSPU-DUP");
-        dupRspu.setProductName("扶摇沙发");
-        dupRspu.setRspuCode("FS-WJ-001-M");
-        when(rspuMapper.selectById("RSPU-DUP")).thenReturn(dupRspu);
+        when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(duplicateImageAsset());
+        when(rspuMapper.selectById("RSPU-DUP")).thenReturn(duplicateRspu());
 
         assertThatThrownBy(() -> productService.createEntry(List.of(image), null))
             .isInstanceOf(com.rsdp.exception.BusinessException.class)
@@ -171,6 +197,47 @@ class ProductServiceTest {
             .hasMessageContaining("扶摇沙发")
             .hasMessageContaining("FS-WJ-001-M");
         verify(rspuMapper, org.mockito.Mockito.never()).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void createEntry_duplicate_forDesigner_shouldMaskDuplicateProductInfo() throws Exception {
+        // 非平台员工（DESIGNER）视角：查重报错脱敏，不含已有产品的品名/编码（跨数据归属防泄露）
+        authenticateWithRoles("designer", "DESIGNER");
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(duplicateImageAsset());
+
+        assertThatThrownBy(() -> productService.createEntry(List.of(image), null))
+            .isInstanceOf(com.rsdp.exception.BusinessException.class)
+            .hasMessageContaining("已录入过系统")
+            .hasMessageContaining("仍然导入")
+            .hasMessageNotContaining("扶摇沙发")
+            .hasMessageNotContaining("FS-WJ-001-M")
+            .hasMessageNotContaining("RSPU-DUP");
+        // 脱敏分支不查询已有产品主档
+        verify(rspuMapper, never()).selectById(anyString());
+        verify(rspuMapper, never()).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void createEntry_duplicate_forFactoryAdmin_shouldMaskDuplicateProductInfo() throws Exception {
+        // 非平台员工（FACTORY_ADMIN）视角：查重报错同样脱敏
+        authenticateWithRoles("factory", "FACTORY_ADMIN");
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(duplicateImageAsset());
+
+        assertThatThrownBy(() -> productService.createEntry(List.of(image), null))
+            .isInstanceOf(com.rsdp.exception.BusinessException.class)
+            .hasMessageContaining("已录入过系统")
+            .hasMessageNotContaining("扶摇沙发")
+            .hasMessageNotContaining("FS-WJ-001-M");
+        verify(rspuMapper, never()).selectById(anyString());
+        verify(rspuMapper, never()).insert(any(RspuMaster.class));
     }
 
     @Test
