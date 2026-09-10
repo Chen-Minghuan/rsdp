@@ -5,10 +5,14 @@ import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuScene;
+import com.rsdp.entity.RspuStyle;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuSceneMapper;
+import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.ContentHashes;
 import com.rsdp.util.ImageUploadValidator;
@@ -53,6 +57,12 @@ class ProductServiceTest {
 
     @Mock
     private RspuMapper rspuMapper;
+
+    @Mock
+    private RspuStyleMapper rspuStyleMapper;
+
+    @Mock
+    private RspuSceneMapper rspuSceneMapper;
 
     @Mock
     private AsyncTaskMapper asyncTaskMapper;
@@ -524,6 +534,143 @@ class ProductServiceTest {
         verify(rspuVariantService, times(1)).createVariantForEntry(anyString(), any());
         verify(rspuVariantService, never()).createVariant(anyString(), any());
         verify(auditLogService, times(1)).logCreate(eq("rspu_master"), anyString(), any(), any());
+    }
+
+    @Test
+    void createManualEntry_shouldWriteStyleAndSceneAssociations() throws Exception {
+        // 2.6：手工录入补写 rspu_style（is_primary=true）与 rspu_scene，供列表风格/场景筛选命中
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("scene")).thenReturn(List.of(
+            createDict("scene", "LIVING", "客厅"),
+            createDict("scene", "BEDROOM", "卧室")
+        ));
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-S01");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("mc");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+        // 场景码大小写混合 + 重复值：归一后去重，只插 LIVING/BEDROOM 两条
+        request.setSceneTags(List.of("living", "BEDROOM", "LIVING"));
+
+        Map<String, Object> result = productService.createManualEntry(request, null);
+
+        assertThat(result.get("message")).isEqualTo("手工录入产品成功");
+
+        ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
+        verify(rspuStyleMapper, times(1)).insert(styleCaptor.capture());
+        RspuStyle style = styleCaptor.getValue();
+        assertThat(style.getStyleCode()).isEqualTo("MC");
+        assertThat(style.getDictType()).isEqualTo("style");
+        assertThat(style.getIsPrimary()).isTrue();
+
+        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
+        verify(rspuSceneMapper, times(2)).insert(sceneCaptor.capture());
+        assertThat(sceneCaptor.getAllValues())
+            .extracting(RspuScene::getSceneCode)
+            .containsExactly("LIVING", "BEDROOM");
+        assertThat(sceneCaptor.getAllValues())
+            .allMatch(s -> "scene".equals(s.getDictType()));
+
+        // 审计沿用 2.3「每 RSPU 一条汇总」口径：旧集合为空 → 新集合
+        verify(auditLogService).logUpdate(eq("rspu_style"), eq(style.getRspuId()),
+            eq(Map.of("styleCodes", List.of())), eq(Map.of("styleCodes", List.of("MC"))), any());
+        verify(auditLogService).logUpdate(eq("rspu_scene"), eq(style.getRspuId()),
+            eq(Map.of("sceneCodes", List.of())), eq(Map.of("sceneCodes", List.of("LIVING", "BEDROOM"))), any());
+    }
+
+    @Test
+    void createManualEntry_invalidSceneTag_shouldSkipAndStillSucceed() throws Exception {
+        // 2.6：非法 scene 值跳过（不写 rspu_scene，避免复合外键违例），不影响建档
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("scene")).thenReturn(List.of(createDict("scene", "LIVING", "客厅")));
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-S02");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+        request.setSceneTags(List.of("LIVING", "NOT_A_SCENE", ""));
+
+        Map<String, Object> result = productService.createManualEntry(request, null);
+
+        assertThat(result.get("message")).isEqualTo("手工录入产品成功");
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
+        verify(rspuSceneMapper, times(1)).insert(sceneCaptor.capture());
+        assertThat(sceneCaptor.getValue().getSceneCode()).isEqualTo("LIVING");
+    }
+
+    @Test
+    void createManualEntry_gradePositioningLabel_shouldSkipStyleAssociation() throws Exception {
+        // 2.6：办公家具职级码（grade 字典，如 EX）不写 rspu_style——与既有三条链路
+        // （Excel 导入 / Excel AI 导入 / AI 识别回填）只写 style 字典码的口径一致
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("grade")).thenReturn(List.of(createDict("grade", "EX", "总裁级")));
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-S03");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("EX");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("总裁桌");
+        request.setVariantMaterialCode("WO");
+
+        Map<String, Object> result = productService.createManualEntry(request, null);
+
+        assertThat(result.get("message")).isEqualTo("手工录入产品成功");
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+        verify(rspuStyleMapper, never()).insert(any(RspuStyle.class));
+        // 未写入任何关联时不重复记审计（rspu_master 的 logCreate 快照已含原始值）
+        verify(auditLogService, never()).logUpdate(eq("rspu_style"), anyString(), any(), any(), any());
+        verify(auditLogService, never()).logUpdate(eq("rspu_scene"), anyString(), any(), any(), any());
+    }
+
+    @Test
+    void createFactoryEntry_shouldWriteStyleAndSceneAssociations() throws Exception {
+        // 2.6：工厂录入与手工录入共用 insertRspuForEntry，关联表补写自动覆盖
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("scene")).thenReturn(List.of(createDict("scene", "OFFICE", "办公室")));
+        when(userFactoryService.getFactoryCodesByUsername(anyString())).thenReturn(List.of("A004"));
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-S04");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+        when(rskuService.createRsku(any())).thenReturn("RSKU-S04");
+
+        com.rsdp.dto.request.FactoryProductEntryRequest request = new com.rsdp.dto.request.FactoryProductEntryRequest();
+        request.setFactoryCode("A004");
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("工厂标准版");
+        request.setVariantMaterialCode("WO");
+        request.setFactoryPrice(new java.math.BigDecimal("999.00"));
+        request.setSceneTags(List.of("OFFICE"));
+
+        Map<String, Object> result = productService.createFactoryEntry(request, null);
+
+        assertThat(result.get("message")).isEqualTo("工厂产品录入成功");
+        ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
+        verify(rspuStyleMapper, times(1)).insert(styleCaptor.capture());
+        assertThat(styleCaptor.getValue().getStyleCode()).isEqualTo("MC");
+        assertThat(styleCaptor.getValue().getIsPrimary()).isTrue();
+        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
+        verify(rspuSceneMapper, times(1)).insert(sceneCaptor.capture());
+        assertThat(sceneCaptor.getValue().getSceneCode()).isEqualTo("OFFICE");
     }
 
     @Test

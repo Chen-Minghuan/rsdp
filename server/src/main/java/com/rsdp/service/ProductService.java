@@ -5,12 +5,17 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuScene;
+import com.rsdp.entity.RspuStyle;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuSceneMapper;
+import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
@@ -55,6 +60,8 @@ import com.rsdp.util.IdGenerator;
 public class ProductService {
 
     private final RspuMapper rspuMapper;
+    private final RspuStyleMapper rspuStyleMapper;
+    private final RspuSceneMapper rspuSceneMapper;
     private final AsyncTaskMapper asyncTaskMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final AsyncTaskProcessor asyncTaskProcessor;
@@ -326,7 +333,7 @@ public class ProductService {
     }
 
     /**
-     * 创建并落库 RSPU（active + 待复核），写审计日志。
+     * 创建并落库 RSPU（active + 待复核），写审计日志，并补写风格/场景关联表。
      */
     private RspuMaster insertRspuForEntry(String categoryCode, String positioningLabel, String colorPrimaryName,
                                           List<String> materialTags, List<String> fabricTags, List<String> sceneTags,
@@ -355,7 +362,113 @@ public class ProductService {
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
+        insertStyleSceneAssociations(rspu, sceneTags);
         return rspu;
+    }
+
+    /**
+     * 录入场景补写 rspu_style / rspu_scene 关联表（2.6）。
+     *
+     * <p>产品列表的风格/场景筛选走 {@code EXISTS rspu_style/rspu_scene} 子查询，
+     * 只写 rspu_master 的 JSONB 列会导致手工/工厂录入的产品在风格/场景筛选下查不到。</p>
+     *
+     * <p>口径与既有写入方（Excel 导入 saveStyles/saveScenes、Excel AI 导入 saveStylesAndScenes、
+     * AI 识别回填 refreshStyleAssociations/refreshSceneAssociations）对齐：</p>
+     * <ul>
+     *   <li>rspu_style 只写 style 字典码且 {@code is_primary=true}；positioningLabel 为办公家具
+     *       职级码（grade 字典，如 EX/MG）时不写 rspu_style——既有链路均只写 style 字典码，
+     *       职级码仅保留在 rspu_master.positioning_label 与 rspu_code 中，不发明新规则。</li>
+     *   <li>rspu_scene 逐值归一（字典码忽略大小写 → 字典名），重复码去重；未命中 scene 字典的
+     *       值跳过并记 log.warn——rspu_scene 有到 category_dict 的复合外键，插脏值会 FK 违例
+     *       导致整单回滚，故坏值降级跳过而不阻断建档。</li>
+     *   <li>审计沿用 2.3「关联表变更每 RSPU 一条汇总」口径，参照 AI 回填链路以
+     *       「旧集合为空 → 新集合」记一条 logUpdate；未写入任何关联时不重复记
+     *       （rspu_master 的 logCreate 快照已含 positioningLabel/sceneTags 原始值）。</li>
+     * </ul>
+     *
+     * @param rspu      已落库的 RSPU
+     * @param sceneTags 前端传入的场景字典码列表（未经字典校验，需归一）
+     */
+    private void insertStyleSceneAssociations(RspuMaster rspu, List<String> sceneTags) {
+        String rspuId = rspu.getRspuId();
+        String operator = SecurityOperatorContext.currentUsername();
+
+        String styleCode = matchDictCode(rspu.getPositioningLabel(), dictService.listByType("style"));
+        if (styleCode != null) {
+            RspuStyle style = new RspuStyle();
+            style.setRspuId(rspuId);
+            style.setDictType("style");
+            style.setStyleCode(styleCode);
+            style.setIsPrimary(true);
+            style.setCreatedAt(LocalDateTime.now());
+            rspuStyleMapper.insert(style);
+            auditLogService.logUpdate("rspu_style", rspuId,
+                Map.of("styleCodes", List.of()), Map.of("styleCodes", List.of(styleCode)), operator);
+        } else if (StringUtils.hasText(rspu.getPositioningLabel())) {
+            boolean isGradeCode = dictService.listByType("grade").stream()
+                .anyMatch(d -> rspu.getPositioningLabel().equalsIgnoreCase(d.getDictCode()));
+            if (isGradeCode) {
+                // 办公家具职级码不写 rspu_style（与既有三条链路口径一致），属预期内跳过
+                log.info("录入定位标签为职级码，跳过 rspu_style 写入，rspuId={}, label={}",
+                    rspuId, rspu.getPositioningLabel());
+            } else {
+                log.warn("录入定位标签未命中 style 字典，跳过 rspu_style 写入，rspuId={}, label={}",
+                    rspuId, rspu.getPositioningLabel());
+            }
+        }
+
+        if (sceneTags == null || sceneTags.isEmpty()) {
+            return;
+        }
+        List<CategoryDict> sceneDict = dictService.listByType("scene");
+        Set<String> seen = new HashSet<>();
+        List<String> insertedCodes = new ArrayList<>();
+        for (String raw : sceneTags) {
+            String code = matchDictCode(raw, sceneDict);
+            if (code == null) {
+                log.warn("录入场景标签未命中 scene 字典，跳过 rspu_scene 写入，rspuId={}, value={}", rspuId, raw);
+                continue;
+            }
+            if (!seen.add(code)) {
+                continue;
+            }
+            RspuScene scene = new RspuScene();
+            scene.setRspuId(rspuId);
+            scene.setDictType("scene");
+            scene.setSceneCode(code);
+            scene.setCreatedAt(LocalDateTime.now());
+            rspuSceneMapper.insert(scene);
+            insertedCodes.add(code);
+        }
+        if (!insertedCodes.isEmpty()) {
+            auditLogService.logUpdate("rspu_scene", rspuId,
+                Map.of("sceneCodes", List.of()), Map.of("sceneCodes", insertedCodes), operator);
+        }
+    }
+
+    /**
+     * 字典码归一：先按字典码忽略大小写精确匹配，再按字典名精确匹配；未命中返回 null。
+     *
+     * @param input 原始输入
+     * @param dicts 字典列表
+     * @return 归一后的字典码；未命中返回 null
+     */
+    private String matchDictCode(String input, List<CategoryDict> dicts) {
+        if (!StringUtils.hasText(input)) {
+            return null;
+        }
+        String trimmed = input.trim();
+        for (CategoryDict d : dicts) {
+            if (trimmed.equalsIgnoreCase(d.getDictCode())) {
+                return d.getDictCode();
+            }
+        }
+        for (CategoryDict d : dicts) {
+            if (StringUtils.hasText(d.getDictName()) && trimmed.equals(d.getDictName())) {
+                return d.getDictCode();
+            }
+        }
+        return null;
     }
 
     /**
