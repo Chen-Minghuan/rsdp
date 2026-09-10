@@ -6,10 +6,12 @@ import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.request.RskuPriceUpdateRequest;
 import com.rsdp.dto.response.RskuBatchCreateResponse;
 import com.rsdp.dto.response.RskuResponse;
+import com.rsdp.security.Permissions;
 import com.rsdp.service.RskuService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,6 +41,7 @@ public class RskuController {
      * @return RSKU 列表
      */
     @GetMapping
+    @PreAuthorize("hasAuthority('" + Permissions.RSKU_READ + "')")
     public Result<List<RskuResponse>> list(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
         return Result.ok(rskuService.listByRspu(rspuId));
     }
@@ -51,6 +54,7 @@ public class RskuController {
      * @return RSKU 详情
      */
     @GetMapping("/{rskuId}")
+    @PreAuthorize("hasAuthority('" + Permissions.RSKU_READ + "')")
     public Result<RskuResponse> detail(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                        @PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId) {
         return Result.ok(rskuService.getRsku(rspuId, rskuId));
@@ -64,6 +68,7 @@ public class RskuController {
      * @return 空结果
      */
     @PostMapping
+    @PreAuthorize("hasAuthority('" + Permissions.RSKU_CREATE + "')")
     public Result<Void> create(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                @Valid @RequestBody RskuCreateRequest request) {
         request.setRspuId(rspuId);
@@ -79,6 +84,7 @@ public class RskuController {
      * @return 批量创建结果（成功数、失败明细）
      */
     @PostMapping("/batch")
+    @PreAuthorize("hasAuthority('" + Permissions.RSKU_CREATE + "')")
     public Result<RskuBatchCreateResponse> batchCreate(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                                        @Valid @RequestBody RskuBatchCreateRequest request) {
         return Result.ok(rskuService.batchCreateRskus(rspuId, request));
@@ -93,6 +99,7 @@ public class RskuController {
      * @return 空结果
      */
     @PutMapping("/{rskuId}/price")
+    @PreAuthorize("hasAuthority('" + Permissions.RSKU_UPDATE + "')")
     public Result<Void> updatePrice(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                     @PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId,
                                     @Valid @RequestBody RskuPriceUpdateRequest request) {

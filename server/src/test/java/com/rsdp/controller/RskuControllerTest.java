@@ -1,9 +1,12 @@
 package com.rsdp.controller;
 
+import com.rsdp.dto.request.RskuBatchCreateRequest;
+import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.request.RskuPriceUpdateRequest;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.security.JwtAuthenticationFilter;
+import com.rsdp.security.Permissions;
 import com.rsdp.service.RskuService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -13,10 +16,12 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -111,5 +116,26 @@ class RskuControllerTest {
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(400));
+    }
+
+    @Test
+    void controllerMethods_shouldDeclareMethodLevelPermissions() throws Exception {
+        // 2.9：方法级权限注解存在性校验（URL 规则之外的第二道防线，对齐 SkuController 风格）
+        assertThat(RskuController.class
+                .getMethod("list", String.class).getAnnotation(PreAuthorize.class).value())
+            .contains(Permissions.RSKU_READ);
+        assertThat(RskuController.class
+                .getMethod("detail", String.class, String.class).getAnnotation(PreAuthorize.class).value())
+            .contains(Permissions.RSKU_READ);
+        assertThat(RskuController.class
+                .getMethod("create", String.class, RskuCreateRequest.class).getAnnotation(PreAuthorize.class).value())
+            .contains(Permissions.RSKU_CREATE);
+        assertThat(RskuController.class
+                .getMethod("batchCreate", String.class, RskuBatchCreateRequest.class).getAnnotation(PreAuthorize.class).value())
+            .contains(Permissions.RSKU_CREATE);
+        assertThat(RskuController.class
+                .getMethod("updatePrice", String.class, String.class, RskuPriceUpdateRequest.class)
+                .getAnnotation(PreAuthorize.class).value())
+            .contains(Permissions.RSKU_UPDATE);
     }
 }

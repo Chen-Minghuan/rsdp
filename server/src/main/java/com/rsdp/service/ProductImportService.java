@@ -200,6 +200,8 @@ public class ProductImportService {
         Map<String, List<CategoryDict>> cache = new HashMap<>();
         cache.put("category", safeList(dictService.listByType("category")));
         cache.put("style", safeList(dictService.listByType("style")));
+        // 办公家具职级码（EX/MG/ST/PU/CO）存独立 grade 字典，定位标签校验需 style∪grade 命中任一
+        cache.put("grade", safeList(dictService.listByType("grade")));
         cache.put("scene", safeList(dictService.listByType("scene")));
         cache.put("material", safeList(dictService.listByType("material")));
         cache.put("size", safeList(dictService.listByType("size")));
@@ -210,6 +212,19 @@ public class ProductImportService {
 
     private List<CategoryDict> safeList(List<CategoryDict> list) {
         return list == null ? List.of() : list;
+    }
+
+    /**
+     * 合并 style 与 grade 字典：定位标签对办公家具使用职级码（grade 字典，如 EX/MG），
+     * 校验与归一按 style∪grade 命中任一即通过，与 {@code RspuCodeService.validateStyleOrGradeCode} 口径一致。
+     *
+     * @param dictCache 字典缓存
+     * @return style + grade 合并字典列表
+     */
+    private List<CategoryDict> styleAndGradeDicts(Map<String, List<CategoryDict>> dictCache) {
+        List<CategoryDict> combined = new ArrayList<>(dictCache.get("style"));
+        combined.addAll(dictCache.get("grade"));
+        return combined;
     }
 
     /**
@@ -519,7 +534,7 @@ public class ProductImportService {
         // 导致 commit 时 UnexpectedRollbackException 并被二次 rollback 抛出“Transaction is already completed”。
         String sizeCode = resolveImportSizeCode(row.getSizeCode(), dictCache.get("size"));
         String positioningLabel = rspu.getPositioningLabel();
-        if (isValidDictCode(positioningLabel, dictCache.get("style"))) {
+        if (isValidDictCode(positioningLabel, styleAndGradeDicts(dictCache))) {
             rspuCodeService.assignCode(rspuId, rspu.getCategoryCode(), positioningLabel, sizeCode);
         } else if (StringUtils.hasText(row.getPositioningLabel())) {
             // 仅当用户显式提供了风格/职级但未能归一时才提示；缺失时兜底为「待识别」是已知行为，不冗余告警
@@ -635,9 +650,12 @@ public class ProductImportService {
         Set<String> styleCodes = new HashSet<>();
         if (StringUtils.hasText(positioningLabel)) {
             String code = normalizeDictCode(positioningLabel, styles);
-            if (code != null) {
+            // 职级码（grade 字典）不写 rspu_style——与手工/AI 录入链路口径一致，避免污染风格筛选
+            if (code != null && isValidDictCode(code, styles)) {
                 styleCodes.add(code);
                 insertStyle(rspuId, code, true);
+            } else if (code != null) {
+                log.info("导入定位标签为职级码，跳过 rspu_style 写入，rspuId={}, label={}", rspuId, code);
             }
         }
         // 材质标签不再作为风格处理，避免语义混乱
@@ -654,7 +672,8 @@ public class ProductImportService {
         rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
         List<String> newCodes = new ArrayList<>();
         String code = normalizeDictCode(positioningLabel, styles);
-        if (code != null) {
+        // 职级码（grade 字典）不写 rspu_style——与手工/AI 录入链路口径一致
+        if (code != null && isValidDictCode(code, styles)) {
             insertStyle(rspuId, code, true);
             newCodes.add(code);
         }
@@ -961,7 +980,7 @@ public class ProductImportService {
         }
 
         if (StringUtils.hasText(row.getPositioningLabel())
-            && !isValidDictCode(row.getPositioningLabel().trim(), dictCache.get("style"))) {
+            && !isValidDictCode(row.getPositioningLabel().trim(), styleAndGradeDicts(dictCache))) {
             return "定位标签不存在: " + row.getPositioningLabel();
         }
 
@@ -1044,7 +1063,7 @@ public class ProductImportService {
 
         // 字典字段先归一（支持中文名→字典码）再进入校验，避免中文名被误判为非法字典码
         if (StringUtils.hasText(row.getPositioningLabel())) {
-            row.setPositioningLabel(normalizeDictCode(row.getPositioningLabel(), dictCache.get("style")));
+            row.setPositioningLabel(normalizeDictCode(row.getPositioningLabel(), styleAndGradeDicts(dictCache)));
         }
         if (StringUtils.hasText(row.getProductLevel())) {
             row.setProductLevel(normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level")));

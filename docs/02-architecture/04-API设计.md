@@ -465,13 +465,16 @@ GET    /api/v1/images/{imageId}
 
 ### 供应管理
 
+> 权限（2.9 起 URL 规则 + 方法级 @PreAuthorize 双重校验）：list/detail → rsku:read；create/batchCreate → rsku:create；updatePrice → rsku:update；delete → rsku:delete。
+> 价格校验口径统一为「必须 > 0」：factoryPrice 在 DTO（@Positive）与服务层（createRsku/updateRskuPrice 兜底）双重校验，0 价与负价均拒绝。
+
 ```
 GET    /api/v1/products/{rspuId}/rsku
-       # 查询某 RSPU 下的 RSKU 工厂报价列表（已实现）
+       # 查询某 RSPU 下的 RSKU 工厂报价列表（已实现，权限 rsku:read）
        # Response: [RskuSupply...]
 
 GET    /api/v1/products/{rspuId}/rsku/{rskuId}
-       # 查询单个 RSKU 报价详情（已实现）
+       # 查询单个 RSKU 报价详情（已实现，权限 rsku:read）
        # Response: RskuSupply
 
 GET    /api/v1/products/{rspuId}/variants
@@ -484,16 +487,16 @@ POST   /api/v1/products/{rspuId}/variants
        # Response: RspuVariant
 
 POST   /api/v1/products/{rspuId}/rsku
-       # 为该 RSPU 新增工厂报价（已实现）
-       # Request: { factoryCode, variantId（必填）, factorySku?, factoryPrice, materialCode?, materialDescription?,
+       # 为该 RSPU 新增工厂报价（已实现，权限 rsku:create）
+       # Request: { factoryCode, variantId（必填）, factorySku?, factoryPrice（必填且 > 0）, materialCode?, materialDescription?,
        #            leadTimeDays?, moq?, warrantyYears?, shippingFrom?, diffNotes?, quoteConfidence? }
        # Response: void
        # 说明：rsku_code 可空——所属 RSPU 未发号（rspu_code 为空）时报价先创建、编码留空，
        #       待 AI 补码（补发 rspu_code）后由 RskuCodeService.backfillCodesByRspu 联动补发
 
 PUT    /api/v1/products/{rspuId}/rsku/{rskuId}/price
-       # 更新 RSKU 出厂价，自动写入 price_history（已实现）
-       # Request: { factoryPrice, changeReason? }
+       # 更新 RSKU 出厂价，自动写入 price_history（已实现，权限 rsku:update）
+       # Request: { factoryPrice（必填且 > 0）, changeReason? }
        # Response: void
 
 GET    /api/v1/rsku/{rskuId}/price-history

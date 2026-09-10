@@ -680,6 +680,31 @@ class ProductServiceTest {
     }
 
     @Test
+    void createFactoryEntry_shouldRejectWhenFactoryPriceNotPositive() {
+        // 2.9：工厂录入的 0 价/负价由 RskuService.createRsku 服务层兜底拒绝并向上抛出
+        //（入口侧 DTO 另有 @Positive 前置校验）
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(userFactoryService.getFactoryCodesByUsername(anyString())).thenReturn(List.of("A004"));
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-S05");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+        when(rskuService.createRsku(any())).thenThrow(new BusinessException("出厂价必须大于 0"));
+
+        com.rsdp.dto.request.FactoryProductEntryRequest request = new com.rsdp.dto.request.FactoryProductEntryRequest();
+        request.setFactoryCode("A004");
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("工厂标准版");
+        request.setVariantMaterialCode("WO");
+        request.setFactoryPrice(java.math.BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> productService.createFactoryEntry(request, null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("出厂价必须大于 0");
+    }
+
+    @Test
     void createManualEntry_withImages_shouldStoreImages() throws Exception {
         MockMultipartFile image = new MockMultipartFile(
             "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()

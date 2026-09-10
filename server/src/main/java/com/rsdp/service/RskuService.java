@@ -122,6 +122,11 @@ public class RskuService {
      */
     @Transactional
     public String createRsku(RskuCreateRequest request) {
+        // 服务层兜底：出厂价必须 > 0（与 updateRskuPrice 口径一致，防绕过 Bean Validation 的内部调用）
+        if (request.getFactoryPrice() == null || request.getFactoryPrice().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException("出厂价必须大于 0");
+        }
+
         RspuMaster rspu = rspuMapper.selectById(request.getRspuId());
         if (rspu == null) {
             throw new ResourceNotFoundException("产品不存在: " + request.getRspuId());
@@ -420,8 +425,8 @@ public class RskuService {
         if (!dataScopeHelper.canAccessRskuFactory(rsku.getFactoryCode())) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
         }
-        if (newPrice == null || newPrice.compareTo(java.math.BigDecimal.ZERO) < 0) {
-            throw new BusinessException("价格不能为负数");
+        if (newPrice == null || newPrice.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new BusinessException("价格必须大于 0");
         }
 
         RskuSupply oldSnapshot = snapshot(rsku);

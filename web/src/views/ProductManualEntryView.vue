@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -94,7 +94,10 @@ const rules: FormRules = {
 
 const formRef = ref<InstanceType<typeof NForm> | null>(null)
 
-onMounted(async () => {
+const dictLoadError = ref(false)
+
+async function loadDicts() {
+  dictLoadError.value = false
   try {
     const [categories, styles, scenes, materials, fabrics, levels] = await Promise.all([
       listDicts('category'),
@@ -111,9 +114,38 @@ onMounted(async () => {
     fabricOptions.value = fabrics
     productLevelOptions.value = levels
   } catch (e) {
-    errorMessage.value = '加载字典失败，请刷新页面重试'
+    dictLoadError.value = true
+    errorMessage.value = '加载字典失败，请点击重试'
     console.error(e)
   }
+}
+
+/** 表单或图片有内容且未提交时为脏状态（提交成功后 resetForm 还原即视为干净）。 */
+const initialFormJson = JSON.stringify(form.value)
+
+const hasUnsavedChanges = computed(() =>
+  JSON.stringify(form.value) !== initialFormJson || fileList.value.length > 0
+)
+
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (hasUnsavedChanges.value) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
+onBeforeRouteLeave(() => {
+  if (!hasUnsavedChanges.value) return true
+  return window.confirm('当前表单有未提交的内容，离开后将丢失，确定要离开吗？')
+})
+
+onMounted(async () => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  await loadDicts()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 
 /** 图片可选；有上传时校验格式与大小。 */
@@ -250,6 +282,13 @@ function viewCreatedProduct() {
 
       <n-alert v-if="errorMessage" type="error" closable style="margin-bottom: 16px;" @close="errorMessage = ''">
         {{ errorMessage }}
+      </n-alert>
+
+      <n-alert v-if="dictLoadError" type="warning" style="margin-bottom: 16px;">
+        <n-space align="center">
+          <span>字典数据加载失败，下拉选项不可用。</span>
+          <n-button size="small" @click="loadDicts">重试</n-button>
+        </n-space>
       </n-alert>
 
       <n-form

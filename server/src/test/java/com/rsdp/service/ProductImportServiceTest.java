@@ -408,6 +408,45 @@ class ProductImportServiceTest {
     }
 
     @Test
+    void importProducts_gradeCodePositioningLabel_shouldSucceedAndAssignCode() {
+        // 2.8：办公家具职级码存独立 grade 字典，定位标签填职级码（EX）应导入成功并正常发号
+        when(dictService.listByType("grade")).thenReturn(List.of(createDict("EX", "总裁级")));
+        ProductImportRow row = createValidRow();
+        row.setRspuId(null);
+        row.setPositioningLabel("EX");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        assertThat(insertedRspus).hasSize(1);
+        assertThat(insertedRspus.get(0).getPositioningLabel()).isEqualTo("EX");
+        // 命中 grade 字典即视为有效定位标签，正常生成 RSPU 业务编码
+        verify(rspuCodeService).assignCode(anyString(), org.mockito.ArgumentMatchers.eq("FS"),
+            org.mockito.ArgumentMatchers.eq("EX"), anyString());
+        // 职级码不写 rspu_style（与手工/AI 录入链路口径一致，避免污染风格筛选）
+        assertThat(insertedStyles).isEmpty();
+    }
+
+    @Test
+    void importProducts_unknownPositioningLabel_shouldStillFail() {
+        // 2.8：style 与 grade 字典均未命中的定位标签仍被拒
+        when(dictService.listByType("grade")).thenReturn(List.of(createDict("EX", "总裁级")));
+        ProductImportRow row = createValidRow();
+        row.setPositioningLabel("NOT-A-STYLE");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(0);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("定位标签不存在");
+    }
+
+    @Test
     void importProducts_shouldSucceedEvenWhenImageDownloadFails() {
         ProductImportRow row = createValidRow();
         // 使用白名单内的本地地址 + 未监听端口，连接即刻被拒绝，快速触发下载失败分支
