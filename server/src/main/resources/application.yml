@@ -164,8 +164,8 @@ rsdp:
     pdf:
       # PDF 导入文件大小上限（MB）
       max-file-size-mb: 50
-      # PDF 最大页数
-      max-pages: 200
+      # PDF 最大页数（默认 50：同步全页位图渲染驻留堆内存，页数过多有 OOM 风险，异步化后再评估上调）
+      max-pages: 50
       # 渲染 DPI（越高裁剪图越清晰，内存占用随平方增长）
       render-dpi: 200
       # 页面区域检测每批最大页数
