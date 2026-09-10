@@ -192,8 +192,8 @@ class ProductSubjectCropServiceTest {
             imageBytes, "RSPU-1", "VAR-1", "IMG-1", "images/IMG-1.png");
 
         assertThat(result).isPresent();
-        // 裁剪图写入新对象键（同 imageId，扩展名改 jpg）
-        verify(storageService).store(any(InputStream.class), eq("images/IMG-1.jpg"), anyLong(), eq("image/jpeg"));
+        // 裁剪图写入独立对象键 images/{imageId}-cropped.jpg（与原图键永不冲突）
+        verify(storageService).store(any(InputStream.class), eq("images/IMG-1-cropped.jpg"), anyLong(), eq("image/jpeg"));
         // 原图登记为 original 类型资产，仍指向原对象键
         ArgumentCaptor<ImageAssets> originalCaptor = ArgumentCaptor.forClass(ImageAssets.class);
         verify(imageAssetsMapper).insert(originalCaptor.capture());
@@ -204,7 +204,7 @@ class ProductSubjectCropServiceTest {
         assertThat(original.getWidth()).isEqualTo(400);
         assertThat(original.getHeight()).isEqualTo(400);
         // 主图改指裁剪图并回填元数据
-        assertThat(primary.getStoragePath()).isEqualTo("images/IMG-1.jpg");
+        assertThat(primary.getStoragePath()).isEqualTo("images/IMG-1-cropped.jpg");
         assertThat(primary.getFormat()).isEqualTo("jpg");
         assertThat(primary.getWidth()).isNotNull();
         // 内容版本递增（原值 null 按 1 处理 → 2），防旧向量回写
@@ -253,5 +253,95 @@ class ProductSubjectCropServiceTest {
         assertThat(result).isEmpty();
         verify(storageService, never()).store(any(InputStream.class), anyString(), anyLong(), anyString());
         verify(imageAssetsMapper, never()).updateById(any(ImageAssets.class));
+    }
+
+    @Test
+    void cropAndReplacePrimary_jpgUpload_shouldNotOverwriteOriginalObjectKey() throws Exception {
+        // jpg 上传：原图键 images/IMG-1.jpg 与裁剪键 images/IMG-1-cropped.jpg 必须不同，
+        // 否则 store 会覆盖原图文件，original 溯源资产指向的已是裁剪图（原图永久丢失）
+        byte[] imageBytes = buildTestImage();
+        when(visionService.detectProductSubject(any(InputStream.class)))
+            .thenReturn(new ProductBoundingBox(0.25, 0.25, 0.5, 0.5));
+        ImageAssets primary = new ImageAssets();
+        primary.setImageId("IMG-1");
+        primary.setRspuId("RSPU-1");
+        primary.setImageType("white_bg");
+        primary.setStoragePath("images/IMG-1.jpg");
+        primary.setFormat("jpg");
+        primary.setPrimary(true);
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(primary);
+
+        Optional<byte[]> result = cropService.cropAndReplacePrimary(
+            imageBytes, "RSPU-1", null, "IMG-1", "images/IMG-1.jpg");
+
+        assertThat(result).isPresent();
+        // 裁剪图写独立键，不写原图键
+        verify(storageService).store(any(InputStream.class), eq("images/IMG-1-cropped.jpg"), anyLong(), eq("image/jpeg"));
+        verify(storageService, never()).store(any(InputStream.class), eq("images/IMG-1.jpg"), anyLong(), anyString());
+        // original 资产指向真正的原图键，与主图键不同
+        ArgumentCaptor<ImageAssets> originalCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper).insert(originalCaptor.capture());
+        assertThat(originalCaptor.getValue().getStoragePath()).isEqualTo("images/IMG-1.jpg");
+        assertThat(primary.getStoragePath()).isEqualTo("images/IMG-1-cropped.jpg");
+        assertThat(primary.getStoragePath()).isNotEqualTo(originalCaptor.getValue().getStoragePath());
+        // 原图文件保留不删
+        verify(storageService, never()).delete(anyString());
+    }
+
+    @Test
+    void cropAndReplacePrimary_shouldCleanupCroppedKeyWhenDbUpdateFails() throws Exception {
+        // 裁剪图写盘成功但后续 DB 更新失败（如 keepOriginal 登记抛错）时，裁剪键必须被清理，避免孤儿文件
+        byte[] imageBytes = buildTestImage();
+        when(visionService.detectProductSubject(any(InputStream.class)))
+            .thenReturn(new ProductBoundingBox(0.25, 0.25, 0.5, 0.5));
+        ImageAssets primary = new ImageAssets();
+        primary.setImageId("IMG-1");
+        primary.setRspuId("RSPU-1");
+        primary.setStoragePath("images/IMG-1.png");
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(primary);
+        org.mockito.Mockito.doThrow(new RuntimeException("DB 写入失败"))
+            .when(imageAssetsMapper).insert(any(ImageAssets.class));
+
+        Optional<byte[]> result = cropService.cropAndReplacePrimary(
+            imageBytes, "RSPU-1", null, "IMG-1", "images/IMG-1.png");
+
+        assertThat(result).isEmpty();
+        verify(storageService).delete("images/IMG-1-cropped.jpg");
+        // 主图行未被改写
+        verify(imageAssetsMapper, never()).updateById(any(ImageAssets.class));
+    }
+
+    @Test
+    void cropAndReplacePrimary_shouldCleanupCroppedKeyWhenPrimaryMissing() throws Exception {
+        byte[] imageBytes = buildTestImage();
+        when(visionService.detectProductSubject(any(InputStream.class)))
+            .thenReturn(new ProductBoundingBox(0.25, 0.25, 0.5, 0.5));
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(null);
+
+        Optional<byte[]> result = cropService.cropAndReplacePrimary(
+            imageBytes, "RSPU-1", null, "IMG-1", "images/IMG-1.png");
+
+        assertThat(result).isEmpty();
+        verify(storageService).delete("images/IMG-1-cropped.jpg");
+        verify(imageAssetsMapper, never()).insert(any(ImageAssets.class));
+        verify(imageAssetsMapper, never()).updateById(any(ImageAssets.class));
+    }
+
+    @Test
+    void cropAndReplacePrimaryAsync_shouldDelegateToCropAndSwallowFailures() throws Exception {
+        // 异步入口委托同步裁剪逻辑；内部异常不外抛（失败回退原图语义）
+        byte[] imageBytes = buildTestImage();
+        when(visionService.detectProductSubject(any(InputStream.class)))
+            .thenReturn(new ProductBoundingBox(0.25, 0.25, 0.5, 0.5));
+        ImageAssets primary = new ImageAssets();
+        primary.setImageId("IMG-1");
+        primary.setRspuId("RSPU-1");
+        primary.setStoragePath("images/IMG-1.png");
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(primary);
+
+        cropService.cropAndReplacePrimaryAsync(imageBytes, "RSPU-1", null, "IMG-1", "images/IMG-1.png");
+
+        verify(storageService).store(any(InputStream.class), eq("images/IMG-1-cropped.jpg"), anyLong(), eq("image/jpeg"));
+        verify(imageAssetsMapper).updateById(primary);
     }
 }

@@ -11,6 +11,7 @@ import com.rsdp.util.ProductBoxRefiner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
@@ -148,14 +149,16 @@ public class ProductSubjectCropService {
      *
      * <p>裁剪成功时：</p>
      * <ol>
-     *   <li>裁剪图写入新对象键 {@code images/{imageId}.jpg}，主图 image_assets 行改指向它
-     *       （imageId 不变，前端主图 URL 无感知），并回填宽高/大小/格式；</li>
+     *   <li>裁剪图写入独立对象键 {@code images/{imageId}-cropped.jpg}（与原图键
+     *       {@code images/{imageId}.{原扩展名}} 永不冲突，jpg 上传时也不会覆盖原图），
+     *       主图 image_assets 行改指向它（imageId 不变，前端主图 URL 无感知），并回填宽高/大小/格式；</li>
      *   <li>{@code keepOriginal=true} 时，把指向原图的资产行另存为 original 类型（非主图），
-     *       保留溯源与后续"恢复原图"能力；否则删除原图文件；</li>
+     *       保留溯源与后续"恢复原图"能力；否则在主图改写成功后删除原图文件；</li>
      *   <li>返回裁剪后的字节，供后续 AI 识别与向量计算使用，保证语义一致。</li>
      * </ol>
      *
-     * <p>任何失败都只记日志并返回 empty，已存储的原图不受影响。</p>
+     * <p>任何失败都只记日志并返回 empty：主图行未更新时删除已写入的裁剪图文件与
+     * 已登记的 original 资产行，已存储的原图不受影响。</p>
      *
      * @param originalBytes  原图字节
      * @param rspuId         RSPU ID
@@ -172,14 +175,17 @@ public class ProductSubjectCropService {
         }
         byte[] cropped = croppedOpt.get();
 
+        String croppedKey = "images/" + primaryImageId + "-cropped.jpg";
+        boolean primaryUpdated = false;
+        String insertedOriginalId = null;
         try {
-            String croppedKey = "images/" + primaryImageId + ".jpg";
             storageService.store(new ByteArrayInputStream(cropped), croppedKey, cropped.length, "image/jpeg");
 
             String operator = SecurityOperatorContext.currentUsername();
             ImageAssets primary = imageAssetsMapper.selectById(primaryImageId);
             if (primary == null) {
                 log.warn("主图资产记录不存在，imageId={}", primaryImageId);
+                cleanupCroppedKey(croppedKey);
                 return Optional.empty();
             }
 
@@ -200,9 +206,8 @@ public class ProductSubjectCropService {
                 original.setCreatedAt(LocalDateTime.now());
                 fillDimensions(original, originalBytes);
                 imageAssetsMapper.insert(original);
+                insertedOriginalId = original.getImageId();
                 auditLogService.logCreate("image_assets", original.getImageId(), original, operator);
-            } else {
-                storageService.delete(objectKey);
             }
 
             // 主图改指裁剪图并回填元数据
@@ -224,13 +229,61 @@ public class ProductSubjectCropService {
             // 内容版本递增：主图内容已变更，防旧向量（基于裁剪前内容编码）回写覆盖
             primary.setContentRevision(primary.getContentRevision() == null ? 2L : primary.getContentRevision() + 1);
             imageAssetsMapper.updateById(primary);
+            primaryUpdated = true;
             auditLogService.logUpdate("image_assets", primaryImageId, oldSnapshot, primary, operator);
+
+            // 不保留原图时，主图已成功改指裁剪图后再删除原图文件（提前删除会导致失败时 DB 指向已删文件）
+            if (!keepOriginal) {
+                storageService.delete(objectKey);
+            }
 
             log.info("主图已替换为 AI 裁剪图，imageId={}，rspuId={}", primaryImageId, rspuId);
             return Optional.of(cropped);
         } catch (Exception e) {
             log.warn("主图裁剪替换失败，保留原图，imageId={}：{}", primaryImageId, e.getMessage());
+            // 主图行未更新时，清理已写入的裁剪图文件与已登记的 original 资产行，避免孤儿
+            if (!primaryUpdated) {
+                cleanupCroppedKey(croppedKey);
+                if (insertedOriginalId != null) {
+                    try {
+                        imageAssetsMapper.deleteById(insertedOriginalId);
+                    } catch (Exception ex) {
+                        log.warn("清理 original 资产行失败，imageId={}：{}", insertedOriginalId, ex.getMessage());
+                    }
+                }
+            }
             return Optional.empty();
+        }
+    }
+
+    /** 尽力删除已写入的裁剪图文件（失败只记日志）。 */
+    private void cleanupCroppedKey(String croppedKey) {
+        try {
+            storageService.delete(croppedKey);
+        } catch (Exception e) {
+            log.warn("清理裁剪图文件失败，key={}：{}", croppedKey, e.getMessage());
+        }
+    }
+
+    /**
+     * 异步执行主图裁剪替换（taskExecutor 线程池）。
+     *
+     * <p>供录入接口在事务提交后（afterCommit）调用，避免在 DB 事务内同步调用外部 AI。
+     * 失败只记日志，主图保持原图，与 {@link #cropAndReplacePrimary} 的失败回退语义一致。</p>
+     *
+     * @param originalBytes  原图字节
+     * @param rspuId         RSPU ID
+     * @param variantId      变体 ID（可为空）
+     * @param primaryImageId 主图图片 ID
+     * @param objectKey      主图当前存储对象键
+     */
+    @Async("taskExecutor")
+    public void cropAndReplacePrimaryAsync(byte[] originalBytes, String rspuId, String variantId,
+                                           String primaryImageId, String objectKey) {
+        try {
+            cropAndReplacePrimary(originalBytes, rspuId, variantId, primaryImageId, objectKey);
+        } catch (Exception e) {
+            log.warn("异步主图裁剪失败，保留原图，imageId={}：{}", primaryImageId, e.getMessage());
         }
     }
 

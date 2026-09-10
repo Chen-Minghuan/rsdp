@@ -233,7 +233,8 @@ public class ProductService {
      * 工厂单条录入新产品。
      *
      * <p>在一个事务中完成 RSPU、默认变体、图片资源（可选）和第一条 RSKU 的创建。
-     * 不调用 AI，供工厂管理员手动维护产品使用。</p>
+     * 事务内不调用 AI；主图 AI 智能裁剪在事务提交后异步执行（不阻塞录入响应，失败回退原图），
+     * 供工厂管理员手动维护产品使用。</p>
      *
      * @param request 工厂录入请求
      * @param images  产品图片，可选
@@ -287,7 +288,7 @@ public class ProductService {
     }
 
     /**
-     * 传统手工录入新产品（不调用 AI、不关联工厂报价）。
+     * 传统手工录入新产品（不关联工厂报价；主图 AI 智能裁剪在事务提交后异步执行，不阻塞录入响应）。
      *
      * <p>在一个事务中完成 RSPU、默认变体、图片资源（可选）的创建。
      * 供平台运营人员按传统表单方式维护产品使用；工厂报价可后续在产品详情页补充。</p>
@@ -388,6 +389,10 @@ public class ProductService {
 
     /**
      * 保存录入图片（可选）：第一张为主图，逐张写入 image_assets 并记审计。
+     *
+     * <p>主图 AI 智能裁剪不在本事务内同步执行（避免长事务占库连接 + AI 慢/挂导致录入超时），
+     * 而是收集主图信息后注册 afterCommit 回调，事务提交后异步投递到 taskExecutor 执行；
+     * 事务回滚时裁剪不会执行，也不会产生孤儿裁剪文件。异步裁剪失败只记日志，主图保持原图。</p>
      */
     private List<String> storeEntryImages(String rspuId, String variantId, List<MultipartFile> images) throws IOException {
         List<String> imageIds = new ArrayList<>();
@@ -395,6 +400,10 @@ public class ProductService {
             return imageIds;
         }
         List<String> storedObjectKeys = new ArrayList<>();
+        // 主图裁剪所需信息：字节 + imageId + 对象键，事务提交后异步裁剪使用
+        byte[] primaryBytes = null;
+        String primaryImageId = null;
+        String primaryObjectKey = null;
         long maxSize = parseMaxFileSize(maxFileSize);
         for (int i = 0; i < images.size(); i++) {
             MultipartFile image = images.get(i);
@@ -425,13 +434,36 @@ public class ProductService {
             auditLogService.logCreate("image_assets", imageId, imageAsset, SecurityOperatorContext.currentUsername());
             imageIds.add(imageId);
 
-            // 主图智能裁剪：AI 识别产品主体并替换主图存储与元数据，失败时回退原图
+            // 主图智能裁剪信息收集：事务提交后异步执行，AI 识别产品主体并替换主图，
+            // 失败时回退原图；响应不等待裁剪，主图可能在裁剪完成前短暂显示原图
             if (isPrimary) {
-                subjectCropService.cropAndReplacePrimary(imageBytes, rspuId, variantId, imageId, storagePath);
+                primaryBytes = imageBytes;
+                primaryImageId = imageId;
+                primaryObjectKey = storagePath;
             }
         }
         registerStorageRollbackCleanup(storedObjectKeys);
+        if (primaryImageId != null) {
+            registerPostCommitSubjectCrop(primaryBytes, rspuId, variantId, primaryImageId, primaryObjectKey);
+        }
         return imageIds;
+    }
+
+    /**
+     * 注册主图裁剪任务：事务提交后（afterCommit）异步执行；无活动事务时直接异步投递。
+     */
+    private void registerPostCommitSubjectCrop(byte[] imageBytes, String rspuId, String variantId,
+                                               String imageId, String objectKey) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    subjectCropService.cropAndReplacePrimaryAsync(imageBytes, rspuId, variantId, imageId, objectKey);
+                }
+            });
+        } else {
+            subjectCropService.cropAndReplacePrimaryAsync(imageBytes, rspuId, variantId, imageId, objectKey);
+        }
     }
 
     /**

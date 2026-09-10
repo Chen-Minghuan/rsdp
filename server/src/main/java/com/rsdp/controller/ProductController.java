@@ -123,7 +123,7 @@ public class ProductController {
     }
 
     /**
-     * 工厂单条录入新产品（不调用 AI）。
+     * 工厂单条录入新产品（事务内不调用 AI；主图 AI 裁剪在事务提交后异步执行）。
      *
      * @param request 录入请求
      * @param images  产品图片，可选
@@ -142,7 +142,7 @@ public class ProductController {
     }
 
     /**
-     * 传统手工录入新产品（不调用 AI、不关联工厂报价）。
+     * 传统手工录入新产品（不关联工厂报价；主图 AI 裁剪在事务提交后异步执行）。
      *
      * @param request 录入请求（RSPU + 默认变体信息）
      * @param images  产品图片，可选

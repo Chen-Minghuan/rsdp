@@ -551,6 +551,89 @@ class ProductServiceTest {
         assertThat(imageCaptor.getValue().getPrimary()).isTrue();
         assertThat(imageCaptor.getValue().getImageType()).isEqualTo("white_bg");
         assertThat(imageCaptor.getValue().getVariantId()).isEqualTo("VAR-002");
+        // 主图裁剪不在录入事务内同步调用 AI（无活动事务时直接走异步入口）
+        verify(subjectCropService, never()).cropAndReplacePrimary(any(), any(), any(), any(), any());
+        verify(subjectCropService, times(1)).cropAndReplacePrimaryAsync(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createManualEntry_withImages_shouldDispatchCropAfterCommit() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString())).thenReturn("images/IMG-MANUAL.jpg");
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-003");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            Map<String, Object> result = productService.createManualEntry(request, List.of(image));
+            String imageId = ((List<String>) result.get("imageIds")).get(0);
+
+            // 事务提交前：不同步调裁剪，也不投递异步任务
+            verify(subjectCropService, never()).cropAndReplacePrimary(any(), any(), any(), any(), any());
+            verify(subjectCropService, never()).cropAndReplacePrimaryAsync(any(), any(), any(), any(), any());
+
+            // 模拟事务提交：afterCommit 回调投递异步裁剪任务
+            List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
+            assertThat(syncs).isNotEmpty();
+            for (TransactionSynchronization sync : syncs) {
+                sync.afterCommit();
+            }
+
+            verify(subjectCropService, times(1)).cropAndReplacePrimaryAsync(
+                any(byte[].class), anyString(), eq("VAR-003"), eq(imageId), eq("images/IMG-MANUAL.jpg"));
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
+    }
+
+    @Test
+    void createManualEntry_withImages_shouldNotDispatchCropWhenRolledBack() throws Exception {
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString())).thenReturn("images/IMG-MANUAL.jpg");
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-004");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            productService.createManualEntry(request, List.of(image));
+
+            // 模拟事务回滚：afterCompletion(STATUS_ROLLED_BACK) 不触发 afterCommit，裁剪不会执行
+            List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
+            for (TransactionSynchronization sync : syncs) {
+                sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+            }
+
+            verify(subjectCropService, never()).cropAndReplacePrimary(any(), any(), any(), any(), any());
+            verify(subjectCropService, never()).cropAndReplacePrimaryAsync(any(), any(), any(), any(), any());
+            // 回滚清理仍覆盖原始图键
+            verify(storageService).delete("images/IMG-MANUAL.jpg");
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
     }
 
     @Test
