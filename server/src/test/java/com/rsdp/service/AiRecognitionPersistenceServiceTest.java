@@ -87,6 +87,25 @@ class AiRecognitionPersistenceServiceTest {
     }
 
     @Test
+    void saveFailure_shouldKeepProcessingAndMarkDoubtful() {
+        // 识别失败兜底：status 保持 processing（不置 active，失败产品不进入在售/检索/官网），
+        // reviewStatus=存疑，直到重新识别成功或人工复核确认翻 active
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setStatus("processing");
+        rspu.setReviewStatus("待复核");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        persistenceService.saveFailure("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", "AI 调用超时");
+
+        assertThat(rspu.getStatus()).isEqualTo("processing");
+        assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
+        verify(rspuMapper).updateById(rspu);
+        verify(aiRecognitionMapper).insert(any(com.rsdp.entity.AiRecognition.class));
+    }
+
+    @Test
     void saveSuccess_shouldPersistSecondaryStylesAsNonPrimary() {
         // AI 输出主风格「中古风」+ 备选「奶油风/北欧风」（含与主重复项，验证去重过滤）
         RspuMaster rspu = new RspuMaster();

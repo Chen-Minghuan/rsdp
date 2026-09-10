@@ -36,6 +36,8 @@ const styleTags = computed(() => {
 function statusText(status: string): string {
   if (status === 'active') return '上架中'
   if (status === 'inactive') return '已下架'
+  // processing + 存疑 = 识别失败待处理（可重新识别/复核确认）；其余 processing = 识别中
+  if (status === 'processing') return rspu.value.reviewStatus === '存疑' ? '识别失败' : '识别中'
   return status || '-'
 }
 
@@ -86,7 +88,7 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
 
       <div class="hero-info">
         <div class="hero-tags">
-          <StatusPill :value="rspu.status" :label="statusText(rspu.status)" />
+          <StatusPill :value="statusText(rspu.status)" />
           <StatusPill :value="rspu.reviewStatus || '待复核'" />
           <StatusPill :value="rspu.aestheticsConfidence" :label="confidenceText(rspu.aestheticsConfidence)" />
           <n-tag v-if="rspu.productLevel" type="info" size="small">{{ rspu.productLevel }} 级</n-tag>

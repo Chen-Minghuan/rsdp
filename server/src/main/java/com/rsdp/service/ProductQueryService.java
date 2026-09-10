@@ -599,6 +599,10 @@ public class ProductQueryService {
     /**
      * 复核确认产品。
      *
+     * <p>复核状态置「已确认」时，若产品仍为 processing（识别失败/收割超时留下的存疑产品），
+     * 同步翻转 status 为 active——复核确认 = 人工认定识别完成，产品进入在售/检索/官网可见范围。
+     * active 产品（含疑似同款 active+存疑）复核确认只更新复核状态，status 不变。</p>
+     *
      * @param rspuId         RSPU ID
      * @param reviewStatus   复核状态
      * @param reviewComment  复核备注
@@ -617,6 +621,9 @@ public class ProductQueryService {
         RspuMaster oldSnapshot = snapshot(rspu);
         rspu.setReviewStatus(reviewStatus);
         rspu.setReviewComment(reviewComment);
+        if (ReviewStatus.APPROVED.getDbValue().equals(reviewStatus) && "processing".equals(rspu.getStatus())) {
+            rspu.setStatus("active");
+        }
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 

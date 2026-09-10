@@ -34,10 +34,11 @@ import java.util.List;
  * 执行线程已消亡（AI 识别正常耗时远低于阈值），均标记为 failed 并写明原因。
  * 使用条件 UPDATE（状态前置校验），不会覆盖并发执行线程刚写入的状态。</p>
  *
- * <p>product_entry 任务被收割时联动处理其 RSPU：正常识别成功/失败链路会把 RSPU 从
- * processing（识别中）翻转为 active，任务被收割则无人翻转，产品会永久卡在识别中
- * （官网只展示 active）。收割前将仍停留在 processing 的 RSPU 条件更新为
- * active + 存疑（可重新识别），并补一条 ai_recognition 失败记录留档。</p>
+ * <p>product_entry 任务被收割时联动处理其 RSPU：正常识别成功链路会把 RSPU 从
+ * processing（识别中）翻转为 active，任务被收割则无人翻转，产品会永久卡在识别中。
+ * 收割前将仍停留在 processing 的 RSPU 条件置为存疑（status 保持 processing，
+ * 不置 active，与识别失败兜底同语义；官网/检索只消费 active），并补一条
+ * ai_recognition 失败记录留档。后续通过重新识别成功或人工复核确认翻转为 active。</p>
  *
  * <p>同时收割 excel_import_batch 中超时 importing 的批次：批次被抢占为 importing 后
  * 若 JVM 崩溃/重启会永久卡死，用户无法重试；超时后复位为 pending。阈值默认 2 小时，
@@ -79,7 +80,7 @@ public class AsyncTaskReaper {
             LocalDateTime pendingThreshold = now.minusSeconds(pendingTimeoutMs / 1000);
             LocalDateTime processingThreshold = now.minusSeconds(processingTimeoutMs / 1000);
 
-            // product_entry 任务收割前联动：把仍卡在 processing 的 RSPU 置为 active + 存疑
+            // product_entry 任务收割前联动：仍卡在 processing 的 RSPU 置存疑（status 保持 processing）
             linkReapedProductEntryRspu(pendingThreshold, processingThreshold);
 
             int pendingReaped = asyncTaskMapper.update(null, new UpdateWrapper<AsyncTask>()
@@ -144,7 +145,7 @@ public class AsyncTaskReaper {
 
     /**
      * 单个被收割 product_entry 任务的 RSPU 联动：仅当 RSPU 仍是 processing 时
-     * 条件更新为 active + 存疑（不覆盖并发写入的后续状态），并补 ai_recognition 失败记录。
+     * 条件置存疑（status 保持 processing，不覆盖并发写入的后续状态），并补 ai_recognition 失败记录。
      *
      * @param task 被收割的任务（input_data 内含 rspuId/imageId）
      */
@@ -158,11 +159,10 @@ public class AsyncTaskReaper {
             return;
         }
         LocalDateTime now = LocalDateTime.now();
-        // 条件更新：仅当 RSPU 仍为 processing 时翻转，避免覆盖识别线程刚写入的后续状态
+        // 条件更新：仅当 RSPU 仍为 processing 时置存疑（status 不翻转），避免覆盖识别线程刚写入的后续状态
         int updated = rspuMapper.update(null, new UpdateWrapper<RspuMaster>()
             .eq("rspu_id", rspuId)
             .eq("status", "processing")
-            .set("status", "active")
             .set("review_status", "存疑")
             .set("review_comment", "识别任务超时未执行，可重新识别")
             .set("updated_at", now));
@@ -186,7 +186,7 @@ public class AsyncTaskReaper {
 
         RspuMaster newSnapshot = new RspuMaster();
         org.springframework.beans.BeanUtils.copyProperties(rspu, newSnapshot);
-        newSnapshot.setStatus("active");
+        newSnapshot.setStatus("processing");
         newSnapshot.setReviewStatus("存疑");
         newSnapshot.setReviewComment("识别任务超时未执行，可重新识别");
         newSnapshot.setUpdatedAt(now);

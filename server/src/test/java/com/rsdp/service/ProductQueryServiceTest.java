@@ -435,15 +435,50 @@ class ProductQueryServiceTest {
 
     @Test
     void reviewProduct_shouldUpdateReviewStatus() {
+        // active + 存疑（疑似同款场景）复核确认：只更新复核状态，status 保持 active 不变
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
-        rspu.setReviewStatus("待复核");
+        rspu.setStatus("active");
+        rspu.setReviewStatus("存疑");
 
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
 
         productQueryService.reviewProduct("RSPU-TEST01", "已确认", "人工复核通过");
 
         assertThat(rspu.getReviewStatus()).isEqualTo("已确认");
+        assertThat(rspu.getStatus()).isEqualTo("active");
+    }
+
+    @Test
+    void reviewProduct_shouldFlipProcessingToActiveWhenApproved() {
+        // processing + 存疑（识别失败/收割超时）复核确认 = 人工认定识别完成：status 翻转为 active
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setStatus("processing");
+        rspu.setReviewStatus("存疑");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        productQueryService.reviewProduct("RSPU-TEST01", "已确认", "人工复核确认识别完成");
+
+        assertThat(rspu.getReviewStatus()).isEqualTo("已确认");
+        assertThat(rspu.getStatus()).isEqualTo("active");
+    }
+
+    @Test
+    void reviewProduct_shouldKeepProcessingWhenNotApproved() {
+        // 非「已确认」复核（如标记存疑）不翻转 status，processing 保持 processing
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setStatus("processing");
+        rspu.setReviewStatus("待复核");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        productQueryService.reviewProduct("RSPU-TEST01", "存疑", "标签仍需确认");
+
+        assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
+        assertThat(rspu.getStatus()).isEqualTo("processing");
     }
 
     @Test

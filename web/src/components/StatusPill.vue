@@ -34,7 +34,7 @@ const WAIT_VALUES = new Set([
 ])
 const BAD_VALUES = new Set([
   'failed', 'error', 'low',
-  '存疑', '失败', '低'
+  '存疑', '失败', '低', '识别失败'
 ])
 const INFO_VALUES = new Set([
   'inactive', 'skipped', 'high',

@@ -202,6 +202,12 @@ DELETE /api/v1/products/{rspuId}/relations/{relationId}
 PUT    /api/v1/products/{rspuId}/review
        # 人工复核确认/存疑（已实现）
        # Request: { reviewStatus: "已确认"|"存疑", reviewComment? }
+       # 说明：reviewStatus="已确认" 且产品仍为 processing（识别失败/收割超时留下的存疑产品）时，
+       #       同步翻转 status 为 active（复核确认 = 人工认定识别完成，2026-09-10 阶段 2.2）；
+       #       active 产品（含疑似同款 active+存疑）复核确认只更新复核状态，status 不变；
+       #       标记存疑不翻转 status。
+       # 状态机语义（阶段 2.2 统一）：识别成功→active+待复核；识别失败→processing+存疑；
+       #       收割超时→processing+存疑（可重新识别）；疑似同款→active+存疑；无图导入→active+待复核
 
 POST   /api/v1/products/{rspuId}/re-recognize
        # 重新触发产品 AI 识别（已实现，2026-09-10；需 product:update 权限，URL 规则 + @PreAuthorize 双保险）

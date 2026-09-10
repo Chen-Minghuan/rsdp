@@ -95,8 +95,8 @@ class AsyncTaskReaperTest {
 
     @Test
     void reapStaleTasks_shouldMarkProductEntryRspuDoubtfulWhenReaped() {
-        // 超时 product_entry 任务被收割时，仍卡在 processing 的 RSPU 联动置 active + 存疑，
-        // 并补 ai_recognition 失败记录
+        // 超时 product_entry 任务被收割时，仍卡在 processing 的 RSPU 联动置存疑
+        // （status 保持 processing，不置 active，与识别失败兜底同语义），并补 ai_recognition 失败记录
         AsyncTask task = staleProductEntryTask("TASK-1", "RSPU-1", "IMG-1");
         when(asyncTaskMapper.selectList(any())).thenReturn(List.of(task));
 
@@ -109,13 +109,15 @@ class AsyncTaskReaperTest {
 
         reaper.reapStaleTasks();
 
-        // RSPU 条件更新为 active + 存疑（仅仍 processing 时生效）
+        // RSPU 条件置存疑（仅仍 processing 时生效）；status 不翻转，保持 processing
         ArgumentCaptor<UpdateWrapper<RspuMaster>> wrapperCaptor = ArgumentCaptor.forClass(UpdateWrapper.class);
         verify(rspuMapper).update(isNull(), wrapperCaptor.capture());
-        assertThat(wrapperCaptor.getValue().getSqlSet())
-            .contains("status=")
+        String sqlSet = wrapperCaptor.getValue().getSqlSet();
+        assertThat(sqlSet)
             .contains("review_status")
             .contains("review_comment");
+        assertThat(java.util.Arrays.stream(sqlSet.split(",")).map(String::trim))
+            .noneMatch(setClause -> setClause.startsWith("status="));
 
         // 补 ai_recognition 失败记录（对齐 saveFailure 写法）
         ArgumentCaptor<AiRecognition> recCaptor = ArgumentCaptor.forClass(AiRecognition.class);

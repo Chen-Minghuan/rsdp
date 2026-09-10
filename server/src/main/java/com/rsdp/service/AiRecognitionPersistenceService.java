@@ -89,7 +89,7 @@ public class AiRecognitionPersistenceService {
     }
 
     /**
-     * 在独立事务中保存 AI 识别失败结果，并将 RSPU 标记为存疑。
+     * 在独立事务中保存 AI 识别失败结果，并将 RSPU 标记为存疑（status 保持 processing，不置 active）。
      *
      * @param taskId        任务 ID
      * @param rspuId        RSPU ID
@@ -350,6 +350,12 @@ public class AiRecognitionPersistenceService {
         return !StringUtils.hasText(value) || emptyForm.equals(value.trim());
     }
 
+    /**
+     * 识别失败兜底：RSPU 标记存疑，status 保持 processing（不置 active）。
+     *
+     * <p>识别失败 = 识别未完成，产品应留在 processing 避免进入在售列表/检索/官网
+     * （均只消费 active），直到重新识别成功（翻 active）或人工复核确认（翻 active）。</p>
+     */
     private void markRspuAsDoubtful(String rspuId, String modelName) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
@@ -358,7 +364,6 @@ public class AiRecognitionPersistenceService {
         }
 
         RspuMaster oldSnapshot = snapshot(rspu);
-        rspu.setStatus("active");
         rspu.setReviewStatus("存疑");
         rspu.setSourceAgentVersion(modelName);
         rspu.setUpdatedAt(LocalDateTime.now());
