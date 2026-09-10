@@ -159,6 +159,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/*/factories/*").hasAuthority(Permissions.PRODUCT_UPDATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/variants").hasAuthority(Permissions.PRODUCT_UPDATE)
 
+                // 产品重新识别（识别中/存疑产品的手动重试入口）
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/re-recognize").hasAuthority(Permissions.PRODUCT_UPDATE)
+
                 // 产品复核
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/review").hasAuthority(Permissions.PRODUCT_REVIEW)
 

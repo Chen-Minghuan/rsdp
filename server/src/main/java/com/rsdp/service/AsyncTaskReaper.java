@@ -1,16 +1,26 @@
 package com.rsdp.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.RspuMaster;
+import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ExcelImportBatchMapper;
+import com.rsdp.mapper.RspuMapper;
+import com.rsdp.util.IdGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 异步任务收割器：兜底清理永久挂起的任务。
@@ -24,6 +34,11 @@ import java.time.LocalDateTime;
  * 执行线程已消亡（AI 识别正常耗时远低于阈值），均标记为 failed 并写明原因。
  * 使用条件 UPDATE（状态前置校验），不会覆盖并发执行线程刚写入的状态。</p>
  *
+ * <p>product_entry 任务被收割时联动处理其 RSPU：正常识别成功/失败链路会把 RSPU 从
+ * processing（识别中）翻转为 active，任务被收割则无人翻转，产品会永久卡在识别中
+ * （官网只展示 active）。收割前将仍停留在 processing 的 RSPU 条件更新为
+ * active + 存疑（可重新识别），并补一条 ai_recognition 失败记录留档。</p>
+ *
  * <p>同时收割 excel_import_batch 中超时 importing 的批次：批次被抢占为 importing 后
  * 若 JVM 崩溃/重启会永久卡死，用户无法重试；超时后复位为 pending。阈值默认 2 小时，
  * 需大于正常导入最坏耗时，避免误收割仍在运行的导入（导入期间批次 updated_at 仅在被抢占
@@ -36,6 +51,10 @@ public class AsyncTaskReaper {
 
     private final AsyncTaskMapper asyncTaskMapper;
     private final ExcelImportBatchMapper excelImportBatchMapper;
+    private final RspuMapper rspuMapper;
+    private final AiRecognitionMapper aiRecognitionMapper;
+    private final AuditLogService auditLogService;
+    private final ObjectMapper objectMapper;
 
     /** pending 超时（毫秒）：超过该时长未被认领视为投递失败 */
     @Value("${rsdp.task.pending-timeout-ms:600000}")
@@ -57,10 +76,15 @@ public class AsyncTaskReaper {
     public void reapStaleTasks() {
         try {
             LocalDateTime now = LocalDateTime.now();
+            LocalDateTime pendingThreshold = now.minusSeconds(pendingTimeoutMs / 1000);
+            LocalDateTime processingThreshold = now.minusSeconds(processingTimeoutMs / 1000);
+
+            // product_entry 任务收割前联动：把仍卡在 processing 的 RSPU 置为 active + 存疑
+            linkReapedProductEntryRspu(pendingThreshold, processingThreshold);
 
             int pendingReaped = asyncTaskMapper.update(null, new UpdateWrapper<AsyncTask>()
                 .eq("status", "pending")
-                .lt("created_at", now.minusSeconds(pendingTimeoutMs / 1000))
+                .lt("created_at", pendingThreshold)
                 .set("status", "failed")
                 .set("progress", 100)
                 .set("error_message", "任务投递后长时间未被认领（可能线程池拒绝或进程重启），已被收割任务标记失败，请重试")
@@ -71,7 +95,7 @@ public class AsyncTaskReaper {
 
             int processingReaped = asyncTaskMapper.update(null, new UpdateWrapper<AsyncTask>()
                 .eq("status", "processing")
-                .lt("created_at", now.minusSeconds(processingTimeoutMs / 1000))
+                .lt("created_at", processingThreshold)
                 .set("status", "failed")
                 .set("progress", 100)
                 .set("error_message", "任务执行超时（可能进程重启导致执行中断），已被收割任务标记失败，请重试")
@@ -89,6 +113,105 @@ public class AsyncTaskReaper {
         } catch (Exception e) {
             // 收割器自身失败（如 DB 短暂故障）不能影响调度线程，下个周期重试
             log.error("异步任务收割执行失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 找出将被本周期收割的 product_entry 任务，逐个联动其 RSPU 置存疑。
+     *
+     * <p>与下方批量 UPDATE 相同的超时口径；单个任务联动失败不影响其余任务与批量收割。</p>
+     *
+     * @param pendingThreshold    pending 超时阈值时间
+     * @param processingThreshold processing 超时阈值时间
+     */
+    private void linkReapedProductEntryRspu(LocalDateTime pendingThreshold, LocalDateTime processingThreshold) {
+        List<AsyncTask> staleEntryTasks = asyncTaskMapper.selectList(new QueryWrapper<AsyncTask>()
+            .eq("task_type", "product_entry")
+            .and(w -> w
+                .and(q -> q.eq("status", "pending").lt("created_at", pendingThreshold))
+                .or(q -> q.eq("status", "processing").lt("created_at", processingThreshold))));
+        if (staleEntryTasks == null || staleEntryTasks.isEmpty()) {
+            return;
+        }
+        for (AsyncTask task : staleEntryTasks) {
+            try {
+                markRspuDoubtfulForReapedTask(task);
+            } catch (Exception e) {
+                log.error("收割任务联动 RSPU 置存疑失败，taskId={}: {}", task.getTaskId(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 单个被收割 product_entry 任务的 RSPU 联动：仅当 RSPU 仍是 processing 时
+     * 条件更新为 active + 存疑（不覆盖并发写入的后续状态），并补 ai_recognition 失败记录。
+     *
+     * @param task 被收割的任务（input_data 内含 rspuId/imageId）
+     */
+    private void markRspuDoubtfulForReapedTask(AsyncTask task) {
+        String rspuId = extractInputField(task.getInputData(), "rspuId");
+        if (!StringUtils.hasText(rspuId)) {
+            return;
+        }
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null || !"processing".equals(rspu.getStatus())) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        // 条件更新：仅当 RSPU 仍为 processing 时翻转，避免覆盖识别线程刚写入的后续状态
+        int updated = rspuMapper.update(null, new UpdateWrapper<RspuMaster>()
+            .eq("rspu_id", rspuId)
+            .eq("status", "processing")
+            .set("status", "active")
+            .set("review_status", "存疑")
+            .set("review_comment", "识别任务超时未执行，可重新识别")
+            .set("updated_at", now));
+        if (updated == 0) {
+            return;
+        }
+
+        // 补 ai_recognition 失败记录（字段对齐 AiRecognitionPersistenceService.saveFailure 写法）
+        AiRecognition rec = new AiRecognition();
+        rec.setRecognitionId(IdGenerator.recognitionId());
+        rec.setImageId(extractInputField(task.getInputData(), "imageId"));
+        rec.setRspuId(rspuId);
+        rec.setTaskId(task.getTaskId());
+        rec.setRecognitionType("label");
+        rec.setEndpoint("/chat/completions");
+        rec.setStatus("failed");
+        rec.setProcessingTimeMs(0);
+        rec.setErrorMessage("识别任务超时未执行，被收割任务标记失败，可重新识别");
+        rec.setCreatedAt(now);
+        aiRecognitionMapper.insert(rec);
+
+        RspuMaster newSnapshot = new RspuMaster();
+        org.springframework.beans.BeanUtils.copyProperties(rspu, newSnapshot);
+        newSnapshot.setStatus("active");
+        newSnapshot.setReviewStatus("存疑");
+        newSnapshot.setReviewComment("识别任务超时未执行，可重新识别");
+        newSnapshot.setUpdatedAt(now);
+        String operator = StringUtils.hasText(task.getCreatedBy()) ? task.getCreatedBy() : "system";
+        auditLogService.logReview("rspu_master", rspuId, rspu, newSnapshot, operator);
+        log.info("收割 product_entry 任务联动 RSPU 置存疑，taskId={}，rspuId={}", task.getTaskId(), rspuId);
+    }
+
+    /**
+     * 从任务 input_data JSON 中提取字符串字段。
+     *
+     * @param inputData 任务输入 JSON
+     * @param field     字段名
+     * @return 字段值；缺失或解析失败返回 null
+     */
+    private String extractInputField(String inputData, String field) {
+        if (!StringUtils.hasText(inputData)) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(inputData).get(field);
+            return node != null && node.isTextual() ? node.asText() : null;
+        } catch (Exception e) {
+            log.warn("解析任务 input_data 字段 {} 失败: {}", field, e.getMessage());
+            return null;
         }
     }
 }

@@ -203,6 +203,16 @@ PUT    /api/v1/products/{rspuId}/review
        # 人工复核确认/存疑（已实现）
        # Request: { reviewStatus: "已确认"|"存疑", reviewComment? }
 
+POST   /api/v1/products/{rspuId}/re-recognize
+       # 重新触发产品 AI 识别（已实现，2026-09-10；需 product:update 权限，URL 规则 + @PreAuthorize 双保险）
+       # Response: { taskId, message }
+       # 说明：识别中（processing）或存疑产品的手动重试入口（识别任务失败/被收割器标记失败后的重识别）。
+       #       校验 RSPU 存在 + 数据归属（工厂仅可重识别本厂已报价产品，平台员工均可）；
+       #       无 is_primary 主图时报 400「产品没有主图，无法重新识别」；
+       #       已有 pending/processing 识别任务在途时报 400 拒绝重复触发；
+       #       通过后 RSPU 置回 processing + 待复核（清掉存疑备注，记审计），
+       #       新建 product_entry 异步任务（source=re_recognize）afterCommit 投递，识别成功/失败由异步链路正常翻转状态
+
 PUT    /api/v1/products/{rspuId}
        # 更新产品元数据（产品名称、定位标签、颜色、材质、场景、六维标签、价格带、零售参考价retailPrice、保修年限等，已实现）
        # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）

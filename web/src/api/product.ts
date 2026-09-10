@@ -136,6 +136,19 @@ export async function reviewProduct(rspuId: string, request: ProductReviewReques
 }
 
 /**
+ * 重新触发产品 AI 识别（识别中/存疑产品的手动重试入口）。
+ *
+ * @param rspuId RSPU ID
+ * @returns 新建识别任务信息（taskId）
+ */
+export async function reRecognizeProduct(rspuId: string): Promise<{ taskId: string; message: string }> {
+  const { data: result } = await apiClient.post<ApiResult<{ taskId: string; message: string }>>(
+    `/v1/products/${rspuId}/re-recognize`
+  )
+  return result.data
+}
+
+/**
  * 更新产品元数据。
  *
  * @param rspuId RSPU ID

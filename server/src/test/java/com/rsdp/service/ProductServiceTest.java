@@ -92,6 +92,9 @@ class ProductServiceTest {
     @Mock
     private VisionService visionService;
 
+    @Mock
+    private com.rsdp.security.datascope.DataScopeHelper dataScopeHelper;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -729,6 +732,115 @@ class ProductServiceTest {
         assertThatThrownBy(() -> productService.createEntriesFromRegions(png, List.of()))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("至少选择一个产品区域");
+    }
+
+    @Test
+    void reRecognize_shouldResetRspuAndCreateTask() {
+        // 存疑产品重新识别：RSPU 置回 processing + 待复核（清掉存疑备注）、新建 product_entry 任务并投递
+        authenticateWithRoles("admin", "ADMIN");
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-1");
+        rspu.setStatus("active");
+        rspu.setReviewStatus("存疑");
+        rspu.setReviewComment("识别任务超时未执行，可重新识别");
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
+
+        ImageAssets primary = new ImageAssets();
+        primary.setImageId("IMG-1");
+        primary.setRspuId("RSPU-1");
+        primary.setPrimary(true);
+        primary.setStoragePath("images/IMG-1.jpg");
+        when(imageAssetsMapper.selectOne(any())).thenReturn(primary);
+        when(asyncTaskMapper.selectList(any())).thenReturn(List.of());
+
+        Map<String, Object> result = productService.reRecognize("RSPU-1");
+
+        assertThat(result).containsKeys("taskId", "message");
+
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper).updateById(rspuCaptor.capture());
+        assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("processing");
+        assertThat(rspuCaptor.getValue().getReviewStatus()).isEqualTo("待复核");
+        assertThat(rspuCaptor.getValue().getReviewComment()).isNull();
+
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).insert(taskCaptor.capture());
+        AsyncTask task = taskCaptor.getValue();
+        assertThat(task.getTaskType()).isEqualTo("product_entry");
+        assertThat(task.getStatus()).isEqualTo("pending");
+        assertThat(task.getInputData()).contains("\"rspuId\":\"RSPU-1\"")
+            .contains("\"imageId\":\"IMG-1\"");
+
+        verify(dataScopeHelper).assertCanAccessRspu("RSPU-1");
+        verify(auditLogService).logReview(eq("rspu_master"), eq("RSPU-1"), any(), any(), anyString());
+        verify(asyncTaskProcessor).processProductEntry(anyString(), eq("RSPU-1"), eq("IMG-1"), eq("images/IMG-1.jpg"));
+    }
+
+    @Test
+    void reRecognize_shouldRejectWhenNoPrimaryImage() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-1");
+        rspu.setStatus("processing");
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
+        when(imageAssetsMapper.selectOne(any())).thenReturn(null);
+
+        assertThatThrownBy(() -> productService.reRecognize("RSPU-1"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("产品没有主图，无法重新识别");
+        verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
+        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+    }
+
+    @Test
+    void reRecognize_shouldRejectWhenInflightTaskExists() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-1");
+        rspu.setStatus("processing");
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
+
+        ImageAssets primary = new ImageAssets();
+        primary.setImageId("IMG-1");
+        primary.setRspuId("RSPU-1");
+        primary.setPrimary(true);
+        primary.setStoragePath("images/IMG-1.jpg");
+        when(imageAssetsMapper.selectOne(any())).thenReturn(primary);
+
+        AsyncTask inflight = new AsyncTask();
+        inflight.setTaskId("TASK-RUNNING");
+        inflight.setTaskType("product_entry");
+        inflight.setStatus("processing");
+        inflight.setInputData("{\"rspuId\":\"RSPU-1\",\"imageId\":\"IMG-1\"}");
+        when(asyncTaskMapper.selectList(any())).thenReturn(List.of(inflight));
+
+        assertThatThrownBy(() -> productService.reRecognize("RSPU-1"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("已有识别任务在执行中");
+        verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
+        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+    }
+
+    @Test
+    void reRecognize_shouldRejectWhenFactoryCannotAccessRspu() {
+        // 非本厂已报价产品：数据归属校验拒绝
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-1");
+        when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
+        doThrow(new BusinessException("只能维护本厂已报价的产品: RSPU-1"))
+            .when(dataScopeHelper).assertCanAccessRspu("RSPU-1");
+
+        assertThatThrownBy(() -> productService.reRecognize("RSPU-1"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("只能维护本厂已报价的产品");
+        verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
+    }
+
+    @Test
+    void reRecognize_shouldRejectWhenRspuNotFound() {
+        when(rspuMapper.selectById("RSPU-X")).thenReturn(null);
+
+        assertThatThrownBy(() -> productService.reRecognize("RSPU-X"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("产品不存在");
     }
 
     private byte[] createPngBytes(int width, int height) {

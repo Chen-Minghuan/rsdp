@@ -194,6 +194,18 @@ public class ProductController {
     }
 
     /**
+     * 重新触发产品 AI 识别（识别中/存疑产品的手动重试入口）。
+     *
+     * @param rspuId RSPU ID
+     * @return 新建任务信息（taskId）
+     */
+    @PostMapping("/{rspuId}/re-recognize")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<Map<String, Object>> reRecognize(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
+        return Result.ok(productService.reRecognize(rspuId));
+    }
+
+    /**
      * 复核确认产品。
      *
      * @param rspuId  RSPU ID

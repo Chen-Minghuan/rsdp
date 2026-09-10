@@ -2,6 +2,7 @@ package com.rsdp.service;
 
 import com.rsdp.security.SecurityOperatorContext;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.ImageAssets;
@@ -10,6 +11,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ContentHashes;
@@ -66,6 +68,7 @@ public class ProductService {
     private final RskuCodeService rskuCodeService;
     private final ProductSubjectCropService subjectCropService;
     private final VisionService visionService;
+    private final DataScopeHelper dataScopeHelper;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
@@ -617,6 +620,104 @@ public class ProductService {
             log.info("区域拆分建档：第 {} 个区域（品类 {}）→ rspuId={}", i + 1, region.categoryCode(), entry.get("rspuId"));
         }
         return results;
+    }
+
+    /**
+     * 重新触发产品 AI 识别（识别中/存疑产品的手动重试入口）。
+     *
+     * <p>识别任务失败或被收割器标记失败后，RSPU 停留在 processing（识别中）或
+     * active + 存疑，本方法按 {@link #createEntry(List, String)} 的范式重新发起识别：
+     * RSPU 置回 processing + 待复核（清掉存疑备注）、新建 product_entry 异步任务、
+     * 事务提交后投递执行。识别成功/失败后由异步链路正常翻转状态。</p>
+     *
+     * @param rspuId RSPU ID
+     * @return 包含 taskId 的映射
+     */
+    @Transactional
+    public Map<String, Object> reRecognize(String rspuId) {
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null) {
+            throw new BusinessException("产品不存在: " + rspuId);
+        }
+        // 数据归属：平台员工均可，工厂仅可重识别本厂已报价产品
+        dataScopeHelper.assertCanAccessRspu(rspuId);
+
+        ImageAssets primaryImage = imageAssetsMapper.selectOne(new QueryWrapper<ImageAssets>()
+            .eq("rspu_id", rspuId)
+            .eq("is_primary", true)
+            .orderByDesc("created_at")
+            .last("limit 1"));
+        if (primaryImage == null) {
+            throw new BusinessException("产品没有主图，无法重新识别");
+        }
+
+        // 已有在途识别任务时拒绝重复触发（input_data 为 JSON，量小，内存匹配 rspuId）
+        List<AsyncTask> inflightTasks = asyncTaskMapper.selectList(new QueryWrapper<AsyncTask>()
+            .eq("task_type", "product_entry")
+            .in("status", "pending", "processing"));
+        boolean hasInflightTask = inflightTasks != null && inflightTasks.stream()
+            .anyMatch(task -> rspuId.equals(extractInputRspuId(task.getInputData())));
+        if (hasInflightTask) {
+            throw new BusinessException("该产品已有识别任务在执行中，请稍后再试");
+        }
+
+        // RSPU 置回识别中：清掉存疑状态与备注，等异步识别结果翻转
+        RspuMaster oldSnapshot = new RspuMaster();
+        org.springframework.beans.BeanUtils.copyProperties(rspu, oldSnapshot);
+        rspu.setStatus("processing");
+        rspu.setReviewStatus("待复核");
+        rspu.setReviewComment(null);
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.updateById(rspu);
+        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+
+        String taskId = IdGenerator.taskId();
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setTaskType("product_entry");
+        task.setStatus("pending");
+        task.setProgress(0);
+        try {
+            task.setInputData(objectMapper.writeValueAsString(Map.of(
+                "rspuId", rspuId,
+                "imageId", primaryImage.getImageId(),
+                "objectKey", primaryImage.getStoragePath(),
+                "originalFilename", primaryImage.getStoragePath(),
+                "source", "re_recognize"
+            )));
+        } catch (Exception e) {
+            log.warn("序列化任务输入失败", e);
+        }
+        task.setCreatedBy(SecurityOperatorContext.currentUsername());
+        task.setCreatedAt(LocalDateTime.now());
+        asyncTaskMapper.insert(task);
+
+        triggerAsyncProcess(taskId, rspuId, primaryImage.getImageId(), primaryImage.getStoragePath());
+
+        log.info("重新识别任务已创建，rspuId={}，taskId={}", rspuId, taskId);
+        return Map.of(
+            "taskId", taskId,
+            "message", "重新识别任务已创建，正在后台识别中"
+        );
+    }
+
+    /**
+     * 从任务 input_data JSON 中提取 rspuId。
+     *
+     * @param inputData 任务输入 JSON
+     * @return RSPU ID；缺失或解析失败返回 null
+     */
+    private String extractInputRspuId(String inputData) {
+        if (!StringUtils.hasText(inputData)) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(inputData).get("rspuId");
+            return node != null && node.isTextual() ? node.asText() : null;
+        } catch (Exception e) {
+            log.warn("解析任务 input_data 失败: {}", e.getMessage());
+            return null;
+        }
     }
 
     private void validateFactoryEntryOwnership(String factoryCode) {

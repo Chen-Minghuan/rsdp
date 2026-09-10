@@ -4492,6 +4492,71 @@ class ExcelAiImportServiceTest {
         assertEquals(1, result.getTaskIds().size());
     }
 
+    @Test
+    void confirmAndImport_shouldCreateRspuAsActiveWhenRowHasNoImage() throws IOException {
+        // 阶段 2.1 卡点 2 修复：无图行不会产生 AI 识别任务，RSPU 落库即 active + 待复核
+        // （与手工录入口径一致），不再永久卡在 processing（识别中）
+        byte[] excelBytes = createExcelWithCategoryAndNameOnly();
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"品类\":\"categoryCode\",\"名称\":\"productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
+        request.setCategoryHint("FS");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
+        assertEquals("active", rspuCaptor.getValue().getStatus(), "无图行 RSPU 应落库即 active");
+        assertEquals("待复核", rspuCaptor.getValue().getReviewStatus());
+        // 无图行不建 AI 识别任务
+        verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
+        assertTrue(result.getTaskIds().isEmpty());
+    }
+
+    @Test
+    void confirmAndImport_shouldCreateRspuAsProcessingWhenRowHasImage() throws IOException {
+        // 有图行保持 processing，等异步识别完成后翻转
+        byte[] pngBytes = createPng(0xFFAA00);
+        byte[] excelBytes = createExcelWithEmbeddedImage(pngBytes);
+        ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
+            "{\"mapping\":{\"类别\":\"categoryCode\",\"型号\":\"externalCode,productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-A");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("类别", "categoryCode", "型号", "externalCode,productName"));
+        request.setCategoryHint("FS");
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
+        assertEquals("processing", rspuCaptor.getValue().getStatus(), "有图行 RSPU 应保持 processing 等识别翻转");
+        // 有图行新登记主图 → 建一次 AI 识别任务
+        verify(asyncTaskMapper, times(1)).insert(any(com.rsdp.entity.AsyncTask.class));
+        assertEquals(1, result.getTaskIds().size());
+    }
+
     private Map<String, String> previewMappingForUpdate(ExcelImportBatch savedBatch) {
         return Map.of("型号品名", "externalCode", "规格/模块", "variantDisplayName", "价格", "__PRICE__:A级布");
     }

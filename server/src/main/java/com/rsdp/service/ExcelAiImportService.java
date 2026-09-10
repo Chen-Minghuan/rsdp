@@ -4,6 +4,7 @@ import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.read.listener.ReadListener;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.BeanUtils;
@@ -2886,6 +2887,12 @@ public class ExcelAiImportService {
         String defaultMaterialCode = resolveDefaultMaterialCode(request, dictCache, rowIssues);
         String rspuId;
         boolean createdNewRspu;
+        // 新建 RSPU 时预判本行是否会产生 AI 识别任务（判定口径与下方建任务条件一致：
+        // 新建 RSPU 无既有图片可查重，allowPrimary 且有产品图且（有 primary 标记图或
+        // 非严格主图模式首图兜底）时必新登记主图 → 必建识别任务），供 createRspu
+        // 在 insert 时就写对 status：无图行直接 active，避免永久卡在 processing（识别中）
+        boolean expectAiTask = prep.allowPrimary() && !storedProductImages.isEmpty()
+            && (storedProductImages.stream().anyMatch(StoredImage::primary) || !prep.strictPrimary());
         if (prep.sameProduct()) {
             rspuId = currentGroup.rspuId;
             createdNewRspu = false;
@@ -2916,7 +2923,7 @@ public class ExcelAiImportService {
                 createdNewRspu = false;
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
-                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache);
+                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache, expectAiTask);
                 saveStylesAndScenes(rspuId, row, dictCache);
                 createdNewRspu = true;
             }
@@ -2946,6 +2953,22 @@ public class ExcelAiImportService {
             boolean needTask = !prep.sameProduct() || !currentGroup.hasAiTask;
             if (needTask) {
                 taskId = createAsyncTask(rspuId, primaryObjectKey);
+            }
+        }
+
+        // 复用已有 RSPU 且本行未建识别任务时，若 RSPU 仍卡在 processing（历史无图导入/
+        // 任务丢失等），条件翻转为 active + 待复核，避免永久识别中；同组已有在途任务
+        // （sameProduct 且组内已建任务）时不翻转，等组内任务识别完成后正常翻转
+        boolean groupTaskInflight = prep.sameProduct() && currentGroup != null && currentGroup.hasAiTask;
+        if (!createdNewRspu && taskId == null && !groupTaskInflight) {
+            int flipped = rspuMapper.update(null, new UpdateWrapper<RspuMaster>()
+                .eq("rspu_id", rspuId)
+                .eq("status", "processing")
+                .set("status", "active")
+                .set("review_status", "待复核")
+                .set("updated_at", LocalDateTime.now()));
+            if (flipped > 0) {
+                log.info("第 {} 行未建识别任务，将卡在识别中的已有 RSPU {} 翻转为 active", rowIndex, rspuId);
             }
         }
 
@@ -3732,9 +3755,17 @@ public class ExcelAiImportService {
         }
     }
 
+    /**
+     * 新建 RSPU 落库。
+     *
+     * @param expectAiTask 本行是否会产生 AI 识别任务（persistRow 按主图登记口径预判）：
+     *                     true 时 RSPU 置 processing 等异步识别翻转；false（无图行）
+     *                     时不会有识别任务，直接落 active + 待复核（与手工录入口径一致），
+     *                     避免永久卡在识别中
+     */
     private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
                               List<String> rowIssues, String defaultProductLevel,
-                              BatchImportCache importCache) {
+                              BatchImportCache importCache, boolean expectAiTask) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -3768,7 +3799,9 @@ public class ExcelAiImportService {
             : defaultProductLevel);
         rspu.setWarrantyYears(row.getWarrantyYears());
         rspu.setKeySpecs(trim(row.getKeySpecs()));
-        rspu.setStatus("processing");
+        // 有图行保持 processing 等异步识别翻转；无图行不会产生识别任务，
+        // 直接落 active（与手工录入口径一致），避免永久卡在识别中
+        rspu.setStatus(expectAiTask ? "processing" : "active");
         rspu.setReviewStatus("待复核");
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());

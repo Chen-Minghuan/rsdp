@@ -28,7 +28,7 @@ import VariantRskuTab from '@/components/product/VariantRskuTab.vue'
 import ImageGalleryTab from '@/components/product/ImageGalleryTab.vue'
 import RelationTab from '@/components/product/RelationTab.vue'
 import AiInsightTab from '@/components/product/AiInsightTab.vue'
-import { getProductDetail, listProducts, reviewProduct, updateProduct, deleteProduct } from '@/api/product'
+import { getProductDetail, listProducts, reviewProduct, updateProduct, deleteProduct, reRecognizeProduct } from '@/api/product'
 import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
 import { listRskuByRspu, createRsku, deleteRsku, batchCreateRskus } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
@@ -526,6 +526,30 @@ async function handleReview(status: '已确认' | '存疑') {
   }
 }
 
+/** 产品是否处于可重新识别状态（识别中或存疑）。 */
+const canReRecognize = computed(() => {
+  const rspu = detail.value?.rspu
+  if (!rspu) return false
+  return rspu.status === 'processing' || rspu.reviewStatus === '存疑'
+})
+const reRecognizing = ref(false)
+
+async function handleReRecognize() {
+  reRecognizing.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const result = await reRecognizeProduct(rspuId.value)
+    successMessage.value = result.message || '重新识别任务已创建，正在后台识别中'
+    await loadDetail()
+  } catch (e) {
+    successMessage.value = ''
+    errorMessage.value = e instanceof Error ? e.message : '重新识别失败'
+  } finally {
+    reRecognizing.value = false
+  }
+}
+
 function openDictCreateModal(type: 'material' | 'fabric' | 'scene') {
   dictCreateType.value = type
   dictCreateForm.value = { dictCode: '', dictName: '', dictNameEn: '' }
@@ -1015,6 +1039,15 @@ onBeforeRouteUpdate((to, from) => {
             @click="openEditModal"
           >
             编辑元数据
+          </n-button>
+          <n-button
+            v-if="canUpdateProduct && canManageProduct && canReRecognize"
+            size="small"
+            type="info"
+            :loading="reRecognizing"
+            @click="handleReRecognize"
+          >
+            重新识别
           </n-button>
           <n-button
             v-if="canReviewProduct && canManageProduct"
