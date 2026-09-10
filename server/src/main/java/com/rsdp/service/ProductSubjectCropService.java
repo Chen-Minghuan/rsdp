@@ -5,6 +5,7 @@ import com.rsdp.entity.ImageAssets;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.ContentHashes;
 import com.rsdp.util.IdGenerator;
 import com.rsdp.util.ImageWhitespaceTrimmer;
 import com.rsdp.util.ProductBoxRefiner;
@@ -199,7 +200,12 @@ public class ProductSubjectCropService {
                 original.setStoragePath(objectKey);
                 original.setPrimary(false);
                 original.setAiProcessed(false);
-                original.setContentHash(primary.getContentHash());
+                // content_hash 写原图字节的真实哈希（original 资产内容=原图），不复制主图行的值——
+                // 历史主图行 hash 可能为 null（2.5 前手工/工厂录入不写 hash）。
+                // 主图行 content_hash 不改（仍保留原图哈希），original 资产与主图行会同 hash：
+                // selectByContentHash 命中任一未删行都会定位到同一 RSPU（describeDuplicateProduct
+                // 仅取 rspuId），查重本就该命中，两条未删行同 hash 不影响判定
+                original.setContentHash(ContentHashes.sha256Hex(originalBytes));
                 original.setFileSize((long) originalBytes.length);
                 original.setFormat(extensionOf(objectKey));
                 original.setUploadedBy(operator);

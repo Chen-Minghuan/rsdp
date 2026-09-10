@@ -19,6 +19,7 @@ import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.ContentHashes;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -117,6 +118,10 @@ class ProductImportServiceTest {
     private final List<ImageAssets> insertedImages = new ArrayList<>();
 
     private HttpServer imageServer;
+
+    /** 图片服务器 /chair.jpg 返回的固定字节（真实 JPEG 魔数），供 content_hash 断言复用 */
+    private static final byte[] CHAIR_JPG_BYTES =
+        {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0x00, 0x10, 0x4A, 0x46};
 
     @BeforeEach
     void setUp() throws Exception {
@@ -459,6 +464,41 @@ class ProductImportServiceTest {
         assertThat(result.getFailedCount()).isEqualTo(0);
         assertThat(insertedImages).hasSize(1);
         assertThat(insertedImages.get(0).getImageType()).isEqualTo("white_bg");
+        // 2.5：导入图片写入 content_hash（下载字节的 SHA-256）
+        assertThat(insertedImages.get(0).getContentHash()).isEqualTo(ContentHashes.sha256Hex(CHAIR_JPG_BYTES));
+    }
+
+    @Test
+    void importProducts_reimportSameImage_shouldSkipDuplicateRegistration() throws IOException {
+        // 2.5：更新模式重导同一模板，同 RSPU 同内容图片跳过重登记，不再累积图片副本
+        startImageServer();
+
+        ProductImportRow row = createValidRow();
+        row.setRspuId(null);
+        row.setPrimaryImageUrl("http://127.0.0.1:" + imageServer.getAddress().getPort() + "/chair.jpg");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-OLD001");
+        existing.setExternalCode("EXT-001");
+        existing.setCategoryCode("FS");
+        existing.setCategoryPath("[\"家具\"]");
+        existing.setPositioningLabel("MC");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        // 库中已有同内容主图（hash 与本次下载字节一致）
+        ImageAssets existingImage = new ImageAssets();
+        existingImage.setImageId("IMG-OLD02");
+        existingImage.setRspuId("RSPU-OLD001");
+        existingImage.setPrimary(true);
+        existingImage.setContentHash(ContentHashes.sha256Hex(CHAIR_JPG_BYTES));
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(existingImage));
+
+        ProductImportResult result = productImportService.importProducts(file, true);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        // 同 hash 跳过重登记：不登记新图片资产，也不重复写存储文件
+        assertThat(insertedImages).isEmpty();
+        verify(storageService, never()).store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString());
     }
 
     @Test
@@ -806,7 +846,13 @@ class ProductImportServiceTest {
         existing.setCategoryPath("[\"家具\"]");
         existing.setPositioningLabel("MC");
         when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
-        when(imageAssetsMapper.selectCount(any())).thenReturn(1L);
+        // 已有主图（2.5 起由 saveImages 按 RSPU 预取 selectList 派生，不再走 selectCount）
+        ImageAssets existingPrimary = new ImageAssets();
+        existingPrimary.setImageId("IMG-OLD01");
+        existingPrimary.setRspuId("RSPU-OLD001");
+        existingPrimary.setPrimary(true);
+        existingPrimary.setContentHash("other-content-hash");
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of(existingPrimary));
         when(storageService.store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString()))
             .thenReturn("images/IMG-TEST03.jpg");
 
@@ -862,7 +908,7 @@ class ProductImportServiceTest {
         imageServer.createContext("/chair.jpg", new HttpHandler() {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
-                byte[] bytes = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0x00, 0x10, 0x4A, 0x46};
+                byte[] bytes = CHAIR_JPG_BYTES;
                 exchange.getResponseHeaders().set("Content-Type", "image/jpeg");
                 exchange.sendResponseHeaders(200, bytes.length);
                 exchange.getResponseBody().write(bytes);

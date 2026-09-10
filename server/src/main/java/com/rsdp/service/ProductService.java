@@ -39,8 +39,10 @@ import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.rsdp.util.IdGenerator;
 
@@ -393,6 +395,11 @@ public class ProductService {
      * <p>主图 AI 智能裁剪不在本事务内同步执行（避免长事务占库连接 + AI 慢/挂导致录入超时），
      * 而是收集主图信息后注册 afterCommit 回调，事务提交后异步投递到 taskExecutor 执行；
      * 事务回滚时裁剪不会执行，也不会产生孤儿裁剪文件。异步裁剪失败只记日志，主图保持原图。</p>
+     *
+     * <p>图片内容查重（2.5）：每张图写入 {@code content_hash}（SHA-256）；同内容图片已在库
+     * （未软删）时抛错拦截——手工/工厂录入每次都新建 RSPU，同图即重复建档，与 createEntry
+     * 同语义但不提供 force 跳过参数；同一请求内多图相同（用户重复选同一张图）仅保留首次
+     * 出现的图、静默跳过重登记，不拦截整单。</p>
      */
     private List<String> storeEntryImages(String rspuId, String variantId, List<MultipartFile> images) throws IOException {
         List<String> imageIds = new ArrayList<>();
@@ -400,6 +407,7 @@ public class ProductService {
             return imageIds;
         }
         List<String> storedObjectKeys = new ArrayList<>();
+        Set<String> seenHashes = new HashSet<>();
         // 主图裁剪所需信息：字节 + imageId + 对象键，事务提交后异步裁剪使用
         byte[] primaryBytes = null;
         String primaryImageId = null;
@@ -411,6 +419,20 @@ public class ProductService {
             // 本地磁盘存储的 store(MultipartFile) 内部走 transferTo 会移走 Tomcat 上传临时文件，
             // 之后再读内容会 NoSuchFileException；先一次性读入字节，存储与主图裁剪共用
             byte[] imageBytes = image.getBytes();
+            String contentHash = ContentHashes.sha256Hex(imageBytes);
+            // 同一请求内重复选择同一张图：保留首次出现的图，跳过重登记（首图永不会被跳过，主图口径不变）
+            if (contentHash != null && !seenHashes.add(contentHash)) {
+                log.info("同一请求内重复图片，跳过重登记，rspuId={}, filename={}", rspuId, image.getOriginalFilename());
+                continue;
+            }
+            // 全库查重（对齐 createEntry 语义，脱敏口径同 1.5）：拦截在存储之前，不产生孤儿文件
+            if (contentHash != null) {
+                ImageAssets duplicate = imageAssetsMapper.selectByContentHash(contentHash);
+                if (duplicate != null) {
+                    throw new BusinessException(
+                        buildEntryDuplicateMessageWithoutForce(image.getOriginalFilename(), duplicate));
+                }
+            }
             String imageId = IdGenerator.imageId();
             String objectKey = "images/" + imageId + "." + getExtension(image.getOriginalFilename());
             String storagePath = storageService.store(
@@ -428,6 +450,8 @@ public class ProductService {
             imageAsset.setAiProcessed(false);
             imageAsset.setFileSize((long) imageBytes.length);
             imageAsset.setFormat(getExtension(image.getOriginalFilename()));
+            // 内容哈希落库（2.5）：供录入查重与跨链路查重命中
+            imageAsset.setContentHash(contentHash);
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);
@@ -829,6 +853,24 @@ public class ProductService {
         }
         return "图片「" + filename + "」已录入过，对应产品：" + describeDuplicateProduct(duplicate)
             + "。如确认是不同产品，请使用「仍然导入」";
+    }
+
+    /**
+     * 手工/工厂录入的图片查重命中报错文案（2.5）。
+     *
+     * <p>与 {@link #buildDuplicateEntryMessage} 同脱敏口径，但手工/工厂录入接口不提供
+     * force 跳过参数，文案不含「仍然导入」指引，改为说明当前不支持强制跳过。</p>
+     *
+     * @param filename  本次上传的文件名（用户自己的文件，可保留）
+     * @param duplicate 哈希命中的图片资产
+     * @return 报错文案
+     */
+    private String buildEntryDuplicateMessageWithoutForce(String filename, ImageAssets duplicate) {
+        if (!SecurityOperatorContext.isPlatformStaff()) {
+            return "图片「" + filename + "」已录入过系统，请勿重复录入；如确属新品请联系平台管理员处理";
+        }
+        return "图片「" + filename + "」已录入过，对应产品：" + describeDuplicateProduct(duplicate)
+            + "。手工/工厂录入暂不支持强制跳过查重，请确认是否为重复录入";
     }
 
     /**

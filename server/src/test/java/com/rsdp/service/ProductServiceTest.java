@@ -10,6 +10,7 @@ import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.ContentHashes;
 import com.rsdp.util.ImageUploadValidator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -551,9 +552,113 @@ class ProductServiceTest {
         assertThat(imageCaptor.getValue().getPrimary()).isTrue();
         assertThat(imageCaptor.getValue().getImageType()).isEqualTo("white_bg");
         assertThat(imageCaptor.getValue().getVariantId()).isEqualTo("VAR-002");
+        // 2.5：手工/工厂录入图片写入 content_hash（图片字节的 SHA-256）
+        assertThat(imageCaptor.getValue().getContentHash())
+            .isEqualTo(ContentHashes.sha256Hex("fake-image".getBytes()));
         // 主图裁剪不在录入事务内同步调用 AI（无活动事务时直接走异步入口）
         verify(subjectCropService, never()).cropAndReplacePrimary(any(), any(), any(), any(), any());
         verify(subjectCropService, times(1)).cropAndReplacePrimaryAsync(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createManualEntry_duplicateImage_shouldReject() throws Exception {
+        // 2.5 查重拦截（平台员工 ADMIN 视角）：同 hash 图片已在库时拒绝，文案带产品定位信息
+        authenticateWithRoles("admin", "ADMIN");
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-DUP");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+        when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(duplicateImageAsset());
+        when(rspuMapper.selectById("RSPU-DUP")).thenReturn(duplicateRspu());
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+
+        assertThatThrownBy(() -> productService.createManualEntry(request, List.of(image)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("已录入过")
+            .hasMessageContaining("扶摇沙发")
+            .hasMessageContaining("FS-WJ-001-M")
+            // 手工/工厂录入无 force 参数，文案不含「仍然导入」指引
+            .hasMessageContaining("暂不支持强制跳过")
+            .hasMessageNotContaining("仍然导入");
+        // 拦截在图片存储与登记之前（RSPU/变体在同事务内会随异常回滚）
+        verify(storageService, never()).store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString());
+        verify(imageAssetsMapper, never()).insert(any(ImageAssets.class));
+    }
+
+    @Test
+    void createFactoryEntry_duplicateImage_forFactoryAdmin_shouldMaskDuplicateInfo() throws Exception {
+        // 2.5 查重拦截（非平台员工 FACTORY_ADMIN 视角）：报错脱敏，不含已有产品品名/编码
+        authenticateWithRoles("factory", "FACTORY_ADMIN");
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "sofa.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(userFactoryService.getFactoryCodesByUsername(anyString())).thenReturn(List.of("A004"));
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-FDUP");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+        when(imageAssetsMapper.selectByContentHash(anyString())).thenReturn(duplicateImageAsset());
+
+        com.rsdp.dto.request.FactoryProductEntryRequest request = new com.rsdp.dto.request.FactoryProductEntryRequest();
+        request.setFactoryCode("A004");
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("工厂标准版");
+        request.setVariantMaterialCode("WO");
+        request.setFactoryPrice(new java.math.BigDecimal("999.00"));
+
+        assertThatThrownBy(() -> productService.createFactoryEntry(request, List.of(image)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("已录入过系统")
+            .hasMessageContaining("请勿重复录入")
+            .hasMessageNotContaining("扶摇沙发")
+            .hasMessageNotContaining("FS-WJ-001-M")
+            .hasMessageNotContaining("RSPU-DUP");
+        // 脱敏分支不查询已有产品主档
+        verify(rspuMapper, never()).selectById(anyString());
+        verify(storageService, never()).store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString());
+        verify(imageAssetsMapper, never()).insert(any(ImageAssets.class));
+    }
+
+    @Test
+    void createManualEntry_sameImageTwiceInRequest_shouldRegisterOnce() throws Exception {
+        // 2.5 边界：同一请求内多图相同（用户重复选同一张图）——保留首次出现的图，静默跳过重登记，不拦截整单
+        MockMultipartFile first = new MockMultipartFile(
+            "image", "chair.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        MockMultipartFile sameAgain = new MockMultipartFile(
+            "image", "chair-copy.jpg", "image/jpeg", "fake-image".getBytes()
+        );
+        when(dictService.listByType("category")).thenReturn(categoryDicts());
+        when(storageService.store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString())).thenReturn("images/IMG-MANUAL.jpg");
+        com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
+        variantResponse.setVariantId("VAR-005");
+        when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
+
+        com.rsdp.dto.request.ManualProductEntryRequest request = new com.rsdp.dto.request.ManualProductEntryRequest();
+        request.setCategoryCode("FS");
+        request.setPositioningLabel("MC");
+        request.setProductLevel("A");
+        request.setVariantDisplayName("标准版");
+        request.setVariantMaterialCode("WO");
+
+        Map<String, Object> result = productService.createManualEntry(request, List.of(first, sameAgain));
+
+        // 只登记一张（首图为主图），重复图不触发查重也不入库
+        assertThat(result.get("imageIds")).asList().hasSize(1);
+        verify(imageAssetsMapper, times(1)).insert(any(ImageAssets.class));
+        verify(storageService, times(1)).store(any(ByteArrayInputStream.class), anyString(), anyLong(), anyString());
+        verify(imageAssetsMapper, times(1)).selectByContentHash(anyString());
     }
 
     @Test

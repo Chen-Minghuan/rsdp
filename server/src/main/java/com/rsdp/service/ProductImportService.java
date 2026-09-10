@@ -20,6 +20,7 @@ import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.util.CategoryPaths;
+import com.rsdp.util.ContentHashes;
 import com.rsdp.util.ExcelFileValidator;
 import com.rsdp.util.ImageUrlValidator;
 import com.rsdp.mapper.RspuMapper;
@@ -796,12 +797,33 @@ public class ProductImportService {
         if (images == null || images.isEmpty()) {
             return;
         }
-        // 更新模式追加图片时，若该 RSPU 已有主图，新图一律不作为主图，避免同一 RSPU 出现多条主图
-        boolean hasExistingPrimary = imageAssetsMapper.selectCount(
-            new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId).eq("is_primary", true)) > 0;
+        // 按 RSPU 预取已有图片（@TableLogic 自动过滤软删行），一次查询派生两件事，
+        // 对齐 Excel AI 导入 registerImages 的范式：
+        // ①已有主图时新图一律不作为主图，避免同一 RSPU 出现多条主图；
+        // ②按 content_hash 去重：同 RSPU 同内容图片跳过重登记（跳过存储与登记，不产生孤儿文件），
+        //   更新模式重导同一模板不再累积图片副本。Excel 导入是批量场景，不做全库查重拦截——
+        //   不同产品用同一张图是合理场景，仅按 RSPU 去重。
+        List<ImageAssets> existingImages = imageAssetsMapper.selectList(
+            new QueryWrapper<ImageAssets>().eq("rspu_id", rspuId));
+        boolean hasExistingPrimary = false;
+        Set<String> seenHashes = new HashSet<>();
+        for (ImageAssets existing : existingImages) {
+            if (Boolean.TRUE.equals(existing.getPrimary())) {
+                hasExistingPrimary = true;
+            }
+            if (StringUtils.hasText(existing.getContentHash())) {
+                seenHashes.add(existing.getContentHash());
+            }
+        }
         boolean hasPrimary = images.stream().anyMatch(DownloadedImage::primary);
         for (int i = 0; i < images.size(); i++) {
             DownloadedImage downloaded = images.get(i);
+            // 内容哈希（2.5）：落库 + 同 RSPU 查重跳过重登记；同批内重复图也一并去重
+            String contentHash = ContentHashes.sha256Hex(downloaded.bytes);
+            if (contentHash != null && !seenHashes.add(contentHash)) {
+                log.info("同 RSPU 同内容图片已存在，跳过重复登记，rspuId={}, url={}", rspuId, downloaded.url);
+                continue;
+            }
             String imageId = IdGenerator.imageId();
             String extension = downloaded.format;
             String objectKey = "images/" + imageId + "." + extension;
@@ -830,6 +852,7 @@ public class ProductImportService {
             imageAsset.setAiProcessed(false);
             imageAsset.setFileSize((long) downloaded.bytes.length);
             imageAsset.setFormat(extension);
+            imageAsset.setContentHash(contentHash);
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);

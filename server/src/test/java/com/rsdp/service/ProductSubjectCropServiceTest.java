@@ -4,6 +4,7 @@ import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.ContentHashes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -203,6 +204,8 @@ class ProductSubjectCropServiceTest {
         assertThat(original.getPrimary()).isFalse();
         assertThat(original.getWidth()).isEqualTo(400);
         assertThat(original.getHeight()).isEqualTo(400);
+        // 2.5：original 资产 content_hash 写原图字节的真实哈希（本例主图行 hash 为 null 的历史数据场景）
+        assertThat(original.getContentHash()).isEqualTo(ContentHashes.sha256Hex(imageBytes));
         // 主图改指裁剪图并回填元数据
         assertThat(primary.getStoragePath()).isEqualTo("images/IMG-1-cropped.jpg");
         assertThat(primary.getFormat()).isEqualTo("jpg");
@@ -286,6 +289,31 @@ class ProductSubjectCropServiceTest {
         assertThat(primary.getStoragePath()).isNotEqualTo(originalCaptor.getValue().getStoragePath());
         // 原图文件保留不删
         verify(storageService, never()).delete(anyString());
+    }
+
+    @Test
+    void cropAndReplacePrimary_originalAssetHash_shouldBeOriginalBytesHashNotCopiedFromPrimary() throws Exception {
+        // 2.5：original 资产 hash 取原图字节真实哈希，而非复制主图行的 content_hash
+        // （主图行改写后指向裁剪图，其 hash 口径为录入时的原图哈希；此处用异值验证不复制）
+        byte[] imageBytes = buildTestImage();
+        when(visionService.detectProductSubject(any(InputStream.class)))
+            .thenReturn(new ProductBoundingBox(0.25, 0.25, 0.5, 0.5));
+        ImageAssets primary = new ImageAssets();
+        primary.setImageId("IMG-1");
+        primary.setRspuId("RSPU-1");
+        primary.setStoragePath("images/IMG-1.png");
+        primary.setContentHash("PRIMARY-ROW-HASH");
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(primary);
+
+        Optional<byte[]> result = cropService.cropAndReplacePrimary(
+            imageBytes, "RSPU-1", null, "IMG-1", "images/IMG-1.png");
+
+        assertThat(result).isPresent();
+        ArgumentCaptor<ImageAssets> originalCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper).insert(originalCaptor.capture());
+        assertThat(originalCaptor.getValue().getContentHash())
+            .isEqualTo(ContentHashes.sha256Hex(imageBytes))
+            .isNotEqualTo("PRIMARY-ROW-HASH");
     }
 
     @Test
