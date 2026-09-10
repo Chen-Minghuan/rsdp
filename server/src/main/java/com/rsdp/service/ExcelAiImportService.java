@@ -400,6 +400,10 @@ public class ExcelAiImportService {
             throw new BusinessException("批次正在导入中，请稍后重试: " + batch.getStatus());
         }
         batch.setStatus("importing");
+        // 批次状态机审计（P3-8）：抢占 importing 记一条状态变更
+        auditLogService.logUpdate("excel_import_batch", batch.getBatchId(),
+            Map.of("status", previousResult.status()), Map.of("status", "importing"),
+            SecurityOperatorContext.currentUsername());
         try {
             return doConfirmImport(batch, request, mapping);
         } catch (RuntimeException | Error e) {
@@ -432,6 +436,10 @@ public class ExcelAiImportService {
                 batchMapper.resetToPending(batch.getBatchId());
                 batch.setStatus("pending");
             }
+            // 批次状态机审计（P3-8）：导入异常复位记一条状态变更（importing → 恢复后状态）
+            auditLogService.logUpdate("excel_import_batch", batch.getBatchId(),
+                Map.of("status", "importing"), Map.of("status", batch.getStatus()),
+                SecurityOperatorContext.currentUsername());
         } catch (Exception restoreError) {
             log.error("恢复导入批次状态失败，batchId={}", batch.getBatchId(), restoreError);
         }
@@ -3394,6 +3402,7 @@ public class ExcelAiImportService {
         // 写回前校验目标码是合法 category 字典码，非法值跳过不写，避免污染别名库（P2-6）
         List<CategoryDict> categories = safeList(dictService.listByType("category"));
         String operator = SecurityOperatorContext.currentUsername();
+        Map<String, String> learned = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, String> entry : categoryMapping.entrySet()) {
             if (!StringUtils.hasText(entry.getKey()) || !StringUtils.hasText(entry.getValue())) {
                 continue;
@@ -3405,9 +3414,15 @@ public class ExcelAiImportService {
             }
             try {
                 dictAliasService.saveAlias("category", entry.getKey().trim(), code, operator);
+                learned.put(entry.getKey().trim(), code);
             } catch (Exception e) {
                 log.warn("写回品类别名失败: {} -> {}", entry.getKey(), entry.getValue(), e);
             }
+        }
+        // 批次级汇总审计（P3-7）：一次确认导入学习的品类别名记一条，不逐条刷量
+        if (!learned.isEmpty()) {
+            auditLogService.logCreate("dict_alias", "category",
+                Map.of("learnedCount", learned.size(), "mappings", learned), operator);
         }
     }
 

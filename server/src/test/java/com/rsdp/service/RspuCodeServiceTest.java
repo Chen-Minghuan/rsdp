@@ -32,6 +32,9 @@ class RspuCodeServiceTest {
     @Mock
     private RspuMapper rspuMapper;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private RspuCodeService rspuCodeService;
 
@@ -132,6 +135,28 @@ class RspuCodeServiceTest {
 
         assertThat(code).isEqualTo("FS-MC-005-M");
         assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-005-M");
+    }
+
+    @Test
+    void assignCode_shouldWriteAuditLogWithOperator() {
+        // P1-3：发号改写 rspu_code 记 logUpdate 审计（旧值 null → 新编码），操作人显式传入
+        stubDicts();
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setRspuCode(null);
+        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
+        when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(5L);
+
+        String code = rspuCodeService.assignCode("RSPU-001", "FS", "MC", "M", "editor01");
+
+        assertThat(code).isEqualTo("FS-MC-005-M");
+        org.mockito.ArgumentCaptor<Object> oldCaptor = org.mockito.ArgumentCaptor.forClass(Object.class);
+        org.mockito.ArgumentCaptor<Object> newCaptor = org.mockito.ArgumentCaptor.forClass(Object.class);
+        org.mockito.Mockito.verify(auditLogService).logUpdate(
+            org.mockito.ArgumentMatchers.eq("rspu_master"), org.mockito.ArgumentMatchers.eq("RSPU-001"),
+            oldCaptor.capture(), newCaptor.capture(), org.mockito.ArgumentMatchers.eq("editor01"));
+        assertThat(((RspuMaster) oldCaptor.getValue()).getRspuCode()).isNull();
+        assertThat(((RspuMaster) newCaptor.getValue()).getRspuCode()).isEqualTo("FS-MC-005-M");
     }
 
     @Test

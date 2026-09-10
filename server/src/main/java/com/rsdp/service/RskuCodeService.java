@@ -7,6 +7,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.RskuCodeMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.security.SecurityOperatorContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -32,6 +33,7 @@ public class RskuCodeService {
     private final RskuCodeMapper rskuCodeMapper;
     private final RspuMapper rspuMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
+    private final AuditLogService auditLogService;
 
     /**
      * 生成下一个 RSKU 业务编码。
@@ -79,6 +81,25 @@ public class RskuCodeService {
      */
     @Transactional(noRollbackFor = BusinessException.class)
     public String assignCode(String rskuId, String rspuId, String factoryCode, String materialCode) {
+        return assignCode(rskuId, rspuId, factoryCode, materialCode, null);
+    }
+
+    /**
+     * 为指定 RSKU 生成并写入业务编码（显式指定审计操作人）。
+     *
+     * <p>异步链路（AI 补码联动）由调用方透传任务创建人；operator 为空时回落
+     * {@link SecurityOperatorContext#currentUsername()}（同步链路现状）。
+     * 发号改写 rsku_code 记审计（P1-3），新旧值：null → 编码。</p>
+     *
+     * @param rskuId       RSKU ID
+     * @param rspuId       所属 RSPU ID
+     * @param factoryCode  工厂代码
+     * @param materialCode 材质码
+     * @param operator     审计操作人（可空，空时回落当前登录用户）
+     * @return 生成的业务编码
+     */
+    @Transactional(noRollbackFor = BusinessException.class)
+    public String assignCode(String rskuId, String rspuId, String factoryCode, String materialCode, String operator) {
         if (!StringUtils.hasText(rskuId)) {
             throw new BusinessException("RSKU ID 不能为空");
         }
@@ -100,6 +121,9 @@ public class RskuCodeService {
             // 调用方尚未持久化，仅返回编码，由调用方写入
             return code;
         }
+        RskuSupply oldSnapshot = new RskuSupply();
+        oldSnapshot.setRskuId(rsku.getRskuId());
+        oldSnapshot.setRskuCode(rsku.getRskuCode());
         rsku.setRskuCode(code);
         rsku.setUpdatedAt(java.time.LocalDateTime.now());
         try {
@@ -110,7 +134,18 @@ public class RskuCodeService {
             rsku.setRskuCode(code);
             rskuSupplyMapper.updateById(rsku);
         }
+        auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, rsku, resolveOperator(operator));
         return code;
+    }
+
+    /**
+     * 解析审计操作人：显式传入优先，为空回落当前登录用户。
+     *
+     * @param operator 显式操作人（可空）
+     * @return 有效操作人
+     */
+    private String resolveOperator(String operator) {
+        return StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername();
     }
 
     /**
@@ -150,13 +185,25 @@ public class RskuCodeService {
      */
     @Transactional(noRollbackFor = BusinessException.class)
     public int backfillCodesByRspu(String rspuId) {
+        return backfillCodesByRspu(rspuId, null);
+    }
+
+    /**
+     * 为指定 RSPU 下所有未软删且 rsku_code 为空的 RSKU 补发业务编码（显式指定审计操作人）。
+     *
+     * @param rspuId   RSPU ID
+     * @param operator 审计操作人（可空，空时回落当前登录用户）
+     * @return 实际补发成功的 RSKU 数量
+     */
+    @Transactional(noRollbackFor = BusinessException.class)
+    public int backfillCodesByRspu(String rspuId, String operator) {
         List<RskuSupply> pending = rskuSupplyMapper.selectList(new QueryWrapper<RskuSupply>()
             .eq("rspu_id", rspuId)
             .isNull("rsku_code"));
         int backfilled = 0;
         for (RskuSupply rsku : pending) {
             try {
-                assignCode(rsku.getRskuId(), rspuId, rsku.getFactoryCode(), rsku.getMaterialCode());
+                assignCode(rsku.getRskuId(), rspuId, rsku.getFactoryCode(), rsku.getMaterialCode(), operator);
                 backfilled++;
             } catch (BusinessException e) {
                 // 单条失败不阻断：记录告警后继续补发其余记录

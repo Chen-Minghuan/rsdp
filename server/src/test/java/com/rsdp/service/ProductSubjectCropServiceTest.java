@@ -210,6 +210,12 @@ class ProductSubjectCropServiceTest {
         // 内容版本递增（原值 null 按 1 处理 → 2），防旧向量回写
         assertThat(primary.getContentRevision()).isEqualTo(2L);
         verify(imageAssetsMapper).updateById(primary);
+        // P1-4：主图改写有 logUpdate 审计，旧快照保留原 storage_path
+        ArgumentCaptor<ImageAssets> oldCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(auditLogService).logUpdate(eq("image_assets"), eq("IMG-1"),
+            oldCaptor.capture(), eq(primary), any());
+        assertThat(oldCaptor.getValue().getStoragePath()).isEqualTo("images/IMG-1.png");
+        assertThat(oldCaptor.getValue().getContentRevision()).isNull();
         // 原图文件不删除
         verify(storageService, never()).delete(anyString());
     }

@@ -431,8 +431,8 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
         when(rspuCodeService.inferSizeCode(any())).thenReturn("M");
-        when(rspuCodeService.assignCode("RSPU-TEST01", "FS", "MC", "M")).thenReturn("FS-MC-001-M");
-        when(rskuCodeService.backfillCodesByRspu("RSPU-TEST01")).thenReturn(2);
+        when(rspuCodeService.assignCode(eq("RSPU-TEST01"), eq("FS"), eq("MC"), eq("M"), any())).thenReturn("FS-MC-001-M");
+        when(rskuCodeService.backfillCodesByRspu(eq("RSPU-TEST01"), any())).thenReturn(2);
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
@@ -443,9 +443,9 @@ class AiRecognitionPersistenceServiceTest {
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
         assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-001-M");
         assertThat(rspu.getReviewStatus()).isNotEqualTo("存疑");
-        verify(rspuCodeService).assignCode("RSPU-TEST01", "FS", "MC", "M");
+        verify(rspuCodeService).assignCode(eq("RSPU-TEST01"), eq("FS"), eq("MC"), eq("M"), any());
         // RSPU 补码成功后联动补发该 RSPU 下无码 RSKU 的业务编码
-        verify(rskuCodeService).backfillCodesByRspu("RSPU-TEST01");
+        verify(rskuCodeService).backfillCodesByRspu(eq("RSPU-TEST01"), any());
     }
 
     @Test
@@ -465,7 +465,7 @@ class AiRecognitionPersistenceServiceTest {
         when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
         when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
         when(rspuCodeService.inferSizeCode(any())).thenReturn("M");
-        when(rspuCodeService.assignCode(any(), any(), any(), any()))
+        when(rspuCodeService.assignCode(any(), any(), any(), any(), any()))
             .thenThrow(new com.rsdp.exception.BusinessException("风格/职级码不存在: MC"));
 
         AiLabels labels = new AiLabels();
@@ -482,7 +482,7 @@ class AiRecognitionPersistenceServiceTest {
         verify(rspuMapper).updateById(rspu);
         verify(aiRecognitionMapper).insert(any(com.rsdp.entity.AiRecognition.class));
         // RSPU 补码失败，不触发 RSKU 联动补发
-        verify(rskuCodeService, never()).backfillCodesByRspu(any());
+        verify(rskuCodeService, never()).backfillCodesByRspu(any(), any());
     }
 
     @Test
@@ -507,7 +507,7 @@ class AiRecognitionPersistenceServiceTest {
         variant.setDimensions("{\"w\":605,\"d\":590,\"h\":810,\"unit\":\"mm\"}");
         when(rspuVariantMapper.selectList(any())).thenReturn(List.of(variant));
         when(rspuCodeService.inferSizeCodeFromMm(810L)).thenReturn("M");
-        when(rspuCodeService.assignCode("RSPU-TEST01", "FS", "MC", "M")).thenReturn("FS-MC-001-M");
+        when(rspuCodeService.assignCode(eq("RSPU-TEST01"), eq("FS"), eq("MC"), eq("M"), any())).thenReturn("FS-MC-001-M");
 
         AiLabels labels = new AiLabels();
         labels.setStyle("中古风");
@@ -548,6 +548,96 @@ class AiRecognitionPersistenceServiceTest {
         assertThat(rspu.getRspuCode()).isNull();
         assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
         assertThat(rspu.getReviewComment()).contains("无法推断尺寸码");
-        verify(rspuCodeService, never()).assignCode(any(), any(), any(), any());
+        verify(rspuCodeService, never()).assignCode(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void saveSuccess_shouldUseExplicitOperatorForAudit() {
+        // P0-1：异步链路显式传入任务创建人，审计操作人不再是 SecurityContext 里的用户/anonymous
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, "editor01");
+
+        // SecurityContext 中是 admin，但审计必须用显式传入的 editor01
+        verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-TEST01"), any(), any(), eq("editor01"));
+    }
+
+    @Test
+    void saveSuccess_shouldFallbackToSecurityContextWhenOperatorMissing() {
+        // 旧签名（operator=null）：回落 SecurityOperatorContext.currentUsername()（测试上下文为 admin）
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100);
+
+        verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-TEST01"), any(), any(), eq("admin"));
+    }
+
+    @Test
+    void saveFailure_shouldUseExplicitOperatorForReviewAudit() {
+        // P0-1：识别失败置存疑的 logReview 同样使用显式操作人
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setStatus("processing");
+        rspu.setReviewStatus("待复核");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        persistenceService.saveFailure("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", "AI 调用超时", "editor01");
+
+        verify(auditLogService).logReview(eq("rspu_master"), eq("RSPU-TEST01"), any(), any(), eq("editor01"));
+    }
+
+    @Test
+    void saveSuccess_shouldWriteSummaryAuditForStyleAndSceneAssociations() {
+        // P2-5：AI 补建风格/场景关联时，每 RSPU 记一条汇总审计（detail 为码集合）
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuStyleMapper.selectCount(any())).thenReturn(0L);
+        when(rspuSceneMapper.selectCount(any())).thenReturn(0L);
+
+        when(dictResolverService.resolveCodeByName("style", "中古风")).thenReturn("MC");
+        when(dictResolverService.resolveCodesByNames("style", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("scene", List.of("客厅"))).thenReturn(List.of("LIVING"));
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setSceneTags(List.of("客厅"));
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100, "editor01");
+
+        verify(auditLogService).logUpdate(eq("rspu_style"), eq("RSPU-TEST01"), any(), any(), eq("editor01"));
+        verify(auditLogService).logUpdate(eq("rspu_scene"), eq("RSPU-TEST01"), any(), any(), eq("editor01"));
     }
 }

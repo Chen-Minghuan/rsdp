@@ -67,6 +67,30 @@ public class AiRecognitionPersistenceService {
     public String saveSuccess(String taskId, String rspuId, String imageId,
                               String recognitionId, String modelName,
                               AiLabels labels, int processingTime) {
+        return saveSuccess(taskId, rspuId, imageId, recognitionId, modelName, labels, processingTime, null);
+    }
+
+    /**
+     * 在独立事务中保存 AI 识别成功结果（显式指定审计操作人）。
+     *
+     * <p>异步线程（rsdp-async-*）无 SecurityContext，调用方（AsyncTaskProcessor）从
+     * async_task.created_by 读出任务创建人显式传入；operator 为空时回落
+     * {@link SecurityOperatorContext#currentUsername()}（同步调用链现状）。</p>
+     *
+     * @param taskId         任务 ID
+     * @param rspuId         RSPU ID
+     * @param imageId        图片 ID
+     * @param recognitionId  识别记录 ID
+     * @param modelName      模型名称
+     * @param labels         AI 识别标签
+     * @param processingTime 处理耗时（毫秒）
+     * @param operator       审计操作人（可空，空时回落当前登录用户）
+     * @return 最终生效的产品名称（OCR 品名或品类回退名；无则 null）
+     */
+    @Transactional
+    public String saveSuccess(String taskId, String rspuId, String imageId,
+                              String recognitionId, String modelName,
+                              AiLabels labels, int processingTime, String operator) {
         String styleCode = dictResolverService.resolveCodeByName("style", labels.getStyle());
         List<String> secondaryStyleCodes = dictResolverService.resolveCodesByNames("style", labels.getSecondaryStyles());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
@@ -80,9 +104,9 @@ public class AiRecognitionPersistenceService {
         List<String> materialCodes = dictResolverService.resolveCodesByNames("material", materialCandidates);
         List<String> fabricCodes = dictResolverService.resolveCodesByNames("fabric", labels.getFabricTags());
 
-        String productName = updateRspu(rspuId, labels, styleCode, materialCodes, fabricCodes, sceneCodes, modelName);
-        refreshStyleAssociations(rspuId, styleCode, secondaryStyleCodes);
-        refreshSceneAssociations(rspuId, sceneCodes);
+        String productName = updateRspu(rspuId, labels, styleCode, materialCodes, fabricCodes, sceneCodes, modelName, operator);
+        refreshStyleAssociations(rspuId, styleCode, secondaryStyleCodes, operator);
+        refreshSceneAssociations(rspuId, sceneCodes, operator);
         markImageProcessed(imageId);
         insertRecognitionRecord(taskId, rspuId, imageId, recognitionId, modelName, labels, processingTime, "success", null);
         return productName;
@@ -101,13 +125,41 @@ public class AiRecognitionPersistenceService {
     @Transactional
     public void saveFailure(String taskId, String rspuId, String imageId,
                             String recognitionId, String modelName, String errorMessage) {
+        saveFailure(taskId, rspuId, imageId, recognitionId, modelName, errorMessage, null);
+    }
+
+    /**
+     * 在独立事务中保存 AI 识别失败结果（显式指定审计操作人，语义同
+     * {@link #saveSuccess(String, String, String, String, String, AiLabels, int, String)}）。
+     *
+     * @param taskId        任务 ID
+     * @param rspuId        RSPU ID
+     * @param imageId       图片 ID
+     * @param recognitionId 识别记录 ID
+     * @param modelName     模型名称
+     * @param errorMessage  错误信息
+     * @param operator      审计操作人（可空，空时回落当前登录用户）
+     */
+    @Transactional
+    public void saveFailure(String taskId, String rspuId, String imageId,
+                            String recognitionId, String modelName, String errorMessage, String operator) {
         insertRecognitionRecord(taskId, rspuId, imageId, recognitionId, modelName, null, 0, "failed", errorMessage);
-        markRspuAsDoubtful(rspuId, modelName);
+        markRspuAsDoubtful(rspuId, modelName, operator);
+    }
+
+    /**
+     * 解析审计操作人：显式传入优先，为空回落当前登录用户（同步链路现状）。
+     *
+     * @param operator 显式操作人（可空）
+     * @return 有效操作人
+     */
+    private String resolveOperator(String operator) {
+        return StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername();
     }
 
     private String updateRspu(String rspuId, AiLabels labels, String styleCode,
                             List<String> materialCodes, List<String> fabricCodes, List<String> sceneCodes,
-                            String modelName) {
+                            String modelName, String operator) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
             log.warn("保存识别结果时 RSPU 不存在，rspuId={}", rspuId);
@@ -161,11 +213,11 @@ public class AiRecognitionPersistenceService {
         rspu.setStatus("active");
 
         // AI 识别后尝试生成 RSPU 业务编码；无法推断尺寸或风格时标记为存疑
-        assignRspuCodeIfPossible(rspu, labels, styleCode);
+        assignRspuCodeIfPossible(rspu, labels, styleCode, operator);
 
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
-        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, resolveOperator(operator));
         return rspu.getProductName();
     }
 
@@ -217,7 +269,7 @@ public class AiRecognitionPersistenceService {
      * 推断不出尺寸/风格按既有「存疑」语义留空不阻断。assignCode 本身幂等
      * （已有 code 直接返回），发号失败（含非业务异常）捕获降级，不影响识别主流程。</p>
      */
-    private void assignRspuCodeIfPossible(RspuMaster rspu, AiLabels labels, String styleCode) {
+    private void assignRspuCodeIfPossible(RspuMaster rspu, AiLabels labels, String styleCode, String operator) {
         if (StringUtils.hasText(rspu.getRspuCode())) {
             return;
         }
@@ -243,12 +295,12 @@ public class AiRecognitionPersistenceService {
         }
         try {
             String code = rspuCodeService.assignCode(rspu.getRspuId(), categoryCode,
-                effectiveStyleCode, inferredSizeCode);
+                effectiveStyleCode, inferredSizeCode, operator);
             // assignCode 内部已落库；同步到当前实体，避免后续 updateById 用旧快照覆盖
             rspu.setRspuCode(code);
             log.info("AI 识别补全风格后补发 RSPU 业务编码成功，rspuId={}，rspuCode={}", rspu.getRspuId(), code);
             // RSPU 发号成功，联动补发此前因无 rspu_code 而"无码创建"的 RSKU 业务编码
-            int backfilled = rskuCodeService.backfillCodesByRspu(rspu.getRspuId());
+            int backfilled = rskuCodeService.backfillCodesByRspu(rspu.getRspuId(), operator);
             if (backfilled > 0) {
                 log.info("RSPU 补码后联动补发 RSKU 业务编码，rspuId={}，补发数量={}", rspu.getRspuId(), backfilled);
             }
@@ -356,7 +408,7 @@ public class AiRecognitionPersistenceService {
      * <p>识别失败 = 识别未完成，产品应留在 processing 避免进入在售列表/检索/官网
      * （均只消费 active），直到重新识别成功（翻 active）或人工复核确认（翻 active）。</p>
      */
-    private void markRspuAsDoubtful(String rspuId, String modelName) {
+    private void markRspuAsDoubtful(String rspuId, String modelName, String operator) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
             log.warn("标记 RSPU 存疑时记录不存在，rspuId={}", rspuId);
@@ -368,10 +420,10 @@ public class AiRecognitionPersistenceService {
         rspu.setSourceAgentVersion(modelName);
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
-        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, resolveOperator(operator));
     }
 
-    private void refreshStyleAssociations(String rspuId, String styleCode, List<String> secondaryStyleCodes) {
+    private void refreshStyleAssociations(String rspuId, String styleCode, List<String> secondaryStyleCodes, String operator) {
         // 人工/Excel 已明确提供风格关联时不覆盖，AI 只补空缺
         Long existing = rspuStyleMapper.selectCount(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
         if (existing != null && existing > 0) {
@@ -380,6 +432,7 @@ public class AiRecognitionPersistenceService {
         if (styleCode == null || styleCode.isBlank()) {
             return;
         }
+        List<String> insertedCodes = new java.util.ArrayList<>();
         RspuStyle style = new RspuStyle();
         style.setRspuId(rspuId);
         style.setDictType("style");
@@ -387,27 +440,32 @@ public class AiRecognitionPersistenceService {
         style.setIsPrimary(true);
         style.setCreatedAt(LocalDateTime.now());
         rspuStyleMapper.insert(style);
+        insertedCodes.add(styleCode);
         // 备选风格（AI 识别输出，去重且不与主风格重复）
-        if (secondaryStyleCodes == null) {
-            return;
-        }
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        seen.add(styleCode);
-        for (String secondaryCode : secondaryStyleCodes) {
-            if (secondaryCode == null || secondaryCode.isBlank() || !seen.add(secondaryCode)) {
-                continue;
+        if (secondaryStyleCodes != null) {
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            seen.add(styleCode);
+            for (String secondaryCode : secondaryStyleCodes) {
+                if (secondaryCode == null || secondaryCode.isBlank() || !seen.add(secondaryCode)) {
+                    continue;
+                }
+                RspuStyle secondary = new RspuStyle();
+                secondary.setRspuId(rspuId);
+                secondary.setDictType("style");
+                secondary.setStyleCode(secondaryCode);
+                secondary.setIsPrimary(false);
+                secondary.setCreatedAt(LocalDateTime.now());
+                rspuStyleMapper.insert(secondary);
+                insertedCodes.add(secondaryCode);
             }
-            RspuStyle secondary = new RspuStyle();
-            secondary.setRspuId(rspuId);
-            secondary.setDictType("style");
-            secondary.setStyleCode(secondaryCode);
-            secondary.setIsPrimary(false);
-            secondary.setCreatedAt(LocalDateTime.now());
-            rspuStyleMapper.insert(secondary);
         }
+        // 汇总审计（P2-5）：每 RSPU 一条，detail 记风格码前后集合（AI 只补空缺，旧集合恒为空）
+        auditLogService.logUpdate("rspu_style", rspuId,
+            java.util.Map.of("styleCodes", List.of()), java.util.Map.of("styleCodes", insertedCodes),
+            resolveOperator(operator));
     }
 
-    private void refreshSceneAssociations(String rspuId, List<String> sceneCodes) {
+    private void refreshSceneAssociations(String rspuId, List<String> sceneCodes, String operator) {
         // 人工/Excel 已明确提供场景关联时不覆盖，AI 只补空缺
         Long existing = rspuSceneMapper.selectCount(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
         if (existing != null && existing > 0) {
@@ -416,6 +474,7 @@ public class AiRecognitionPersistenceService {
         if (sceneCodes == null || sceneCodes.isEmpty()) {
             return;
         }
+        List<String> insertedCodes = new java.util.ArrayList<>();
         for (String sceneCode : sceneCodes) {
             RspuScene scene = new RspuScene();
             scene.setRspuId(rspuId);
@@ -423,7 +482,12 @@ public class AiRecognitionPersistenceService {
             scene.setSceneCode(sceneCode);
             scene.setCreatedAt(LocalDateTime.now());
             rspuSceneMapper.insert(scene);
+            insertedCodes.add(sceneCode);
         }
+        // 汇总审计（P2-5）：每 RSPU 一条，detail 记场景码前后集合（AI 只补空缺，旧集合恒为空）
+        auditLogService.logUpdate("rspu_scene", rspuId,
+            java.util.Map.of("sceneCodes", List.of()), java.util.Map.of("sceneCodes", insertedCodes),
+            resolveOperator(operator));
     }
 
     private void markImageProcessed(String imageId) {

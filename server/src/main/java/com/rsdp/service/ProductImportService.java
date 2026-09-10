@@ -636,11 +636,19 @@ public class ProductImportService {
         if (!StringUtils.hasText(positioningLabel)) {
             return;
         }
+        // 汇总审计（P2-5）：删+重建前捕获旧风格码集合，每 RSPU 一条审计（不逐行刷量）
+        List<String> oldCodes = rspuStyleMapper.selectList(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId))
+            .stream().map(RspuStyle::getStyleCode).toList();
         rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        List<String> newCodes = new ArrayList<>();
         String code = normalizeDictCode(positioningLabel, styles);
         if (code != null) {
             insertStyle(rspuId, code, true);
+            newCodes.add(code);
         }
+        auditLogService.logUpdate("rspu_style", rspuId,
+            Map.of("styleCodes", oldCodes), Map.of("styleCodes", newCodes),
+            SecurityOperatorContext.currentUsername());
     }
 
     private void insertStyle(String rspuId, String styleCode, boolean primary) {
@@ -676,7 +684,15 @@ public class ProductImportService {
         if (sceneCodes == null || sceneCodes.isEmpty()) {
             return;
         }
+        // 汇总审计（P2-5）：删+重建前捕获旧场景码集合，每 RSPU 一条审计（不逐行刷量）
+        List<String> oldCodes = rspuSceneMapper.selectList(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId))
+            .stream().map(RspuScene::getSceneCode).toList();
         saveScenes(rspuId, sceneCodes);
+        List<String> newCodes = sceneCodes.stream()
+            .filter(StringUtils::hasText).map(String::trim).toList();
+        auditLogService.logUpdate("rspu_scene", rspuId,
+            Map.of("sceneCodes", oldCodes), Map.of("sceneCodes", newCodes),
+            SecurityOperatorContext.currentUsername());
     }
 
     private boolean shouldCreateVariant(ProductImportRow row) {
@@ -1035,12 +1051,16 @@ public class ProductImportService {
         copy.setCategoryCode(source.getCategoryCode());
         copy.setCategoryPath(source.getCategoryPath());
         copy.setPositioningLabel(source.getPositioningLabel());
+        copy.setProductName(source.getProductName());
+        copy.setDescription(source.getDescription());
+        copy.setRetailPrice(source.getRetailPrice());
         copy.setSixDimTags(source.getSixDimTags());
         copy.setStyleVector(source.getStyleVector());
         copy.setColorPrimaryName(source.getColorPrimaryName());
         copy.setColorPrimaryHsv(source.getColorPrimaryHsv());
         copy.setColorSecondary(source.getColorSecondary());
         copy.setMaterialTags(source.getMaterialTags());
+        copy.setFabricTags(source.getFabricTags());
         copy.setSceneTags(source.getSceneTags());
         copy.setReferencePriceBand(source.getReferencePriceBand());
         copy.setProductLevel(source.getProductLevel());

@@ -206,6 +206,17 @@ public class ProductSubjectCropService {
             }
 
             // 主图改指裁剪图并回填元数据
+            // 审计旧快照（P1-4）：主图改写（storage_path/format/file_size 等）此前无审计。
+            // 操作人取当前上下文；异步链路（rsdp-async-* 线程）无 SecurityContext 时回落 anonymous，
+            // 与既有 image_assets 审计口径一致
+            ImageAssets oldSnapshot = new ImageAssets();
+            oldSnapshot.setImageId(primary.getImageId());
+            oldSnapshot.setStoragePath(primary.getStoragePath());
+            oldSnapshot.setFormat(primary.getFormat());
+            oldSnapshot.setFileSize(primary.getFileSize());
+            oldSnapshot.setWidth(primary.getWidth());
+            oldSnapshot.setHeight(primary.getHeight());
+            oldSnapshot.setContentRevision(primary.getContentRevision());
             primary.setStoragePath(croppedKey);
             primary.setFormat("jpg");
             primary.setFileSize((long) cropped.length);
@@ -213,6 +224,7 @@ public class ProductSubjectCropService {
             // 内容版本递增：主图内容已变更，防旧向量（基于裁剪前内容编码）回写覆盖
             primary.setContentRevision(primary.getContentRevision() == null ? 2L : primary.getContentRevision() + 1);
             imageAssetsMapper.updateById(primary);
+            auditLogService.logUpdate("image_assets", primaryImageId, oldSnapshot, primary, operator);
 
             log.info("主图已替换为 AI 裁剪图，imageId={}，rspuId={}", primaryImageId, rspuId);
             return Optional.of(cropped);

@@ -299,6 +299,42 @@ class ProductImportServiceTest {
     }
 
     @Test
+    void importProducts_updateModeAuditSnapshot_shouldContainProductNameDescriptionRetailPriceFabricTags() {
+        // P2-6：审计旧快照必须包含 buildRspuFromRow 更新模式会改的
+        // productName / description / retailPrice / fabricTags 四个字段
+        ProductImportRow row = createValidRow();
+        row.setRspuId(null);
+        row.setProductName("新品名");
+        row.setDescription("新描述");
+        row.setRetailPrice(new java.math.BigDecimal("2999.00"));
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-OLD001");
+        existing.setExternalCode("EXT-001");
+        existing.setCategoryCode("FS");
+        existing.setCategoryPath("[\"家具\"]");
+        existing.setPositioningLabel("MC");
+        existing.setProductName("旧品名");
+        existing.setDescription("旧描述");
+        existing.setRetailPrice(new java.math.BigDecimal("1999.00"));
+        existing.setFabricTags("[\"LINEN\"]");
+        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+
+        ProductImportResult result = productImportService.importProducts(file, true);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        ArgumentCaptor<Object> oldCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(auditLogService).logUpdate(org.mockito.ArgumentMatchers.eq("rspu_master"),
+            org.mockito.ArgumentMatchers.eq("RSPU-OLD001"), oldCaptor.capture(), any(), any());
+        RspuMaster oldSnapshot = (RspuMaster) oldCaptor.getValue();
+        assertThat(oldSnapshot.getProductName()).isEqualTo("旧品名");
+        assertThat(oldSnapshot.getDescription()).isEqualTo("旧描述");
+        assertThat(oldSnapshot.getRetailPrice()).isEqualByComparingTo(new java.math.BigDecimal("1999.00"));
+        assertThat(oldSnapshot.getFabricTags()).isEqualTo("[\"LINEN\"]");
+    }
+
+    @Test
     void importProducts_shouldSkipWhenExistsAndUpdateIfExistsFalse() {
         ProductImportRow row = createValidRow();
         MockMultipartFile file = createExcelFile(List.of(row));

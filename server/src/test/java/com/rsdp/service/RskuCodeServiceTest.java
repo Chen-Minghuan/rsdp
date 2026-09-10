@@ -38,6 +38,9 @@ class RskuCodeServiceTest {
     @Mock
     private RskuSupplyMapper rskuSupplyMapper;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private RskuCodeService rskuCodeService;
 
@@ -110,6 +113,25 @@ class RskuCodeServiceTest {
         assertThat(code).isEqualTo("FS-MC-001-M-A004-PE-003");
         verify(rspuMapper, never()).selectById(anyString());
         verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+    }
+
+    @Test
+    void assignCode_shouldWriteAuditLogWithOperator() {
+        // P1-3：发号改写 rsku_code 记 logUpdate 审计（旧值 null → 新编码），操作人显式传入
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rskuWithoutCode("RSKU-TEST01", "PE"));
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspuWithCode());
+        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004", "PE")).thenReturn(1L);
+
+        String code = rskuCodeService.assignCode("RSKU-TEST01", "RSPU-TEST01", "A004", "PE", "editor01");
+
+        assertThat(code).isEqualTo("FS-MC-001-M-A004-PE-001");
+        ArgumentCaptor<Object> oldCaptor = ArgumentCaptor.forClass(Object.class);
+        ArgumentCaptor<Object> newCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(auditLogService).logUpdate(org.mockito.ArgumentMatchers.eq("rsku_supply"),
+            org.mockito.ArgumentMatchers.eq("RSKU-TEST01"),
+            oldCaptor.capture(), newCaptor.capture(), org.mockito.ArgumentMatchers.eq("editor01"));
+        assertThat(((RskuSupply) oldCaptor.getValue()).getRskuCode()).isNull();
+        assertThat(((RskuSupply) newCaptor.getValue()).getRskuCode()).isEqualTo("FS-MC-001-M-A004-PE-001");
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.RspuCodeMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.security.SecurityOperatorContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -37,6 +38,7 @@ public class RspuCodeService {
     private final RspuCodeMapper rspuCodeMapper;
     private final DictService dictService;
     private final RspuMapper rspuMapper;
+    private final AuditLogService auditLogService;
 
     /**
      * 生成下一个 RSPU 业务编码。
@@ -92,6 +94,25 @@ public class RspuCodeService {
      */
     @Transactional(noRollbackFor = BusinessException.class)
     public String assignCode(String rspuId, String categoryCode, String styleCode, String sizeCode) {
+        return assignCode(rspuId, categoryCode, styleCode, sizeCode, null);
+    }
+
+    /**
+     * 为指定 RSPU 生成并写入业务编码（显式指定审计操作人）。
+     *
+     * <p>异步链路（AI 识别补码）由调用方透传任务创建人；operator 为空时回落
+     * {@link SecurityOperatorContext#currentUsername()}（同步链路现状）。
+     * 发号改写 rspu_code 记审计（P1-3），新旧值：null → 编码。</p>
+     *
+     * @param rspuId       RSPU ID
+     * @param categoryCode 品类码
+     * @param styleCode    风格/职级码
+     * @param sizeCode     尺寸码
+     * @param operator     审计操作人（可空，空时回落当前登录用户）
+     * @return 生成的业务编码
+     */
+    @Transactional(noRollbackFor = BusinessException.class)
+    public String assignCode(String rspuId, String categoryCode, String styleCode, String sizeCode, String operator) {
         if (!StringUtils.hasText(rspuId)) {
             throw new BusinessException("RSPU ID 不能为空");
         }
@@ -103,10 +124,24 @@ public class RspuCodeService {
             return rspu.getRspuCode();
         }
         String code = generateNextCode(categoryCode, styleCode, sizeCode);
+        RspuMaster oldSnapshot = new RspuMaster();
+        oldSnapshot.setRspuId(rspu.getRspuId());
+        oldSnapshot.setRspuCode(rspu.getRspuCode());
         rspu.setRspuCode(code);
         rspu.setUpdatedAt(java.time.LocalDateTime.now());
         rspuMapper.updateById(rspu);
+        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, resolveOperator(operator));
         return code;
+    }
+
+    /**
+     * 解析审计操作人：显式传入优先，为空回落当前登录用户。
+     *
+     * @param operator 显式操作人（可空）
+     * @return 有效操作人
+     */
+    private String resolveOperator(String operator) {
+        return StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername();
     }
 
     /**

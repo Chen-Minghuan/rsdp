@@ -55,6 +55,7 @@ public class AsyncTaskProcessor {
     private final ImageAssetsMapper imageAssetsMapper;
     private final StorageService storageService;
     private final AiRecognitionPersistenceService persistenceService;
+    private final AuditLogService auditLogService;
     private final StyleMatchingService styleMatchingService;
     private final RspuVariantService rspuVariantService;
     private final ProductSubjectCropService subjectCropService;
@@ -94,6 +95,10 @@ public class AsyncTaskProcessor {
             return;
         }
 
+        // 审计操作人：异步线程无 SecurityContext（ThreadLocal 为空会落成 anonymous），
+        // 显式取任务创建人（async_task.created_by）透传给所有写库审计；取不到按 system
+        String operator = resolveTaskOperator(taskId);
+
         String recognitionId = IdGenerator.recognitionId();
         String modelName = aiModel;
         int processingTime = 0;
@@ -107,13 +112,13 @@ public class AsyncTaskProcessor {
             if (imageBytes.length > maxImageSize) {
                 String msg = "图片大小超过限制：" + imageBytes.length + " 字节（最大允许 " + maxImageSize + " 字节）";
                 log.error("{}，taskId={}", msg, taskId);
-                safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, msg);
+                safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, msg, operator);
                 safeUpdateTaskStatus(taskId, "failed", 100, null, msg);
                 return;
             }
         } catch (Exception e) {
             log.error("读取图片失败，taskId={}", taskId, e);
-            safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
+            safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage(), operator);
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
             return;
         }
@@ -161,10 +166,16 @@ public class AsyncTaskProcessor {
                 String detected = visionService.classifyCategory(new ByteArrayInputStream(originalImageBytes));
                 if (StringUtils.hasText(detected) && !detected.equalsIgnoreCase(categoryCode) && rspu != null) {
                     String previous = categoryCode;
+                    // 审计旧快照（P0-2）：品类纠正此前绕过审计日志
+                    RspuMaster oldSnapshot = new RspuMaster();
+                    oldSnapshot.setRspuId(rspu.getRspuId());
+                    oldSnapshot.setCategoryCode(rspu.getCategoryCode());
+                    oldSnapshot.setCategoryPath(rspu.getCategoryPath());
                     rspu.setCategoryCode(detected);
                     rspu.setCategoryPath(CategoryPaths.resolve(detected));
                     rspu.setUpdatedAt(LocalDateTime.now());
                     rspuMapper.updateById(rspu);
+                    auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, operator);
                     categoryCode = detected;
                     log.info("AI 品类判定纠正品类：{} → {}，rspuId={}", previous, detected, rspuId);
                 }
@@ -204,14 +215,14 @@ public class AsyncTaskProcessor {
             float[] embedding = imageEmbedding != null ? imageEmbedding.vector() : null;
 
             String productName = persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
-                labels, processingTime);
+                labels, processingTime, operator);
             successSaved = true;
 
             // 同款检测（写入向量前召回比对）：相似度超阈值时把新品标记"存疑-疑似同款"，
             // 由人工裁决保留或删除——不硬拦截（同款不同工厂是合法场景）
             if (embedding != null) {
                 try {
-                    flagDuplicateSuspect(rspuId, embedding);
+                    flagDuplicateSuspect(rspuId, embedding, operator);
                 } catch (Exception e) {
                     log.warn("同款检测失败，跳过，rspuId={}", rspuId, e);
                 }
@@ -261,7 +272,7 @@ public class AsyncTaskProcessor {
                 safeUpdateTaskStatus(taskId, "partial_success", 100, null,
                     "AI 识别完成，但后续步骤失败: " + e.getMessage());
             } else {
-                safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage());
+                safeSaveFailure(taskId, rspuId, imageId, recognitionId, modelName, e.getMessage(), operator);
                 safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
             }
         }
@@ -346,12 +357,31 @@ public class AsyncTaskProcessor {
      * saveFailure 自身的持久化失败（如主键冲突、DB 故障）不能中断后续任务状态更新。
      */
     private void safeSaveFailure(String taskId, String rspuId, String imageId,
-                                 String recognitionId, String modelName, String errorMessage) {
+                                 String recognitionId, String modelName, String errorMessage, String operator) {
         try {
-            persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, errorMessage);
+            persistenceService.saveFailure(taskId, rspuId, imageId, recognitionId, modelName, errorMessage, operator);
         } catch (Exception ex) {
             log.error("保存识别失败记录异常，taskId={}", taskId, ex);
         }
+    }
+
+    /**
+     * 解析审计操作人：异步线程（rsdp-async-*）无 SecurityContext，
+     * 取任务创建人（async_task.created_by）作为审计操作人；取不到按 "system"。
+     *
+     * @param taskId 任务 ID
+     * @return 审计操作人
+     */
+    private String resolveTaskOperator(String taskId) {
+        try {
+            AsyncTask task = asyncTaskMapper.selectById(taskId);
+            if (task != null && StringUtils.hasText(task.getCreatedBy())) {
+                return task.getCreatedBy();
+            }
+        } catch (Exception e) {
+            log.warn("读取任务创建人失败，审计操作人按 system 处理，taskId={}", taskId, e);
+        }
+        return "system";
     }
 
     /**
@@ -577,8 +607,9 @@ public class AsyncTaskProcessor {
      *
      * @param rspuId    当前 RSPU ID
      * @param embedding 本次主图向量
+     * @param operator  审计操作人（任务创建人）
      */
-    private void flagDuplicateSuspect(String rspuId, float[] embedding) {
+    private void flagDuplicateSuspect(String rspuId, float[] embedding, String operator) {
         List<VectorHit> hits = productVectorStore.search(embedding, 5, null, false);
         if (hits == null || hits.isEmpty()) {
             return;
@@ -603,11 +634,17 @@ public class AsyncTaskProcessor {
             String dupName = dup != null && StringUtils.hasText(dup.getProductName())
                 ? "「" + dup.getProductName() + "」" : "";
             long percent = Math.round(similarity * 100);
+            // 审计旧快照（P0-2）：与 AiRecognitionPersistenceService.markRspuAsDoubtful 的 logReview 口径对齐
+            RspuMaster oldSnapshot = new RspuMaster();
+            oldSnapshot.setRspuId(current.getRspuId());
+            oldSnapshot.setReviewStatus(current.getReviewStatus());
+            oldSnapshot.setReviewComment(current.getReviewComment());
             current.setReviewStatus("存疑");
             current.setReviewComment("疑似与 " + dupName + dupLabel + " 同款（向量相似度 "
                 + percent + "%），请确认是否重复录入");
             current.setUpdatedAt(LocalDateTime.now());
             rspuMapper.updateById(current);
+            auditLogService.logReview("rspu_master", rspuId, oldSnapshot, current, operator);
             log.info("疑似同款标记：rspuId={}，命中 {}，相似度 {}%", rspuId, dupLabel, percent);
             return;
         }

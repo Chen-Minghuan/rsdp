@@ -1708,6 +1708,13 @@ class ExcelAiImportServiceTest {
         verify(dictResolverService, never()).resolveCodeByName(anyString(), anyString());
         // 用户确认的映射写回别名库自学习
         verify(dictAliasService).saveAlias(eq("category"), eq("茶桌"), eq("TB"), any());
+        // P3-7：别名自学习写回 dict_alias 有批次级汇总审计（一条，detail 含码值映射）
+        ArgumentCaptor<Object> auditDetailCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(auditLogService).logCreate(eq("dict_alias"), eq("category"), auditDetailCaptor.capture(), any());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> auditDetail = (Map<String, Object>) auditDetailCaptor.getValue();
+        assertEquals(1, auditDetail.get("learnedCount"));
+        assertEquals(Map.of("茶桌", "TB"), auditDetail.get("mappings"));
     }
 
     @Test
