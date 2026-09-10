@@ -262,6 +262,7 @@ POST   /api/v1/products/import
        #   successCount: number,
        #   failedCount: number,
        #   failures: [{ rowIndex, externalCode?, rspuId?, reason }]
+       #   warnings: [{ rowIndex, externalCode?, rspuId?, reason }]  # 行级警告（如场景标签未归一已降级采集），不影响该行成功，不计 failedCount
        # }
        # 说明：
        #   - 一行对应一个 RSPU 及其可选默认变体

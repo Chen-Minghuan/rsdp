@@ -78,6 +78,7 @@ public class ProductService {
     private final ProductSubjectCropService subjectCropService;
     private final VisionService visionService;
     private final DataScopeHelper dataScopeHelper;
+    private final DictUnresolvedService dictUnresolvedService;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     @Value("${spring.servlet.multipart.max-file-size:20MB}")
@@ -379,8 +380,8 @@ public class ProductService {
      *       职级码（grade 字典，如 EX/MG）时不写 rspu_style——既有链路均只写 style 字典码，
      *       职级码仅保留在 rspu_master.positioning_label 与 rspu_code 中，不发明新规则。</li>
      *   <li>rspu_scene 逐值归一（字典码忽略大小写 → 字典名），重复码去重；未命中 scene 字典的
-     *       值跳过并记 log.warn——rspu_scene 有到 category_dict 的复合外键，插脏值会 FK 违例
-     *       导致整单回滚，故坏值降级跳过而不阻断建档。</li>
+     *       值跳过并记 log.warn + 采集 dict_unresolved_value 待治理（2.7）——rspu_scene 有到
+     *       category_dict 的复合外键，插脏值会 FK 违例导致整单回滚，故坏值降级跳过而不阻断建档。</li>
      *   <li>审计沿用 2.3「关联表变更每 RSPU 一条汇总」口径，参照 AI 回填链路以
      *       「旧集合为空 → 新集合」记一条 logUpdate；未写入任何关联时不重复记
      *       （rspu_master 的 logCreate 快照已含 positioningLabel/sceneTags 原始值）。</li>
@@ -427,6 +428,9 @@ public class ProductService {
             String code = matchDictCode(raw, sceneDict);
             if (code == null) {
                 log.warn("录入场景标签未命中 scene 字典，跳过 rspu_scene 写入，rspuId={}, value={}", rspuId, raw);
+                // 2.7：未命中值同步采集 dict_unresolved_value 待治理（空值由 record 内部忽略），
+                // 与两条 Excel 导入链路的"归一 + 未命中降级采集"口径统一
+                dictUnresolvedService.record("scene", raw, null, operator);
                 continue;
             }
             if (!seen.add(code)) {

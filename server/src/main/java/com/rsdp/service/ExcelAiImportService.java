@@ -51,6 +51,7 @@ import com.rsdp.security.datascope.DataScope;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
+import com.rsdp.util.ConstraintViolations;
 import com.rsdp.util.ExcelFileValidator;
 import com.rsdp.util.ExcelHeaderNormalizer;
 import com.rsdp.util.ExcelImageExtractor;
@@ -2788,11 +2789,13 @@ public class ExcelAiImportService {
             if (e instanceof BusinessException be) {
                 throw be;
             }
-            // 唯一索引冲突（V24 external_code、V12 uk_variant_attrs 等）转用户可读文案，
-            // 不把英文 SQL 原文抛给前端
-            if (e instanceof DataIntegrityViolationException) {
-                log.warn("Excel AI 导入触发数据库唯一约束冲突，rowIndex={}", rowIndex, e);
-                throw new BusinessException("外部编码或变体属性组合与已有数据冲突，请检查是否重复导入");
+            // 数据库约束冲突转用户可读文案（2.7 起按约束类型细分：唯一冲突才报重复导入，
+            // 外键引用失败报引用校验失败并附约束名），不把英文 SQL 原文抛给前端
+            if (e instanceof DataIntegrityViolationException dive) {
+                log.warn("Excel AI 导入触发数据库约束冲突，rowIndex={}, constraint={}",
+                    rowIndex, ConstraintViolations.extractConstraintName(dive), dive);
+                throw new BusinessException(ConstraintViolations.toUserMessage(dive,
+                    "外部编码或变体属性组合与已有数据冲突，请检查是否重复导入"));
             }
             throw new BusinessException("系统异常: " + e.getMessage());
         }
@@ -2920,7 +2923,7 @@ public class ExcelAiImportService {
                 // 非本厂已报价产品跳过共享信息更新，仅继续本行本厂 RSKU 报价登记
                 if (dataScopeHelper.currentDataScope() == DataScope.ALL) {
                     updateExistingRspu(existing, row, dictCache);
-                    saveStylesAndScenes(rspuId, row, dictCache);
+                    saveStylesAndScenes(rspuId, row, dictCache, rowIssues);
                 } else if (dataScopeHelper.canAccessRspu(rspuId)) {
                     fillExistingRspuGaps(existing, row, dictCache);
                     // 风格/场景关联表是"先删后插"的覆盖语义，非平台身份下不做，
@@ -2932,7 +2935,7 @@ public class ExcelAiImportService {
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
                 rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache, expectAiTask);
-                saveStylesAndScenes(rspuId, row, dictCache);
+                saveStylesAndScenes(rspuId, row, dictCache, rowIssues);
                 createdNewRspu = true;
             }
         }
@@ -4660,8 +4663,16 @@ public class ExcelAiImportService {
         return parts.isEmpty() ? "默认变体" : String.join("-", parts);
     }
 
+    /**
+     * 重建 rspu_style / rspu_scene 关联。
+     *
+     * <p>场景侧（2.7）：逐值归一（别名 → 字典码 → 字典名），未命中 scene 字典的值
+     * <strong>不插入</strong>（rspu_scene 有到 category_dict 的复合外键，插脏值会 FK 违例
+     * 导致整行回滚），采集到 dict_unresolved_value 并记 rowIssue，不阻断建档；
+     * 归一后按码去重。风格侧处理保持不变。</p>
+     */
     private void saveStylesAndScenes(String rspuId, ProductImportRow row,
-                                     Map<String, List<CategoryDict>> dictCache) {
+                                     Map<String, List<CategoryDict>> dictCache, List<String> rowIssues) {
         rspuStyleMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuStyle>()
             .eq("rspu_id", rspuId));
         // 风格支持多值（「中古风,奶油风」「中古风/奶油风」等写法）：
@@ -4687,9 +4698,21 @@ public class ExcelAiImportService {
         rspuSceneMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuScene>()
             .eq("rspu_id", rspuId));
         List<String> sceneCodes = splitCsv(row.getSceneTags());
+        java.util.Set<String> seenSceneCodes = new java.util.HashSet<>();
         for (String code : sceneCodes) {
-            String sceneCode = normalizeDictCode(code, dictCache.get("scene"));
+            String sceneCode = normalizeDictCode("scene", code, dictCache.get("scene"));
             if (!StringUtils.hasText(sceneCode)) {
+                continue;
+            }
+            if (!isValidDictCode(sceneCode, dictCache.get("scene"))) {
+                // 未归一的场景值不插 rspu_scene（防复合 FK 违例行回滚），采集待治理 + 行级提示（2.7）
+                String trimmed = code.trim();
+                log.warn("导入场景标签未命中 scene 字典，跳过 rspu_scene 写入，rspuId={}, value={}", rspuId, trimmed);
+                rowIssues.add("场景标签未识别: " + trimmed + "，已跳过场景关联写入，待治理归一");
+                dictUnresolvedService.record("scene", trimmed, null, SecurityOperatorContext.currentUsername());
+                continue;
+            }
+            if (!seenSceneCodes.add(sceneCode)) {
                 continue;
             }
             RspuScene scene = new RspuScene();

@@ -515,7 +515,74 @@ class ProductImportServiceTest {
 
         assertThat(result.getSuccessCount()).isEqualTo(0);
         assertThat(result.getFailedCount()).isEqualTo(1);
-        assertThat(result.getFailures().get(0).getReason()).contains("已存在");
+        // 2.7：唯一冲突保持「重复导入」口径
+        assertThat(result.getFailures().get(0).getReason()).contains("已存在").contains("重复导入");
+    }
+
+    @Test
+    void importProducts_unknownSceneTag_shouldSkipInsertCollectAndWarn() {
+        // 2.7：场景标签未归一 → 不插 rspu_scene（防复合 FK 违例行回滚）+ 采集 dict_unresolved
+        // + 行级警告，行建档成功；命中值正常写入，归一后同码去重
+        ProductImportRow row = createValidRow();
+        row.setSceneTags("LIVING,太空舱,living");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        // 只插归一命中的 LIVING（living 归一后同码去重），未命中的「太空舱」不插
+        assertThat(insertedScenes).hasSize(1);
+        assertThat(insertedScenes.get(0).getSceneCode()).isEqualTo("LIVING");
+        verify(dictUnresolvedService).record(
+            org.mockito.ArgumentMatchers.eq("scene"),
+            org.mockito.ArgumentMatchers.eq("太空舱"),
+            org.mockito.ArgumentMatchers.isNull(), any());
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).getReason())
+            .contains("场景标签未识别").contains("太空舱");
+    }
+
+    @Test
+    void importProducts_sceneTagNormalizedByDictName_shouldInsert() {
+        // 2.7：场景标签填字典名（中文名）时归一为字典码写入，与定位标签归一口径一致
+        ProductImportRow row = createValidRow();
+        row.setSceneTags("客厅");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(insertedScenes).hasSize(1);
+        assertThat(insertedScenes.get(0).getSceneCode()).isEqualTo("LIVING");
+        assertThat(result.getWarnings()).isEmpty();
+    }
+
+    @Test
+    void importProducts_foreignKeyViolation_shouldReportReferenceCheckMessage() {
+        // 2.7 兜底防线：残留的外键违例（非唯一冲突）报「数据引用校验失败」并附约束名，
+        // 不再被误译为「重复导入」
+        ProductImportRow row = createValidRow();
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+        doAnswer(invocation -> {
+            throw new DataIntegrityViolationException(
+                "insert or update on table \"rspu_scene\" violates foreign key constraint \"rspu_scene_dict_fk\"");
+        }).when(rspuMapper).insert(any(RspuMaster.class));
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(0);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason())
+            .contains("数据引用校验失败")
+            .contains("rspu_scene_dict_fk")
+            .doesNotContain("重复导入");
     }
 
     @Test

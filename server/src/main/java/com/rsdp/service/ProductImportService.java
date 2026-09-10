@@ -20,6 +20,7 @@ import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.util.CategoryPaths;
+import com.rsdp.util.ConstraintViolations;
 import com.rsdp.util.ContentHashes;
 import com.rsdp.util.ExcelFileValidator;
 import com.rsdp.util.ImageUrlValidator;
@@ -420,8 +421,12 @@ public class ProductImportService {
             return rspuId;
         } catch (DataIntegrityViolationException e) {
             transactionManager.rollback(status);
-            log.warn("导入产品触发数据库唯一约束冲突，rowExternalCode={}", row.getExternalCode(), e);
-            throw new BusinessException("产品编码或外部编码已存在，请检查是否重复导入");
+            // 2.7：按约束类型细分文案——唯一冲突才报「重复导入」，外键引用失败（如场景/风格
+            // 脏值撞 category_dict 复合外键）报引用校验失败，避免真实原因被掩盖
+            log.warn("导入产品触发数据库约束冲突，rowExternalCode={}, constraint={}",
+                row.getExternalCode(), ConstraintViolations.extractConstraintName(e), e);
+            throw new BusinessException(
+                ConstraintViolations.toUserMessage(e, "产品编码或外部编码已存在，请检查是否重复导入"));
         } catch (BusinessException e) {
             transactionManager.rollback(status);
             throw e;
@@ -444,6 +449,10 @@ public class ProductImportService {
         }
 
         RspuMaster rspu;
+        // 2.7：场景标签未归一时降级为行级警告（不阻断建档），对齐 Excel AI 导入 rowIssue 口径
+        java.util.function.Consumer<String> sceneUnresolvedCollector = value ->
+            result.getWarnings().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                "场景标签未识别: " + value + "，已跳过场景关联写入，待治理归一"));
         if (existing != null) {
             if (!dataScopeHelper.canAccessRspu(existing.getRspuId())) {
                 throw new BusinessException("无权更新该产品: " + existing.getRspuId());
@@ -451,11 +460,13 @@ public class ProductImportService {
             rspu = updateRspu(existing, row, dictCache);
             // 更新时重新建立风格和场景
             updateStyles(existing.getRspuId(), row.getPositioningLabel(), dictCache.get("style"));
-            updateScenes(existing.getRspuId(), splitCsv(row.getSceneTags()));
+            updateScenes(existing.getRspuId(), splitCsv(row.getSceneTags()), dictCache.get("scene"),
+                sceneUnresolvedCollector);
         } else {
             rspu = createRspu(row, dictCache, result, rowIndex);
             saveStyles(rspu.getRspuId(), row.getPositioningLabel(), splitCsv(row.getMaterialTags()), dictCache.get("style"));
-            saveScenes(rspu.getRspuId(), splitCsv(row.getSceneTags()));
+            saveScenes(rspu.getRspuId(), splitCsv(row.getSceneTags()), dictCache.get("scene"),
+                sceneUnresolvedCollector);
         }
 
         if (shouldCreateVariant(row)) {
@@ -662,25 +673,70 @@ public class ProductImportService {
         rspuStyleMapper.insert(style);
     }
 
-    private void saveScenes(String rspuId, List<String> sceneCodes) {
+    /**
+     * 重建 rspu_scene 关联（2.7 起逐值归一）。
+     *
+     * <p>每个场景值先经 {@link #resolveSceneCode} 归一（别名 → 字典码 → 字典名）；
+     * 未命中 scene 字典的值<strong>不插入</strong>（rspu_scene 有到 category_dict 的复合外键，
+     * 插脏值会 FK 违例导致整行回滚），采集到 dict_unresolved_value 并回调行级警告收集器，
+     * 不阻断建档。归一后按码去重，避免同一码重复插入撞复合主键。</p>
+     *
+     * @param rspuId               RSPU ID
+     * @param sceneCodes           原始场景值列表（未归一）
+     * @param sceneDict            scene 字典
+     * @param unresolvedCollector  未命中值的行级警告收集器
+     * @return 实际写入的场景码列表（供审计快照）
+     */
+    private List<String> saveScenes(String rspuId, List<String> sceneCodes, List<CategoryDict> sceneDict,
+                                    java.util.function.Consumer<String> unresolvedCollector) {
         rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
+        List<String> insertedCodes = new ArrayList<>();
         if (sceneCodes == null || sceneCodes.isEmpty()) {
-            return;
+            return insertedCodes;
         }
-        for (String code : sceneCodes) {
-            if (!StringUtils.hasText(code)) {
+        Set<String> seen = new HashSet<>();
+        for (String raw : sceneCodes) {
+            String code = resolveSceneCode(raw, sceneDict);
+            if (code == null) {
+                String trimmed = raw.trim();
+                log.warn("导入场景标签未命中 scene 字典，跳过 rspu_scene 写入，rspuId={}, value={}", rspuId, trimmed);
+                dictUnresolvedService.record("scene", trimmed, null, SecurityOperatorContext.currentUsername());
+                unresolvedCollector.accept(trimmed);
+                continue;
+            }
+            if (!seen.add(code)) {
                 continue;
             }
             RspuScene scene = new RspuScene();
             scene.setRspuId(rspuId);
             scene.setDictType("scene");
-            scene.setSceneCode(code.trim());
+            scene.setSceneCode(code);
             scene.setCreatedAt(LocalDateTime.now());
             rspuSceneMapper.insert(scene);
+            insertedCodes.add(code);
         }
+        return insertedCodes;
     }
 
-    private void updateScenes(String rspuId, List<String> sceneCodes) {
+    /**
+     * 尽力将场景值归一为 scene 字典码：别名 → 字典码（忽略大小写）→ 字典名；未命中返回 null。
+     * 归一范式与变体三码的 {@link #resolveCodeOrNull} 一致。
+     */
+    private String resolveSceneCode(String raw, List<CategoryDict> sceneDict) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        String byAlias = dictAliasService.resolveAlias("scene", trimmed);
+        if (StringUtils.hasText(byAlias)) {
+            return byAlias;
+        }
+        String normalized = normalizeDictCode(trimmed, sceneDict);
+        return isValidDictCode(normalized, sceneDict) ? normalized : null;
+    }
+
+    private void updateScenes(String rspuId, List<String> sceneCodes, List<CategoryDict> sceneDict,
+                              java.util.function.Consumer<String> unresolvedCollector) {
         // 更新模式下场景标签留空表示不调整场景关联，跳过 delete+重建，避免清空已有数据
         if (sceneCodes == null || sceneCodes.isEmpty()) {
             return;
@@ -688,9 +744,7 @@ public class ProductImportService {
         // 汇总审计（P2-5）：删+重建前捕获旧场景码集合，每 RSPU 一条审计（不逐行刷量）
         List<String> oldCodes = rspuSceneMapper.selectList(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId))
             .stream().map(RspuScene::getSceneCode).toList();
-        saveScenes(rspuId, sceneCodes);
-        List<String> newCodes = sceneCodes.stream()
-            .filter(StringUtils::hasText).map(String::trim).toList();
+        List<String> newCodes = saveScenes(rspuId, sceneCodes, sceneDict, unresolvedCollector);
         auditLogService.logUpdate("rspu_scene", rspuId,
             Map.of("sceneCodes", oldCodes), Map.of("sceneCodes", newCodes),
             SecurityOperatorContext.currentUsername());

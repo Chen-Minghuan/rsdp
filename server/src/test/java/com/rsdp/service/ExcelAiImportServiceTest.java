@@ -41,6 +41,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
@@ -58,6 +59,7 @@ import java.util.Map;
 import javax.imageio.ImageIO;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -70,6 +72,8 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -280,6 +284,176 @@ class ExcelAiImportServiceTest {
         RspuMaster created = rspuCaptor.getValue();
         assertEquals("FS", created.getCategoryCode());
         assertEquals("MC", created.getPositioningLabel());
+    }
+
+    @Test
+    void confirmAndImport_unresolvedSceneTag_shouldSkipInsertCollectAndReportIssue() throws IOException {
+        // 2.7：场景标签「客厅」按字典名归一为 LIVING 写入；「太空舱」未命中 scene 字典——
+        // 不插 rspu_scene（防复合 FK 违例行回滚）+ 采集 dict_unresolved + 行级提示，行建档成功
+        byte[] excelBytes = createExcelWithSceneBytes();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"品类\":\"categoryCode\",\"名称\":\"productName\",\"场景\":\"sceneTags\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithSceneBytes()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("scene")).thenReturn(List.of(createDict("scene", "LIVING", "客厅")));
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-TEST");
+            return 1;
+        });
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("RSPU-TEST-V001");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(Map.of(
+            "品类", "categoryCode",
+            "名称", "productName",
+            "场景", "sceneTags"
+        ));
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount());
+        assertEquals(0, result.getFailedCount());
+        // 只插归一命中的 LIVING；未命中的「太空舱」不插 rspu_scene
+        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
+        verify(rspuSceneMapper, times(1)).insert(sceneCaptor.capture());
+        assertEquals("LIVING", sceneCaptor.getValue().getSceneCode());
+        // 采集待治理 + 行级提示（行内问题进批次失败明细但不计 failedCount）
+        verify(dictUnresolvedService).record(eq("scene"), eq("太空舱"), isNull(), any());
+        assertEquals(1, result.getFailures().size());
+        assertTrue(result.getFailures().get(0).getReason().contains("场景标签未识别"));
+        assertTrue(result.getFailures().get(0).getReason().contains("太空舱"));
+    }
+
+    @Test
+    void confirmAndImport_foreignKeyViolation_shouldReportReferenceCheckMessage() throws IOException {
+        // 2.7 兜底防线：行事务内残留的外键违例报「数据引用校验失败」并附约束名，不再误报重复导入
+        ExcelAiMappingRequest request = prepareSingleRowImportViaPreview();
+
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("scene")).thenReturn(List.of(createDict("scene", "LIVING", "客厅")));
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        doAnswer(inv -> {
+            throw new DataIntegrityViolationException(
+                "insert or update on table \"rspu_scene\" violates foreign key constraint \"rspu_scene_dict_fk\"");
+        }).when(rspuMapper).insert(any(RspuMaster.class));
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(0, result.getSuccessCount());
+        assertEquals(1, result.getFailedCount());
+        assertTrue(result.getFailures().get(0).getReason().contains("数据引用校验失败"));
+        assertTrue(result.getFailures().get(0).getReason().contains("rspu_scene_dict_fk"));
+        assertFalse(result.getFailures().get(0).getReason().contains("重复导入"));
+    }
+
+    @Test
+    void confirmAndImport_uniqueViolation_shouldKeepDuplicateImportMessage() throws IOException {
+        // 2.7：唯一冲突仍按「重复导入」口径报错（文案细分后不回退）
+        ExcelAiMappingRequest request = prepareSingleRowImportViaPreview();
+
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        doAnswer(inv -> {
+            throw new DataIntegrityViolationException(
+                "duplicate key value violates unique constraint \"rspu_master_external_code_key\"");
+        }).when(rspuMapper).insert(any(RspuMaster.class));
+
+        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+
+        assertEquals(0, result.getSuccessCount());
+        assertEquals(1, result.getFailedCount());
+        assertTrue(result.getFailures().get(0).getReason().contains("重复导入"));
+    }
+
+    /**
+     * 单行（品类/名称/场景）导入的预览准备：跑通 previewMapping 存批次，返回可直接
+     * confirmAndImport 的请求。dict 与 insert 桩由各用例自行覆盖。
+     */
+    private ExcelAiMappingRequest prepareSingleRowImportViaPreview() throws IOException {
+        byte[] excelBytes = createExcelWithSceneBytes();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"品类\":\"categoryCode\",\"名称\":\"productName\",\"场景\":\"sceneTags\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithSceneBytes()));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(Map.of(
+            "品类", "categoryCode",
+            "名称", "productName",
+            "场景", "sceneTags"
+        ));
+        return request;
     }
 
     @Test
@@ -2700,6 +2874,19 @@ class ExcelAiImportServiceTest {
             List<List<String>> data = List.of(
                 List.of("品类", "名称", "风格"),
                 List.of("FS", "休闲椅 A", "中古风")
+            );
+            com.alibaba.excel.EasyExcel.write(out).sheet("Sheet1").doWrite(data);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithSceneBytes() {
+        try (var out = new java.io.ByteArrayOutputStream()) {
+            List<List<String>> data = List.of(
+                List.of("品类", "名称", "场景"),
+                List.of("FS", "休闲椅 A", "客厅,太空舱")
             );
             com.alibaba.excel.EasyExcel.write(out).sheet("Sheet1").doWrite(data);
             return out.toByteArray();

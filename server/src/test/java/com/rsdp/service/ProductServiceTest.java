@@ -106,6 +106,9 @@ class ProductServiceTest {
     @Mock
     private com.rsdp.security.datascope.DataScopeHelper dataScopeHelper;
 
+    @Mock
+    private DictUnresolvedService dictUnresolvedService;
+
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -586,7 +589,8 @@ class ProductServiceTest {
 
     @Test
     void createManualEntry_invalidSceneTag_shouldSkipAndStillSucceed() throws Exception {
-        // 2.6：非法 scene 值跳过（不写 rspu_scene，避免复合外键违例），不影响建档
+        // 2.6：非法 scene 值跳过（不写 rspu_scene，避免复合外键违例），不影响建档；
+        // 2.7：未命中值同步采集 dict_unresolved_value 待治理
         when(dictService.listByType("category")).thenReturn(categoryDicts());
         when(dictService.listByType("style")).thenReturn(List.of(createDict("style", "MC", "中古风")));
         when(dictService.listByType("scene")).thenReturn(List.of(createDict("scene", "LIVING", "客厅")));
@@ -609,6 +613,8 @@ class ProductServiceTest {
         ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
         verify(rspuSceneMapper, times(1)).insert(sceneCaptor.capture());
         assertThat(sceneCaptor.getValue().getSceneCode()).isEqualTo("LIVING");
+        // 2.7：未归一场景值采集待治理（空串由 record 内部忽略，但服务层会调用；此处断言非空值被采集）
+        verify(dictUnresolvedService).record(eq("scene"), eq("NOT_A_SCENE"), isNull(), any());
     }
 
     @Test
