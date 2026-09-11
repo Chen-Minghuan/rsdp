@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.ExcelImportRow;
 import com.rsdp.mapper.ExcelImportRowMapper;
@@ -17,6 +18,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -59,26 +61,26 @@ class ExcelImportRowServiceTest {
     }
 
     @Test
-    void updateStage_shouldUpdateWhenRowExists() {
-        ExcelImportRow row = new ExcelImportRow();
-        row.setRowId(1L);
-        row.setStatus("pending");
-
-        when(rowMapper.selectById(1L)).thenReturn(row);
-
+    void updateStage_shouldIssueSingleUpdateWithoutSelect() {
+        // 3.4：行级写放大治理——updateStage 改为按 rowId 单语句 UPDATE，不再先 selectById
         rowService.updateStage(1L, "create_rspu");
 
-        assertThat(row.getProcessingStage()).isEqualTo("create_rspu");
-        verify(rowMapper, times(1)).updateById(row);
+        verify(rowMapper, never()).selectById(any(Long.class));
+        ArgumentCaptor<UpdateWrapper<ExcelImportRow>> captor = ArgumentCaptor.forClass(UpdateWrapper.class);
+        verify(rowMapper, times(1)).update(org.mockito.ArgumentMatchers.isNull(), captor.capture());
+        UpdateWrapper<ExcelImportRow> wrapper = captor.getValue();
+        assertThat(wrapper.getSqlSet()).contains("processing_stage").contains("updated_at");
+        assertThat(wrapper.getParamNameValuePairs()).containsValue("create_rspu");
     }
 
     @Test
-    void updateStage_shouldIgnoreWhenRowNotExists() {
-        when(rowMapper.selectById(1L)).thenReturn(null);
+    void updateStage_shouldNotFailWhenRowMissing() {
+        // 行不存在时 UPDATE 命中 0 行，与原"查不到直接返回"语义一致
+        when(rowMapper.update(org.mockito.ArgumentMatchers.isNull(), any(UpdateWrapper.class))).thenReturn(0);
 
         rowService.updateStage(1L, "create_rspu");
 
-        verify(rowMapper, times(0)).updateById(any(ExcelImportRow.class));
+        verify(rowMapper, times(1)).update(org.mockito.ArgumentMatchers.isNull(), any(UpdateWrapper.class));
     }
 
     @Test
@@ -99,50 +101,46 @@ class ExcelImportRowServiceTest {
 
     @Test
     void markSuccess_shouldUpdateStatusAndGeneratedIds() {
-        ExcelImportRow row = new ExcelImportRow();
-        row.setRowId(1L);
-
-        when(rowMapper.selectById(1L)).thenReturn(row);
-
+        // 3.4：单语句 UPDATE（不再 selectById + updateById），null 字段条件 set 语义不变
         rowService.markSuccess(1L, "RSPU-001", "VAR-001", List.of("RSKU-001", "RSKU-002"),
             2, List.of("IMG-001"), "TASK-001");
 
-        assertThat(row.getStatus()).isEqualTo("success");
-        assertThat(row.getGeneratedRspuId()).isEqualTo("RSPU-001");
-        assertThat(row.getGeneratedVariantId()).isEqualTo("VAR-001");
-        assertThat(row.getGeneratedRskuIds()).contains("RSKU-001");
-        assertThat(row.getExtractedImageCount()).isEqualTo(2);
-        assertThat(row.getAiTaskId()).isEqualTo("TASK-001");
-        verify(rowMapper, times(1)).updateById(row);
+        verify(rowMapper, never()).selectById(any(Long.class));
+        ArgumentCaptor<UpdateWrapper<ExcelImportRow>> captor = ArgumentCaptor.forClass(UpdateWrapper.class);
+        verify(rowMapper, times(1)).update(org.mockito.ArgumentMatchers.isNull(), captor.capture());
+        UpdateWrapper<ExcelImportRow> wrapper = captor.getValue();
+        assertThat(wrapper.getSqlSet())
+            .contains("status").contains("generated_rspu_id").contains("generated_variant_id")
+            .contains("generated_rsku_ids").contains("extracted_image_count").contains("ai_task_id");
+        assertThat(wrapper.getParamNameValuePairs())
+            .containsValue("success").containsValue("RSPU-001").containsValue("VAR-001")
+            .containsValue("TASK-001").containsValue(2);
     }
 
     @Test
     void markFailed_shouldUpdateStatusAndReason() {
-        ExcelImportRow row = new ExcelImportRow();
-        row.setRowId(1L);
-
-        when(rowMapper.selectById(1L)).thenReturn(row);
-
         rowService.markFailed(1L, "validate", "品类码无效");
 
-        assertThat(row.getStatus()).isEqualTo("failed");
-        assertThat(row.getFailureStage()).isEqualTo("validate");
-        assertThat(row.getFailureReason()).isEqualTo("品类码无效");
-        verify(rowMapper, times(1)).updateById(row);
+        verify(rowMapper, never()).selectById(any(Long.class));
+        ArgumentCaptor<UpdateWrapper<ExcelImportRow>> captor = ArgumentCaptor.forClass(UpdateWrapper.class);
+        verify(rowMapper, times(1)).update(org.mockito.ArgumentMatchers.isNull(), captor.capture());
+        UpdateWrapper<ExcelImportRow> wrapper = captor.getValue();
+        assertThat(wrapper.getSqlSet()).contains("status").contains("failure_stage").contains("failure_reason");
+        assertThat(wrapper.getParamNameValuePairs())
+            .containsValue("failed").containsValue("validate").containsValue("品类码无效");
     }
 
     @Test
     void markSkipped_shouldUpdateStatusAndReason() {
-        ExcelImportRow row = new ExcelImportRow();
-        row.setRowId(1L);
-
-        when(rowMapper.selectById(1L)).thenReturn(row);
-
         rowService.markSkipped(1L, "说明或空行");
 
-        assertThat(row.getStatus()).isEqualTo("skipped");
-        assertThat(row.getFailureReason()).isEqualTo("说明或空行");
-        verify(rowMapper, times(1)).updateById(row);
+        verify(rowMapper, never()).selectById(any(Long.class));
+        ArgumentCaptor<UpdateWrapper<ExcelImportRow>> captor = ArgumentCaptor.forClass(UpdateWrapper.class);
+        verify(rowMapper, times(1)).update(org.mockito.ArgumentMatchers.isNull(), captor.capture());
+        UpdateWrapper<ExcelImportRow> wrapper = captor.getValue();
+        assertThat(wrapper.getSqlSet()).contains("status").contains("failure_reason");
+        assertThat(wrapper.getParamNameValuePairs())
+            .containsValue("skipped").containsValue("说明或空行");
     }
 
     @Test

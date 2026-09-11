@@ -73,6 +73,33 @@ public class DictAliasService {
     }
 
     /**
+     * 按字典类型批量预载别名（导入批次级缓存用，消除行内逐值单查）。
+     *
+     * @param dictTypes 字典类型集合
+     * @return dictType → (aliasName → dictCode)；同类别名重复时保留先返回者
+     */
+    public Map<String, Map<String, String>> loadAliases(Collection<String> dictTypes) {
+        if (dictTypes == null || dictTypes.isEmpty()) {
+            return Map.of();
+        }
+        List<String> types = dictTypes.stream()
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList();
+        if (types.isEmpty()) {
+            return Map.of();
+        }
+        List<DictAlias> aliases = dictAliasMapper.selectList(new QueryWrapper<DictAlias>()
+            .in("dict_type", types));
+        Map<String, Map<String, String>> result = new HashMap<>();
+        for (DictAlias alias : aliases) {
+            result.computeIfAbsent(alias.getDictType(), k -> new HashMap<>())
+                .putIfAbsent(alias.getAliasName(), alias.getDictCode());
+        }
+        return result;
+    }
+
+    /**
      * 幂等保存别名：同 (dict_type, alias_name) 已存在则按需更新 dict_code，
      * 不存在则插入；并发下唯一约束冲突时安全跳过。
      *

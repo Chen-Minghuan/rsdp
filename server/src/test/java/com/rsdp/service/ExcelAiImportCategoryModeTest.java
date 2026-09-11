@@ -85,6 +85,8 @@ class ExcelAiImportCategoryModeTest {
     @Mock
     private ExcelImportBatchMapper batchMapper;
     @Mock
+    private RspuPriceSummaryService rspuPriceSummaryService;
+    @Mock
     private VisionService visionService;
     @Mock
     private RspuMapper rspuMapper;

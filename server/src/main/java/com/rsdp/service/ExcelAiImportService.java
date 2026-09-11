@@ -33,6 +33,7 @@ import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ExcelImportBatch;
 import com.rsdp.entity.ExcelImportRow;
+import com.rsdp.entity.FactoryLeadTimeRule;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
@@ -277,6 +278,7 @@ public class ExcelAiImportService {
     private final DictResolverService dictResolverService;
     private final DictAliasService dictAliasService;
     private final DictUnresolvedService dictUnresolvedService;
+    private final RspuPriceSummaryService rspuPriceSummaryService;
     private final DataScopeHelper dataScopeHelper;
     private final RspuCodeService rspuCodeService;
     private final FactoryMasterMapper factoryMasterMapper;
@@ -783,10 +785,19 @@ public class ExcelAiImportService {
         // 导入循环内不再调用大模型，行内 externalCode 由映射列 + 复合列拆分确定性得出，
         // 可在循环前一把 in 查询收集；未命中编码行内 miss 时仍实时单查回填
         BatchImportCache importCache = preloadBatchCache(rawDataRows, mapping);
+        // 3.4 批次级预载续：字典别名（category/size/color/material/scene）与工厂交期规则
+        // 各一把查询进内存，行内别名解析/交期匹配不再逐值/逐行查库
+        importCache.aliasByType.putAll(safeAliases(dictAliasService.loadAliases(
+            List.of("category", "size", "color", "material", "scene"))));
+        importCache.leadTimeRules = preloadLeadTimeRules(request);
 
         int rowIndex = 1; // 第 1 行为表头
         int dataRowOrdinal = 0;
         ProductGroup currentGroup = null;
+        // 3.4：价格投影延迟重算作用域——行内 RSKU upsert 触发的 recalculate 只登记 RSPU ID 去重，
+        // 作用域关闭（行循环结束/异常逃逸）时按 RSPU 去重统一重算一次，投影最终结果与逐次重算一致
+        try (RspuPriceSummaryService.DeferralScope ignored = rspuPriceSummaryService.openDeferralScope()) {
+            try {
         for (Map<String, String> dataRow : rawDataRows) {
             rowIndex++;
             // 数据行物理行号：优先取重建结果（与 previewRows 顺序一一对应），缺失回退旧换算
@@ -895,6 +906,12 @@ public class ExcelAiImportService {
                 log.warn("导入批次心跳刷新失败，batchId={}", batch.getBatchId(), heartbeatError);
             }
         }
+            } finally {
+                // 3.4：批次末聚合落库未归一值采集（finally 保证异常中断时已提交行的采集不丢失，
+                // 与原逐条实时落库的可见性一致）；采集失败绝不阻断导入
+                flushUnresolvedValuesQuietly(importCache);
+            }
+        }
 
         // 口径说明（评估后保持现状）：rspuIds 按「成功处理行」逐行记录，同组模块行会重复同一 RSPU ID，
         // 因此 successCount 语义 = 成功处理行数（与 skippedCount/failedCount 对齐、与前端「成功 N 行」展示一致），
@@ -909,7 +926,7 @@ public class ExcelAiImportService {
 
         updateBatchResult(batch, request, result);
         // 别名自学习：用户确认的品类映射写回别名库，后续导入直接命中，不再调 AI
-        learnCategoryAliases(request);
+        learnCategoryAliases(request, importCache);
         // 导入完成：清理数据清洗阶段的全部临时文件（preview-images 前缀残留 + tmpdir 行图缓存；失败不影响导入结果）
         try {
             cleanBatchPreviewTempFiles(batch.getBatchId());
@@ -2907,6 +2924,52 @@ public class ExcelAiImportService {
         return list == null ? List.of() : list;
     }
 
+    private Map<String, Map<String, String>> safeAliases(Map<String, Map<String, String>> aliases) {
+        return aliases == null ? Map.of() : aliases;
+    }
+
+    /**
+     * 预载本批次工厂的生效交期规则（3.4）：工厂由请求级 defaultFactoryCode 确定，
+     * 批次内固定，一把查询后行内走内存匹配，替代原"每价格列每行一次"的逐行查库。
+     *
+     * @param request 确认导入请求
+     * @return 生效规则快照；未指定工厂时为空列表
+     */
+    private List<FactoryLeadTimeRule> preloadLeadTimeRules(ExcelAiMappingRequest request) {
+        String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
+            ? request.getDefaultFactoryCode() : null;
+        if (factoryCode == null) {
+            return List.of();
+        }
+        List<FactoryLeadTimeRule> rules = factoryLeadTimeRuleService.listActiveRules(factoryCode);
+        return rules != null ? rules : List.of();
+    }
+
+    /**
+     * 批次末聚合落库未归一值采集（3.4）：同 (dictType, value, batchId) 在行循环内已按
+     * 出现次数累计，此处一次性写库——单次出现的走原 {@code record}（语义逐字不变），
+     * 多次出现的走计数聚合版本；最终 occurrence_count 与逐条实时采集完全一致。
+     */
+    private void flushUnresolvedValuesQuietly(BatchImportCache importCache) {
+        if (importCache.unresolvedCounts.isEmpty()) {
+            return;
+        }
+        try {
+            String operator = SecurityOperatorContext.currentUsername();
+            importCache.unresolvedCounts.forEach((key, count) -> {
+                if (count == 1) {
+                    dictUnresolvedService.record(key.dictType(), key.rawValue(), key.batchId(), operator);
+                } else {
+                    dictUnresolvedService.recordOccurrences(key.dictType(), key.rawValue(), count,
+                        key.batchId(), operator);
+                }
+            });
+        } catch (Exception e) {
+            // 采集是辅助链路，任何失败都不能阻断导入主流程
+            log.warn("未归一值批次落库失败", e);
+        }
+    }
+
     /**
      * 批次级预加载（消除行循环 N+1）：本批次出现过的全部 external_code 一把 in 查询
      * 建立「编码 → RSPU」缓存，并对命中的 RSPU 各用一把 in 查询批量预载变体与图片快照。
@@ -3012,8 +3075,12 @@ public class ExcelAiImportService {
         // 行回滚时可能产生孤儿存储对象，属可接受代价（量大时可加定期清理）。
         PreparedRow prep = prepareRow(dataRow, mapping, categoryHint, priceColumns, request,
             embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
+<<<<<<< HEAD
             currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batchId,
             rowCategorySelection);
+=======
+            currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batchId, importCache);
+>>>>>>> dev
         if (prep.earlyResult() != null) {
             return prep.earlyResult();
         }
@@ -3079,7 +3146,11 @@ public class ExcelAiImportService {
                                    Integer physicalRowIndex,
                                    ProductGroup currentGroup, PhysicalLayout physicalLayout,
                                    int sheetIndex, String sheetName, String categoryGuess, String batchId,
+<<<<<<< HEAD
                                    String rowCategorySelection) {
+=======
+                                   BatchImportCache importCache) {
+>>>>>>> dev
         if (isNoteOrEmptyRow(dataRow)) {
             log.debug("第 {} 行为说明或空行，已跳过", rowIndex);
             return PreparedRow.skip(RowResult.skipped("说明或空行"));
@@ -3094,6 +3165,7 @@ public class ExcelAiImportService {
         }
 
         excelImportRowService.updateStage(importRowId, "build_product_row");
+<<<<<<< HEAD
         boolean categoryModeEnabled = request.getCategoryMode() != null;
         // 新模式（SINGLE/MIXED）下 Sheet 名 / 品类提示 / categoryGuess 不走 buildProductImportRow 的旧兜底链，
         // 只保留行内类别列原值，由下方收敛兜底链解析（§26.1）；
@@ -3116,16 +3188,27 @@ public class ExcelAiImportService {
             if (normalizedCategory != null) {
                 row.setCategoryCode(normalizedCategory);
             }
+=======
+        ProductImportRow row = buildProductImportRow(dataRow, mapping, categoryHint, categoryGuess, sheetName,
+            dictCache, importCache);
+        // 品类分层解析：中文品名/方言 → 字典码（用户确认映射 > 字典码 > 字典名 > 别名库），未命中保留原值
+        String normalizedCategory = normalizeCategoryCode(row.getCategoryCode(), request.getCategoryMapping(),
+            dictCache, importCache);
+        if (normalizedCategory != null) {
+            row.setCategoryCode(normalizedCategory);
+>>>>>>> dev
         }
         String error = validateRow(row, dictCache);
         if (error != null) {
             throw new BusinessException(error);
         }
 
-        excelImportRowService.updateStage(importRowId, "download_images");
+        // 3.4：stage 中间态（download_images/create_rspu/...）不再逐步落库——processing_stage
+        // 全链路无读取方，仅保留行进入处理的首个 stage（build_product_row）作诊断标记；
+        // 失败语义由 markFailed 的 failure_stage/failure_reason 承载，不受影响
         List<String> rowIssues = new ArrayList<>();
         // 三码容错解析（V19）：未识别的尺寸/颜色/材质码降级为原文保留并采集待治理，不阻断导入
-        resolveVariantCodeFields(row, dictCache, rowIssues, batchId);
+        resolveVariantCodeFields(row, dictCache, rowIssues, batchId, importCache);
         // sales 角色价格列：不建变体/RSKU，价格值作为零售参考价（仅当行内尚无 retailPrice 时取值）
         if (row.getRetailPrice() == null) {
             row.setRetailPrice(extractSalesRetailPrice(dataRow, priceColumns, rowIndex, rowIssues));
@@ -3172,7 +3255,7 @@ public class ExcelAiImportService {
         List<String> rowIssues = prep.rowIssues();
         String groupKey = prep.groupKey();
 
-        excelImportRowService.updateStage(importRowId, "create_rspu");
+        // 3.4：原 "create_rspu" stage 中间态落库已移除（processing_stage 无读取方，见 prepareRow 注释）
         // 请求级默认产品等级（对齐 defaultFactoryCode/defaultMoq 模式）：行值缺失时兜底，
         // 统一解析一次避免 createRspu 与变体/RSKU 组装重复记录行级问题
         String defaultProductLevel = resolveDefaultProductLevel(request, dictCache, rowIssues);
@@ -3204,8 +3287,13 @@ public class ExcelAiImportService {
                 // 本厂已报价的共管产品仅补空缺（不覆盖已有值，categoryCode 不可改）；
                 // 非本厂已报价产品跳过共享信息更新，仅继续本行本厂 RSKU 报价登记
                 if (dataScopeHelper.currentDataScope() == DataScope.ALL) {
+<<<<<<< HEAD
                     updateExistingRspu(existing, row, dictCache, rowIssues);
                     saveStylesAndScenes(rspuId, row, dictCache, rowIssues);
+=======
+                    updateExistingRspu(existing, row, dictCache);
+                    saveStylesAndScenes(rspuId, row, dictCache, rowIssues, importCache);
+>>>>>>> dev
                 } else if (dataScopeHelper.canAccessRspu(rspuId)) {
                     fillExistingRspuGaps(existing, row, dictCache);
                     // 风格/场景关联表是"先删后插"的覆盖语义，非平台身份下不做，
@@ -3217,14 +3305,13 @@ public class ExcelAiImportService {
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
                 rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache, expectAiTask);
-                saveStylesAndScenes(rspuId, row, dictCache, rowIssues);
+                saveStylesAndScenes(rspuId, row, dictCache, rowIssues, importCache);
                 createdNewRspu = true;
             }
         }
         // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）；
         // createdNewRspu 行（本次事务刚 insert 的 RSPU）走录入旁路入口，跳过对
         // "刚创建、尚无本厂 RSKU"的新 RSPU 必然误伤的 assertCanAccessRspu 校验
-        excelImportRowService.updateStage(importRowId, "create_factory_mapping");
         VariantRskuOutcome variantRskuOutcome = createRspuFactoryMappingAndVariants(rspuId, dataRow, row,
             priceColumns, request, dictCache, importRowId, rowIssues, defaultProductLevel, defaultMaterialCode,
             importCache, createdNewRspu);
@@ -3237,7 +3324,6 @@ public class ExcelAiImportService {
         String primaryObjectKey = productImageReg != null ? productImageReg.primaryObjectKey() : null;
         boolean newPrimaryRegistered = productImageReg != null && productImageReg.newPrimaryRegistered();
 
-        excelImportRowService.updateStage(importRowId, "create_async_task");
         String taskId = null;
         // 仅当本行有新的主图入库时才允许创建 AI 识别任务：重导入（updateIfExists）行
         // 图片被 content_hash 查重跳过、主图复用库中值时不再重复烧识别调用（0.2 修复）；
@@ -3275,7 +3361,8 @@ public class ExcelAiImportService {
 
     private ProductImportRow buildProductImportRow(Map<String, String> dataRow, Map<String, String> mapping,
                                                    String categoryHint, String categoryGuess, String sheetName,
-                                                   Map<String, List<CategoryDict>> dictCache) {
+                                                   Map<String, List<CategoryDict>> dictCache,
+                                                   BatchImportCache importCache) {
         ProductImportRow row = new ProductImportRow();
         Map<String, String> standardValues = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : dataRow.entrySet()) {
@@ -3326,7 +3413,7 @@ public class ExcelAiImportService {
         // 品类兜底链：行类别列 > sheet 名归一 > 用户品类提示 > AI 品类猜测
         String categoryCode = getValue(standardValues, "categoryCode");
         if (!StringUtils.hasText(categoryCode)) {
-            categoryCode = resolveCategoryBySheetName(sheetName, dictCache);
+            categoryCode = resolveCategoryBySheetName(sheetName, dictCache, importCache);
         }
         if (!StringUtils.hasText(categoryCode)) {
             categoryCode = categoryHint;
@@ -3428,7 +3515,8 @@ public class ExcelAiImportService {
      * @return 归一后的字典码；输入为空返回 null；无法解析返回原值
      */
     private String normalizeCategoryCode(String value, Map<String, String> userMapping,
-                                         Map<String, List<CategoryDict>> dictCache) {
+                                         Map<String, List<CategoryDict>> dictCache,
+                                         BatchImportCache importCache) {
         if (!StringUtils.hasText(value)) {
             return null;
         }
@@ -3450,8 +3538,8 @@ public class ExcelAiImportService {
         if (StringUtils.hasText(byName)) {
             return byName.trim().toUpperCase();
         }
-        // ④ 别名库
-        String byAlias = dictAliasService.resolveAlias("category", trimmed);
+        // ④ 别名库（3.4：走批次预载内存快照，不再逐值单查）
+        String byAlias = importCache.resolveAlias("category", trimmed);
         if (StringUtils.hasText(byAlias) && isValidDictCode(byAlias.trim().toUpperCase(), categories)) {
             return byAlias.trim().toUpperCase();
         }
@@ -3469,7 +3557,8 @@ public class ExcelAiImportService {
      * @param dictCache 字典缓存
      * @return 归一后的品类字典码；无法归一为 null
      */
-    private String resolveCategoryBySheetName(String sheetName, Map<String, List<CategoryDict>> dictCache) {
+    private String resolveCategoryBySheetName(String sheetName, Map<String, List<CategoryDict>> dictCache,
+                                              BatchImportCache importCache) {
         if (!StringUtils.hasText(sheetName)) {
             return null;
         }
@@ -3484,8 +3573,8 @@ public class ExcelAiImportService {
         if (StringUtils.hasText(byName)) {
             return byName.trim().toUpperCase();
         }
-        // ③ 别名库
-        String byAlias = dictAliasService.resolveAlias("category", name);
+        // ③ 别名库（3.4：走批次预载内存快照）
+        String byAlias = importCache.resolveAlias("category", name);
         if (StringUtils.hasText(byAlias) && isValidDictCode(byAlias.trim().toUpperCase(), categories)) {
             return byAlias.trim().toUpperCase();
         }
@@ -3677,9 +3766,10 @@ public class ExcelAiImportService {
      * 别名自学习：把用户在确认页提交/确认过的品类映射写回别名库。
      * 单个词条失败不影响其他词条与导入结果。
      *
-     * @param request 确认导入请求（含 categoryMapping）
+     * @param request     确认导入请求（含 categoryMapping）
+     * @param importCache 批次导入缓存（学到的新别名同步进内存 Map，与库保持一致）
      */
-    private void learnCategoryAliases(ExcelAiMappingRequest request) {
+    private void learnCategoryAliases(ExcelAiMappingRequest request, BatchImportCache importCache) {
         Map<String, String> categoryMapping = request.getCategoryMapping();
         if (categoryMapping == null || categoryMapping.isEmpty()) {
             return;
@@ -3700,6 +3790,9 @@ public class ExcelAiImportService {
             try {
                 dictAliasService.saveAlias("category", entry.getKey().trim(), code, operator);
                 learned.put(entry.getKey().trim(), code);
+                // 学习成功同步进批次内存别名 Map（当前学习发生在行循环之后，同步主要为
+                // 保证缓存与库的最终一致性，便于后续流程内复用）
+                importCache.learnAlias("category", entry.getKey().trim(), code);
             } catch (Exception e) {
                 log.warn("写回品类别名失败: {} -> {}", entry.getKey(), entry.getValue(), e);
             }
@@ -4233,23 +4326,24 @@ public class ExcelAiImportService {
      * @param batchId   导入批次 ID（采集上下文，可为 null）
      */
     private void resolveVariantCodeFields(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
-                                          List<String> rowIssues, String batchId) {
+                                          List<String> rowIssues, String batchId, BatchImportCache importCache) {
         resolveOneCodeField("size", "尺寸码", row.getSizeCode(), dictCache.get("size"), rowIssues, batchId,
-            row::setSizeCode, row::setSizeText);
+            row::setSizeCode, row::setSizeText, importCache);
         resolveOneCodeField("color", "颜色码", row.getColorCode(), dictCache.get("color"), rowIssues, batchId,
-            row::setColorCode, row::setColorText);
+            row::setColorCode, row::setColorText, importCache);
         resolveOneCodeField("material", "材质码", row.getMaterialCode(), dictCache.get("material"), rowIssues, batchId,
-            row::setMaterialCode, row::setMaterialText);
+            row::setMaterialCode, row::setMaterialText, importCache);
     }
 
     private void resolveOneCodeField(String dictType, String label, String raw, List<CategoryDict> dicts,
                                      List<String> rowIssues, String batchId,
                                      java.util.function.Consumer<String> codeSetter,
-                                     java.util.function.Consumer<String> textSetter) {
+                                     java.util.function.Consumer<String> textSetter,
+                                     BatchImportCache importCache) {
         if (!StringUtils.hasText(raw)) {
             return;
         }
-        String resolved = normalizeDictCode(dictType, raw, dicts);
+        String resolved = normalizeDictCode(dictType, raw, dicts, importCache);
         if (isValidDictCode(resolved, dicts)) {
             codeSetter.accept(resolved);
             return;
@@ -4258,7 +4352,8 @@ public class ExcelAiImportService {
         codeSetter.accept(null);
         textSetter.accept(trimmed);
         rowIssues.add(label + "未识别: " + trimmed + "，已按原文保留，待治理归一");
-        dictUnresolvedService.record(dictType, trimmed, batchId, SecurityOperatorContext.currentUsername());
+        // 3.4：批次聚合采集（此处为事务外调用点，对齐原实时自动提交语义，直接并入已提交计数）
+        importCache.recordUnresolved(dictType, trimmed, batchId, false);
     }
 
     private boolean isValidDictCode(String code, List<CategoryDict> dicts) {
@@ -4269,24 +4364,27 @@ public class ExcelAiImportService {
     }
 
     private String normalizeDictCode(String input, List<CategoryDict> dicts) {
-        return normalizeDictCode(null, input, dicts);
+        return normalizeDictCode(null, input, dicts, null);
     }
 
     /**
-     * 尽力将输入归一为字典码：别名（dict_alias）→ 字典码（忽略大小写）→ 字典名；未命中返回原值。
+     * 尽力将输入归一为字典码：别名（dict_alias 批次内存快照）→ 字典码（忽略大小写）→ 字典名；
+     * 未命中返回原值。
      *
-     * @param dictType 字典类型（提供时启用别名解析；为 null 时跳过别名）
-     * @param input    原始输入
-     * @param dicts    字典列表
+     * @param dictType    字典类型（提供时启用别名解析；为 null 时跳过别名）
+     * @param input       原始输入
+     * @param dicts       字典列表
+     * @param importCache 批次导入缓存（别名内存快照；为 null 时跳过别名解析）
      * @return 归一后的字典码，未命中返回原值
      */
-    private String normalizeDictCode(String dictType, String input, List<CategoryDict> dicts) {
+    private String normalizeDictCode(String dictType, String input, List<CategoryDict> dicts,
+                                     BatchImportCache importCache) {
         if (!StringUtils.hasText(input)) {
             return null;
         }
         String trimmed = input.trim();
-        if (StringUtils.hasText(dictType)) {
-            String byAlias = dictAliasService.resolveAlias(dictType, trimmed);
+        if (StringUtils.hasText(dictType) && importCache != null) {
+            String byAlias = importCache.resolveAlias(dictType, trimmed);
             if (StringUtils.hasText(byAlias)) {
                 return byAlias;
             }
@@ -4857,10 +4955,11 @@ public class ExcelAiImportService {
                 // 材质码尽力解析（别名→字典）；未识别时依次回退行级材质码、行材质标签首值
                 // （复用同一字典缓存），覆盖「单列出厂价 + 行材质列有值」场景；
                 // 全部落空才降级为原文（material_text）并采集待治理，不阻断变体/报价创建
-                String materialCode = resolveMaterialCode(materialName, dictCache.get("material"));
+                String materialCode = resolveMaterialCode(materialName, dictCache.get("material"), importCache);
                 String materialText = null;
                 if (materialCode == null) {
-                    String fallbackMaterialCode = resolveRowLevelMaterialCode(baseRow, dictCache.get("material"));
+                    String fallbackMaterialCode = resolveRowLevelMaterialCode(baseRow, dictCache.get("material"),
+                        importCache);
                     if (fallbackMaterialCode != null) {
                         materialCode = fallbackMaterialCode;
                         rowIssues.add(StringUtils.hasText(materialName)
@@ -4875,15 +4974,16 @@ public class ExcelAiImportService {
                     } else if (StringUtils.hasText(materialName)) {
                         materialText = materialName.trim();
                         rowIssues.add("材质码未识别: " + materialText + "，已按原文保留，待治理归一");
-                        dictUnresolvedService.record("material", materialText, null, SecurityOperatorContext.currentUsername());
+                        // 3.4：批次聚合采集（行事务内调用点，随行提交并入/回滚丢弃）
+                        importCache.recordUnresolved("material", materialText, null, true);
                     }
                 }
 
-                // 交期：行级 Excel 值优先，否则按工厂交期规则动态计算
+                // 交期：行级 Excel 值优先，否则按工厂交期规则动态计算（3.4：批次预载规则内存匹配）
                 Integer leadTimeDays = baseRow.getLeadTimeDays() != null
                     ? baseRow.getLeadTimeDays()
                     : calculateLeadTime(factoryCode, categoryCode, materialGradeCode,
-                        request.getDefaultLeadTimeDays());
+                        request.getDefaultLeadTimeDays(), importCache);
 
                 // 按尺寸规格展开：多尺寸时同一价格列对每个尺寸各建/复用一个变体并挂 RSKU
                 for (SizeSpecParser.SizeSpec spec : specLoop) {
@@ -5311,12 +5411,12 @@ public class ExcelAiImportService {
     }
 
     private Integer calculateLeadTime(String factoryCode, String categoryCode, String materialGradeCode,
-                                      Integer defaultLeadTimeDays) {
+                                      Integer defaultLeadTimeDays, BatchImportCache importCache) {
         if (factoryCode == null) {
             return defaultLeadTimeDays;
         }
-        Integer ruleDays = factoryLeadTimeRuleService.calculateLeadTime(factoryCode, categoryCode, materialGradeCode,
-            "standard", 1);
+        Integer ruleDays = factoryLeadTimeRuleService.calculateLeadTime(importCache.leadTimeRules, categoryCode,
+            materialGradeCode, "standard", 1);
         return ruleDays != null ? ruleDays : defaultLeadTimeDays;
     }
 
@@ -5363,11 +5463,12 @@ public class ExcelAiImportService {
         }
     }
 
-    private String resolveMaterialCode(String materialName, List<CategoryDict> materials) {
+    private String resolveMaterialCode(String materialName, List<CategoryDict> materials,
+                                       BatchImportCache importCache) {
         if (!StringUtils.hasText(materialName) || materials == null) {
             return null;
         }
-        String byAlias = dictAliasService.resolveAlias("material", materialName.trim());
+        String byAlias = importCache.resolveAlias("material", materialName.trim());
         if (StringUtils.hasText(byAlias)) {
             return byAlias;
         }
@@ -5383,16 +5484,18 @@ public class ExcelAiImportService {
      * 价格列材质未识别时的行级回退：行级材质码（prepareRow 已完成别名→字典归一）优先，
      * 其次取行材质标签首值经同一材质字典缓存归一（resolveMaterialCode 复用）。
      *
-     * @param row       产品导入行
-     * @param materials 材质字典缓存（与价格列解析共用）
+     * @param row         产品导入行
+     * @param materials   材质字典缓存（与价格列解析共用）
+     * @param importCache 批次导入缓存（别名内存快照）
      * @return 回退材质码；行级亦无可用材质时返回 null
      */
-    private String resolveRowLevelMaterialCode(ProductImportRow row, List<CategoryDict> materials) {
+    private String resolveRowLevelMaterialCode(ProductImportRow row, List<CategoryDict> materials,
+                                               BatchImportCache importCache) {
         if (StringUtils.hasText(row.getMaterialCode())) {
             return row.getMaterialCode();
         }
         String firstTag = splitCsv(row.getMaterialTags()).stream().findFirst().orElse(null);
-        return resolveMaterialCode(firstTag, materials);
+        return resolveMaterialCode(firstTag, materials, importCache);
     }
 
     private String resolvePriceBand(BigDecimal price) {
@@ -5432,7 +5535,8 @@ public class ExcelAiImportService {
      * 归一后按码去重。风格侧处理保持不变。</p>
      */
     private void saveStylesAndScenes(String rspuId, ProductImportRow row,
-                                     Map<String, List<CategoryDict>> dictCache, List<String> rowIssues) {
+                                     Map<String, List<CategoryDict>> dictCache, List<String> rowIssues,
+                                     BatchImportCache importCache) {
         rspuStyleMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuStyle>()
             .eq("rspu_id", rspuId));
         // 风格支持多值（「中古风,奶油风」「中古风/奶油风」等写法）：
@@ -5460,7 +5564,7 @@ public class ExcelAiImportService {
         List<String> sceneCodes = splitCsv(row.getSceneTags());
         java.util.Set<String> seenSceneCodes = new java.util.HashSet<>();
         for (String code : sceneCodes) {
-            String sceneCode = normalizeDictCode("scene", code, dictCache.get("scene"));
+            String sceneCode = normalizeDictCode("scene", code, dictCache.get("scene"), importCache);
             if (!StringUtils.hasText(sceneCode)) {
                 continue;
             }
@@ -5469,7 +5573,8 @@ public class ExcelAiImportService {
                 String trimmed = code.trim();
                 log.warn("导入场景标签未命中 scene 字典，跳过 rspu_scene 写入，rspuId={}, value={}", rspuId, trimmed);
                 rowIssues.add("场景标签未识别: " + trimmed + "，已跳过场景关联写入，待治理归一");
-                dictUnresolvedService.record("scene", trimmed, null, SecurityOperatorContext.currentUsername());
+                // 3.4：批次聚合采集（此处为行事务内调用点，随行提交并入/回滚丢弃，对齐原同事务语义）
+                importCache.recordUnresolved("scene", trimmed, null, true);
                 continue;
             }
             if (!seenSceneCodes.add(sceneCode)) {
@@ -5842,11 +5947,63 @@ public class ExcelAiImportService {
         final Set<String> touchedCodes = new HashSet<>();
         /** 本行加载/追加过快照的 rspu_id，回滚时逐出 */
         final Set<String> touchedRspuIds = new HashSet<>();
+        /** 批次级字典别名快照（3.4）：dictType → (aliasName → dictCode)，行内别名解析走内存 */
+        final Map<String, Map<String, String>> aliasByType = new HashMap<>();
+        /** 批次工厂交期规则快照（3.4）：行内内存匹配，替代逐行查库 */
+        List<FactoryLeadTimeRule> leadTimeRules = List.of();
+        /** 已提交行的未归一值采集计数（3.4）：批次末聚合落库，occurrence_count 与逐条采集一致 */
+        final Map<UnresolvedKey, Integer> unresolvedCounts = new HashMap<>();
+        /** 本行事务内采集、尚未提交的未归一值计数；commitRow 并入，rollbackRow 丢弃（对齐原同事务回滚语义） */
+        final Map<UnresolvedKey, Integer> pendingUnresolvedCounts = new HashMap<>();
 
-        /** 行事务提交成功：并入本行新建 RSPU，清空行级追踪。 */
+        /**
+         * 内存别名解析（语义同 {@code DictAliasService.resolveAlias}：空输入/未命中返回 null，按 trim 后名称匹配）。
+         *
+         * @param dictType  字典类型
+         * @param aliasName 别名（工厂方言叫法）
+         * @return 字典码；不存在返回 null
+         */
+        String resolveAlias(String dictType, String aliasName) {
+            if (!StringUtils.hasText(dictType) || !StringUtils.hasText(aliasName)) {
+                return null;
+            }
+            Map<String, String> byName = aliasByType.get(dictType);
+            return byName == null ? null : byName.get(aliasName.trim());
+        }
+
+        /** 导入中学到的新别名同步进内存 Map（与库写回配套调用）。 */
+        void learnAlias(String dictType, String aliasName, String dictCode) {
+            if (!StringUtils.hasText(dictType) || !StringUtils.hasText(aliasName) || !StringUtils.hasText(dictCode)) {
+                return;
+            }
+            aliasByType.computeIfAbsent(dictType, k -> new HashMap<>()).put(aliasName.trim(), dictCode);
+        }
+
+        /**
+         * 采集一个未归一值到批次聚合器（不落库）。
+         *
+         * @param inTransaction true = 行事务内采集（先入 pending，随行提交并入/回滚丢弃）；
+         *                      false = 事务外采集（原实时自动提交语义，直接并入已提交计数）
+         */
+        void recordUnresolved(String dictType, String rawValue, String batchId, boolean inTransaction) {
+            if (!StringUtils.hasText(dictType) || !StringUtils.hasText(rawValue)) {
+                return;
+            }
+            String value = rawValue.trim();
+            // 与 DictUnresolvedService.record 同口径：空值/超长（>128）不采集
+            if (value.isEmpty() || value.length() > 128) {
+                return;
+            }
+            UnresolvedKey key = new UnresolvedKey(dictType, value, batchId);
+            (inTransaction ? pendingUnresolvedCounts : unresolvedCounts).merge(key, 1, Integer::sum);
+        }
+
+        /** 行事务提交成功：并入本行新建 RSPU 与事务内采集的未归一值计数，清空行级追踪。 */
         void commitRow() {
             rspuByExternalCode.putAll(pendingNewRspu);
             pendingNewRspu.clear();
+            pendingUnresolvedCounts.forEach((key, count) -> unresolvedCounts.merge(key, count, Integer::sum));
+            pendingUnresolvedCounts.clear();
             touchedCodes.clear();
             touchedRspuIds.clear();
         }
@@ -5857,9 +6014,20 @@ public class ExcelAiImportService {
             touchedRspuIds.forEach(variantsByRspuId::remove);
             touchedRspuIds.forEach(imagesByRspuId::remove);
             pendingNewRspu.clear();
+            pendingUnresolvedCounts.clear();
             touchedCodes.clear();
             touchedRspuIds.clear();
         }
+    }
+
+    /**
+     * 未归一值采集聚合键（3.4）：同 (dictType, rawValue, batchId) 批次内按出现次数累计。
+     *
+     * @param dictType 字典类型
+     * @param rawValue 未归一原文（已 trim、已过滤空值/超长）
+     * @param batchId  采集上下文批次 ID（可为 null，与原 record 调用点口径一致）
+     */
+    private record UnresolvedKey(String dictType, String rawValue, String batchId) {
     }
 
     /**
