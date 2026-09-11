@@ -123,12 +123,30 @@ class DictAliasServiceTest {
     }
 
     @Test
-    void saveAlias_shouldSwallowConcurrentUniqueViolation() {
-        // 并发下另一请求已写入同 (dict_type, alias_name)：唯一约束冲突安全跳过
-        when(dictAliasMapper.selectOne(any())).thenReturn(null);
-        when(dictAliasMapper.insert(any(DictAlias.class)))
-            .thenThrow(new DataIntegrityViolationException("duplicate key uk_dict_alias"));
+    void loadAliases_shouldGroupByDictType() {
+        // 3.4：批次级别名预载——一把 in 查询返回 dictType → (aliasName → dictCode) 内存 Map
+        DictAlias a1 = new DictAlias();
+        a1.setDictType("category");
+        a1.setAliasName("茶桌");
+        a1.setDictCode("TB");
+        DictAlias a2 = new DictAlias();
+        a2.setDictType("material");
+        a2.setAliasName("半青皮");
+        a2.setDictCode("LEATHER_HALF");
+        when(dictAliasMapper.selectList(any())).thenReturn(List.of(a1, a2));
 
-        assertDoesNotThrow(() -> dictAliasService.saveAlias("category", "茶桌", "TB", "user-1"));
+        Map<String, Map<String, String>> result = dictAliasService.loadAliases(List.of("category", "material"));
+
+        assertEquals(2, result.size());
+        assertEquals("TB", result.get("category").get("茶桌"));
+        assertEquals("LEATHER_HALF", result.get("material").get("半青皮"));
+    }
+
+    @Test
+    void loadAliases_shouldReturnEmptyForBlankInput() {
+        assertTrue(dictAliasService.loadAliases(List.of()).isEmpty());
+        assertTrue(dictAliasService.loadAliases(null).isEmpty());
+        assertTrue(dictAliasService.loadAliases(List.of(" ", "")).isEmpty());
+        verify(dictAliasMapper, never()).selectList(any());
     }
 }

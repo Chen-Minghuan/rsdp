@@ -98,4 +98,44 @@ class DictUnresolvedServiceTest {
         assertEquals("ignored", existing.getStatus());
         verify(mapper).updateById(existing);
     }
+
+    @Test
+    void recordOccurrences_firstSeen_shouldInsertWithCount() {
+        // 3.4：批次聚合落库——首次出现按聚合计数插入，与逐条 record N 次的最终计数一致
+        when(mapper.selectOne(any())).thenReturn(null);
+
+        service.recordOccurrences("material", "半青皮", 5, "BATCH-1", "admin");
+
+        ArgumentCaptor<DictUnresolvedValue> captor = ArgumentCaptor.forClass(DictUnresolvedValue.class);
+        verify(mapper).insert(captor.capture());
+        assertEquals(5, captor.getValue().getOccurrenceCount());
+        assertEquals("pending", captor.getValue().getStatus());
+        assertEquals("BATCH-1", captor.getValue().getLastBatchId());
+    }
+
+    @Test
+    void recordOccurrences_duplicate_shouldIncrementByCount() {
+        DictUnresolvedValue existing = new DictUnresolvedValue();
+        existing.setId(3L);
+        existing.setDictType("color");
+        existing.setRawValue("焦糖棕");
+        existing.setOccurrenceCount(2);
+        existing.setStatus("pending");
+        when(mapper.selectOne(any())).thenReturn(existing);
+
+        service.recordOccurrences("color", "焦糖棕", 7, null, "editor");
+
+        assertEquals(9, existing.getOccurrenceCount());
+        verify(mapper).updateById(existing);
+        verify(mapper, never()).insert(any(DictUnresolvedValue.class));
+    }
+
+    @Test
+    void recordOccurrences_invalidCountOrBlank_shouldSkip() {
+        service.recordOccurrences("size", "值", 0, null, null);
+        service.recordOccurrences("size", "  ", 3, null, null);
+        service.recordOccurrences("", "值", 3, null, null);
+
+        verify(mapper, never()).insert(any(DictUnresolvedValue.class));
+    }
 }

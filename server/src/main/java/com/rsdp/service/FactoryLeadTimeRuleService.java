@@ -119,6 +119,16 @@ public class FactoryLeadTimeRuleService {
     }
 
     /**
+     * 查询工厂全部生效规则（导入批次级预载用，行内走内存匹配消除逐行查库）。
+     *
+     * @param factoryCode 工厂代码
+     * @return 生效规则列表
+     */
+    public List<FactoryLeadTimeRule> listActiveRules(String factoryCode) {
+        return ruleMapper.selectActiveRulesByFactory(factoryCode);
+    }
+
+    /**
      * 动态计算交期。
      *
      * <p>匹配顺序：精确匹配 → 忽略材质等级 → 忽略工艺类型 → 仅按工厂默认。</p>
@@ -132,8 +142,24 @@ public class FactoryLeadTimeRuleService {
      */
     public Integer calculateLeadTime(String factoryCode, String categoryCode,
                                      String materialGradeCode, String processType, Integer quantity) {
-        List<FactoryLeadTimeRule> rules = ruleMapper.selectActiveRulesByFactory(factoryCode);
-        if (rules.isEmpty()) {
+        return calculateLeadTime(ruleMapper.selectActiveRulesByFactory(factoryCode), categoryCode,
+            materialGradeCode, processType, quantity);
+    }
+
+    /**
+     * 基于预载规则快照计算交期（匹配顺序与 {@link #calculateLeadTime(String, String, String, String, Integer)}
+     * 完全一致，供批量导入等已按批次预载规则的链路走内存匹配）。
+     *
+     * @param rules             预载的工厂生效规则快照（可为 null/空）
+     * @param categoryCode      品类代码
+     * @param materialGradeCode 材质等级代码
+     * @param processType       工艺类型
+     * @param quantity          数量
+     * @return 交期天数；无规则时返回 null
+     */
+    public Integer calculateLeadTime(List<FactoryLeadTimeRule> rules, String categoryCode,
+                                     String materialGradeCode, String processType, Integer quantity) {
+        if (rules == null || rules.isEmpty()) {
             return null;
         }
 

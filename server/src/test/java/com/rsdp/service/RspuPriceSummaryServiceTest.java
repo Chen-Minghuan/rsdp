@@ -106,4 +106,65 @@ class RspuPriceSummaryServiceTest {
         assertThat(result).containsOnlyKeys("RSPU-1");
         assertThat(result.get("RSPU-1").getMinFactoryPrice()).isEqualByComparingTo("100");
     }
+
+    @Test
+    void deferralScopeCollectsAndRecalculatesEachRspuOnce() {
+        // 3.4：延迟重算作用域——作用域内 recalculate 只登记去重不查库，
+        // close 时每 RSPU 只重算一次（同一 RSPU 多次 RSKU 写入合并为一次投影重算）
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        try (RspuPriceSummaryService.DeferralScope scope = service.openDeferralScope()) {
+            service.recalculate("RSPU-1");
+            service.recalculate("RSPU-1");
+            service.recalculate("RSPU-1");
+            service.recalculate("RSPU-2");
+            service.recalculate(" ");
+            // 作用域内不触库
+            verifyNoInteractions(rskuSupplyMapper, rspuPriceSummaryMapper);
+        }
+
+        // close 后每 RSPU 恰好重算一次
+        ArgumentCaptor<RspuPriceSummary> captor = ArgumentCaptor.forClass(RspuPriceSummary.class);
+        verify(rspuPriceSummaryMapper, org.mockito.Mockito.times(2)).upsert(captor.capture());
+        assertThat(captor.getAllValues()).extracting(RspuPriceSummary::getRspuId)
+            .containsExactlyInAnyOrder("RSPU-1", "RSPU-2");
+    }
+
+    @Test
+    void deferralScopeCloseWithoutCollectedIdsDoesNothing() {
+        try (RspuPriceSummaryService.DeferralScope ignored = service.openDeferralScope()) {
+            // 无 recalculate 调用
+        }
+        verifyNoInteractions(rskuSupplyMapper, rspuPriceSummaryMapper);
+    }
+
+    @Test
+    void recalculateOutsideDeferralScopeHitsDbImmediately() {
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        service.recalculate("RSPU-1");
+
+        verify(rspuPriceSummaryMapper).upsert(any(RspuPriceSummary.class));
+    }
+
+    @Test
+    void nestedDeferralScopeMergesIntoOuter() {
+        // 嵌套作用域：内层 close 不触库，并入外层，外层 close 统一重算一次
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        try (RspuPriceSummaryService.DeferralScope outer = service.openDeferralScope()) {
+            service.recalculate("RSPU-1");
+            try (RspuPriceSummaryService.DeferralScope inner = service.openDeferralScope()) {
+                service.recalculate("RSPU-1");
+                service.recalculate("RSPU-2");
+            }
+            // 内层 close 后不触库
+            verifyNoInteractions(rskuSupplyMapper, rspuPriceSummaryMapper);
+        }
+
+        ArgumentCaptor<RspuPriceSummary> captor = ArgumentCaptor.forClass(RspuPriceSummary.class);
+        verify(rspuPriceSummaryMapper, org.mockito.Mockito.times(2)).upsert(captor.capture());
+        assertThat(captor.getAllValues()).extracting(RspuPriceSummary::getRspuId)
+            .containsExactlyInAnyOrder("RSPU-1", "RSPU-2");
+    }
 }
