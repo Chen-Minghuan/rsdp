@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import {
   NCard,
   NButton,
@@ -114,17 +114,25 @@ const step2Rules: FormRules = {
   variantDisplayName: { required: true, message: '请输入变体显示名称', trigger: 'blur' },
   variantMaterialCode: { required: true, message: '请选择变体主材质码', trigger: 'change' },
   factoryCode: { required: true, message: '请选择工厂', trigger: 'change' },
-  factoryPrice: { required: true, type: 'number', message: '请输入出厂价', trigger: 'blur' }
+  factoryPrice: {
+    required: true,
+    type: 'number',
+    validator: (_rule, value: number | null) => {
+      if (value === null || value === undefined) return new Error('请输入出厂价')
+      if (value <= 0) return new Error('出厂价必须大于 0')
+      return true
+    },
+    trigger: 'blur'
+  }
 }
 
 const step1FormRef = ref<InstanceType<typeof NForm> | null>(null)
 const step2FormRef = ref<InstanceType<typeof NForm> | null>(null)
 
-onMounted(async () => {
-  if (!isFactoryAdmin.value) {
-    errorMessage.value = '仅工厂管理员可访问该页面'
-    return
-  }
+const dictLoadError = ref(false)
+
+async function loadDicts() {
+  dictLoadError.value = false
   try {
     const [categories, styles, scenes, materials, fabrics, levels] = await Promise.all([
       listDicts('category'),
@@ -141,9 +149,42 @@ onMounted(async () => {
     fabricOptions.value = fabrics
     productLevelOptions.value = levels
   } catch (e) {
-    errorMessage.value = '加载字典失败，请刷新页面重试'
+    dictLoadError.value = true
+    errorMessage.value = '加载字典失败，请点击重试'
     console.error(e)
   }
+}
+
+/** 表单或图片有内容且未提交时为脏状态（提交成功后 resetForm 还原即视为干净）。 */
+const initialFormJson = JSON.stringify(form.value)
+
+const hasUnsavedChanges = computed(() =>
+  JSON.stringify(form.value) !== initialFormJson || fileList.value.length > 0
+)
+
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (hasUnsavedChanges.value) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
+onBeforeRouteLeave(() => {
+  if (!hasUnsavedChanges.value) return true
+  return window.confirm('当前表单有未提交的内容，离开后将丢失，确定要离开吗？')
+})
+
+onMounted(async () => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  if (!isFactoryAdmin.value) {
+    errorMessage.value = '仅工厂管理员可访问该页面'
+    return
+  }
+  await loadDicts()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 
 function validateImages(): string | null {
@@ -313,6 +354,13 @@ function viewCreatedProduct() {
         {{ errorMessage }}
       </n-alert>
 
+      <n-alert v-if="dictLoadError" type="warning" style="margin-bottom: 16px;">
+        <n-space align="center">
+          <span>字典数据加载失败，下拉选项不可用。</span>
+          <n-button size="small" @click="loadDicts">重试</n-button>
+        </n-space>
+      </n-alert>
+
       <n-steps :current="currentStep" style="margin-bottom: 24px;">
         <n-step title="产品信息" description="填写 RSPU 基础信息并上传图片" />
         <n-step title="变体与报价" description="填写默认变体及第一条 RSKU" />
@@ -464,6 +512,9 @@ function viewCreatedProduct() {
             placeholder="请选择工厂"
             clearable
           />
+          <div v-if="factoryOptions.length === 0" style="color: #999; font-size: 12px; margin-top: 4px;">
+            未关联工厂，请联系平台管理员配置
+          </div>
         </n-form-item>
 
         <n-form-item label="工厂 SKU">
@@ -471,7 +522,7 @@ function viewCreatedProduct() {
         </n-form-item>
 
         <n-form-item label="出厂价" path="factoryPrice">
-          <n-input-number v-model:value="form.factoryPrice" placeholder="请输入出厂价" :min="0" style="width: 100%;" />
+          <n-input-number v-model:value="form.factoryPrice" placeholder="请输入出厂价" :min="0.01" style="width: 100%;" />
         </n-form-item>
 
         <n-form-item label="最小起订量">

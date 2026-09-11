@@ -611,4 +611,189 @@ class AsyncTaskProcessorTest {
         // Then：置存疑有 logReview 审计，操作人=任务创建人
         verify(auditLogService).logReview(eq("rspu_master"), eq(rspuId), any(), any(), eq("editor01"));
     }
+
+    // ==================== 文档导入批次任务（阶段 3.1） ====================
+
+    @Test
+    void processDocumentImport_shouldCompleteTaskWithBatchFinalStatus() throws Exception {
+        // Given：批次执行成功收尾（done）
+        PdfImportService pdfImportService = installPdfImportServiceProvider();
+
+        com.rsdp.entity.DocumentImportBatch batch = new com.rsdp.entity.DocumentImportBatch();
+        batch.setBatchId("BATCH-1");
+        batch.setStatus("done");
+        when(pdfImportService.executeImport("BATCH-1")).thenReturn(batch);
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setStatus("processing");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        // When
+        asyncTaskProcessor.processDocumentImport(taskId, "BATCH-1");
+
+        // Then：任务状态对齐批次终态 done，进度 100
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getStatus()).isEqualTo("done");
+        assertThat(taskCaptor.getValue().getProgress()).isEqualTo(100);
+        assertThat(taskCaptor.getValue().getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    void processDocumentImport_shouldMarkTaskFailedWhenBatchFailed() throws Exception {
+        // Given：批次全部失败（failed + errorMessage）
+        PdfImportService pdfImportService = installPdfImportServiceProvider();
+
+        com.rsdp.entity.DocumentImportBatch batch = new com.rsdp.entity.DocumentImportBatch();
+        batch.setBatchId("BATCH-2");
+        batch.setStatus("failed");
+        batch.setErrorMessage("未成功建档任何产品");
+        when(pdfImportService.executeImport("BATCH-2")).thenReturn(batch);
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setStatus("processing");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        // When
+        asyncTaskProcessor.processDocumentImport(taskId, "BATCH-2");
+
+        // Then：任务 failed，错误文案透传批次 errorMessage
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getStatus()).isEqualTo("failed");
+        assertThat(taskCaptor.getValue().getErrorMessage()).isEqualTo("未成功建档任何产品");
+    }
+
+    @Test
+    void processDocumentImport_shouldMarkTaskFailedWhenServiceThrows() throws Exception {
+        // Given：批次服务抛异常（致命错误）
+        PdfImportService pdfImportService = installPdfImportServiceProvider();
+        when(pdfImportService.executeImport("BATCH-3")).thenThrow(new RuntimeException("db down"));
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setStatus("processing");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        // When
+        asyncTaskProcessor.processDocumentImport(taskId, "BATCH-3");
+
+        // Then：任务 failed，异常文案落 errorMessage
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getStatus()).isEqualTo("failed");
+        assertThat(taskCaptor.getValue().getErrorMessage()).contains("db down");
+    }
+
+    @Test
+    void processDocumentImport_shouldSkipWhenTaskAlreadyClaimed() {
+        // Given：任务已被其他执行器认领
+        when(asyncTaskMapper.claimPendingTask(taskId)).thenReturn(0);
+
+        // When
+        asyncTaskProcessor.processDocumentImport(taskId, "BATCH-4");
+
+        // Then：不再更新任务状态
+        verify(asyncTaskMapper, times(0)).updateById(any(AsyncTask.class));
+    }
+
+    /**
+     * 安装 PdfImportService 的 ObjectProvider 桩（反射注入，避免 @InjectMocks 对多个
+     * ObjectProvider 字段的类型擦除歧义）。
+     *
+     * @return PdfImportService mock
+     */
+    @SuppressWarnings("unchecked")
+    private PdfImportService installPdfImportServiceProvider() throws Exception {
+        PdfImportService pdfImportService = org.mockito.Mockito.mock(PdfImportService.class);
+        org.springframework.beans.factory.ObjectProvider<PdfImportService> provider =
+            org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getObject()).thenReturn(pdfImportService);
+        java.lang.reflect.Field providerField =
+            AsyncTaskProcessor.class.getDeclaredField("pdfImportServiceProvider");
+        providerField.setAccessible(true);
+        providerField.set(asyncTaskProcessor, provider);
+        return pdfImportService;
+    }
+
+    // ==================== Excel 导入批次任务（阶段 3.2） ====================
+
+    @Test
+    void processExcelImport_shouldCompleteTaskWhenImportSucceeds() throws Exception {
+        // Given：批次执行成功（executeImport 正常返回，批次终态由服务侧落库）
+        ExcelAiImportService excelAiImportService = installExcelImportServiceProvider();
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setStatus("processing");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        // When
+        asyncTaskProcessor.processExcelImport(taskId, "BATCH-E1");
+
+        // Then：分发到 executeImport，任务 done、进度 100
+        verify(excelAiImportService).executeImport(taskId, "BATCH-E1");
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getStatus()).isEqualTo("done");
+        assertThat(taskCaptor.getValue().getProgress()).isEqualTo(100);
+        assertThat(taskCaptor.getValue().getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    void processExcelImport_shouldMarkTaskFailedWhenServiceThrows() throws Exception {
+        // Given：批次服务抛异常（致命错误，批次侧已置 failed）
+        ExcelAiImportService excelAiImportService = installExcelImportServiceProvider();
+        when(excelAiImportService.executeImport(taskId, "BATCH-E2"))
+            .thenThrow(new RuntimeException("db down"));
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setStatus("processing");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        // When
+        asyncTaskProcessor.processExcelImport(taskId, "BATCH-E2");
+
+        // Then：任务 failed，异常文案落 errorMessage
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getStatus()).isEqualTo("failed");
+        assertThat(taskCaptor.getValue().getErrorMessage()).contains("db down");
+    }
+
+    @Test
+    void processExcelImport_shouldSkipWhenTaskAlreadyClaimed() throws Exception {
+        // Given：任务已被其他执行器认领
+        ExcelAiImportService excelAiImportService = installExcelImportServiceProvider();
+        when(asyncTaskMapper.claimPendingTask(taskId)).thenReturn(0);
+
+        // When
+        asyncTaskProcessor.processExcelImport(taskId, "BATCH-E3");
+
+        // Then：不分发、不更新任务状态
+        verify(excelAiImportService, times(0)).executeImport(any(), any());
+        verify(asyncTaskMapper, times(0)).updateById(any(AsyncTask.class));
+    }
+
+    /**
+     * 安装 ExcelAiImportService 的 ObjectProvider 桩（反射注入，同 PdfImportService 桩模式）。
+     *
+     * @return ExcelAiImportService mock
+     */
+    @SuppressWarnings("unchecked")
+    private ExcelAiImportService installExcelImportServiceProvider() throws Exception {
+        ExcelAiImportService excelAiImportService = org.mockito.Mockito.mock(ExcelAiImportService.class);
+        org.springframework.beans.factory.ObjectProvider<ExcelAiImportService> provider =
+            org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        // lenient：任务已被认领的用例不会走到 getObject()
+        lenient().when(provider.getObject()).thenReturn(excelAiImportService);
+        java.lang.reflect.Field providerField =
+            AsyncTaskProcessor.class.getDeclaredField("excelImportServiceProvider");
+        providerField.setAccessible(true);
+        providerField.set(asyncTaskProcessor, provider);
+        return excelAiImportService;
+    }
 }

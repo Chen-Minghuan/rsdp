@@ -48,6 +48,36 @@ class PdfRendererTest {
         assertThat(images).hasSize(2);
     }
 
+    // ---------- 逐页流式渲染（阶段 3.1：PDF 导入异步批次化） ----------
+
+    @Test
+    void renderPage_shouldRenderSinglePageOnSharedDocument() throws IOException {
+        byte[] pdfBytes = createPdfBytes(3);
+
+        try (PDDocument document = org.apache.pdfbox.Loader.loadPDF(pdfBytes)) {
+            // 复用同一 PDDocument 逐页渲染，每页位图独立（调用方处理完即可释放）
+            for (int i = 0; i < 3; i++) {
+                BufferedImage image = PdfRenderer.renderPage(document, i, 72);
+                assertThat(image.getWidth()).isGreaterThan(0);
+                assertThat(image.getHeight()).isGreaterThan(0);
+            }
+        }
+    }
+
+    @Test
+    void renderPage_shouldRenderSameResultAsBatchRender() throws IOException {
+        byte[] pdfBytes = createPdfBytes(2);
+
+        List<BufferedImage> batchImages = PdfRenderer.renderPages(pdfBytes, 72);
+        try (PDDocument document = org.apache.pdfbox.Loader.loadPDF(pdfBytes)) {
+            for (int i = 0; i < batchImages.size(); i++) {
+                BufferedImage single = PdfRenderer.renderPage(document, i, 72);
+                assertThat(single.getWidth()).isEqualTo(batchImages.get(i).getWidth());
+                assertThat(single.getHeight()).isEqualTo(batchImages.get(i).getHeight());
+            }
+        }
+    }
+
     // ---------- 首页渲染为 PNG（户型图 PDF 支持，v3.0 §8 P2） ----------
 
     @Test

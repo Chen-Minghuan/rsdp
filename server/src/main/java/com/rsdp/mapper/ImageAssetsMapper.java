@@ -56,4 +56,18 @@ public interface ImageAssetsMapper extends BaseMapper<ImageAssets> {
      */
     @Select("SELECT * FROM image_assets WHERE content_hash = #{contentHash} AND deleted_at IS NULL LIMIT 1")
     ImageAssets selectByContentHash(String contentHash);
+
+    /**
+     * 查询软删超过阈值的图片资产（历史孤儿文件清理用，只删存储文件、行保留）。
+     *
+     * <p>手写 SQL 不走 @TableLogic 过滤，可查到已软删行。</p>
+     *
+     * @param threshold 软删时间阈值（deleted_at 早于此时间）
+     * @param limit     每批上限
+     * @return 软删超期的图片资产列表
+     */
+    @Select("SELECT * FROM image_assets WHERE deleted_at IS NOT NULL AND deleted_at < #{threshold}"
+        + " ORDER BY deleted_at LIMIT #{limit}")
+    List<ImageAssets> selectSoftDeletedBefore(@Param("threshold") java.time.LocalDateTime threshold,
+                                              @Param("limit") int limit);
 }

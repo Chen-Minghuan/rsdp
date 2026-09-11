@@ -1,11 +1,25 @@
 package com.rsdp.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.DocumentProductRegion;
 import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.dto.response.DocumentImportFailure;
 import com.rsdp.dto.response.DocumentImportResult;
+import com.rsdp.dto.response.DocumentImportSubmitResult;
+import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.DocumentImportBatch;
+import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.BusinessException;
+import com.rsdp.exception.ForbiddenException;
+import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.DocumentImportBatchMapper;
+import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.RspuMapper;
+import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.ContentHashes;
 import com.rsdp.util.ImageBackgroundAnalyzer;
 import com.rsdp.util.ImageWhitespaceTrimmer;
 import com.rsdp.util.PdfEmbeddedImageExtractor;
@@ -14,8 +28,14 @@ import com.rsdp.util.PdfRenderer;
 import com.rsdp.util.ProductBoxRefiner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
@@ -25,28 +45,58 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import com.rsdp.util.IdGenerator;
 
 /**
- * PDF 产品目录批量导入服务。
+ * PDF 产品目录批量导入服务（阶段 3.1：异步批次化）。
+ *
+ * <p>提交接口只做校验 + 原始文件落存储 + 建批次（pending）+ 建异步任务后立即返回 batchId；
+ * 批处理复用 async_task 体系（task_type=document_import）由 {@link AsyncTaskProcessor} 异步执行：
+ * 按检测批次大小分块逐页渲染（渲染一块 → AI 检测 → 裁剪产品图 → 释放该块位图），
+ * 全程不保留全量页位图；逐产品建档前按图片字节 contentHash 查重，命中跳过建档；
+ * 每处理完一页回写批次进度，前端按 batchId 轮询。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PdfImportService {
 
+    /** 批次状态：待处理 */
+    public static final String STATUS_PENDING = "pending";
+    /** 批次状态：处理中 */
+    public static final String STATUS_PROCESSING = "processing";
+    /** 批次状态：全部成功 */
+    public static final String STATUS_DONE = "done";
+    /** 批次状态：部分成功（含失败/跳过明细） */
+    public static final String STATUS_PARTIAL_SUCCESS = "partial_success";
+    /** 批次状态：失败 */
+    public static final String STATUS_FAILED = "failed";
+
+    /** 文档导入异步任务类型（async_task.task_type） */
+    public static final String TASK_TYPE_DOCUMENT_IMPORT = "document_import";
+
     private final VisionService visionService;
     private final ProductService productService;
+    private final DocumentImportBatchMapper batchMapper;
+    private final AsyncTaskMapper asyncTaskMapper;
+    private final ImageAssetsMapper imageAssetsMapper;
+    private final RspuMapper rspuMapper;
+    private final StorageService storageService;
+    private final AuditLogService auditLogService;
+    private final AsyncTaskProcessor asyncTaskProcessor;
+    private final ObjectMapper objectMapper;
 
-    @Value("${rsdp.document-import.pdf.max-file-size-mb:50}")
+    @Value("${rsdp.document-import.pdf.max-file-size-mb:100}")
     private int maxFileSizeMb;
 
-    // 默认页数上限 50：PDF 导入为同步全页位图渲染（页图驻留堆内存），页数过多有 OOM 风险；
-    // 待导入流程正式异步化/流式化后再评估上调。可通过 rsdp.document-import.pdf.max-pages 配置覆盖
-    @Value("${rsdp.document-import.pdf.max-pages:50}")
+    // PDF 导入正式上限 100 页 / 100MB（2026-09-11 决策点③定口径）：
+    // 导入已异步批次化 + 分块逐页流式渲染，页位图不再全量驻留堆内存。
+    // 可通过 rsdp.document-import.pdf.max-pages 配置覆盖
+    @Value("${rsdp.document-import.pdf.max-pages:100}")
     private int maxPages;
 
     @Value("${rsdp.document-import.pdf.render-dpi:200}")
@@ -94,90 +144,380 @@ public class PdfImportService {
     private static final double CROP_PAD_RATIO = 0.05;
 
     /**
-     * 导入 PDF 文件，自动识别产品页、裁剪产品图并创建 RSPU 录入任务。
+     * 提交 PDF 导入：校验 + 原始文件落存储 + 建批次（pending）+ 建异步任务后立即返回。
      *
      * @param file         PDF 文件
      * @param categoryHint 品类提示，可为空
-     * @return 导入批次结果
-     * @throws IOException 文件处理失败
+     * @return 提交结果（仅含 batchId，处理进度走批次查询接口轮询）
+     * @throws IOException 文件读取/存储失败
      */
-    public DocumentImportResult importPdf(MultipartFile file, String categoryHint) throws IOException {
-        long start = System.currentTimeMillis();
+    @Transactional
+    public DocumentImportSubmitResult importPdf(MultipartFile file, String categoryHint) throws IOException {
         long maxSizeBytes = (long) maxFileSizeMb * 1024 * 1024;
-        PdfFileValidator.validate(file, maxSizeBytes, maxPages);
-
-        String batchId = IdGenerator.batchId();
-        DocumentImportResult result = new DocumentImportResult();
-        result.setBatchId(batchId);
-
+        int totalPages = PdfFileValidator.validate(file, maxSizeBytes, maxPages);
         byte[] pdfBytes = file.getBytes();
 
-        // 嵌入图直取（零渲染损失的原图，优先于 AI 裁剪）；失败不影响主流程。
-        // 放在渲染之前执行：避免与整页位图同时占堆，降低内存峰值
-        Map<Integer, List<BufferedImage>> embeddedByPage = extractEmbeddedImagesSafely(pdfBytes, batchId);
+        String batchId = IdGenerator.batchId();
+        // 原始 PDF 落存储：批处理异步执行时从存储读回，请求线程不持有字节
+        String objectKey = "document-imports/" + batchId + ".pdf";
+        String storagePath;
+        try (InputStream in = new ByteArrayInputStream(pdfBytes)) {
+            storagePath = storageService.store(in, objectKey, pdfBytes.length, "application/pdf");
+        } catch (IOException e) {
+            log.error("保存原始 PDF 文件失败，batchId={}", batchId, e);
+            throw new BusinessException("保存原始 PDF 文件失败");
+        }
+        registerStorageRollbackCleanup(List.of(storagePath));
 
-        List<BufferedImage> pageImages = PdfRenderer.renderPages(pdfBytes, renderDpi);
-        result.setTotalPages(pageImages.size());
-        log.info("PDF 渲染完成，batchId={}，总页数={}，耗时 {}ms",
-            batchId, pageImages.size(), System.currentTimeMillis() - start);
+        DocumentImportBatch batch = new DocumentImportBatch();
+        batch.setBatchId(batchId);
+        batch.setFileName(file.getOriginalFilename());
+        batch.setStoragePath(storagePath);
+        batch.setStatus(STATUS_PENDING);
+        batch.setTotalPages(totalPages);
+        batch.setProcessedPages(0);
+        batch.setProductPages(0);
+        batch.setDetectedProducts(0);
+        batch.setSuccessCount(0);
+        batch.setFailCount(0);
+        batch.setSkipCount(0);
+        if (StringUtils.hasText(categoryHint)) {
+            // category_hint 列宽 VARCHAR(16)，超长截断防御（对齐 Excel 导入 saveBatch 口径）
+            String hint = categoryHint.trim().toUpperCase();
+            batch.setCategoryHint(hint.length() > 16 ? hint.substring(0, 16) : hint);
+        }
+        batch.setCreatedBy(SecurityOperatorContext.currentUserId());
+        batch.setCreatedAt(LocalDateTime.now());
+        batch.setUpdatedAt(LocalDateTime.now());
+        batchMapper.insert(batch);
+        auditLogService.logCreate("document_import_batch", batchId, batch, SecurityOperatorContext.currentUsername());
 
-        if (pageImages.isEmpty()) {
-            result.setFailedCount(1);
-            result.getFailures().add(new DocumentImportFailure(0, "PDF 没有可读取的页面"));
-            return result;
+        // 建异步任务（task_type=document_import）：批处理由 AsyncTaskProcessor 认领执行
+        String taskId = IdGenerator.taskId();
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setTaskType(TASK_TYPE_DOCUMENT_IMPORT);
+        task.setStatus(STATUS_PENDING);
+        task.setProgress(0);
+        task.setInputData(objectMapper.writeValueAsString(Map.of(
+            "batchId", batchId,
+            "objectKey", storagePath,
+            "fileName", file.getOriginalFilename() != null ? file.getOriginalFilename() : "",
+            "categoryHint", batch.getCategoryHint() != null ? batch.getCategoryHint() : ""
+        )));
+        task.setCreatedBy(SecurityOperatorContext.currentUsername());
+        task.setCreatedAt(LocalDateTime.now());
+        asyncTaskMapper.insert(task);
+
+        triggerAsyncImport(taskId, batchId);
+        log.info("PDF 导入批次已创建，batchId={}，taskId={}，总页数={}", batchId, taskId, totalPages);
+        return new DocumentImportSubmitResult(batchId);
+    }
+
+    /**
+     * 执行导入批次（由 {@link AsyncTaskProcessor#processDocumentImport} 异步调用）。
+     *
+     * <p>分块逐页流式处理：每次只渲染 {@code detectBatchSize} 页位图，检测 + 裁剪建档完成后
+     * 释放该块再渲染下一块，全程不保留全量页位图；每处理完一页回写批次进度。</p>
+     *
+     * @param batchId 批次 ID
+     * @return 终态批次实体（status 为 done/partial_success/failed）
+     * @throws BusinessException 批次不存在或处理发生致命错误（批次已置 failed）
+     */
+    public DocumentImportBatch executeImport(String batchId) {
+        long start = System.currentTimeMillis();
+        DocumentImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        batch.setStatus(STATUS_PROCESSING);
+        batch.setUpdatedAt(LocalDateTime.now());
+        batchMapper.updateById(batch);
+
+        byte[] pdfBytes;
+        try (InputStream in = storageService.get(batch.getStoragePath())) {
+            pdfBytes = in.readAllBytes();
+        } catch (Exception e) {
+            return failBatchFatally(batch, "读取原始 PDF 文件失败: " + e.getMessage(), e);
         }
 
-        // 分批进行页面区域检测
-        List<DocumentProductRegion> allRegions = detectProductRegions(pageImages);
-        log.info("PDF 页面区域检测完成，batchId={}，共 {} 页产品页",
-            batchId, allRegions.stream().filter(PdfImportService::isProductPageType).count());
-
-        // 逐产品创建录入任务：嵌入图直取优先，AI bbox 精修裁剪兜底
-        int productPages = 0;
-        int totalProducts = 0;
-        int successCount = 0;
-        int failedCount = 0;
-        for (DocumentProductRegion region : allRegions) {
-            // 注意：只按 pageType 判断，AI 判为产品页但漏检 bbox 时也要走嵌入图兜底
-            if (!isProductPageType(region)) {
-                continue;
+        ImportAccumulator acc = new ImportAccumulator();
+        try (PDDocument document = Loader.loadPDF(pdfBytes)) {
+            int totalPages = document.getNumberOfPages();
+            for (int chunkStart = 0; chunkStart < totalPages; chunkStart += detectBatchSize) {
+                int chunkEnd = Math.min(chunkStart + detectBatchSize, totalPages);
+                processPageChunk(document, batch, chunkStart, chunkEnd, acc);
             }
-            productPages++;
-            BufferedImage pageImage = pageImages.get(region.getPageIndex());
-            List<ProductSource> sources = buildProductSources(region,
-                embeddedByPage.get(region.getPageIndex()), pageImage.getWidth(), pageImage.getHeight());
-            if (sources.isEmpty()) {
-                log.warn("产品页未提取到任何产品图（AI 漏检且无嵌入大图），batchId={}，pageIndex={}",
-                    batchId, region.getPageIndex());
-            }
-            totalProducts += sources.size();
-            for (ProductSource source : sources) {
-                try {
-                    EntryInfo entryInfo = createEntryFromSource(batchId, pageImage, source, categoryHint);
-                    if (entryInfo != null && entryInfo.rspuId != null) {
-                        result.getRspuIds().add(entryInfo.rspuId);
-                        result.getTaskIds().add(entryInfo.taskId);
-                        successCount++;
-                    }
-                } catch (Exception e) {
-                    failedCount++;
-                    log.warn("产品图提取或录入失败，batchId={}，pageIndex={}", batchId, region.getPageIndex(), e);
-                    result.getFailures().add(new DocumentImportFailure(region.getPageIndex(),
-                        "产品录入失败: " + e.getMessage()));
-                }
-            }
+        } catch (Exception e) {
+            return failBatchFatally(batch, "PDF 解析失败: " + e.getMessage(), e);
         }
-        result.setProductPages(productPages);
-        result.setTotalProducts(totalProducts);
-        result.setSuccessCount(successCount);
-        result.setFailedCount(failedCount);
 
-        log.info("PDF 导入完成，batchId={}，总页数={}，产品页={}，产品数={}，成功={}，失败={}，总耗时 {}ms",
-            batchId, result.getTotalPages(), result.getProductPages(), result.getTotalProducts(),
-            successCount, failedCount, System.currentTimeMillis() - start);
+        finalizeBatch(batch, acc);
+        log.info("PDF 导入批次完成，batchId={}，总页数={}，产品页={}，产品数={}，成功={}，失败={}，跳过={}，总耗时 {}ms",
+            batchId, batch.getTotalPages(), acc.productPages, acc.totalProducts,
+            acc.successCount, acc.failCount, acc.skipCount, System.currentTimeMillis() - start);
+        return batch;
+    }
 
+    /**
+     * 查询批次并校验归属：仅批次创建者本人或平台 ADMIN 可访问（对齐 excel_import_batch 口径）。
+     *
+     * @param batchId 批次 ID
+     * @return 批次实体
+     * @throws BusinessException  批次不存在
+     * @throws ForbiddenException 无权访问该批次
+     */
+    public DocumentImportBatch getAccessibleBatch(String batchId) {
+        DocumentImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        if (SecurityOperatorContext.isCurrentUserAdmin()) {
+            return batch;
+        }
+        if (batch.getCreatedBy() == null
+            || !batch.getCreatedBy().equals(SecurityOperatorContext.currentUserId())) {
+            throw new ForbiddenException("无权访问该导入批次: " + batchId);
+        }
+        return batch;
+    }
+
+    /**
+     * 查询批次状态/进度/结果（含 taskIds/rspuIds 配对，供前端继续轮询各产品识别任务）。
+     *
+     * @param batchId 批次 ID
+     * @return 批次结果视图
+     */
+    public DocumentImportResult getBatchResult(String batchId) {
+        DocumentImportBatch batch = getAccessibleBatch(batchId);
+        DocumentImportResult result = new DocumentImportResult();
+        result.setBatchId(batch.getBatchId());
+        result.setStatus(batch.getStatus());
+        result.setErrorMessage(batch.getErrorMessage());
+        result.setTotalPages(valueOrZero(batch.getTotalPages()));
+        result.setProcessedPages(valueOrZero(batch.getProcessedPages()));
+        result.setProductPages(valueOrZero(batch.getProductPages()));
+        result.setTotalProducts(valueOrZero(batch.getDetectedProducts()));
+        result.setSuccessCount(valueOrZero(batch.getSuccessCount()));
+        result.setFailedCount(valueOrZero(batch.getFailCount()));
+        result.setSkippedCount(valueOrZero(batch.getSkipCount()));
+        result.setTaskIds(readStringList(batch.getTaskIds()));
+        result.setRspuIds(readStringList(batch.getRspuIds()));
+        result.setFailures(readFailures(batch.getFailures()));
         return result;
     }
+
+    // ==================== 批处理执行（分块逐页流式） ====================
+
+    /**
+     * 处理一个页块（最多 detectBatchSize 页）：渲染本块页位图 → AI 检测 → 逐页裁剪建档 →
+     * 回写批次进度。方法返回后本块页位图即可被 GC，不驻留全量页位图。
+     *
+     * <p>package-private 以便测试通过 spy 验证分块流式行为。</p>
+     */
+    void processPageChunk(PDDocument document, DocumentImportBatch batch, int chunkStart, int chunkEnd,
+                          ImportAccumulator acc) {
+        // 逐页渲染：单页渲染失败只记录该页失败，不影响本块其余页
+        List<BufferedImage> chunkImages = new ArrayList<>(chunkEnd - chunkStart);
+        List<Integer> chunkIndexes = new ArrayList<>(chunkEnd - chunkStart);
+        for (int i = chunkStart; i < chunkEnd; i++) {
+            try {
+                chunkImages.add(PdfRenderer.renderPage(document, i, renderDpi));
+                chunkIndexes.add(i);
+            } catch (Exception e) {
+                log.error("PDF 第 {} 页渲染失败，batchId={}", i + 1, batch.getBatchId(), e);
+                acc.failures.add(new DocumentImportFailure(i, "页面渲染失败: " + e.getMessage()));
+                acc.pageResults.add(new PageResult(i, "render_failed", 0));
+                acc.processedPages++;
+            }
+        }
+
+        if (!chunkImages.isEmpty()) {
+            // 块内批量 AI 检测（region.pageIndex 为块内相对序号，映射回绝对页码）
+            List<DocumentProductRegion> regions = detectProductRegions(chunkImages);
+            for (int k = 0; k < regions.size(); k++) {
+                DocumentProductRegion region = regions.get(k);
+                int pageIndex = chunkIndexes.get(k);
+                if (region == null) {
+                    region = new DocumentProductRegion();
+                    region.setPageType("unknown");
+                }
+                region.setPageIndex(pageIndex);
+                processPage(document, batch, pageIndex, chunkImages.get(k), region, acc);
+            }
+        }
+        // 每处理完一个页块回写一次批次进度（块内逐页累计，块尾落库）
+        flushProgress(batch, acc);
+    }
+
+    /**
+     * 处理单页：产品页提取产品图并逐产品建档（含 contentHash 查重），非产品页只记页级结果。
+     */
+    private void processPage(PDDocument document, DocumentImportBatch batch, int pageIndex,
+                             BufferedImage pageImage, DocumentProductRegion region, ImportAccumulator acc) {
+        acc.processedPages++;
+        // 注意：只按 pageType 判断，AI 判为产品页但漏检 bbox 时也要走嵌入图兜底
+        if (!isProductPageType(region)) {
+            acc.pageResults.add(new PageResult(pageIndex,
+                region.getPageType() != null ? region.getPageType() : "unknown", 0));
+            return;
+        }
+        acc.productPages++;
+        List<BufferedImage> embeddedImages = extractEmbeddedImagesSafely(document, pageIndex, batch.getBatchId());
+        List<ProductSource> sources = buildProductSources(region, embeddedImages,
+            pageImage.getWidth(), pageImage.getHeight());
+        if (sources.isEmpty()) {
+            log.warn("产品页未提取到任何产品图（AI 漏检且无嵌入大图），batchId={}，pageIndex={}",
+                batch.getBatchId(), pageIndex);
+        }
+        acc.totalProducts += sources.size();
+        for (ProductSource source : sources) {
+            try {
+                EntryInfo entryInfo = createEntryFromSource(batch.getBatchId(), pageImage, source,
+                    batch.getCategoryHint(), pageIndex, acc);
+                if (entryInfo != null && entryInfo.rspuId != null) {
+                    acc.rspuIds.add(entryInfo.rspuId);
+                    acc.taskIds.add(entryInfo.taskId);
+                    acc.successCount++;
+                }
+            } catch (Exception e) {
+                acc.failCount++;
+                log.warn("产品图提取或录入失败，batchId={}，pageIndex={}", batch.getBatchId(), pageIndex, e);
+                acc.failures.add(new DocumentImportFailure(pageIndex, "产品录入失败: " + e.getMessage()));
+            }
+        }
+        acc.pageResults.add(new PageResult(pageIndex, "product", sources.size()));
+    }
+
+    /**
+     * 抽取单页嵌入大图，失败（含 OOM）时降级为空列表（纯 AI 裁剪路径）。
+     */
+    private List<BufferedImage> extractEmbeddedImagesSafely(PDDocument document, int pageIndex, String batchId) {
+        try {
+            List<BufferedImage> embedded =
+                PdfEmbeddedImageExtractor.extractPageImages(document, pageIndex, embeddedMinAreaRatio,
+                    embeddedMinPixelEdge);
+            if (!embedded.isEmpty()) {
+                log.info("PDF 第 {} 页抽取到 {} 张大嵌入图，batchId={}", pageIndex + 1, embedded.size(), batchId);
+            }
+            return embedded;
+        } catch (OutOfMemoryError e) {
+            // 防御性兜底：单图解码已有像素上限拦截，理论上不应到达；一旦发生必须让主流程继续
+            log.error("PDF 第 {} 页嵌入图抽取内存不足，降级为纯 AI 裁剪路径，batchId={}", pageIndex + 1, batchId);
+            return List.of();
+        } catch (Exception e) {
+            log.warn("PDF 第 {} 页嵌入图抽取失败，降级为纯 AI 裁剪路径，batchId={}", pageIndex + 1, batchId, e);
+            return List.of();
+        }
+    }
+
+    /**
+     * 批次进度落库（页块尾调用）：进度字段 + 明细 JSONB 全量刷新。
+     */
+    private void flushProgress(DocumentImportBatch batch, ImportAccumulator acc) {
+        batch.setProcessedPages(acc.processedPages);
+        batch.setProductPages(acc.productPages);
+        batch.setDetectedProducts(acc.totalProducts);
+        batch.setSuccessCount(acc.successCount);
+        batch.setFailCount(acc.failCount);
+        batch.setSkipCount(acc.skipCount);
+        batch.setFailures(toJson(acc.failures));
+        batch.setPageResults(toJson(acc.pageResults));
+        batch.setTaskIds(toJson(acc.taskIds));
+        batch.setRspuIds(toJson(acc.rspuIds));
+        batch.setUpdatedAt(LocalDateTime.now());
+        batchMapper.updateById(batch);
+    }
+
+    /**
+     * 批次正常收尾：无失败明细 → done；有成功/跳过 → partial_success；全部失败 → failed。
+     */
+    private void finalizeBatch(DocumentImportBatch batch, ImportAccumulator acc) {
+        flushProgress(batch, acc);
+        String finalStatus;
+        String errorMessage = null;
+        if (acc.failCount == 0 && acc.failures.isEmpty()) {
+            finalStatus = STATUS_DONE;
+        } else if (acc.successCount > 0 || acc.skipCount > 0) {
+            finalStatus = STATUS_PARTIAL_SUCCESS;
+        } else {
+            finalStatus = STATUS_FAILED;
+            errorMessage = "未成功建档任何产品"
+                + (acc.failures.isEmpty() ? "" : "，首个失败原因: " + acc.failures.get(0).getReason());
+        }
+        batch.setStatus(finalStatus);
+        batch.setErrorMessage(errorMessage);
+        batch.setCompletedAt(LocalDateTime.now());
+        batch.setUpdatedAt(LocalDateTime.now());
+        batchMapper.updateById(batch);
+        auditLogService.logUpdate("document_import_batch", batch.getBatchId(), null, batch, resolveBatchOperator(batch));
+    }
+
+    /**
+     * 致命失败收尾：批次置 failed 并写明原因，随后抛出让任务状态联动失败。
+     */
+    private DocumentImportBatch failBatchFatally(DocumentImportBatch batch, String message, Exception e) {
+        log.error("PDF 导入批次失败，batchId={}: {}", batch.getBatchId(), message, e);
+        batch.setStatus(STATUS_FAILED);
+        batch.setErrorMessage(message);
+        batch.setCompletedAt(LocalDateTime.now());
+        batch.setUpdatedAt(LocalDateTime.now());
+        batchMapper.updateById(batch);
+        auditLogService.logUpdate("document_import_batch", batch.getBatchId(), null, batch, resolveBatchOperator(batch));
+        return batch;
+    }
+
+    /**
+     * 批次审计操作人：异步线程无 SecurityContext，取批次创建人（created_by 为 userId，
+     * 审计口径沿用任务创建人语义，取不到按 system）。
+     */
+    private String resolveBatchOperator(DocumentImportBatch batch) {
+        return StringUtils.hasText(batch.getCreatedBy()) ? batch.getCreatedBy() : "system";
+    }
+
+    // ==================== 提交侧私有方法 ====================
+
+    /**
+     * 事务提交后触发异步批处理；无活动事务时直接投递（对齐 ProductService.triggerAsyncProcess 模式）。
+     */
+    private void triggerAsyncImport(String taskId, String batchId) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    asyncTaskProcessor.processDocumentImport(taskId, batchId);
+                }
+            });
+        } else {
+            asyncTaskProcessor.processDocumentImport(taskId, batchId);
+        }
+    }
+
+    /**
+     * 注册事务回滚清理：若当前事务最终回滚，则删除已写入存储的原始 PDF，避免孤儿文件。
+     */
+    private void registerStorageRollbackCleanup(List<String> objectKeys) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive() || objectKeys.isEmpty()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status != STATUS_ROLLED_BACK) {
+                    return;
+                }
+                for (String objectKey : objectKeys) {
+                    try {
+                        storageService.delete(objectKey);
+                    } catch (IOException e) {
+                        log.warn("事务回滚后清理文件失败: {}", objectKey, e);
+                    }
+                }
+            }
+        });
+    }
+
+    // ==================== 页面检测（块内批量 + 单页重试，逻辑与同步版一致） ====================
 
     /**
      * 按 pageType 判断产品页（不要求 products 非空，容忍 AI 漏检 bbox 的情况）。
@@ -193,6 +533,28 @@ public class PdfImportService {
      */
     private record ProductSource(String estimatedCategory, ProductBoundingBox bbox, BufferedImage embeddedImage,
                                  OcrResult nearbyText, List<ProductBoundingBox> siblingCores) {
+    }
+
+    /**
+     * 页级处理结果（page_results JSONB 明细元素）。
+     */
+    record PageResult(Integer pageIndex, String pageType, int productCount) {
+    }
+
+    /**
+     * 批次处理累计器：跨页块传递计数与明细，块尾由 {@link #flushProgress} 落库。
+     */
+    static final class ImportAccumulator {
+        int processedPages;
+        int productPages;
+        int totalProducts;
+        int successCount;
+        int failCount;
+        int skipCount;
+        final List<DocumentImportFailure> failures = new ArrayList<>();
+        final List<PageResult> pageResults = new ArrayList<>();
+        final List<String> taskIds = new ArrayList<>();
+        final List<String> rspuIds = new ArrayList<>();
     }
 
     /**
@@ -296,28 +658,7 @@ public class PdfImportService {
     }
 
     /**
-     * 抽取嵌入大图，失败（含 OOM）时降级为空 Map（纯 AI 裁剪路径）。
-     */
-    private Map<Integer, List<BufferedImage>> extractEmbeddedImagesSafely(byte[] pdfBytes, String batchId) {
-        try {
-            Map<Integer, List<BufferedImage>> embedded =
-                PdfEmbeddedImageExtractor.extractLargeImages(pdfBytes, embeddedMinAreaRatio, embeddedMinPixelEdge);
-            if (!embedded.isEmpty()) {
-                log.info("PDF 嵌入图抽取完成，batchId={}，共 {} 页含大嵌入图", batchId, embedded.size());
-            }
-            return embedded;
-        } catch (OutOfMemoryError e) {
-            // 防御性兜底：单图解码已有像素上限拦截，理论上不应到达；一旦发生必须让主流程继续
-            log.error("PDF 嵌入图抽取内存不足，降级为纯 AI 裁剪路径，batchId={}", batchId);
-            return Map.of();
-        } catch (Exception e) {
-            log.warn("PDF 嵌入图抽取失败，降级为纯 AI 裁剪路径，batchId={}", batchId, e);
-            return Map.of();
-        }
-    }
-
-    /**
-     * 分批检测所有页面的产品区域。
+     * 分批检测一个页块的产品区域（输入仅为本块页位图，region.pageIndex 为块内相对序号）。
      */
     private List<DocumentProductRegion> detectProductRegions(List<BufferedImage> pageImages) {
         List<DocumentProductRegion> allRegions = new ArrayList<>(pageImages.size());
@@ -434,10 +775,14 @@ public class PdfImportService {
      * 保守收紧（每边限幅 + 细腿保护 + 场景背景不收）+ 内容重裁（纯色背景下裁掉卡片底部
      * 说明文字带与边缘相邻图切片），宁可多留边也绝不切到产品。</p>
      *
-     * @return 录入信息，包含 RSPU ID 和任务 ID
+     * <p>建档前先按图片字节 contentHash 查 image_assets（未软删）查重（3.1）：命中即跳过建档，
+     * 在批次明细中记"已存在跳过"，防重传同一 PDF 整批重复建档。</p>
+     *
+     * @return 录入信息，包含 RSPU ID 和任务 ID；查重命中跳过返回 null
      */
     private EntryInfo createEntryFromSource(String batchId, BufferedImage pageImage, ProductSource source,
-                                            String categoryHint) throws IOException {
+                                            String categoryHint, int pageIndex, ImportAccumulator acc)
+        throws IOException {
         byte[] imageBytes;
         if (source.embeddedImage() != null) {
             // 嵌入原图：整图白边精修（去扫描边距 + 留白），不经任何渲染缩放；
@@ -458,6 +803,18 @@ public class PdfImportService {
             throw new BusinessException("提取产品图失败");
         }
 
+        // 图片内容查重（3.1）：同一产品图已入库（未软删）时跳过建档，防重传同一 PDF 整批重复。
+        // 脱敏口径参照 1.5/2.5：异步线程无 SecurityContext，isPlatformStaff() 恒为 false，
+        // 批次明细统一落中性文案（不含已有产品品名/编码）
+        ImageAssets duplicate = imageAssetsMapper.selectByContentHash(ContentHashes.sha256Hex(imageBytes));
+        if (duplicate != null) {
+            acc.skipCount++;
+            acc.failures.add(new DocumentImportFailure(pageIndex, buildDuplicateSkipMessage(duplicate)));
+            log.info("产品图已存在（contentHash 命中），跳过建档，batchId={}，pageIndex={}，命中 imageId={}",
+                batchId, pageIndex, duplicate.getImageId());
+            return null;
+        }
+
         String effectiveCategory = resolveCategory(source.estimatedCategory(), categoryHint);
         String filename = batchId + "_page_product.jpg";
         Map<String, Object> entryResult;
@@ -473,6 +830,79 @@ public class PdfImportService {
         }
         return null;
     }
+
+    /**
+     * 查重命中跳过建档的明细文案（脱敏口径对齐 ProductService.buildDuplicateEntryMessage：
+     * 非平台员工不含已有产品品名/编码；批处理在异步线程执行时统一为中性文案）。
+     */
+    private String buildDuplicateSkipMessage(ImageAssets duplicate) {
+        if (!SecurityOperatorContext.isPlatformStaff()) {
+            return "产品图已存在，跳过建档（避免重复录入）";
+        }
+        return "产品图已存在（对应产品：" + describeDuplicateProduct(duplicate) + "），跳过建档";
+    }
+
+    /**
+     * 描述图片查重命中的已有产品（品名 + 业务编码/RSPU ID），用于重复导入提示。
+     */
+    private String describeDuplicateProduct(ImageAssets duplicate) {
+        if (duplicate.getRspuId() == null) {
+            return "（图片 " + duplicate.getImageId() + "）";
+        }
+        RspuMaster rspu = rspuMapper.selectById(duplicate.getRspuId());
+        if (rspu == null) {
+            return "RSPU " + duplicate.getRspuId();
+        }
+        String name = StringUtils.hasText(rspu.getProductName()) ? rspu.getProductName() : rspu.getRspuId();
+        String code = StringUtils.hasText(rspu.getRspuCode()) ? "（" + rspu.getRspuCode() + "）" : "";
+        return "「" + name + "」" + code;
+    }
+
+    // ==================== 结果视图解析 ====================
+
+    private int valueOrZero(Integer value) {
+        return value != null ? value : 0;
+    }
+
+    private String toJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.warn("批次明细 JSON 序列化失败", e);
+            return null;
+        }
+    }
+
+    private List<String> readStringList(String json) {
+        if (!StringUtils.hasText(json)) {
+            return new ArrayList<>();
+        }
+        try {
+            return objectMapper.readValue(json,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+        } catch (Exception e) {
+            log.warn("批次 ID 列表 JSON 解析失败: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private List<DocumentImportFailure> readFailures(String json) {
+        if (!StringUtils.hasText(json)) {
+            return new ArrayList<>();
+        }
+        try {
+            return objectMapper.readValue(json,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, DocumentImportFailure.class));
+        } catch (Exception e) {
+            log.warn("批次失败明细 JSON 解析失败: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    // ==================== bbox 外扩与裁切边外延恢复（与同步版一致） ====================
 
     /**
      * 按 bbox 自身宽高的比例外扩（相对坐标，结果钳制在 [0,1] 内）。

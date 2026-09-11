@@ -1126,7 +1126,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
     <n-card v-if="currentStep === 4 && batchRecovering" title="导入进行中">
       <n-spin :show="true" description="正在查询批次导入进度…">
         <n-alert type="info" :show-icon="true">
-          导入请求超时，但批次仍在后台导入中。正在等待结果，完成后将自动展示，请勿重复提交。
+          导入已在后台执行中（大行量含图片下载/存储，可能需要数分钟）。正在等待结果，完成后将自动展示，请勿重复提交。
         </n-alert>
       </n-spin>
     </n-card>

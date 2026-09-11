@@ -458,6 +458,41 @@ class RskuServiceTest {
     }
 
     @Test
+    void createRsku_shouldThrowWhenPriceNotPositive() {
+        // 2.9：服务层兜底，0 价与负价均被拒（防绕过 Bean Validation 的内部调用）
+        RskuCreateRequest zeroPrice = new RskuCreateRequest();
+        zeroPrice.setFactoryPrice(BigDecimal.ZERO);
+        assertThatThrownBy(() -> rskuService.createRsku(zeroPrice))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("出厂价必须大于 0");
+
+        RskuCreateRequest negativePrice = new RskuCreateRequest();
+        negativePrice.setFactoryPrice(new BigDecimal("-1"));
+        assertThatThrownBy(() -> rskuService.createRsku(negativePrice))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("出厂价必须大于 0");
+    }
+
+    @Test
+    void updateRskuPrice_shouldThrowWhenPriceNotPositive() {
+        // 2.9：0 价与负价统一按「必须大于 0」拒绝（原仅拒绝负数）
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setRspuId("RSPU-TEST01");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("1200"));
+
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+
+        assertThatThrownBy(() -> rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", BigDecimal.ZERO, "调价"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("价格必须大于 0");
+        assertThatThrownBy(() -> rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", new BigDecimal("-100"), "调价"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("价格必须大于 0");
+    }
+
+    @Test
     void deleteRsku_shouldSoftDelete() {
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId("RSKU-TEST01");

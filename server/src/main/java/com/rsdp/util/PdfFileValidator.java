@@ -24,13 +24,14 @@ public final class PdfFileValidator {
      * @param file        上传文件
      * @param maxSizeBytes 最大允许字节数
      * @param maxPages    最大允许页数
+     * @return PDF 页数
      */
-    public static void validate(MultipartFile file, long maxSizeBytes, int maxPages) {
+    public static int validate(MultipartFile file, long maxSizeBytes, int maxPages) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException("请上传 PDF 文件");
         }
         if (file.getSize() > maxSizeBytes) {
-            throw new BusinessException("PDF 文件大小超过限制");
+            throw new BusinessException("PDF 文件大小超过限制（最大 " + (maxSizeBytes / 1024 / 1024) + "MB）");
         }
         if (!isPdf(file)) {
             throw new BusinessException("仅支持 PDF 文件，请检查文件格式");
@@ -42,6 +43,7 @@ public final class PdfFileValidator {
         if (pages == 0) {
             throw new BusinessException("PDF 文件没有可读取的页面");
         }
+        return pages;
     }
 
     /**

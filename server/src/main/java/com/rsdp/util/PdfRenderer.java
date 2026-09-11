@@ -81,13 +81,31 @@ public final class PdfRenderer {
             int pages = document.getNumberOfPages();
             List<BufferedImage> images = new ArrayList<>(pages);
             for (int i = 0; i < pages; i++) {
-                long start = System.currentTimeMillis();
-                BufferedImage image = renderer.renderImageWithDPI(i, dpi);
-                images.add(image);
-                log.debug("渲染 PDF 第 {} 页完成，耗时 {}ms，尺寸 {}x{}",
-                    i + 1, System.currentTimeMillis() - start, image.getWidth(), image.getHeight());
+                images.add(renderPage(renderer, i, dpi));
             }
             return images;
         }
+    }
+
+    /**
+     * 渲染 PDF 单页为图片（阶段 3.1 逐页流式处理：调用方复用同一 PDDocument 逐页渲染，
+     * 处理完一页即可释放该页位图，避免全量页位图驻留堆内存）。
+     *
+     * @param document  已打开的 PDF 文档（调用方负责关闭）
+     * @param pageIndex 页码（0 起）
+     * @param dpi       渲染 DPI
+     * @return 该页位图
+     * @throws IOException 渲染失败
+     */
+    public static BufferedImage renderPage(PDDocument document, int pageIndex, float dpi) throws IOException {
+        return renderPage(new PDFRenderer(document), pageIndex, dpi);
+    }
+
+    private static BufferedImage renderPage(PDFRenderer renderer, int pageIndex, float dpi) throws IOException {
+        long start = System.currentTimeMillis();
+        BufferedImage image = renderer.renderImageWithDPI(pageIndex, dpi);
+        log.debug("渲染 PDF 第 {} 页完成，耗时 {}ms，尺寸 {}x{}",
+            pageIndex + 1, System.currentTimeMillis() - start, image.getWidth(), image.getHeight());
+        return image;
     }
 }

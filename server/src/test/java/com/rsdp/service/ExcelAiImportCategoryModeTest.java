@@ -6,7 +6,9 @@ import com.rsdp.dto.request.ExcelAiClassifyCategoriesRequest;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
 import com.rsdp.dto.response.ExcelAiClassifyCategoriesResponse;
 import com.rsdp.dto.response.ExcelAiImportResult;
+import com.rsdp.dto.response.ExcelAiImportSubmitResult;
 import com.rsdp.dto.response.RspuVariantResponse;
+import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ExcelImportBatch;
 import com.rsdp.entity.RspuMaster;
@@ -53,6 +55,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -129,6 +132,8 @@ class ExcelAiImportCategoryModeTest {
     private DataScopeHelper dataScopeHelper;
     @Mock
     private com.rsdp.mapper.FactoryMasterMapper factoryMasterMapper;
+    @Mock
+    private com.rsdp.security.datascope.DataScopeContext dataScopeContext;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -148,6 +153,23 @@ class ExcelAiImportCategoryModeTest {
             .thenAnswer(inv -> rspuVariantService.createVariant(inv.getArgument(0), inv.getArgument(1)));
         lenient().when(factoryMasterMapper.selectById(anyString()))
             .thenReturn(new com.rsdp.entity.FactoryMaster());
+    }
+
+    /**
+     * confirm 已异步化（confirmAndImport 只做校验/抢占/建任务/投递，立即返回受理状态）；
+     * 本方法串联 confirmAndImport（受理）→ executeImport（异步执行本体，含 input_data 序列化/还原），
+     * 返回导入结果，保持用例断言语义不变（与 ExcelAiImportServiceTest 同名辅助方法一致）。
+     */
+    private ExcelAiImportResult confirmAndImport(ExcelAiMappingRequest request) {
+        ExcelAiImportSubmitResult submit = excelAiImportService.confirmAndImport(request);
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper, atLeastOnce()).insert(taskCaptor.capture());
+        AsyncTask importTask = taskCaptor.getAllValues().stream()
+            .filter(t -> submit.getTaskId().equals(t.getTaskId()))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("未找到批次导入任务: " + submit.getTaskId()));
+        when(asyncTaskMapper.selectById(submit.getTaskId())).thenReturn(importTask);
+        return excelAiImportService.executeImport(submit.getTaskId(), submit.getBatchId());
     }
 
     // ------------------------------------------------------------------
@@ -572,7 +594,7 @@ class ExcelAiImportCategoryModeTest {
         request.setBatchId("B-OLD");
         request.setMapping(basicMapping());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(0, result.getSuccessCount());
         assertEquals(1, result.getFailedCount());
@@ -698,7 +720,7 @@ class ExcelAiImportCategoryModeTest {
         request.setRowCategorySelections(Map.of(2, CY));
         request.setSkipRows(List.of(3)); // 未确定的行 3 被用户跳过 → 不拦截
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getTotalRows());
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
@@ -747,7 +769,7 @@ class ExcelAiImportCategoryModeTest {
         request.setCandidateCategoryCodes(List.of(CY, CZ));
         request.setRowCategorySelections(Map.of(2, CY, 3, CY));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(2, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         // 同一逻辑产品只建一个 RSPU
@@ -785,7 +807,7 @@ class ExcelAiImportCategoryModeTest {
         request.setCategoryMode(CategoryMode.SINGLE);
         request.setCategoryHint(CZ);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(2, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -815,7 +837,7 @@ class ExcelAiImportCategoryModeTest {
         // 行号 99 不存在：多余选择项不影响导入（按行号匹配，永不命中）
         request.setRowCategorySelections(Map.of(2, CY, 3, CZ, 99, CZ));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(2, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -852,7 +874,7 @@ class ExcelAiImportCategoryModeTest {
         request.setMapping(basicMapping());
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -887,7 +909,7 @@ class ExcelAiImportCategoryModeTest {
         request.setMapping(basicMapping());
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -916,7 +938,7 @@ class ExcelAiImportCategoryModeTest {
         request.setMapping(basicMapping());
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);

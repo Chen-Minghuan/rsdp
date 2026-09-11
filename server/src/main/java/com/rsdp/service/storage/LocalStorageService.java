@@ -13,6 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * 本地磁盘存储实现。
@@ -62,6 +64,35 @@ public class LocalStorageService implements StorageService {
         Path target = resolvePath(objectKey);
         Files.deleteIfExists(target);
         log.debug("本地存储删除文件: {}", target);
+    }
+
+    @Override
+    public int deleteByPrefix(String prefix) throws IOException {
+        Path root = resolveRoot();
+        Path target = root.resolve(Paths.get(prefix).normalize()).normalize();
+        if (!target.startsWith(root)) {
+            throw new IllegalArgumentException("非法对象键前缀，路径越界: " + prefix);
+        }
+        if (!Files.exists(target)) {
+            return 0;
+        }
+        if (!Files.isDirectory(target)) {
+            Files.deleteIfExists(target);
+            return 1;
+        }
+        List<Path> paths;
+        try (var stream = Files.walk(target)) {
+            paths = stream.sorted(Comparator.reverseOrder()).toList();
+        }
+        int deleted = 0;
+        for (Path path : paths) {
+            if (Files.isRegularFile(path)) {
+                deleted++;
+            }
+            Files.deleteIfExists(path);
+            log.debug("本地存储删除路径: {}", path);
+        }
+        return deleted;
     }
 
     /**

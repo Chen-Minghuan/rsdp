@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
 import com.rsdp.dto.request.PreviewEdit;
 import com.rsdp.dto.response.ExcelAiImportResult;
+import com.rsdp.dto.response.ExcelAiImportSubmitResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
 import com.rsdp.dto.response.ExcelAiPreviewDataResponse;
@@ -12,6 +13,7 @@ import com.rsdp.dto.response.PriceColumnInfo;
 import com.rsdp.dto.response.UnmappedColumnInfo;
 import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.CategoryDict;
+import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.ExcelImportBatch;
 import com.rsdp.entity.ExcelImportRow;
 import com.rsdp.entity.ImageAssets;
@@ -81,6 +83,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 
 /**
  * Excel AI 辅助导入服务测试。
@@ -141,6 +145,14 @@ class ExcelAiImportServiceTest {
     private DataScopeHelper dataScopeHelper;
     @Mock
     private com.rsdp.mapper.FactoryMasterMapper factoryMasterMapper;
+    @Mock
+    private com.rsdp.mapper.SysUserMapper sysUserMapper;
+    @Mock
+    private UserRoleService userRoleService;
+    @Mock
+    private PermissionService permissionService;
+    @Mock
+    private com.rsdp.security.datascope.DataScopeContext dataScopeContext;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -167,6 +179,23 @@ class ExcelAiImportServiceTest {
         // 默认工厂编码存在；个别测试可覆盖为 null 模拟填错编码
         lenient().when(factoryMasterMapper.selectById(anyString()))
             .thenReturn(new com.rsdp.entity.FactoryMaster());
+    }
+
+    /**
+     * 阶段 3.2 测试辅助：confirm 已异步化（confirmAndImport 只做校验/抢占/建任务/投递，
+     * 立即返回受理状态，不触发行循环），本方法串联 confirmAndImport（受理）→ executeImport
+     * （异步执行本体，含任务 input_data 序列化/还原链路），返回导入结果，保持既有用例断言语义不变。
+     */
+    private ExcelAiImportResult confirmAndImport(ExcelAiMappingRequest request) {
+        ExcelAiImportSubmitResult submit = excelAiImportService.confirmAndImport(request);
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper, atLeastOnce()).insert(taskCaptor.capture());
+        AsyncTask importTask = taskCaptor.getAllValues().stream()
+            .filter(t -> submit.getTaskId().equals(t.getTaskId()))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("未找到批次导入任务: " + submit.getTaskId()));
+        when(asyncTaskMapper.selectById(submit.getTaskId())).thenReturn(importTask);
+        return excelAiImportService.executeImport(submit.getTaskId(), submit.getBatchId());
     }
 
     @Test
@@ -267,7 +296,7 @@ class ExcelAiImportServiceTest {
             "风格", "positioningLabel"
         ));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getTotalRows());
@@ -345,7 +374,7 @@ class ExcelAiImportServiceTest {
             "场景", "sceneTags"
         ));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount());
         assertEquals(0, result.getFailedCount());
@@ -377,7 +406,7 @@ class ExcelAiImportServiceTest {
                 "insert or update on table \"rspu_scene\" violates foreign key constraint \"rspu_scene_dict_fk\"");
         }).when(rspuMapper).insert(any(RspuMaster.class));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(0, result.getSuccessCount());
         assertEquals(1, result.getFailedCount());
@@ -403,7 +432,7 @@ class ExcelAiImportServiceTest {
                 "duplicate key value violates unique constraint \"rspu_master_external_code_key\"");
         }).when(rspuMapper).insert(any(RspuMaster.class));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(0, result.getSuccessCount());
         assertEquals(1, result.getFailedCount());
@@ -579,7 +608,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getTotalRows());
@@ -651,7 +680,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getSuccessCount());
@@ -733,7 +762,7 @@ class ExcelAiImportServiceTest {
         request.setDefaultFactoryCode("F001");
         request.setSelectedPriceColumns(List.of("出厂价"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getSuccessCount());
@@ -815,7 +844,7 @@ class ExcelAiImportServiceTest {
         request.setDefaultMaterialCode("实木");
         request.setSelectedPriceColumns(List.of("出厂价"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getSuccessCount());
@@ -849,7 +878,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(List.of());
         request.setSkipRows(java.util.List.of(999));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
@@ -879,15 +908,16 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setSelectedPriceColumns(List.of()); // 不选任何价格列 → 走无价格列分支
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         verify(rspuVariantService, never()).createVariant(anyString(), any());
     }
 
     @Test
-    void confirmAndImport_shouldRestoreDoneBatchResultWhenImportFails() throws IOException {
-        // done 批次重导失败：恢复历史结果（status/counts/failures/processedAt），不退化为 pending
+    void confirmAndImport_shouldRestoreDoneBatchResultWhenTaskCreationFails() throws IOException {
+        // 3.2：done 批次重导，抢占成功但建异步任务失败 → 恢复历史结果（status/counts/failures/processedAt），
+        // 不退化为 pending（导入主流程已移至 executeImport，confirm 侧失败点收敛为建任务/投递）
         byte[] excelBytes = createExcelWithSingleSizeAndPriceColumn();
         ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
             "{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"尺寸(W*D*H)\":\"dimensions\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
@@ -899,8 +929,8 @@ class ExcelAiImportServiceTest {
         savedBatch.setProcessedAt(previousProcessedAt);
 
         when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
-        // 抢占后导入主流程抛异常（模拟字典服务故障）
-        when(dictService.listByType("category")).thenThrow(new RuntimeException("DB 故障"));
+        // 抢占后建异步任务抛异常（模拟 DB 故障）
+        when(asyncTaskMapper.insert(any(AsyncTask.class))).thenThrow(new RuntimeException("DB 故障"));
 
         ExcelAiMappingRequest request = new ExcelAiMappingRequest();
         request.setBatchId(savedBatch.getBatchId());
@@ -1079,7 +1109,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(preview.getSuggestedMapping());
         request.setCategoryHint("FS");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(2, result.getTotalRows(), "原始数据行应包含 1 行数据 + 1 行说明");
@@ -1147,7 +1177,7 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setDefaultFactoryCode("F001");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(2, result.getTotalRows(), "原始数据行应包含 1 行产品 + 1 行组合汇总");
@@ -1222,7 +1252,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(preview.getSuggestedMapping());
         request.setCategoryHint("DT");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(4, result.getTotalRows(), "原始数据行应包含 3 行产品 + 1 行组合汇总");
@@ -1306,7 +1336,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getTotalRows());
@@ -1378,7 +1408,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
@@ -1453,7 +1483,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertNotNull(result);
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
@@ -1526,7 +1556,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         // 3 个数据行全部成功（含 null 价格行），2 行重复表头被跳过
         assertEquals(3, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
@@ -1610,7 +1640,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(2, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
 
@@ -1631,7 +1661,7 @@ class ExcelAiImportServiceTest {
         assertNull(savedImages.get(1).getVariantId(), "产品图样列的图归属 RSPU 产品级");
 
         // 组内 AI 识别任务只建一次（基于组主图）
-        verify(asyncTaskMapper, times(1)).insert(any(com.rsdp.entity.AsyncTask.class));
+        verify(asyncTaskMapper, times(1)).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
     }
 
     @Test
@@ -1695,7 +1725,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
 
@@ -1708,7 +1738,7 @@ class ExcelAiImportServiceTest {
         assertEquals("V-A", savedImage.getVariantId(), "模块示例图应挂到本行变体");
 
         // 无主图 → 不建 AI 识别任务
-        verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
+        verify(asyncTaskMapper, never()).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
     }
 
     @Test
@@ -1774,7 +1804,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
 
@@ -1814,7 +1844,7 @@ class ExcelAiImportServiceTest {
         request.setBatchId(savedBatch.getBatchId());
         request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -1842,7 +1872,7 @@ class ExcelAiImportServiceTest {
         request.setBatchId(savedBatch.getBatchId());
         request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -1873,7 +1903,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
         request.setCategoryMapping(Map.of("茶桌", "TB"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -1906,7 +1936,7 @@ class ExcelAiImportServiceTest {
         request.setBatchId(savedBatch.getBatchId());
         request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(0, result.getSuccessCount());
         assertEquals(1, result.getFailedCount());
@@ -2105,7 +2135,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(preview.getSuggestedMapping());
         request.setCategoryHint("FS");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
 
@@ -2193,7 +2223,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(2, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         assertEquals(0, result.getFailedCount());
@@ -2271,7 +2301,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "行本身仍成功: " + result.getFailures());
         assertEquals(0, result.getFailedCount(), "RSKU 部分失败不计入行失败数");
@@ -2335,7 +2365,7 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setUpdateIfExists(false);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(0, result.getSuccessCount());
         assertEquals(0, result.getFailedCount());
@@ -2401,7 +2431,7 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         assertEquals(List.of("RSPU-EXIST"), result.getRspuIds(), "应复用已有 RSPU");
@@ -2410,7 +2440,7 @@ class ExcelAiImportServiceTest {
         verify(auditLogService, times(1)).logUpdate(eq("rspu_master"), eq("RSPU-EXIST"), any(), any(), any());
         verify(rspuVariantService, times(1)).createVariant(eq("RSPU-EXIST"), any());
         // 无图行不建 AI 识别任务
-        verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
+        verify(asyncTaskMapper, never()).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
     }
 
     @Test
@@ -2471,7 +2501,7 @@ class ExcelAiImportServiceTest {
         request.setDefaultFactoryCode("F001");
         request.setSelectedPriceColumns(List.of("出厂价"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         // rspuId 由 IdGenerator 在 insert 前生成，捕获实际值用于交叉断言
@@ -2556,7 +2586,7 @@ class ExcelAiImportServiceTest {
         request.setDefaultFactoryCode("F001");
         request.setSelectedPriceColumns(List.of("出厂价"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         assertEquals(List.of("RSPU-OTHER"), result.getRspuIds(), "应复用已有 RSPU");
@@ -2641,7 +2671,7 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -2715,7 +2745,7 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -2836,7 +2866,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         // 提取器已提前跳过 EMF：行内不再出现「不支持的图片格式」，批次级也无图片提取失败
@@ -3650,21 +3680,21 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
-    void confirmAndImport_shouldResetBatchToPendingWhenImportFails() {
-        // P1-1：抢占成功后主流程异常 → 批次复位 pending，用户可重试
+    void confirmAndImport_shouldResetBatchToPendingWhenTaskCreationFails() {
+        // P1-1 + 3.2：抢占成功后建异步任务异常 → 批次复位 pending，用户可重试
         ExcelImportBatch batch = new ExcelImportBatch();
         batch.setBatchId("BATCH-X");
         batch.setStatus("pending");
-        batch.setPreviewRows("not-a-json");
         when(batchMapper.selectById("BATCH-X")).thenReturn(batch);
+        when(asyncTaskMapper.insert(any(AsyncTask.class))).thenThrow(new RuntimeException("DB 故障"));
 
         ExcelAiMappingRequest request = new ExcelAiMappingRequest();
         request.setBatchId("BATCH-X");
         request.setMapping(Map.of("名称", "productName"));
 
-        BusinessException e = assertThrows(BusinessException.class,
+        RuntimeException e = assertThrows(RuntimeException.class,
             () -> excelAiImportService.confirmAndImport(request));
-        assertTrue(e.getMessage().contains("读取批次原始数据失败"), "异常信息: " + e.getMessage());
+        assertTrue(e.getMessage().contains("DB 故障"), "异常信息: " + e.getMessage());
         verify(batchMapper, times(1)).resetToPending("BATCH-X");
     }
 
@@ -3674,9 +3704,62 @@ class ExcelAiImportServiceTest {
         ExcelImportBatch batch = new ExcelImportBatch();
         batch.setBatchId("BATCH-X");
         batch.setStatus("pending");
+        when(batchMapper.selectById("BATCH-X")).thenReturn(batch);
+        when(asyncTaskMapper.insert(any(AsyncTask.class))).thenThrow(new RuntimeException("DB 故障"));
+        when(batchMapper.resetToPending("BATCH-X")).thenThrow(new RuntimeException("db down"));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId("BATCH-X");
+        request.setMapping(Map.of("名称", "productName"));
+
+        RuntimeException e = assertThrows(RuntimeException.class,
+            () -> excelAiImportService.confirmAndImport(request));
+        assertTrue(e.getMessage().contains("DB 故障"), "异常信息: " + e.getMessage());
+    }
+
+    @Test
+    void confirmAndImport_shouldReturnImmediatelyAndDispatchAsyncTask() {
+        // 3.2：confirm 立即返回受理状态（batchId/taskId/importing），建 excel_import 任务并投递，
+        // 不触发行循环（previewRows 为坏 JSON，若同步执行会立即失败）
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-X");
+        batch.setStatus("pending");
         batch.setPreviewRows("not-a-json");
         when(batchMapper.selectById("BATCH-X")).thenReturn(batch);
-        when(batchMapper.resetToPending("BATCH-X")).thenThrow(new RuntimeException("db down"));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId("BATCH-X");
+        request.setMapping(Map.of("名称", "productName"));
+
+        ExcelAiImportSubmitResult submit = excelAiImportService.confirmAndImport(request);
+
+        assertEquals("BATCH-X", submit.getBatchId());
+        assertNotNull(submit.getTaskId());
+        assertEquals("importing", submit.getStatus());
+        // 建任务：task_type=excel_import，input_data 携带 batchId 与确认后的请求
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).insert(taskCaptor.capture());
+        assertEquals("excel_import", taskCaptor.getValue().getTaskType());
+        assertEquals("pending", taskCaptor.getValue().getStatus());
+        assertTrue(taskCaptor.getValue().getInputData().contains("BATCH-X"), "inputData: "
+            + taskCaptor.getValue().getInputData());
+        assertTrue(taskCaptor.getValue().getInputData().contains("\"request\""), "inputData: "
+            + taskCaptor.getValue().getInputData());
+        // 无活动事务时直接投递
+        verify(asyncTaskProcessor).processExcelImport(submit.getTaskId(), "BATCH-X");
+        // 未触发行循环/数据预处理
+        verify(rspuMapper, never()).insert(any(RspuMaster.class));
+    }
+
+    @Test
+    void confirmAndImport_shouldRestoreBatchWhenDispatchRejected() {
+        // 3.2：投递被线程池拒绝（AbortPolicy）→ 任务置 failed + 批次复位 pending + 抛业务异常
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-X");
+        batch.setStatus("pending");
+        when(batchMapper.selectById("BATCH-X")).thenReturn(batch);
+        doThrow(new org.springframework.core.task.TaskRejectedException("pool full", null))
+            .when(asyncTaskProcessor).processExcelImport(anyString(), eq("BATCH-X"));
 
         ExcelAiMappingRequest request = new ExcelAiMappingRequest();
         request.setBatchId("BATCH-X");
@@ -3684,7 +3767,74 @@ class ExcelAiImportServiceTest {
 
         BusinessException e = assertThrows(BusinessException.class,
             () -> excelAiImportService.confirmAndImport(request));
+        assertTrue(e.getMessage().contains("投递被拒绝"), "异常信息: " + e.getMessage());
+        verify(batchMapper, times(1)).resetToPending("BATCH-X");
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertEquals("failed", taskCaptor.getValue().getStatus());
+    }
+
+    @Test
+    void executeImport_shouldMarkBatchFailedOnFatalError() throws Exception {
+        // 3.2：异步执行致命失败（对齐 processDocumentImport 终态口径）→ 批次 failed +
+        // 失败原因写入批次失败明细；异常继续抛出由 AsyncTaskProcessor 对齐任务状态
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-X");
+        batch.setStatus("importing");
+        batch.setPreviewRows("not-a-json");
+        when(batchMapper.selectById("BATCH-X")).thenReturn(batch);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId("BATCH-X");
+        request.setMapping(Map.of("名称", "productName"));
+        AsyncTask task = new AsyncTask();
+        task.setTaskId("TASK-X");
+        task.setTaskType("excel_import");
+        task.setInputData(objectMapper.writeValueAsString(Map.of("batchId", "BATCH-X", "request", request)));
+        when(asyncTaskMapper.selectById("TASK-X")).thenReturn(task);
+
+        BusinessException e = assertThrows(BusinessException.class,
+            () -> excelAiImportService.executeImport("TASK-X", "BATCH-X"));
         assertTrue(e.getMessage().contains("读取批次原始数据失败"), "异常信息: " + e.getMessage());
+
+        ArgumentCaptor<ExcelImportBatch> batchCaptor = ArgumentCaptor.forClass(ExcelImportBatch.class);
+        verify(batchMapper).updateById(batchCaptor.capture());
+        assertEquals("failed", batchCaptor.getValue().getStatus());
+        assertTrue(batchCaptor.getValue().getFailures().contains("读取批次原始数据失败"),
+            "failures: " + batchCaptor.getValue().getFailures());
+    }
+
+    @Test
+    void executeImport_shouldRejectWhenTaskInputMissing() {
+        // 3.2：任务不存在或无 input_data → 业务异常（由处理器落任务 failed）
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-X");
+        batch.setStatus("importing");
+        when(batchMapper.selectById("BATCH-X")).thenReturn(batch);
+
+        BusinessException e = assertThrows(BusinessException.class,
+            () -> excelAiImportService.executeImport("TASK-MISSING", "BATCH-X"));
+        assertTrue(e.getMessage().contains("导入任务不存在"), "异常信息: " + e.getMessage());
+    }
+
+    @Test
+    void executeImport_shouldRefreshBatchHeartbeatDuringRowLoop() throws IOException {
+        // 3.2：行循环逐行刷新批次 updated_at 心跳，防止长导入被 reapStaleImporting 误收割
+        ExcelAiMappingRequest request = prepareSingleRowImportViaPreview();
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-TEST");
+            return 1;
+        });
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("RSPU-TEST-V001");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiImportResult result = confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        verify(batchMapper, atLeastOnce()).touchImporting(request.getBatchId());
     }
 
     @org.junit.jupiter.api.Test
@@ -3752,7 +3902,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         // 双行表头场景数据行物理行号为 2（0-based），initRow 应收到展示口径 3
@@ -3858,7 +4008,7 @@ class ExcelAiImportServiceTest {
         edit.setValue("编辑后的名称");
         request.setPreviewEdits(List.of(edit));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -3914,7 +4064,7 @@ class ExcelAiImportServiceTest {
         // 跳过第二个数据行（物理行号 3，1-based）
         request.setSkipRows(List.of(3));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getTotalRows(), "过滤后应只剩 1 行");
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
@@ -3974,7 +4124,7 @@ class ExcelAiImportServiceTest {
         // 非法字典码 XX + 合法字典码 FS（合法条目仍应写回）
         request.setCategoryMapping(Map.of("茶桌", "XX", "方凳", "FS"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         verify(dictAliasService, never()).saveAlias(eq("category"), eq("茶桌"), eq("XX"), any());
@@ -4057,7 +4207,7 @@ class ExcelAiImportServiceTest {
         request.setBatchId("BATCH-CSV");
         request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         assertTrue(result.getFailures().stream()
@@ -4160,7 +4310,7 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setDefaultFactoryCode("F001");
 
-        excelAiImportService.confirmAndImport(request);
+        confirmAndImport(request);
 
         ArgumentCaptor<Map<String, String>> mappedFieldsCaptor = ArgumentCaptor.forClass(Map.class);
         ArgumentCaptor<List<String>> selectedPriceColumnsCaptor = ArgumentCaptor.forClass(List.class);
@@ -4197,7 +4347,7 @@ class ExcelAiImportServiceTest {
         request.setDefaultFactoryCode("F001");
         request.setSelectedPriceColumns(List.of()); // 显式不选任何价格列
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         verify(rskuService, never()).upsertRsku(any());
@@ -4234,7 +4384,7 @@ class ExcelAiImportServiceTest {
         request.setDefaultFactoryCode("F001");
         // 不设置 selectedPriceColumns（null = 未提供）
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         verify(rskuService, times(2)).upsertRsku(any());
@@ -4270,7 +4420,7 @@ class ExcelAiImportServiceTest {
         // 填字典名「A级」验证归一为字典码「A」
         request.setDefaultProductLevel("A级");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -4313,7 +4463,7 @@ class ExcelAiImportServiceTest {
         request.setDefaultFactoryCode("F001");
         request.setDefaultProductLevel("不存在的等级");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "非法默认等级不应阻断导入: " + result.getFailures());
         assertTrue(result.getFailures().stream()
@@ -4351,7 +4501,7 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setDefaultFactoryCode("F001");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<com.rsdp.dto.request.RskuCreateRequest> rskuCaptor =
@@ -4419,7 +4569,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<com.rsdp.dto.request.RskuCreateRequest> rskuCaptor =
@@ -4476,7 +4626,7 @@ class ExcelAiImportServiceTest {
         request.setSelectedPriceColumns(preview.getPriceColumns().stream()
             .map(PriceColumnInfo::getHeader).toList());
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         // 同一行两张产品图合并为一批插入（insertBatch）
@@ -4559,7 +4709,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(Map.of("类别", "categoryCode", "型号", "externalCode,productName"));
         request.setCategoryHint("FS");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         verify(imageAssetsMapper, never()).insert(any(ImageAssets.class));
@@ -4593,7 +4743,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(Map.of("类别", "categoryCode", "型号", "externalCode,productName"));
         request.setCategoryHint("FS");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<List<ImageAssets>> imageCaptor = ArgumentCaptor.forClass(List.class);
@@ -4638,13 +4788,13 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         assertEquals(List.of("RSPU-EXIST"), result.getRspuIds(), "应复用已有 RSPU");
         verify(imageAssetsMapper, never()).insertBatch(any());
         // 无新主图入库 → 不建 AI 识别任务
-        verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
+        verify(asyncTaskMapper, never()).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
         assertTrue(result.getTaskIds().isEmpty());
     }
 
@@ -4678,7 +4828,7 @@ class ExcelAiImportServiceTest {
         request.setDefaultFactoryCode("F001");
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(2, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         assertEquals(List.of("RSPU-EXIST", "RSPU-EXIST"), result.getRspuIds(), "两个模块行应复用同一已有 RSPU");
@@ -4686,7 +4836,7 @@ class ExcelAiImportServiceTest {
         // 归组生效：行 2 与行 1 同产品（sameProduct），不再重复更新已有 RSPU
         verify(rspuMapper, times(1)).updateById(any(RspuMaster.class));
         // 行 1 新登记主图 → 建一次 AI 识别任务；行 2 同组且未产生新主图 → 不再建
-        verify(asyncTaskMapper, times(1)).insert(any(com.rsdp.entity.AsyncTask.class));
+        verify(asyncTaskMapper, times(1)).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
         assertEquals(1, result.getTaskIds().size());
     }
 
@@ -4711,7 +4861,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
         request.setCategoryHint("FS");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -4719,7 +4869,7 @@ class ExcelAiImportServiceTest {
         assertEquals("active", rspuCaptor.getValue().getStatus(), "无图行 RSPU 应落库即 active");
         assertEquals("待复核", rspuCaptor.getValue().getReviewStatus());
         // 无图行不建 AI 识别任务
-        verify(asyncTaskMapper, never()).insert(any(com.rsdp.entity.AsyncTask.class));
+        verify(asyncTaskMapper, never()).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
         assertTrue(result.getTaskIds().isEmpty());
     }
 
@@ -4744,14 +4894,14 @@ class ExcelAiImportServiceTest {
         request.setMapping(Map.of("类别", "categoryCode", "型号", "externalCode,productName"));
         request.setCategoryHint("FS");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
         assertEquals("processing", rspuCaptor.getValue().getStatus(), "有图行 RSPU 应保持 processing 等识别翻转");
         // 有图行新登记主图 → 建一次 AI 识别任务
-        verify(asyncTaskMapper, times(1)).insert(any(com.rsdp.entity.AsyncTask.class));
+        verify(asyncTaskMapper, times(1)).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
         assertEquals(1, result.getTaskIds().size());
     }
 
@@ -4989,7 +5139,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(preview.getSuggestedMapping());
         request.setCategoryHint("FS");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         // 数据来自 sheet 1（型号 S-001），不是 sheet 0 的 T-001
@@ -5044,7 +5194,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(preview.getSuggestedMapping());
         request.setCategoryHint("FS");
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -5103,7 +5253,7 @@ class ExcelAiImportServiceTest {
         request.setCategoryHint("FS");
         request.setUpdateIfExists(true);
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -5165,7 +5315,7 @@ class ExcelAiImportServiceTest {
             new com.rsdp.dto.request.PriceColumnSelection("出厂价", "factory"),
             new com.rsdp.dto.request.PriceColumnSelection("销售价", "sales")));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         // 只有 factory 列建变体 + RSKU
@@ -5226,7 +5376,7 @@ class ExcelAiImportServiceTest {
         request.setMapping(preview.getSuggestedMapping());
         // 故意不给 categoryHint：品类应完全由 sheet 名归一
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
@@ -5259,7 +5409,7 @@ class ExcelAiImportServiceTest {
         request.setBatchId("BATCH-DONE");
         request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
 
-        ExcelAiImportResult result = excelAiImportService.confirmAndImport(request);
+        ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
         verify(batchMapper).claimForImport("BATCH-DONE");

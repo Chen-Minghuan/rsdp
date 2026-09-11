@@ -3,6 +3,9 @@ package com.rsdp.service.storage;
 import com.rsdp.config.properties.StorageProperties;
 import io.minio.*;
 import io.minio.errors.*;
+import io.minio.messages.DeleteError;
+import io.minio.messages.DeleteObject;
+import io.minio.messages.Item;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -13,6 +16,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * MinIO 对象存储实现。
@@ -118,6 +123,33 @@ public class MinioStorageService implements StorageService {
             throw new IOException("MinIO 删除失败: " + objectKey, e);
         }
         log.debug("MinIO 存储删除对象: {}/{}", bucketName, objectKey);
+    }
+
+    @Override
+    public int deleteByPrefix(String prefix) throws IOException {
+        String bucketName = storageProperties.getMinio().getBucketName();
+        try {
+            List<DeleteObject> objects = new ArrayList<>();
+            for (Result<Item> result : minioClient.listObjects(
+                ListObjectsArgs.builder().bucket(bucketName).prefix(prefix).recursive(true).build())) {
+                objects.add(new DeleteObject(result.get().objectName()));
+            }
+            if (objects.isEmpty()) {
+                return 0;
+            }
+            Iterable<Result<DeleteError>> results = minioClient.removeObjects(
+                RemoveObjectsArgs.builder().bucket(bucketName).objects(objects).build());
+            for (Result<DeleteError> result : results) {
+                DeleteError error = result.get();
+                if (error != null) {
+                    throw new IOException("MinIO 批量删除失败: " + error.objectName() + " " + error.message());
+                }
+            }
+            log.debug("MinIO 按前缀删除对象: {}/{} 共 {} 个", bucketName, prefix, objects.size());
+            return objects.size();
+        } catch (MinioException | InvalidKeyException | NoSuchAlgorithmException e) {
+            throw new IOException("MinIO 按前缀删除失败: " + prefix, e);
+        }
     }
 
     private void ensureBucketExists(String bucketName) throws IOException {

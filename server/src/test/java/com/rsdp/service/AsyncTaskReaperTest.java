@@ -7,6 +7,7 @@ import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.DocumentImportBatchMapper;
 import com.rsdp.mapper.ExcelImportBatchMapper;
 import com.rsdp.mapper.RspuMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +46,9 @@ class AsyncTaskReaperTest {
     private ExcelImportBatchMapper excelImportBatchMapper;
 
     @Mock
+    private DocumentImportBatchMapper documentImportBatchMapper;
+
+    @Mock
     private RspuMapper rspuMapper;
 
     @Mock
@@ -59,7 +63,7 @@ class AsyncTaskReaperTest {
 
     @BeforeEach
     void setUp() {
-        reaper = new AsyncTaskReaper(asyncTaskMapper, excelImportBatchMapper,
+        reaper = new AsyncTaskReaper(asyncTaskMapper, excelImportBatchMapper, documentImportBatchMapper,
             rspuMapper, aiRecognitionMapper, auditLogService, objectMapper);
         ReflectionTestUtils.setField(reaper, "pendingTimeoutMs", 600000L);
         ReflectionTestUtils.setField(reaper, "processingTimeoutMs", 1800000L);
@@ -178,6 +182,49 @@ class AsyncTaskReaperTest {
         verify(aiRecognitionMapper, never()).insert(any(AiRecognition.class));
         // 批量收割照常执行
         verify(asyncTaskMapper, times(2)).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void reapStaleTasks_shouldFailDocumentImportBatchWhenReaped() {
+        // 超时 document_import 任务被收割时，仍卡在 pending/processing 的批次联动置 failed（3.1）
+        AsyncTask task = new AsyncTask();
+        task.setTaskId("TASK-D1");
+        task.setTaskType("document_import");
+        task.setStatus("processing");
+        task.setCreatedBy("user-1");
+        task.setCreatedAt(LocalDateTime.now().minusHours(2));
+        task.setInputData("{\"batchId\":\"BATCH-D1\",\"objectKey\":\"document-imports/BATCH-D1.pdf\"}");
+        when(asyncTaskMapper.selectList(any())).thenReturn(List.of(task));
+        when(documentImportBatchMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(1);
+
+        reaper.reapStaleTasks();
+
+        // 批次条件置 failed（仅 pending/processing 生效），写明收割原因并落完成时间
+        ArgumentCaptor<UpdateWrapper<com.rsdp.entity.DocumentImportBatch>> wrapperCaptor =
+            ArgumentCaptor.forClass(UpdateWrapper.class);
+        verify(documentImportBatchMapper).update(isNull(), wrapperCaptor.capture());
+        assertThat(wrapperCaptor.getValue().getSqlSet())
+            .contains("status")
+            .contains("error_message")
+            .contains("completed_at");
+        // product_entry 联动链不被误触（该任务 input_data 无 rspuId）
+        verify(rspuMapper, never()).selectById(anyString());
+    }
+
+    @Test
+    void reapStaleTasks_shouldNotTouchDocumentImportBatchWhenUpdateMisses() {
+        // 条件更新未命中（批次已被执行线程写入终态）时不覆盖
+        AsyncTask task = new AsyncTask();
+        task.setTaskId("TASK-D2");
+        task.setTaskType("document_import");
+        task.setStatus("pending");
+        task.setCreatedAt(LocalDateTime.now().minusHours(2));
+        task.setInputData("{\"batchId\":\"BATCH-D2\"}");
+        when(asyncTaskMapper.selectList(any())).thenReturn(List.of(task));
+        when(documentImportBatchMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(0);
+
+        assertThatCode(() -> reaper.reapStaleTasks()).doesNotThrowAnyException();
+        verify(documentImportBatchMapper).update(isNull(), any(UpdateWrapper.class));
     }
 
     /** 构造一个超时 product_entry 任务（pending，创建时间远超阈值）。 */

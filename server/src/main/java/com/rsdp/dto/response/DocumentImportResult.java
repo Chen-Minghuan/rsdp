@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * PDF 文档批量导入结果。
+ * PDF 文档批量导入结果（批次状态查询响应）。
  */
 @Data
 public class DocumentImportResult {
@@ -17,9 +17,24 @@ public class DocumentImportResult {
     private String batchId;
 
     /**
+     * 批次状态：pending/processing/done/partial_success/failed。
+     */
+    private String status;
+
+    /**
+     * 批次级错误信息（status=failed 时）。
+     */
+    private String errorMessage;
+
+    /**
      * PDF 总页数。
      */
     private int totalPages;
+
+    /**
+     * 已处理页数（进度轮询）。
+     */
+    private int processedPages;
 
     /**
      * 识别为产品页的页数。
@@ -40,6 +55,11 @@ public class DocumentImportResult {
      * 失败数量。
      */
     private int failedCount;
+
+    /**
+     * 图片查重命中（已存在）跳过建档的数量。
+     */
+    private int skippedCount;
 
     /**
      * 创建的异步任务 ID 列表。

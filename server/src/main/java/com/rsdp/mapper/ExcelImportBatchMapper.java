@@ -12,10 +12,11 @@ import java.time.LocalDateTime;
 public interface ExcelImportBatchMapper extends BaseMapper<ExcelImportBatch> {
 
     /**
-     * 原子抢占批次导入权：仅当批次仍处于 pending 或 done 时置为 importing。
+     * 原子抢占批次导入权：仅当批次仍处于 pending / done / failed 时置为 importing。
      *
      * <p>用于防止并发重复导入（替代先查状态再判断的 check-then-act 竞态）。
-     * done 批次允许重新抢占，支撑「以更新模式重新导入」；抢占时同步重置上一轮
+     * done 批次允许重新抢占，支撑「以更新模式重新导入」；failed 批次（3.2 异步化后
+     * 异步执行的致命失败终态）允许重新抢占重试；抢占时同步重置上一轮
      * 导入结果字段（success/failed/failures/processed_at），importing 中拒绝。</p>
      *
      * @param batchId 批次 ID
@@ -23,8 +24,20 @@ public interface ExcelImportBatchMapper extends BaseMapper<ExcelImportBatch> {
      */
     @Update("UPDATE excel_import_batch SET status = 'importing', success_count = 0, failed_count = 0,"
         + " failures = '[]'::jsonb, processed_at = NULL, updated_at = now()"
-        + " WHERE batch_id = #{batchId} AND status IN ('pending', 'done')")
+        + " WHERE batch_id = #{batchId} AND status IN ('pending', 'done', 'failed')")
     int claimForImport(@Param("batchId") String batchId);
+
+    /**
+     * 导入心跳：逐行刷新 importing 批次的 updated_at，防止长导入被
+     * {@link #reapStaleImporting} 误判为僵死批次误收割（3.2 异步化后导入在后台
+     * 线程执行，耗时可能超过收割阈值）。
+     *
+     * @param batchId 批次 ID
+     * @return 影响行数；0 表示批次已不在 importing 状态（无需心跳）
+     */
+    @Update("UPDATE excel_import_batch SET updated_at = now()"
+        + " WHERE batch_id = #{batchId} AND status = 'importing'")
+    int touchImporting(@Param("batchId") String batchId);
 
     /**
      * 复位批次状态：仅当批次仍处于 importing 时退回 pending。
