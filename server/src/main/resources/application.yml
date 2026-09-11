@@ -121,6 +121,16 @@ rsdp:
     encrypt-batch-size: 100
     price-summary-batch-size: 100
     six-dim-batch-size: 200
+  data-retention:
+    # 批次/文件生命周期清理（DataRetentionCleanupService，定时任务；见阶段 3.3）
+    enabled: ${RSDP_DATA_RETENTION_ENABLED:true}   # 总开关
+    pending-batch-max-age-hours: 24                # pending 批次超期整批删除（批次行+行记录+原始文件+临时图）
+    completed-batch-file-retention-days: 7         # done/failed 批次原始文件/preview_rows 超期清理（行与结果永久保留）
+    batch-size: 100                                # 单次调度每类批次处理上限
+    # 软删图片孤儿存储文件清理：默认关闭，确认后手动打开；只删存储文件，软删行保留
+    orphan-image-cleanup-enabled: ${RSDP_ORPHAN_IMAGE_CLEANUP_ENABLED:false}
+    orphan-image-retention-days: 30
+    orphan-image-batch-size: 200
   async:
     core-pool-size: 4
     max-pool-size: 16

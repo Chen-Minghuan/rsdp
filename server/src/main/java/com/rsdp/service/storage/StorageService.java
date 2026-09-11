@@ -60,4 +60,13 @@ public interface StorageService {
      * @throws IOException 删除失败
      */
     void delete(String objectKey) throws IOException;
+
+    /**
+     * 按前缀删除全部对象（用于整目录清理，如 {@code preview-images/{batchId}/}）。
+     *
+     * @param prefix 对象键前缀（目录式前缀，通常以 "/" 结尾）
+     * @return 实际删除的对象数
+     * @throws IOException 存储后端访问异常（单个对象删除失败汇总为异常抛出）
+     */
+    int deleteByPrefix(String prefix) throws IOException;
 }

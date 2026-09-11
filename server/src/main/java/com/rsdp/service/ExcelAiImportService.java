@@ -894,11 +894,11 @@ public class ExcelAiImportService {
         updateBatchResult(batch, request, result);
         // 别名自学习：用户确认的品类映射写回别名库，后续导入直接命中，不再调 AI
         learnCategoryAliases(request);
-        // 导入完成：清理数据清洗阶段上传的临时图片文件（失败不影响导入结果）
+        // 导入完成：清理数据清洗阶段的全部临时文件（preview-images 前缀残留 + tmpdir 行图缓存；失败不影响导入结果）
         try {
-            cleanPreviewUploadImages(batch.getBatchId(), preservedOverrideImages);
+            cleanBatchPreviewTempFiles(batch.getBatchId());
         } catch (Exception e) {
-            log.warn("清理预览上传临时图片失败，batchId={}", batch.getBatchId(), e);
+            log.warn("清理导入临时文件失败，batchId={}", batch.getBatchId(), e);
         }
         return result;
     }
@@ -1305,24 +1305,35 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 清理数据清洗阶段上传的临时图片文件。
+     * 清理数据清洗阶段的全部临时文件（导入完成后调用）。
+     *
+     * <p>覆盖两类残留：①存储端 {@code preview-images/{batchId}/} 前缀下的全部上传临时图
+     * ——含上传后未挂到任何行的残留（原 cleanPreviewUploadImages 只按 overrideImages 清单
+     * 逐个删除，清单外的残留永不删除）；②tmpdir 下 {@code rsdp-preview-images/{batchId}}
+     * 行图缓存目录（原仅在启动时按 2 小时龄期清理）。已被导入迁移到正式 {@code images/}
+     * 路径的覆盖图不受影响。单步失败只记日志，不阻断导入主流程。</p>
+     *
+     * @param batchId 批次 ID
      */
-    private void cleanPreviewUploadImages(String batchId, Map<Integer, List<String>> overrideImages) {
-        if (overrideImages == null || overrideImages.isEmpty()) {
-            return;
-        }
-        Set<String> keys = overrideImages.values().stream()
-            .flatMap(List::stream)
-            .collect(Collectors.toSet());
-        for (String key : keys) {
-            for (String ext : List.of("jpeg", "png", "gif", "webp")) {
-                String objectKey = previewUploadObjectKey(batchId, key, ext);
-                try {
-                    storageService.delete(objectKey);
-                } catch (IOException e) {
-                    log.warn("删除预览上传临时图片失败，objectKey={}", objectKey, e);
-                }
+    private void cleanBatchPreviewTempFiles(String batchId) {
+        try {
+            int deleted = storageService.deleteByPrefix(
+                PREVIEW_UPLOAD_IMAGE_PREFIX + "/" + sanitizeFileName(batchId) + "/");
+            if (deleted > 0) {
+                log.info("清理预览上传临时图片 {} 个，batchId={}", deleted, batchId);
             }
+        } catch (Exception e) {
+            log.warn("清理预览上传临时图片失败，batchId={}", batchId, e);
+        }
+        try {
+            Path cacheDir = Paths.get(System.getProperty("java.io.tmpdir"), PREVIEW_IMAGE_CACHE_DIR,
+                sanitizeFileName(batchId));
+            if (Files.exists(cacheDir)) {
+                deleteDirectory(cacheDir);
+                log.info("清理预览行图缓存目录，batchId={}", batchId);
+            }
+        } catch (Exception e) {
+            log.warn("清理预览行图缓存失败，batchId={}", batchId, e);
         }
     }
 
