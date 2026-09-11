@@ -1,5 +1,6 @@
 package com.rsdp.service;
 
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.ExcelImportRow;
@@ -75,16 +76,17 @@ public class ExcelImportRowService {
 
     /**
      * 更新行处理阶段。
+     *
+     * <p>3.4 起改为按 rowId 单语句 UPDATE（不再先 selectById 再 updateById）：
+     * 行不存在时 UPDATE 命中 0 行，与原有"查不到直接返回"语义一致；
+     * 行级写路径在 500 行批次下由 2 条 SQL/次降为 1 条。</p>
      */
     @Transactional
     public void updateStage(Long rowId, String stage) {
-        ExcelImportRow row = rowMapper.selectById(rowId);
-        if (row == null) {
-            return;
-        }
-        row.setProcessingStage(stage);
-        row.setUpdatedAt(LocalDateTime.now());
-        rowMapper.updateById(row);
+        rowMapper.update(null, new UpdateWrapper<ExcelImportRow>()
+            .eq("row_id", rowId)
+            .set("processing_stage", stage)
+            .set("updated_at", LocalDateTime.now()));
     }
 
     /**
@@ -104,54 +106,50 @@ public class ExcelImportRowService {
 
     /**
      * 标记行处理成功并记录生成的实体。
+     *
+     * <p>3.4 起改为单语句 UPDATE；null 字段不写入（条件 set），与 updateById
+     * 默认的非空字段策略保持一致。</p>
      */
     @Transactional
     public void markSuccess(Long rowId, String rspuId, String variantId, List<String> rskuIds,
                             Integer imageCount, List<String> imageAssetIds, String aiTaskId) {
-        ExcelImportRow row = rowMapper.selectById(rowId);
-        if (row == null) {
-            return;
-        }
-        row.setStatus("success");
-        row.setGeneratedRspuId(rspuId);
-        row.setGeneratedVariantId(variantId);
-        row.setGeneratedRskuIds(toJson(rskuIds));
-        row.setExtractedImageCount(imageCount != null ? imageCount : 0);
-        row.setImageAssetIds(toJson(imageAssetIds));
-        row.setAiTaskId(aiTaskId);
-        row.setUpdatedAt(LocalDateTime.now());
-        rowMapper.updateById(row);
+        String rskuIdsJson = toJson(rskuIds);
+        String imageAssetIdsJson = toJson(imageAssetIds);
+        rowMapper.update(null, new UpdateWrapper<ExcelImportRow>()
+            .eq("row_id", rowId)
+            .set("status", "success")
+            .set(rspuId != null, "generated_rspu_id", rspuId)
+            .set(variantId != null, "generated_variant_id", variantId)
+            .set(rskuIdsJson != null, "generated_rsku_ids", rskuIdsJson)
+            .set("extracted_image_count", imageCount != null ? imageCount : 0)
+            .set(imageAssetIdsJson != null, "image_asset_ids", imageAssetIdsJson)
+            .set(aiTaskId != null, "ai_task_id", aiTaskId)
+            .set("updated_at", LocalDateTime.now()));
     }
 
     /**
-     * 标记行处理失败。
+     * 标记行处理失败（单语句 UPDATE，null 字段不写入，语义同原 selectById + updateById）。
      */
     @Transactional
     public void markFailed(Long rowId, String stage, String reason) {
-        ExcelImportRow row = rowMapper.selectById(rowId);
-        if (row == null) {
-            return;
-        }
-        row.setStatus("failed");
-        row.setFailureStage(stage);
-        row.setFailureReason(reason);
-        row.setUpdatedAt(LocalDateTime.now());
-        rowMapper.updateById(row);
+        rowMapper.update(null, new UpdateWrapper<ExcelImportRow>()
+            .eq("row_id", rowId)
+            .set("status", "failed")
+            .set(stage != null, "failure_stage", stage)
+            .set(reason != null, "failure_reason", reason)
+            .set("updated_at", LocalDateTime.now()));
     }
 
     /**
-     * 标记行被跳过。
+     * 标记行被跳过（单语句 UPDATE，null 字段不写入，语义同原 selectById + updateById）。
      */
     @Transactional
     public void markSkipped(Long rowId, String reason) {
-        ExcelImportRow row = rowMapper.selectById(rowId);
-        if (row == null) {
-            return;
-        }
-        row.setStatus("skipped");
-        row.setFailureReason(reason);
-        row.setUpdatedAt(LocalDateTime.now());
-        rowMapper.updateById(row);
+        rowMapper.update(null, new UpdateWrapper<ExcelImportRow>()
+            .eq("row_id", rowId)
+            .set("status", "skipped")
+            .set(reason != null, "failure_reason", reason)
+            .set("updated_at", LocalDateTime.now()));
     }
 
     /**

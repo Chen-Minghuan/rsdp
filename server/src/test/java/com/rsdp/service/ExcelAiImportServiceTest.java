@@ -140,6 +140,8 @@ class ExcelAiImportServiceTest {
     @Mock
     private DictUnresolvedService dictUnresolvedService;
     @Mock
+    private RspuPriceSummaryService rspuPriceSummaryService;
+    @Mock
     private RspuCodeService rspuCodeService;
     @Mock
     private DataScopeHelper dataScopeHelper;
@@ -164,6 +166,9 @@ class ExcelAiImportServiceTest {
             .thenReturn("FS-MC-001-M");
         lenient().when(factoryLeadTimeRuleService.calculateLeadTime(anyString(), any(), any(), anyString(), anyInt()))
             .thenReturn(null);
+        // 3.4：行内别名解析改走批次预载内存快照（loadAliases），默认空快照；个别用例覆盖
+        lenient().when(dictAliasService.loadAliases(org.mockito.ArgumentMatchers.<java.util.Collection<String>>any()))
+            .thenReturn(java.util.Map.of());
         // 默认批次可抢占导入权（P1-6 并发防护）；个别测试可覆盖为 0 模拟冲突
         lenient().when(batchMapper.claimForImport(anyString())).thenReturn(1);
         // previewMapping 的 saveBatch 使用编程式事务（P1-7），单测中事务管理器全部 mock
@@ -1862,7 +1867,9 @@ class ExcelAiImportServiceTest {
         when(storageService.get(anyString()))
             .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithCategoryValues("茶桌")));
         stubCategoryDicts();
-        when(dictAliasService.resolveAlias("category", "茶桌")).thenReturn("TB");
+        // 3.4：行内别名解析走批次预载内存快照（loadAliases 一次预载，行内不再 resolveAlias 单查）
+        when(dictAliasService.loadAliases(org.mockito.ArgumentMatchers.<java.util.Collection<String>>any()))
+            .thenReturn(java.util.Map.of("category", java.util.Map.of("茶桌", "TB")));
         when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
         RspuVariantResponse variantResponse = new RspuVariantResponse();
         variantResponse.setVariantId("V-1");
@@ -1878,7 +1885,46 @@ class ExcelAiImportServiceTest {
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper).insert(rspuCaptor.capture());
         assertEquals("TB", rspuCaptor.getValue().getCategoryCode(), "方言「茶桌」应经别名库归一为 TB");
-        verify(dictAliasService).resolveAlias("category", "茶桌");
+        // 行内不再逐值单查别名库（预载内存命中）
+        verify(dictAliasService, never()).resolveAlias(anyString(), anyString());
+    }
+
+    @Test
+    void confirmAndImport_shouldPreloadAliasesAndLeadTimeRulesOncePerBatch() throws IOException {
+        // 3.4 批次级预载治理：别名/交期规则各一把查询进内存，行级 tracking 每行仅一次 stage 落库
+        ExcelImportBatch savedBatch = prepareCategoryBatch(createExcelWithCategoryValues("FS"),
+            "{\"mapping\":{\"品类\":\"categoryCode\",\"名称\":\"productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+
+        when(batchMapper.selectById(savedBatch.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithCategoryValues("FS")));
+        stubCategoryDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-1");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(savedBatch.getBatchId());
+        request.setMapping(Map.of("品类", "categoryCode", "名称", "productName"));
+        request.setDefaultFactoryCode("F001");
+
+        ExcelAiImportResult result = confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        // 别名：批次预载一次，行内不再逐值单查
+        verify(dictAliasService, times(1))
+            .loadAliases(org.mockito.ArgumentMatchers.<java.util.Collection<String>>any());
+        verify(dictAliasService, never()).resolveAlias(anyString(), anyString());
+        // 交期规则：按批次工厂预载一次，行内不再逐行查库（5 参实时计算入口不再被导入链路调用）
+        verify(factoryLeadTimeRuleService, times(1)).listActiveRules("F001");
+        verify(factoryLeadTimeRuleService, never())
+            .calculateLeadTime(anyString(), any(), any(), anyString(), anyInt());
+        // 行级 tracking：每行仅首个 stage（build_product_row）落库一次，中间态不再逐步写
+        verify(excelImportRowService, times(1)).updateStage(any(), eq("build_product_row"));
+        verify(excelImportRowService, times(1)).updateStage(any(), anyString());
+        // 价格投影：批次级延迟重算作用域开启一次（行内 RSKU upsert 不再逐次重算）
+        verify(rspuPriceSummaryService, times(1)).openDeferralScope();
     }
 
     @Test

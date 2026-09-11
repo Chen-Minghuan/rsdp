@@ -33,7 +33,24 @@ public class DictUnresolvedService {
      * @param username 操作人（可为 null）
      */
     public void record(String dictType, String rawValue, String batchId, String username) {
-        if (!StringUtils.hasText(dictType) || !StringUtils.hasText(rawValue)) {
+        recordOccurrences(dictType, rawValue, 1, batchId, username);
+    }
+
+    /**
+     * 采集一个未归一值并累加指定次数（导入批次末聚合落库用）。
+     *
+     * <p>语义与逐次调用 {@link #record} N 次完全一致：已存在则计数 +N 并更新
+     * 最近出现信息，不存在则按计数 N 插入；唯一约束冲突同样降级为忽略，
+     * 任何失败都不阻断导入主流程。</p>
+     *
+     * @param dictType 字典类型（size/color/material 等）
+     * @param rawValue 未归一的工厂原文
+     * @param count    出现次数（&lt;1 时忽略）
+     * @param batchId  导入批次 ID（可为 null）
+     * @param username 操作人（可为 null）
+     */
+    public void recordOccurrences(String dictType, String rawValue, int count, String batchId, String username) {
+        if (!StringUtils.hasText(dictType) || !StringUtils.hasText(rawValue) || count < 1) {
             return;
         }
         String value = rawValue.trim();
@@ -45,7 +62,7 @@ public class DictUnresolvedService {
                 .eq("dict_type", dictType)
                 .eq("raw_value", value));
             if (existing != null) {
-                existing.setOccurrenceCount(existing.getOccurrenceCount() + 1);
+                existing.setOccurrenceCount(existing.getOccurrenceCount() + count);
                 existing.setLastSeenAt(LocalDateTime.now());
                 existing.setLastBatchId(batchId);
                 existing.setLastUsername(username);
@@ -56,7 +73,7 @@ public class DictUnresolvedService {
             DictUnresolvedValue record = new DictUnresolvedValue();
             record.setDictType(dictType);
             record.setRawValue(value);
-            record.setOccurrenceCount(1);
+            record.setOccurrenceCount(count);
             record.setLastBatchId(batchId);
             record.setLastUsername(username);
             record.setStatus("pending");

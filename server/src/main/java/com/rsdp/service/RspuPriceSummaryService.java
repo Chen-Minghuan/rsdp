@@ -34,6 +34,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class RspuPriceSummaryService {
 
+    /**
+     * 延迟重算作用域（线程级）：作用域内 {@link #recalculate(String)} 只收集 RSPU ID 去重，
+     * 不立即查库；作用域 {@link DeferralScope#close()} 时对收集到的 ID 做一次
+     * {@link #recalculateBatch(Collection)}。供 Excel AI 导入等批量链路把
+     * "每 RSKU 一次重算"合并为"每 RSPU 每批次一次"，投影最终结果不变。
+     */
+    private static final ThreadLocal<Set<String>> DEFERRED_RSPU_IDS = new ThreadLocal<>();
+
     private final RspuPriceSummaryMapper rspuPriceSummaryMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
 
@@ -43,9 +51,64 @@ public class RspuPriceSummaryService {
      * <p>不加事务注解：单 upsert 语句，在调用方（RSKU 写路径）的事务内执行即随其提交；
      * 无有效 RSKU 时投影行保留（min/max 为 NULL、count 为 0），与"无报价"列表行为一致。</p>
      *
+     * <p>处于 {@link #openDeferralScope()} 作用域内时仅登记 ID 延迟到作用域关闭统一重算。</p>
+     *
      * @param rspuId RSPU ID
      */
     public void recalculate(String rspuId) {
+        Set<String> deferred = DEFERRED_RSPU_IDS.get();
+        if (deferred != null) {
+            if (StringUtils.hasText(rspuId)) {
+                deferred.add(rspuId);
+            }
+            return;
+        }
+        doRecalculate(rspuId);
+    }
+
+    /**
+     * 开启延迟重算作用域（try-with-resources 使用）。支持嵌套：内层作用域关闭时
+     * 把收集到的 ID 并入外层而非立即重算。
+     *
+     * @return 作用域句柄；close 时去重后统一 {@link #recalculateBatch(Collection)}
+     */
+    public DeferralScope openDeferralScope() {
+        Set<String> previous = DEFERRED_RSPU_IDS.get();
+        Set<String> bag = new LinkedHashSet<>();
+        DEFERRED_RSPU_IDS.set(bag);
+        return new DeferralScope(previous, bag);
+    }
+
+    /**
+     * 延迟重算作用域句柄。close 幂等；异常路径同样会 flush 已提交的收集结果
+     * （逐 RSPU 重算失败在 {@link #recalculateBatch} 内隔离，不影响调用方）。
+     */
+    public final class DeferralScope implements AutoCloseable {
+        private final Set<String> previous;
+        private final Set<String> bag;
+        private boolean closed;
+
+        private DeferralScope(Set<String> previous, Set<String> bag) {
+            this.previous = previous;
+            this.bag = bag;
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            DEFERRED_RSPU_IDS.remove();
+            if (previous != null) {
+                previous.addAll(bag);
+                return;
+            }
+            recalculateBatch(bag);
+        }
+    }
+
+    private void doRecalculate(String rspuId) {
         if (!StringUtils.hasText(rspuId)) {
             return;
         }
