@@ -611,4 +611,110 @@ class AsyncTaskProcessorTest {
         // Then：置存疑有 logReview 审计，操作人=任务创建人
         verify(auditLogService).logReview(eq("rspu_master"), eq(rspuId), any(), any(), eq("editor01"));
     }
+
+    // ==================== 文档导入批次任务（阶段 3.1） ====================
+
+    @Test
+    void processDocumentImport_shouldCompleteTaskWithBatchFinalStatus() throws Exception {
+        // Given：批次执行成功收尾（done）
+        PdfImportService pdfImportService = installPdfImportServiceProvider();
+
+        com.rsdp.entity.DocumentImportBatch batch = new com.rsdp.entity.DocumentImportBatch();
+        batch.setBatchId("BATCH-1");
+        batch.setStatus("done");
+        when(pdfImportService.executeImport("BATCH-1")).thenReturn(batch);
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setStatus("processing");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        // When
+        asyncTaskProcessor.processDocumentImport(taskId, "BATCH-1");
+
+        // Then：任务状态对齐批次终态 done，进度 100
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getStatus()).isEqualTo("done");
+        assertThat(taskCaptor.getValue().getProgress()).isEqualTo(100);
+        assertThat(taskCaptor.getValue().getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    void processDocumentImport_shouldMarkTaskFailedWhenBatchFailed() throws Exception {
+        // Given：批次全部失败（failed + errorMessage）
+        PdfImportService pdfImportService = installPdfImportServiceProvider();
+
+        com.rsdp.entity.DocumentImportBatch batch = new com.rsdp.entity.DocumentImportBatch();
+        batch.setBatchId("BATCH-2");
+        batch.setStatus("failed");
+        batch.setErrorMessage("未成功建档任何产品");
+        when(pdfImportService.executeImport("BATCH-2")).thenReturn(batch);
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setStatus("processing");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        // When
+        asyncTaskProcessor.processDocumentImport(taskId, "BATCH-2");
+
+        // Then：任务 failed，错误文案透传批次 errorMessage
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getStatus()).isEqualTo("failed");
+        assertThat(taskCaptor.getValue().getErrorMessage()).isEqualTo("未成功建档任何产品");
+    }
+
+    @Test
+    void processDocumentImport_shouldMarkTaskFailedWhenServiceThrows() throws Exception {
+        // Given：批次服务抛异常（致命错误）
+        PdfImportService pdfImportService = installPdfImportServiceProvider();
+        when(pdfImportService.executeImport("BATCH-3")).thenThrow(new RuntimeException("db down"));
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setStatus("processing");
+        when(asyncTaskMapper.selectById(taskId)).thenReturn(task);
+
+        // When
+        asyncTaskProcessor.processDocumentImport(taskId, "BATCH-3");
+
+        // Then：任务 failed，异常文案落 errorMessage
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getStatus()).isEqualTo("failed");
+        assertThat(taskCaptor.getValue().getErrorMessage()).contains("db down");
+    }
+
+    @Test
+    void processDocumentImport_shouldSkipWhenTaskAlreadyClaimed() {
+        // Given：任务已被其他执行器认领
+        when(asyncTaskMapper.claimPendingTask(taskId)).thenReturn(0);
+
+        // When
+        asyncTaskProcessor.processDocumentImport(taskId, "BATCH-4");
+
+        // Then：不再更新任务状态
+        verify(asyncTaskMapper, times(0)).updateById(any(AsyncTask.class));
+    }
+
+    /**
+     * 安装 PdfImportService 的 ObjectProvider 桩（反射注入，避免 @InjectMocks 对多个
+     * ObjectProvider 字段的类型擦除歧义）。
+     *
+     * @return PdfImportService mock
+     */
+    @SuppressWarnings("unchecked")
+    private PdfImportService installPdfImportServiceProvider() throws Exception {
+        PdfImportService pdfImportService = org.mockito.Mockito.mock(PdfImportService.class);
+        org.springframework.beans.factory.ObjectProvider<PdfImportService> provider =
+            org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getObject()).thenReturn(pdfImportService);
+        java.lang.reflect.Field providerField =
+            AsyncTaskProcessor.class.getDeclaredField("pdfImportServiceProvider");
+        providerField.setAccessible(true);
+        providerField.set(asyncTaskProcessor, provider);
+        return pdfImportService;
+    }
 }

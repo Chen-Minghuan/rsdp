@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, DocumentImportSubmitResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -283,23 +283,38 @@ export async function manualEntry(formData: FormData): Promise<ManualProductEntr
 }
 
 /**
- * 从 PDF 文档批量导入产品。
+ * 从 PDF 文档批量导入产品（阶段 3.1 异步化：校验 + 建批次后立即返回 batchId，
+ * 处理进度走 getDocumentImportBatch 轮询）。
  *
  * @param file PDF 文件
  * @param categoryHint 品类提示，如 SF/TB/FC
  * @param signal 可选的 AbortSignal，用于取消请求
- * @returns 导入批次结果
+ * @returns 提交结果（batchId）
  */
-export async function importProductsFromDocument(file: File, categoryHint?: string, signal?: AbortSignal): Promise<DocumentImportResult> {
+export async function importProductsFromDocument(file: File, categoryHint?: string, signal?: AbortSignal): Promise<DocumentImportSubmitResult> {
   const formData = new FormData()
   formData.append('file', file)
   if (categoryHint) {
     formData.append('categoryHint', categoryHint)
   }
 
-  const { data: result } = await uploadClient.post<ApiResult<DocumentImportResult>>(
+  const { data: result } = await uploadClient.post<ApiResult<DocumentImportSubmitResult>>(
     '/v1/products/document-import',
     formData,
+    { signal }
+  )
+  return result.data
+}
+
+/**
+ * 查询文档导入批次状态/进度/结果（含 taskIds/rspuIds 配对，供继续轮询各产品识别任务）。
+ *
+ * @param batchId 批次号
+ * @param signal 可选的 AbortSignal
+ */
+export async function getDocumentImportBatch(batchId: string, signal?: AbortSignal): Promise<DocumentImportResult> {
+  const { data: result } = await apiClient.get<ApiResult<DocumentImportResult>>(
+    `/v1/products/document-import/${batchId}`,
     { signal }
   )
   return result.data

@@ -21,24 +21,28 @@ import StatusPill from '@/components/StatusPill.vue'
 import { listDicts } from '@/api/dict'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
-import type { DocumentImportFailure } from '@/types/product'
+import type { DocumentImportBatchStatus, DocumentImportFailure } from '@/types/product'
 
 const router = useRouter()
 
 // 导入状态在 Pinia 中，切换页面后返回进度不丢失；
-// 上传/导入请求与识别轮询由 store 驱动，组件卸载不影响流程进行
+// 上传/批次轮询/识别轮询由 store 驱动，组件卸载不影响流程进行
 const store = useDocumentImportStore()
 const {
   fileList,
   uploading,
   errorMessage,
   categoryHint,
+  batchId,
   importResult,
+  batchPollError,
+  batchRunning,
+  batchProgressPercent,
   taskList,
   hasSelectedFile,
   pendingTaskCount
 } = storeToRefs(store)
-const { handleStartImport, clearAll, ensurePolling } = store
+const { handleStartImport, clearAll, ensurePolling, ensureBatchPolling } = store
 
 const categoryOptions = ref<DictItem[]>([])
 
@@ -51,7 +55,7 @@ async function loadCategoryDicts() {
 }
 
 function handleBeforeUnload(e: BeforeUnloadEvent) {
-  if (uploading.value || pendingTaskCount.value > 0) {
+  if (uploading.value || batchRunning.value || pendingTaskCount.value > 0) {
     e.preventDefault()
     e.returnValue = ''
   }
@@ -59,7 +63,10 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 
 onMounted(() => {
   loadCategoryDicts()
-  // 从其他页面返回时，如仍有进行中的识别任务，恢复轮询展示进度
+  // 从其他页面返回时，如批次仍在处理或仍有进行中的识别任务，恢复轮询展示进度
+  if (batchRunning.value) {
+    ensureBatchPolling()
+  }
   if (pendingTaskCount.value > 0) {
     ensurePolling()
   }
@@ -88,6 +95,23 @@ function statusText(status: TaskItem['status']) {
   }
 }
 
+function batchStatusText(status: DocumentImportBatchStatus) {
+  switch (status) {
+    case 'pending':
+      return '排队中'
+    case 'processing':
+      return '处理中'
+    case 'done':
+      return '已完成'
+    case 'partial_success':
+      return '部分成功'
+    case 'failed':
+      return '失败'
+    default:
+      return '未知'
+  }
+}
+
 function goToProduct(rspuId: string) {
   router.push(`/products/${rspuId}`)
 }
@@ -99,7 +123,7 @@ const failureColumns: DataTableColumns<DocumentImportFailure> = [
     render: (row: DocumentImportFailure) => row.pageIndex + 1
   },
   {
-    title: '失败原因',
+    title: '明细',
     key: 'reason'
   }
 ]
@@ -134,7 +158,7 @@ const failureColumns: DataTableColumns<DocumentImportFailure> = [
         <n-space>
           <n-button
             type="primary"
-            :disabled="!hasSelectedFile || uploading"
+            :disabled="!hasSelectedFile || uploading || batchRunning"
             :loading="uploading"
             @click="handleStartImport"
           >
@@ -147,22 +171,55 @@ const failureColumns: DataTableColumns<DocumentImportFailure> = [
       </n-space>
     </n-card>
 
-    <n-card v-if="importResult" title="导入结果">
-      <n-descriptions bordered :columns="3">
-        <n-descriptions-item label="批次号">{{ importResult.batchId }}</n-descriptions-item>
-        <n-descriptions-item label="总页数">{{ importResult.totalPages }}</n-descriptions-item>
-        <n-descriptions-item label="产品页数">{{ importResult.productPages }}</n-descriptions-item>
-        <n-descriptions-item label="产品总数">{{ importResult.totalProducts }}</n-descriptions-item>
-        <n-descriptions-item label="成功数">{{ importResult.successCount }}</n-descriptions-item>
-        <n-descriptions-item label="失败数">{{ importResult.failedCount }}</n-descriptions-item>
-      </n-descriptions>
+    <n-card v-if="batchId" title="导入批次">
+      <n-spin :show="batchRunning">
+        <n-space vertical :size="12">
+          <n-alert
+            v-if="batchPollError"
+            type="warning"
+            :show-icon="false"
+          >
+            批次进度查询异常：{{ batchPollError }}（不影响后台处理，稍后自动恢复）
+          </n-alert>
+          <n-alert
+            v-if="importResult?.status === 'failed' && importResult.errorMessage"
+            type="error"
+            :show-icon="false"
+          >
+            {{ importResult.errorMessage }}
+          </n-alert>
 
-      <n-data-table
-        v-if="importResult.failures.length > 0"
-        :columns="failureColumns"
-        :data="importResult.failures"
-        style="margin-top: 16px;"
-      />
+          <n-space align="center">
+            <StatusPill
+              :value="importResult?.status ?? 'pending'"
+              :label="batchStatusText(importResult?.status ?? 'pending')"
+            />
+            <span>批次号：{{ batchId }}</span>
+          </n-space>
+
+          <n-progress :percentage="batchProgressPercent" />
+          <div v-if="importResult">
+            已处理 {{ importResult.processedPages }} / {{ importResult.totalPages }} 页
+          </div>
+
+          <n-descriptions v-if="importResult" bordered :columns="3">
+            <n-descriptions-item label="总页数">{{ importResult.totalPages }}</n-descriptions-item>
+            <n-descriptions-item label="产品页数">{{ importResult.productPages }}</n-descriptions-item>
+            <n-descriptions-item label="产品总数">{{ importResult.totalProducts }}</n-descriptions-item>
+            <n-descriptions-item label="成功数">{{ importResult.successCount }}</n-descriptions-item>
+            <n-descriptions-item label="失败数">{{ importResult.failedCount }}</n-descriptions-item>
+            <n-descriptions-item label="已存在跳过">
+              {{ importResult.skippedCount }}
+            </n-descriptions-item>
+          </n-descriptions>
+
+          <n-data-table
+            v-if="importResult && importResult.failures.length > 0"
+            :columns="failureColumns"
+            :data="importResult.failures"
+          />
+        </n-space>
+      </n-spin>
     </n-card>
 
     <n-card v-if="taskList.length > 0" title="识别任务">

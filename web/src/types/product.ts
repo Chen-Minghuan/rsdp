@@ -354,15 +354,35 @@ export interface DocumentImportFailure {
 }
 
 /**
- * 文档批量导入结果（PDF/PPT）。
+ * 文档导入提交响应（阶段 3.1 异步化：提交即返回，仅含批次号）。
+ */
+export interface DocumentImportSubmitResult {
+  batchId: string
+}
+
+/**
+ * 文档批量导入批次状态（批次轮询响应）。
+ */
+export type DocumentImportBatchStatus = 'pending' | 'processing' | 'done' | 'partial_success' | 'failed'
+
+/**
+ * 文档批量导入批次结果（GET /v1/products/document-import/{batchId}）。
  */
 export interface DocumentImportResult {
   batchId: string
+  /** 批次状态 */
+  status: DocumentImportBatchStatus
+  /** 批次级错误信息（failed 时） */
+  errorMessage?: string
   totalPages: number
+  /** 已处理页数（进度轮询） */
+  processedPages: number
   productPages: number
   totalProducts: number
   successCount: number
   failedCount: number
+  /** 图片查重命中（已存在）跳过建档的数量 */
+  skippedCount: number
   taskIds: string[]
   rspuIds: string[]
   failures: DocumentImportFailure[]

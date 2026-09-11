@@ -270,25 +270,39 @@ POST   /api/v1/products/import
        #   - 图片 URL 仅支持 http/https，下载失败只记录失败明细，不影响产品数据写入
 
 POST   /api/v1/products/document-import
-       # PDF 产品目录批量导入（已实现）
+       # PDF 产品目录批量导入（已实现；阶段 3.1 起为异步批次化：提交即返回，不再同步跑完全程）
        # Request: multipart/form-data
-       #   file: File (必填, PDF, ≤50MB, ≤200 页)
+       #   file: File (必填, PDF, ≤100MB, ≤100 页 —— 2026-09-11 决策点③正式口径)
        #   categoryHint: string (可选, 品类提示如 SF/TB/FC)
+       # Response: { batchId: string }
+       # 说明：
+       #   - 服务端只做校验 + 原始 PDF 落存储 + 建批次（document_import_batch，pending）
+       #     + 建异步任务（async_task task_type=document_import），立即返回 batchId
+       #   - 批处理在后台分块逐页流式执行（渲染一块 → AI 检测 → 裁剪产品图 → 释放该块位图，
+       #     全程不保留全量页位图）；逐产品建档前按图片 contentHash 查 image_assets（未软删）
+       #     查重，命中跳过建档并在批次明细记「已存在跳过」
+       #   - 前端拿到 batchId 后轮询下方批次查询接口（建议 3s 间隔）
+
+GET    /api/v1/products/document-import/{batchId}
+       # 文档导入批次状态/进度/结果查询（已实现；仅批次创建者本人或 ADMIN 可访问）
        # Response: {
        #   batchId: string,
+       #   status: "pending"|"processing"|"done"|"partial_success"|"failed",
+       #   errorMessage?: string,          # 批次级错误（failed 时）
        #   totalPages: number,
+       #   processedPages: number,          # 已处理页数（进度轮询）
        #   productPages: number,
        #   totalProducts: number,
        #   successCount: number,
        #   failedCount: number,
-       #   taskIds: string[],
+       #   skippedCount: number,            # 图片查重命中（已存在）跳过建档数
+       #   taskIds: string[],               # 建档 product_entry 任务（与 rspuIds 一一对应）
        #   rspuIds: string[],
-       #   failures: [{ pageIndex, reason }]
+       #   failures: [{ pageIndex, reason }] # 含「已存在跳过」明细
        # }
        # 说明：
-       #   - 后端将 PDF 渲染为图片，通过 AI 检测产品页和每个产品的位置框（bbox）
-       #   - 按 bbox 裁剪出单产品图后，为每个产品创建 RSPU 草稿并触发异步 AI 识别
-       #   - 前端通过 taskIds 轮询每个产品的识别进度
+       #   - 批次进入终态（done/partial_success/failed）后，前端再按 taskIds 轮询
+       #     每个产品的 AI 识别任务（GET /api/v1/tasks/{taskId}，既有链路不变）
 
 POST   /api/v1/products/excel-ai-import/preview
        # Excel AI 辅助字段映射预览（已实现）

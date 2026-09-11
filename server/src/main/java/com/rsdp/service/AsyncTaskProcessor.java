@@ -64,6 +64,10 @@ public class AsyncTaskProcessor {
      * 户型图分析服务（延迟解析，打破 FloorPlanService ↔ AsyncTaskProcessor 循环依赖）。
      */
     private final ObjectProvider<FloorPlanService> floorPlanServiceProvider;
+    /**
+     * 文档导入服务（延迟解析，打破 PdfImportService ↔ AsyncTaskProcessor 循环依赖）。
+     */
+    private final ObjectProvider<PdfImportService> pdfImportServiceProvider;
     private final ObjectMapper objectMapper;
     /** 向量重建服务（Worker D 提供）：重编码图片向量并写入 pgvector。 */
     private final VectorRebuildService vectorRebuildService;
@@ -682,5 +686,39 @@ public class AsyncTaskProcessor {
     public void processVectorRebuild(String taskId) {
         log.info("开始异步处理向量重建任务，taskId={}", taskId);
         vectorRebuildService.executeRebuildTask(taskId);
+    }
+
+    /**
+     * 异步处理文档（PDF）导入批次任务（阶段 3.1）：逐页流式渲染 + AI 检测 + 逐产品建档，
+     * 批次进度落 document_import_batch 供前端轮询。
+     *
+     * <p>照 {@link #processProductEntry} 模式：claimPendingTask 原子认领；
+     * 批次终态（done/partial_success/failed）由 {@link PdfImportService#executeImport} 落库，
+     * 本方法把任务状态对齐批次终态。</p>
+     *
+     * @param taskId  任务 ID
+     * @param batchId 导入批次 ID
+     */
+    @Async("taskExecutor")
+    public void processDocumentImport(String taskId, String batchId) {
+        log.info("开始异步处理文档导入批次任务，taskId={}，batchId={}", taskId, batchId);
+        // 原子认领任务：仅 pending 状态可置为 processing，防止多执行器并发重复处理同一任务
+        if (asyncTaskMapper.claimPendingTask(taskId) == 0) {
+            log.warn("任务已被认领或不处于 pending 状态，跳过处理，taskId={}", taskId);
+            return;
+        }
+        try {
+            com.rsdp.entity.DocumentImportBatch batch =
+                pdfImportServiceProvider.getObject().executeImport(batchId);
+            String finalStatus = batch.getStatus();
+            if (!isTerminalStatus(finalStatus)) {
+                finalStatus = "failed";
+            }
+            updateTaskStatus(taskId, finalStatus, 100, null, batch.getErrorMessage());
+            log.info("文档导入批次任务完成，taskId={}，batchId={}，status={}", taskId, batchId, finalStatus);
+        } catch (Exception e) {
+            log.error("文档导入批次处理失败，taskId={}，batchId={}", taskId, batchId, e);
+            safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+        }
     }
 }

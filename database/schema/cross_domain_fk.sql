@@ -1,6 +1,6 @@
 -- ============================================================
 -- RSDP 基线 DDL · 跨域后置外键（cross_domain_fk.sql，无数字编号）
--- 包含表：（无新表）后置外键 ALTER——原文件已有的循环引用后置（excel_import_batch.created_by、sys_user↔company/member_group/invited_by、user_favorite.folder_id、scheme.project_id）+ 按域拆分后跨域执行序后置（rsku_supply↔factory_master/factory_warehouse、user_favorite/favorite_folder/product_collection/project/design_order/recommendation_score_config→sys_user）
+-- 包含表：（无新表）后置外键 ALTER——原文件已有的循环引用后置（excel_import_batch.created_by、document_import_batch.created_by、sys_user↔company/member_group/invited_by、user_favorite.folder_id、scheme.project_id）+ 按域拆分后跨域执行序后置（rsku_supply↔factory_master/factory_warehouse、user_favorite/favorite_folder/product_collection/project/design_order/recommendation_score_config→sys_user）
 -- 执行顺序：schema/ 目录按文件名字母序执行（01_~12_ 数字编号域文件在前，本文件字母开头排最后，zz_seed.sql 种子殿后）
 -- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
 -- ============================================================
@@ -9,6 +9,13 @@ ALTER TABLE excel_import_batch
     DROP CONSTRAINT IF EXISTS fk_excel_import_batch_created_by;
 ALTER TABLE excel_import_batch
     ADD CONSTRAINT fk_excel_import_batch_created_by
+        FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
+
+-- 补齐 document_import_batch 外键（该表在 sys_user 之前创建）
+ALTER TABLE document_import_batch
+    DROP CONSTRAINT IF EXISTS fk_document_import_batch_created_by;
+ALTER TABLE document_import_batch
+    ADD CONSTRAINT fk_document_import_batch_created_by
         FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
 
 -- 补齐 sys_user 企业/邀请外键（company/member_group 在 sys_user 之后创建，循环引用需后置）

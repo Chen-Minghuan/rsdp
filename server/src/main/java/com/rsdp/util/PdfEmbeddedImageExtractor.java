@@ -68,21 +68,39 @@ public final class PdfEmbeddedImageExtractor {
         try (PDDocument document = Loader.loadPDF(pdfBytes)) {
             int pages = document.getNumberOfPages();
             for (int i = 0; i < pages; i++) {
-                PDPage page = document.getPage(i);
-                LargeImageCollector collector = new LargeImageCollector(page, minAreaRatio, minPixelEdge);
-                try {
-                    collector.processPage(page);
-                } catch (Exception e) {
-                    log.warn("抽取第 {} 页嵌入图失败，跳过该页", i + 1, e);
-                    continue;
-                }
-                if (!collector.images.isEmpty()) {
-                    result.put(i, collector.images);
-                    log.debug("第 {} 页抽取到 {} 张大嵌入图", i + 1, collector.images.size());
+                List<BufferedImage> images = extractPageImages(document, i, minAreaRatio, minPixelEdge);
+                if (!images.isEmpty()) {
+                    result.put(i, images);
                 }
             }
         }
         return result;
+    }
+
+    /**
+     * 抽取单页的大面积嵌入图片（阶段 3.1 逐页流式处理：调用方复用同一 PDDocument 按需抽取，
+     * 处理完一页即可释放该页嵌入图，避免全量嵌入位图驻留堆内存）。
+     *
+     * @param document      已打开的 PDF 文档（调用方负责关闭）
+     * @param pageIndex     页码（0 起）
+     * @param minAreaRatio  图片绘制面积占页面面积的最小比例（如 0.20）
+     * @param minPixelEdge  图片原始像素的最小边长（如 200），过滤缩略图
+     * @return 该页大面积嵌入图列表，无合格图片返回空列表
+     */
+    public static List<BufferedImage> extractPageImages(PDDocument document, int pageIndex,
+                                                        double minAreaRatio, int minPixelEdge) {
+        PDPage page = document.getPage(pageIndex);
+        LargeImageCollector collector = new LargeImageCollector(page, minAreaRatio, minPixelEdge);
+        try {
+            collector.processPage(page);
+        } catch (Exception e) {
+            log.warn("抽取第 {} 页嵌入图失败，跳过该页", pageIndex + 1, e);
+            return List.of();
+        }
+        if (!collector.images.isEmpty()) {
+            log.debug("第 {} 页抽取到 {} 张大嵌入图", pageIndex + 1, collector.images.size());
+        }
+        return collector.images;
     }
 
     /**

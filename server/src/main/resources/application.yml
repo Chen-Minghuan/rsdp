@@ -162,10 +162,10 @@ rsdp:
     allowed-image-hosts: ${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:}
   document-import:
     pdf:
-      # PDF 导入文件大小上限（MB）
-      max-file-size-mb: 50
-      # PDF 最大页数（默认 50：同步全页位图渲染驻留堆内存，页数过多有 OOM 风险，异步化后再评估上调）
-      max-pages: 50
+      # PDF 导入文件大小上限（MB，正式口径 100：导入已异步批次化 + 分块逐页流式渲染）
+      max-file-size-mb: 100
+      # PDF 最大页数（正式口径 100：页位图不再全量驻留堆内存，OOM 风险已消除）
+      max-pages: 100
       # 渲染 DPI（越高裁剪图越清晰，内存占用随平方增长）
       render-dpi: 200
       # 页面区域检测每批最大页数

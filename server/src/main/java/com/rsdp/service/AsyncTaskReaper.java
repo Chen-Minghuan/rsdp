@@ -9,6 +9,7 @@ import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.AsyncTaskMapper;
+import com.rsdp.mapper.DocumentImportBatchMapper;
 import com.rsdp.mapper.ExcelImportBatchMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.util.IdGenerator;
@@ -52,6 +53,7 @@ public class AsyncTaskReaper {
 
     private final AsyncTaskMapper asyncTaskMapper;
     private final ExcelImportBatchMapper excelImportBatchMapper;
+    private final DocumentImportBatchMapper documentImportBatchMapper;
     private final RspuMapper rspuMapper;
     private final AiRecognitionMapper aiRecognitionMapper;
     private final AuditLogService auditLogService;
@@ -82,6 +84,9 @@ public class AsyncTaskReaper {
 
             // product_entry 任务收割前联动：仍卡在 processing 的 RSPU 置存疑（status 保持 processing）
             linkReapedProductEntryRspu(pendingThreshold, processingThreshold);
+
+            // document_import 任务收割前联动：仍卡在 pending/processing 的批次置 failed（批次不会永久卡死）
+            linkReapedDocumentImportBatch(now, pendingThreshold, processingThreshold);
 
             int pendingReaped = asyncTaskMapper.update(null, new UpdateWrapper<AsyncTask>()
                 .eq("status", "pending")
@@ -114,6 +119,50 @@ public class AsyncTaskReaper {
         } catch (Exception e) {
             // 收割器自身失败（如 DB 短暂故障）不能影响调度线程，下个周期重试
             log.error("异步任务收割执行失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 找出将被本周期收割的 document_import 任务，逐个联动其批次置 failed。
+     *
+     * <p>与下方批量 UPDATE 相同的超时口径；批次收割用条件 UPDATE（仅 pending/processing
+     * 可置 failed），不覆盖执行线程刚写入的终态。单个任务联动失败不影响其余任务与批量收割。</p>
+     *
+     * @param now                 当前时间
+     * @param pendingThreshold    pending 超时阈值时间
+     * @param processingThreshold processing 超时阈值时间
+     */
+    private void linkReapedDocumentImportBatch(LocalDateTime now, LocalDateTime pendingThreshold,
+                                               LocalDateTime processingThreshold) {
+        List<AsyncTask> staleImportTasks = asyncTaskMapper.selectList(new QueryWrapper<AsyncTask>()
+            .eq("task_type", "document_import")
+            .and(w -> w
+                .and(q -> q.eq("status", "pending").lt("created_at", pendingThreshold))
+                .or(q -> q.eq("status", "processing").lt("created_at", processingThreshold))));
+        if (staleImportTasks == null || staleImportTasks.isEmpty()) {
+            return;
+        }
+        for (AsyncTask task : staleImportTasks) {
+            try {
+                String batchId = extractInputField(task.getInputData(), "batchId");
+                if (!StringUtils.hasText(batchId)) {
+                    continue;
+                }
+                int updated = documentImportBatchMapper.update(null,
+                    new UpdateWrapper<com.rsdp.entity.DocumentImportBatch>()
+                        .eq("batch_id", batchId)
+                        .in("status", "pending", "processing")
+                        .set("status", "failed")
+                        .set("error_message", "导入任务超时未执行（可能进程重启导致中断），已被收割任务标记失败，请重新上传")
+                        .set("completed_at", now)
+                        .set("updated_at", now));
+                if (updated > 0) {
+                    log.warn("收割 document_import 任务联动批次置 failed，taskId={}，batchId={}",
+                        task.getTaskId(), batchId);
+                }
+            } catch (Exception e) {
+                log.error("收割任务联动文档导入批次置失败异常，taskId={}: {}", task.getTaskId(), e.getMessage());
+            }
         }
     }
 
