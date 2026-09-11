@@ -43,8 +43,8 @@ import java.util.List;
  *
  * <p>同时收割 excel_import_batch 中超时 importing 的批次：批次被抢占为 importing 后
  * 若 JVM 崩溃/重启会永久卡死，用户无法重试；超时后复位为 pending。阈值默认 2 小时，
- * 需大于正常导入最坏耗时，避免误收割仍在运行的导入（导入期间批次 updated_at 仅在被抢占
- * 与最终落库时刷新，中间不更新）。</p>
+ * 需大于正常导入最坏耗时，避免误收割仍在运行的导入（3.2 起导入行循环逐行刷新
+ * 批次 updated_at 心跳，只有导入线程真正消亡才会超时）。</p>
  */
 @Slf4j
 @Component

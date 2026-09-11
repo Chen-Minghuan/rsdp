@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, DocumentImportSubmitResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, DocumentImportSubmitResult, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -343,10 +343,14 @@ export async function previewExcelAiImport(file: File, sheetIndex?: number, sign
 }
 
 /**
- * Excel AI 辅助导入：确认映射并执行导入。
+ * Excel AI 辅助导入：确认映射并受理导入（阶段 3.2 异步化）。
+ *
+ * 接口立即返回受理状态（batchId/taskId/importing），导入在后台批次执行；
+ * 结果凭 batchId 轮询批次状态接口获取，不再同步等待导入结果。
+ * 保留 uploadClient（300s 超时）无实际必要但无害：confirm 只做短 DB 写入，正常秒级返回。
  */
-export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signal?: AbortSignal): Promise<ExcelAiImportResult> {
-  const { data: result } = await uploadClient.post<ApiResult<ExcelAiImportResult>>(
+export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signal?: AbortSignal): Promise<ExcelAiImportSubmitResult> {
+  const { data: result } = await uploadClient.post<ApiResult<ExcelAiImportSubmitResult>>(
     '/v1/products/excel-ai-import/import',
     request,
     { signal }

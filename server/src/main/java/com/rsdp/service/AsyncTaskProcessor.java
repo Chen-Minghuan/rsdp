@@ -68,6 +68,10 @@ public class AsyncTaskProcessor {
      * 文档导入服务（延迟解析，打破 PdfImportService ↔ AsyncTaskProcessor 循环依赖）。
      */
     private final ObjectProvider<PdfImportService> pdfImportServiceProvider;
+    /**
+     * Excel 导入服务（延迟解析，打破 ExcelAiImportService ↔ AsyncTaskProcessor 循环依赖）。
+     */
+    private final ObjectProvider<ExcelAiImportService> excelImportServiceProvider;
     private final ObjectMapper objectMapper;
     /** 向量重建服务（Worker D 提供）：重编码图片向量并写入 pgvector。 */
     private final VectorRebuildService vectorRebuildService;
@@ -718,6 +722,35 @@ public class AsyncTaskProcessor {
             log.info("文档导入批次任务完成，taskId={}，batchId={}，status={}", taskId, batchId, finalStatus);
         } catch (Exception e) {
             log.error("文档导入批次处理失败，taskId={}，batchId={}", taskId, batchId, e);
+            safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+        }
+    }
+
+    /**
+     * 异步处理 Excel 导入批次任务（阶段 3.2：confirm 异步化）：执行数据预处理链 + 行循环，
+     * 批次进度/结果落 excel_import_batch 供前端轮询。
+     *
+     * <p>照 {@link #processDocumentImport} 模式：claimPendingTask 原子认领；
+     * 批次终态（done/failed）由 {@link ExcelAiImportService#executeImport} 落库，
+     * 本方法把任务状态对齐执行结果。</p>
+     *
+     * @param taskId  任务 ID
+     * @param batchId 导入批次 ID
+     */
+    @Async("taskExecutor")
+    public void processExcelImport(String taskId, String batchId) {
+        log.info("开始异步处理 Excel 导入批次任务，taskId={}，batchId={}", taskId, batchId);
+        // 原子认领任务：仅 pending 状态可置为 processing，防止多执行器并发重复处理同一任务
+        if (asyncTaskMapper.claimPendingTask(taskId) == 0) {
+            log.warn("任务已被认领或不处于 pending 状态，跳过处理，taskId={}", taskId);
+            return;
+        }
+        try {
+            excelImportServiceProvider.getObject().executeImport(taskId, batchId);
+            updateTaskStatus(taskId, "done", 100, null, null);
+            log.info("Excel 导入批次任务完成，taskId={}，batchId={}", taskId, batchId);
+        } catch (Exception e) {
+            log.error("Excel 导入批次处理失败，taskId={}，batchId={}", taskId, batchId, e);
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
         }
     }

@@ -431,7 +431,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     uploadAbortController = new AbortController()
 
     try {
-      const result = await confirmExcelAiImport({
+      const submit = await confirmExcelAiImport({
         batchId: mappingResponse.value.batchId,
         mapping,
         updateIfExists: updateIfExists.value,
@@ -448,20 +448,17 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         skipRows: Array.from(skippedRows.value)
       }, uploadAbortController.signal)
 
-      importResult.value = result
-      currentStep.value = 4
-
-      // 同批次可能重复 confirm（如更新模式重新导入），先清空旧任务列表再重建
+      // confirm 已异步化（阶段 3.2）：接口立即返回受理状态，导入在后台批次执行；
+      // 批次状态轮询成为主路径，完成后由批次状态恢复结果页并接续识别任务轮询。
+      // 同批次可能重复 confirm（如更新模式重新导入），先清空旧结果与任务列表
+      importResult.value = null
       taskList.value = []
-      buildTaskList(result)
-
-      await pollAllTasks()
-      ensurePolling()
+      startBatchStatusPolling(submit.batchId)
     } catch (e) {
       if (axios.isCancel(e)) {
         errorMessage.value = '导入已取消'
       } else {
-        // 大文件导入可能超时，但批次实际可能已完成：尝试通过批次状态恢复结果页
+        // confirm 请求失败（网络异常等）：批次可能已受理在后台执行，尝试通过批次状态恢复（兜底路径）
         const recovered = await tryRecoverImportResult()
         if (!recovered) {
           errorMessage.value = e instanceof Error ? e.message : '导入失败'
@@ -520,8 +517,12 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   let batchPollTimeoutId: ReturnType<typeof setTimeout> | null = null
   /** 批次状态恢复轮询代际令牌：stopBatchPolling/重新发起时递增，防止在途响应复活已清空的结果页 */
   let batchPollGeneration = 0
-  /** 批次状态恢复轮询的最长等待时间：超过后提示用户稍后自行查看 */
-  const BATCH_RECOVER_TIMEOUT_MS = 5 * 60 * 1000
+  /**
+   * 批次状态轮询的最长等待时间（3.2 起批次轮询是 confirm 后的主路径，不再只是超时兜底）：
+   * 对齐后端 importing 批次收割阈值（rsdp.task.import-batch-timeout-ms 默认 2h），
+   * 超过后提示用户稍后自行查看
+   */
+  const BATCH_RECOVER_TIMEOUT_MS = 2 * 60 * 60 * 1000
   const BATCH_RECOVER_POLL_INTERVAL_MS = 3000
 
   function stopBatchPolling() {

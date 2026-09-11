@@ -498,6 +498,18 @@ export interface ExcelAiImportFailure {
 }
 
 /**
+ * Excel AI 辅助导入受理结果（阶段 3.2：confirm 异步化）。
+ * confirm 接口立即返回受理状态，导入在后台批次执行，结果凭 batchId 轮询批次状态获取。
+ */
+export interface ExcelAiImportSubmitResult {
+  batchId: string
+  /** 批次导入异步任务 ID（task_type=excel_import） */
+  taskId: string
+  /** 受理后批次状态（固定 importing） */
+  status: string
+}
+
+/**
  * Excel AI 辅助导入执行结果。
  */
 export interface ExcelAiImportResult {

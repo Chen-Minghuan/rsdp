@@ -347,7 +347,7 @@ POST   /api/v1/products/excel-ai-import/preview
        #   - 200MB 大文件内含大量图片时，内嵌图片提取可能占用较多内存，建议优先使用图片 URL
 
 POST   /api/v1/products/excel-ai-import/import
-       # Excel AI 辅助确认导入（已实现）
+       # Excel AI 辅助确认导入（已实现；阶段 3.2 起异步化：受理后立即返回，导入在后台批次执行）
        # Request: JSON Body
        #   {
        #     batchId: string,
@@ -367,21 +367,25 @@ POST   /api/v1/products/excel-ai-import/import
        #     categoryMapping: { [rawValue: string]: string }  // 用户确认的品类映射（原始值 → 字典码），行级解析最高优先；导入后写回别名库
        #     previewEdits: [{ rowIndex: number, header: string, value: string|null }]  // 数据清洗阶段对原始单元格的编辑；按 rowIndex + header 定位覆盖，优先级高于 forward fill
        #   }
-       # Response: {
+       # Response（3.2 异步化契约变更，不再同步返回导入结果）: {
        #   batchId: string,
-       #   totalRows: number,
-       #   successCount: number,
-       #   failedCount: number,
-       #   skippedCount: number,             // 说明行/重复表头行/已存在跳过 的行数
-       #   taskIds: string[],
-       #   rspuIds: string[],
-       #   tasks: [{ taskId, rspuId }],      // 任务与 RSPU 成对关联（仅有任务的行，不错位）
-       #   failures: [{ rowIndex, reason }]  // rowIndex 为 Excel 物理行号；含行内部分失败（如某价格列报价失败）
+       #   taskId: string,                  // 批次导入异步任务（task_type=excel_import，input_data 携带 batchId + 确认后的请求）
+       #   status: "importing"              // 受理后批次状态；导入结果凭 batchId 轮询 GET /excel-ai-import/{batchId} 获取
        # }
        # 说明：
+       #   - 异步化流程（3.2）：confirm 只做 前置校验（映射/工厂/权限）→ 原子抢占批次 → 建异步任务 →
+       #     事务提交后投递，立即返回受理状态；导入本体（数据预处理链 + 行循环）由 AsyncTaskProcessor
+       #     processExcelImport 认领后驱动 ExcelAiImportService.executeImport 在后台线程执行；
+       #     异步线程按批次创建人重建 SecurityContext（行内数据权限分流/审计操作人与原同步口径一致）
+       #   - 终态：成功 → 批次 done（结果字段/失败明细落 excel_import_batch，同原同步口径）；
+       #     致命失败 → 批次 failed + 失败原因写入批次 failures（rowIndex=0 批次级），任务状态同步 failed；
+       #     建任务/投递失败 → 批次沿用快照复位（done 批次恢复历史结果，其余回 pending）
+       #   - 心跳：行循环逐行刷新批次 updated_at（条件更新仅命中 importing），
+       #     防止长导入被 reapStaleImporting 误判僵死收割
        #   - 按 mapping 读取 Excel 每一行，逐行独立事务写入 RSPU / 变体 / 图片 / RSKU
-       #   - 并发防重：导入前原子抢占批次状态（pending/done → importing），抢占失败抛业务异常；
-       #     done 批次允许重新抢占（「以更新模式重新导入」），抢占时重置 success/failed/failures 结果字段，
+       #   - 并发防重：导入前原子抢占批次状态（pending/done/failed → importing），抢占失败抛业务异常；
+       #     done 批次允许重新抢占（「以更新模式重新导入」），failed 批次（异步执行致命失败终态）允许重新抢占重试，
+       #     抢占时重置 success/failed/failures 结果字段，
        #     excel_import_row 旧记录整体删除后按同一批物理行号重建；importing 中拒绝
        #   - 批次归属：confirm/getStatus/listRows 均校验 createdBy == 当前用户（平台 ADMIN 放行）
        #   - 「规格/模块」列映射为标准字段 variantDisplayName，作为变体显示名称
@@ -409,7 +413,8 @@ POST   /api/v1/products/excel-ai-import/import
        #   - 价格列材质回退：价格列材质名归一失败时依次回退 行级材质码 > 行材质标签首值归一
        #     （覆盖「单列出厂价 + 行材质列」场景），记 failures「价格列材质未识别: X，已回退行级材质 Y」；
        #     全部落空才按原文保留 material_text 并采集 dict_unresolved_value 待治理
-       #   - 主数据创建成功后为每个 RSPU 触发异步 AI 识别任务，前端通过 taskIds 轮询
+       #   - 主数据创建成功后为每个 RSPU 触发异步 AI 识别任务；confirm 异步化后前端经批次状态接口的
+       #     tasks 配对（taskId ↔ rspuId，从 excel_import_row 聚合）恢复识别任务轮询
        #   - 失败行不影响其他行，失败原因写入返回结果
        #   - 当指定 defaultFactoryCode 时，会为每个 RSPU 创建 RSPU-工厂关联（rspu_factory_mapping），
        #     并标记为主供工厂；同时每个价格列生成的 RSKU 会写入工厂报价、发货地、MOQ、动态交期
