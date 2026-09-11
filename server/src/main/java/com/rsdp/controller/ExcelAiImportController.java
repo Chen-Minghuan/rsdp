@@ -4,8 +4,8 @@ import com.rsdp.common.Result;
 import com.rsdp.dto.request.ExcelAiClassifyCategoriesRequest;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
 import com.rsdp.dto.response.ExcelAiClassifyCategoriesResponse;
-import com.rsdp.dto.response.ExcelAiImportResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
+import com.rsdp.dto.response.ExcelAiImportSubmitResult;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
 import com.rsdp.dto.response.ExcelAiPreviewDataResponse;
 import com.rsdp.dto.response.PreviewDataRow;
@@ -61,11 +61,12 @@ public class ExcelAiImportController {
     }
 
     /**
-     * 确认字段映射并执行导入。
+     * 确认字段映射并受理导入（阶段 3.2 异步化：立即返回受理状态，导入在后台批次执行，
+     * 客户端凭 batchId 轮询 {@link #getStatus} 获取最终结果）。
      */
     @PostMapping("/import")
     @PreAuthorize("hasAuthority('product:import')")
-    public Result<ExcelAiImportResult> importExcel(
+    public Result<ExcelAiImportSubmitResult> importExcel(
         @RequestBody @Valid ExcelAiMappingRequest request) {
         excelAiImportService.getAccessibleBatch(request.getBatchId());
         return Result.ok(excelAiImportService.confirmAndImport(request));

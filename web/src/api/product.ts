@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, DocumentImportSubmitResult, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -283,23 +283,38 @@ export async function manualEntry(formData: FormData): Promise<ManualProductEntr
 }
 
 /**
- * 从 PDF 文档批量导入产品。
+ * 从 PDF 文档批量导入产品（阶段 3.1 异步化：校验 + 建批次后立即返回 batchId，
+ * 处理进度走 getDocumentImportBatch 轮询）。
  *
  * @param file PDF 文件
  * @param categoryHint 品类提示，如 SF/TB/FC
  * @param signal 可选的 AbortSignal，用于取消请求
- * @returns 导入批次结果
+ * @returns 提交结果（batchId）
  */
-export async function importProductsFromDocument(file: File, categoryHint?: string, signal?: AbortSignal): Promise<DocumentImportResult> {
+export async function importProductsFromDocument(file: File, categoryHint?: string, signal?: AbortSignal): Promise<DocumentImportSubmitResult> {
   const formData = new FormData()
   formData.append('file', file)
   if (categoryHint) {
     formData.append('categoryHint', categoryHint)
   }
 
-  const { data: result } = await uploadClient.post<ApiResult<DocumentImportResult>>(
+  const { data: result } = await uploadClient.post<ApiResult<DocumentImportSubmitResult>>(
     '/v1/products/document-import',
     formData,
+    { signal }
+  )
+  return result.data
+}
+
+/**
+ * 查询文档导入批次状态/进度/结果（含 taskIds/rspuIds 配对，供继续轮询各产品识别任务）。
+ *
+ * @param batchId 批次号
+ * @param signal 可选的 AbortSignal
+ */
+export async function getDocumentImportBatch(batchId: string, signal?: AbortSignal): Promise<DocumentImportResult> {
+  const { data: result } = await apiClient.get<ApiResult<DocumentImportResult>>(
+    `/v1/products/document-import/${batchId}`,
     { signal }
   )
   return result.data
@@ -328,10 +343,14 @@ export async function previewExcelAiImport(file: File, sheetIndex?: number, sign
 }
 
 /**
- * Excel AI 辅助导入：确认映射并执行导入。
+ * Excel AI 辅助导入：确认映射并受理导入（阶段 3.2 异步化）。
+ *
+ * 接口立即返回受理状态（batchId/taskId/importing），导入在后台批次执行；
+ * 结果凭 batchId 轮询批次状态接口获取，不再同步等待导入结果。
+ * 保留 uploadClient（300s 超时）无实际必要但无害：confirm 只做短 DB 写入，正常秒级返回。
  */
-export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signal?: AbortSignal): Promise<ExcelAiImportResult> {
-  const { data: result } = await uploadClient.post<ApiResult<ExcelAiImportResult>>(
+export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signal?: AbortSignal): Promise<ExcelAiImportSubmitResult> {
+  const { data: result } = await uploadClient.post<ApiResult<ExcelAiImportSubmitResult>>(
     '/v1/products/excel-ai-import/import',
     request,
     { signal }

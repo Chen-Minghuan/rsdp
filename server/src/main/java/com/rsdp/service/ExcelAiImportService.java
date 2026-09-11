@@ -20,6 +20,7 @@ import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.response.ExcelAiImportFailure;
 import com.rsdp.dto.response.ExcelAiImportResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
+import com.rsdp.dto.response.ExcelAiImportSubmitResult;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
 import com.rsdp.dto.response.ExcelAiPreviewDataResponse;
 import com.rsdp.dto.response.PreviewDataRow;
@@ -37,6 +38,7 @@ import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RspuVariant;
+import com.rsdp.entity.SysUser;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ExternalServiceException;
 import com.rsdp.exception.ForbiddenException;
@@ -50,6 +52,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.SecurityUser;
 import com.rsdp.security.datascope.DataScope;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
@@ -71,6 +74,10 @@ import org.apache.poi.util.XMLHelper;
 import org.apache.poi.xssf.eventusermodel.XSSFReader;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.NoTransactionException;
@@ -151,6 +158,8 @@ public class ExcelAiImportService {
     private static final String PRICE_ROLE_FACTORY = "factory";
     /** 价格列角色：销售价（写 RSPU 零售参考价，不建变体/RSKU） */
     private static final String PRICE_ROLE_SALES = "sales";
+    /** 批次导入异步任务类型（async_task.task_type，阶段 3.2 confirm 异步化） */
+    public static final String TASK_TYPE_EXCEL_IMPORT = "excel_import";
 
     /**
      * 启动时清理超过 2 小时的预览图片临时缓存，避免磁盘堆积。
@@ -271,6 +280,10 @@ public class ExcelAiImportService {
     private final DataScopeHelper dataScopeHelper;
     private final RspuCodeService rspuCodeService;
     private final FactoryMasterMapper factoryMasterMapper;
+    private final com.rsdp.mapper.SysUserMapper sysUserMapper;
+    private final UserRoleService userRoleService;
+    private final PermissionService permissionService;
+    private final com.rsdp.security.datascope.DataScopeContext dataScopeContext;
 
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
@@ -362,12 +375,18 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 确认字段映射并执行导入。
+     * 确认字段映射并受理导入（阶段 3.2：异步化）。
+     *
+     * <p>本方法只做：前置校验（映射/工厂/权限）→ 原子抢占批次 → 建异步任务
+     * （task_type=excel_import，input_data 携带批次号与确认后的请求）→ 事务提交后投递，
+     * 立即返回受理状态；导入本体（行循环）由 {@link AsyncTaskProcessor#processExcelImport}
+     * 异步驱动 {@link #executeImport} 执行，客户端凭 batchId 轮询批次状态获取结果。</p>
      *
      * @param request 映射确认请求
-     * @return 导入结果
+     * @return 受理结果（batchId / taskId / status=importing）
      */
-    public ExcelAiImportResult confirmAndImport(ExcelAiMappingRequest request) {
+    @Transactional
+    public ExcelAiImportSubmitResult confirmAndImport(ExcelAiMappingRequest request) {
         ExcelImportBatch batch = batchMapper.selectById(request.getBatchId());
         if (batch == null) {
             throw new BusinessException("导入批次不存在: " + request.getBatchId());
@@ -399,12 +418,13 @@ public class ExcelAiImportService {
         // 新模式（SINGLE/MIXED）品类前置校验（§20）：品类完整性 + 同一逻辑产品品类唯一性；
         // 在抢占导入权之前完成，校验失败不扰动批次状态；旧路径（未选导入方式）不校验，维持现状
         validateCategoryConfigBeforeImport(batch, request, mapping);
-        // 快照上一轮导入结果：抢占会清零计数字段，导入主流程失败复位时恢复，
+        // 快照上一轮导入结果：抢占会清零计数字段，建任务/投递失败复位时恢复，
         // done 批次重导失败不丢历史结果（行级记录已删无法恢复，批次级结果与失败明细可恢复）
         BatchResultSnapshot previousResult = new BatchResultSnapshot(batch.getStatus(),
             batch.getSuccessCount(), batch.getFailedCount(), batch.getFailures(), batch.getProcessedAt());
         // 原子抢占导入权，防止并发重复导入（替代先查状态再判断的 check-then-act 竞态）；
-        // pending / done 均可抢占（done 批次支持「以更新模式重新导入」），importing 拒绝
+        // pending / done / failed 均可抢占（done 支持「以更新模式重新导入」，
+        // failed 为异步执行致命失败终态，允许重试），importing 拒绝
         if (batchMapper.claimForImport(batch.getBatchId()) == 0) {
             throw new BusinessException("批次正在导入中，请稍后重试: " + batch.getStatus());
         }
@@ -414,12 +434,222 @@ public class ExcelAiImportService {
             Map.of("status", previousResult.status()), Map.of("status", "importing"),
             SecurityOperatorContext.currentUsername());
         try {
-            return doConfirmImport(batch, request, mapping);
+            // 异步任务携带确认后的请求（映射已清洗），执行线程从 input_data 还原参数
+            request.setMapping(mapping);
+            String taskId = createExcelImportTask(batch, request);
+            triggerExcelImport(taskId, batch, previousResult);
+            log.info("Excel 导入批次已受理，batchId={}，taskId={}", batch.getBatchId(), taskId);
+            return new ExcelAiImportSubmitResult(batch.getBatchId(), taskId, "importing");
         } catch (RuntimeException | Error e) {
             // 抢占成功后任何异常都必须恢复批次状态，否则批次永久卡死 importing、
-            // 用户无法重试（claimForImport 只认 pending/done）；恢复本身容错，不掩盖原始异常
-            restoreBatchQuietly(batch, previousResult);
+            // 用户无法重试（claimForImport 只认 pending/done/failed）；恢复本身容错，不掩盖原始异常。
+            // 投递被拒绝时 dispatchExcelImportSafely 已完成复位（batch 状态不再是 importing），此处跳过
+            if ("importing".equals(batch.getStatus())) {
+                restoreBatchQuietly(batch, previousResult);
+            }
             throw e;
+        }
+    }
+
+    /**
+     * 执行 Excel 导入批次本体（由 {@link AsyncTaskProcessor#processExcelImport} 异步驱动，阶段 3.2）。
+     *
+     * <p>从异步任务 input_data 还原确认请求后执行 {@link #doConfirmImport}（数据预处理链 + 行循环，
+     * 行内事务/缓存/结果写回逻辑不变）。异步线程无 SecurityContext：执行前按批次创建人重建
+     * 操作人上下文，保证行内数据权限分流（updateIfExists 归属收窄）与审计操作人和原同步口径一致。</p>
+     *
+     * @param taskId  异步任务 ID
+     * @param batchId 批次 ID
+     * @return 导入结果
+     * @throws BusinessException 批次/任务不存在或参数缺失；执行致命失败时批次已置 failed 后继续抛出
+     */
+    public ExcelAiImportResult executeImport(String taskId, String batchId) {
+        ExcelImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        ExcelAiMappingRequest request = readImportRequest(taskId);
+        Map<String, String> mapping = sanitizeMapping(request.getMapping());
+        Authentication previousAuthentication = installBatchOperatorContext(batch);
+        try {
+            return doConfirmImport(batch, request, mapping);
+        } catch (RuntimeException | Error e) {
+            // 异步执行致命失败终态（对齐 processDocumentImport 口径）：批次置 failed + 失败原因
+            // 写入批次失败明细；批次可重新 confirm 重试（claimForImport 放行 failed）
+            markImportFailed(batch, e);
+            throw e;
+        } finally {
+            clearBatchOperatorContext(previousAuthentication);
+        }
+    }
+
+    /**
+     * 从异步任务 input_data 还原 confirm 阶段确认后的映射请求。
+     *
+     * @param taskId 异步任务 ID
+     * @return 映射确认请求
+     */
+    private ExcelAiMappingRequest readImportRequest(String taskId) {
+        AsyncTask task = asyncTaskMapper.selectById(taskId);
+        if (task == null || !StringUtils.hasText(task.getInputData())) {
+            throw new BusinessException("导入任务不存在或缺少输入参数: " + taskId);
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
+            com.fasterxml.jackson.databind.JsonNode requestNode = root.get("request");
+            if (requestNode == null || requestNode.isNull()) {
+                throw new BusinessException("导入任务缺少映射请求参数: " + taskId);
+            }
+            return objectMapper.treeToValue(requestNode, ExcelAiMappingRequest.class);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("解析导入任务参数失败，taskId={}", taskId, e);
+            throw new BusinessException("解析导入任务参数失败: " + taskId);
+        }
+    }
+
+    /**
+     * 创建批次导入异步任务（task_type=excel_import）：input_data 携带批次号与确认后的请求。
+     *
+     * @param batch   导入批次（已抢占为 importing）
+     * @param request 已清洗映射的确认请求
+     * @return 任务 ID
+     */
+    private String createExcelImportTask(ExcelImportBatch batch, ExcelAiMappingRequest request) {
+        String taskId = IdGenerator.taskId();
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setTaskType(TASK_TYPE_EXCEL_IMPORT);
+        task.setStatus("pending");
+        task.setProgress(0);
+        try {
+            task.setInputData(objectMapper.writeValueAsString(Map.of(
+                "batchId", batch.getBatchId(),
+                "request", request
+            )));
+        } catch (Exception e) {
+            throw new BusinessException("序列化导入任务参数失败: " + e.getMessage());
+        }
+        task.setCreatedBy(SecurityOperatorContext.currentUsername());
+        task.setCreatedAt(LocalDateTime.now());
+        asyncTaskMapper.insert(task);
+        return taskId;
+    }
+
+    /**
+     * 事务提交后投递批次导入任务；无活动事务时直接投递（对齐 {@link #triggerAsyncProcess} 模式）。
+     */
+    private void triggerExcelImport(String taskId, ExcelImportBatch batch, BatchResultSnapshot previousResult) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    dispatchExcelImportSafely(taskId, batch, previousResult);
+                }
+            });
+        } else {
+            dispatchExcelImportSafely(taskId, batch, previousResult);
+        }
+    }
+
+    /**
+     * 投递批次导入任务。线程池队列满（AbortPolicy）时把任务立即标记为 failed 并复位批次
+     * （沿用快照恢复，done 批次不丢历史结果），避免批次永久卡死 importing。
+     */
+    private void dispatchExcelImportSafely(String taskId, ExcelImportBatch batch, BatchResultSnapshot previousResult) {
+        try {
+            asyncTaskProcessor.processExcelImport(taskId, batch.getBatchId());
+        } catch (org.springframework.core.task.TaskRejectedException e) {
+            log.error("批次导入任务投递被拒绝（线程池已满），taskId={}，batchId={}", taskId, batch.getBatchId(), e);
+            try {
+                AsyncTask rejected = new AsyncTask();
+                rejected.setTaskId(taskId);
+                rejected.setStatus("failed");
+                rejected.setProgress(100);
+                rejected.setErrorMessage("系统繁忙，任务投递被拒绝，请稍后重试");
+                rejected.setCompletedAt(LocalDateTime.now());
+                asyncTaskMapper.updateById(rejected);
+            } catch (Exception ex) {
+                log.error("标记被拒绝任务失败，taskId={}", taskId, ex);
+            }
+            restoreBatchQuietly(batch, previousResult);
+            throw new BusinessException("系统繁忙，导入任务投递被拒绝，请稍后重试");
+        }
+    }
+
+    /**
+     * 异步执行致命失败时把批次置 failed：失败原因写入批次失败明细（行号 0 = 批次级），
+     * 前端批次轮询可见；批次可重新 confirm 重试。本方法自身容错，不掩盖原始异常。
+     *
+     * @param batch 导入批次
+     * @param error 致命异常
+     */
+    private void markImportFailed(ExcelImportBatch batch, Throwable error) {
+        try {
+            String message = "导入执行失败: " + error.getMessage();
+            batch.setStatus("failed");
+            batch.setFailures(toJson(List.of(new ExcelAiImportFailure(0, message))));
+            batch.setProcessedAt(LocalDateTime.now());
+            batch.setUpdatedAt(LocalDateTime.now());
+            batchMapper.updateById(batch);
+            // 批次状态机审计（P3-8）：importing → failed 记一条状态变更
+            auditLogService.logUpdate("excel_import_batch", batch.getBatchId(),
+                Map.of("status", "importing"), Map.of("status", "failed"),
+                SecurityOperatorContext.currentUsername());
+        } catch (Exception markError) {
+            log.error("标记导入批次失败状态异常，batchId={}", batch.getBatchId(), markError);
+        }
+    }
+
+    /**
+     * 在异步线程按批次创建人重建 SecurityContext（操作人身份），
+     * 使行内数据权限分流与审计操作人和 confirm 请求线程口径一致。
+     *
+     * @param batch 导入批次（createdBy 为 sys_user.user_id）
+     * @return 重建前的 Authentication（通常为 null），用于执行后还原
+     */
+    private Authentication installBatchOperatorContext(ExcelImportBatch batch) {
+        Authentication previous = SecurityContextHolder.getContext().getAuthentication();
+        try {
+            String userId = batch.getCreatedBy();
+            if (!StringUtils.hasText(userId)) {
+                return previous;
+            }
+            SysUser user = sysUserMapper.selectById(userId);
+            if (user == null || !StringUtils.hasText(user.getUsername())) {
+                return previous;
+            }
+            List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+            for (String roleCode : userRoleService.getRoleCodesByUsername(user.getUsername())) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_" + roleCode));
+            }
+            for (String permission : permissionService.getPermissionsByUserId(userId)) {
+                authorities.add(new SimpleGrantedAuthority(permission));
+            }
+            SecurityUser securityUser = new SecurityUser(user.getUserId(), user.getUsername(),
+                user.getPasswordHash() != null ? user.getPasswordHash() : "", authorities);
+            SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(securityUser, null, authorities));
+        } catch (Exception e) {
+            // 上下文重建失败不阻断导入：降级为匿名执行（审计操作人降级、数据权限按最严口径）
+            log.warn("重建导入批次操作人上下文失败，按匿名身份执行，batchId={}", batch.getBatchId(), e);
+        }
+        return previous;
+    }
+
+    /**
+     * 还原异步线程的 SecurityContext 并清理数据范围缓存，防止执行器线程复用泄漏身份。
+     */
+    private void clearBatchOperatorContext(Authentication previous) {
+        try {
+            if (previous != null) {
+                SecurityContextHolder.getContext().setAuthentication(previous);
+            } else {
+                SecurityContextHolder.clearContext();
+            }
+        } finally {
+            dataScopeContext.clearCache();
         }
     }
 
@@ -657,6 +887,13 @@ public class ExcelAiImportService {
                     excelImportRowService.markFailed(importRowId, "system", e.getMessage());
                 }
             }
+            // 批次心跳（3.2）：逐行刷新 updated_at（条件更新仅命中 importing，代价远低于行内图片处理），
+            // 防止长导入在后台执行期间被 reapStaleImporting 误判僵死误收割；心跳失败不阻断导入
+            try {
+                batchMapper.touchImporting(batch.getBatchId());
+            } catch (Exception heartbeatError) {
+                log.warn("导入批次心跳刷新失败，batchId={}", batch.getBatchId(), heartbeatError);
+            }
         }
 
         // 口径说明（评估后保持现状）：rspuIds 按「成功处理行」逐行记录，同组模块行会重复同一 RSPU ID，
@@ -673,11 +910,11 @@ public class ExcelAiImportService {
         updateBatchResult(batch, request, result);
         // 别名自学习：用户确认的品类映射写回别名库，后续导入直接命中，不再调 AI
         learnCategoryAliases(request);
-        // 导入完成：清理数据清洗阶段上传的临时图片文件（失败不影响导入结果）
+        // 导入完成：清理数据清洗阶段的全部临时文件（preview-images 前缀残留 + tmpdir 行图缓存；失败不影响导入结果）
         try {
-            cleanPreviewUploadImages(batch.getBatchId(), preservedOverrideImages);
+            cleanBatchPreviewTempFiles(batch.getBatchId());
         } catch (Exception e) {
-            log.warn("清理预览上传临时图片失败，batchId={}", batch.getBatchId(), e);
+            log.warn("清理导入临时文件失败，batchId={}", batch.getBatchId(), e);
         }
         return result;
     }
@@ -1084,24 +1321,35 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 清理数据清洗阶段上传的临时图片文件。
+     * 清理数据清洗阶段的全部临时文件（导入完成后调用）。
+     *
+     * <p>覆盖两类残留：①存储端 {@code preview-images/{batchId}/} 前缀下的全部上传临时图
+     * ——含上传后未挂到任何行的残留（原 cleanPreviewUploadImages 只按 overrideImages 清单
+     * 逐个删除，清单外的残留永不删除）；②tmpdir 下 {@code rsdp-preview-images/{batchId}}
+     * 行图缓存目录（原仅在启动时按 2 小时龄期清理）。已被导入迁移到正式 {@code images/}
+     * 路径的覆盖图不受影响。单步失败只记日志，不阻断导入主流程。</p>
+     *
+     * @param batchId 批次 ID
      */
-    private void cleanPreviewUploadImages(String batchId, Map<Integer, List<String>> overrideImages) {
-        if (overrideImages == null || overrideImages.isEmpty()) {
-            return;
-        }
-        Set<String> keys = overrideImages.values().stream()
-            .flatMap(List::stream)
-            .collect(Collectors.toSet());
-        for (String key : keys) {
-            for (String ext : List.of("jpeg", "png", "gif", "webp")) {
-                String objectKey = previewUploadObjectKey(batchId, key, ext);
-                try {
-                    storageService.delete(objectKey);
-                } catch (IOException e) {
-                    log.warn("删除预览上传临时图片失败，objectKey={}", objectKey, e);
-                }
+    private void cleanBatchPreviewTempFiles(String batchId) {
+        try {
+            int deleted = storageService.deleteByPrefix(
+                PREVIEW_UPLOAD_IMAGE_PREFIX + "/" + sanitizeFileName(batchId) + "/");
+            if (deleted > 0) {
+                log.info("清理预览上传临时图片 {} 个，batchId={}", deleted, batchId);
             }
+        } catch (Exception e) {
+            log.warn("清理预览上传临时图片失败，batchId={}", batchId, e);
+        }
+        try {
+            Path cacheDir = Paths.get(System.getProperty("java.io.tmpdir"), PREVIEW_IMAGE_CACHE_DIR,
+                sanitizeFileName(batchId));
+            if (Files.exists(cacheDir)) {
+                deleteDirectory(cacheDir);
+                log.info("清理预览行图缓存目录，batchId={}", batchId);
+            }
+        } catch (Exception e) {
+            log.warn("清理预览行图缓存失败，batchId={}", batchId, e);
         }
     }
 

@@ -14,7 +14,7 @@ database/
 │   ├── 02_product.sql           # 产品域：rspu_master/rspu_style/rspu_scene/rspu_variant/rspu_relation/3 个 code_counter/rsku_supply/price_history/rspu_price_summary
 │   ├── 03_factory.sql           # 工厂域：factory_master/level_capability/warehouse/variant_capacity/rspu_factory_mapping/lead_time_rule/capacity_assessment/factory_product_capability
 │   ├── 04_image_ai.sql          # 图片与AI识别域：image_assets / ai_recognition / async_task
-│   ├── 05_excel_import.sql      # Excel导入域：excel_import_batch/excel_import_row
+│   ├── 05_excel_import.sql      # 导入域：excel_import_batch/excel_import_row/document_import_batch（PDF 文档导入批次）
 │   ├── 06_floor_plan.sql        # 户型图域：floor_plan_analysis / floor_plan_room
 │   ├── 07_project_scheme.sql    # 项目与方案域：project/scheme/scheme_item/scheme_candidate/favorite_folder/user_favorite/template_tag/product_collection/product_collection_item
 │   ├── 08_order_pricing.sql     # 订单与定价域：design_order/design_order_item/order_no_counter/sys_config/pricing_rule/recommendation_score_config
