@@ -419,6 +419,48 @@ export interface CategoryMappingItem {
 }
 
 /**
+ * Excel 导入方式（按 Sheet/批次生效）：
+ * SINGLE 单一品类（指定一个默认品类，不做品类 AI）；MIXED 混合品类（候选集约束的 AI 逐行预填）。
+ */
+export type ExcelCategoryMode = 'SINGLE' | 'MIXED'
+
+/**
+ * Excel AI 导入：行级品类预分类请求（进入数据清洗页时调用，幂等）。
+ */
+export interface ExcelAiClassifyCategoriesRequest {
+  /** 导入方式 */
+  mode: ExcelCategoryMode
+  /** SINGLE 的默认品类 */
+  categoryHint?: string
+  /** MIXED 候选品类码列表（≥2 个），AI 输出必须落在该集合内 */
+  candidateCategoryCodes?: string[]
+  /** 当前工作表名（仅作为 AI 分类的上下文线索，不作直接品类来源） */
+  sheetName?: string
+  /** 用户确认后的字段映射（原始表头 → 系统字段）；缺省时后端回退批次预览保存的映射 */
+  mapping?: Record<string, string>
+  /** 用户确认的品类映射（rawValue → dictCode），行内类别列确定性归一的最高优先级 */
+  categoryMapping?: Record<string, string>
+}
+
+/**
+ * Excel AI 导入：单行品类建议（仅前端预填展示用，不提交后端）。
+ */
+export interface ExcelAiRowCategorySuggestion {
+  /** Excel 物理行号（1-based） */
+  rowIndex: number
+  /** 系统过滤行（说明行/重复表头行/组合汇总价行），导入时自动跳过，无需确定品类 */
+  filtered: boolean
+  /** 建议品类码；未识别为 null */
+  suggestedCategoryCode: string | null
+  /** 建议来源：dict=行内类别列确定性归一；ai=候选集约束 AI 推荐；default=SINGLE 默认品类；none=未识别 */
+  source: 'dict' | 'ai' | 'default' | 'none'
+}
+
+export interface ExcelAiClassifyCategoriesResponse {
+  suggestions: ExcelAiRowCategorySuggestion[]
+}
+
+/**
  * Excel AI 辅助导入字段映射预览响应。
  */
 export interface UnmappedColumnInfo {
@@ -449,7 +491,17 @@ export interface ExcelAiMappingRequest {
   batchId: string
   mapping: Record<string, string>
   updateIfExists?: boolean
+  /**
+   * 品类提示。SINGLE 导入方式下即「默认商品品类」（同一字段）：
+   * 行内类别列确定性归一命中时以行内值为准，本字段只补空值行
+   */
   categoryHint?: string
+  /** 导入方式（SINGLE 单一品类 / MIXED 混合品类），按 Sheet 生效；缺省为未选模式的旧路径 */
+  categoryMode?: ExcelCategoryMode
+  /** MIXED 候选品类码列表（≥2 个），限定 AI 逐行分类的识别范围 */
+  candidateCategoryCodes?: string[]
+  /** 数据清洗后的行级最终品类：Excel 物理行号（1-based）→ 品类字典码。新模式下后端只认本集合 */
+  rowCategorySelections?: Record<number, string>
   /** 用户确认后的品类归一映射（rawValue → dictCode） */
   categoryMapping?: Record<string, string>
   defaultFactoryCode?: string

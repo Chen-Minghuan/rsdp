@@ -9,6 +9,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.BeanUtils;
 import com.rsdp.dto.excel.ProductImportRow;
+import com.rsdp.dto.request.CategoryMode;
+import com.rsdp.dto.request.ExcelAiClassifyCategoriesRequest;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
 import com.rsdp.dto.request.PreviewEdit;
 import com.rsdp.dto.request.PriceColumnSelection;
@@ -22,6 +24,7 @@ import com.rsdp.dto.response.ExcelAiMappingResponse;
 import com.rsdp.dto.response.ExcelAiPreviewDataResponse;
 import com.rsdp.dto.response.PreviewDataRow;
 import com.rsdp.dto.response.CategoryMappingItem;
+import com.rsdp.dto.response.ExcelAiClassifyCategoriesResponse;
 import com.rsdp.dto.response.ExcelSheetInfo;
 import com.rsdp.dto.response.PriceColumnInfo;
 import com.rsdp.dto.response.UnmappedColumnInfo;
@@ -134,6 +137,8 @@ public class ExcelAiImportService {
     private static final int MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
     private static final int PREVIEW_ROW_COUNT = 5;
     private static final int MAX_CATEGORY_SUGGESTIONS = 50;
+    /** MIXED 逐行品类分类单次 AI 调用承载的最大逻辑产品数（控制 prompt 长度与超时风险） */
+    private static final int CATEGORY_CLASSIFY_CHUNK_SIZE = 20;
     /** 预览阶段懒加载缩略图的原图临时缓存目录前缀 */
     private static final String PREVIEW_IMAGE_CACHE_DIR = "rsdp-preview-images";
     /** 数据清洗页用户上传的临时图片存储前缀（导入成功后应清理） */
@@ -391,6 +396,9 @@ public class ExcelAiImportService {
         if (defaultFactoryCode != null && !dataScopeHelper.canAccessFactory(defaultFactoryCode)) {
             throw new BusinessException("无权使用该工厂: " + defaultFactoryCode);
         }
+        // 新模式（SINGLE/MIXED）品类前置校验（§20）：品类完整性 + 同一逻辑产品品类唯一性；
+        // 在抢占导入权之前完成，校验失败不扰动批次状态；旧路径（未选导入方式）不校验，维持现状
+        validateCategoryConfigBeforeImport(batch, request, mapping);
         // 快照上一轮导入结果：抢占会清零计数字段，导入主流程失败复位时恢复，
         // done 批次重导失败不丢历史结果（行级记录已删无法恢复，批次级结果与失败明细可恢复）
         BatchResultSnapshot previousResult = new BatchResultSnapshot(batch.getStatus(),
@@ -577,6 +585,14 @@ public class ExcelAiImportService {
                 }
                 List<String> selectedPriceHeaders = selectedPriceColumns.stream()
                     .map(PriceColumnInfo::getHeader).toList();
+                // 新模式（SINGLE/MIXED）清洗页提交的行级最终品类（§17：后端只认 rowCategorySelections）；
+                // 最终值写入行记录 mapped_fields 快照（不为此前给 excel_import_row 加字段）
+                String rowCategorySelection = request.getRowCategorySelections() != null
+                    ? request.getRowCategorySelections().get(displayRowIndex)
+                    : null;
+                if (request.getCategoryMode() != null && StringUtils.hasText(rowCategorySelection)) {
+                    mappedFields.put("categoryCode", rowCategorySelection);
+                }
                 importRowId = excelImportRowService.initRow(batch.getBatchId(), displayRowIndex, "product", dataRow, null,
                     mappedFields, selectedPriceHeaders);
                 // 恢复数据清洗页编辑的行级图片覆盖
@@ -587,7 +603,7 @@ public class ExcelAiImportService {
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
                     selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
                     currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId(),
-                    importCache);
+                    importCache, rowCategorySelection);
                 if (rowResult.rspuId != null) {
                     rspuIds.add(rowResult.rspuId);
                     excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
@@ -2740,14 +2756,16 @@ public class ExcelAiImportService {
                                               Long importRowId, Integer physicalRowIndex,
                                               ProductGroup currentGroup, PhysicalLayout physicalLayout,
                                               int sheetIndex, String sheetName, String categoryGuess,
-                                              String batchId, BatchImportCache importCache) {
+                                              String batchId, BatchImportCache importCache,
+                                              String rowCategorySelection) {
         // 事务外预处理：行构建/校验、URL 图片下载、内嵌图提取。
         // 网络与文件 IO 耗时可达数十秒，绝不放入 DB 事务（长事务占用连接池会拖垮全系统）；
         // 同时 MinIO 不参与 DB 事务，先存文件、事务内只登记元数据。
         // 行回滚时可能产生孤儿存储对象，属可接受代价（量大时可加定期清理）。
         PreparedRow prep = prepareRow(dataRow, mapping, categoryHint, priceColumns, request,
             embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
-            currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batchId);
+            currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batchId,
+            rowCategorySelection);
         if (prep.earlyResult() != null) {
             return prep.earlyResult();
         }
@@ -2812,7 +2830,8 @@ public class ExcelAiImportService {
                                    Map<String, List<CategoryDict>> dictCache, int rowIndex, Long importRowId,
                                    Integer physicalRowIndex,
                                    ProductGroup currentGroup, PhysicalLayout physicalLayout,
-                                   int sheetIndex, String sheetName, String categoryGuess, String batchId) {
+                                   int sheetIndex, String sheetName, String categoryGuess, String batchId,
+                                   String rowCategorySelection) {
         if (isNoteOrEmptyRow(dataRow)) {
             log.debug("第 {} 行为说明或空行，已跳过", rowIndex);
             return PreparedRow.skip(RowResult.skipped("说明或空行"));
@@ -2827,13 +2846,28 @@ public class ExcelAiImportService {
         }
 
         excelImportRowService.updateStage(importRowId, "build_product_row");
-        ProductImportRow row = buildProductImportRow(dataRow, mapping, categoryHint, categoryGuess, sheetName,
+        boolean categoryModeEnabled = request.getCategoryMode() != null;
+        // 新模式（SINGLE/MIXED）下 Sheet 名 / 品类提示 / categoryGuess 不走 buildProductImportRow 的旧兜底链，
+        // 只保留行内类别列原值，由下方收敛兜底链解析（§26.1）；
+        // 旧路径（未选导入方式）参数原样传入，兜底链维持现状（行类别列 → Sheet 名 → 品类提示 → categoryGuess）
+        ProductImportRow row = buildProductImportRow(dataRow, mapping,
+            categoryModeEnabled ? null : categoryHint,
+            categoryModeEnabled ? null : categoryGuess,
+            categoryModeEnabled ? null : sheetName,
             dictCache);
-        // 品类分层解析：中文品名/方言 → 字典码（用户确认映射 > 字典码 > 字典名 > 别名库），未命中保留原值
-        String normalizedCategory = normalizeCategoryCode(row.getCategoryCode(), request.getCategoryMapping(),
-            dictCache);
-        if (normalizedCategory != null) {
-            row.setCategoryCode(normalizedCategory);
+        if (categoryModeEnabled) {
+            // 收敛兜底链：清洗页行级最终选择 → 行内类别列确定性归一 → SINGLE 默认品类；
+            // MIXED 无更多兜底（品类完整性由 confirmAndImport 前置校验整批拦截）
+            row.setCategoryCode(resolveFinalCategoryCode(dataRow, mapping, rowCategorySelection,
+                request.getCategoryMapping(), dictCache,
+                request.getCategoryMode() == CategoryMode.SINGLE ? categoryHint : null));
+        } else {
+            // 品类分层解析：中文品名/方言 → 字典码（用户确认映射 > 字典码 > 字典名 > 别名库），未命中保留原值
+            String normalizedCategory = normalizeCategoryCode(row.getCategoryCode(), request.getCategoryMapping(),
+                dictCache);
+            if (normalizedCategory != null) {
+                row.setCategoryCode(normalizedCategory);
+            }
         }
         String error = validateRow(row, dictCache);
         if (error != null) {
@@ -2922,7 +2956,7 @@ public class ExcelAiImportService {
                 // 本厂已报价的共管产品仅补空缺（不覆盖已有值，categoryCode 不可改）；
                 // 非本厂已报价产品跳过共享信息更新，仅继续本行本厂 RSKU 报价登记
                 if (dataScopeHelper.currentDataScope() == DataScope.ALL) {
-                    updateExistingRspu(existing, row, dictCache);
+                    updateExistingRspu(existing, row, dictCache, rowIssues);
                     saveStylesAndScenes(rspuId, row, dictCache, rowIssues);
                 } else if (dataScopeHelper.canAccessRspu(rspuId)) {
                     fillExistingRspuGaps(existing, row, dictCache);
@@ -3427,6 +3461,474 @@ public class ExcelAiImportService {
             auditLogService.logCreate("dict_alias", "category",
                 Map.of("learnedCount", learned.size(), "mappings", learned), operator);
         }
+    }
+
+    /**
+     * 行级品类预分类（进入数据清洗页时由前端触发；幂等：纯计算不写库）。
+     *
+     * <p>AI 调用时序约定（方案 §9/§26.12）：Preview 阶段只做确定性归一，
+     * 候选集约束的 AI（品类归一 fallback + 逐行分类）推迟到用户在 Step 2 选定
+     * 导入方式与候选集之后，由本接口承载。</p>
+     *
+     * <ul>
+     *   <li>SINGLE：行内类别列确定性归一命中 → 默认品类（categoryHint）兜底；
+     *       不进行品类 AI 识别（§4.1）。</li>
+     *   <li>MIXED：行内类别列确定性归一命中（可超候选集，Excel 自有数据可信） →
+     *       候选集约束的 AI 逐行分类；AI 输出必须 ∈ candidateCategoryCodes，
+     *       超出或无法判断时按未识别（null）处理，禁止强制猜测（§7/§15）。</li>
+     * </ul>
+     *
+     * <p>去重按逻辑产品（复用 RSPU 分组规则 {@link #computeLogicalGroupKeys}）：
+     * 同一逻辑产品的多价格列变体行只分类一次、共享结果。V1 文本 only，图片不参与分类（§14）。</p>
+     *
+     * @param batchId 导入批次 ID
+     * @param request 预分类请求（导入方式 + 默认品类/候选集 + 确认映射）
+     * @return 逐行品类建议（仅前端预填展示用，最终品类以 rowCategorySelections 为准）
+     */
+    public ExcelAiClassifyCategoriesResponse classifyRowCategories(String batchId,
+                                                                   ExcelAiClassifyCategoriesRequest request) {
+        ExcelImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        CategoryMode mode = request.getMode();
+        if (mode == null) {
+            throw new BusinessException("导入方式不能为空");
+        }
+        List<CategoryDict> categories = safeList(dictService.listByType("category"));
+        String singleDefaultCategory = null;
+        Set<String> candidateSet = new LinkedHashSet<>();
+        if (mode == CategoryMode.SINGLE) {
+            if (!StringUtils.hasText(request.getCategoryHint())
+                || !isValidDictCode(request.getCategoryHint().trim().toUpperCase(), categories)) {
+                throw new BusinessException("请选择默认商品品类");
+            }
+            singleDefaultCategory = request.getCategoryHint().trim().toUpperCase();
+        } else {
+            if (request.getCandidateCategoryCodes() == null || request.getCandidateCategoryCodes().size() < 2) {
+                throw new BusinessException("混合品类导入请至少选择两个商品品类");
+            }
+            for (String code : request.getCandidateCategoryCodes()) {
+                if (!StringUtils.hasText(code) || !isValidDictCode(code.trim().toUpperCase(), categories)) {
+                    throw new BusinessException("候选品类包含非法品类码: " + code);
+                }
+                candidateSet.add(code.trim().toUpperCase());
+            }
+        }
+
+        // 映射优先取请求中用户确认的字段映射，缺省回退批次预览时保存的映射
+        Map<String, String> mapping = request.getMapping() != null && !request.getMapping().isEmpty()
+            ? sanitizeMapping(request.getMapping())
+            : loadColumnMapping(batch);
+        List<Map<String, String>> rows = loadRawDataRows(batch);
+        ExcelAiClassifyCategoriesResponse response = new ExcelAiClassifyCategoriesResponse();
+        if (rows.isEmpty()) {
+            return response;
+        }
+        // 与正式导入同口径的型号/品名/类别列向下填充（纵向合并单元格语义）
+        forwardFillKeyColumns(rows, mapping);
+        Map<String, List<CategoryDict>> dictCache = Map.of("category", categories);
+        List<String> groupKeys = computeLogicalGroupKeys(rows, mapping);
+
+        // 逻辑产品组 → 成员行下标（保持行顺序）；系统过滤行不归组
+        Map<String, List<Integer>> groupMembers = new LinkedHashMap<>();
+        for (int i = 0; i < rows.size(); i++) {
+            String groupKey = groupKeys.get(i);
+            if (groupKey != null) {
+                groupMembers.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(i);
+            }
+        }
+
+        Map<String, String> groupCategory = new HashMap<>();
+        Map<String, String> groupSource = new HashMap<>();
+        List<String> aiGroupKeys = new ArrayList<>();
+        for (Map.Entry<String, List<Integer>> entry : groupMembers.entrySet()) {
+            // 行内类别列确定性归一（用户确认映射 > 字典码 > 字典名 > 别名库），
+            // 命中不受候选集限制直接采用（§9）；组内取首个可归一的非空类别值
+            String hit = null;
+            for (Integer rowIdx : entry.getValue()) {
+                String rawValue = getMappedCellValue(rows.get(rowIdx), mapping, "categoryCode");
+                if (!StringUtils.hasText(rawValue)) {
+                    continue;
+                }
+                String normalized = normalizeCategoryCode(rawValue, request.getCategoryMapping(), dictCache);
+                if (isValidDictCode(normalized, categories)) {
+                    hit = normalized;
+                    break;
+                }
+            }
+            if (hit != null) {
+                groupCategory.put(entry.getKey(), hit);
+                groupSource.put(entry.getKey(), "dict");
+            } else if (mode == CategoryMode.SINGLE) {
+                // SINGLE 不调 AI：默认品类只补无行内命中的组（§18 默认品类语义）
+                groupCategory.put(entry.getKey(), singleDefaultCategory);
+                groupSource.put(entry.getKey(), "default");
+            } else {
+                aiGroupKeys.add(entry.getKey());
+            }
+        }
+        if (!aiGroupKeys.isEmpty()) {
+            classifyGroupsByAi(aiGroupKeys, groupMembers, rows, mapping, candidateSet, categories,
+                request.getSheetName(), groupCategory, groupSource);
+        }
+
+        for (int i = 0; i < rows.size(); i++) {
+            int displayRowIndex = resolveDisplayRowIndex(rows.get(i), i + 2);
+            String groupKey = groupKeys.get(i);
+            if (groupKey == null) {
+                response.getSuggestions().add(new ExcelAiClassifyCategoriesResponse.RowCategorySuggestion(
+                    displayRowIndex, true, null, "none"));
+                continue;
+            }
+            response.getSuggestions().add(new ExcelAiClassifyCategoriesResponse.RowCategorySuggestion(
+                displayRowIndex, false, groupCategory.get(groupKey),
+                groupSource.getOrDefault(groupKey, "none")));
+        }
+        return response;
+    }
+
+    /**
+     * MIXED 候选集约束的 AI 逐行品类分类：按逻辑产品分批调用，
+     * 输出必须 ∈ 候选集，超出或解析失败按未识别（null）处理；AI 整体失败不阻断（全部按未识别）。
+     */
+    private void classifyGroupsByAi(List<String> aiGroupKeys, Map<String, List<Integer>> groupMembers,
+                                    List<Map<String, String>> rows, Map<String, String> mapping,
+                                    Set<String> candidateSet, List<CategoryDict> categories,
+                                    String sheetName,
+                                    Map<String, String> groupCategory, Map<String, String> groupSource) {
+        List<CategoryDict> candidateDicts = categories.stream()
+            .filter(d -> d.getDictCode() != null && candidateSet.contains(d.getDictCode().toUpperCase()))
+            .toList();
+        for (int from = 0; from < aiGroupKeys.size(); from += CATEGORY_CLASSIFY_CHUNK_SIZE) {
+            List<String> chunk = aiGroupKeys.subList(from,
+                Math.min(from + CATEGORY_CLASSIFY_CHUNK_SIZE, aiGroupKeys.size()));
+            Map<String, String> resolved;
+            try {
+                String systemPrompt = """
+                    你是家具品类分类专家。给定一批家具产品的文本信息和候选品类集合，判断每个产品属于候选集合中的哪个品类。
+                    输出 JSON 数组：[{"index":1,"categoryCode":"字典码"}]，每个输入产品恰好一条；
+                    categoryCode 只能使用候选品类集合中的字典码；
+                    文本信息不足、无法可靠判断时 categoryCode 填 null，禁止强制猜测。
+                    只输出 JSON，不要输出任何其他文字。
+                    """;
+                StringBuilder sb = new StringBuilder();
+                sb.append("候选品类集合：").append(buildCategoryEnumText(candidateDicts)).append("\n");
+                if (StringUtils.hasText(sheetName)) {
+                    // Sheet 名仅作 AI 分类的上下文线索注入，不作每行直接品类来源（§26.8）
+                    sb.append("工作表名（仅为上下文线索，不代表每个产品的品类）：「").append(sheetName.trim()).append("」\n");
+                }
+                sb.append("\n产品列表：\n");
+                for (int i = 0; i < chunk.size(); i++) {
+                    sb.append(i + 1).append(". ")
+                        .append(buildGroupClassifyText(chunk.get(i), groupMembers, rows, mapping))
+                        .append("\n");
+                }
+                resolved = parseCategoryClassifyResponse(
+                    visionService.chatText(systemPrompt, sb.toString()), chunk, candidateSet);
+            } catch (Exception e) {
+                log.warn("AI 逐行品类分类失败，本批 {} 个逻辑产品按未识别处理", chunk.size(), e);
+                resolved = Map.of();
+            }
+            for (String groupKey : chunk) {
+                String code = resolved.get(groupKey);
+                groupCategory.put(groupKey, code);
+                groupSource.put(groupKey, code != null ? "ai" : "none");
+            }
+        }
+    }
+
+    /**
+     * 组装逻辑产品的 AI 分类文本（V1 文本 only，§14）：
+     * 产品名称 / 型号 / Excel 原始品类 / 规格模块名（组内去重）/ 尺寸 / 材质 / 描述。
+     */
+    private String buildGroupClassifyText(String groupKey, Map<String, List<Integer>> groupMembers,
+                                          List<Map<String, String>> rows, Map<String, String> mapping) {
+        List<Integer> memberIndexes = groupMembers.get(groupKey);
+        Map<String, String> firstRow = rows.get(memberIndexes.get(0));
+        StringBuilder sb = new StringBuilder();
+        appendClassifyField(sb, "型号", resolveRowExternalCode(firstRow, mapping));
+        appendClassifyField(sb, "品名", getMappedCellValue(firstRow, mapping, "productName"));
+        appendClassifyField(sb, "原始品类", getMappedCellValue(firstRow, mapping, "categoryCode"));
+        // 模块行（规格/模块列）的名称可能暗示品类（如「方凳」），组内去重拼接
+        Set<String> variantNames = new LinkedHashSet<>();
+        for (Integer idx : memberIndexes) {
+            String name = getMappedCellValue(rows.get(idx), mapping, "variantDisplayName");
+            if (StringUtils.hasText(name)) {
+                variantNames.add(name.trim());
+            }
+        }
+        appendClassifyField(sb, "规格模块", variantNames.isEmpty() ? null : String.join("/", variantNames));
+        appendClassifyField(sb, "尺寸", truncateText(getMappedCellValue(firstRow, mapping, "dimensions"), 80));
+        appendClassifyField(sb, "材质", truncateText(getMappedCellValue(firstRow, mapping, "materialTags"), 80));
+        appendClassifyField(sb, "描述", truncateText(getMappedCellValue(firstRow, mapping, "description"), 200));
+        return sb.toString();
+    }
+
+    private void appendClassifyField(StringBuilder sb, String label, String value) {
+        if (StringUtils.hasText(value)) {
+            if (sb.length() > 0) {
+                sb.append("；");
+            }
+            sb.append(label).append("=").append(value.trim());
+        }
+    }
+
+    /** 截断长文本，控制 AI prompt 长度。 */
+    private String truncateText(String value, int maxLength) {
+        if (!StringUtils.hasText(value) || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength) + "…";
+    }
+
+    /**
+     * 解析 AI 逐行分类响应（JSON 数组 [{index, categoryCode}]），容错截取首个 '['；
+     * 只接受候选集内的字典码（§15：AI 不能创造候选集外的品类），越界/非法项忽略。
+     *
+     * @param aiResponse     AI 原始响应
+     * @param chunkGroupKeys 本批逻辑产品 key（与 prompt 中的 index 一一对应）
+     * @param candidateSet   候选品类码集合（大写）
+     * @return groupKey → 品类码（仅含候选集内命中的组）
+     */
+    private Map<String, String> parseCategoryClassifyResponse(String aiResponse, List<String> chunkGroupKeys,
+                                                              Set<String> candidateSet) {
+        if (!StringUtils.hasText(aiResponse)) {
+            return Map.of();
+        }
+        String json = aiResponse.trim();
+        int start = json.indexOf('[');
+        if (start < 0) {
+            return Map.of();
+        }
+        try {
+            List<Map<String, Object>> list = objectMapper.readValue(json.substring(start), new TypeReference<>() {
+            });
+            Map<String, String> result = new HashMap<>();
+            for (Map<String, Object> item : list) {
+                Object indexObj = item.get("index");
+                Object codeObj = item.get("categoryCode");
+                if (indexObj == null || codeObj == null) {
+                    continue;
+                }
+                int index;
+                try {
+                    index = Integer.parseInt(indexObj.toString().trim());
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+                if (index < 1 || index > chunkGroupKeys.size()) {
+                    continue;
+                }
+                String code = codeObj.toString().trim().toUpperCase();
+                if (candidateSet.contains(code)) {
+                    result.put(chunkGroupKeys.get(index - 1), code);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("解析 AI 逐行品类分类响应失败，response={}", aiResponse, e);
+            return Map.of();
+        }
+    }
+
+    /**
+     * 新模式（SINGLE/MIXED）的导入前置品类校验（§20，confirmAndImport 兜底，防前端绕过）。
+     *
+     * <p>两道校验：①品类完整性——所有非跳过、非系统过滤行（说明行/重复表头行/组合汇总价行）
+     * 必须有最终品类；②同一逻辑产品（边界判定复用 RSPU 分组规则
+     * {@link #computeLogicalGroupKeys}）下的所有非跳过行必须共享同一个最终品类。
+     * 任一不满足整批拒绝并返回行号清单；校验通过后的导入保持逐行容错（失败清单机制不变）。</p>
+     *
+     * @param batch   导入批次
+     * @param request 确认导入请求
+     * @param mapping 已清洗的字段映射
+     */
+    private void validateCategoryConfigBeforeImport(ExcelImportBatch batch, ExcelAiMappingRequest request,
+                                                    Map<String, String> mapping) {
+        CategoryMode mode = request.getCategoryMode();
+        if (mode == null) {
+            return; // 旧路径（未选导入方式）不校验，维持现状
+        }
+        List<CategoryDict> categories = safeList(dictService.listByType("category"));
+        // 配置校验（§22 后端兜底）：SINGLE 默认品类必填且合法；MIXED 候选集 ≥2 且全部合法
+        if (mode == CategoryMode.SINGLE) {
+            if (!StringUtils.hasText(request.getCategoryHint())) {
+                throw new BusinessException("请选择默认商品品类");
+            }
+            if (!isValidDictCode(request.getCategoryHint().trim().toUpperCase(), categories)) {
+                throw new BusinessException("默认商品品类不是合法品类码: " + request.getCategoryHint());
+            }
+        } else {
+            List<String> candidates = request.getCandidateCategoryCodes();
+            if (candidates == null || candidates.size() < 2) {
+                throw new BusinessException("混合品类导入请至少选择两个商品品类");
+            }
+            for (String code : candidates) {
+                if (!StringUtils.hasText(code) || !isValidDictCode(code.trim().toUpperCase(), categories)) {
+                    throw new BusinessException("候选品类包含非法品类码: " + code);
+                }
+            }
+        }
+        // 行级选择值合法性（防绕过前端提交非法品类码）
+        Map<Integer, String> selections = request.getRowCategorySelections() != null
+            ? request.getRowCategorySelections()
+            : Map.of();
+        for (Map.Entry<Integer, String> entry : selections.entrySet()) {
+            if (!StringUtils.hasText(entry.getValue())
+                || !isValidDictCode(entry.getValue().trim().toUpperCase(), categories)) {
+                throw new BusinessException("行级品类选择包含非法品类码: " + entry.getValue()
+                    + "（行号 " + entry.getKey() + "）");
+            }
+        }
+
+        // 与正式导入同口径的行准备：forward-fill → 预览编辑 → 跳过行过滤
+        List<Map<String, String>> rows = loadRawDataRows(batch);
+        forwardFillKeyColumns(rows, mapping);
+        applyPreviewEdits(rows, request.getPreviewEdits());
+        Set<Integer> skipRowSet = request.getSkipRows() != null ? new HashSet<>(request.getSkipRows()) : Set.of();
+        rows = rows.stream()
+            .filter(row -> !skipRowSet.contains(resolveDisplayRowIndex(row, -1)))
+            .collect(Collectors.toCollection(ArrayList::new));
+        Map<String, List<CategoryDict>> dictCache = Map.of("category", categories);
+        List<String> groupKeys = computeLogicalGroupKeys(rows, mapping);
+
+        List<Integer> missingRows = new ArrayList<>();
+        // 逻辑产品组 → 品类 → 行号清单（品类唯一性校验用）
+        Map<String, Map<String, List<Integer>>> groupCategoryRows = new LinkedHashMap<>();
+        for (int i = 0; i < rows.size(); i++) {
+            String groupKey = groupKeys.get(i);
+            if (groupKey == null) {
+                continue; // 系统过滤行不要求品类（导入时自动跳过）
+            }
+            Map<String, String> row = rows.get(i);
+            int displayRowIndex = resolveDisplayRowIndex(row, i + 2);
+            String resolved = resolveFinalCategoryCode(row, mapping, selections.get(displayRowIndex),
+                request.getCategoryMapping(), dictCache,
+                mode == CategoryMode.SINGLE ? request.getCategoryHint() : null);
+            if (!StringUtils.hasText(resolved)) {
+                missingRows.add(displayRowIndex);
+                continue;
+            }
+            groupCategoryRows.computeIfAbsent(groupKey, k -> new LinkedHashMap<>())
+                .computeIfAbsent(resolved.trim().toUpperCase(), k -> new ArrayList<>())
+                .add(displayRowIndex);
+        }
+        if (!missingRows.isEmpty()) {
+            throw new BusinessException("仍有 " + missingRows.size() + " 行商品品类未确定（行号："
+                + joinRowIndexes(missingRows) + "），请完成数据清洗后再执行导入");
+        }
+        // 同一逻辑产品只能有一个品类：人工把同组多行改成不同品类时整批拦截并给出行号（§20）
+        List<Integer> conflictRows = new ArrayList<>();
+        for (Map<String, List<Integer>> byCategory : groupCategoryRows.values()) {
+            if (byCategory.size() > 1) {
+                byCategory.values().forEach(conflictRows::addAll);
+            }
+        }
+        if (!conflictRows.isEmpty()) {
+            conflictRows.sort(Integer::compareTo);
+            throw new BusinessException("同一逻辑产品存在多个品类（行号：" + joinRowIndexes(conflictRows)
+                + "），一个产品只能有一个品类，请在数据清洗页统一后再执行导入");
+        }
+    }
+
+    /**
+     * 新模式（SINGLE/MIXED）行级最终品类解析（§26.1 收敛兜底链）：
+     * 清洗页行级最终选择（rowCategorySelections，人工最终裁定） →
+     * 行内类别列确定性归一命中（可超候选集） → SINGLE 默认品类（categoryHint，只补空值行）。
+     *
+     * <p>Sheet 名与 categoryGuess 不参与新模式兜底（Sheet 名仅作 AI prompt 上下文）；
+     * MIXED 无更多兜底，缺失由导入前置校验整批拦截。行内类别值无法归一为合法字典码时
+     * 不算命中（与旧路径「保留原值报错」不同，新模式下行内未识别只是无命中，继续向下兜底）。</p>
+     *
+     * @param dataRow               数据行（表头 → 值）
+     * @param mapping               字段映射
+     * @param rowCategorySelection  清洗页提交的行级最终品类（可为 null）
+     * @param userCategoryMapping   用户确认的品类映射（rawValue → dictCode，可为 null）
+     * @param dictCache             字典缓存
+     * @param singleDefaultCategory SINGLE 默认品类（MIXED 传 null）
+     * @return 最终品类字典码；无法确定为 null
+     */
+    private String resolveFinalCategoryCode(Map<String, String> dataRow, Map<String, String> mapping,
+                                            String rowCategorySelection, Map<String, String> userCategoryMapping,
+                                            Map<String, List<CategoryDict>> dictCache, String singleDefaultCategory) {
+        if (StringUtils.hasText(rowCategorySelection)) {
+            return rowCategorySelection.trim().toUpperCase();
+        }
+        String rowColumnValue = getMappedCellValue(dataRow, mapping, "categoryCode");
+        if (StringUtils.hasText(rowColumnValue)) {
+            String normalized = normalizeCategoryCode(rowColumnValue, userCategoryMapping, dictCache);
+            if (isValidDictCode(normalized, dictCache.get("category"))) {
+                return normalized;
+            }
+        }
+        return StringUtils.hasText(singleDefaultCategory) ? singleDefaultCategory.trim().toUpperCase() : null;
+    }
+
+    /**
+     * 逻辑产品分组（复用正式导入的 RSPU 归组规则，§14/§20 对齐结论 14）：
+     * forward-fill 后连续相同 externalCode（含复合「型号品名」拆分语义，与
+     * {@link #resolveRowExternalCode} 同口径）的行属同一逻辑产品；
+     * externalCode 为空的行各自独立成组并打断前后连续性（与导入循环 sameProduct 判定一致：
+     * 空编码永不归组）；系统过滤行（说明行/重复表头行/组合汇总价行）不参与分组、
+     * 也不打断前后行的连续性（导入循环中此类行提前跳过、不触碰当前组状态）。
+     *
+     * <p>供 MIXED 逐行 AI 分类去重与导入前置「同一逻辑产品品类唯一性」校验共同调用，
+     * 不另建一套与正式导入不同的分组 key。</p>
+     *
+     * @param rows    数据行（应已完成 forward-fill / 预览编辑 / 跳过行过滤）
+     * @param mapping 字段映射（表头 → 标准字段）
+     * @return 与 rows 等长的分组 key 列表；系统过滤行位置为 null
+     */
+    private List<String> computeLogicalGroupKeys(List<Map<String, String>> rows, Map<String, String> mapping) {
+        List<String> keys = new ArrayList<>(rows.size());
+        String lastCode = null;
+        String currentGroupKey = null;
+        int seq = 0;
+        for (Map<String, String> row : rows) {
+            if (isNoteOrEmptyRow(row) || isRepeatedHeaderRow(row) || isComboSummaryRow(row, mapping)) {
+                keys.add(null);
+                continue;
+            }
+            String code = resolveRowExternalCode(row, mapping);
+            if (!StringUtils.hasText(code)) {
+                keys.add("EMPTY-" + (seq++));
+                lastCode = null;
+                currentGroupKey = keys.get(keys.size() - 1);
+                continue;
+            }
+            if (!code.equals(lastCode)) {
+                currentGroupKey = "G" + (seq++);
+            }
+            keys.add(currentGroupKey);
+            lastCode = code;
+        }
+        return keys;
+    }
+
+    /**
+     * 解析数据行的 Excel 展示行号（1-based 物理行号）：优先 previewRows 携带的
+     * {@code __rowIndex__}，缺失时回退调用方给的序号换算（与失败明细口径一致）。
+     */
+    private int resolveDisplayRowIndex(Map<String, String> row, int fallback) {
+        String rowIndexStr = row.get("__rowIndex__");
+        if (StringUtils.hasText(rowIndexStr)) {
+            try {
+                return Integer.parseInt(rowIndexStr);
+            } catch (NumberFormatException ignored) {
+                // 落回序号换算
+            }
+        }
+        return fallback;
+    }
+
+    /** 行号清单拼接（截断展示，避免超长错误消息）。 */
+    private String joinRowIndexes(List<Integer> rowIndexes) {
+        int limit = Math.min(rowIndexes.size(), 30);
+        String joined = rowIndexes.subList(0, limit).stream()
+            .map(String::valueOf)
+            .collect(Collectors.joining("、"));
+        return rowIndexes.size() > limit ? joined + " 等" : joined;
     }
 
     private String validateRow(ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
@@ -4371,9 +4873,10 @@ public class ExcelAiImportService {
      * @param rspu      已有 RSPU 实体
      * @param row       本行数据
      * @param dictCache 字典缓存
+     * @param rowIssues 行级问题收集器（跨品类保护提示对用户可见）
      */
     private void updateExistingRspu(RspuMaster rspu, ProductImportRow row,
-                                    Map<String, List<CategoryDict>> dictCache) {
+                                    Map<String, List<CategoryDict>> dictCache, List<String> rowIssues) {
         RspuMaster oldSnapshot = snapshotRspu(rspu);
         // 品名取值与 createRspu 一致：productName 优先，缺失时回退变体显示名
         String productName = StringUtils.hasText(row.getProductName())
@@ -4389,8 +4892,17 @@ public class ExcelAiImportService {
         if (rspu.getRetailPrice() == null && row.getRetailPrice() != null) {
             rspu.setRetailPrice(row.getRetailPrice());
         }
-        rspu.setCategoryCode(row.getCategoryCode().trim().toUpperCase());
-        rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
+        // 跨品类保护（§21.1）：更新模式命中已有 RSPU 时品类不更新——已有品类可能经过人工治理，
+        // 导入链路（AI/批量操作）不应静默把 RSPU 改到其他品类；不一致保留原品类并记行级提示，
+        // 真正改品类走产品管理。已有品类为空时才补填。
+        String rowCategoryCode = row.getCategoryCode().trim().toUpperCase();
+        if (!StringUtils.hasText(rspu.getCategoryCode())) {
+            rspu.setCategoryCode(rowCategoryCode);
+            rspu.setCategoryPath(CategoryPaths.resolve(rowCategoryCode));
+        } else if (!rspu.getCategoryCode().equalsIgnoreCase(rowCategoryCode)) {
+            rowIssues.add("品类与已有商品不一致（已有：" + rspu.getCategoryCode()
+                + "，本次：" + rowCategoryCode + "），已保留原品类");
+        }
         String primaryStyleName = splitCsv(row.getPositioningLabel()).stream().findFirst().orElse(null);
         if (StringUtils.hasText(primaryStyleName)) {
             rspu.setPositioningLabel(normalizeDictCode(primaryStyleName, dictCache.get("style")));

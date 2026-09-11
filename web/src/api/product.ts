@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportResult, ExcelAiImportStatus, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -429,6 +429,26 @@ export async function cloneExcelAiRowImages(
 ): Promise<string[]> {
   const { data: result } = await apiClient.post<ApiResult<string[]>>(
     `/v1/products/excel-ai-import/${batchId}/rows/${sourceRowIndex}/clone-images-to/${targetRowIndex}`
+  )
+  return result.data
+}
+
+/**
+ * Excel AI 辅助导入：行级品类预分类（进入数据清洗页时调用，幂等）。
+ *
+ * SINGLE 只做行内类别列确定性归一 + 默认品类兜底（不调 AI）；
+ * MIXED 在候选集约束下做 AI 逐行分类。返回的建议仅作前端预填展示。
+ *
+ * @param batchId 预览批次号
+ * @param request 预分类请求（导入方式 + 默认品类/候选集 + 确认映射）
+ */
+export async function classifyExcelAiRowCategories(
+  batchId: string,
+  request: ExcelAiClassifyCategoriesRequest
+): Promise<ExcelAiClassifyCategoriesResponse> {
+  const { data: result } = await apiClient.post<ApiResult<ExcelAiClassifyCategoriesResponse>>(
+    `/v1/products/excel-ai-import/${batchId}/classify-categories`,
+    request
   )
   return result.data
 }

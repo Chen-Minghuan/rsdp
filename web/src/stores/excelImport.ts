@@ -2,10 +2,10 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios from 'axios'
 import type { UploadFileInfo } from 'naive-ui'
-import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides, cloneExcelAiRowImages } from '@/api/product'
+import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides, cloneExcelAiRowImages, classifyExcelAiRowCategories } from '@/api/product'
 import { getTaskStatus } from '@/api/task'
 import type { TaskItem } from '@/types/task'
-import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataRow, PreviewEdit } from '@/types/product'
+import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, ExcelCategoryMode, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataRow, PreviewEdit } from '@/types/product'
 
 /**
  * Excel AI 导入向导状态（跨路由保持）。
@@ -25,6 +25,23 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const confirmedCategoryMapping = ref<Record<string, string | null>>({})
   const categoryHint = ref<string | null>(null)
   const updateIfExists = ref(false)
+
+  /** 导入方式（SINGLE 单一品类 / MIXED 混合品类），按 Sheet（批次）生效；null = 未选择 */
+  const categoryMode = ref<ExcelCategoryMode | null>(null)
+  /** MIXED 候选品类码列表（≥2 个），限定 AI 逐行分类的识别范围 */
+  const candidateCategoryCodes = ref<string[]>([])
+  /** 清洗页行级最终品类：Excel 物理行号（1-based）→ 品类字典码（确认导入时唯一行级载体，同 previewEdits 模式） */
+  const rowCategorySelections = ref<Record<number, string>>({})
+  /** 系统/AI 建议品类（仅渲染「AI 建议」等标记用，不提交后端） */
+  const suggestedCategoryCodes = ref<Record<number, string | null>>({})
+  /** 行级品类建议来源标记（dict/ai/default/none），仅展示用 */
+  const rowCategorySourceTags = ref<Record<number, string>>({})
+  /** 后端判定的系统过滤行（说明行/重复表头行/组合汇总价行），不计入「未确定」统计 */
+  const systemFilteredRows = ref<Set<number>>(new Set())
+  /** 用户在清洗页手动改过品类的行（重新预分类时不覆盖这些行） */
+  const userEditedCategoryRows = ref<Set<number>>(new Set())
+  /** 行级品类预分类进行中 */
+  const classifyingCategories = ref(false)
 
   const importResult = ref<ExcelAiImportResult | null>(null)
   const taskList = ref<TaskItem[]>([])
@@ -67,6 +84,16 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const pendingTaskCount = computed(
     () => taskList.value.filter(t => !terminalStatuses.includes(t.status)).length
   )
+
+  /** 仍未确定商品品类的非跳过、非系统过滤行（Step 3→4 前端拦截与「只看未确定商品」过滤用） */
+  const undeterminedCategoryRowIndexes = computed(() => {
+    if (!categoryMode.value) return []
+    return previewData.value
+      .filter(row => !skippedRows.value.has(row.rowIndex)
+        && !systemFilteredRows.value.has(row.rowIndex)
+        && !rowCategorySelections.value[row.rowIndex])
+      .map(row => row.rowIndex)
+  })
 
   let pollTimeoutId: ReturnType<typeof setTimeout> | null = null
   let pollAbortController: AbortController | null = null
@@ -196,6 +223,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         (result.priceColumns || []).map(p => [p.header, p.role ?? 'factory'])
       )
       selectedPriceColumns.value = (result.priceColumns || []).map(p => p.header)
+      // 导入方式 per-sheet 生效：切换 sheet / 重新预览即新批次，重置方式与行级品类状态
+      categoryMode.value = null
+      candidateCategoryCodes.value = []
+      resetRowCategoryState()
       // 加载全量预览数据并清空上次编辑
       await loadPreviewData(result.batchId)
       currentStep.value = 2
@@ -260,6 +291,115 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    */
   function isSkippedRow(rowIndex: number): boolean {
     return skippedRows.value.has(rowIndex)
+  }
+
+  /**
+   * 设置某行的最终商品品类（清洗页人工选择/批量设置），标记为人工修改行，
+   * 后续重新预分类不覆盖。
+   *
+   * @param rowIndex     Excel 物理行号（1-based）
+   * @param categoryCode 品类字典码；null/空表示清除选择
+   */
+  function setRowCategory(rowIndex: number, categoryCode: string | null) {
+    const next = { ...rowCategorySelections.value }
+    if (categoryCode) {
+      next[rowIndex] = categoryCode
+    } else {
+      delete next[rowIndex]
+    }
+    rowCategorySelections.value = next
+    const edited = new Set(userEditedCategoryRows.value)
+    edited.add(rowIndex)
+    userEditedCategoryRows.value = edited
+    // 人工修改后来源标记同步为「人工修改」，避免行上仍挂着「AI 建议」误导；
+    // 清除选择时移除标记，恢复「未识别」展示
+    const tags = { ...rowCategorySourceTags.value }
+    if (categoryCode) {
+      tags[rowIndex] = 'manual'
+    } else {
+      delete tags[rowIndex]
+    }
+    rowCategorySourceTags.value = tags
+  }
+
+  /**
+   * 重置行级品类状态（切换 sheet / 重新预览 / 变更导入方式时调用）。
+   */
+  function resetRowCategoryState() {
+    rowCategorySelections.value = {}
+    suggestedCategoryCodes.value = {}
+    rowCategorySourceTags.value = {}
+    systemFilteredRows.value = new Set()
+    userEditedCategoryRows.value = new Set()
+  }
+
+  /**
+   * 行级品类预分类：进入数据清洗页时触发（接口幂等，可重复调用）。
+   *
+   * SINGLE 只做确定性归一 + 默认品类兜底；MIXED 在候选集约束下调 AI 逐行分类。
+   * 失败仅提示不阻断——用户仍可在清洗页全人工选择品类；
+   * 人工已修改的行不被返回结果覆盖。
+   */
+  async function classifyRowCategories() {
+    const currentMapping = mappingResponse.value
+    if (!currentMapping?.batchId || !categoryMode.value) {
+      return
+    }
+    const batchId = currentMapping.batchId
+    // 与 handleImport 同口径的用户确认映射
+    const mapping: Record<string, string> = {}
+    for (const header of currentMapping.headers) {
+      const value = confirmedMapping.value[header]
+      if (value) {
+        mapping[header] = value
+      }
+    }
+    const categoryMapping: Record<string, string> = {}
+    for (const [rawValue, dictCode] of Object.entries(confirmedCategoryMapping.value)) {
+      if (dictCode) {
+        categoryMapping[rawValue] = dictCode
+      }
+    }
+    classifyingCategories.value = true
+    try {
+      const response = await classifyExcelAiRowCategories(batchId, {
+        mode: categoryMode.value,
+        categoryHint: categoryHint.value ?? undefined,
+        candidateCategoryCodes: categoryMode.value === 'MIXED' ? [...candidateCategoryCodes.value] : undefined,
+        sheetName: currentSheetName.value || undefined,
+        mapping,
+        categoryMapping: Object.keys(categoryMapping).length > 0 ? categoryMapping : undefined
+      })
+      const filtered = new Set<number>()
+      const selections = { ...rowCategorySelections.value }
+      const suggested: Record<number, string | null> = {}
+      const sources: Record<number, string> = {}
+      for (const item of response.suggestions) {
+        if (item.filtered) {
+          filtered.add(item.rowIndex)
+          continue
+        }
+        suggested[item.rowIndex] = item.suggestedCategoryCode
+        sources[item.rowIndex] = item.source
+        if (!userEditedCategoryRows.value.has(item.rowIndex)) {
+          if (item.suggestedCategoryCode) {
+            selections[item.rowIndex] = item.suggestedCategoryCode
+          } else {
+            delete selections[item.rowIndex]
+          }
+        }
+      }
+      systemFilteredRows.value = filtered
+      suggestedCategoryCodes.value = suggested
+      rowCategorySourceTags.value = sources
+      rowCategorySelections.value = selections
+    } catch (e) {
+      errorMessage.value = e instanceof Error
+        ? `商品品类预分类失败：${e.message}，可在数据清洗页手工选择品类`
+        : '商品品类预分类失败，可在数据清洗页手工选择品类'
+    } finally {
+      classifyingCategories.value = false
+    }
   }
 
   /**
@@ -399,7 +539,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       }
     }
 
-    if (!Object.values(mapping).includes('categoryCode') && !categoryHint.value) {
+    // 旧路径（未选导入方式）保持原有兜底校验；新模式（SINGLE/MIXED）由方式配置校验与行级品类覆盖
+    if (!categoryMode.value && !Object.values(mapping).includes('categoryCode') && !categoryHint.value) {
       errorMessage.value = '未映射品类码字段且未选择品类提示，请至少选择一项'
       return
     }
@@ -424,6 +565,18 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       return
     }
 
+    // 新模式：清洗页表格当前值即最终输入（§17 只提交 rowCategorySelections，suggested 不提交）；
+    // 跳过行不上传（后端按 skipRows 过滤）
+    const rowCategorySelectionsPayload: Record<number, string> = {}
+    if (categoryMode.value) {
+      for (const [rowIndexKey, code] of Object.entries(rowCategorySelections.value)) {
+        const rowIndex = Number(rowIndexKey)
+        if (code && !skippedRows.value.has(rowIndex)) {
+          rowCategorySelectionsPayload[rowIndex] = code
+        }
+      }
+    }
+
     errorMessage.value = ''
     uploading.value = true
     stopPolling()
@@ -436,6 +589,11 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         mapping,
         updateIfExists: updateIfExists.value,
         categoryHint: categoryHint.value ?? undefined,
+        categoryMode: categoryMode.value ?? undefined,
+        candidateCategoryCodes: categoryMode.value === 'MIXED' ? [...candidateCategoryCodes.value] : undefined,
+        rowCategorySelections: Object.keys(rowCategorySelectionsPayload).length > 0
+          ? rowCategorySelectionsPayload
+          : undefined,
         categoryMapping: Object.keys(categoryMapping).length > 0 ? categoryMapping : undefined,
         defaultFactoryCode: defaultFactoryCode.value || undefined,
         defaultShippingFrom: defaultShippingFrom.value || undefined,
@@ -484,10 +642,41 @@ export const useExcelImportStore = defineStore('excelImport', () => {
 
   /**
    * 从字段映射页进入数据清洗页（步骤 3）。
-   * 调用前已保证 previewData 已加载。
+   * 先校验导入方式配置（§22），再触发候选集约束的行级品类预分类（SINGLE 不调 AI）。
    */
-  function handleGoToCleanStep() {
+  async function handleGoToCleanStep() {
+    if (!categoryMode.value) {
+      errorMessage.value = '请选择导入方式（单一品类 / 混合品类）'
+      return
+    }
+    if (categoryMode.value === 'SINGLE' && !categoryHint.value) {
+      errorMessage.value = '请选择默认商品品类'
+      return
+    }
+    if (categoryMode.value === 'MIXED' && candidateCategoryCodes.value.length < 2) {
+      errorMessage.value = '混合品类导入请至少选择两个商品品类'
+      return
+    }
+    errorMessage.value = ''
     currentStep.value = 3
+    await classifyRowCategories()
+  }
+
+  /**
+   * 从数据清洗页进入确认导入页（步骤 4）。
+   * 仍有未确定品类的非跳过行时拦截（§20 前端拦截；后端 confirmAndImport 兜底再校验一次）。
+   *
+   * @return false 表示被拦截，由视图展示未确定行（如开启「只看未确定商品」过滤）
+   */
+  function handleGoToConfirmStep(): boolean {
+    const undetermined = undeterminedCategoryRowIndexes.value
+    if (undetermined.length > 0) {
+      errorMessage.value = `仍有 ${undetermined.length} 行商品品类未确定，请完成数据清洗后再执行导入`
+      return false
+    }
+    errorMessage.value = ''
+    currentStep.value = 4
+    return true
   }
 
   /**
@@ -648,6 +837,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     currentStep.value = 1
     errorMessage.value = ''
     categoryHint.value = null
+    categoryMode.value = null
+    candidateCategoryCodes.value = []
+    resetRowCategoryState()
     updateIfExists.value = false
     stopPolling()
     stopBatchPolling()
@@ -664,6 +856,14 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     confirmedMapping,
     confirmedCategoryMapping,
     categoryHint,
+    categoryMode,
+    candidateCategoryCodes,
+    rowCategorySelections,
+    suggestedCategoryCodes,
+    rowCategorySourceTags,
+    systemFilteredRows,
+    classifyingCategories,
+    undeterminedCategoryRowIndexes,
     updateIfExists,
     importResult,
     taskList,
@@ -689,10 +889,14 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     handleImport,
     handleReimportWithUpdate,
     handleGoToCleanStep,
+    handleGoToConfirmStep,
     loadPreviewData,
     updatePreviewEdit,
     toggleSkipRow,
     isSkippedRow,
+    setRowCategory,
+    resetRowCategoryState,
+    classifyRowCategories,
     fillDefaultValue,
     getPreviewCellValue,
     getRowImageOverrides,

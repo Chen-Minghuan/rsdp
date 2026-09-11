@@ -2658,7 +2658,7 @@ class ExcelAiImportServiceTest {
     @Test
     void confirmAndImport_platformIdentityShouldOverwriteSharedFieldsAsBefore() throws IOException {
         // 阶段 1.3-C：平台员工（ALL）行为不变——命中已有 RSPU 全量覆盖共享字段，
-        // 不经过 canAccessRspu 归属校验
+        // 不经过 canAccessRspu 归属校验；唯一例外是品类字段：§21.1 跨品类保护后不更新
         byte[] excelBytes = createExcelWithCodeNameAndStyle();
         MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
@@ -2722,7 +2722,11 @@ class ExcelAiImportServiceTest {
         verify(rspuMapper, times(1)).updateById(captor.capture());
         RspuMaster updated = captor.getValue();
         assertEquals("休闲椅 A", updated.getProductName(), "平台身份应全量覆盖品名");
-        assertEquals("FS", updated.getCategoryCode(), "平台身份应可更新 categoryCode");
+        // §21.1 跨品类保护：更新模式命中已有 RSPU 时品类不再被导入覆盖，保留原品类并记行级提示
+        assertEquals("SF", updated.getCategoryCode(), "跨品类保护：已有品类应保留原值（§21.1）");
+        assertTrue(result.getFailures().stream().anyMatch(f -> f.getReason() != null
+                && f.getReason().contains("已保留原品类")),
+            "品类不一致应记录行级提示: " + result.getFailures());
         assertEquals("MC", updated.getPositioningLabel());
         // 平台身份不经归属校验，且风格关联表照常重建
         verify(dataScopeHelper, never()).canAccessRspu(anyString());
