@@ -35,8 +35,29 @@ public class ExcelAiMappingRequest {
 
     /**
      * 品类提示，当 Excel 中无品类字段时使用。
+     * SINGLE 导入方式下即「默认商品品类」（同一字段，DB 复用 category_hint 列）：
+     * 行内类别列确定性归一命中时以行内值为准，本字段只补空值行。
      */
     private String categoryHint;
+
+    /**
+     * 导入方式（SINGLE 单一品类 / MIXED 混合品类），按 Sheet（批次）生效。
+     * 缺省（null）表示未选导入方式的旧路径：维持原有品类兜底链
+     * （行类别列 → Sheet 名归一 → 品类提示 → categoryGuess），向后兼容。
+     */
+    private CategoryMode categoryMode;
+
+    /**
+     * MIXED 候选品类码列表（≥2 个），限定 AI 逐行分类的识别范围；随导入请求提交。
+     */
+    private List<String> candidateCategoryCodes;
+
+    /**
+     * 数据清洗后的行级最终品类：Excel 物理行号（1-based）→ 品类字典码。
+     * 新模式（categoryMode 非空）下后端只认本集合（与 previewEdits / skipRows 同模式）；
+     * AI/系统的 suggested 建议仅前端展示，不提交。
+     */
+    private Map<Integer, String> rowCategorySelections;
 
     /**
      * 默认工厂编码，用于为每个价格列创建 RSKU。

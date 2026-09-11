@@ -30,6 +30,12 @@ const {
   confirmedMapping,
   confirmedCategoryMapping,
   categoryHint,
+  categoryMode,
+  candidateCategoryCodes,
+  rowCategorySelections,
+  rowCategorySourceTags,
+  classifyingCategories,
+  undeterminedCategoryRowIndexes,
   updateIfExists,
   importResult,
   taskList,
@@ -50,7 +56,7 @@ const {
   pendingTaskCount,
   batchRecovering
 } = storeToRefs(store)
-const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue, uploadRowImage, removeRowImage, cloneRowImages } = store
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue, uploadRowImage, removeRowImage, cloneRowImages, setRowCategory, resetRowCategoryState } = store
 
 const STANDARD_FIELDS = [
   { label: '（不映射）', value: '' },
@@ -80,6 +86,16 @@ const categoryOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
 const materialOptions = ref<DictItem[]>([])
 const factoryOptions = ref<Factory[]>([])
+
+/** 商品品类下拉选项（全量有效字典：AI 可选范围受限，人工修改可选全部品类） */
+const categorySelectOptions = computed(() =>
+  categoryOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
+)
+
+// 变更导入方式后，上一方式下的行级品类预填/建议全部失效，回到未分类状态
+watch(categoryMode, () => {
+  resetRowCategoryState()
+})
 
 /** 存在「出厂价」角色的价格列时，默认工厂编码必填（与后端 confirmAndImport 校验一致） */
 const factoryRequired = computed(() =>
@@ -399,6 +415,12 @@ const unmappedColumnsColumns = computed<DataTableColumns<UnmappedColumnInfo>>(()
 const cleanTableRef = ref<InstanceType<typeof VxeTable> | null>(null)
 const cleanFillHeader = ref<string | null>(null)
 const cleanFillValue = ref('')
+/** 只看「商品品类未确定」的行（Step 3→4 被拦截时自动开启） */
+const showOnlyUndetermined = ref(false)
+/** 批量设置商品品类选中的品类码 */
+const batchCategoryCode = ref<string | null>(null)
+/** 清洗表格勾选行（批量设置品类用） */
+const selectedCleanRowIndexes = ref<number[]>([])
 
 /** 图片预览弹窗状态 */
 const imagePreviewVisible = ref(false)
@@ -418,7 +440,10 @@ const cleanHeaders = computed(() => {
 /** 把 PreviewDataRow 转换成 VxeTable 行数据，带内部行号字段与图片 */
 const cleanTableData = computed(() => {
   const overrides = rowImageOverrides.value
-  return previewData.value.map(row => {
+  const rows = showOnlyUndetermined.value
+    ? previewData.value.filter(r => undeterminedCategoryRowIndexes.value.includes(r.rowIndex))
+    : previewData.value
+  return rows.map(row => {
     const record: Record<string, string | number | PreviewRowImage[] | string[]> = {
       __rowIndex__: row.rowIndex,
       __images__: row.images ?? [],
@@ -441,6 +466,28 @@ function cleanColumnTitle(header: string): string {
     return `${header} → ${fieldLabel}`
   }
   return header
+}
+
+/**
+ * 数据列宽：按映射字段类型定宽。
+ * 不能用 min-width——vxe-table 会把容器剩余宽度均摊给 min-width 列，宽屏下列被拉得很长。
+ */
+function cleanColumnWidth(header: string): number {
+  if (mappingResponse.value?.priceColumns.some(p => p.header === header)) return 110
+  switch (previewData.value[0]?.mappedFieldByHeader[header]) {
+    case 'description': return 240
+    case 'productName': return 200
+    case 'keySpecs': return 180
+    case 'externalCode':
+    case 'variantDisplayName':
+    case 'dimensions': return 160
+    case 'warrantyYears':
+    case 'leadTimeDays':
+    case 'sizeCode':
+    case 'colorCode':
+    case 'materialCode': return 110
+    default: return 150
+  }
 }
 
 /**
@@ -473,6 +520,33 @@ function applyCleanFill() {
   if (!header || value === '') return
   fillDefaultValue(header, value)
   cleanFillValue.value = ''
+}
+
+/** 勾选行变化时同步选中行号（批量设置品类的「已选择 N 行」展示） */
+function onCleanSelectionChange() {
+  const records = (cleanTableRef.value?.getCheckboxRecords?.() ?? []) as Record<string, unknown>[]
+  selectedCleanRowIndexes.value = records.map(r => Number(r.__rowIndex__))
+}
+
+/** 批量设置勾选行的商品品类（§13 第一版只做普通批量设置，不做自动分组/聚类） */
+function applyBatchCategory() {
+  const code = batchCategoryCode.value
+  if (!code || selectedCleanRowIndexes.value.length === 0) return
+  let applied = 0
+  for (const rowIndex of selectedCleanRowIndexes.value) {
+    if (skippedRows.value.has(rowIndex)) continue
+    setRowCategory(rowIndex, code)
+    applied++
+  }
+  message.success(`已批量设置 ${applied} 行商品品类`)
+  batchCategoryCode.value = null
+}
+
+/** 数据清洗 → 确认导入：被拦截（仍有未确定品类行）时自动切到「只看未确定商品」 */
+function goToConfirmStep() {
+  if (!handleGoToConfirmStep()) {
+    showOnlyUndetermined.value = true
+  }
 }
 
 /** 被跳过行的视觉样式 */
@@ -636,20 +710,58 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             切换工作表将重新识别字段映射，当前确认内容会被重置；每个工作表导入为独立批次。
           </n-alert>
 
+          <n-space v-if="currentSheetName" align="center">
+            <span>当前 Sheet：</span>
+            <n-tag type="info" :bordered="false">{{ currentSheetName }}</n-tag>
+          </n-space>
+
           <n-alert type="info" :show-icon="false">
-            AI 已根据表头和样例数据推荐字段映射。请检查并调整，尤其是<b>品类码</b>必须正确映射或在下方选择品类提示。
+            AI 已根据表头和样例数据推荐字段映射。请检查并调整；品类通过下方「导入方式」确定：单一品类整批默认一个品类，混合品类由 AI 在你选的候选品类中逐行预填。
           </n-alert>
 
-          <n-select
-            v-model:value="categoryHint"
-            :options="categoryOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
-            placeholder="品类提示（可不填：优先取类别列，其次按 Sheet 名自动识别）"
-            clearable
-            style="max-width: 420px;"
-          />
-          <p style="color: #999; font-size: 12px; margin: 0;">
-            品类提示作为兜底：未在下方「品类名归一」中指认的品类值，将统一使用该品类。可不填：优先取类别列，其次按 Sheet 名自动识别。
-          </p>
+          <!-- 导入方式（§4：per-sheet，放在 Step 2 顶部；SINGLE 复用 categoryHint，不并存两套品类选择） -->
+          <div>
+            <span><span class="required-star">*</span>导入方式</span>
+            <n-radio-group v-model:value="categoryMode" style="display: block; margin-top: 8px;">
+              <n-space vertical :size="8">
+                <n-radio value="SINGLE">
+                  单一品类导入
+                  <span style="color: #999; font-size: 12px;">　当前 Sheet 中的商品均属于同一个品类</span>
+                </n-radio>
+                <n-radio value="MIXED">
+                  混合品类导入
+                  <span style="color: #999; font-size: 12px;">　当前 Sheet 中包含多个商品品类</span>
+                </n-radio>
+              </n-space>
+            </n-radio-group>
+          </div>
+          <n-space v-if="categoryMode === 'SINGLE'" align="center">
+            <span><span class="required-star">*</span>默认商品品类</span>
+            <n-select
+              v-model:value="categoryHint"
+              :options="categorySelectOptions"
+              placeholder="整批商品默认使用该品类"
+              filterable
+              style="width: 260px;"
+            />
+            <n-text depth="3" style="font-size: 12px;">
+              行内类别列可识别的行以行内值为准，默认品类只补空值行；单一品类导入不进行品类 AI 识别
+            </n-text>
+          </n-space>
+          <n-space v-if="categoryMode === 'MIXED'" align="center">
+            <span><span class="required-star">*</span>该 Sheet 包含的品类</span>
+            <n-select
+              v-model:value="candidateCategoryCodes"
+              :options="categorySelectOptions"
+              placeholder="至少选择两个候选品类"
+              multiple
+              filterable
+              style="width: 420px; max-width: 100%;"
+            />
+            <n-text depth="3" style="font-size: 12px;">
+              AI 只会在候选品类中逐行识别，无法判断时留空由你在数据清洗页选择
+            </n-text>
+          </n-space>
 
           <n-checkbox v-model:checked="updateIfExists">
             当外部编码已存在时更新已有产品
@@ -681,7 +793,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
 
           <n-card v-if="mappingResponse?.categoryMappings && mappingResponse.categoryMappings.length > 0" title="品类名归一" size="small">
             <n-alert type="info" :show-icon="false" style="margin-bottom: 12px;">
-              请确认 Excel 中的品类名称对应的系统品类码，初始值为系统建议；无法归一的词可手动选择，或留空由品类提示兜底。
+              请确认 Excel 中的品类名称对应的系统品类码，初始值为系统建议；无法归一的词可手动选择，或留空在数据清洗页逐行确定。
             </n-alert>
             <n-data-table
               :columns="categoryMappingColumns"
@@ -711,13 +823,44 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             以下按 Excel 原始表头展示全部数据行，可直接双击单元格编辑。编辑仅影响本次导入，不会修改原始文件。
           </n-alert>
 
-          <n-space align="center">
+          <n-space align="center" wrap>
+            <n-tag type="default">共 {{ previewData.length }} 行</n-tag>
             <n-tag v-if="skippedRows.size > 0" type="warning">
               已跳过 {{ skippedRows.size }} 行，导入时不会录入
             </n-tag>
-            <n-tag v-else type="default">
-              未标记跳过行
-            </n-tag>
+            <template v-if="categoryMode">
+              <n-tag v-if="classifyingCategories" type="info">
+                正在识别商品品类…
+              </n-tag>
+              <n-tag v-else-if="undeterminedCategoryRowIndexes.length > 0" type="error">
+                {{ undeterminedCategoryRowIndexes.length }} 行商品品类未确定
+              </n-tag>
+              <n-tag v-else type="success">
+                全部行已确定商品品类
+              </n-tag>
+              <n-checkbox v-model:checked="showOnlyUndetermined">
+                只看未确定商品
+              </n-checkbox>
+            </template>
+          </n-space>
+
+          <!-- 批量设置商品品类（§13：第一版只做普通批量设置） -->
+          <n-space v-if="categoryMode" align="center">
+            <n-text depth="3">已选择 {{ selectedCleanRowIndexes.length }} 行</n-text>
+            <n-select
+              v-model:value="batchCategoryCode"
+              :options="categorySelectOptions"
+              placeholder="批量设置商品品类"
+              clearable
+              filterable
+              style="width: 220px;"
+            />
+            <n-button
+              :disabled="!batchCategoryCode || selectedCleanRowIndexes.length === 0"
+              @click="applyBatchCategory"
+            >
+              批量设置品类
+            </n-button>
           </n-space>
 
           <n-space>
@@ -752,7 +895,10 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             border
             show-overflow="title"
             @edit-closed="onCleanEditClosed"
+            @checkbox-change="onCleanSelectionChange"
+            @checkbox-all="onCleanSelectionChange"
           >
+            <vxe-column v-if="categoryMode" type="checkbox" width="46" fixed="left" />
             <vxe-column type="seq" title="行号" width="70" fixed="left" />
             <vxe-column title="跳过" width="70" fixed="left">
               <template #default="{ row }">
@@ -762,7 +908,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
                 />
               </template>
             </vxe-column>
-            <vxe-column title="图片" width="300" fixed="left">
+            <vxe-column title="图片" width="200" fixed="left">
               <template #default="{ row }">
                 <div style="display: flex; flex-direction: column; gap: 8px; padding: 4px 0;">
                   <div style="display: flex; gap: 6px; flex-wrap: wrap; min-height: 48px; align-items: center;">
@@ -829,12 +975,49 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
                 </div>
               </template>
             </vxe-column>
+            <!-- 商品品类列（§10/§12：AI 只预填候选集内建议，人工可选全量字典品类） -->
+            <vxe-column v-if="categoryMode" title="商品品类" width="220" fixed="left">
+              <template #default="{ row }">
+                <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
+                  <n-select
+                    :value="rowCategorySelections[Number(row.__rowIndex__)] ?? null"
+                    :options="categorySelectOptions"
+                    placeholder="请选择品类"
+                    clearable
+                    filterable
+                    size="small"
+                    style="width: 180px;"
+                    @update:value="(value: string | null) => setRowCategory(Number(row.__rowIndex__), value)"
+                  />
+                  <n-tag v-if="rowCategorySourceTags[Number(row.__rowIndex__)] === 'manual'" size="tiny" :bordered="false">
+                    人工修改
+                  </n-tag>
+                  <n-tag v-else-if="rowCategorySourceTags[Number(row.__rowIndex__)] === 'ai'" size="tiny" type="info" :bordered="false">
+                    AI 建议
+                  </n-tag>
+                  <n-tag v-else-if="rowCategorySourceTags[Number(row.__rowIndex__)] === 'dict'" size="tiny" type="success" :bordered="false">
+                    类别列识别
+                  </n-tag>
+                  <n-tag v-else-if="rowCategorySourceTags[Number(row.__rowIndex__)] === 'default'" size="tiny" type="default" :bordered="false">
+                    默认品类
+                  </n-tag>
+                  <n-tag
+                    v-else-if="!rowCategorySelections[Number(row.__rowIndex__)] && !skippedRows.has(Number(row.__rowIndex__))"
+                    size="tiny"
+                    type="warning"
+                    :bordered="false"
+                  >
+                    未识别
+                  </n-tag>
+                </div>
+              </template>
+            </vxe-column>
             <vxe-column
               v-for="header in cleanHeaders"
               :key="header"
               :field="header"
               :title="cleanColumnTitle(header)"
-              min-width="140"
+              :width="cleanColumnWidth(header)"
               :edit-render="{ name: 'input' }"
             />
           </vxe-table>
@@ -843,7 +1026,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             <n-button @click="currentStep = 2">
               上一步
             </n-button>
-            <n-button type="primary" @click="currentStep = 4">
+            <n-button type="primary" @click="goToConfirmStep">
               下一步：确认导入
             </n-button>
           </n-space>

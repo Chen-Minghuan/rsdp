@@ -1,7 +1,9 @@
 package com.rsdp.controller;
 
 import com.rsdp.common.Result;
+import com.rsdp.dto.request.ExcelAiClassifyCategoriesRequest;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
+import com.rsdp.dto.response.ExcelAiClassifyCategoriesResponse;
 import com.rsdp.dto.response.ExcelAiImportResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
@@ -89,6 +91,22 @@ public class ExcelAiImportController {
         @PathVariable @NotBlank String batchId) {
         excelAiImportService.getAccessibleBatch(batchId);
         return Result.ok(excelAiImportService.getPreviewData(batchId));
+    }
+
+    /**
+     * 行级品类预分类（进入数据清洗页时调用，幂等）。
+     *
+     * <p>SINGLE：只做行内类别列确定性归一 + 默认品类兜底，不调 AI；
+     * MIXED：候选集约束的 AI 逐行分类（推迟到候选品类确定后执行）。
+     * 返回的建议仅作前端预填展示，最终品类以确认导入请求的 rowCategorySelections 为准。</p>
+     */
+    @PostMapping("/{batchId}/classify-categories")
+    @PreAuthorize("hasAuthority('product:import')")
+    public Result<ExcelAiClassifyCategoriesResponse> classifyCategories(
+        @PathVariable @NotBlank String batchId,
+        @RequestBody @Valid ExcelAiClassifyCategoriesRequest request) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        return Result.ok(excelAiImportService.classifyRowCategories(batchId, request));
     }
 
     /**
