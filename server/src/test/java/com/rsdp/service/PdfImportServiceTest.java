@@ -120,7 +120,7 @@ class PdfImportServiceTest {
         // 立即返回 batchId，不做任何渲染/AI 检测/建档
         assertThat(result.getBatchId()).isNotBlank();
         verify(visionService, never()).detectPageRegions(any(), any());
-        verify(productService, never()).createEntryFromStream(any(), anyString(), anyLong(), anyString(), any());
+        verify(productService, never()).createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any());
 
         // 原始 PDF 落存储
         verify(storageService).store(any(), eq("document-imports/" + result.getBatchId() + ".pdf"),
@@ -200,7 +200,7 @@ class PdfImportServiceTest {
         coverPage.setProducts(List.of());
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage, coverPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST01", "taskId", "TASK-TEST01"));
 
         DocumentImportBatch result = pdfImportService.executeImport("B1");
@@ -228,7 +228,7 @@ class PdfImportServiceTest {
         ));
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), eq("TB"), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), eq("TB"), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST02", "taskId", "TASK-TEST02"));
 
         DocumentImportBatch result = pdfImportService.executeImport("B2");
@@ -252,14 +252,14 @@ class PdfImportServiceTest {
         ));
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST04", "taskId", "TASK-TEST04"));
 
         pdfImportService.executeImport("B3");
 
         ArgumentCaptor<OcrResult> ocrCaptor = ArgumentCaptor.forClass(OcrResult.class);
         verify(productService).createEntryFromStream(any(), anyString(), anyLong(), anyString(),
-            ocrCaptor.capture());
+            ocrCaptor.capture(), any());
         assertThat(ocrCaptor.getValue().getProductName()).isEqualTo("兰卡沙发");
         assertThat(ocrCaptor.getValue().getModelNumber()).isEqualTo("LK-2450");
     }
@@ -298,7 +298,7 @@ class PdfImportServiceTest {
         when(visionService.detectPageRegions(any(), any()))
             .thenThrow(new RuntimeException("AI 服务超时"))
             .thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST03", "taskId", "TASK-TEST03"));
 
         DocumentImportBatch result = pdfImportService.executeImport("B5");
@@ -319,7 +319,7 @@ class PdfImportServiceTest {
         productPage.setProducts(List.of());
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST04", "taskId", "TASK-TEST04"));
 
         DocumentImportBatch result = pdfImportService.executeImport("B6");
@@ -343,7 +343,7 @@ class PdfImportServiceTest {
         ));
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST05", "taskId", "TASK-TEST05"));
 
         DocumentImportBatch result = pdfImportService.executeImport("B7");
@@ -370,7 +370,7 @@ class PdfImportServiceTest {
         ));
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST07", "taskId", "TASK-TEST07"));
 
         DocumentImportBatch result = pdfImportService.executeImport("B8");
@@ -391,7 +391,7 @@ class PdfImportServiceTest {
         ));
 
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST06", "taskId", "TASK-TEST06"));
 
         DocumentImportBatch result = pdfImportService.executeImport("B9");
@@ -420,7 +420,7 @@ class PdfImportServiceTest {
         when(visionService.detectPageRegions(any(), any()))
             .thenReturn(List.of(brokenPage))
             .thenReturn(List.of(recoveredPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST08", "taskId", "TASK-TEST08"));
 
         DocumentImportBatch result = pdfImportService.executeImport("B10");
@@ -452,7 +452,7 @@ class PdfImportServiceTest {
         DocumentImportBatch result = pdfImportService.executeImport("B11");
 
         // 不建档，记"已存在跳过"；异步线程无 SecurityContext → 中性文案（不含品名/编码）
-        verify(productService, never()).createEntryFromStream(any(), anyString(), anyLong(), anyString(), any());
+        verify(productService, never()).createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any());
         assertThat(result.getSuccessCount()).isEqualTo(0);
         assertThat(result.getSkipCount()).isEqualTo(1);
         assertThat(result.getStatus()).isEqualTo("partial_success");
@@ -568,7 +568,7 @@ class PdfImportServiceTest {
             new DocumentProductRegion.PageProduct(new ProductBoundingBox(0.5, 0.5, 0.4, 0.4), "SF", null, null)
         ));
         when(visionService.detectPageRegions(any(), any())).thenReturn(List.of(productPage));
-        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any()))
+        when(productService.createEntryFromStream(any(), anyString(), anyLong(), anyString(), any(), any()))
             .thenReturn(Map.of("rspuId", "RSPU-TEST09", "taskId", "TASK-TEST09"))
             .thenThrow(new RuntimeException("存储故障"));
 

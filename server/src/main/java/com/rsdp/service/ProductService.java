@@ -159,6 +159,7 @@ public class ProductService {
         rspu.setPositioningLabel("待识别");
         rspu.setStatus("processing");
         rspu.setReviewStatus("待复核");
+        rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
@@ -359,6 +360,7 @@ public class ProductService {
         rspu.setKeySpecs(toJson(keySpecs));
         rspu.setStatus("active");
         rspu.setReviewStatus("待复核");
+        rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
@@ -625,6 +627,22 @@ public class ProductService {
     @Transactional
     public Map<String, Object> createEntryFromStream(InputStream imageStream, String filename, long size,
                                                      String categoryCode, OcrResult pageOcr) throws IOException {
+        return createEntryFromStream(imageStream, filename, size, categoryCode, pageOcr, null);
+    }
+
+    /**
+     * 从图片流创建单产品录入（可显式指定录入人）。
+     *
+     * @param createdByUserId 录入人（sys_user.user_id，写 rspu_master.created_by）：
+     *                        PDF 文档导入等在异步线程执行、无 SecurityContext 的场景由调用方
+     *                        显式传入批次创建人；null 时回落当前登录人
+     * @return 包含 taskId、rspuId、imageIds 的映射
+     * @throws IOException 文件保存失败
+     */
+    @Transactional
+    public Map<String, Object> createEntryFromStream(InputStream imageStream, String filename, long size,
+                                                     String categoryCode, OcrResult pageOcr,
+                                                     String createdByUserId) throws IOException {
         long start = System.currentTimeMillis();
 
         if (imageStream == null) {
@@ -648,6 +666,7 @@ public class ProductService {
         rspu.setPositioningLabel("待识别");
         rspu.setStatus("processing");
         rspu.setReviewStatus("待复核");
+        rspu.setCreatedBy(createdByUserId != null ? createdByUserId : SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);
