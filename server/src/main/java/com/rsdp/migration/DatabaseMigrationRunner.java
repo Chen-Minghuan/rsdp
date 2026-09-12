@@ -8,7 +8,7 @@ import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
 /**
- * 启动时按序执行一次各幂等数据修正任务（加密 → 投影重算 → 标签归一）。
+ * 启动时按序执行一次各幂等数据修正任务（加密 → 投影重算 → 标签归一 → 权限补授）。
  * 结构演进由 Flyway 负责，与本类无关。
  */
 @Slf4j
@@ -19,6 +19,7 @@ public class DatabaseMigrationRunner implements ApplicationRunner, Ordered {
     private final PriceEncryptionMigration priceEncryptionMigration;
     private final PriceSummaryBackfillMigration priceSummaryBackfillMigration;
     private final SixDimNormalizationMigration sixDimNormalizationMigration;
+    private final FactoryAdminImportPermissionMigration factoryAdminImportPermissionMigration;
 
     @Override
     public int getOrder() {
@@ -31,6 +32,7 @@ public class DatabaseMigrationRunner implements ApplicationRunner, Ordered {
         priceEncryptionMigration.execute();
         priceSummaryBackfillMigration.execute();
         sixDimNormalizationMigration.execute();
+        factoryAdminImportPermissionMigration.execute();
         log.info("启动期数据修正任务完成");
     }
 }
