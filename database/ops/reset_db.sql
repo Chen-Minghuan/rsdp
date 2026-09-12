@@ -143,7 +143,8 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     source_agent_version VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
-    deleted_at TIMESTAMPTZ
+    deleted_at TIMESTAMPTZ,
+    created_by VARCHAR(64)                         -- 录入人（sys_user.user_id，V3 增量并入；历史未知行留 NULL）
 );
 
 -- RSPU 多风格关联表
@@ -848,6 +849,7 @@ CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label
 CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_rspu_created_by ON rspu_master(created_by);
 -- 外部编码部分唯一索引（V17 并入）：防并发导入产生重复外部编码，仅约束未软删除且非空记录
 CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL AND external_code IS NOT NULL;
 
@@ -969,6 +971,13 @@ ALTER TABLE document_import_batch
     DROP CONSTRAINT IF EXISTS fk_document_import_batch_created_by;
 ALTER TABLE document_import_batch
     ADD CONSTRAINT fk_document_import_batch_created_by
+        FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
+
+-- 补齐 rspu_master 录入人外键（V3，该表在 sys_user 之前创建）
+ALTER TABLE rspu_master
+    DROP CONSTRAINT IF EXISTS fk_rspu_master_created_by;
+ALTER TABLE rspu_master
+    ADD CONSTRAINT fk_rspu_master_created_by
         FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
 
 -- 企业表（V13 并入）

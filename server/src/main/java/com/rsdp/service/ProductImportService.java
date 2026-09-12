@@ -523,6 +523,7 @@ public class ProductImportService {
         rspu.setExternalCode(trim(row.getExternalCode()));
         rspu.setStatus("active");
         rspu.setReviewStatus("待复核");
+        rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);

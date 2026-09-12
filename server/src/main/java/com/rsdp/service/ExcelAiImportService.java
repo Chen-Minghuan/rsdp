@@ -4653,6 +4653,7 @@ public class ExcelAiImportService {
         // 直接落 active（与手工录入口径一致），避免永久卡在识别中
         rspu.setStatus(expectAiTask ? "processing" : "active");
         rspu.setReviewStatus("待复核");
+        rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.insert(rspu);

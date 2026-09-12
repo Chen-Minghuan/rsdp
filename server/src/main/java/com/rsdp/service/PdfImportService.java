@@ -374,7 +374,7 @@ public class PdfImportService {
         for (ProductSource source : sources) {
             try {
                 EntryInfo entryInfo = createEntryFromSource(batch.getBatchId(), pageImage, source,
-                    batch.getCategoryHint(), pageIndex, acc);
+                    batch.getCategoryHint(), pageIndex, acc, batch.getCreatedBy());
                 if (entryInfo != null && entryInfo.rspuId != null) {
                     acc.rspuIds.add(entryInfo.rspuId);
                     acc.taskIds.add(entryInfo.taskId);
@@ -781,7 +781,8 @@ public class PdfImportService {
      * @return 录入信息，包含 RSPU ID 和任务 ID；查重命中跳过返回 null
      */
     private EntryInfo createEntryFromSource(String batchId, BufferedImage pageImage, ProductSource source,
-                                            String categoryHint, int pageIndex, ImportAccumulator acc)
+                                            String categoryHint, int pageIndex, ImportAccumulator acc,
+                                            String entryCreatedBy)
         throws IOException {
         byte[] imageBytes;
         if (source.embeddedImage() != null) {
@@ -820,7 +821,7 @@ public class PdfImportService {
         Map<String, Object> entryResult;
         try (InputStream in = new ByteArrayInputStream(imageBytes)) {
             entryResult = productService.createEntryFromStream(in, filename, imageBytes.length, effectiveCategory,
-                source.nearbyText());
+                source.nearbyText(), entryCreatedBy);
         }
 
         Object rspuId = entryResult.get("rspuId");
