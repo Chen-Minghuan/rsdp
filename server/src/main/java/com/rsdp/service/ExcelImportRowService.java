@@ -107,24 +107,25 @@ public class ExcelImportRowService {
     /**
      * 标记行处理成功并记录生成的实体。
      *
-     * <p>3.4 起改为单语句 UPDATE；null 字段不写入（条件 set），与 updateById
-     * 默认的非空字段策略保持一致。</p>
+     * <p>单语句 UPDATE（updateById 默认非空字段策略：null 字段不写入）。
+     * 注意：generated_rsku_ids/image_asset_ids 为 jsonb 列，必须走实体的
+     * {@code JsonbTypeHandler}；UpdateWrapper.set 会以 varchar 写入触发
+     * PSQLException（2026-09-12 冒烟实测坐实，Mock 单测无法覆盖真实类型转换）。</p>
      */
     @Transactional
     public void markSuccess(Long rowId, String rspuId, String variantId, List<String> rskuIds,
                             Integer imageCount, List<String> imageAssetIds, String aiTaskId) {
-        String rskuIdsJson = toJson(rskuIds);
-        String imageAssetIdsJson = toJson(imageAssetIds);
-        rowMapper.update(null, new UpdateWrapper<ExcelImportRow>()
-            .eq("row_id", rowId)
-            .set("status", "success")
-            .set(rspuId != null, "generated_rspu_id", rspuId)
-            .set(variantId != null, "generated_variant_id", variantId)
-            .set(rskuIdsJson != null, "generated_rsku_ids", rskuIdsJson)
-            .set("extracted_image_count", imageCount != null ? imageCount : 0)
-            .set(imageAssetIdsJson != null, "image_asset_ids", imageAssetIdsJson)
-            .set(aiTaskId != null, "ai_task_id", aiTaskId)
-            .set("updated_at", LocalDateTime.now()));
+        ExcelImportRow row = new ExcelImportRow();
+        row.setRowId(rowId);
+        row.setStatus("success");
+        row.setGeneratedRspuId(rspuId);
+        row.setGeneratedVariantId(variantId);
+        row.setGeneratedRskuIds(toJson(rskuIds));
+        row.setExtractedImageCount(imageCount != null ? imageCount : 0);
+        row.setImageAssetIds(toJson(imageAssetIds));
+        row.setAiTaskId(aiTaskId);
+        row.setUpdatedAt(LocalDateTime.now());
+        rowMapper.updateById(row);
     }
 
     /**

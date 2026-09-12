@@ -101,20 +101,23 @@ class ExcelImportRowServiceTest {
 
     @Test
     void markSuccess_shouldUpdateStatusAndGeneratedIds() {
-        // 3.4：单语句 UPDATE（不再 selectById + updateById），null 字段条件 set 语义不变
+        // jsonb 列（generated_rsku_ids/image_asset_ids）必须走实体的 JsonbTypeHandler，
+        // 故用 updateById（仍是单语句 UPDATE），不能用 UpdateWrapper.set（varchar 写 jsonb 列会 PSQLException）
         rowService.markSuccess(1L, "RSPU-001", "VAR-001", List.of("RSKU-001", "RSKU-002"),
             2, List.of("IMG-001"), "TASK-001");
 
-        verify(rowMapper, never()).selectById(any(Long.class));
-        ArgumentCaptor<UpdateWrapper<ExcelImportRow>> captor = ArgumentCaptor.forClass(UpdateWrapper.class);
-        verify(rowMapper, times(1)).update(org.mockito.ArgumentMatchers.isNull(), captor.capture());
-        UpdateWrapper<ExcelImportRow> wrapper = captor.getValue();
-        assertThat(wrapper.getSqlSet())
-            .contains("status").contains("generated_rspu_id").contains("generated_variant_id")
-            .contains("generated_rsku_ids").contains("extracted_image_count").contains("ai_task_id");
-        assertThat(wrapper.getParamNameValuePairs())
-            .containsValue("success").containsValue("RSPU-001").containsValue("VAR-001")
-            .containsValue("TASK-001").containsValue(2);
+        ArgumentCaptor<ExcelImportRow> captor = ArgumentCaptor.forClass(ExcelImportRow.class);
+        verify(rowMapper, times(1)).updateById(captor.capture());
+        ExcelImportRow row = captor.getValue();
+        assertThat(row.getRowId()).isEqualTo(1L);
+        assertThat(row.getStatus()).isEqualTo("success");
+        assertThat(row.getGeneratedRspuId()).isEqualTo("RSPU-001");
+        assertThat(row.getGeneratedVariantId()).isEqualTo("VAR-001");
+        assertThat(row.getGeneratedRskuIds()).contains("RSKU-001").contains("RSKU-002");
+        assertThat(row.getExtractedImageCount()).isEqualTo(2);
+        assertThat(row.getImageAssetIds()).contains("IMG-001");
+        assertThat(row.getAiTaskId()).isEqualTo("TASK-001");
+        assertThat(row.getUpdatedAt()).isNotNull();
     }
 
     @Test

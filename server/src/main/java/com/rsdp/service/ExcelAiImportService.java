@@ -846,13 +846,17 @@ public class ExcelAiImportService {
                     currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId(),
                     importCache, rowCategorySelection);
                 if (rowResult.rspuId != null) {
-                    rspuIds.add(rowResult.rspuId);
-                    excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
-                        rowResult.rskuIds, rowResult.imageCount, rowResult.imageAssetIds, rowResult.taskId);
-                    // 行内部分失败（如某价格列 RSKU 创建失败）不吞掉：记入批次失败明细，用户可见
+                    // 行内部分失败（如某价格列 RSKU 创建失败）不吞掉：记入批次失败明细，用户可见。
+                    // 必须先于 markSuccess 追加：markSuccess 抛异常时行落入 catch 记失败，
+                    // 这些真实行级问题（如 RSKU 创建失败原因）不应随之丢失（2026-09-12 冒烟实测暴露）
                     for (String issue : rowResult.issues) {
                         failures.add(new ExcelAiImportFailure(displayRowIndex, issue));
                     }
+                    excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
+                        rowResult.rskuIds, rowResult.imageCount, rowResult.imageAssetIds, rowResult.taskId);
+                    // 成功计数（rspuIds）必须在 markSuccess 之后累加：
+                    // 否则 markSuccess 失败时同一行同时计入成功与失败（冒烟实测曾出现 success=2/failed=2）
+                    rspuIds.add(rowResult.rspuId);
                     // 行提交成功后更新产品组状态（回滚行不影响组）
                     // update 模式命中已有 RSPU 的行（createdNewRspu=false 但型号与当前组不同）
                     // 同样开启新组，否则同一产品的后续模块行会对照上一组的 externalCode，
