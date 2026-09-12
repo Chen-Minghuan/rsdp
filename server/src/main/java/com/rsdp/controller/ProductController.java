@@ -7,6 +7,7 @@ import com.rsdp.dto.request.ManualProductEntryRequest;
 import com.rsdp.dto.request.ProductBatchDeleteRequest;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductReviewRequest;
+import com.rsdp.dto.request.RspuMergeRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductBatchDeleteResponse;
 import com.rsdp.dto.response.ProductDetailResponse;
@@ -15,6 +16,7 @@ import com.rsdp.dto.response.ProductSummaryResponse;
 import com.rsdp.security.Permissions;
 import com.rsdp.service.ProductQueryService;
 import com.rsdp.service.ProductService;
+import com.rsdp.service.RspuMergeService;
 import com.rsdp.util.ImageUploadValidator;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -50,6 +52,7 @@ public class ProductController {
 
     private final ProductService productService;
     private final ProductQueryService productQueryService;
+    private final RspuMergeService rspuMergeService;
     private final ImageUploadValidator imageUploadValidator;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final jakarta.validation.Validator validator;
@@ -203,6 +206,31 @@ public class ProductController {
     @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
     public Result<Map<String, Object>> reRecognize(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
         return Result.ok(productService.reRecognize(rspuId));
+    }
+
+    /**
+     * 查询产品的 pending 疑似同款配对（合并候选，供合并向导使用）。
+     *
+     * @param rspuId RSPU ID
+     * @return 配对列表（含命中产品的编码与品名）
+     */
+    @GetMapping("/{rspuId}/duplicate-suspects")
+    public Result<List<Map<String, Object>>> listDuplicateSuspects(
+            @PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
+        return Result.ok(rspuMergeService.listPendingSuspects(rspuId));
+    }
+
+    /**
+     * 同款产品合并（决策点②共享主档模型）：把重复副本合并到目标 RSPU，
+     * 副本在全部数据迁出后软删（回收站可见）。仅平台员工可执行（服务内强制）。
+     *
+     * @param request 合并请求（副本/目标 + 字段覆盖选择 + RSKU 冲突裁决）
+     * @return 合并结果统计
+     */
+    @PostMapping("/merge")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<Map<String, Object>> merge(@Valid @RequestBody RspuMergeRequest request) {
+        return Result.ok(rspuMergeService.merge(request));
     }
 
     /**

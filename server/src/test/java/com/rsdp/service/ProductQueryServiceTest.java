@@ -102,6 +102,9 @@ class ProductQueryServiceTest {
     private RspuRelationMapper rspuRelationMapper;
 
     @Mock
+    private com.rsdp.mapper.RspuDuplicateSuspectMapper duplicateSuspectMapper;
+
+    @Mock
     private ProductStyleMatchMapper productStyleMatchMapper;
 
     @Mock
