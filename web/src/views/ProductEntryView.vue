@@ -25,8 +25,9 @@ import {
 import { uploadProductImages, updateProduct, detectProductRegions, entryByRegions } from '@/api/product'
 import StatusPill from '@/components/StatusPill.vue'
 import type { RegionProduct, RegionSelection } from '@/api/product'
-import { getTaskStatus } from '@/api/task'
 import { listDicts } from '@/api/dict'
+import { useTaskPolling, TASK_TERMINAL_STATUSES } from '@/composables/useTaskPolling'
+import { useUserStore } from '@/stores/user'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
 import type { OcrResult } from '@/types/product'
@@ -35,8 +36,15 @@ import { getSixDimSchema } from '@/utils/sixDimLabels'
 const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
+const userStore = useUserStore()
 
-const TASKS_STORAGE_KEY = 'rsdp:product-entry:tasks'
+/** localStorage 键按用户名隔离（换账号互不可见，避免他账号任务被误标失败） */
+function tasksStorageKey() {
+  return `rsdp:product-entry:tasks:${userStore.userInfo?.username ?? 'anonymous'}`
+}
+/** 持久化容量封顶：最多保留最近 50 条，且丢弃 7 天前的任务 */
+const MAX_STORED_TASKS = 50
+const STORE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 const fileList = ref<UploadFileInfo[]>([])
 const taskList = ref<TaskItem[]>([])
@@ -193,19 +201,28 @@ function closeSplit() {
 
 const hasSelectedFiles = computed(() => selectedFiles.value.length > 0)
 const hasTasks = computed(() => taskList.value.length > 0)
-const terminalStatuses = ['done', 'partial_success', 'failed']
+const terminalStatuses = TASK_TERMINAL_STATUSES
 const pendingTaskCount = computed(
   () => taskList.value.filter(t => !terminalStatuses.includes(t.status)).length
 )
 
-let pollTimeoutId: ReturnType<typeof setTimeout> | null = null
-let pollAbortController: AbortController | null = null
 let uploadAbortController: AbortController | null = null
 let viewUnmounted = false
 
+// 任务轮询统一走 useTaskPolling（批量接口一轮一请求 + 代际令牌 + pollError 独立字段，轮询错误不再误置 failed）
+const { ensurePolling, stopPolling, pollAllTasks } = useTaskPolling({
+  tasks: taskList,
+  onAfterPoll: saveTasks
+})
+
 function saveTasks() {
   try {
-    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(taskList.value))
+    const cutoff = Date.now() - STORE_TTL_MS
+    // 容量封顶：丢弃 7 天前的任务（createdAt 缺失的保留），最多保留最近 50 条（列表新任务在前）
+    const pruned = taskList.value
+      .filter(t => !t.createdAt || new Date(t.createdAt).getTime() >= cutoff)
+      .slice(0, MAX_STORED_TASKS)
+    localStorage.setItem(tasksStorageKey(), JSON.stringify(pruned))
   } catch (e) {
     console.error('保存任务列表失败', e)
   }
@@ -213,7 +230,7 @@ function saveTasks() {
 
 function loadTasks() {
   try {
-    const raw = localStorage.getItem(TASKS_STORAGE_KEY)
+    const raw = localStorage.getItem(tasksStorageKey())
     if (raw) {
       taskList.value = JSON.parse(raw)
       if (pendingTaskCount.value > 0) {
@@ -227,74 +244,9 @@ function loadTasks() {
 
 function clearStoredTasks() {
   try {
-    localStorage.removeItem(TASKS_STORAGE_KEY)
+    localStorage.removeItem(tasksStorageKey())
   } catch (e) {
     console.error('清除任务列表失败', e)
-  }
-}
-
-function stopPolling() {
-  if (pollTimeoutId) {
-    clearTimeout(pollTimeoutId)
-    pollTimeoutId = null
-  }
-  if (pollAbortController) {
-    pollAbortController.abort()
-    pollAbortController = null
-  }
-}
-
-function ensurePolling() {
-  // 首轮请求在途期间 pollTimeoutId 为 null，必须同时检查 pollAbortController，否则会起第二条轮询链
-  if (pollTimeoutId || pollAbortController) return
-  pollOnce()
-}
-
-async function pollOnce() {
-  if (pendingTaskCount.value === 0) {
-    pollTimeoutId = null
-    return
-  }
-
-  pollAbortController = new AbortController()
-  const signal = pollAbortController.signal
-
-  try {
-    await pollAllTasks(signal)
-  } finally {
-    saveTasks()
-    pollAbortController = null
-
-    if (pendingTaskCount.value > 0 && !signal.aborted) {
-      pollTimeoutId = setTimeout(pollOnce, 1500)
-    } else {
-      pollTimeoutId = null
-    }
-  }
-}
-
-async function pollAllTasks(signal?: AbortSignal) {
-  const pendingTasks = taskList.value.filter(
-    t => !terminalStatuses.includes(t.status)
-  )
-  await Promise.all(pendingTasks.map(task => pollTask(task, signal)))
-}
-
-async function pollTask(taskItem: TaskItem, signal?: AbortSignal) {
-  try {
-    const status = await getTaskStatus(taskItem.taskId, signal)
-    taskItem.status = status.status
-    taskItem.progress = status.progress
-    taskItem.result = status.result
-    taskItem.errorMessage = status.errorMessage
-    taskItem.createdAt = status.createdAt
-    taskItem.completedAt = status.completedAt
-  } catch (e) {
-    if (axios.isCancel(e)) {
-      return
-    }
-    taskItem.status = 'failed'
-    taskItem.errorMessage = e instanceof Error ? e.message : '轮询失败'
   }
 }
 
@@ -428,6 +380,21 @@ async function doUpload(force: boolean) {
 }
 
 function clearAll() {
+  // 有进行中任务时二次确认：后台任务仍将继续，清空后本页无法再查看进度
+  if (pendingTaskCount.value > 0) {
+    dialog.warning({
+      title: '确认清空记录',
+      content: `还有 ${pendingTaskCount.value} 个产品正在识别中，后台任务仍将继续，清空后将无法在本页查看进度。`,
+      positiveText: '仍然清空',
+      negativeText: '取消',
+      onPositiveClick: doClearAll
+    })
+    return
+  }
+  doClearAll()
+}
+
+function doClearAll() {
   fileList.value = []
   taskList.value = []
   errorMessage.value = ''
@@ -591,6 +558,10 @@ function formatPrice(ocr?: OcrResult): string {
 
             <n-alert v-if="task.status === 'failed'" type="error" :show-icon="true">
               {{ task.errorMessage }}
+            </n-alert>
+
+            <n-alert v-if="task.pollError" type="warning" :show-icon="false">
+              进度查询异常：{{ task.pollError }}（不影响后台识别，稍后自动恢复）
             </n-alert>
 
             <n-alert v-if="task.status === 'partial_success'" type="warning" :show-icon="true">

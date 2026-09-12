@@ -80,7 +80,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
                 .requestMatchers(HttpMethod.PUT, "/api/v1/auth/me/preferences").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/dicts/**").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/v1/tasks/*").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/tasks", "/api/v1/tasks/*").authenticated()
 
                 // 文档导入（必须放在产品读通配规则之前）
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/document-import").hasAuthority(Permissions.PRODUCT_IMPORT)

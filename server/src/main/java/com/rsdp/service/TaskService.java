@@ -12,9 +12,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 异步任务查询服务。
@@ -48,12 +52,67 @@ public class TaskService {
             }
         }
 
+        return toStatusMap(task);
+    }
+
+    /** 批量任务状态查询的 ids 数量上限（防滥用）。 */
+    public static final int BATCH_QUERY_MAX_IDS = 100;
+
+    /**
+     * 批量查询任务状态（前端一轮一请求，消除逐任务轮询风暴）。
+     *
+     * <p>归属校验与 {@link #getTaskStatus} 同口径：非平台运营只能看自己创建的任务；
+     * 不存在或无权限的 id 不整单报错，而是放入 {@code skippedIds} 由前端按「进度查询异常」口径展示。</p>
+     *
+     * @param taskIds 任务 ID 列表（去重后数量不能超过 {@link #BATCH_QUERY_MAX_IDS}）
+     * @return { tasks: 可见任务状态列表（按请求顺序）, skippedIds: 不存在或无权限的 id }
+     */
+    public Map<String, Object> listTaskStatuses(List<String> taskIds) {
+        // 去重并保持请求顺序
+        List<String> ids = new ArrayList<>(new LinkedHashSet<>(taskIds));
+        if (ids.size() > BATCH_QUERY_MAX_IDS) {
+            throw new IllegalArgumentException("单次最多查询 " + BATCH_QUERY_MAX_IDS + " 个任务");
+        }
+        Map<String, Object> result = new HashMap<>();
+        result.put("tasks", List.of());
+        result.put("skippedIds", List.of());
+        if (ids.isEmpty()) {
+            return result;
+        }
+
+        Map<String, AsyncTask> taskById = asyncTaskMapper.selectBatchIds(ids).stream()
+            .collect(Collectors.toMap(AsyncTask::getTaskId, Function.identity()));
+        boolean platformStaff = SecurityOperatorContext.isPlatformStaff();
+        String currentUser = SecurityOperatorContext.currentUsername();
+
+        List<Map<String, Object>> tasks = new ArrayList<>();
+        List<String> skippedIds = new ArrayList<>();
+        for (String id : ids) {
+            AsyncTask task = taskById.get(id);
+            if (task == null) {
+                skippedIds.add(id);
+                continue;
+            }
+            String creator = task.getCreatedBy();
+            if (!platformStaff && (creator == null || !creator.equals(currentUser))) {
+                skippedIds.add(id);
+                continue;
+            }
+            tasks.add(toStatusMap(task));
+        }
+        result.put("tasks", tasks);
+        result.put("skippedIds", skippedIds);
+        return result;
+    }
+
+    /** 任务实体 → 状态响应 Map（单个/批量查询共用）。 */
+    private Map<String, Object> toStatusMap(AsyncTask task) {
         Object resultData = null;
         if (task.getResultData() != null && !task.getResultData().isBlank()) {
             try {
                 resultData = objectMapper.readValue(task.getResultData(), Object.class);
             } catch (Exception e) {
-                log.warn("任务结果 JSON 解析失败，taskId={}", taskId, e);
+                log.warn("任务结果 JSON 解析失败，taskId={}", task.getTaskId(), e);
                 resultData = task.getResultData();
             }
         }

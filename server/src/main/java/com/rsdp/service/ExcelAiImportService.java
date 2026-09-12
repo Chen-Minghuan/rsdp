@@ -3075,12 +3075,8 @@ public class ExcelAiImportService {
         // 行回滚时可能产生孤儿存储对象，属可接受代价（量大时可加定期清理）。
         PreparedRow prep = prepareRow(dataRow, mapping, categoryHint, priceColumns, request,
             embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
-<<<<<<< HEAD
-            currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batchId,
+            currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batchId, importCache,
             rowCategorySelection);
-=======
-            currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batchId, importCache);
->>>>>>> dev
         if (prep.earlyResult() != null) {
             return prep.earlyResult();
         }
@@ -3146,11 +3142,7 @@ public class ExcelAiImportService {
                                    Integer physicalRowIndex,
                                    ProductGroup currentGroup, PhysicalLayout physicalLayout,
                                    int sheetIndex, String sheetName, String categoryGuess, String batchId,
-<<<<<<< HEAD
-                                   String rowCategorySelection) {
-=======
-                                   BatchImportCache importCache) {
->>>>>>> dev
+                                   BatchImportCache importCache, String rowCategorySelection) {
         if (isNoteOrEmptyRow(dataRow)) {
             log.debug("第 {} 行为说明或空行，已跳过", rowIndex);
             return PreparedRow.skip(RowResult.skipped("说明或空行"));
@@ -3165,7 +3157,6 @@ public class ExcelAiImportService {
         }
 
         excelImportRowService.updateStage(importRowId, "build_product_row");
-<<<<<<< HEAD
         boolean categoryModeEnabled = request.getCategoryMode() != null;
         // 新模式（SINGLE/MIXED）下 Sheet 名 / 品类提示 / categoryGuess 不走 buildProductImportRow 的旧兜底链，
         // 只保留行内类别列原值，由下方收敛兜底链解析（§26.1）；
@@ -3174,29 +3165,20 @@ public class ExcelAiImportService {
             categoryModeEnabled ? null : categoryHint,
             categoryModeEnabled ? null : categoryGuess,
             categoryModeEnabled ? null : sheetName,
-            dictCache);
+            dictCache, importCache);
         if (categoryModeEnabled) {
             // 收敛兜底链：清洗页行级最终选择 → 行内类别列确定性归一 → SINGLE 默认品类；
             // MIXED 无更多兜底（品类完整性由 confirmAndImport 前置校验整批拦截）
             row.setCategoryCode(resolveFinalCategoryCode(dataRow, mapping, rowCategorySelection,
                 request.getCategoryMapping(), dictCache,
-                request.getCategoryMode() == CategoryMode.SINGLE ? categoryHint : null));
+                request.getCategoryMode() == CategoryMode.SINGLE ? categoryHint : null, importCache));
         } else {
             // 品类分层解析：中文品名/方言 → 字典码（用户确认映射 > 字典码 > 字典名 > 别名库），未命中保留原值
             String normalizedCategory = normalizeCategoryCode(row.getCategoryCode(), request.getCategoryMapping(),
-                dictCache);
+                dictCache, importCache);
             if (normalizedCategory != null) {
                 row.setCategoryCode(normalizedCategory);
             }
-=======
-        ProductImportRow row = buildProductImportRow(dataRow, mapping, categoryHint, categoryGuess, sheetName,
-            dictCache, importCache);
-        // 品类分层解析：中文品名/方言 → 字典码（用户确认映射 > 字典码 > 字典名 > 别名库），未命中保留原值
-        String normalizedCategory = normalizeCategoryCode(row.getCategoryCode(), request.getCategoryMapping(),
-            dictCache, importCache);
-        if (normalizedCategory != null) {
-            row.setCategoryCode(normalizedCategory);
->>>>>>> dev
         }
         String error = validateRow(row, dictCache);
         if (error != null) {
@@ -3287,13 +3269,8 @@ public class ExcelAiImportService {
                 // 本厂已报价的共管产品仅补空缺（不覆盖已有值，categoryCode 不可改）；
                 // 非本厂已报价产品跳过共享信息更新，仅继续本行本厂 RSKU 报价登记
                 if (dataScopeHelper.currentDataScope() == DataScope.ALL) {
-<<<<<<< HEAD
                     updateExistingRspu(existing, row, dictCache, rowIssues);
-                    saveStylesAndScenes(rspuId, row, dictCache, rowIssues);
-=======
-                    updateExistingRspu(existing, row, dictCache);
                     saveStylesAndScenes(rspuId, row, dictCache, rowIssues, importCache);
->>>>>>> dev
                 } else if (dataScopeHelper.canAccessRspu(rspuId)) {
                     fillExistingRspuGaps(existing, row, dictCache);
                     // 风格/场景关联表是"先删后插"的覆盖语义，非平台身份下不做，
@@ -3538,8 +3515,10 @@ public class ExcelAiImportService {
         if (StringUtils.hasText(byName)) {
             return byName.trim().toUpperCase();
         }
-        // ④ 别名库（3.4：走批次预载内存快照，不再逐值单查）
-        String byAlias = importCache.resolveAlias("category", trimmed);
+        // ④ 别名库（3.4：批次内走预载内存快照；批次外的预览/校验路径 importCache 为 null，回退逐值单查）
+        String byAlias = importCache != null
+            ? importCache.resolveAlias("category", trimmed)
+            : dictAliasService.resolveAlias("category", trimmed);
         if (StringUtils.hasText(byAlias) && isValidDictCode(byAlias.trim().toUpperCase(), categories)) {
             return byAlias.trim().toUpperCase();
         }
@@ -3892,7 +3871,7 @@ public class ExcelAiImportService {
                 if (!StringUtils.hasText(rawValue)) {
                     continue;
                 }
-                String normalized = normalizeCategoryCode(rawValue, request.getCategoryMapping(), dictCache);
+                String normalized = normalizeCategoryCode(rawValue, request.getCategoryMapping(), dictCache, null);
                 if (isValidDictCode(normalized, categories)) {
                     hit = normalized;
                     break;
@@ -4146,7 +4125,7 @@ public class ExcelAiImportService {
             int displayRowIndex = resolveDisplayRowIndex(row, i + 2);
             String resolved = resolveFinalCategoryCode(row, mapping, selections.get(displayRowIndex),
                 request.getCategoryMapping(), dictCache,
-                mode == CategoryMode.SINGLE ? request.getCategoryHint() : null);
+                mode == CategoryMode.SINGLE ? request.getCategoryHint() : null, null);
             if (!StringUtils.hasText(resolved)) {
                 missingRows.add(displayRowIndex);
                 continue;
@@ -4192,13 +4171,14 @@ public class ExcelAiImportService {
      */
     private String resolveFinalCategoryCode(Map<String, String> dataRow, Map<String, String> mapping,
                                             String rowCategorySelection, Map<String, String> userCategoryMapping,
-                                            Map<String, List<CategoryDict>> dictCache, String singleDefaultCategory) {
+                                            Map<String, List<CategoryDict>> dictCache, String singleDefaultCategory,
+                                            BatchImportCache importCache) {
         if (StringUtils.hasText(rowCategorySelection)) {
             return rowCategorySelection.trim().toUpperCase();
         }
         String rowColumnValue = getMappedCellValue(dataRow, mapping, "categoryCode");
         if (StringUtils.hasText(rowColumnValue)) {
-            String normalized = normalizeCategoryCode(rowColumnValue, userCategoryMapping, dictCache);
+            String normalized = normalizeCategoryCode(rowColumnValue, userCategoryMapping, dictCache, importCache);
             if (isValidDictCode(normalized, dictCache.get("category"))) {
                 return normalized;
             }

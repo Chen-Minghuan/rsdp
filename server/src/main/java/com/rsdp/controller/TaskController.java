@@ -39,6 +39,20 @@ public class TaskController {
     }
 
     /**
+     * 批量查询异步任务状态（前端一轮一请求；ids 为逗号分隔，去重后上限 100 个）。
+     *
+     * <p>不存在或无权限的 id 不整单报错，在响应 {@code skippedIds} 中返回。</p>
+     *
+     * @param ids 任务 ID 列表
+     * @return { tasks: 可见任务状态列表, skippedIds: 不可见 id }
+     */
+    @GetMapping
+    @PreAuthorize("isAuthenticated()")
+    public Result<Map<String, Object>> getTasks(@RequestParam List<String> ids) {
+        return Result.ok(taskService.listTaskStatuses(ids));
+    }
+
+    /**
      * 最近任务列表（工作台「识别任务队列」；精确路径优先于 /{taskId} 模板）。
      *
      * @param size 条数（默认 5，上限 20）
