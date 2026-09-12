@@ -3,7 +3,8 @@ import { defineStore } from 'pinia'
 import axios from 'axios'
 import type { UploadFileInfo } from 'naive-ui'
 import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides, cloneExcelAiRowImages, classifyExcelAiRowCategories } from '@/api/product'
-import { getTaskStatus } from '@/api/task'
+import { useTaskPolling } from '@/composables/useTaskPolling'
+import { useUserStore } from './user'
 import type { TaskItem } from '@/types/task'
 import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, ExcelCategoryMode, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataRow, PreviewEdit } from '@/types/product'
 
@@ -95,71 +96,80 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       .map(row => row.rowIndex)
   })
 
-  let pollTimeoutId: ReturnType<typeof setTimeout> | null = null
-  let pollAbortController: AbortController | null = null
   let uploadAbortController: AbortController | null = null
-  /** 轮询代际令牌：每次 stopPolling/ensurePolling 递增，防止被 abort 的旧轮询链在 finally 中重排 setTimeout 形成双链 */
-  let pollGeneration = 0
 
-  function stopPolling() {
-    // 递增代际令牌，作废旧轮询链（即使其 finally 稍后才执行也不会再重排）
-    pollGeneration++
-    if (pollTimeoutId) {
-      clearTimeout(pollTimeoutId)
-      pollTimeoutId = null
-    }
-    if (pollAbortController) {
-      pollAbortController.abort()
-      pollAbortController = null
-    }
+  // 任务轮询统一走 useTaskPolling（批量接口一轮一请求 + 代际令牌 + pollError 独立字段）
+  const { ensurePolling, stopPolling } = useTaskPolling({
+    tasks: taskList,
+    onAfterPoll: clearPersistedBatchIfFinished
+  })
+
+  // ---------- 批次进度持久化（刷新恢复；阶段 3.5） ----------
+
+  /** 持久化 TTL（7 天），超期不恢复并清除 */
+  const PERSIST_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+  /** localStorage 键按用户名隔离，换账号互不可见 */
+  function persistedBatchKey() {
+    const username = useUserStore().userInfo?.username ?? 'anonymous'
+    return `rsdp:excel-import:batch:${username}`
   }
 
-  function ensurePolling() {
-    if (pollTimeoutId || pollAbortController) return
-    const gen = ++pollGeneration
-    pollOnce(gen)
-  }
-
-  async function pollOnce(gen: number) {
-    if (pollAbortController) return
-    pollTimeoutId = null
-    if (pendingTaskCount.value === 0) return
-    pollAbortController = new AbortController()
-    const signal = pollAbortController.signal
+  function persistBatch(batchId: string) {
     try {
-      await pollAllTasks(signal)
-    } finally {
-      pollAbortController = null
-      // 令牌已作废说明期间发生了 stopPolling/ensurePolling，由新链接管，不再重排
-      if (gen === pollGeneration && pendingTaskCount.value > 0) {
-        pollTimeoutId = setTimeout(() => pollOnce(gen), 1500)
-      } else {
-        pollTimeoutId = null
-      }
-    }
-  }
-
-  async function pollAllTasks(signal?: AbortSignal) {
-    const pendingTasks = taskList.value.filter(t => !terminalStatuses.includes(t.status))
-    await Promise.all(pendingTasks.map(task => pollTask(task, signal)))
-  }
-
-  async function pollTask(taskItem: TaskItem, signal?: AbortSignal) {
-    try {
-      const status = await getTaskStatus(taskItem.taskId, signal)
-      taskItem.pollError = ''
-      taskItem.status = status.status
-      taskItem.progress = status.progress
-      taskItem.result = status.result
-      taskItem.errorMessage = status.errorMessage
-      taskItem.createdAt = status.createdAt
-      taskItem.completedAt = status.completedAt
+      localStorage.setItem(persistedBatchKey(), JSON.stringify({ batchId, savedAt: Date.now() }))
     } catch (e) {
-      if (axios.isCancel(e)) {
-        return
+      console.error('持久化导入批次失败', e)
+    }
+  }
+
+  function clearPersistedBatch() {
+    try {
+      localStorage.removeItem(persistedBatchKey())
+    } catch (e) {
+      console.error('清除持久化导入批次失败', e)
+    }
+  }
+
+  /** 导入完成（批次已到终态且识别任务全部终态）后清除持久化，由轮询每轮回调触发 */
+  function clearPersistedBatchIfFinished() {
+    if (importResult.value && pendingTaskCount.value === 0) {
+      clearPersistedBatch()
+    }
+  }
+
+  /**
+   * 刷新后按持久化的 batchId 恢复导入进度：importing 续走批次轮询，
+   * 终态批次复用 recoverFromBatchStatus 重建结果页与识别任务轮询。
+   */
+  async function restoreFromStorage() {
+    // 已有导入状态（同会话内路由往返）时不恢复，避免覆盖
+    if (mappingResponse.value || importResult.value || batchRecovering.value) return
+    let saved: { batchId?: string; savedAt?: number } | null = null
+    try {
+      const raw = localStorage.getItem(persistedBatchKey())
+      saved = raw ? JSON.parse(raw) : null
+    } catch {
+      saved = null
+    }
+    if (!saved?.batchId) return
+    if (saved.savedAt && Date.now() - saved.savedAt > PERSIST_TTL_MS) {
+      clearPersistedBatch()
+      return
+    }
+    try {
+      const status = await getExcelAiImportStatus(saved.batchId)
+      if (status.status === 'importing') {
+        startBatchStatusPolling(saved.batchId)
+      } else if (status.status === 'pending') {
+        // 预览后未确认导入的批次：无映射上下文可恢复，丢弃持久化
+        clearPersistedBatch()
+      } else {
+        recoverFromBatchStatus(status)
       }
-      // 轮询失败只记录到独立字段展示「进度查询异常」，不覆盖任务真实状态（后端任务可能实际成功）
-      taskItem.pollError = e instanceof Error ? e.message : '进度查询失败'
+    } catch {
+      // 批次已被清理或查询失败：丢弃持久化，回到初始步骤
+      clearPersistedBatch()
     }
   }
 
@@ -744,6 +754,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     taskList.value = []
     buildTaskList(importResult.value)
     currentStep.value = 4
+    // 批次已终态且无待识别任务（如无图片行）：导入整体完成，清除持久化
+    if (pendingTaskCount.value === 0) {
+      clearPersistedBatch()
+    }
     ensurePolling()
   }
 
@@ -755,6 +769,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     const gen = ++batchPollGeneration
     batchRecovering.value = true
     currentStep.value = 4
+    persistBatch(batchId)
     batchPollTimeoutId = setTimeout(async () => {
       batchPollTimeoutId = null
       try {
@@ -846,6 +861,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     stopBatchPolling()
     uploadAbortController?.abort()
     uploadAbortController = null
+    clearPersistedBatch()
   }
 
   return {
@@ -906,6 +922,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     removeRowImage,
     cloneRowImages,
     clearAll,
+    restoreFromStorage,
     ensurePolling,
     stopPolling
   }

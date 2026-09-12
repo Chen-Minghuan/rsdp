@@ -158,6 +158,8 @@ onMounted(() => {
   loadProductLevelDicts()
   loadMaterialDicts()
   loadFactories()
+  // 刷新后按持久化的 batchId 恢复导入进度（无持久化时为空操作）
+  void store.restoreFromStorage()
   // 从其他页面返回时，如仍有进行中的识别任务，恢复轮询展示进度
   if (pendingTaskCount.value > 0) {
     store.ensurePolling()
@@ -726,11 +728,11 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
               <n-space vertical :size="8">
                 <n-radio value="SINGLE">
                   单一品类导入
-                  <span style="color: #999; font-size: 12px;">　当前 Sheet 中的商品均属于同一个品类</span>
+                  <span style="color: #999; font-size: 12px;">&nbsp;&nbsp;当前 Sheet 中的商品均属于同一个品类</span>
                 </n-radio>
                 <n-radio value="MIXED">
                   混合品类导入
-                  <span style="color: #999; font-size: 12px;">　当前 Sheet 中包含多个商品品类</span>
+                  <span style="color: #999; font-size: 12px;">&nbsp;&nbsp;当前 Sheet 中包含多个商品品类</span>
                 </n-radio>
               </n-space>
             </n-radio-group>

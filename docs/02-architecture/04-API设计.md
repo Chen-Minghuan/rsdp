@@ -128,6 +128,16 @@ GET    /api/v1/tasks/{taskId}
        #   createdAt, completedAt
        # }
 
+GET    /api/v1/tasks?ids=a,b,c
+       # 批量查询异步任务状态（前端一轮一请求，消除逐任务轮询风暴）
+       # Query: ids 逗号分隔任务 ID（去重后上限 100 个，超限 400）
+       # Response: {
+       #   tasks: [ 同 /tasks/{taskId} 的单任务结构 ],  // 按请求顺序，仅含可见任务
+       #   skippedIds: string[]                          // 不存在或无权限的 id（不整单 403）
+       # }
+       # 归属校验与单查同口径：非平台运营只能看自己创建的任务；无权限的 id 进 skippedIds，
+       # 前端按「进度查询异常」（pollError）口径展示，不覆盖任务真实状态
+
 GET    /api/v1/products
        # 产品列表（分页+多条件筛选，已实现）
        # Query: page, size, categoryCode, positioningLabel（风格码）, sceneCode,

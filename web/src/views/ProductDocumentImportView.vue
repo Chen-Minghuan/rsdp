@@ -42,7 +42,7 @@ const {
   hasSelectedFile,
   pendingTaskCount
 } = storeToRefs(store)
-const { handleStartImport, clearAll, ensurePolling, ensureBatchPolling } = store
+const { handleStartImport, clearAll, ensurePolling, ensureBatchPolling, restoreFromStorage } = store
 
 const categoryOptions = ref<DictItem[]>([])
 
@@ -63,6 +63,8 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 
 onMounted(() => {
   loadCategoryDicts()
+  // 刷新后按持久化的 batchId 恢复批次进度（无持久化时为空操作）
+  void restoreFromStorage()
   // 从其他页面返回时，如批次仍在处理或仍有进行中的识别任务，恢复轮询展示进度
   if (batchRunning.value) {
     ensureBatchPolling()
