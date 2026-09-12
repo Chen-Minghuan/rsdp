@@ -229,6 +229,27 @@ POST   /api/v1/products/{rspuId}/re-recognize
        #       通过后 RSPU 置回 processing + 待复核（清掉存疑备注，记审计），
        #       新建 product_entry 异步任务（source=re_recognize）afterCommit 投递，识别成功/失败由异步链路正常翻转状态
 
+GET    /api/v1/products/{rspuId}/duplicate-suspects
+       # 查询产品的 pending 疑似同款配对（已实现，2026-09-12 合并工具 M2；走 GET /products/** = product:read）
+       # Response: [{ suspectId, matchedRspuId, matchedRspuCode, matchedProductName, similarity, createdAt }]
+       # 说明：数据来自 rspu_duplicate_suspect 结构化配对表（向量同款检测命中落库，M2）；
+       #       配对状态机 pending → merged（合并）/ dismissed（复核「已确认」或副本合并删除时闭环）
+
+POST   /api/v1/products/merge
+       # 同款产品合并（已实现，2026-09-12 合并工具 M3；product:update + 服务内强制平台员工）
+       # Request: { sourceRspuId, targetRspuId, takeSourceFields?, rskuConflictResolutions? }
+       #        takeSourceFields: 指定这些字段取副本值覆盖目标（白名单：productName/description/retailPrice/
+       #          colorPrimaryName/materialTags/fabricTags/sixDimTags/referencePriceBand/productLevel/warrantyYears/keySpecs）；
+       #          缺省 = 目标已有值不动、仅补空缺
+       #        rskuConflictResolutions: { 副本rskuId: "keepSource"|"keepTarget" }——目标已有同(变体,工厂)报价时必须逐条裁决，
+       #          未裁决整体 400 拒绝（单事务回滚，不产生半合并状态）
+       # Response: { sourceRspuId, targetRspuId, changedFields, movedVariantCount, migratedCount, migratedRskuIds,
+       #             conflictKeepTargetDeleted, conflictKeepSourceReplaced, movedImageCount, reissuedRskuCodes, message }
+       # 说明：守卫 source≠target/双方非识别中；变体按 uk_variant_attrs 同 key 自动映射或改挂；
+       #       图片改挂主键不变（pgvector 向量无需重建）；scheme_item/收藏/产品集/工厂关联/搭配关系/识别历史等
+       #       引用全部改指目标；双投影重算；rsku_code 置空重发（旧码记审计）；
+       #       副本最后走既有 deleteProduct 软删（回收站可见，级联/审计/向量清理复用既有链路）
+
 PUT    /api/v1/products/{rspuId}
        # 更新产品元数据（产品名称、定位标签、颜色、材质、场景、六维标签、价格带、零售参考价retailPrice、保修年限等，已实现）
        # Request: JSON Body（只传要更新的字段；定位标签/风格、场景会同步更新 rspu_style / rspu_scene 关联表）

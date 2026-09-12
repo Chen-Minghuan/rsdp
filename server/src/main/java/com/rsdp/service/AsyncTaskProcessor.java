@@ -8,9 +8,11 @@ import com.rsdp.dto.OcrResult;
 import com.rsdp.dto.StyleMatchResult;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.FloorPlanAnalysis;
+import com.rsdp.entity.RspuDuplicateSuspect;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.FloorPlanAnalysisMapper;
+import com.rsdp.mapper.RspuDuplicateSuspectMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.service.EmbeddingService.ImageEmbedding;
@@ -24,12 +26,15 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -60,6 +65,7 @@ public class AsyncTaskProcessor {
     private final RspuVariantService rspuVariantService;
     private final ProductSubjectCropService subjectCropService;
     private final FloorPlanAnalysisMapper floorPlanAnalysisMapper;
+    private final RspuDuplicateSuspectMapper duplicateSuspectMapper;
     /**
      * 户型图分析服务（延迟解析，打破 FloorPlanService ↔ AsyncTaskProcessor 循环依赖）。
      */
@@ -633,7 +639,13 @@ public class AsyncTaskProcessor {
                 return;
             }
             RspuMaster current = rspuMapper.selectById(rspuId);
-            if (current == null || !"待复核".equals(current.getReviewStatus())) {
+            if (current == null || "已确认".equals(current.getReviewStatus())) {
+                return;
+            }
+            // 结构化落库（M2）：同款配对是合并工具的候选队列，review_comment 文本仅作展示；
+            // UNIQUE(rspu_id, matched_rspu_id) 兜底幂等，重复识别/重复导入不产生重复行
+            insertSuspectQuietly(rspuId, dupRspu.toString(), similarity);
+            if (!"待复核".equals(current.getReviewStatus())) {
                 return;
             }
             RspuMaster dup = rspuMapper.selectById(dupRspu.toString());
@@ -655,6 +667,30 @@ public class AsyncTaskProcessor {
             auditLogService.logReview("rspu_master", rspuId, oldSnapshot, current, operator);
             log.info("疑似同款标记：rspuId={}，命中 {}，相似度 {}%", rspuId, dupLabel, percent);
             return;
+        }
+    }
+
+    /**
+     * 落一条疑似同款结构化记录（M2）。唯一键冲突（同一配对已记录）静默忽略。
+     *
+     * @param rspuId        被标存疑的新品
+     * @param matchedRspuId 召回命中的疑似同款
+     * @param similarity    向量相似度（0~1）
+     */
+    private void insertSuspectQuietly(String rspuId, String matchedRspuId, double similarity) {
+        try {
+            RspuDuplicateSuspect suspect = new RspuDuplicateSuspect();
+            suspect.setRspuId(rspuId);
+            suspect.setMatchedRspuId(matchedRspuId);
+            suspect.setSimilarity(BigDecimal.valueOf(similarity).setScale(4, RoundingMode.HALF_UP));
+            suspect.setStatus("pending");
+            suspect.setCreatedAt(LocalDateTime.now());
+            duplicateSuspectMapper.insert(suspect);
+        } catch (DuplicateKeyException e) {
+            log.debug("疑似同款配对已存在，跳过落库：rspuId={}，matched={}", rspuId, matchedRspuId);
+        } catch (Exception e) {
+            // 结构化落库失败不影响主链路（文本标记与审计照常）
+            log.warn("疑似同款配对落库失败：rspuId={}，matched={}", rspuId, matchedRspuId, e);
         }
     }
 

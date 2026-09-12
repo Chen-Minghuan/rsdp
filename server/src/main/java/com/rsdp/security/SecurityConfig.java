@@ -163,6 +163,9 @@ public class SecurityConfig {
                 // 产品重新识别（识别中/存疑产品的手动重试入口）
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/re-recognize").hasAuthority(Permissions.PRODUCT_UPDATE)
 
+                // 同款产品合并（决策点②共享主档模型；服务内再强制平台员工）
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/merge").hasAuthority(Permissions.PRODUCT_UPDATE)
+
                 // 产品复核
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/review").hasAuthority(Permissions.PRODUCT_REVIEW)
 

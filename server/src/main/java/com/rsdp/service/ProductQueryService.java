@@ -4,6 +4,7 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
@@ -19,6 +20,7 @@ import com.rsdp.dto.response.SchemeRefInfo;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.RspuDuplicateSuspect;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuRelation;
 import com.rsdp.entity.RspuScene;
@@ -38,6 +40,7 @@ import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.ProductPurgeMapper;
 import com.rsdp.mapper.RspuFactoryMappingMapper;
 import com.rsdp.mapper.RspuMapper;
+import com.rsdp.mapper.RspuDuplicateSuspectMapper;
 import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
@@ -81,6 +84,7 @@ public class ProductQueryService {
     private final RspuSceneMapper rspuSceneMapper;
     private final RspuVariantMapper rspuVariantMapper;
     private final RspuRelationMapper rspuRelationMapper;
+    private final RspuDuplicateSuspectMapper duplicateSuspectMapper;
     private final ProductStyleMatchMapper productStyleMatchMapper;
     private final AuditLogService auditLogService;
     private final DictService dictService;
@@ -626,6 +630,16 @@ public class ProductQueryService {
         }
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
+
+        // 复核「已确认」= 人工认定不重复（或接受现状），闭环该产品全部 pending 疑似同款配对（M2）
+        if (ReviewStatus.APPROVED.getDbValue().equals(reviewStatus)) {
+            duplicateSuspectMapper.update(null, new UpdateWrapper<RspuDuplicateSuspect>()
+                .eq("rspu_id", rspuId)
+                .eq("status", "pending")
+                .set("status", "dismissed")
+                .set("resolved_by", SecurityOperatorContext.currentUsername())
+                .set("resolved_at", LocalDateTime.now()));
+        }
 
         auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
     }

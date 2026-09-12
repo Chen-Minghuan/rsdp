@@ -1,6 +1,6 @@
 -- ============================================================
 -- RSDP 基线 DDL · 02 产品域（02_product.sql）
--- 包含表：rspu_master, rspu_style, rspu_scene, rspu_variant, rspu_relation, rspu_code_counter, rsku_code_counter, variant_code_counter, rsku_supply, price_history, rspu_price_summary
+-- 包含表：rspu_master, rspu_style, rspu_scene, rspu_variant, rspu_relation, rspu_duplicate_suspect, rspu_code_counter, rsku_code_counter, variant_code_counter, rsku_supply, price_history, rspu_price_summary
 -- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
 -- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
 -- ============================================================
@@ -181,6 +181,24 @@ CREATE TABLE IF NOT EXISTS rspu_relation (
 );
 CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu_id, relation_type, status);
 CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, relation_type, status);
+
+-- RSPU 疑似同款配对表（V4，决策点②共享主档模型配套：向量同款检测命中落结构化记录，
+-- 供合并工具候选队列与闭环追踪；review_comment 文本仅作展示，不再是唯一记录）
+CREATE TABLE IF NOT EXISTS rspu_duplicate_suspect (
+    suspect_id BIGSERIAL PRIMARY KEY,
+    rspu_id VARCHAR(64) NOT NULL,                    -- 被标存疑的新品
+    matched_rspu_id VARCHAR(64) NOT NULL,            -- 召回命中的疑似同款
+    similarity NUMERIC(5,4) NOT NULL,                -- 向量相似度（0~1）
+    status VARCHAR(16) DEFAULT 'pending',            -- pending / merged / dismissed
+    resolved_by VARCHAR(64),                         -- 处理人（合并/排除操作人 username）
+    resolved_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (rspu_id, matched_rspu_id),
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (matched_rspu_id) REFERENCES rspu_master(rspu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rspu_dup_suspect_status ON rspu_duplicate_suspect(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rspu_dup_suspect_matched ON rspu_duplicate_suspect(matched_rspu_id);
 
 -- =================== 索引 ===================
 
