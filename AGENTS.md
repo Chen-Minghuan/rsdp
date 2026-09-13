@@ -122,8 +122,6 @@
 │   ├── seed_style_knowledge.sql   # 风格知识库种子数据
 │   └── seed_dev_data.sql          # 开发/演示种子（弱口令测试账号 + 演示工厂/产品，仅开发环境）
 ├── data/                          # 运行数据（uploads 上传文件、style-knowledge 风格素材）
-├── ops/                           # 运维脚本
-│   └── anchor_encode.sh           # 锚点图批量编码（未完成 stub）
 └── scripts/                       # 常用脚本
     ├── setup.sh                   # 开发环境一键搭建
     ├── test.sh                    # 运行全部测试

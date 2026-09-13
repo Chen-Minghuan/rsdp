@@ -6,7 +6,6 @@ import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -29,7 +28,6 @@ public class ImageAssets {
     private Boolean primary;
 
     private Boolean aiProcessed;
-    private BigDecimal qualityScore;
     /** 图片内容 SHA-256 哈希（录入查重用，V31） */
     private String contentHash;
     /** 图片内容版本：替换/裁剪覆盖时递增（+1），向量按版本防旧写（P0） */

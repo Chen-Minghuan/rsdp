@@ -531,7 +531,19 @@ async function handleReview(status: '已确认' | '存疑') {
 const canReRecognize = computed(() => {
   const rspu = detail.value?.rspu
   if (!rspu) return false
-  return rspu.status === 'processing' || rspu.reviewStatus === '存疑'
+  if (rspu.status === 'processing' || rspu.reviewStatus === '存疑') return true
+  // 4.5：从未走过 AI 识别的产品（手工/工厂录入：active + 待复核 + 无识别来源版本）也可手动触发识别回填，
+  // 消除与 AI 录入产品的能力差（识别只补空缺 + 写向量 + 同款检测，不覆盖人工已填字段）
+  const neverRecognized = rspu.status === 'active' && rspu.reviewStatus === '待复核' && !rspu.sourceAgentVersion
+  const hasPrimaryImage = (detail.value?.images ?? []).some(img => img.primary)
+  return neverRecognized && hasPrimaryImage
+})
+/** 按钮文案：从未识别的产品显示「AI 识别」，其余为「重新识别」。 */
+const reRecognizeLabel = computed(() => {
+  const rspu = detail.value?.rspu
+  return rspu && rspu.status !== 'processing' && rspu.reviewStatus === '待复核' && !rspu.sourceAgentVersion
+    ? 'AI 识别'
+    : '重新识别'
 })
 const reRecognizing = ref(false)
 
@@ -1055,7 +1067,7 @@ onBeforeRouteUpdate((to, from) => {
             :loading="reRecognizing"
             @click="handleReRecognize"
           >
-            重新识别
+            {{ reRecognizeLabel }}
           </n-button>
           <n-button
             v-if="canReviewProduct && canManageProduct"

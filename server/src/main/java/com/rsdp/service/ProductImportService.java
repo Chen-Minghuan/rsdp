@@ -24,6 +24,7 @@ import com.rsdp.util.ConstraintViolations;
 import com.rsdp.util.ContentHashes;
 import com.rsdp.util.DictNormalizes;
 import com.rsdp.util.ExcelFileValidator;
+import com.rsdp.util.ImageDimensions;
 import com.rsdp.util.ImageUrlDownloads;
 import com.rsdp.util.ImageUrlValidator;
 import com.rsdp.mapper.RspuMapper;
@@ -894,6 +895,11 @@ public class ProductImportService {
             imageAsset.setFileSize((long) downloaded.bytes.length);
             imageAsset.setFormat(extension);
             imageAsset.setContentHash(contentHash);
+            int[] dims = ImageDimensions.read(downloaded.bytes);
+            if (dims != null) {
+                imageAsset.setWidth(dims[0]);
+                imageAsset.setHeight(dims[1]);
+            }
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);

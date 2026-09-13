@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS image_assets (
     format VARCHAR(16),
     is_primary BOOLEAN DEFAULT FALSE,
     ai_processed BOOLEAN DEFAULT FALSE,
-    quality_score DECIMAL(5, 4),
     content_hash VARCHAR(64),                        -- 图片内容 SHA-256（录入查重，V31）
     content_revision BIGINT NOT NULL DEFAULT 1,      -- 图片内容版本：替换/裁剪覆盖时递增，向量按版本防旧写（P0）
     uploaded_by VARCHAR(64),
@@ -54,9 +53,7 @@ CREATE TABLE IF NOT EXISTS ai_recognition (
     rspu_id VARCHAR(64),
     task_id VARCHAR(64),
     model_name VARCHAR(64),
-    model_version VARCHAR(64),                   -- 识别模型版本（V43）
-    prompt_version VARCHAR(64),                  -- 提示词模板版本（V43）
-    recognition_type VARCHAR(16),                  -- encode/label/judge
+    recognition_type VARCHAR(16),
     endpoint TEXT,
     input_data JSONB,
     output_data JSONB,
