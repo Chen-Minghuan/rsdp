@@ -269,7 +269,7 @@ DELETE /api/v1/products/{rspuId}
        # 软删除（已实现）
        # Response: void
        # 说明：rspu_master 软删（deleted_at），变体/RSKU/图片/搭配关系（双向）级联软删，风格/场景关联物理删除；
-       #       ChromaDB 向量经 RspuDeletedEvent 事务提交后异步清理；其他工厂已关联时拒绝删除
+       #       pgvector 向量（product_image_embedding 表）经 RspuDeletedEvent 事务提交后异步清理；其他工厂已关联时拒绝删除
 
 POST   /api/v1/products/{rspuId}/restore
        # 回收站恢复（已实现，需 product:delete 权限）
@@ -1200,7 +1200,7 @@ POST   /api/v1/retrieval/similar
        #   topK: number (可选，默认 20)
        # Response: [{ rspuId, categoryCode, positioningLabel, mainImageUrl, vectorScore, finalScore, matchReasons }]
        # 说明：三层检索：① DashScope 多模态 embedding 生成查询向量；
-       #      ② ChromaDB 向量召回 + metadata 过滤；③ 按 RSPU 聚合 + 规则重排。
+       #      ② pgvector 向量召回（product_image_embedding，JOIN image_assets 过滤软删）；③ 按 RSPU 聚合 + 规则重排。
 ```
 
 ### 管理后台
@@ -1210,7 +1210,7 @@ POST   /api/v1/admin/vectors/backfill
        # 存量图片向量回填（已实现）
        # Query: batchSize (默认 100，最大 1000)
        # Response: { successCount, failedCount }
-       # 说明：为已 AI 识别但缺少向量的存量图片生成 embedding，并写入 ChromaDB。
+       # 说明：为已 AI 识别但缺少向量的存量图片生成 embedding，并写入 pgvector（product_image_embedding 表）。
 
 GET    /api/v1/admin/async/metrics
        # 异步任务线程池运行时指标（已实现）
@@ -1373,7 +1373,7 @@ GET    /api/v1/enums
        # 前端下拉选项数据
 
 GET    /api/v1/health
-       # 健康检查（检查 PostgreSQL + ChromaDB + AI + Redis 连通性）
+       # 健康检查（检查 PostgreSQL（含 pgvector）+ AI + Redis 连通性）
 ```
 
 ### 工厂产品能力档案

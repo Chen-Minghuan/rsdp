@@ -20,10 +20,10 @@
 - **安全**：Spring Security + JWT（jjwt），接口级权限 + 数据归属隔离
 - **ORM**：MyBatis-Plus 3.5+
 - **数据库**：PostgreSQL 16
-- **向量数据库**：ChromaDB 0.5+（REST API）
+- **向量检索**：pgvector（PostgreSQL 扩展，`product_image_embedding` 表 + HNSW 索引，1024 维）
 - **文件存储**：MinIO 8.5+（生产）/ 本地磁盘（开发）
 - **缓存**：Redis 7.x（关闭时以 ConcurrentMapCacheManager 做 JVM 内存回退，见 `config/CacheConfig.java`）
-- **AI 推理**：当前 MVP 通过 DashScope `qwen3-vl-plus`（OpenAI 兼容接口）完成视觉识别；后续目标切换为本地 Ollama 托管 Qwen 2.5-VL 7B + nomic-embed-text
+- **AI 推理**：当前 MVP 通过 DashScope（OpenAI 兼容接口）：`qwen3-vl-plus` 视觉识别 + `multimodal-embedding-v1` 向量编码；后续目标切换为本地 Ollama 托管
 - **HTTP 客户端**：Spring RestClient（虚拟线程）
 - **Excel**：EasyExcel 3.3+
 - **Office 文档**：Apache POI 5.3+（Excel 浮动图片锚点解析、采购合同 docx 生成）
@@ -139,7 +139,7 @@
 
 ```
 ├── controller/   # REST 接口层（薄层，30+ Controller）
-├── service/      # 业务逻辑层（含 chroma/ 向量检索、storage/ 文件存储子包）
+├── service/      # 业务逻辑层（含 vector/ 向量检索、storage/ 文件存储子包）
 ├── mapper/       # MyBatis-Plus Mapper
 ├── entity/       # 数据库实体
 ├── dto/          # 请求/响应 DTO（按 request/ response 分包，另有 excel/ 导入子包）
@@ -211,7 +211,7 @@ RSKU（供应单元）：[RSPU ID]-[工厂代码3位]-[材质版本2位]
 
 ### 5.4 数据库
 - 元数据表用 PostgreSQL，JSON 字段统一存 JSONB。
-- 向量主存 ChromaDB，PostgreSQL 只保留 `style_vector` 副本。
+- 向量主存 pgvector（`product_image_embedding` 表）；`rspu_master.style_vector` 为历史备份列，新数据不再写入。
 - 所有修改 RSPU/RSKU/工厂的操作必须记审计日志。
 
 ---
@@ -255,7 +255,7 @@ make clean
 ## 七、测试要求
 
 - 核心业务逻辑必须有单元测试。
-- 涉及外部 HTTP 调用（AI / ChromaDB）的测试使用 WireMock 模拟。
+- 涉及外部 HTTP 调用（AI）的测试使用 WireMock 模拟。
 - 提交前必须跑通 `make test`。
 - 新增接口必须补充集成测试或至少 Controller 层测试。
 - 涉及实体/表结构改动时，运行 `scripts/check_entity_db_fields.js` 做实体-数据库字段对账。
@@ -301,9 +301,8 @@ make clean
 
 | 服务 | 地址 |
 |:-----|:-----|
-| PostgreSQL | `postgres:5432` |
+| PostgreSQL（含 pgvector） | `postgres:5432` |
 | Ollama | `http://ollama:11434` |
-| ChromaDB | `http://chromadb:8000` |
 | Redis | `redis:6379` |
 | MinIO | `http://minio:9000` |
 
@@ -316,4 +315,4 @@ make clean
 
 ## 十一、一句话总结
 
-> RSDP 是一个以"双层编码 + AI 看图识别 + 三层检索 + 空间校验"为核心的家具产品数字化平台。后端用 SpringBoot + Java 21 编排确定性业务与 AI 调用，前端用 Vue 3 + TypeScript 提供录入/检索/搭配/报价/项目/订单界面，数据落 PostgreSQL + ChromaDB + MinIO，AI 推理当前使用 DashScope 快速验证、后续目标为本地 Ollama，Docker Compose 一键部署。
+> RSDP 是一个以"双层编码 + AI 看图识别 + 三层检索 + 空间校验"为核心的家具产品数字化平台。后端用 SpringBoot + Java 21 编排确定性业务与 AI 调用，前端用 Vue 3 + TypeScript 提供录入/检索/搭配/报价/项目/订单界面，数据落 PostgreSQL（含 pgvector 向量检索）+ MinIO，AI 推理当前使用 DashScope 快速验证、后续目标为本地 Ollama，Docker Compose 一键部署。
