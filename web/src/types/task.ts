@@ -21,6 +21,12 @@ export interface ProductEntryResult {
   imageId?: string
   imageIds: string[]
   message: string
+  /** 区域拆分逐项成败（5.1 收集式返回）：false 时 reason 为失败原因 */
+  success?: boolean
+  /** 区域序号（1-based，仅区域拆分路径返回） */
+  region?: number
+  /** 失败原因（success=false 时） */
+  reason?: string
 }
 
 /**

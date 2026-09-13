@@ -124,6 +124,8 @@ CREATE TABLE IF NOT EXISTS rspu_factory_mapping (
 CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_rspu ON rspu_factory_mapping(rspu_id, status);
 CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_factory ON rspu_factory_mapping(factory_code, status);
 CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_warehouse ON rspu_factory_mapping(shipping_warehouse_id);
+-- 主供唯一：每 RSPU 最多一条 is_primary = true（V7 并入；应用层 clearOtherPrimary 之外的 DB 兜底）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_factory_mapping_primary ON rspu_factory_mapping(rspu_id) WHERE is_primary = true;
 
 -- 工厂交期规则表（V2 并入）
 CREATE TABLE IF NOT EXISTS factory_lead_time_rule (

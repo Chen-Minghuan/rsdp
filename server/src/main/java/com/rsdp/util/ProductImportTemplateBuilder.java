@@ -130,7 +130,7 @@ public final class ProductImportTemplateBuilder {
         rows.add(List.of("材质原文", "建议", "工厂材质原文（码未识别时使用）", "头层牛皮"));
         rows.add(List.of("变体参考价格带", "可选", "low/mid/high 之一（不区分大小写）", "mid"));
         rows.add(List.of("变体产品等级", "可选", "factory_level 字典码。长度≤8", "A"));
-        rows.add(List.of("交期天数", "可选", "整数天数", "15"));
+        rows.add(List.of("交期天数", "可选", "整数天数。本列暂不入库（仅 Excel AI 导入链路生效）", "15"));
         rows.add(List.of("描述/配置说明", "可选", "长文本描述原文", "含两个抱枕，脚垫可拆"));
         rows.add(List.of("零售参考价", "建议", "数字（元）；缺失则官网无价展示", "3999"));
         return rows;

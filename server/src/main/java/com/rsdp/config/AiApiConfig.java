@@ -5,10 +5,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.ClientHttpRequestFactory;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
+import java.net.http.HttpClient;
 import java.time.Duration;
 
 @Configuration
@@ -81,10 +82,19 @@ public class AiApiConfig {
             .build();
     }
 
+    /**
+     * AI 调用的 HTTP 请求工厂：使用 JDK 自带 {@link HttpClient}（java.net.http，内置连接池，
+     * 连接按目标主机复用），替代每次新建 TCP 的 SimpleClientHttpRequestFactory；零新增依赖。
+     *
+     * @param timeoutSeconds 连接/读取超时（秒）
+     * @return 支持连接池的请求工厂
+     */
     private ClientHttpRequestFactory requestFactory(int timeoutSeconds) {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         Duration timeout = Duration.ofSeconds(timeoutSeconds);
-        factory.setConnectTimeout(timeout);
+        HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(timeout)
+            .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
         factory.setReadTimeout(timeout);
         return factory;
     }

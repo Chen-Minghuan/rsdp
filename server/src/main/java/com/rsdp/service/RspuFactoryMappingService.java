@@ -13,7 +13,9 @@ import com.rsdp.mapper.FactoryWarehouseMapper;
 import com.rsdp.mapper.RspuFactoryMappingMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
+import com.rsdp.util.ConstraintViolations;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -119,12 +121,21 @@ public class RspuFactoryMappingService {
         }
 
         if (isCreate) {
-            mappingMapper.insert(mapping);
+            try {
+                mappingMapper.insert(mapping);
+            } catch (DataIntegrityViolationException e) {
+                // 并发撞唯一索引（uk rspu_id+factory_code / 主供部分唯一索引）时翻译为友好文案
+                throw new BusinessException(ConstraintViolations.toUserMessage(e, "该工厂已关联此产品"));
+            }
             auditLogService.logCreate("rspu_factory_mapping", String.valueOf(mapping.getMappingId()), mapping,
                 SecurityOperatorContext.currentUsername());
         } else {
             RspuFactoryMapping old = mappingMapper.selectById(mapping.getMappingId());
-            mappingMapper.updateById(mapping);
+            try {
+                mappingMapper.updateById(mapping);
+            } catch (DataIntegrityViolationException e) {
+                throw new BusinessException(ConstraintViolations.toUserMessage(e, "该工厂已关联此产品"));
+            }
             auditLogService.logUpdate("rspu_factory_mapping", String.valueOf(mapping.getMappingId()), old, mapping,
                 SecurityOperatorContext.currentUsername());
         }
@@ -176,6 +187,12 @@ public class RspuFactoryMappingService {
     }
 
     private void validateRequest(RspuFactoryMappingRequest request) {
+        if (!StringUtils.hasText(request.getRspuId())) {
+            throw new BusinessException("RSPU ID 不能为空");
+        }
+        if (!StringUtils.hasText(request.getFactoryCode())) {
+            throw new BusinessException("工厂代码不能为空");
+        }
         FactoryMaster factory = factoryMasterMapper.selectById(request.getFactoryCode());
         if (factory == null) {
             throw new BusinessException("工厂不存在: " + request.getFactoryCode());

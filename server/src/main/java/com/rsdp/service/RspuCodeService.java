@@ -10,6 +10,7 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -104,6 +105,11 @@ public class RspuCodeService {
      * {@link SecurityOperatorContext#currentUsername()}（同步链路现状）。
      * 发号改写 rspu_code 记审计（P1-3），新旧值：null → 编码。</p>
      *
+     * <p>并发安全：写入走条件 UPDATE（{@code WHERE rspu_code IS NULL}），并发双发时
+     * 只有一个事务命中；影响 0 行说明编码已被并发发放，回读现有编码直接返回
+     * （幂等安全，不覆盖）。编码撞唯一索引（uk_rspu_code_alive）时重试生成一次，
+     * 对齐 {@code RskuCodeService.assignCode} 的容错风格。</p>
+     *
      * @param rspuId       RSPU ID
      * @param categoryCode 品类码
      * @param styleCode    风格/职级码
@@ -124,12 +130,28 @@ public class RspuCodeService {
             return rspu.getRspuCode();
         }
         String code = generateNextCode(categoryCode, styleCode, sizeCode);
+        int updated;
+        try {
+            updated = rspuMapper.assignCodeIfAbsent(rspuId, code);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("RSPU 业务编码唯一冲突，重试生成，rspuId={}", rspuId);
+            code = generateNextCode(categoryCode, styleCode, sizeCode);
+            updated = rspuMapper.assignCodeIfAbsent(rspuId, code);
+        }
+        if (updated == 0) {
+            // 并发已发号：回读现有编码返回（幂等安全，不覆盖、不重复记审计）
+            RspuMaster current = rspuMapper.selectById(rspuId);
+            if (current != null && StringUtils.hasText(current.getRspuCode())) {
+                log.info("RSPU 业务编码已被并发发放，返回现有编码，rspuId={}，code={}", rspuId, current.getRspuCode());
+                return current.getRspuCode();
+            }
+            throw new BusinessException("RSPU 业务编码发放冲突，请重试: " + rspuId);
+        }
         RspuMaster oldSnapshot = new RspuMaster();
         oldSnapshot.setRspuId(rspu.getRspuId());
         oldSnapshot.setRspuCode(rspu.getRspuCode());
         rspu.setRspuCode(code);
         rspu.setUpdatedAt(java.time.LocalDateTime.now());
-        rspuMapper.updateById(rspu);
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, resolveOperator(operator));
         return code;
     }

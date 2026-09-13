@@ -47,6 +47,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -782,7 +783,10 @@ public class ProductService {
         }
 
         // 逐区域独立事务建档（TransactionTemplate 代理 @Transactional 的 createEntryFromStream，
-        // 避免 this 自调用导致事务失效）：单区域失败回滚自身并清理已存文件，不影响已建档区域
+        // 避免 this 自调用导致事务失效）：单区域失败回滚自身并清理已存文件，不影响已建档区域。
+        // 收集式返回（阶段 5.1）：单区域失败不再整单 500——结果与输入区域同序，
+        // 每项 success=true（含 taskId/rspuId/imageIds）或 success=false（含 region/reason），
+        // 客户端可感知部分成功并精确重试，避免"已成功但拿不到 rspuId → 重试重复建档"
         TransactionTemplate regionTx = new TransactionTemplate(transactionManager);
         List<Map<String, Object>> results = new ArrayList<>();
         for (int i = 0; i < regions.size(); i++) {
@@ -800,16 +804,27 @@ public class ProductService {
             String filename = "region-" + (i + 1) + ".jpg";
             int regionNo = i + 1;
             com.rsdp.dto.OcrResult finalPageOcr = pageOcr;
-            Map<String, Object> entry = regionTx.execute(status -> {
-                try {
-                    return createEntryFromStream(new ByteArrayInputStream(cropped), filename, cropped.length,
-                        region.categoryCode(), finalPageOcr);
-                } catch (IOException e) {
-                    throw new BusinessException("第 " + regionNo + " 个产品区域建档失败: " + e.getMessage());
-                }
-            });
-            results.add(entry);
-            log.info("区域拆分建档：第 {} 个区域（品类 {}）→ rspuId={}", i + 1, region.categoryCode(), entry.get("rspuId"));
+            Map<String, Object> outcome = new LinkedHashMap<>();
+            try {
+                Map<String, Object> entry = regionTx.execute(status -> {
+                    try {
+                        return createEntryFromStream(new ByteArrayInputStream(cropped), filename, cropped.length,
+                            region.categoryCode(), finalPageOcr);
+                    } catch (IOException e) {
+                        throw new BusinessException("第 " + regionNo + " 个产品区域建档失败: " + e.getMessage());
+                    }
+                });
+                outcome.putAll(entry);
+                outcome.put("success", true);
+                outcome.put("region", regionNo);
+                log.info("区域拆分建档：第 {} 个区域（品类 {}）→ rspuId={}", regionNo, region.categoryCode(), entry.get("rspuId"));
+            } catch (Exception e) {
+                outcome.put("success", false);
+                outcome.put("region", regionNo);
+                outcome.put("reason", e.getMessage());
+                log.warn("区域拆分建档失败：第 {} 个区域（品类 {}）: {}", regionNo, region.categoryCode(), e.getMessage());
+            }
+            results.add(outcome);
         }
         return results;
     }

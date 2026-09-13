@@ -44,10 +44,11 @@ class RspuPriceSummaryServiceTest {
     }
 
     @Test
-    void recalculateComputesMinMaxAndCountIgnoringNullPrices() {
+    void recalculateComputesMinMaxAndCount() {
+        // 查询已在 DB 侧按新口径过滤（factory_price 非空且 status='active'），
+        // 返回行全部为有效报价行：count = 行数，min/max 全量参与
         when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(
             rskuWithPrice("1200.00"),
-            rskuWithPrice(null),
             rskuWithPrice("800.50"),
             rskuWithPrice("2500.00")
         ));
@@ -60,9 +61,25 @@ class RspuPriceSummaryServiceTest {
         assertThat(summary.getRspuId()).isEqualTo("RSPU-1");
         assertThat(summary.getMinFactoryPrice()).isEqualByComparingTo("800.50");
         assertThat(summary.getMaxFactoryPrice()).isEqualByComparingTo("2500.00");
-        // 计数含价格为 NULL 的有效报价（与列表"报价×N"旧口径一致）
-        assertThat(summary.getActiveRskuCount()).isEqualTo(4);
+        assertThat(summary.getActiveRskuCount()).isEqualTo(3);
         assertThat(summary.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void recalculateQueryFiltersOnlyPricedActiveRskus() {
+        // 新口径（阶段 5 拍板）：active_rsku_count 与 min/max 只统计
+        // 「factory_price 非空 且 status='active'」的 RSKU 行——NULL 价行与
+        // discontinued/paused 行在 DB 查询侧即被排除，不参与聚合
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        service.recalculate("RSPU-1");
+
+        ArgumentCaptor<QueryWrapper> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rskuSupplyMapper).selectList(captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        assertThat(sqlSegment).contains("rspu_id");
+        assertThat(sqlSegment).contains("status");
+        assertThat(sqlSegment).contains("factory_price IS NOT NULL");
     }
 
     @Test

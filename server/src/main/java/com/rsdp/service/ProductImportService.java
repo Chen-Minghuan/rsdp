@@ -105,10 +105,8 @@ public class ProductImportService {
     public ProductImportResult importProducts(MultipartFile file, boolean updateIfExists) {
         validateFile(file);
 
+        // 行数上限在解析期提前中断（见 parseExcel 监听器），此处无需再校验
         List<ProductImportRow> rows = parseExcel(file);
-        if (rows.size() > MAX_ROWS) {
-            throw new BusinessException("单次导入不能超过 " + MAX_ROWS + " 行");
-        }
 
         ProductImportResult result = new ProductImportResult();
         result.setTotalRows(rows.size());
@@ -130,26 +128,50 @@ public class ProductImportService {
                 continue;
             }
 
-            // Excel 内重复检测：同一产品分别用 rspuId 和 externalCode 引用时也识别为重复
+            // Excel 内重复检测：同一产品分别用 rspuId 和 externalCode 引用时也识别为重复。
+            // 仅成功落库的行才记入查重集合（见下方成功分支），处理失败的行不占位，
+            // 否则后续同编码行会被误判为重复行
             String rowRspuId = StringUtils.hasText(row.getRspuId()) ? row.getRspuId().trim() : null;
             String rowExternalCode = StringUtils.hasText(row.getExternalCode()) ? row.getExternalCode().trim() : null;
             String effectiveRspuId = rowRspuId != null
                 ? rowRspuId
                 : (rowExternalCode != null ? externalCodeToRspuId.get(rowExternalCode) : null);
-            boolean duplicated = (effectiveRspuId != null && !processedRspuIds.add(effectiveRspuId))
-                || (rowExternalCode != null && !processedExternalCodes.add(rowExternalCode));
+            boolean duplicated = (effectiveRspuId != null && processedRspuIds.contains(effectiveRspuId))
+                || (rowExternalCode != null && processedExternalCodes.contains(rowExternalCode));
             if (duplicated) {
                 result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
                     "Excel 中存在重复产品行（同一 RSPU ID 或外部编码）"));
                 continue;
             }
 
+            // 存在性/冲突判断前置到图片下载之前：updateIfExists=false 且行已存在时直接跳过，
+            // 不再下载图片，也不产生图片相关明细
+            RspuMaster existing;
+            try {
+                existing = resolveExistingRspu(row.getRspuId(), row.getExternalCode());
+            } catch (BusinessException e) {
+                result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(), e.getMessage()));
+                continue;
+            }
+            if (existing != null && !updateIfExists) {
+                result.setSkippedCount(result.getSkippedCount() + 1);
+                result.getWarnings().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                    "产品已存在，已跳过"));
+                continue;
+            }
+
             List<DownloadedImage> images = downloadImages(row, rowIndex, result);
 
             try {
-                String rspuId = processRowInTransaction(row, images, updateIfExists, dictCache, rowIndex, result);
+                String rspuId = processRowInTransaction(row, images, dictCache, rowIndex, result, existing);
                 result.setSuccessCount(result.getSuccessCount() + 1);
                 processedRspuIds.add(rspuId);
+                if (effectiveRspuId != null) {
+                    processedRspuIds.add(effectiveRspuId);
+                }
+                if (rowExternalCode != null) {
+                    processedExternalCodes.add(rowExternalCode);
+                }
             } catch (BusinessException e) {
                 result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(), e.getMessage()));
             } catch (Exception e) {
@@ -181,6 +203,10 @@ public class ProductImportService {
             EasyExcel.read(stream, ProductImportRow.class, new ReadListener<ProductImportRow>() {
                 @Override
                 public void invoke(ProductImportRow row, AnalysisContext context) {
+                    // 行数超限在读取期提前中断（不等整文件解析完），超限行不纳入结果
+                    if (rows.size() >= MAX_ROWS) {
+                        throw new BusinessException("单次导入不能超过 " + MAX_ROWS + " 行");
+                    }
                     rows.add(row);
                 }
 
@@ -193,10 +219,27 @@ public class ProductImportService {
             log.error("读取 Excel 文件失败", e);
             throw new BusinessException("读取 Excel 文件失败", e);
         } catch (Exception e) {
+            // 监听器抛出的行数超限异常可能被 EasyExcel 包装，沿 cause 链还原业务文案
+            BusinessException business = findBusinessException(e);
+            if (business != null) {
+                throw business;
+            }
             log.error("解析 Excel 文件失败，请检查文件格式是否与模板一致", e);
             throw new BusinessException("解析 Excel 文件失败，请检查文件格式是否与模板一致", e);
         }
         return rows;
+    }
+
+    /** 沿异常 cause 链查找业务异常（EasyExcel 可能包装监听器内抛出的异常）。 */
+    private BusinessException findBusinessException(Throwable e) {
+        Throwable current = e;
+        while (current != null) {
+            if (current instanceof BusinessException businessException) {
+                return businessException;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     private Map<String, List<CategoryDict>> preloadDicts() {
@@ -263,7 +306,7 @@ public class ProductImportService {
     }
 
     /**
-     * 下载图片，返回下载成功的图片列表；图片下载失败作为失败明细记录。
+     * 下载图片，返回下载成功的图片列表；图片下载失败作为行级警告记录（不阻断产品数据导入）。
      */
     private List<DownloadedImage> downloadImages(ProductImportRow row, int rowIndex, ProductImportResult result) {
         List<DownloadedImage> images = new ArrayList<>();
@@ -271,14 +314,14 @@ public class ProductImportService {
         String primaryUrl = trim(row.getPrimaryImageUrl());
         if (StringUtils.hasText(primaryUrl)) {
             if (!ImageUrlValidator.isAllowed(primaryUrl, allowedImageHosts)) {
-                result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                result.getWarnings().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
                     "不安全的图片 URL: " + primaryUrl));
             } else {
                 DownloadedImage image = downloadSingleImage(primaryUrl, true);
                 if (image != null) {
                     images.add(image);
                 } else {
-                    result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                    result.getWarnings().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
                         "主图下载失败: " + primaryUrl));
                 }
             }
@@ -287,20 +330,20 @@ public class ProductImportService {
         List<String> detailUrls = splitCsv(row.getDetailImageUrls());
         for (String url : detailUrls) {
             if (!ImageUrlValidator.isAllowed(url, allowedImageHosts)) {
-                result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                result.getWarnings().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
                     "不安全的图片 URL: " + url));
             } else {
                 DownloadedImage image = downloadSingleImage(url, false);
                 if (image != null) {
                     images.add(image);
                 } else {
-                    result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                    result.getWarnings().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
                         "详情图下载失败: " + url));
                 }
             }
         }
 
-        // 图片下载失败不影响产品数据导入，只记录失败明细
+        // 图片下载失败不影响产品数据导入，只记录行级警告
         return images;
     }
 
@@ -399,13 +442,13 @@ public class ProductImportService {
     /**
      * 在独立事务中处理单行导入。
      */
-    private String processRowInTransaction(ProductImportRow row, List<DownloadedImage> images, boolean updateIfExists,
+    private String processRowInTransaction(ProductImportRow row, List<DownloadedImage> images,
                                            Map<String, List<CategoryDict>> dictCache,
-                                           int rowIndex, ProductImportResult result) {
+                                           int rowIndex, ProductImportResult result, RspuMaster existing) {
         DefaultTransactionDefinition def = new DefaultTransactionDefinition();
         TransactionStatus status = transactionManager.getTransaction(def);
         try {
-            String rspuId = processRow(row, images, updateIfExists, dictCache, rowIndex, result);
+            String rspuId = processRow(row, images, dictCache, rowIndex, result, existing);
             transactionManager.commit(status);
             return rspuId;
         } catch (DataIntegrityViolationException e) {
@@ -427,16 +470,13 @@ public class ProductImportService {
 
     /**
      * 处理单行导入：保存/更新 RSPU、关联表、变体、图片。
+     *
+     * @param existing 行级存在性预判结果（null 表示新建）；存在性/冲突判断已在图片下载前完成，
+     *                 跳过模式（updateIfExists=false）下已存在的行不会进入本方法
      */
-    private String processRow(ProductImportRow row, List<DownloadedImage> images, boolean updateIfExists,
+    private String processRow(ProductImportRow row, List<DownloadedImage> images,
                               Map<String, List<CategoryDict>> dictCache,
-                              int rowIndex, ProductImportResult result) {
-        RspuMaster existing = resolveExistingRspu(row.getRspuId(), row.getExternalCode());
-
-        if (existing != null && !updateIfExists) {
-            throw new BusinessException("产品已存在，已跳过");
-        }
-
+                              int rowIndex, ProductImportResult result, RspuMaster existing) {
         RspuMaster rspu;
         // 2.7：场景标签未归一时降级为行级警告（不阻断建档），对齐 Excel AI 导入 rowIssue 口径
         java.util.function.Consumer<String> sceneUnresolvedCollector = value ->
@@ -453,7 +493,7 @@ public class ProductImportService {
                 sceneUnresolvedCollector);
         } else {
             rspu = createRspu(row, dictCache, result, rowIndex);
-            saveStyles(rspu.getRspuId(), row.getPositioningLabel(), splitCsv(row.getMaterialTags()), dictCache.get("style"));
+            saveStyles(rspu.getRspuId(), row.getPositioningLabel(), dictCache.get("style"));
             saveScenes(rspu.getRspuId(), splitCsv(row.getSceneTags()), dictCache.get("scene"),
                 sceneUnresolvedCollector);
         }
@@ -515,7 +555,7 @@ public class ProductImportService {
             // 仅当用户显式提供了风格/职级但未能归一时才提示；缺失时兜底为「待识别」是已知行为，不冗余告警
             log.warn("导入生成 RSPU 业务编码跳过（风格/职级码未归一，rspu_code 留空，不阻断导入），rspuId={}，positioningLabel={}",
                 rspuId, positioningLabel);
-            result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+            result.getWarnings().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
                 "业务编码生成跳过（rspu_code 留空）: 风格/职级码未识别: " + positioningLabel));
         }
 
@@ -585,10 +625,11 @@ public class ProductImportService {
             rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         }
         if (!isUpdate || StringUtils.hasText(row.getMaterialTags())) {
-            rspu.setMaterialTags(writeJson(splitCsv(row.getMaterialTags())));
+            // 空集合写 null 而非 "[]"，避免空值两种形态并存（读取方对 null 与 "[]" 均按空处理）
+            rspu.setMaterialTags(writeJsonListOrNull(splitCsv(row.getMaterialTags())));
         }
         if (!isUpdate || StringUtils.hasText(row.getSceneTags())) {
-            rspu.setSceneTags(writeJson(splitCsv(row.getSceneTags())));
+            rspu.setSceneTags(writeJsonListOrNull(splitCsv(row.getSceneTags())));
         }
         if (!isUpdate || StringUtils.hasText(row.getSixDimTags())) {
             rspu.setSixDimTags(trim(row.getSixDimTags()));
@@ -618,8 +659,7 @@ public class ProductImportService {
         return rspu;
     }
 
-    private void saveStyles(String rspuId, String positioningLabel, List<String> materialTags,
-                            List<CategoryDict> styles) {
+    private void saveStyles(String rspuId, String positioningLabel, List<CategoryDict> styles) {
         List<RspuStyle> newRows = new ArrayList<>();
         if (StringUtils.hasText(positioningLabel)) {
             String code = normalizeDictCode(positioningLabel, styles);
@@ -631,7 +671,6 @@ public class ProductImportService {
             }
         }
         associationHelper.replaceStyles(rspuId, newRows, null, false);
-        // 材质标签不再作为风格处理，避免语义混乱
     }
 
     private void updateStyles(String rspuId, String positioningLabel, List<CategoryDict> styles) {
@@ -879,7 +918,7 @@ public class ProductImportService {
                 );
             } catch (IOException e) {
                 log.error("存储图片失败，rspuId={}, imageId={}", rspuId, imageId, e);
-                result.getFailures().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
+                result.getWarnings().add(new ProductImportFailure(rowIndex, row.getExternalCode(), row.getRspuId(),
                     "图片存储失败: " + downloaded.url));
                 continue;
             }
@@ -1087,6 +1126,17 @@ public class ProductImportService {
             log.warn("JSON 序列化失败", e);
             return "[]";
         }
+    }
+
+    /**
+     * 序列化字符串列表为 JSONB 文本；空列表写 null 而非 "[]"（对齐读取方 null 安全口径，
+     * 避免空集合在库中存在 null / "[]" 两种形态）。
+     *
+     * @param values 字符串列表
+     * @return JSON 字符串；列表为空时返回 null
+     */
+    private String writeJsonListOrNull(List<String> values) {
+        return values == null || values.isEmpty() ? null : writeJson(values);
     }
 
     private String trim(String value) {

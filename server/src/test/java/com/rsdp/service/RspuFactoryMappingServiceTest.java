@@ -349,4 +349,93 @@ class RspuFactoryMappingServiceTest {
         assertThatThrownBy(() -> mappingService.deleteMapping(999L))
             .isInstanceOf(ResourceNotFoundException.class);
     }
+
+    @Test
+    void requestFactoryCode_shouldHaveNotBlankAnnotation() throws NoSuchFieldException {
+        // DTO 校验：factoryCode 带 @NotBlank，空工厂代码在 Controller @Valid 层即被拒，
+        // 不再落到"工厂不存在: null"这类糊涂报错
+        var field = RspuFactoryMappingRequest.class.getDeclaredField("factoryCode");
+        var notBlank = field.getAnnotation(jakarta.validation.constraints.NotBlank.class);
+        assertThat(notBlank).isNotNull();
+        assertThat(notBlank.message()).isEqualTo("工厂代码不能为空");
+    }
+
+    @Test
+    void saveMapping_shouldThrowWhenFactoryCodeBlank() {
+        // Service 层兜底（导入链路不走 Controller @Valid）：空工厂代码给明确文案
+        RspuFactoryMappingRequest request = new RspuFactoryMappingRequest();
+        request.setRspuId("RSPU-001");
+        request.setFactoryCode(null);
+
+        assertThatThrownBy(() -> mappingService.saveMapping(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("工厂代码不能为空");
+    }
+
+    @Test
+    void saveMapping_shouldThrowWhenRspuIdBlank() {
+        RspuFactoryMappingRequest request = new RspuFactoryMappingRequest();
+        request.setRspuId(" ");
+        request.setFactoryCode("F001");
+
+        assertThatThrownBy(() -> mappingService.saveMapping(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("RSPU ID 不能为空");
+    }
+
+    @Test
+    void saveMapping_shouldTranslateUniqueViolationToFriendlyMessage() {
+        // 并发撞唯一索引（check-then-act 间隙另一事务已插入）：翻译为友好文案而非裸 500
+        RspuFactoryMappingRequest request = new RspuFactoryMappingRequest();
+        request.setRspuId("RSPU-001");
+        request.setFactoryCode("F001");
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+        when(mappingMapper.selectCount(any())).thenReturn(0L);
+        when(mappingMapper.insert(any(RspuFactoryMapping.class)))
+            .thenThrow(new org.springframework.dao.DuplicateKeyException(
+                "duplicate key value violates unique constraint \"rspu_factory_mapping_rspu_id_factory_code_key\""));
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            assertThatThrownBy(() -> mappingService.saveMapping(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("该工厂已关联此产品");
+        }
+    }
+
+    @Test
+    void saveMapping_shouldTranslatePrimaryUniqueViolationOnUpdate() {
+        // 更新路径并发撞主供部分唯一索引（uk_rspu_factory_mapping_primary）：同样翻译
+        RspuFactoryMappingRequest request = new RspuFactoryMappingRequest();
+        request.setMappingId(1L);
+        request.setRspuId("RSPU-001");
+        request.setFactoryCode("F001");
+        request.setIsPrimary(true);
+
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("F001");
+        RspuFactoryMapping existing = new RspuFactoryMapping();
+        existing.setMappingId(1L);
+        existing.setRspuId("RSPU-001");
+        existing.setFactoryCode("F001");
+
+        when(factoryMasterMapper.selectById("F001")).thenReturn(factory);
+        when(mappingMapper.selectById(1L)).thenReturn(existing);
+        when(mappingMapper.selectList(any())).thenReturn(List.of());
+        when(mappingMapper.updateById(any(RspuFactoryMapping.class)))
+            .thenThrow(new org.springframework.dao.DuplicateKeyException(
+                "duplicate key value violates unique constraint \"uk_rspu_factory_mapping_primary\""));
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            assertThatThrownBy(() -> mappingService.saveMapping(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("该工厂已关联此产品");
+        }
+    }
 }

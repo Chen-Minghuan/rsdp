@@ -357,9 +357,14 @@ class ProductImportServiceTest {
 
         ProductImportResult result = productImportService.importProducts(file, false);
 
+        // 冲突跳过：计 skippedCount（非真失败），跳过原因记入行级警告
         assertThat(result.getSuccessCount()).isEqualTo(0);
-        assertThat(result.getFailedCount()).isEqualTo(1);
-        assertThat(result.getFailures().get(0).getReason()).contains("已跳过");
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        assertThat(result.getSkippedCount()).isEqualTo(1);
+        assertThat(result.getSuccessCount() + result.getFailedCount() + result.getSkippedCount())
+            .isEqualTo(result.getTotalRows());
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).getReason()).contains("已跳过");
     }
 
     @Test
@@ -379,7 +384,8 @@ class ProductImportServiceTest {
 
     @Test
     void importProducts_shouldDetectDuplicateWhenSameProductReferencedByRspuIdAndExternalCode() {
-        // 同一产品在 Excel 中分别用 rspuId（第 1 行）和 externalCode（第 2 行）引用
+        // 同一产品在 Excel 中分别用 rspuId（第 1 行）和 externalCode（第 2 行）引用；
+        // 更新模式下第 1 行成功落库并占查重位，第 2 行识别为重复行
         ProductImportRow row1 = createValidRow();
         row1.setExternalCode(null);
         ProductImportRow row2 = createValidRow();
@@ -389,15 +395,17 @@ class ProductImportServiceTest {
         RspuMaster existing = new RspuMaster();
         existing.setRspuId("RSPU-OLD001");
         existing.setExternalCode("EXT-001");
+        existing.setCategoryCode("FS");
+        existing.setCategoryPath("[\"家具\"]");
+        existing.setPositioningLabel("MC");
         when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
         when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
 
-        ProductImportResult result = productImportService.importProducts(file, false);
+        ProductImportResult result = productImportService.importProducts(file, true);
 
-        // 第 1 行按「产品已存在」跳过，第 2 行识别为重复行
-        assertThat(result.getSuccessCount()).isEqualTo(0);
-        assertThat(result.getFailedCount()).isEqualTo(2);
-        assertThat(result.getFailures().get(1).getReason()).contains("重复");
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("重复");
     }
 
     @Test
@@ -464,8 +472,10 @@ class ProductImportServiceTest {
         ProductImportResult result = productImportService.importProducts(file, false);
 
         assertThat(result.getSuccessCount()).isEqualTo(1);
-        assertThat(result.getFailedCount()).isEqualTo(1);
-        assertThat(result.getFailures().get(0).getReason()).contains("主图下载失败");
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        // 图片下载失败降级为行级警告，不计真失败
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).getReason()).contains("主图下载失败");
         assertThat(insertedImages).isEmpty();
     }
 
@@ -486,8 +496,9 @@ class ProductImportServiceTest {
         ProductImportResult result = productImportService.importProducts(file, false);
 
         assertThat(result.getSuccessCount()).isEqualTo(1);
-        assertThat(result.getFailedCount()).isEqualTo(1);
-        assertThat(result.getFailures().get(0).getReason()).contains("不安全的图片 URL");
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).getReason()).contains("不安全的图片 URL");
         assertThat(insertedImages).isEmpty();
     }
 
@@ -645,8 +656,9 @@ class ProductImportServiceTest {
         ProductImportResult result = productImportService.importProducts(file, false);
 
         assertThat(result.getSuccessCount()).isEqualTo(1);
-        assertThat(result.getFailedCount()).isEqualTo(1);
-        assertThat(result.getFailures().get(0).getReason()).contains("图片存储失败");
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).getReason()).contains("图片存储失败");
         assertThat(insertedImages).isEmpty();
     }
 
@@ -847,8 +859,9 @@ class ProductImportServiceTest {
 
         // Then：SVG 被内容嗅探拒绝，产品数据仍正常导入
         assertThat(result.getSuccessCount()).isEqualTo(1);
-        assertThat(result.getFailedCount()).isEqualTo(1);
-        assertThat(result.getFailures().get(0).getReason()).contains("主图下载失败");
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).getReason()).contains("主图下载失败");
         assertThat(insertedImages).isEmpty();
     }
 
@@ -900,8 +913,9 @@ class ProductImportServiceTest {
             ProductImportResult result = productImportService.importProducts(file, false);
 
             assertThat(result.getSuccessCount()).isEqualTo(1);
-            assertThat(result.getFailedCount()).isEqualTo(1);
-            assertThat(result.getFailures().get(0).getReason()).contains("主图下载失败");
+            assertThat(result.getFailedCount()).isEqualTo(0);
+            assertThat(result.getWarnings()).hasSize(1);
+            assertThat(result.getWarnings().get(0).getReason()).contains("主图下载失败");
             assertThat(insertedImages).isEmpty();
         } finally {
             server.stop(0);
@@ -933,8 +947,9 @@ class ProductImportServiceTest {
             ProductImportResult result = productImportService.importProducts(file, false);
 
             assertThat(result.getSuccessCount()).isEqualTo(1);
-            assertThat(result.getFailedCount()).isEqualTo(1);
-            assertThat(result.getFailures().get(0).getReason()).contains("主图下载失败");
+            assertThat(result.getFailedCount()).isEqualTo(0);
+            assertThat(result.getWarnings()).hasSize(1);
+            assertThat(result.getWarnings().get(0).getReason()).contains("主图下载失败");
             assertThat(insertedImages).isEmpty();
         } finally {
             server.stop(0);
@@ -1012,6 +1027,70 @@ class ProductImportServiceTest {
         assertThat(result.getSuccessCount()).isEqualTo(0);
         assertThat(result.getFailedCount()).isEqualTo(1);
         assertThat(result.getFailures().get(0).getReason()).contains("主色 长度不能超过 64");
+    }
+
+    @Test
+    void importProducts_skipMode_shouldNotDownloadImagesBeforeSkip() {
+        // 跳过模式（updateIfExists=false）下行已存在：存在性判断前置到图片下载之前，
+        // 不再下载图片，也不产生图片相关明细
+        ProductImportRow row = createValidRow();
+        // 白名单内的死端口地址：若仍先下载图片会产生「主图下载失败」警告
+        row.setPrimaryImageUrl("http://127.0.0.1:1/test.jpg");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-OLD001");
+        existing.setExternalCode("EXT-001");
+        when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSkippedCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(0);
+        // 仅一条「已跳过」警告，无图片下载相关明细
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).getReason()).contains("已跳过");
+        verify(imageAssetsMapper, never()).selectList(any());
+        assertThat(insertedImages).isEmpty();
+    }
+
+    @Test
+    void importProducts_shouldAbortParsingWhenRowsExceedLimit() {
+        // 501 行：EasyExcel 读取期提前中断，不等整文件解析完再报
+        List<ProductImportRow> rows = new ArrayList<>();
+        for (int i = 0; i < 501; i++) {
+            rows.add(createValidRow());
+        }
+        MockMultipartFile file = createExcelFile(rows);
+
+        assertThatThrownBy(() -> productImportService.importProducts(file, false))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("单次导入不能超过 500 行");
+    }
+
+    @Test
+    void importProducts_failedRowShouldNotOccupyDedupeSlot() {
+        // 处理失败的行不占查重位：第 1 行落库异常失败，第 2 行同编码仍应正常处理（不误判重复）
+        ProductImportRow row1 = createValidRow();
+        ProductImportRow row2 = createValidRow();
+        MockMultipartFile file = createExcelFile(List.of(row1, row2));
+
+        when(rspuMapper.selectList(any())).thenReturn(List.of());
+        doAnswer(invocation -> {
+            throw new DataIntegrityViolationException("duplicate key value violates unique constraint");
+        }).doAnswer(invocation -> {
+            insertedRspus.add(invocation.getArgument(0));
+            return 1;
+        }).when(rspuMapper).insert(any(RspuMaster.class));
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(insertedRspus).hasSize(1);
+        // 唯一的失败是第 1 行的落库约束冲突，不存在「Excel 重复产品行」误判
+        assertThat(result.getFailures().get(0).getReason()).contains("重复导入");
+        assertThat(result.getFailures()).noneMatch(f -> f.getReason().contains("重复产品行"));
     }
 
     private void startImageServer() throws IOException {

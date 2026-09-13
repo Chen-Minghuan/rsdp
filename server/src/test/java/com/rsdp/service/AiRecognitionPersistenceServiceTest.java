@@ -640,4 +640,55 @@ class AiRecognitionPersistenceServiceTest {
         verify(auditLogService).logUpdate(eq("rspu_style"), eq("RSPU-TEST01"), any(), any(), eq("editor01"));
         verify(auditLogService).logUpdate(eq("rspu_scene"), eq("RSPU-TEST01"), any(), any(), eq("editor01"));
     }
+
+    @Test
+    void saveSuccess_shouldSkipAllWritesWhenRspuNotFound() {
+        // RSPU 不存在（含已软删，@TableLogic 查不到）：记 warn 直接返回，不做任何写入（防孤儿行）
+        when(rspuMapper.selectById(eq("RSPU-MISSING"))).thenReturn(null);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        labels.setSecondaryStyles(List.of("奶油风"));
+
+        String productName = persistenceService.saveSuccess("TASK-1", "RSPU-MISSING", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100);
+
+        assertThat(productName).isNull();
+        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+        verify(rspuStyleMapper, never()).insert(any(RspuStyle.class));
+        verify(rspuSceneMapper, never()).insert(any(com.rsdp.entity.RspuScene.class));
+        verify(imageAssetsMapper, never()).updateById(any(com.rsdp.entity.ImageAssets.class));
+        verify(aiRecognitionMapper, never()).insert(any(com.rsdp.entity.AiRecognition.class));
+    }
+
+    @Test
+    void saveSuccess_shouldPersistSecondaryStylesWhenPrimaryStyleUnresolved() {
+        // 主风格归一失败（字典未命中返回 null）：不阻断备选风格写入，备选集合照常入库（均为非主）
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        when(dictResolverService.resolveCodeByName("style", "小众混搭风")).thenReturn(null);
+        when(dictResolverService.resolveCodesByNames("style", List.of("奶油风", "北欧风")))
+            .thenReturn(List.of("CR", "NC"));
+        when(dictResolverService.resolveCodesByNames("scene", null)).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames(eq("material"), any())).thenReturn(List.of());
+        when(dictResolverService.resolveCodesByNames("fabric", null)).thenReturn(List.of());
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("小众混搭风");
+        labels.setSecondaryStyles(List.of("奶油风", "北欧风"));
+
+        persistenceService.saveSuccess("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
+            "qwen3-vl-plus", labels, 100);
+
+        // 主风格不写，备选 CR、NC 照常写入且均为非主
+        ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
+        verify(rspuStyleMapper, times(2)).insert(styleCaptor.capture());
+        List<RspuStyle> saved = styleCaptor.getAllValues();
+        assertThat(saved.get(0).getStyleCode()).isEqualTo("CR");
+        assertThat(saved.get(0).getIsPrimary()).isFalse();
+        assertThat(saved.get(1).getStyleCode()).isEqualTo("NC");
+        assertThat(saved.get(1).getIsPrimary()).isFalse();
+    }
 }

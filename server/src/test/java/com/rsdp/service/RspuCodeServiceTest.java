@@ -130,11 +130,35 @@ class RspuCodeServiceTest {
         rspu.setRspuCode(null);
         when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
         when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(5L);
+        when(rspuMapper.assignCodeIfAbsent(anyString(), anyString())).thenReturn(1);
 
         String code = rspuCodeService.assignCode("RSPU-001", "FS", "MC", "M");
 
         assertThat(code).isEqualTo("FS-MC-005-M");
         assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-005-M");
+    }
+
+    @Test
+    void assignCode_shouldReturnConcurrentCode_whenCondUpdateHitsZeroRows() {
+        // 并发双发：条件 UPDATE 影响 0 行说明编码已被并发发放，
+        // 回读返回现有编码（幂等安全），不覆盖、不重复记审计
+        stubDicts();
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-001");
+        rspu.setRspuCode(null);
+        RspuMaster concurrent = new RspuMaster();
+        concurrent.setRspuId("RSPU-001");
+        concurrent.setRspuCode("FS-MC-009-M");
+        when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu, concurrent);
+        when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(5L);
+        when(rspuMapper.assignCodeIfAbsent(anyString(), anyString())).thenReturn(0);
+
+        String code = rspuCodeService.assignCode("RSPU-001", "FS", "MC", "M");
+
+        assertThat(code).isEqualTo("FS-MC-009-M");
+        org.mockito.Mockito.verify(auditLogService, org.mockito.Mockito.never()).logUpdate(
+            anyString(), anyString(),
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), anyString());
     }
 
     @Test
@@ -146,6 +170,7 @@ class RspuCodeServiceTest {
         rspu.setRspuCode(null);
         when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
         when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(5L);
+        when(rspuMapper.assignCodeIfAbsent(anyString(), anyString())).thenReturn(1);
 
         String code = rspuCodeService.assignCode("RSPU-001", "FS", "MC", "M", "editor01");
 
@@ -167,6 +192,7 @@ class RspuCodeServiceTest {
         rspu.setRspuCode(null);
         when(rspuMapper.selectById("RSPU-001")).thenReturn(rspu);
         when(rspuCodeMapper.allocateSequence(anyString(), anyString())).thenReturn(3L);
+        when(rspuMapper.assignCodeIfAbsent(anyString(), anyString())).thenReturn(1);
 
         String code = rspuCodeService.tryAssignCode("RSPU-001", "FS", "MC", "M");
 
