@@ -679,3 +679,68 @@ export interface PreviewEdit {
   /** 修改后的单元格值；null 表示清空 */
   value: string | null
 }
+
+// ==================== 同款合并（决策点②共享主档模型，M4） ====================
+
+/** 疑似同款配对项（GET /products/{rspuId}/duplicate-suspects） */
+export interface DuplicateSuspectItem {
+  suspectId: number
+  matchedRspuId: string
+  matchedRspuCode: string | null
+  matchedProductName: string | null
+  similarity: number
+  createdAt: string
+}
+
+/** 合并预览字段差异项 */
+export interface MergeFieldDiff {
+  field: string
+  label: string
+  sourceValue: unknown
+  targetValue: unknown
+  /** 默认行为 = 仅补空缺：源有值且目标空缺时自动填入 */
+  willFill: boolean
+}
+
+/** 合并预览 RSKU 冲突项 */
+export interface MergeConflictItem {
+  rskuId: string
+  factoryCode: string
+  conflictRskuId: string
+}
+
+/** 合并预览结果（POST /products/merge/preview） */
+export interface MergePreviewResult {
+  sourceRspuId: string
+  targetRspuId: string
+  fieldDiffs: MergeFieldDiff[]
+  conflicts: MergeConflictItem[]
+  movedVariantCount: number
+  rskuCount: number
+  imageCount: number
+}
+
+/** 同款合并请求（POST /products/merge） */
+export interface RspuMergeRequest {
+  sourceRspuId: string
+  targetRspuId: string
+  /** 指定这些字段取副本值覆盖目标（白名单字段） */
+  takeSourceFields?: string[]
+  /** RSKU 冲突裁决：副本 rskuId → keepSource/keepTarget */
+  rskuConflictResolutions?: Record<string, 'keepSource' | 'keepTarget'>
+}
+
+/** 同款合并结果 */
+export interface MergeResult {
+  sourceRspuId: string
+  targetRspuId: string
+  changedFields: string[]
+  movedVariantCount: number
+  migratedCount: number
+  migratedRskuIds: string[]
+  conflictKeepTargetDeleted: string[]
+  conflictKeepSourceReplaced: string[]
+  movedImageCount: number
+  reissuedRskuCodes: number
+  message: string
+}

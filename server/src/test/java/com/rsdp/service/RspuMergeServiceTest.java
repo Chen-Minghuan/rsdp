@@ -383,6 +383,52 @@ class RspuMergeServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void preview_shouldReturnFieldDiffsAndConflictsWithoutWrites() {
+        // 目标已有同工厂同变体报价 → 预览返回冲突但不报错、不写库
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class)))
+            .thenReturn(
+                List.of(rsku("RSKU-S-1", SRC, "VAR-S-HIT", "A001", "old-code")),
+                List.of(rsku("RSKU-T-1", TGT, "VAR-T-1", "A001", "tgt-code")));
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+
+            Map<String, Object> result = mergeService.preview(request());
+
+            List<Map<String, Object>> conflicts = (List<Map<String, Object>>) result.get("conflicts");
+            assertThat(conflicts).hasSize(1);
+            assertThat(conflicts.get(0).get("rskuId")).isEqualTo("RSKU-S-1");
+            assertThat(conflicts.get(0).get("conflictRskuId")).isEqualTo("RSKU-T-1");
+            List<Map<String, Object>> fieldDiffs = (List<Map<String, Object>>) result.get("fieldDiffs");
+            assertThat(fieldDiffs).hasSize(11);
+            // description：源有值目标空缺 → willFill=true；productName：双方有值 → willFill=false
+            assertThat(fieldDiffs.stream().filter(d -> "description".equals(d.get("field"))).findFirst().orElseThrow()
+                .get("willFill")).isEqualTo(true);
+            assertThat(fieldDiffs.stream().filter(d -> "productName".equals(d.get("field"))).findFirst().orElseThrow()
+                .get("willFill")).isEqualTo(false);
+            // 只读：无任何写入
+            verify(rskuSupplyMapper, never()).update(isNull(), any(UpdateWrapper.class));
+            verify(rskuSupplyMapper, never()).deleteById(anyString());
+            verify(rspuVariantMapper, never()).updateById(any(RspuVariant.class));
+            verify(productQueryService, never()).deleteProduct(anyString());
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void preview_noConflict_shouldReturnEmptyConflicts() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+
+            Map<String, Object> result = mergeService.preview(request());
+
+            assertThat((List<Map<String, Object>>) result.get("conflicts")).isEmpty();
+            assertThat(result.get("rskuCount")).isEqualTo(1);
+            assertThat(result.get("movedVariantCount")).isEqualTo(1);
+        }
+    }
+
+    @Test
     void listPendingSuspects_shouldEnrichMatchedProduct() {
         com.rsdp.entity.RspuDuplicateSuspect suspect = new com.rsdp.entity.RspuDuplicateSuspect();
         suspect.setSuspectId(7L);

@@ -46,6 +46,7 @@ import type { RspuVariant, RspuVariantCreateRequest } from '@/types/variant'
 import type { RspuRelationCreateRequest } from '@/types/relation'
 import type { FavoriteFolder } from '@/types/favorite'
 import { useRequestAbort } from '@/composables/useRequestAbort'
+import MergeProductDialog from '@/components/MergeProductDialog.vue'
 
 const route = useRoute()
 const signal = useRequestAbort()
@@ -548,6 +549,13 @@ async function handleReRecognize() {
   } finally {
     reRecognizing.value = false
   }
+}
+
+/** 同款合并向导（M4）：合并成功后副本已软删，跳转到目标产品详情。 */
+const showMergeDialog = ref(false)
+
+function handleMerged(targetRspuId: string) {
+  router.replace({ name: 'ProductDetail', params: { rspuId: targetRspuId } })
 }
 
 function openDictCreateModal(type: 'material' | 'fabric' | 'scene') {
@@ -1068,6 +1076,15 @@ onBeforeRouteUpdate((to, from) => {
             @click="handleReview('存疑')"
           >
             标记存疑
+          </n-button>
+          <n-button
+            v-if="isPlatformStaff && detail.rspu.reviewStatus === '存疑'"
+            size="small"
+            type="primary"
+            ghost
+            @click="showMergeDialog = true"
+          >
+            合并到同款产品
           </n-button>
           <n-button
             v-if="canDeleteProduct && canManageProduct"
@@ -1759,6 +1776,14 @@ onBeforeRouteUpdate((to, from) => {
         </n-space>
       </template>
     </n-modal>
+
+    <!-- 同款合并向导（M4，仅平台员工 + 存疑产品可见入口） -->
+    <MergeProductDialog
+      v-model:show="showMergeDialog"
+      :source-rspu-id="rspuId"
+      :source-label="detail?.rspu.productName || detail?.rspu.rspuCode || rspuId"
+      @merged="handleMerged"
+    />
   </PageContainer>
 </template>
 
