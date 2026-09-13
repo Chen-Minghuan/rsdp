@@ -20,6 +20,7 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.ContentHashes;
+import com.rsdp.util.DictNormalizes;
 import com.rsdp.util.ImageBackgroundAnalyzer;
 import com.rsdp.util.ImageWhitespaceTrimmer;
 import com.rsdp.util.PdfEmbeddedImageExtractor;
@@ -88,6 +89,7 @@ public class PdfImportService {
     private final StorageService storageService;
     private final AuditLogService auditLogService;
     private final AsyncTaskProcessor asyncTaskProcessor;
+    private final DictService dictService;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.document-import.pdf.max-file-size-mb:100}")
@@ -144,6 +146,12 @@ public class PdfImportService {
     private static final double CROP_PAD_RATIO = 0.05;
 
     /**
+     * 兜底品类码：AI 未检测出品类且用户未提供品类提示时的最终兜底，
+     * 与手工录入（ProductService）空品类默认口径一致。
+     */
+    private static final String DEFAULT_CATEGORY_CODE = "FS";
+
+    /**
      * 提交 PDF 导入：校验 + 原始文件落存储 + 建批次（pending）+ 建异步任务后立即返回。
      *
      * @param file         PDF 文件
@@ -153,6 +161,12 @@ public class PdfImportService {
      */
     @Transactional
     public DocumentImportSubmitResult importPdf(MultipartFile file, String categoryHint) throws IOException {
+        // 入口校验：品类提示非空时必须是有效 category 字典码，非法直接拒绝
+        // （对齐 Excel 导入 validateRow「品类码不存在」口径，避免非法码流入批处理后逐产品失败计 failure）
+        if (StringUtils.hasText(categoryHint)
+            && !DictNormalizes.isValidIgnoreCase(categoryHint.trim(), dictService.listByType("category"))) {
+            throw new BusinessException("品类码不存在: " + categoryHint.trim().toUpperCase());
+        }
         long maxSizeBytes = (long) maxFileSizeMb * 1024 * 1024;
         int totalPages = PdfFileValidator.validate(file, maxSizeBytes, maxPages);
         byte[] pdfBytes = file.getBytes();
@@ -332,19 +346,18 @@ public class PdfImportService {
             }
         }
 
-        if (!chunkImages.isEmpty()) {
-            // 块内批量 AI 检测（region.pageIndex 为块内相对序号，映射回绝对页码）
-            List<DocumentProductRegion> regions = detectProductRegions(chunkImages);
-            for (int k = 0; k < regions.size(); k++) {
-                DocumentProductRegion region = regions.get(k);
-                int pageIndex = chunkIndexes.get(k);
-                if (region == null) {
-                    region = new DocumentProductRegion();
-                    region.setPageType("unknown");
-                }
-                region.setPageIndex(pageIndex);
-                processPage(document, batch, pageIndex, chunkImages.get(k), region, acc);
+        // 块内批量 AI 检测（region.pageIndex 为块内相对序号，映射回绝对页码；
+        // 块内全部渲染失败时 chunkImages 为空，detectProductRegions 对空输入自然无操作）
+        List<DocumentProductRegion> regions = detectProductRegions(chunkImages);
+        for (int k = 0; k < regions.size(); k++) {
+            DocumentProductRegion region = regions.get(k);
+            int pageIndex = chunkIndexes.get(k);
+            if (region == null) {
+                region = new DocumentProductRegion();
+                region.setPageType("unknown");
             }
+            region.setPageIndex(pageIndex);
+            processPage(document, batch, pageIndex, chunkImages.get(k), region, acc);
         }
         // 每处理完一个页块回写一次批次进度（块内逐页累计，块尾落库）
         flushProgress(batch, acc);
@@ -1104,7 +1117,7 @@ public class PdfImportService {
     }
 
     /**
-     * 解析最终品类码：优先使用 AI 检测出的品类，未检测出时使用用户提示，最后兜底 FS。
+     * 解析最终品类码：优先使用 AI 检测出的品类，未检测出时使用用户提示，最后兜底 {@link #DEFAULT_CATEGORY_CODE}。
      */
     private String resolveCategory(String detectedCategory, String categoryHint) {
         if (detectedCategory != null && !detectedCategory.isBlank()) {
@@ -1113,6 +1126,6 @@ public class PdfImportService {
         if (categoryHint != null && !categoryHint.isBlank()) {
             return categoryHint.trim().toUpperCase();
         }
-        return "FS";
+        return DEFAULT_CATEGORY_CODE;
     }
 }

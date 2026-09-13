@@ -91,6 +91,13 @@ public class AiRecognitionPersistenceService {
     public String saveSuccess(String taskId, String rspuId, String imageId,
                               String recognitionId, String modelName,
                               AiLabels labels, int processingTime, String operator) {
+        // RSPU 不存在（含已软删，@TableLogic 查不到）时整笔跳过：
+        // 关联表/识别记录均以 RSPU 为前提，RSPU 缺失时写入只会产生孤儿行
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null) {
+            log.warn("保存识别结果时 RSPU 不存在，跳过全部写入，rspuId={}", rspuId);
+            return null;
+        }
         String styleCode = dictResolverService.resolveCodeByName("style", labels.getStyle());
         List<String> secondaryStyleCodes = dictResolverService.resolveCodesByNames("style", labels.getSecondaryStyles());
         List<String> sceneCodes = dictResolverService.resolveCodesByNames("scene", labels.getSceneTags());
@@ -104,7 +111,7 @@ public class AiRecognitionPersistenceService {
         List<String> materialCodes = dictResolverService.resolveCodesByNames("material", materialCandidates);
         List<String> fabricCodes = dictResolverService.resolveCodesByNames("fabric", labels.getFabricTags());
 
-        String productName = updateRspu(rspuId, labels, styleCode, materialCodes, fabricCodes, sceneCodes, modelName, operator);
+        String productName = updateRspu(rspu, labels, styleCode, materialCodes, fabricCodes, sceneCodes, modelName, operator);
         refreshStyleAssociations(rspuId, styleCode, secondaryStyleCodes, operator);
         refreshSceneAssociations(rspuId, sceneCodes, operator);
         markImageProcessed(imageId);
@@ -157,15 +164,10 @@ public class AiRecognitionPersistenceService {
         return StringUtils.hasText(operator) ? operator : SecurityOperatorContext.currentUsername();
     }
 
-    private String updateRspu(String rspuId, AiLabels labels, String styleCode,
+    private String updateRspu(RspuMaster rspu, AiLabels labels, String styleCode,
                             List<String> materialCodes, List<String> fabricCodes, List<String> sceneCodes,
                             String modelName, String operator) {
-        RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null) {
-            log.warn("保存识别结果时 RSPU 不存在，rspuId={}", rspuId);
-            return null;
-        }
-
+        String rspuId = rspu.getRspuId();
         RspuMaster oldSnapshot = snapshot(rspu);
         // 人工/Excel 已明确提供的字段不被 AI 覆盖，AI 只补空缺
         // （来源判断 = 字段是否为空；Excel 导入与人工录入提供过的字段必然非空）
@@ -429,22 +431,22 @@ public class AiRecognitionPersistenceService {
         if (existing != null && existing > 0) {
             return;
         }
-        if (styleCode == null || styleCode.isBlank()) {
-            return;
-        }
         List<String> insertedCodes = new java.util.ArrayList<>();
-        RspuStyle style = new RspuStyle();
-        style.setRspuId(rspuId);
-        style.setDictType("style");
-        style.setStyleCode(styleCode);
-        style.setIsPrimary(true);
-        style.setCreatedAt(LocalDateTime.now());
-        rspuStyleMapper.insert(style);
-        insertedCodes.add(styleCode);
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        // 主风格归一失败（styleCode 为空）只跳过主风格写入，不阻断已归一成功的备选风格
+        if (styleCode != null && !styleCode.isBlank()) {
+            RspuStyle style = new RspuStyle();
+            style.setRspuId(rspuId);
+            style.setDictType("style");
+            style.setStyleCode(styleCode);
+            style.setIsPrimary(true);
+            style.setCreatedAt(LocalDateTime.now());
+            rspuStyleMapper.insert(style);
+            insertedCodes.add(styleCode);
+            seen.add(styleCode);
+        }
         // 备选风格（AI 识别输出，去重且不与主风格重复）
         if (secondaryStyleCodes != null) {
-            java.util.Set<String> seen = new java.util.HashSet<>();
-            seen.add(styleCode);
             for (String secondaryCode : secondaryStyleCodes) {
                 if (secondaryCode == null || secondaryCode.isBlank() || !seen.add(secondaryCode)) {
                     continue;
@@ -458,6 +460,9 @@ public class AiRecognitionPersistenceService {
                 rspuStyleMapper.insert(secondary);
                 insertedCodes.add(secondaryCode);
             }
+        }
+        if (insertedCodes.isEmpty()) {
+            return;
         }
         // 汇总审计（P2-5）：每 RSPU 一条，detail 记风格码前后集合（AI 只补空缺，旧集合恒为空）
         auditLogService.logUpdate("rspu_style", rspuId,

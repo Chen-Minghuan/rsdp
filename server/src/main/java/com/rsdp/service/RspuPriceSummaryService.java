@@ -48,6 +48,10 @@ public class RspuPriceSummaryService {
     /**
      * 重算单个 RSPU 的价格投影并 upsert。
      *
+     * <p>聚合口径（阶段 5 拍板）：active_rsku_count 与 min/max_factory_price 均只统计
+     * 「factory_price 非空 且 status='active' 且未软删」的 RSKU 行——无报价行与已停产
+     * （discontinued）/暂停行不参与聚合（软删行由 {@code @TableLogic} 自动排除）。</p>
+     *
      * <p>不加事务注解：单 upsert 语句，在调用方（RSKU 写路径）的事务内执行即随其提交；
      * 无有效 RSKU 时投影行保留（min/max 为 NULL、count 为 0），与"无报价"列表行为一致。</p>
      *
@@ -112,10 +116,13 @@ public class RspuPriceSummaryService {
         if (!StringUtils.hasText(rspuId)) {
             return;
         }
-        // 只取 factory_price 列：避免整实体映射，解密也仅限价格列
+        // 只取 factory_price 列：避免整实体映射，解密也仅限价格列；
+        // 口径：仅统计 factory_price 非空且 status='active' 的行（软删行由 @TableLogic 排除）
         List<RskuSupply> rskus = rskuSupplyMapper.selectList(new QueryWrapper<RskuSupply>()
             .select("factory_price")
-            .eq("rspu_id", rspuId));
+            .eq("rspu_id", rspuId)
+            .eq("status", "active")
+            .isNotNull("factory_price"));
 
         BigDecimal min = null;
         BigDecimal max = null;

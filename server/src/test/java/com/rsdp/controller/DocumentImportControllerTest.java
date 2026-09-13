@@ -2,6 +2,7 @@ package com.rsdp.controller;
 
 import com.rsdp.dto.response.DocumentImportResult;
 import com.rsdp.dto.response.DocumentImportSubmitResult;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.PdfImportService;
@@ -18,6 +19,7 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -69,6 +71,22 @@ class DocumentImportControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.batchId").value("BATCH-TEST02"));
+    }
+
+    @Test
+    void importFromDocument_invalidCategoryHint_shouldReturn400() throws Exception {
+        // 入口校验：非法品类码由服务层抛 BusinessException(400)，统一响应体 code=400
+        when(pdfImportService.importPdf(any(), eq("XX")))
+            .thenThrow(new BusinessException("品类码不存在: XX"));
+
+        MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", "%PDF".getBytes());
+
+        mockMvc.perform(multipart("/api/v1/products/document-import")
+                .file(file)
+                .param("categoryHint", "XX"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.message").value("品类码不存在: XX"));
     }
 
     @Test

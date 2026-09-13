@@ -7,6 +7,12 @@ import java.util.List;
 
 /**
  * 产品（RSPU）批量导入结果。
+ *
+ * <p>计数口径：successCount + failedCount + skippedCount = totalRows。
+ * 真失败（校验不通过、重复行、落库异常等导致该行未导入）进 failedCount/failures；
+ * 冲突跳过（updateIfExists=false 且产品已存在）进 skippedCount；
+ * 不阻断导入的行级问题（图片下载/存储失败、场景标签未归一、rspu_code 发号跳过等）仅进 warnings，
+ * 不影响行计数。</p>
  */
 @Data
 public class ProductImportResult {
@@ -22,12 +28,17 @@ public class ProductImportResult {
     private int successCount;
 
     /**
-     * 失败数。
+     * 真失败数（= failures.size()，行未导入）。
      */
     private int failedCount;
 
     /**
-     * 失败明细。
+     * 冲突跳过数（updateIfExists=false 且产品已存在，行未导入也不算失败；跳过原因记入 warnings）。
+     */
+    private int skippedCount;
+
+    /**
+     * 真失败明细。
      */
     private List<ProductImportFailure> failures = new ArrayList<>();
 

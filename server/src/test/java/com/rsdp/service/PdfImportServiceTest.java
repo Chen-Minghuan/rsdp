@@ -7,6 +7,7 @@ import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.dto.response.DocumentImportResult;
 import com.rsdp.dto.response.DocumentImportSubmitResult;
 import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.DocumentImportBatch;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.exception.BusinessException;
@@ -89,6 +90,9 @@ class PdfImportServiceTest {
     @Mock
     private AsyncTaskProcessor asyncTaskProcessor;
 
+    @Mock
+    private DictService dictService;
+
     @InjectMocks
     private PdfImportService pdfImportService;
 
@@ -114,6 +118,9 @@ class PdfImportServiceTest {
         MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", pdfBytes);
         when(storageService.store(any(), anyString(), anyLong(), anyString()))
             .thenAnswer(inv -> inv.getArgument(1));
+        CategoryDict sf = new CategoryDict();
+        sf.setDictCode("SF");
+        when(dictService.listByType("category")).thenReturn(List.of(sf));
 
         DocumentImportSubmitResult result = pdfImportService.importPdf(file, "SF");
 
@@ -182,6 +189,21 @@ class PdfImportServiceTest {
         assertThatThrownBy(() -> pdfImportService.importPdf(file, null))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("PDF 文件大小超过限制");
+    }
+
+    @Test
+    void importPdf_shouldRejectInvalidCategoryHint() throws IOException {
+        // 入口校验：非法品类码直接拒绝（对齐 Excel 导入 validateRow 口径），不建批次、不落存储
+        CategoryDict sf = new CategoryDict();
+        sf.setDictCode("SF");
+        when(dictService.listByType("category")).thenReturn(List.of(sf));
+        MockMultipartFile file = new MockMultipartFile("file", "catalog.pdf", "application/pdf", "%PDF".getBytes());
+
+        assertThatThrownBy(() -> pdfImportService.importPdf(file, "xx"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("品类码不存在: XX");
+        verify(batchMapper, never()).insert(any(DocumentImportBatch.class));
+        verify(storageService, never()).store(any(), anyString(), anyLong(), anyString());
     }
 
     // ==================== 批次执行（异步） ====================

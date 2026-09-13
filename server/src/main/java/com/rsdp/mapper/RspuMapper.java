@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.rsdp.entity.RspuMaster;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
@@ -54,4 +55,18 @@ public interface RspuMapper extends BaseMapper<RspuMaster> {
      */
     @Delete("DELETE FROM rspu_master WHERE rspu_id = #{rspuId}")
     int physicalDeleteById(String rspuId);
+
+    /**
+     * 条件发放业务编码：仅当 rspu_code 仍为空时写入（并发安全发号）。
+     *
+     * <p>并发双发时只有一个事务的 UPDATE 命中（影响 1 行），另一事务影响 0 行，
+     * 由调用方回读现有编码返回，不覆盖已发放编码。</p>
+     *
+     * @param rspuId RSPU ID
+     * @param code   待写入的业务编码
+     * @return 影响行数（1=发号成功，0=已有编码被并发发放）
+     */
+    @Update("UPDATE rspu_master SET rspu_code = #{code}, updated_at = now()"
+        + " WHERE rspu_id = #{rspuId} AND rspu_code IS NULL")
+    int assignCodeIfAbsent(@Param("rspuId") String rspuId, @Param("code") String code);
 }

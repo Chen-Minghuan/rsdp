@@ -88,6 +88,7 @@ public class ProductImportRow {
     @ExcelProperty("变体产品等级")
     private String variantProductLevel;
 
+    /** 交期天数：本列暂不入库——传统 Excel 导入链路解析后丢弃（保留列以保持模板兼容），仅 Excel AI 导入链路消费（写 RSKU 交期） */
     @ExcelProperty("交期天数")
     private Integer leadTimeDays;
 

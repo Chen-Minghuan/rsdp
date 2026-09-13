@@ -163,11 +163,14 @@ async function handleSplitSubmit() {
       dimensionText: r.nearbyText?.dimensionText ?? undefined
     }))
     const results = await entryByRegions(file, selections)
-    results.forEach((result, i) => {
+    // 收集式返回（5.1）：与输入区域同序，逐项成败——部分失败不再整单 500
+    const succeeded = results.filter(r => r.success !== false)
+    const failed = results.filter(r => r.success === false)
+    succeeded.forEach((result, i) => {
       taskList.value.unshift({
         taskId: result.taskId,
         rspuId: result.rspuId,
-        fileName: `拆分区域 ${i + 1}：${chosen[i].productName || '未命名'}`,
+        fileName: `拆分区域 ${result.region ?? i + 1}：${chosen[(result.region ?? i + 1) - 1]?.productName || '未命名'}`,
         imageIds: result.imageIds,
         status: 'pending',
         progress: 0,
@@ -178,7 +181,15 @@ async function handleSplitSubmit() {
     saveTasks()
     closeSplit()
     fileList.value = []
-    message.success(`已按 ${results.length} 个区域创建录入任务`)
+    if (failed.length > 0) {
+      message.warning(
+        `已按 ${succeeded.length} 个区域创建录入任务，${failed.length} 个失败：`
+        + failed.map(f => `区域${f.region}（${f.reason || '未知原因'}）`).join('；'),
+        { duration: 8000 }
+      )
+    } else {
+      message.success(`已按 ${succeeded.length} 个区域创建录入任务`)
+    }
     await pollAllTasks()
     saveTasks()
     ensurePolling()

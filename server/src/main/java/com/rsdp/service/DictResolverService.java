@@ -192,15 +192,17 @@ public class DictResolverService {
      * @return 查找映射
      */
     private Map<String, String> buildNameToCodeMap(String dictType) {
+        // 一次字典查询喂两轮填充：第一轮标准名/英文名，第二轮别名（putIfAbsent 保证精确匹配优先）
+        List<CategoryDict> dicts = dictService.listByType(dictType);
         Map<String, String> map = new HashMap<>();
-        for (CategoryDict d : dictService.listByType(dictType)) {
+        for (CategoryDict d : dicts) {
             Stream.of(d.getDictName(), d.getDictNameEn())
                 .filter(Objects::nonNull)
                 .map(String::trim)
                 .filter(k -> !k.isEmpty())
                 .forEach(k -> map.putIfAbsent(k, d.getDictCode()));
         }
-        for (CategoryDict d : dictService.listByType(dictType)) {
+        for (CategoryDict d : dicts) {
             for (String alias : parseAliases(d.getAliases())) {
                 map.putIfAbsent(alias, d.getDictCode());
             }
