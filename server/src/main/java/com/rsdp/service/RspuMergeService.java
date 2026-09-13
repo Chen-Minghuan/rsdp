@@ -24,6 +24,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.util.VariantKeys;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -77,6 +78,7 @@ public class RspuMergeService {
     private final RspuMergeMapper rspuMergeMapper;
     private final RspuRelationMapper rspuRelationMapper;
     private final AuditLogService auditLogService;
+    private final RspuAssociationHelper associationHelper;
     private final RspuPriceSummaryService rspuPriceSummaryService;
     private final RskuCodeService rskuCodeService;
     private final ProductQueryService productQueryService;
@@ -494,19 +496,16 @@ public class RspuMergeService {
             }
         }
         if (!addedStyles.isEmpty()) {
-            rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", targetId));
-            for (RspuStyle s : targetStyles) {
-                rspuStyleMapper.insert(s);
-            }
+            List<RspuStyle> unionRows = new ArrayList<>(targetStyles);
             for (RspuStyle s : addedStyles) {
                 RspuStyle row = new RspuStyle();
                 row.setRspuId(targetId);
                 row.setStyleCode(s.getStyleCode());
                 row.setIsPrimary(false);
-                rspuStyleMapper.insert(row);
+                unionRows.add(row);
             }
-            auditLogService.logUpdate("rspu_style", targetId,
-                targetStyles.stream().map(RspuStyle::getStyleCode).toList(), styleCodes, operator);
+            // 汇总审计（2.3 口径：Map.of("styleCodes", 码列表)，helper 统一）
+            associationHelper.replaceStyles(targetId, unionRows, operator, true);
         }
 
         List<RspuScene> targetScenes = rspuSceneMapper.selectList(
@@ -522,31 +521,22 @@ public class RspuMergeService {
             }
         }
         if (!addedScenes.isEmpty()) {
-            rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", targetId));
-            for (RspuScene s : targetScenes) {
-                rspuSceneMapper.insert(s);
-            }
+            List<RspuScene> unionRows = new ArrayList<>(targetScenes);
             for (RspuScene s : addedScenes) {
                 RspuScene row = new RspuScene();
                 row.setRspuId(targetId);
                 row.setSceneCode(s.getSceneCode());
-                rspuSceneMapper.insert(row);
+                unionRows.add(row);
             }
-            auditLogService.logUpdate("rspu_scene", targetId,
-                targetScenes.stream().map(RspuScene::getSceneCode).toList(), sceneCodes, operator);
+            // 汇总审计（2.3 口径：Map.of("sceneCodes", 码列表)，helper 统一）
+            associationHelper.replaceScenes(targetId, unionRows, operator, true);
         }
         return List.copyOf(sceneCodes);
     }
 
-    /** uk_variant_attrs 同口径的变体属性 key：COALESCE(size_code,size_text,'')等三段拼接。 */
+    /** uk_variant_attrs 同口径的变体属性 key（委托共享实现，4.3 批③）。 */
     private String variantKey(RspuVariant v) {
-        return coalesce(v.getSizeCode(), v.getSizeText()) + "|"
-            + coalesce(v.getColorCode(), v.getColorText()) + "|"
-            + coalesce(v.getMaterialCode(), v.getMaterialText());
-    }
-
-    private String coalesce(String a, String b) {
-        return a != null ? a : (b != null ? b : "");
+        return VariantKeys.attrKey(v);
     }
 
     private String rskuConflictKey(String variantId, String factoryCode) {

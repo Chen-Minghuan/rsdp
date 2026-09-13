@@ -57,11 +57,14 @@ import com.rsdp.security.SecurityUser;
 import com.rsdp.security.datascope.DataScope;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.util.PriceBands;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ConstraintViolations;
+import com.rsdp.util.DictNormalizes;
 import com.rsdp.util.ExcelFileValidator;
 import com.rsdp.util.ExcelHeaderNormalizer;
 import com.rsdp.util.ExcelImageExtractor;
+import com.rsdp.util.ImageUrlDownloads;
 import com.rsdp.util.ImageUrlValidator;
 import com.rsdp.util.SizeSpecParser;
 import lombok.RequiredArgsConstructor;
@@ -142,7 +145,6 @@ public class ExcelAiImportService {
 
     private static final int MAX_ROWS = 500;
     private static final long MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
-    private static final int MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
     private static final int PREVIEW_ROW_COUNT = 5;
     private static final int MAX_CATEGORY_SUGGESTIONS = 50;
     /** MIXED 逐行品类分类单次 AI 调用承载的最大逻辑产品数（控制 prompt 长度与超时风险） */
@@ -269,6 +271,7 @@ public class ExcelAiImportService {
     private final StorageService storageService;
     private final DictService dictService;
     private final AuditLogService auditLogService;
+    private final RspuAssociationHelper associationHelper;
     private final VariantCodeMapper variantCodeMapper;
     private final ObjectMapper objectMapper;
     private final PlatformTransactionManager transactionManager;
@@ -4341,10 +4344,7 @@ public class ExcelAiImportService {
     }
 
     private boolean isValidDictCode(String code, List<CategoryDict> dicts) {
-        if (!StringUtils.hasText(code)) {
-            return false;
-        }
-        return dicts.stream().anyMatch(d -> code.equalsIgnoreCase(d.getDictCode()));
+        return DictNormalizes.isValidIgnoreCase(code, dicts);
     }
 
     private String normalizeDictCode(String input, List<CategoryDict> dicts) {
@@ -4373,17 +4373,7 @@ public class ExcelAiImportService {
                 return byAlias;
             }
         }
-        for (CategoryDict d : dicts) {
-            if (trimmed.equalsIgnoreCase(d.getDictCode())) {
-                return d.getDictCode();
-            }
-        }
-        for (CategoryDict d : dicts) {
-            if (StringUtils.hasText(d.getDictName()) && trimmed.equals(d.getDictName())) {
-                return d.getDictCode();
-            }
-        }
-        return trimmed;
+        return DictNormalizes.normalize(trimmed, dicts);
     }
 
     private List<DownloadedImage> downloadUrlImages(ProductImportRow row, int rowIndex) {
@@ -4434,35 +4424,12 @@ public class ExcelAiImportService {
     }
 
     private DownloadedImage downloadImage(String url, boolean primary) {
-        try {
-            URLConnection connection = new URL(url).openConnection();
-            if (connection instanceof HttpURLConnection httpConnection) {
-                httpConnection.setInstanceFollowRedirects(false);
-            }
-            connection.setConnectTimeout(10000);
-            connection.setReadTimeout(30000);
-            String contentType = connection.getContentType();
-            // Content-Length 预检 + 限量读取：先判大小再下载，避免超限图片占满内存（P2-8）
-            long contentLength = connection.getContentLengthLong();
-            if (contentLength > MAX_IMAGE_SIZE) {
-                log.warn("图片超过大小上限（{} 字节），已跳过: {}", contentLength, url);
-                if (connection instanceof HttpURLConnection httpConnection) {
-                    httpConnection.disconnect();
-                }
-                return null;
-            }
-            try (InputStream in = connection.getInputStream()) {
-                // 多读 1 字节用于判断是否超限，无需 readAllBytes 全量加载
-                byte[] bytes = in.readNBytes(MAX_IMAGE_SIZE + 1);
-                if (bytes.length == 0 || bytes.length > MAX_IMAGE_SIZE) {
-                    return null;
-                }
-                return new DownloadedImage(url, bytes, contentType, primary, false, hashBytes(bytes));
-            }
-        } catch (Exception e) {
-            log.warn("下载图片失败: {}", url, e);
+        ImageUrlDownloads.FetchResult fetched = ImageUrlDownloads.fetch(url);
+        if (fetched == null) {
             return null;
         }
+        return new DownloadedImage(url, fetched.bytes(), fetched.contentType(), primary, false,
+            hashBytes(fetched.bytes()));
     }
 
     /**
@@ -5484,17 +5451,8 @@ public class ExcelAiImportService {
     }
 
     private String resolvePriceBand(BigDecimal price) {
-        if (price == null) {
-            return null;
-        }
-        // 与 RSKU 价格带保持一致：<=1000 low, <=5000 mid, >5000 high
-        if (price.compareTo(new BigDecimal("1000")) < 0) {
-            return "low";
-        }
-        if (price.compareTo(new BigDecimal("5000")) < 0) {
-            return "mid";
-        }
-        return "high";
+        // 阈值口径收敛 PriceBands（严格小于，与 RSKU 两处一致）
+        return PriceBands.of(price);
     }
 
     private String buildDefaultVariantName(ProductImportRow row) {
@@ -5522,10 +5480,9 @@ public class ExcelAiImportService {
     private void saveStylesAndScenes(String rspuId, ProductImportRow row,
                                      Map<String, List<CategoryDict>> dictCache, List<String> rowIssues,
                                      BatchImportCache importCache) {
-        rspuStyleMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuStyle>()
-            .eq("rspu_id", rspuId));
         // 风格支持多值（「中古风,奶油风」「中古风/奶油风」等写法）：
         // 第一个值为主风格，其余为辅风格，均可被风格筛选命中
+        List<RspuStyle> styleRows = new ArrayList<>();
         List<String> styleNames = splitCsv(row.getPositioningLabel());
         java.util.Set<String> seenStyleCodes = new java.util.HashSet<>();
         boolean firstStyle = true;
@@ -5540,12 +5497,12 @@ public class ExcelAiImportService {
             style.setStyleCode(styleCode);
             style.setIsPrimary(firstStyle);
             style.setCreatedAt(LocalDateTime.now());
-            rspuStyleMapper.insert(style);
+            styleRows.add(style);
             firstStyle = false;
         }
+        associationHelper.replaceStyles(rspuId, styleRows, null, false);
 
-        rspuSceneMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RspuScene>()
-            .eq("rspu_id", rspuId));
+        List<RspuScene> sceneRows = new ArrayList<>();
         List<String> sceneCodes = splitCsv(row.getSceneTags());
         java.util.Set<String> seenSceneCodes = new java.util.HashSet<>();
         for (String code : sceneCodes) {
@@ -5570,8 +5527,9 @@ public class ExcelAiImportService {
             scene.setDictType("scene");
             scene.setSceneCode(sceneCode);
             scene.setCreatedAt(LocalDateTime.now());
-            rspuSceneMapper.insert(scene);
+            sceneRows.add(scene);
         }
+        associationHelper.replaceScenes(rspuId, sceneRows, null, false);
     }
 
     /**

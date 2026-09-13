@@ -87,6 +87,7 @@ public class ProductQueryService {
     private final RspuDuplicateSuspectMapper duplicateSuspectMapper;
     private final ProductStyleMatchMapper productStyleMatchMapper;
     private final AuditLogService auditLogService;
+    private final RspuAssociationHelper associationHelper;
     private final DictService dictService;
     private final ObjectMapper objectMapper;
     private final RspuRelationService rspuRelationService;
@@ -976,14 +977,13 @@ public class ProductQueryService {
     }
 
     private void updatePrimaryStyle(String rspuId, String styleCode) {
-        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
         RspuStyle style = new RspuStyle();
         style.setRspuId(rspuId);
         style.setDictType("style");
         style.setStyleCode(styleCode);
         style.setIsPrimary(true);
         style.setCreatedAt(LocalDateTime.now());
-        rspuStyleMapper.insert(style);
+        associationHelper.replaceStyles(rspuId, List.of(style), null, false);
     }
 
     /**
@@ -993,7 +993,7 @@ public class ProductQueryService {
      * @param styleCodes 风格字典码列表（非空，首值主风格）
      */
     private void updateStyles(String rspuId, List<String> styleCodes) {
-        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
+        List<RspuStyle> newRows = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
         boolean first = true;
         for (String code : styleCodes) {
@@ -1006,27 +1006,28 @@ public class ProductQueryService {
             style.setStyleCode(code);
             style.setIsPrimary(first);
             style.setCreatedAt(LocalDateTime.now());
-            rspuStyleMapper.insert(style);
+            newRows.add(style);
             first = false;
         }
+        associationHelper.replaceStyles(rspuId, newRows, null, false);
     }
 
     private void updateScenes(String rspuId, List<String> sceneCodes) {
-        rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
-        if (sceneCodes == null || sceneCodes.isEmpty()) {
-            return;
-        }
-        for (String code : sceneCodes) {
-            if (!StringUtils.hasText(code)) {
-                continue;
+        List<RspuScene> newRows = new ArrayList<>();
+        if (sceneCodes != null) {
+            for (String code : sceneCodes) {
+                if (!StringUtils.hasText(code)) {
+                    continue;
+                }
+                RspuScene scene = new RspuScene();
+                scene.setRspuId(rspuId);
+                scene.setDictType("scene");
+                scene.setSceneCode(code.trim());
+                scene.setCreatedAt(LocalDateTime.now());
+                newRows.add(scene);
             }
-            RspuScene scene = new RspuScene();
-            scene.setRspuId(rspuId);
-            scene.setDictType("scene");
-            scene.setSceneCode(code.trim());
-            scene.setCreatedAt(LocalDateTime.now());
-            rspuSceneMapper.insert(scene);
         }
+        associationHelper.replaceScenes(rspuId, newRows, null, false);
     }
 
     private void validateProductLevel(String level) {

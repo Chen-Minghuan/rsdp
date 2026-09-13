@@ -79,6 +79,9 @@ class ExcelAiImportCategoryModeTest {
     private static final String CJ = "CJ";
     private static final String XY = "XY";
 
+    @Mock
+    private com.rsdp.service.RspuAssociationHelper associationHelper;
+
     @InjectMocks
     private ExcelAiImportService excelAiImportService;
 

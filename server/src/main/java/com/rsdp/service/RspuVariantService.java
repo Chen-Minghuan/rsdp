@@ -16,6 +16,7 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.util.SizeSpecParser;
+import com.rsdp.util.VariantKeys;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -143,26 +144,18 @@ public class RspuVariantService {
      * @param request 变体创建请求
      */
     private void assertNoDuplicateDimensions(String rspuId, RspuVariantCreateRequest request) {
-        String effectiveSize = effectiveOf(request.getSizeCode(), request.getSizeText());
-        String effectiveColor = effectiveOf(request.getColorCode(), request.getColorText());
-        String effectiveMaterial = effectiveOf(request.getMaterialCode(), request.getMaterialText());
+        String effectiveSize = VariantKeys.effectiveOf(request.getSizeCode(), request.getSizeText());
+        String effectiveColor = VariantKeys.effectiveOf(request.getColorCode(), request.getColorText());
+        String effectiveMaterial = VariantKeys.effectiveOf(request.getMaterialCode(), request.getMaterialText());
         List<RspuVariant> existing = variantMapper.selectList(
             new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId));
         boolean duplicate = existing.stream().anyMatch(v ->
-            effectiveSize.equals(effectiveOf(v.getSizeCode(), v.getSizeText()))
-                && effectiveColor.equals(effectiveOf(v.getColorCode(), v.getColorText()))
-                && effectiveMaterial.equals(effectiveOf(v.getMaterialCode(), v.getMaterialText())));
+            effectiveSize.equals(VariantKeys.effectiveOf(v.getSizeCode(), v.getSizeText()))
+                && effectiveColor.equals(VariantKeys.effectiveOf(v.getColorCode(), v.getColorText()))
+                && effectiveMaterial.equals(VariantKeys.effectiveOf(v.getMaterialCode(), v.getMaterialText())));
         if (duplicate) {
             throw new BusinessException("相同尺寸/颜色/材质的变体已存在");
         }
-    }
-
-    /** 有效判重值：码优先，无码取原文，均无则为空串（与唯一索引 COALESCE 语义一致）。 */
-    private String effectiveOf(String code, String text) {
-        if (StringUtils.hasText(code)) {
-            return code.trim();
-        }
-        return StringUtils.hasText(text) ? text.trim() : "";
     }
 
     /**

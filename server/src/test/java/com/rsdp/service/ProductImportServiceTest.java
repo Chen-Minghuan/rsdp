@@ -49,6 +49,8 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -107,6 +109,9 @@ class ProductImportServiceTest {
 
     @Mock
     private DataScopeHelper dataScopeHelper;
+
+    @Mock
+    private com.rsdp.service.RspuAssociationHelper associationHelper;
 
     @InjectMocks
     private ProductImportService productImportService;
@@ -169,15 +174,16 @@ class ProductImportServiceTest {
             return 1;
         }).when(rspuVariantMapper).insert(any(RspuVariant.class));
 
+        // 4.3 批②：风格/场景关联改经 RspuAssociationHelper 落库，捕获 helper 入参对齐原 mapper 断言
         doAnswer(invocation -> {
-            insertedStyles.add(invocation.getArgument(0));
-            return 1;
-        }).when(rspuStyleMapper).insert(any(RspuStyle.class));
+            insertedStyles.addAll(invocation.getArgument(1));
+            return null;
+        }).when(associationHelper).replaceStyles(anyString(), anyList(), any(), anyBoolean());
 
         doAnswer(invocation -> {
-            insertedScenes.add(invocation.getArgument(0));
-            return 1;
-        }).when(rspuSceneMapper).insert(any(RspuScene.class));
+            insertedScenes.addAll(invocation.getArgument(1));
+            return null;
+        }).when(associationHelper).replaceScenes(anyString(), anyList(), any(), anyBoolean());
 
         doAnswer(invocation -> {
             insertedImages.add(invocation.getArgument(0));
@@ -211,11 +217,11 @@ class ProductImportServiceTest {
         assertThat(saved.getPositioningLabel()).isEqualTo("MC");
         assertThat(saved.getExternalCode()).isEqualTo("EXT-001");
 
-        verify(rspuStyleMapper).delete(any());
+        verify(associationHelper).replaceStyles(anyString(), anyList(), any(), anyBoolean());
         assertThat(insertedStyles).hasSize(1);
         assertThat(insertedStyles.get(0).getStyleCode()).isEqualTo("MC");
 
-        verify(rspuSceneMapper).delete(any());
+        verify(associationHelper).replaceScenes(anyString(), anyList(), any(), anyBoolean());
         assertThat(insertedScenes).hasSize(1);
         assertThat(insertedScenes.get(0).getSceneCode()).isEqualTo("LIVING");
     }

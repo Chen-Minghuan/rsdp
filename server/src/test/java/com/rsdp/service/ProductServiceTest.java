@@ -112,6 +112,9 @@ class ProductServiceTest {
     private final ImageUploadValidator imageUploadValidator = new ImageUploadValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private com.rsdp.service.RspuAssociationHelper associationHelper;
+
     @InjectMocks
     private ProductService productService;
 
@@ -565,26 +568,22 @@ class ProductServiceTest {
 
         assertThat(result.get("message")).isEqualTo("手工录入产品成功");
 
-        ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
-        verify(rspuStyleMapper, times(1)).insert(styleCaptor.capture());
-        RspuStyle style = styleCaptor.getValue();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RspuStyle>> styleCaptor = ArgumentCaptor.forClass(List.class);
+        verify(associationHelper).replaceStyles(anyString(), styleCaptor.capture(), any(), eq(true));
+        RspuStyle style = styleCaptor.getValue().get(0);
         assertThat(style.getStyleCode()).isEqualTo("MC");
         assertThat(style.getDictType()).isEqualTo("style");
         assertThat(style.getIsPrimary()).isTrue();
 
-        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
-        verify(rspuSceneMapper, times(2)).insert(sceneCaptor.capture());
-        assertThat(sceneCaptor.getAllValues())
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RspuScene>> sceneCaptor = ArgumentCaptor.forClass(List.class);
+        verify(associationHelper).replaceScenes(anyString(), sceneCaptor.capture(), any(), eq(true));
+        assertThat(sceneCaptor.getValue())
             .extracting(RspuScene::getSceneCode)
             .containsExactly("LIVING", "BEDROOM");
-        assertThat(sceneCaptor.getAllValues())
+        assertThat(sceneCaptor.getValue())
             .allMatch(s -> "scene".equals(s.getDictType()));
-
-        // 审计沿用 2.3「每 RSPU 一条汇总」口径：旧集合为空 → 新集合
-        verify(auditLogService).logUpdate(eq("rspu_style"), eq(style.getRspuId()),
-            eq(Map.of("styleCodes", List.of())), eq(Map.of("styleCodes", List.of("MC"))), any());
-        verify(auditLogService).logUpdate(eq("rspu_scene"), eq(style.getRspuId()),
-            eq(Map.of("sceneCodes", List.of())), eq(Map.of("sceneCodes", List.of("LIVING", "BEDROOM"))), any());
     }
 
     @Test
@@ -610,9 +609,10 @@ class ProductServiceTest {
 
         assertThat(result.get("message")).isEqualTo("手工录入产品成功");
         verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
-        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
-        verify(rspuSceneMapper, times(1)).insert(sceneCaptor.capture());
-        assertThat(sceneCaptor.getValue().getSceneCode()).isEqualTo("LIVING");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RspuScene>> sceneCaptor = ArgumentCaptor.forClass(List.class);
+        verify(associationHelper).replaceScenes(anyString(), sceneCaptor.capture(), any(), eq(true));
+        assertThat(sceneCaptor.getValue().get(0).getSceneCode()).isEqualTo("LIVING");
         // 2.7：未归一场景值采集待治理（空串由 record 内部忽略，但服务层会调用；此处断言非空值被采集）
         verify(dictUnresolvedService).record(eq("scene"), eq("NOT_A_SCENE"), isNull(), any());
     }
@@ -670,13 +670,15 @@ class ProductServiceTest {
         Map<String, Object> result = productService.createFactoryEntry(request, null);
 
         assertThat(result.get("message")).isEqualTo("工厂产品录入成功");
-        ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
-        verify(rspuStyleMapper, times(1)).insert(styleCaptor.capture());
-        assertThat(styleCaptor.getValue().getStyleCode()).isEqualTo("MC");
-        assertThat(styleCaptor.getValue().getIsPrimary()).isTrue();
-        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
-        verify(rspuSceneMapper, times(1)).insert(sceneCaptor.capture());
-        assertThat(sceneCaptor.getValue().getSceneCode()).isEqualTo("OFFICE");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RspuStyle>> styleCaptor = ArgumentCaptor.forClass(List.class);
+        verify(associationHelper).replaceStyles(anyString(), styleCaptor.capture(), any(), eq(true));
+        assertThat(styleCaptor.getValue().get(0).getStyleCode()).isEqualTo("MC");
+        assertThat(styleCaptor.getValue().get(0).getIsPrimary()).isTrue();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RspuScene>> sceneCaptor = ArgumentCaptor.forClass(List.class);
+        verify(associationHelper).replaceScenes(anyString(), sceneCaptor.capture(), any(), eq(true));
+        assertThat(sceneCaptor.getValue().get(0).getSceneCode()).isEqualTo("OFFICE");
     }
 
     @Test

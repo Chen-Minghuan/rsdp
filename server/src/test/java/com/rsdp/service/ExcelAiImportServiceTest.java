@@ -68,6 +68,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -91,6 +93,9 @@ import static org.mockito.Mockito.doThrow;
  */
 @ExtendWith(MockitoExtension.class)
 class ExcelAiImportServiceTest {
+
+    @Mock
+    private com.rsdp.service.RspuAssociationHelper associationHelper;
 
     @InjectMocks
     private ExcelAiImportService excelAiImportService;
@@ -383,10 +388,11 @@ class ExcelAiImportServiceTest {
 
         assertEquals(1, result.getSuccessCount());
         assertEquals(0, result.getFailedCount());
-        // 只插归一命中的 LIVING；未命中的「太空舱」不插 rspu_scene
-        ArgumentCaptor<RspuScene> sceneCaptor = ArgumentCaptor.forClass(RspuScene.class);
-        verify(rspuSceneMapper, times(1)).insert(sceneCaptor.capture());
-        assertEquals("LIVING", sceneCaptor.getValue().getSceneCode());
+        // 只插归一命中的 LIVING；未命中的「太空舱」不插 rspu_scene（4.3 批②：经 helper 落库）
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RspuScene>> sceneCaptor = ArgumentCaptor.forClass(List.class);
+        verify(associationHelper).replaceScenes(anyString(), sceneCaptor.capture(), any(), anyBoolean());
+        assertEquals("LIVING", sceneCaptor.getValue().get(0).getSceneCode());
         // 采集待治理 + 行级提示（行内问题进批次失败明细但不计 failedCount）
         verify(dictUnresolvedService).record(eq("scene"), eq("太空舱"), isNull(), any());
         assertEquals(1, result.getFailures().size());
@@ -1818,11 +1824,11 @@ class ExcelAiImportServiceTest {
         verify(rspuMapper).insert(rspuCaptor.capture());
         assertEquals("MC", rspuCaptor.getValue().getPositioningLabel(), "主字段应存第一个风格");
 
-        // rspu_style 两条：MC 主、CR 辅
-        ArgumentCaptor<com.rsdp.entity.RspuStyle> styleCaptor =
-            ArgumentCaptor.forClass(com.rsdp.entity.RspuStyle.class);
-        verify(rspuStyleMapper, times(2)).insert(styleCaptor.capture());
-        var styles = styleCaptor.getAllValues();
+        // rspu_style 两条：MC 主、CR 辅（4.3 批②：经 helper 落库）
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<com.rsdp.entity.RspuStyle>> styleCaptor = ArgumentCaptor.forClass(List.class);
+        verify(associationHelper).replaceStyles(anyString(), styleCaptor.capture(), any(), anyBoolean());
+        var styles = styleCaptor.getValue();
         assertEquals("MC", styles.get(0).getStyleCode());
         assertEquals(Boolean.TRUE, styles.get(0).getIsPrimary(), "第一个风格应为主风格");
         assertEquals("CR", styles.get(1).getStyleCode());
@@ -2804,9 +2810,9 @@ class ExcelAiImportServiceTest {
                 && f.getReason().contains("已保留原品类")),
             "品类不一致应记录行级提示: " + result.getFailures());
         assertEquals("MC", updated.getPositioningLabel());
-        // 平台身份不经归属校验，且风格关联表照常重建
+        // 平台身份不经归属校验，且风格关联表照常重建（4.3 批②：经 helper 落库）
         verify(dataScopeHelper, never()).canAccessRspu(anyString());
-        verify(rspuStyleMapper, times(1)).insert(any(RspuStyle.class));
+        verify(associationHelper, times(1)).replaceStyles(anyString(), anyList(), any(), anyBoolean());
     }
 
     @Test
