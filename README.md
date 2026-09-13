@@ -13,7 +13,7 @@
                                                     │
         ┌───────────────────┬───────────────────────┼───────────────────────┐
         ▼                   ▼                       ▼                       ▼
-  PostgreSQL          ChromaDB                  MinIO                   Redis
+  PostgreSQL          pgvector(PG内)            MinIO                   Redis
    (元数据)             (向量索引)                (文件存储)               (缓存/任务)
         │                   │
         │    ┌──────────────┘
@@ -31,8 +31,8 @@
 | 前端 | Vue 3 + TypeScript + Vite + Naive UI + Pinia |
 | 后端 | SpringBoot 3.4 + Java 21 + MyBatis-Plus |
 | 数据库 | PostgreSQL 16+ |
-| 向量库 | ChromaDB |
-| AI 推理 | DashScope `qwen3-vl-plus`（MVP）/ Ollama（目标） |
+| 向量库 | pgvector（PostgreSQL 扩展，`product_image_embedding` 表） |
+| AI 推理 | DashScope `qwen3-vl-plus` + `multimodal-embedding-v1`（MVP）/ Ollama（目标） |
 | 文件存储 | MinIO（生产）/ 本地磁盘（开发） |
 | 缓存 | Redis |
 | 部署 | Docker Compose |
@@ -73,7 +73,7 @@
 - JDK 21 LTS
 - Node.js 20+ + pnpm
 - Maven 3.9+
-- Docker Desktop（可选，用于 PostgreSQL / Ollama / ChromaDB / Redis / MinIO）
+- Docker Desktop（可选，用于 PostgreSQL / Ollama / Redis / MinIO）
 - NVIDIA RTX 3060/4060 或更高（推荐，用于本地 AI 推理加速）
 
 ### 方式一：生产/全服务部署（Docker Compose）
@@ -85,7 +85,7 @@
 cp deploy/.env.example deploy/.env
 # 编辑 deploy/.env：DASHSCOPE_API_KEY、RSDP_JWT_SECRET、RSDP_ENCRYPTION_KEY、各密码等
 
-# 2. 全量启动（含 Nginx、后端、前端、PostgreSQL、ChromaDB、Redis、MinIO、Ollama）
+# 2. 全量启动（含 Nginx、后端、前端、PostgreSQL、Redis、MinIO、Ollama）
 cd deploy && docker compose up -d
 ```
 
@@ -145,7 +145,7 @@ cd web && pnpm install && pnpm dev
 | 命令 | 说明 |
 |:---|:---|
 | `make help` | 显示所有可用命令 |
-| `make infra` | 启动基础设施容器（PostgreSQL + ChromaDB + Redis + MinIO，不含 Ollama） |
+| `make infra` | 启动基础设施容器（PostgreSQL + Redis + MinIO，不含 Ollama） |
 | `make infra-ai` | 启动包含 Ollama 的基础设施（需要 NVIDIA GPU） |
 | `make init-db` | 初始化数据库 |
 | `make seed` | 导入种子数据 |
