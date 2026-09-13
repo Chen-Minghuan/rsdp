@@ -64,6 +64,7 @@ import com.rsdp.util.DictNormalizes;
 import com.rsdp.util.ExcelFileValidator;
 import com.rsdp.util.ExcelHeaderNormalizer;
 import com.rsdp.util.ExcelImageExtractor;
+import com.rsdp.util.ImageDimensions;
 import com.rsdp.util.ImageUrlDownloads;
 import com.rsdp.util.ImageUrlValidator;
 import com.rsdp.util.SizeSpecParser;
@@ -5572,8 +5573,10 @@ public class ExcelAiImportService {
                 rowIssues.add("图片存储失败: " + downloaded.source());
                 continue;
             }
+            int[] dims = ImageDimensions.read(downloaded.bytes());
             stored.add(new StoredImage(imageId, objectKey, extension, downloaded.contentType(),
-                downloaded.bytes().length, downloaded.primary(), downloaded.variantLevel(), downloaded.contentHash()));
+                downloaded.bytes().length, downloaded.primary(), downloaded.variantLevel(), downloaded.contentHash(),
+                dims != null ? dims[0] : null, dims != null ? dims[1] : null));
         }
         return stored;
     }
@@ -5646,6 +5649,8 @@ public class ExcelAiImportService {
             imageAsset.setFormat(stored.extension());
             // 内容哈希落库（V31）：StoredImage.contentHash 为组内去重时已算好的 SHA-256
             imageAsset.setContentHash(stored.contentHash());
+            imageAsset.setWidth(stored.width());
+            imageAsset.setHeight(stored.height());
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             newAssets.add(imageAsset);
@@ -6015,7 +6020,8 @@ public class ExcelAiImportService {
 
     /** 已写入对象存储的图片（事务外产出，事务内只登记元数据）。 */
     private record StoredImage(String imageId, String objectKey, String extension, String contentType,
-                               long size, boolean primary, boolean variantLevel, String contentHash) {
+                               long size, boolean primary, boolean variantLevel, String contentHash,
+                               Integer width, Integer height) {
     }
 
     /**

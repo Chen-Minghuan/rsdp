@@ -21,6 +21,7 @@ import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ContentHashes;
 import com.rsdp.util.DictNormalizes;
+import com.rsdp.util.ImageDimensions;
 import com.rsdp.util.ImageUploadValidator;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.ManualProductEntryRequest;
@@ -191,6 +192,11 @@ public class ProductService {
             imageAsset.setFileSize(image.getSize());
             imageAsset.setFormat(getExtension(image.getOriginalFilename()));
             imageAsset.setContentHash(contentHashes.get(i));
+            int[] dims = ImageDimensions.read(image.getBytes());
+            if (dims != null) {
+                imageAsset.setWidth(dims[0]);
+                imageAsset.setHeight(dims[1]);
+            }
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssets.add(imageAsset);
@@ -555,6 +561,11 @@ public class ProductService {
             imageAsset.setFormat(getExtension(image.getOriginalFilename()));
             // 内容哈希落库（2.5）：供录入查重与跨链路查重命中
             imageAsset.setContentHash(contentHash);
+            int[] dims = ImageDimensions.read(imageBytes);
+            if (dims != null) {
+                imageAsset.setWidth(dims[0]);
+                imageAsset.setHeight(dims[1]);
+            }
             imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
             imageAsset.setCreatedAt(LocalDateTime.now());
             imageAssetsMapper.insert(imageAsset);
@@ -672,6 +683,11 @@ public class ProductService {
         imageAsset.setFileSize((long) imageBytes.length);
         imageAsset.setFormat(extension);
         imageAsset.setContentHash(ContentHashes.sha256Hex(imageBytes));
+        int[] dims = ImageDimensions.read(imageBytes);
+        if (dims != null) {
+            imageAsset.setWidth(dims[0]);
+            imageAsset.setHeight(dims[1]);
+        }
         imageAsset.setUploadedBy(SecurityOperatorContext.currentUsername());
         imageAsset.setCreatedAt(LocalDateTime.now());
         imageAssetsMapper.insert(imageAsset);
