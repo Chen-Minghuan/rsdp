@@ -50,6 +50,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -151,6 +152,9 @@ class ProductQueryServiceTest {
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
+
+    @Mock
+    private com.rsdp.service.RspuAssociationHelper associationHelper;
 
     @InjectMocks
     private ProductQueryService productQueryService;
@@ -527,10 +531,8 @@ class ProductQueryServiceTest {
         assertThat(rspu.getWarrantyYears()).isEqualTo(3);
         assertThat(rspu.getKeySpecs()).isEqualTo("{\"width\":\"80cm\"}");
 
-        verify(rspuStyleMapper).delete(any());
-        verify(rspuStyleMapper).insert(any(RspuStyle.class));
-        verify(rspuSceneMapper).delete(any());
-        verify(rspuSceneMapper).insert(any(RspuScene.class));
+        verify(associationHelper).replaceStyles(eq("RSPU-TEST01"), any(), isNull(), eq(false));
+        verify(associationHelper).replaceScenes(eq("RSPU-TEST01"), any(), isNull(), eq(false));
         verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq(rspu), eq("admin"));
     }
 
@@ -557,14 +559,13 @@ class ProductQueryServiceTest {
         // 首值为主风格写 positioning_label
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
 
-        // rspu_style 全量重写：MC 主、CR 辅
-        ArgumentCaptor<RspuStyle> styleCaptor = ArgumentCaptor.forClass(RspuStyle.class);
-        verify(rspuStyleMapper).delete(any());
-        verify(rspuStyleMapper, times(2)).insert(styleCaptor.capture());
-        assertThat(styleCaptor.getAllValues().get(0).getStyleCode()).isEqualTo("MC");
-        assertThat(styleCaptor.getAllValues().get(0).getIsPrimary()).isTrue();
-        assertThat(styleCaptor.getAllValues().get(1).getStyleCode()).isEqualTo("CR");
-        assertThat(styleCaptor.getAllValues().get(1).getIsPrimary()).isFalse();
+        // rspu_style 全量重写：MC 主、CR 辅（经 RspuAssociationHelper，4.3 批②）
+        ArgumentCaptor<List<RspuStyle>> styleCaptor = ArgumentCaptor.forClass(List.class);
+        verify(associationHelper).replaceStyles(eq("RSPU-TEST01"), styleCaptor.capture(), isNull(), eq(false));
+        assertThat(styleCaptor.getValue().get(0).getStyleCode()).isEqualTo("MC");
+        assertThat(styleCaptor.getValue().get(0).getIsPrimary()).isTrue();
+        assertThat(styleCaptor.getValue().get(1).getStyleCode()).isEqualTo("CR");
+        assertThat(styleCaptor.getValue().get(1).getIsPrimary()).isFalse();
     }
 
 
@@ -666,8 +667,7 @@ class ProductQueryServiceTest {
         productQueryService.updateProduct("RSPU-TEST01", request);
 
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
-        verify(rspuStyleMapper).delete(any());
-        verify(rspuStyleMapper).insert(any(RspuStyle.class));
+        verify(associationHelper).replaceStyles(eq("RSPU-TEST01"), any(), isNull(), eq(false));
     }
 
     @Test

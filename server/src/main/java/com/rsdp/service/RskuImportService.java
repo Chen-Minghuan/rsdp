@@ -21,6 +21,7 @@ import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.util.PriceBands;
 import com.rsdp.util.ExcelFileValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -651,12 +652,7 @@ public class RskuImportService {
         if (price == null) {
             return "unknown";
         }
-        if (price.compareTo(new BigDecimal("1000")) < 0) {
-            return "low";
-        } else if (price.compareTo(new BigDecimal("5000")) < 0) {
-            return "mid";
-        }
-        return "high";
+        return PriceBands.of(price);
     }
 
     private String trim(String value) {

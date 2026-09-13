@@ -82,6 +82,9 @@ class RspuMergeServiceTest {
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private com.rsdp.service.RspuAssociationHelper associationHelper;
+
     @InjectMocks
     private RspuMergeService mergeService;
 
@@ -279,10 +282,10 @@ class RspuMergeServiceTest {
             verify(rspuMergeMapper).repointSchemeItems(SRC, TGT);
             verify(rspuMergeMapper).repointFavorites(SRC, TGT);
             verify(rspuMergeMapper).repointFactoryMappings(SRC, TGT);
-            // 风格并集：IT 新增 → 目标关联表重写
-            verify(rspuStyleMapper).delete(any(QueryWrapper.class));
+            // 风格并集：IT 新增 → 目标关联表重写（4.3 批②：经 helper 落库）
+            verify(associationHelper).replaceStyles(eq(TGT), any(), eq("admin"), eq(true));
             // 场景无新增（LIVING 重复）→ 不重写
-            verify(rspuSceneMapper, never()).delete(any(QueryWrapper.class));
+            verify(associationHelper, never()).replaceScenes(eq(TGT), any(), any(), eq(true));
             // 配对闭环（merged + dismissed 两次 update）
             verify(duplicateSuspectMapper, times(2)).update(isNull(), any(UpdateWrapper.class));
         }

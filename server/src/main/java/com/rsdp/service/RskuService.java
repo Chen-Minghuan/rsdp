@@ -33,6 +33,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import com.rsdp.util.PriceBands;
 import com.rsdp.util.IdGenerator;
 import java.util.stream.Collectors;
 
@@ -481,13 +482,7 @@ public class RskuService {
         if (price == null) {
             return "unknown";
         }
-        if (price.compareTo(new BigDecimal("1000")) < 0) {
-            return "low";
-        } else if (price.compareTo(new BigDecimal("5000")) < 0) {
-            return "mid";
-        } else {
-            return "high";
-        }
+        return PriceBands.of(price);
     }
 
     private List<RskuResponse> toResponses(List<RskuSupply> rskus) {

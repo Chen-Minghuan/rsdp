@@ -20,6 +20,7 @@ import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ContentHashes;
+import com.rsdp.util.DictNormalizes;
 import com.rsdp.util.ImageUploadValidator;
 import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.ManualProductEntryRequest;
@@ -68,6 +69,7 @@ public class ProductService {
     private final ImageUploadValidator imageUploadValidator;
     private final StorageService storageService;
     private final AuditLogService auditLogService;
+    private final RspuAssociationHelper associationHelper;
     private final DictService dictService;
     private final ObjectMapper objectMapper;
     private final RspuVariantService rspuVariantService;
@@ -404,9 +406,8 @@ public class ProductService {
             style.setStyleCode(styleCode);
             style.setIsPrimary(true);
             style.setCreatedAt(LocalDateTime.now());
-            rspuStyleMapper.insert(style);
-            auditLogService.logUpdate("rspu_style", rspuId,
-                Map.of("styleCodes", List.of()), Map.of("styleCodes", List.of(styleCode)), operator);
+            // 新 RSPU 旧集合为空 → 新集合，一条汇总审计（2.3/2.6 口径）
+            associationHelper.replaceStyles(rspuId, List.of(style), operator, true);
         } else if (StringUtils.hasText(rspu.getPositioningLabel())) {
             boolean isGradeCode = dictService.listByType("grade").stream()
                 .anyMatch(d -> rspu.getPositioningLabel().equalsIgnoreCase(d.getDictCode()));
@@ -425,7 +426,7 @@ public class ProductService {
         }
         List<CategoryDict> sceneDict = dictService.listByType("scene");
         Set<String> seen = new HashSet<>();
-        List<String> insertedCodes = new ArrayList<>();
+        List<RspuScene> sceneRows = new ArrayList<>();
         for (String raw : sceneTags) {
             String code = matchDictCode(raw, sceneDict);
             if (code == null) {
@@ -443,13 +444,10 @@ public class ProductService {
             scene.setDictType("scene");
             scene.setSceneCode(code);
             scene.setCreatedAt(LocalDateTime.now());
-            rspuSceneMapper.insert(scene);
-            insertedCodes.add(code);
+            sceneRows.add(scene);
         }
-        if (!insertedCodes.isEmpty()) {
-            auditLogService.logUpdate("rspu_scene", rspuId,
-                Map.of("sceneCodes", List.of()), Map.of("sceneCodes", insertedCodes), operator);
-        }
+        // 有实际写入时记一条汇总审计（旧集合为空 → 新集合，2.6 口径；未写入不记）
+        associationHelper.replaceScenes(rspuId, sceneRows, operator, !sceneRows.isEmpty());
     }
 
     /**
@@ -460,21 +458,7 @@ public class ProductService {
      * @return 归一后的字典码；未命中返回 null
      */
     private String matchDictCode(String input, List<CategoryDict> dicts) {
-        if (!StringUtils.hasText(input)) {
-            return null;
-        }
-        String trimmed = input.trim();
-        for (CategoryDict d : dicts) {
-            if (trimmed.equalsIgnoreCase(d.getDictCode())) {
-                return d.getDictCode();
-            }
-        }
-        for (CategoryDict d : dicts) {
-            if (StringUtils.hasText(d.getDictName()) && trimmed.equals(d.getDictName())) {
-                return d.getDictCode();
-            }
-        }
-        return null;
+        return DictNormalizes.normalizeOrNull(input, dicts);
     }
 
     /**

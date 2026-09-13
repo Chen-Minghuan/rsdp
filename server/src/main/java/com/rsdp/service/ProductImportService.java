@@ -22,7 +22,9 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ConstraintViolations;
 import com.rsdp.util.ContentHashes;
+import com.rsdp.util.DictNormalizes;
 import com.rsdp.util.ExcelFileValidator;
+import com.rsdp.util.ImageUrlDownloads;
 import com.rsdp.util.ImageUrlValidator;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
@@ -67,7 +69,6 @@ public class ProductImportService {
 
     private static final int MAX_ROWS = 500;
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-    private static final int MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
 
     private final RspuMapper rspuMapper;
     private final RspuStyleMapper rspuStyleMapper;
@@ -77,6 +78,7 @@ public class ProductImportService {
     private final ImageAssetsMapper imageAssetsMapper;
     private final DictService dictService;
     private final AuditLogService auditLogService;
+    private final RspuAssociationHelper associationHelper;
     private final StorageService storageService;
     private final ObjectMapper objectMapper;
     private final PlatformTransactionManager transactionManager;
@@ -310,53 +312,24 @@ public class ProductImportService {
             log.warn("不安全的图片 URL: {}", trimmedUrl);
             return null;
         }
-        try {
-            URLConnection connection = new URL(trimmedUrl).openConnection();
-            // 关闭自动重定向，防止 SSRF 通过 302 跳转到内网地址
-            if (connection instanceof HttpURLConnection httpConnection) {
-                httpConnection.setInstanceFollowRedirects(false);
-            }
-            connection.setConnectTimeout(10000);
-            connection.setReadTimeout(30000);
-            String contentType = connection.getContentType();
-            // Content-Length 预检 + 限量读取：先判大小再下载，避免恶意 URL 用超大响应撑爆堆内存
-            //（与 ExcelAiImportService.downloadImage 同一防护口径）
-            long contentLength = connection.getContentLengthLong();
-            if (contentLength > MAX_IMAGE_SIZE) {
-                log.warn("图片超过大小上限（{} 字节），已跳过: {}", contentLength, trimmedUrl);
-                if (connection instanceof HttpURLConnection httpConnection) {
-                    httpConnection.disconnect();
-                }
-                return null;
-            }
-            try (InputStream in = connection.getInputStream()) {
-                // 多读 1 字节用于判断是否超限，无需 readAllBytes 全量加载
-                byte[] bytes = in.readNBytes(MAX_IMAGE_SIZE + 1);
-                if (bytes.length == 0) {
-                    log.warn("图片 URL 返回空内容: {}", trimmedUrl);
-                    return null;
-                }
-                if (bytes.length > MAX_IMAGE_SIZE) {
-                    log.warn("图片超过最大限制 {}MB: {}", MAX_IMAGE_SIZE / 1024 / 1024, trimmedUrl);
-                    return null;
-                }
-                // 不只信 Content-Type：按首字节魔数嗅探真实格式，拒绝 SVG 与非图片内容（防存储型 XSS）
-                String format = sniffImageFormat(bytes);
-                if (format == null) {
-                    log.warn("图片内容嗅探失败（非支持的位图格式或 SVG），已拒绝: {}, Content-Type={}", trimmedUrl, contentType);
-                    return null;
-                }
-                if (contentType != null && contentType.toLowerCase().startsWith("image/")
-                    && !isContentTypeConsistent(contentType, format)) {
-                    log.warn("图片 Content-Type 与内容嗅探结果不一致，以嗅探结果为准: {}, Content-Type={}, sniffed={}",
-                        trimmedUrl, contentType, format);
-                }
-                return new DownloadedImage(trimmedUrl, bytes, format, primary);
-            }
-        } catch (Exception e) {
-            log.warn("下载图片失败: {}", trimmedUrl, e);
+        ImageUrlDownloads.FetchResult fetched = ImageUrlDownloads.fetch(trimmedUrl);
+        if (fetched == null) {
             return null;
         }
+        byte[] bytes = fetched.bytes();
+        String contentType = fetched.contentType();
+        // 不只信 Content-Type：按首字节魔数嗅探真实格式，拒绝 SVG 与非图片内容（防存储型 XSS）
+        String format = sniffImageFormat(bytes);
+        if (format == null) {
+            log.warn("图片内容嗅探失败（非支持的位图格式或 SVG），已拒绝: {}, Content-Type={}", trimmedUrl, contentType);
+            return null;
+        }
+        if (contentType != null && contentType.toLowerCase().startsWith("image/")
+            && !isContentTypeConsistent(contentType, format)) {
+            log.warn("图片 Content-Type 与内容嗅探结果不一致，以嗅探结果为准: {}, Content-Type={}, sniffed={}",
+                trimmedUrl, contentType, format);
+        }
+        return new DownloadedImage(trimmedUrl, bytes, format, primary);
     }
 
     /**
@@ -646,19 +619,17 @@ public class ProductImportService {
 
     private void saveStyles(String rspuId, String positioningLabel, List<String> materialTags,
                             List<CategoryDict> styles) {
-        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
-
-        Set<String> styleCodes = new HashSet<>();
+        List<RspuStyle> newRows = new ArrayList<>();
         if (StringUtils.hasText(positioningLabel)) {
             String code = normalizeDictCode(positioningLabel, styles);
             // 职级码（grade 字典）不写 rspu_style——与手工/AI 录入链路口径一致，避免污染风格筛选
             if (code != null && isValidDictCode(code, styles)) {
-                styleCodes.add(code);
-                insertStyle(rspuId, code, true);
+                newRows.add(buildStyleRow(rspuId, code, true));
             } else if (code != null) {
                 log.info("导入定位标签为职级码，跳过 rspu_style 写入，rspuId={}, label={}", rspuId, code);
             }
         }
+        associationHelper.replaceStyles(rspuId, newRows, null, false);
         // 材质标签不再作为风格处理，避免语义混乱
     }
 
@@ -667,30 +638,24 @@ public class ProductImportService {
         if (!StringUtils.hasText(positioningLabel)) {
             return;
         }
-        // 汇总审计（P2-5）：删+重建前捕获旧风格码集合，每 RSPU 一条审计（不逐行刷量）
-        List<String> oldCodes = rspuStyleMapper.selectList(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId))
-            .stream().map(RspuStyle::getStyleCode).toList();
-        rspuStyleMapper.delete(new QueryWrapper<RspuStyle>().eq("rspu_id", rspuId));
-        List<String> newCodes = new ArrayList<>();
+        List<RspuStyle> newRows = new ArrayList<>();
         String code = normalizeDictCode(positioningLabel, styles);
         // 职级码（grade 字典）不写 rspu_style——与手工/AI 录入链路口径一致
         if (code != null && isValidDictCode(code, styles)) {
-            insertStyle(rspuId, code, true);
-            newCodes.add(code);
+            newRows.add(buildStyleRow(rspuId, code, true));
         }
-        auditLogService.logUpdate("rspu_style", rspuId,
-            Map.of("styleCodes", oldCodes), Map.of("styleCodes", newCodes),
-            SecurityOperatorContext.currentUsername());
+        // 汇总审计（P2-5）：每 RSPU 一条（不逐行刷量），由 helper 统一口径
+        associationHelper.replaceStyles(rspuId, newRows, SecurityOperatorContext.currentUsername(), true);
     }
 
-    private void insertStyle(String rspuId, String styleCode, boolean primary) {
+    private RspuStyle buildStyleRow(String rspuId, String styleCode, boolean primary) {
         RspuStyle style = new RspuStyle();
         style.setRspuId(rspuId);
         style.setDictType("style");
         style.setStyleCode(styleCode);
         style.setIsPrimary(primary);
         style.setCreatedAt(LocalDateTime.now());
-        rspuStyleMapper.insert(style);
+        return style;
     }
 
     /**
@@ -709,10 +674,17 @@ public class ProductImportService {
      */
     private List<String> saveScenes(String rspuId, List<String> sceneCodes, List<CategoryDict> sceneDict,
                                     java.util.function.Consumer<String> unresolvedCollector) {
-        rspuSceneMapper.delete(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId));
-        List<String> insertedCodes = new ArrayList<>();
+        List<RspuScene> newRows = buildSceneRows(rspuId, sceneCodes, sceneDict, unresolvedCollector);
+        associationHelper.replaceScenes(rspuId, newRows, null, false);
+        return newRows.stream().map(RspuScene::getSceneCode).toList();
+    }
+
+    /** 构建场景关联行：逐值归一（别名 → 字典码 → 字典名）+ 未命中降级采集 + 按码去重。 */
+    private List<RspuScene> buildSceneRows(String rspuId, List<String> sceneCodes, List<CategoryDict> sceneDict,
+                                           java.util.function.Consumer<String> unresolvedCollector) {
+        List<RspuScene> newRows = new ArrayList<>();
         if (sceneCodes == null || sceneCodes.isEmpty()) {
-            return insertedCodes;
+            return newRows;
         }
         Set<String> seen = new HashSet<>();
         for (String raw : sceneCodes) {
@@ -732,10 +704,9 @@ public class ProductImportService {
             scene.setDictType("scene");
             scene.setSceneCode(code);
             scene.setCreatedAt(LocalDateTime.now());
-            rspuSceneMapper.insert(scene);
-            insertedCodes.add(code);
+            newRows.add(scene);
         }
-        return insertedCodes;
+        return newRows;
     }
 
     /**
@@ -761,13 +732,9 @@ public class ProductImportService {
         if (sceneCodes == null || sceneCodes.isEmpty()) {
             return;
         }
-        // 汇总审计（P2-5）：删+重建前捕获旧场景码集合，每 RSPU 一条审计（不逐行刷量）
-        List<String> oldCodes = rspuSceneMapper.selectList(new QueryWrapper<RspuScene>().eq("rspu_id", rspuId))
-            .stream().map(RspuScene::getSceneCode).toList();
-        List<String> newCodes = saveScenes(rspuId, sceneCodes, sceneDict, unresolvedCollector);
-        auditLogService.logUpdate("rspu_scene", rspuId,
-            Map.of("sceneCodes", oldCodes), Map.of("sceneCodes", newCodes),
-            SecurityOperatorContext.currentUsername());
+        List<RspuScene> newRows = buildSceneRows(rspuId, sceneCodes, sceneDict, unresolvedCollector);
+        // 汇总审计（P2-5）：每 RSPU 一条（不逐行刷量），由 helper 统一口径
+        associationHelper.replaceScenes(rspuId, newRows, SecurityOperatorContext.currentUsername(), true);
     }
 
     private boolean shouldCreateVariant(ProductImportRow row) {
@@ -1084,31 +1051,11 @@ public class ProductImportService {
     }
 
     private boolean isValidDictCode(String code, List<CategoryDict> dicts) {
-        if (!StringUtils.hasText(code)) {
-            return false;
-        }
-        return dicts.stream().anyMatch(d -> code.equals(d.getDictCode()));
+        return DictNormalizes.isValid(code, dicts);
     }
 
     private String normalizeDictCode(String input, List<CategoryDict> dicts) {
-        if (!StringUtils.hasText(input)) {
-            return null;
-        }
-        String trimmed = input.trim();
-        // 先按 dictCode 精确匹配（不区分大小写）
-        for (CategoryDict d : dicts) {
-            if (trimmed.equalsIgnoreCase(d.getDictCode())) {
-                return d.getDictCode();
-            }
-        }
-        // 再按 dictName 精确匹配
-        for (CategoryDict d : dicts) {
-            if (StringUtils.hasText(d.getDictName()) && trimmed.equals(d.getDictName())) {
-                return d.getDictCode();
-            }
-        }
-        // 未匹配时保留原始输入，由上层校验决定是否报错
-        return trimmed;
+        return DictNormalizes.normalize(input, dicts);
     }
 
     private List<String> splitCsv(String value) {
