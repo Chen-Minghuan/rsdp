@@ -791,7 +791,7 @@ public class ExcelAiImportService {
         // 3.4 批次级预载续：字典别名（category/size/color/material/scene）与工厂交期规则
         // 各一把查询进内存，行内别名解析/交期匹配不再逐值/逐行查库
         importCache.aliasByType.putAll(safeAliases(dictAliasService.loadAliases(
-            List.of("category", "size", "color", "material", "scene"))));
+            List.of("category", "size", "color", "material", "scene", "material_grade"))));
         importCache.leadTimeRules = preloadLeadTimeRules(request);
 
         int rowIndex = 1; // 第 1 行为表头
@@ -2924,6 +2924,8 @@ public class ExcelAiImportService {
         cache.put("size", safeList(dictService.listByType("size")));
         cache.put("color", safeList(dictService.listByType("color")));
         cache.put("factory_level", safeList(dictService.listByType("factory_level")));
+        // material_grade：价格列材质等级解析（4.4 迁入字典体系，替代硬编码 switch）
+        cache.put("material_grade", safeList(dictService.listByType("material_grade")));
         return cache;
     }
 
@@ -4903,7 +4905,8 @@ public class ExcelAiImportService {
                 }
 
                 String materialName = priceColumn.getMaterialName();
-                String materialGradeCode = resolveMaterialGradeCode(materialName);
+                String materialGradeCode = resolveMaterialGradeCode(materialName,
+                    dictCache.get("material_grade"), importCache);
                 // 材质码尽力解析（别名→字典）；未识别时依次回退行级材质码、行材质标签首值
                 // （复用同一字典缓存），覆盖「单列出厂价 + 行材质列有值」场景；
                 // 全部落空才降级为原文（material_text）并采集待治理，不阻断变体/报价创建
@@ -5372,22 +5375,32 @@ public class ExcelAiImportService {
         return ruleDays != null ? ruleDays : defaultLeadTimeDays;
     }
 
-    private String resolveMaterialGradeCode(String materialName) {
-        if (!StringUtils.hasText(materialName)) {
+    /**
+     * 解析价格列材质等级码（4.4：硬编码 switch 迁入字典体系——
+     * 别名快照 → material_grade 字典（码忽略大小写/名），未命中返回 null。
+     * 既有 9 个中文名与字典 dict_name 一致故行为不变；新增字典项/别名自动生效）。
+     *
+     * @param materialName   价格列材质名原文
+     * @param materialGrades material_grade 字典（批次预载）
+     * @param importCache    批次导入缓存（别名内存快照）
+     * @return 材质等级码；未命中返回 null
+     */
+    private String resolveMaterialGradeCode(String materialName, List<CategoryDict> materialGrades,
+                                            BatchImportCache importCache) {
+        if (!StringUtils.hasText(materialName) || materialGrades == null) {
             return null;
         }
-        return switch (materialName.trim()) {
-            case "A级布" -> "FABRIC_A";
-            case "AA级布" -> "FABRIC_AA";
-            case "S级布" -> "FABRIC_S";
-            case "SS级进口布" -> "FABRIC_SS";
-            case "半皮" -> "LEATHER_HALF";
-            case "A级全皮" -> "LEATHER_A";
-            case "AA级全皮" -> "LEATHER_AA";
-            case "S级全皮" -> "LEATHER_S";
-            case "SS级全皮" -> "LEATHER_SS";
-            default -> null;
-        };
+        String trimmed = materialName.trim();
+        String byAlias = importCache.resolveAlias("material_grade", trimmed);
+        if (StringUtils.hasText(byAlias)) {
+            return byAlias;
+        }
+        for (CategoryDict dict : materialGrades) {
+            if (trimmed.equals(dict.getDictName()) || trimmed.equalsIgnoreCase(dict.getDictCode())) {
+                return dict.getDictCode();
+            }
+        }
+        return null;
     }
 
     /**

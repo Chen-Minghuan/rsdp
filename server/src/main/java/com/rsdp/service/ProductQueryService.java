@@ -837,6 +837,10 @@ public class ProductQueryService {
         rspuFactoryMappingMapper.delete(new QueryWrapper<RspuFactoryMapping>().eq("rspu_id", rspuId));
         userFavoriteMapper.delete(new QueryWrapper<UserFavorite>().eq("rspu_id", rspuId));
         productPurgeMapper.deleteVariantCodeCounter(rspuId);
+        // RSKU 发号计数器（4.4：按 rspu_code 键段清理，彻底删除不再残留孤儿行）
+        if (StringUtils.hasText(existing.getRspuCode())) {
+            productPurgeMapper.deleteRskuCodeCounter(existing.getRspuCode());
+        }
         // 价格投影行（引用 rspu_master，须先于主表删除）
         productPurgeMapper.deletePriceSummary(rspuId);
         // ⑦ 主表

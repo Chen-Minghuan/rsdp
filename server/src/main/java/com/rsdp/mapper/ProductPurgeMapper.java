@@ -122,6 +122,15 @@ public interface ProductPurgeMapper {
     int deleteVariantCodeCounter(String rspuId);
 
     /**
+     * 物理删除 RSKU 发号计数器行（4.4：按业务编码段清理，彻底删除后不再残留孤儿计数器）。
+     *
+     * @param rspuCode RSPU 业务编码（rsku_code_counter 以 rspu_code 为键段，非 rspu_id）
+     * @return 影响行数
+     */
+    @Delete("DELETE FROM rsku_code_counter WHERE rspu_code = #{rspuCode}")
+    int deleteRskuCodeCounter(String rspuCode);
+
+    /**
      * 物理删除 RSPU 价格投影行（V44，引用 rspu_master，须先于主表删除）。
      *
      * @param rspuId RSPU ID
