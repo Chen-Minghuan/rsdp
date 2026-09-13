@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, DocumentImportSubmitResult, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, DocumentImportSubmitResult, DuplicateSuspectItem, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, MergePreviewResult, MergeResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, RspuMergeRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -144,6 +144,45 @@ export async function reviewProduct(rspuId: string, request: ProductReviewReques
 export async function reRecognizeProduct(rspuId: string): Promise<{ taskId: string; message: string }> {
   const { data: result } = await apiClient.post<ApiResult<{ taskId: string; message: string }>>(
     `/v1/products/${rspuId}/re-recognize`
+  )
+  return result.data
+}
+
+/**
+ * 查询产品的 pending 疑似同款配对（合并候选）。
+ *
+ * @param rspuId RSPU ID
+ * @returns 配对列表（含命中产品的编码与品名）
+ */
+export async function getDuplicateSuspects(rspuId: string): Promise<DuplicateSuspectItem[]> {
+  const { data: result } = await apiClient.get<ApiResult<DuplicateSuspectItem[]>>(
+    `/v1/products/${rspuId}/duplicate-suspects`
+  )
+  return result.data
+}
+
+/**
+ * 合并预览（只读）：字段差异 + 变体映射计划 + RSKU 冲突清单。
+ *
+ * @param request 仅需 sourceRspuId/targetRspuId
+ * @returns 预览结果
+ */
+export async function previewMerge(request: RspuMergeRequest): Promise<MergePreviewResult> {
+  const { data: result } = await apiClient.post<ApiResult<MergePreviewResult>>(
+    '/v1/products/merge/preview', request
+  )
+  return result.data
+}
+
+/**
+ * 同款产品合并：把重复副本合并到目标 RSPU（副本迁空后软删进回收站）。
+ *
+ * @param request 合并请求（副本/目标 + 字段覆盖选择 + RSKU 冲突裁决）
+ * @returns 合并结果统计
+ */
+export async function mergeProducts(request: RspuMergeRequest): Promise<MergeResult> {
+  const { data: result } = await apiClient.post<ApiResult<MergeResult>>(
+    '/v1/products/merge', request
   )
   return result.data
 }

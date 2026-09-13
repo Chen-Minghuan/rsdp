@@ -235,6 +235,14 @@ GET    /api/v1/products/{rspuId}/duplicate-suspects
        # 说明：数据来自 rspu_duplicate_suspect 结构化配对表（向量同款检测命中落库，M2）；
        #       配对状态机 pending → merged（合并）/ dismissed（复核「已确认」或副本合并删除时闭环）
 
+POST   /api/v1/products/merge/preview
+       # 合并预览（只读，2026-09-12 M4；product:update + 服务内强制平台员工，守卫口径与正式合并一致）
+       # Request: { sourceRspuId, targetRspuId }
+       # Response: { sourceRspuId, targetRspuId, movedVariantCount, rskuCount, imageCount,
+       #             fieldDiffs: [{ field, label, sourceValue, targetValue, willFill }],
+       #             conflicts: [{ rskuId, factoryCode, conflictRskuId }] }
+       # 说明：willFill=true 表示默认「仅补空缺」会自动填入；conflicts 未全部裁决时正式合并 400 拒绝
+
 POST   /api/v1/products/merge
        # 同款产品合并（已实现，2026-09-12 合并工具 M3；product:update + 服务内强制平台员工）
        # Request: { sourceRspuId, targetRspuId, takeSourceFields?, rskuConflictResolutions? }

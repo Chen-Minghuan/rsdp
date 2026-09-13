@@ -7,6 +7,7 @@ import com.rsdp.dto.request.RspuMergeRequest;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuDuplicateSuspect;
 import com.rsdp.entity.RspuMaster;
+import com.rsdp.entity.RspuRelation;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RspuVariant;
@@ -36,7 +37,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -60,6 +60,13 @@ public class RspuMergeService {
         "productName", "description", "retailPrice", "colorPrimaryName", "materialTags",
         "fabricTags", "sixDimTags", "referencePriceBand", "productLevel", "warrantyYears", "keySpecs");
 
+    /** 字段中文标签（预览接口返回给前端合并向导展示） */
+    private static final Map<String, String> FIELD_LABELS = Map.ofEntries(
+        Map.entry("productName", "品名"), Map.entry("description", "描述"), Map.entry("retailPrice", "零售参考价"),
+        Map.entry("colorPrimaryName", "主色"), Map.entry("materialTags", "材质标签"), Map.entry("fabricTags", "面料标签"),
+        Map.entry("sixDimTags", "六维标签"), Map.entry("referencePriceBand", "参考价格带"),
+        Map.entry("productLevel", "产品等级"), Map.entry("warrantyYears", "质保年限"), Map.entry("keySpecs", "关键规格"));
+
     private final RspuMapper rspuMapper;
     private final RspuStyleMapper rspuStyleMapper;
     private final RspuSceneMapper rspuSceneMapper;
@@ -75,6 +82,12 @@ public class RspuMergeService {
     private final ProductQueryService productQueryService;
     private final ObjectMapper objectMapper;
 
+    /** RSKU 迁移计划（合并执行与预览共用） */
+    private record RskuPlan(RskuSupply rsku, String newVariantId, RskuSupply conflict, String resolution) { }
+
+    /** RSKU 冲突明细（预览展示/未裁决报错共用） */
+    private record RskuConflict(String rskuId, String factoryCode, String conflictRskuId) { }
+
     /**
      * 执行同款合并（单事务；任何一步失败整体回滚，不产生半合并状态）。
      *
@@ -88,26 +101,9 @@ public class RspuMergeService {
         String operator = SecurityOperatorContext.currentUsername();
 
         // ---- 1. 守卫 ----
-        if (!SecurityOperatorContext.isPlatformStaff()) {
-            throw new BusinessException("同款合并仅平台运营人员可执行");
-        }
-        if (sourceId.equals(targetId)) {
-            throw new BusinessException("副本与目标不能是同一个产品");
-        }
-        RspuMaster source = rspuMapper.selectById(sourceId);
-        if (source == null) {
-            throw new ResourceNotFoundException("副本产品不存在: " + sourceId);
-        }
-        RspuMaster target = rspuMapper.selectById(targetId);
-        if (target == null) {
-            throw new ResourceNotFoundException("目标产品不存在: " + targetId);
-        }
-        if ("processing".equals(target.getStatus())) {
-            throw new BusinessException("目标产品仍在识别中，请等待识别完成后再合并");
-        }
-        if ("processing".equals(source.getStatus())) {
-            throw new BusinessException("副本产品仍在识别中，请等待识别完成后再合并");
-        }
+        RspuMaster[] pair = loadAndValidatePair(sourceId, targetId);
+        RspuMaster source = pair[0];
+        RspuMaster target = pair[1];
         List<String> takeSourceFields = request.getTakeSourceFields() == null
             ? List.of() : request.getTakeSourceFields();
         for (String field : takeSourceFields) {
@@ -132,11 +128,19 @@ public class RspuMergeService {
 
         // ---- 4. 变体映射：uk_variant_attrs 同 key → 映射到目标变体；否则改挂到目标 ----
         Map<String, String> variantIdMap = new HashMap<>();
-        int movedVariantCount = migrateVariants(sourceId, targetId, variantIdMap);
+        List<RspuVariant> variantMoves = planVariantMapping(sourceId, targetId, variantIdMap);
+        int movedVariantCount = applyVariantMoves(variantMoves, targetId);
 
         // ---- 5. RSKU 迁移（先全量校验冲突裁决齐不齐，再执行；冲突未裁决整体拒绝） ----
-        Map<String, Object> rskuStats = migrateRskus(sourceId, targetId, variantIdMap,
-            request.getRskuConflictResolutions(), operator);
+        Map<String, String> resolutions = request.getRskuConflictResolutions() == null
+            ? Map.of() : request.getRskuConflictResolutions();
+        List<RskuPlan> plans = planRskuMigration(sourceId, targetId, variantIdMap, resolutions);
+        List<RskuConflict> conflicts = findUnresolvedConflicts(plans);
+        if (!conflicts.isEmpty()) {
+            throw new BusinessException("存在 " + conflicts.size()
+                + " 条 RSKU 报价冲突（同变体同工厂），请逐条裁决后重试: " + formatConflicts(conflicts));
+        }
+        Map<String, Object> rskuStats = executeRskuPlans(plans, sourceId, targetId, operator);
 
         // ---- 6. rsku_code 重发（编码含源 rspu_code 段，迁移行已置空，统一补发） ----
         int reissuedCodes = rskuCodeService.backfillCodesByRspu(targetId);
@@ -182,6 +186,62 @@ public class RspuMergeService {
     }
 
     /**
+     * 合并预览（只读，M4 前端合并向导数据源）：字段差异 + 变体映射计划 + RSKU 冲突清单。
+     * 守卫口径与正式合并一致（仅平台员工、双方存在且非识别中）。
+     *
+     * @param request 仅需 sourceRspuId/targetRspuId
+     * @return 预览结果（fieldDiffs/conflicts/movedVariantCount/imageCount）
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> preview(RspuMergeRequest request) {
+        String sourceId = request.getSourceRspuId().trim();
+        String targetId = request.getTargetRspuId().trim();
+        RspuMaster[] pair = loadAndValidatePair(sourceId, targetId);
+        RspuMaster source = pair[0];
+        RspuMaster target = pair[1];
+
+        List<Map<String, Object>> fieldDiffs = new ArrayList<>();
+        for (String field : MERGEABLE_FIELDS) {
+            Object sourceValue = readField(source, field);
+            Object targetValue = readField(target, field);
+            Map<String, Object> diff = new LinkedHashMap<>();
+            diff.put("field", field);
+            diff.put("label", FIELD_LABELS.get(field));
+            diff.put("sourceValue", sourceValue);
+            diff.put("targetValue", targetValue);
+            // 默认行为 = 仅补空缺：源有值且目标空缺时自动填入
+            diff.put("willFill", hasValue(sourceValue) && !hasValue(targetValue));
+            fieldDiffs.add(diff);
+        }
+
+        Map<String, String> variantIdMap = new HashMap<>();
+        List<RspuVariant> variantMoves = planVariantMapping(sourceId, targetId, variantIdMap);
+        List<RskuPlan> plans = planRskuMigration(sourceId, targetId, variantIdMap, Map.of());
+        List<RskuConflict> conflicts = findUnresolvedConflicts(plans);
+        int imageCount = imageAssetsMapper.selectCount(
+            new QueryWrapper<ImageAssets>().eq("rspu_id", sourceId)).intValue();
+
+        List<Map<String, Object>> conflictItems = new ArrayList<>();
+        for (RskuConflict c : conflicts) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("rskuId", c.rskuId());
+            item.put("factoryCode", c.factoryCode());
+            item.put("conflictRskuId", c.conflictRskuId());
+            conflictItems.add(item);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("sourceRspuId", sourceId);
+        result.put("targetRspuId", targetId);
+        result.put("fieldDiffs", fieldDiffs);
+        result.put("conflicts", conflictItems);
+        result.put("movedVariantCount", variantMoves.size());
+        result.put("rskuCount", plans.size());
+        result.put("imageCount", imageCount);
+        return result;
+    }
+
+    /**
      * 查询产品的 pending 疑似同款配对（合并候选，M4 前端合并向导数据源）。
      *
      * @param rspuId RSPU ID
@@ -211,30 +271,191 @@ public class RspuMergeService {
         return result;
     }
 
-    // ==================== 内部步骤 ====================
+    // ==================== 守卫与规划（合并/预览共用） ====================
+
+    /** 加载并校验合并配对：仅平台员工、source≠target、双方存在且非识别中。 */
+    private RspuMaster[] loadAndValidatePair(String sourceId, String targetId) {
+        if (!SecurityOperatorContext.isPlatformStaff()) {
+            throw new BusinessException("同款合并仅平台运营人员可执行");
+        }
+        if (sourceId.equals(targetId)) {
+            throw new BusinessException("副本与目标不能是同一个产品");
+        }
+        RspuMaster source = rspuMapper.selectById(sourceId);
+        if (source == null) {
+            throw new ResourceNotFoundException("副本产品不存在: " + sourceId);
+        }
+        RspuMaster target = rspuMapper.selectById(targetId);
+        if (target == null) {
+            throw new ResourceNotFoundException("目标产品不存在: " + targetId);
+        }
+        if ("processing".equals(target.getStatus())) {
+            throw new BusinessException("目标产品仍在识别中，请等待识别完成后再合并");
+        }
+        if ("processing".equals(source.getStatus())) {
+            throw new BusinessException("副本产品仍在识别中，请等待识别完成后再合并");
+        }
+        return new RspuMaster[]{source, target};
+    }
+
+    /**
+     * 变体映射规划（只读）：按 uk_variant_attrs 同 COALESCE key 比对，
+     * 命中填映射、未命中加入待改挂清单。
+     *
+     * @param variantIdMap 输出：副本 variantId → 目标 variantId（改挂时为自身）
+     * @return 待改挂到目标的副本变体列表
+     */
+    private List<RspuVariant> planVariantMapping(String sourceId, String targetId, Map<String, String> variantIdMap) {
+        List<RspuVariant> targetVariants = rspuVariantMapper.selectList(
+            new QueryWrapper<RspuVariant>().eq("rspu_id", targetId));
+        Map<String, String> targetKeyMap = new HashMap<>();
+        for (RspuVariant v : targetVariants) {
+            targetKeyMap.put(variantKey(v), v.getVariantId());
+        }
+        List<RspuVariant> moves = new ArrayList<>();
+        List<RspuVariant> sourceVariants = rspuVariantMapper.selectList(
+            new QueryWrapper<RspuVariant>().eq("rspu_id", sourceId));
+        for (RspuVariant v : sourceVariants) {
+            String hit = targetKeyMap.get(variantKey(v));
+            if (hit != null) {
+                // 同 key 变体已存在：RSKU 改指目标变体，副本变体留在副本下随软删级联清理
+                variantIdMap.put(v.getVariantId(), hit);
+            } else {
+                // 目标无此属性组合：变体整体改挂（variant_id 主键不变，RSKU/容量行无需动）
+                variantIdMap.put(v.getVariantId(), v.getVariantId());
+                moves.add(v);
+            }
+        }
+        return moves;
+    }
+
+    /** 应用变体改挂（写），返回改挂数量。 */
+    private int applyVariantMoves(List<RspuVariant> moves, String targetId) {
+        for (RspuVariant v : moves) {
+            v.setRspuId(targetId);
+            v.setUpdatedAt(LocalDateTime.now());
+            rspuVariantMapper.updateById(v);
+        }
+        return moves.size();
+    }
+
+    /**
+     * RSKU 迁移规划（只读）：计算每条副本 RSKU 的新变体与目标侧冲突，
+     * 冲突判定 = 目标已有同 (variant_id, factory_code) 未删行（含 variant_id 为 NULL 的业务判重，
+     * idx_rsku_unique 的 PG NULL 语义不覆盖该情形）。裁决值合法性在此校验。
+     */
+    private List<RskuPlan> planRskuMigration(String sourceId, String targetId, Map<String, String> variantIdMap,
+                                             Map<String, String> resolutions) {
+        List<RskuSupply> sourceRskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>().eq("rspu_id", sourceId));
+        List<RskuSupply> targetRskus = rskuSupplyMapper.selectList(
+            new QueryWrapper<RskuSupply>().eq("rspu_id", targetId));
+        Map<String, RskuSupply> targetByVariantFactory = new HashMap<>();
+        for (RskuSupply r : targetRskus) {
+            targetByVariantFactory.put(rskuConflictKey(r.getVariantId(), r.getFactoryCode()), r);
+        }
+        List<RskuPlan> plans = new ArrayList<>();
+        for (RskuSupply r : sourceRskus) {
+            String newVariantId = r.getVariantId() == null ? null
+                : variantIdMap.getOrDefault(r.getVariantId(), r.getVariantId());
+            RskuSupply conflict = targetByVariantFactory.get(rskuConflictKey(newVariantId, r.getFactoryCode()));
+            String resolution = conflict == null ? null : resolutions.get(r.getRskuId());
+            if (resolution != null && !"keepSource".equals(resolution) && !"keepTarget".equals(resolution)) {
+                throw new BusinessException("无效的 RSKU 冲突裁决: " + resolution + "，仅支持 keepSource/keepTarget");
+            }
+            plans.add(new RskuPlan(r, newVariantId, conflict, resolution));
+        }
+        return plans;
+    }
+
+    /** 找出计划中未裁决的冲突（resolution 为空且 conflict 非空）。 */
+    private List<RskuConflict> findUnresolvedConflicts(List<RskuPlan> plans) {
+        List<RskuConflict> conflicts = new ArrayList<>();
+        for (RskuPlan plan : plans) {
+            if (plan.conflict() != null && plan.resolution() == null) {
+                conflicts.add(new RskuConflict(plan.rsku().getRskuId(),
+                    plan.rsku().getFactoryCode(), plan.conflict().getRskuId()));
+            }
+        }
+        return conflicts;
+    }
+
+    private String formatConflicts(List<RskuConflict> conflicts) {
+        List<String> items = new ArrayList<>();
+        for (RskuConflict c : conflicts) {
+            items.add(c.rskuId() + "(" + c.factoryCode() + " ↔ 目标 " + c.conflictRskuId() + ")");
+        }
+        return String.join("、", items);
+    }
+
+    // ==================== 执行步骤 ====================
+
+    /** 执行 RSKU 迁移计划（阶段 2 写入；调用前必须确保冲突已全部裁决）。 */
+    private Map<String, Object> executeRskuPlans(List<RskuPlan> plans, String sourceId, String targetId,
+                                                 String operator) {
+        List<String> migratedIds = new ArrayList<>();
+        List<String> keepTargetDeleted = new ArrayList<>();
+        List<String> keepSourceReplaced = new ArrayList<>();
+        for (RskuPlan plan : plans) {
+            RskuSupply r = plan.rsku();
+            if (plan.conflict() != null && "keepTarget".equals(plan.resolution())) {
+                // 留目标报价：副本报价软删（价格历史随之封存）
+                rskuSupplyMapper.deleteById(r.getRskuId());
+                keepTargetDeleted.add(r.getRskuId());
+                continue;
+            }
+            if (plan.conflict() != null) {
+                // keepSource：目标旧报价软删，副本报价迁移补位
+                rskuSupplyMapper.deleteById(plan.conflict().getRskuId());
+                keepSourceReplaced.add(plan.conflict().getRskuId());
+            }
+            // 编码含源 rspu_code 段，迁移后语义失效：置空由 backfillCodesByRspu 统一重发（旧码记审计）。
+            // 注意必须走 UpdateWrapper.set——updateById 非空字段策略会跳过 null，rsku_code 置空不生效
+            // （2026-09-12 合并冒烟实测坐实：迁移后旧码残留、重发 0 个）
+            rskuSupplyMapper.update(null, new UpdateWrapper<RskuSupply>()
+                .eq("rsku_id", r.getRskuId())
+                .set("rspu_id", targetId)
+                .set("variant_id", plan.newVariantId())
+                .set("rsku_code", null)
+                .set("updated_at", LocalDateTime.now()));
+            migratedIds.add(r.getRskuId());
+        }
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("migratedCount", migratedIds.size());
+        stats.put("migratedRskuIds", migratedIds);
+        stats.put("conflictKeepTargetDeleted", keepTargetDeleted);
+        stats.put("conflictKeepSourceReplaced", keepSourceReplaced);
+        if (!migratedIds.isEmpty() || !keepTargetDeleted.isEmpty()) {
+            auditLogService.logUpdate("rsku_supply", targetId, null, Map.of(
+                "action", "mergeRsku", "sourceRspuId", sourceId,
+                "migrated", migratedIds, "keepTargetDeleted", keepTargetDeleted,
+                "keepSourceReplaced", keepSourceReplaced), operator);
+        }
+        return stats;
+    }
 
     /** 字段归并：仅补空缺 + takeSourceFields 覆盖，返回实际变更的字段名列表。 */
     private List<String> applyFieldMerge(RspuMaster source, RspuMaster target, List<String> takeSourceFields) {
         List<String> changed = new ArrayList<>();
         Set<String> takeSource = new LinkedHashSet<>(takeSourceFields);
         mergeStringField(source.getProductName(), target.getProductName(), takeSource.contains("productName"),
-            v -> target.setProductName(v), changed, "productName");
+            target::setProductName, changed, "productName");
         mergeStringField(source.getDescription(), target.getDescription(), takeSource.contains("description"),
-            v -> target.setDescription(v), changed, "description");
+            target::setDescription, changed, "description");
         mergeStringField(source.getColorPrimaryName(), target.getColorPrimaryName(), takeSource.contains("colorPrimaryName"),
-            v -> target.setColorPrimaryName(v), changed, "colorPrimaryName");
+            target::setColorPrimaryName, changed, "colorPrimaryName");
         mergeStringField(source.getMaterialTags(), target.getMaterialTags(), takeSource.contains("materialTags"),
-            v -> target.setMaterialTags(v), changed, "materialTags");
+            target::setMaterialTags, changed, "materialTags");
         mergeStringField(source.getFabricTags(), target.getFabricTags(), takeSource.contains("fabricTags"),
-            v -> target.setFabricTags(v), changed, "fabricTags");
+            target::setFabricTags, changed, "fabricTags");
         mergeStringField(source.getSixDimTags(), target.getSixDimTags(), takeSource.contains("sixDimTags"),
-            v -> target.setSixDimTags(v), changed, "sixDimTags");
+            target::setSixDimTags, changed, "sixDimTags");
         mergeStringField(source.getReferencePriceBand(), target.getReferencePriceBand(), takeSource.contains("referencePriceBand"),
-            v -> target.setReferencePriceBand(v), changed, "referencePriceBand");
+            target::setReferencePriceBand, changed, "referencePriceBand");
         mergeStringField(source.getProductLevel(), target.getProductLevel(), takeSource.contains("productLevel"),
-            v -> target.setProductLevel(v), changed, "productLevel");
+            target::setProductLevel, changed, "productLevel");
         mergeStringField(source.getKeySpecs(), target.getKeySpecs(), takeSource.contains("keySpecs"),
-            v -> target.setKeySpecs(v), changed, "keySpecs");
+            target::setKeySpecs, changed, "keySpecs");
         if (source.getRetailPrice() != null && (target.getRetailPrice() == null || takeSource.contains("retailPrice"))) {
             target.setRetailPrice(source.getRetailPrice());
             changed.add("retailPrice");
@@ -317,34 +538,6 @@ public class RspuMergeService {
         return List.copyOf(sceneCodes);
     }
 
-    /** 变体映射：按 uk_variant_attrs 的 COALESCE key 比对；命中填映射、未命中改挂，返回改挂数量。 */
-    private int migrateVariants(String sourceId, String targetId, Map<String, String> variantIdMap) {
-        List<RspuVariant> targetVariants = rspuVariantMapper.selectList(
-            new QueryWrapper<RspuVariant>().eq("rspu_id", targetId));
-        Map<String, String> targetKeyMap = new HashMap<>();
-        for (RspuVariant v : targetVariants) {
-            targetKeyMap.put(variantKey(v), v.getVariantId());
-        }
-        int moved = 0;
-        List<RspuVariant> sourceVariants = rspuVariantMapper.selectList(
-            new QueryWrapper<RspuVariant>().eq("rspu_id", sourceId));
-        for (RspuVariant v : sourceVariants) {
-            String hit = targetKeyMap.get(variantKey(v));
-            if (hit != null) {
-                // 同 key 变体已存在：RSKU 改指目标变体，副本变体留在副本下随软删级联清理
-                variantIdMap.put(v.getVariantId(), hit);
-            } else {
-                // 目标无此属性组合：变体整体改挂（variant_id 主键不变，RSKU/容量行无需动）
-                v.setRspuId(targetId);
-                v.setUpdatedAt(LocalDateTime.now());
-                rspuVariantMapper.updateById(v);
-                variantIdMap.put(v.getVariantId(), v.getVariantId());
-                moved++;
-            }
-        }
-        return moved;
-    }
-
     /** uk_variant_attrs 同口径的变体属性 key：COALESCE(size_code,size_text,'')等三段拼接。 */
     private String variantKey(RspuVariant v) {
         return coalesce(v.getSizeCode(), v.getSizeText()) + "|"
@@ -354,90 +547,6 @@ public class RspuMergeService {
 
     private String coalesce(String a, String b) {
         return a != null ? a : (b != null ? b : "");
-    }
-
-    /**
-     * RSKU 迁移：先两阶段（规划 + 校验冲突裁决齐整）后执行。
-     * 冲突判定 = 目标已有同 (variant_id, factory_code) 未删行（含 variant_id 为 NULL 的业务判重，
-     * idx_rsku_unique 的 PG NULL 语义不覆盖该情形）。
-     */
-    private Map<String, Object> migrateRskus(String sourceId, String targetId, Map<String, String> variantIdMap,
-                                             Map<String, String> resolutions, String operator) {
-        List<RskuSupply> sourceRskus = rskuSupplyMapper.selectList(
-            new QueryWrapper<RskuSupply>().eq("rspu_id", sourceId));
-        List<RskuSupply> targetRskus = rskuSupplyMapper.selectList(
-            new QueryWrapper<RskuSupply>().eq("rspu_id", targetId));
-        Map<String, RskuSupply> targetByVariantFactory = new HashMap<>();
-        for (RskuSupply r : targetRskus) {
-            targetByVariantFactory.put(rskuConflictKey(r.getVariantId(), r.getFactoryCode()), r);
-        }
-
-        // 阶段 1：规划 + 校验冲突裁决
-        record Plan(RskuSupply rsku, String newVariantId, RskuSupply conflict, String resolution) { }
-        List<Plan> plans = new ArrayList<>();
-        List<String> unresolved = new ArrayList<>();
-        Map<String, String> resolutionMap = resolutions == null ? Map.of() : resolutions;
-        for (RskuSupply r : sourceRskus) {
-            String newVariantId = r.getVariantId() == null ? null
-                : variantIdMap.getOrDefault(r.getVariantId(), r.getVariantId());
-            RskuSupply conflict = targetByVariantFactory.get(rskuConflictKey(newVariantId, r.getFactoryCode()));
-            String resolution = conflict == null ? null : resolutionMap.get(r.getRskuId());
-            if (conflict != null && resolution == null) {
-                unresolved.add(r.getRskuId() + "(" + r.getFactoryCode() + " ↔ 目标 "
-                    + conflict.getRskuId() + ")");
-            }
-            if (resolution != null && !"keepSource".equals(resolution) && !"keepTarget".equals(resolution)) {
-                throw new BusinessException("无效的 RSKU 冲突裁决: " + resolution + "，仅支持 keepSource/keepTarget");
-            }
-            plans.add(new Plan(r, newVariantId, conflict, resolution));
-        }
-        if (!unresolved.isEmpty()) {
-            throw new BusinessException("存在 " + unresolved.size()
-                + " 条 RSKU 报价冲突（同变体同工厂），请逐条裁决后重试: " + String.join("、", unresolved));
-        }
-
-        // 阶段 2：执行
-        List<String> migratedIds = new ArrayList<>();
-        List<String> keepTargetDeleted = new ArrayList<>();
-        List<String> keepSourceReplaced = new ArrayList<>();
-        for (Plan plan : plans) {
-            RskuSupply r = plan.rsku();
-            if (plan.conflict() != null && "keepTarget".equals(plan.resolution())) {
-                // 留目标报价：副本报价软删（价格历史随之封存）
-                rskuSupplyMapper.deleteById(r.getRskuId());
-                keepTargetDeleted.add(r.getRskuId());
-                continue;
-            }
-            if (plan.conflict() != null) {
-                // keepSource：目标旧报价软删，副本报价迁移补位
-                rskuSupplyMapper.deleteById(plan.conflict().getRskuId());
-                keepSourceReplaced.add(plan.conflict().getRskuId());
-            }
-            r.setRspuId(targetId);
-            r.setVariantId(plan.newVariantId());
-            // 编码含源 rspu_code 段，迁移后语义失效：置空由 backfillCodesByRspu 统一重发（旧码记审计）。
-            // 注意必须走 UpdateWrapper.set——updateById 非空字段策略会跳过 null，rsku_code 置空不生效
-            // （2026-09-12 合并冒烟实测坐实：迁移后旧码残留、重发 0 个）
-            rskuSupplyMapper.update(null, new UpdateWrapper<RskuSupply>()
-                .eq("rsku_id", r.getRskuId())
-                .set("rspu_id", targetId)
-                .set("variant_id", plan.newVariantId())
-                .set("rsku_code", null)
-                .set("updated_at", LocalDateTime.now()));
-            migratedIds.add(r.getRskuId());
-        }
-        Map<String, Object> stats = new LinkedHashMap<>();
-        stats.put("migratedCount", migratedIds.size());
-        stats.put("migratedRskuIds", migratedIds);
-        stats.put("conflictKeepTargetDeleted", keepTargetDeleted);
-        stats.put("conflictKeepSourceReplaced", keepSourceReplaced);
-        if (!migratedIds.isEmpty() || !keepTargetDeleted.isEmpty()) {
-            auditLogService.logUpdate("rsku_supply", targetId, null, Map.of(
-                "action", "mergeRsku", "sourceRspuId", sourceId,
-                "migrated", migratedIds, "keepTargetDeleted", keepTargetDeleted,
-                "keepSourceReplaced", keepSourceReplaced), operator);
-        }
-        return stats;
     }
 
     private String rskuConflictKey(String variantId, String factoryCode) {
@@ -478,7 +587,6 @@ public class RspuMergeService {
         rspuMergeMapper.repointProductStyleMatch(sourceId, targetId);
         rspuMergeMapper.repointSchemeCandidates(sourceId, targetId);
         // 搭配关系双侧改指（实体走 @TableLogic，仅未删行）+ 自环/重复清理
-        rspuMergeMapper.softDeleteSelfRelations();
         repointRelations(sourceId, targetId);
         rspuMergeMapper.softDeleteSelfRelations();
         rspuMergeMapper.softDeleteDuplicateRelations(targetId);
@@ -486,12 +594,12 @@ public class RspuMergeService {
 
     private void repointRelations(String sourceId, String targetId) {
         // anchor 侧（@TableLogic 自动过滤已删行）
-        rspuRelationMapper.update(null, new UpdateWrapper<com.rsdp.entity.RspuRelation>()
+        rspuRelationMapper.update(null, new UpdateWrapper<RspuRelation>()
             .eq("anchor_rspu_id", sourceId)
             .set("anchor_rspu_id", targetId)
             .set("updated_at", LocalDateTime.now()));
         // related 侧
-        rspuRelationMapper.update(null, new UpdateWrapper<com.rsdp.entity.RspuRelation>()
+        rspuRelationMapper.update(null, new UpdateWrapper<RspuRelation>()
             .eq("related_rspu_id", sourceId)
             .set("related_rspu_id", targetId)
             .set("updated_at", LocalDateTime.now()));
@@ -514,6 +622,33 @@ public class RspuMergeService {
             .set("status", "dismissed")
             .set("resolved_by", operator)
             .set("resolved_at", now));
+    }
+
+    // ==================== 预览辅助 ====================
+
+    /** 读取白名单字段值（预览展示）。 */
+    private Object readField(RspuMaster rspu, String field) {
+        return switch (field) {
+            case "productName" -> rspu.getProductName();
+            case "description" -> rspu.getDescription();
+            case "retailPrice" -> rspu.getRetailPrice();
+            case "colorPrimaryName" -> rspu.getColorPrimaryName();
+            case "materialTags" -> rspu.getMaterialTags();
+            case "fabricTags" -> rspu.getFabricTags();
+            case "sixDimTags" -> rspu.getSixDimTags();
+            case "referencePriceBand" -> rspu.getReferencePriceBand();
+            case "productLevel" -> rspu.getProductLevel();
+            case "warrantyYears" -> rspu.getWarrantyYears();
+            case "keySpecs" -> rspu.getKeySpecs();
+            default -> null;
+        };
+    }
+
+    private boolean hasValue(Object value) {
+        if (value == null) {
+            return false;
+        }
+        return !(value instanceof String s) || StringUtils.hasText(s);
     }
 
     /** 归并字段快照（审计用）。 */

@@ -221,6 +221,18 @@ public class ProductController {
     }
 
     /**
+     * 合并预览（只读）：字段差异 + 变体映射计划 + RSKU 冲突清单，供合并向导展示。
+     *
+     * @param request 仅需 sourceRspuId/targetRspuId
+     * @return 预览结果（fieldDiffs/conflicts/movedVariantCount/rskuCount/imageCount）
+     */
+    @PostMapping("/merge/preview")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<Map<String, Object>> mergePreview(@Valid @RequestBody RspuMergeRequest request) {
+        return Result.ok(rspuMergeService.preview(request));
+    }
+
+    /**
      * 同款产品合并（决策点②共享主档模型）：把重复副本合并到目标 RSPU，
      * 副本在全部数据迁出后软删（回收站可见）。仅平台员工可执行（服务内强制）。
      *

@@ -165,6 +165,7 @@ public class SecurityConfig {
 
                 // 同款产品合并（决策点②共享主档模型；服务内再强制平台员工）
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/merge").hasAuthority(Permissions.PRODUCT_UPDATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/merge/preview").hasAuthority(Permissions.PRODUCT_UPDATE)
 
                 // 产品复核
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/review").hasAuthority(Permissions.PRODUCT_REVIEW)
