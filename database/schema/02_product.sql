@@ -8,7 +8,7 @@
 CREATE TABLE IF NOT EXISTS rspu_master (
     rspu_id VARCHAR(64) PRIMARY KEY,
     external_code VARCHAR(64),                       -- 外部编码（Excel/ERP 导入用）
-    rspu_code VARCHAR(32) UNIQUE,                    -- 业务编码，如 FS-MC-001-M
+    rspu_code VARCHAR(32),                             -- 业务编码，如 FS-MC-001-M（唯一性见 uk_rspu_code_alive 部分索引，V5）
     category_code VARCHAR(16) NOT NULL,
     category_path TEXT NOT NULL,
     positioning_label VARCHAR(64) NOT NULL,        -- 主风格/主职级，如 中古风 / 总裁级
@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS variant_code_counter (
 -- RSKU 供应单元子表（工厂对某变体的报价）
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
-    rsku_code VARCHAR(64) UNIQUE,                    -- 业务编码，如 FS-MC-001-M-A004-PE-001
+    rsku_code VARCHAR(64),                             -- 业务编码，如 FS-MC-001-M-A004-PE-001（唯一性见 uk_rsku_code_alive 部分索引，V5）
     rspu_id VARCHAR(64) NOT NULL,
     variant_id VARCHAR(64),                        -- 关联具体变体
     factory_code VARCHAR(16) NOT NULL,
@@ -214,6 +214,8 @@ CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) 
 CREATE INDEX IF NOT EXISTS idx_rspu_created_by ON rspu_master(created_by);
 -- 外部编码部分唯一索引（V17 并入）：防并发导入产生重复外部编码，仅约束未软删除且非空记录
 CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL AND external_code IS NOT NULL;
+-- 业务编码部分唯一索引（V5）：与软删兼容（回收站中的产品不占用编码），对齐 external_code 先例
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_code_alive ON rspu_master(rspu_code) WHERE deleted_at IS NULL AND rspu_code IS NOT NULL;
 
 -- 多值标签索引
 CREATE INDEX IF NOT EXISTS idx_rspu_style ON rspu_style(style_code);
@@ -242,7 +244,9 @@ CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
 CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code) NULLS NOT DISTINCT WHERE deleted_at IS NULL;
+-- rsku_code 部分唯一索引（V5）：与软删兼容，对齐 uk_rspu_code_alive
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rsku_code_alive ON rsku_supply(rsku_code) WHERE deleted_at IS NULL AND rsku_code IS NOT NULL;
 
 -- 价格历史索引
 CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_at);
