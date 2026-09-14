@@ -10,14 +10,16 @@ export interface ApiOptions {
  * 一图多产品区域检测：AI 检测图内每个产品的位置框、预估品类与产品旁说明文字。
  *
  * @param file 单张产品图片
+ * @param signal 可选的 AbortSignal，用于取消请求（组件卸载/弹窗关闭时 abort）
  * @returns 检测到的产品区域列表
  */
-export async function detectProductRegions(file: File): Promise<RegionProduct[]> {
+export async function detectProductRegions(file: File, signal?: AbortSignal): Promise<RegionProduct[]> {
   const formData = new FormData()
   formData.append('image', file)
   const { data: result } = await uploadClient.post<ApiResult<RegionProduct[]>>(
     '/v1/products/entry/detect-regions',
-    formData
+    formData,
+    { signal }
   )
   return result.data
 }
@@ -27,15 +29,17 @@ export async function detectProductRegions(file: File): Promise<RegionProduct[]>
  *
  * @param file 原图（与 detectProductRegions 同一张）
  * @param regions 选中的产品区域
+ * @param signal 可选的 AbortSignal，用于取消请求（组件卸载/弹窗关闭时 abort）
  * @returns 每个区域的录入结果（与传入顺序一致）
  */
-export async function entryByRegions(file: File, regions: RegionSelection[]): Promise<ProductEntryResult[]> {
+export async function entryByRegions(file: File, regions: RegionSelection[], signal?: AbortSignal): Promise<ProductEntryResult[]> {
   const formData = new FormData()
   formData.append('image', file)
   formData.append('regions', JSON.stringify({ regions }))
   const { data: result } = await uploadClient.post<ApiResult<ProductEntryResult[]>>(
     '/v1/products/entry/by-regions',
-    formData
+    formData,
+    { signal }
   )
   return result.data
 }
@@ -195,6 +199,17 @@ export async function mergeProducts(request: RspuMergeRequest): Promise<MergeRes
  */
 export async function updateProduct(rspuId: string, request: ProductUpdateRequest): Promise<void> {
   await apiClient.put<ApiResult<void>>(`/v1/products/${rspuId}`, request)
+}
+
+/**
+ * 六维标签单维度修正（PATCH 单字段，替代整对象读-改-写 PUT，消除并发 lost update）。
+ *
+ * @param rspuId RSPU ID
+ * @param dimKey 维度键（A/B/C/D/E/F）
+ * @param value  维度值；null 表示清除该维度
+ */
+export async function patchProductSixDimTag(rspuId: string, dimKey: string, value: string | null): Promise<void> {
+  await apiClient.patch<ApiResult<void>>(`/v1/products/${rspuId}/six-dim-tags`, { dimKey, value })
 }
 
 /**

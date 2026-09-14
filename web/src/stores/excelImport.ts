@@ -174,6 +174,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   }
 
   const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
+  /** 单次导入数据行上限（与后端 ExcelAiImportService.MAX_ROWS 保持一致） */
+  const MAX_IMPORT_ROWS = 500
 
   function isExcelFile(file: File): boolean {
     const name = file.name.toLowerCase()
@@ -220,6 +222,14 @@ export const useExcelImportStore = defineStore('excelImport', () => {
 
     try {
       const result = await previewExcelAiImport(file, sheetIndex, uploadAbortController.signal)
+      // 行数前置拦截（与后端 MAX_ROWS=500 一致）：预览响应 sheets[].rowCount 为
+      // 含表头的近似物理行数，超限直接拦截，不进入映射/清洗步骤
+      const resolvedSheetIndex = result.sheetIndex ?? sheetIndex
+      const rowCount = result.sheets?.find(s => s.index === resolvedSheetIndex)?.rowCount
+      if (rowCount != null && rowCount > MAX_IMPORT_ROWS) {
+        errorMessage.value = `单次最多导入 ${MAX_IMPORT_ROWS} 行，当前 ${rowCount} 行`
+        return
+      }
       mappingResponse.value = result
       sheets.value = result.sheets ?? []
       currentSheetIndex.value = result.sheetIndex ?? sheetIndex
@@ -487,21 +497,28 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   /**
    * 将源行的全部图片克隆到目标行的覆盖图列表。
    *
+   * <p>与上传/删除一样走目标行的串行链，避免并发粘贴/删除时
+   * 后完成的请求用旧快照覆盖先完成的（lost update）。</p>
+   *
    * @param batchId        预览批次号
    * @param sourceRowIndex 源行号（1-based）
    * @param targetRowIndex 目标行号（1-based）
    * @return 目标行最终生效的覆盖图 key 列表
    */
   async function cloneRowImages(batchId: string, sourceRowIndex: number, targetRowIndex: number): Promise<string[]> {
-    const keys = await cloneExcelAiRowImages(batchId, sourceRowIndex, targetRowIndex)
-    const next = { ...rowImageOverrides.value }
-    if (keys.length === 0) {
-      delete next[targetRowIndex]
-    } else {
-      next[targetRowIndex] = keys
-    }
-    rowImageOverrides.value = next
-    return keys
+    let resultKeys: string[] = []
+    await enqueueRowImageSave(targetRowIndex, async () => {
+      const keys = await cloneExcelAiRowImages(batchId, sourceRowIndex, targetRowIndex)
+      const next = { ...rowImageOverrides.value }
+      if (keys.length === 0) {
+        delete next[targetRowIndex]
+      } else {
+        next[targetRowIndex] = keys
+      }
+      rowImageOverrides.value = next
+      resultKeys = keys
+    })
+    return resultKeys
   }
 
   async function saveRowImageOverrides(batchId: string, rowIndex: number) {

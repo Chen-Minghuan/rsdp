@@ -109,9 +109,13 @@ public class AsyncTaskProcessor {
             return;
         }
 
+        // 任务记录入口一次读取（B5）：审计操作人与 input_data 各标记位共用同一次 selectById + JSON 解析，
+        // 不再由 isDocumentImportTask/isExcelImportTask/isCategoryAutoDetectTask/extractPageOcr 各自重复查询解析
+        AsyncTask task = loadTaskQuietly(taskId);
         // 审计操作人：异步线程无 SecurityContext（ThreadLocal 为空会落成 anonymous），
         // 显式取任务创建人（async_task.created_by）透传给所有写库审计；取不到按 system
-        String operator = resolveTaskOperator(taskId);
+        String operator = resolveTaskOperator(task);
+        com.fasterxml.jackson.databind.JsonNode inputRoot = parseInputDataRoot(task);
 
         String recognitionId = IdGenerator.recognitionId();
         String modelName = aiModel;
@@ -163,7 +167,7 @@ public class AsyncTaskProcessor {
         // Excel 导入的图片为表格内嵌/链接直接提取的成品图，直接使用原图，不做 AI 裁剪。
         byte[] originalImageBytes = imageBytes;
         boolean subjectCropped = false;
-        if (!isDocumentImportTask(taskId) && !isExcelImportTask(taskId)) {
+        if (!isDocumentImportTask(inputRoot) && !isExcelImportTask(inputRoot)) {
             Optional<byte[]> croppedImage = subjectCropService.cropAndReplacePrimary(
                 imageBytes, rspuId, null, imageId, objectKey);
             if (croppedImage.isPresent()) {
@@ -175,7 +179,7 @@ public class AsyncTaskProcessor {
         // 品类自动判定：录入时用户未选品类（系统兜底 FS）时，用原图（含品名/规格文字版面）
         // 轻量判定品类并纠正——后续六维 schema、风格匹配、业务编码都按正确品类执行。
         // 判定失败不影响主流程，沿用兜底品类。
-        if (isCategoryAutoDetectTask(taskId)) {
+        if (isCategoryAutoDetectTask(inputRoot)) {
             try {
                 String detected = visionService.classifyCategory(new ByteArrayInputStream(originalImageBytes));
                 if (StringUtils.hasText(detected) && !detected.equalsIgnoreCase(categoryCode) && rspu != null) {
@@ -210,7 +214,7 @@ public class AsyncTaskProcessor {
             processingTime = (int) (System.currentTimeMillis() - aiStart);
 
             // 文档导入时，页面级检测提取的产品旁说明文字合并进 OCR（裁剪图不含这些文字）
-            mergePageOcr(labels, extractPageOcr(taskId));
+            mergePageOcr(labels, extractPageOcr(inputRoot));
 
             // AI 标签后处理：清洗 OCR 字段，规范化尺寸，OCR 材质兜底
             postProcessLabels(labels);
@@ -383,97 +387,91 @@ public class AsyncTaskProcessor {
      * 解析审计操作人：异步线程（rsdp-async-*）无 SecurityContext，
      * 取任务创建人（async_task.created_by）作为审计操作人；取不到按 "system"。
      *
-     * @param taskId 任务 ID
+     * @param task 任务记录（入口一次性读取，可为 null）
      * @return 审计操作人
      */
-    private String resolveTaskOperator(String taskId) {
-        try {
-            AsyncTask task = asyncTaskMapper.selectById(taskId);
-            if (task != null && StringUtils.hasText(task.getCreatedBy())) {
-                return task.getCreatedBy();
-            }
-        } catch (Exception e) {
-            log.warn("读取任务创建人失败，审计操作人按 system 处理，taskId={}", taskId, e);
+    private String resolveTaskOperator(AsyncTask task) {
+        if (task != null && StringUtils.hasText(task.getCreatedBy())) {
+            return task.getCreatedBy();
         }
         return "system";
     }
 
     /**
-     * 从任务 input_data 中提取页面级 OCR 文字（文档导入时写入，图片录入无此字段）。
+     * 入口一次性读取任务记录；读取失败按 null 处理（后续标记位全部回退默认值）。
      *
      * @param taskId 任务 ID
-     * @return 页面级 OCR 结果，无则返回 null
+     * @return 任务记录，不存在或读取异常为 null
      */
+    private AsyncTask loadTaskQuietly(String taskId) {
+        try {
+            return asyncTaskMapper.selectById(taskId);
+        } catch (Exception e) {
+            log.warn("读取任务记录失败，taskId={}", taskId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 入口一次性解析任务 input_data（B5）：product_entry 的 source/categoryAutoDetect/pageOcr
+     * 各标记位共用该解析结果，避免每个判断各自 selectById + JSON 解析。
+     *
+     * @param task 任务记录（可为 null）
+     * @return input_data 根节点；无内容或解析失败为 null（调用方按标记缺失处理）
+     */
+    private com.fasterxml.jackson.databind.JsonNode parseInputDataRoot(AsyncTask task) {
+        if (task == null || !StringUtils.hasText(task.getInputData())) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(task.getInputData());
+        } catch (Exception e) {
+            log.warn("解析任务 input_data 失败，标记位按缺失处理，taskId={}", task.getTaskId(), e);
+            return null;
+        }
+    }
+
     /**
      * 判断任务是否来自文档导入（PDF/PPT）。
      * 文档导入的图片已经过页面级主体裁剪，无需再做单图主体检测。
      */
-    private boolean isDocumentImportTask(String taskId) {
-        try {
-            AsyncTask task = asyncTaskMapper.selectById(taskId);
-            if (task == null || !StringUtils.hasText(task.getInputData())) {
-                return false;
-            }
-            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
-            com.fasterxml.jackson.databind.JsonNode source = root.get("source");
-            return source != null && "document_import".equals(source.asText());
-        } catch (Exception e) {
-            log.warn("解析任务 source 失败，按普通录入处理，taskId={}", taskId, e);
-            return false;
-        }
+    private boolean isDocumentImportTask(com.fasterxml.jackson.databind.JsonNode inputRoot) {
+        return "document_import".equals(inputSource(inputRoot));
     }
 
     /**
      * 判断任务是否来自 Excel 导入。
      * Excel 导入的图片为表格内嵌/链接直接提取的成品图，直接使用原图，无需 AI 主体裁剪。
      */
-    private boolean isExcelImportTask(String taskId) {
-        try {
-            AsyncTask task = asyncTaskMapper.selectById(taskId);
-            if (task == null || !StringUtils.hasText(task.getInputData())) {
-                return false;
-            }
-            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
-            com.fasterxml.jackson.databind.JsonNode source = root.get("source");
-            return source != null && "excel_import".equals(source.asText());
-        } catch (Exception e) {
-            log.warn("解析任务 source 失败，按普通录入处理，taskId={}", taskId, e);
-            return false;
-        }
+    private boolean isExcelImportTask(com.fasterxml.jackson.databind.JsonNode inputRoot) {
+        return "excel_import".equals(inputSource(inputRoot));
+    }
+
+    private String inputSource(com.fasterxml.jackson.databind.JsonNode inputRoot) {
+        com.fasterxml.jackson.databind.JsonNode source = inputRoot != null ? inputRoot.get("source") : null;
+        return source != null ? source.asText() : null;
     }
 
     /**
      * 判断任务是否需要 AI 自动判定品类（录入时用户未选品类，系统在 input_data 打了标记）。
      */
-    private boolean isCategoryAutoDetectTask(String taskId) {
-        try {
-            AsyncTask task = asyncTaskMapper.selectById(taskId);
-            if (task == null || !StringUtils.hasText(task.getInputData())) {
-                return false;
-            }
-            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
-            com.fasterxml.jackson.databind.JsonNode flag = root.get("categoryAutoDetect");
-            return flag != null && flag.asBoolean(false);
-        } catch (Exception e) {
-            log.warn("解析任务 categoryAutoDetect 失败，跳过品类判定，taskId={}", taskId, e);
-            return false;
-        }
+    private boolean isCategoryAutoDetectTask(com.fasterxml.jackson.databind.JsonNode inputRoot) {
+        com.fasterxml.jackson.databind.JsonNode flag = inputRoot != null ? inputRoot.get("categoryAutoDetect") : null;
+        return flag != null && flag.asBoolean(false);
     }
 
-    private OcrResult extractPageOcr(String taskId) {
+    private OcrResult extractPageOcr(com.fasterxml.jackson.databind.JsonNode inputRoot) {
+        if (inputRoot == null) {
+            return null;
+        }
         try {
-            AsyncTask task = asyncTaskMapper.selectById(taskId);
-            if (task == null || !StringUtils.hasText(task.getInputData())) {
-                return null;
-            }
-            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(task.getInputData());
-            com.fasterxml.jackson.databind.JsonNode pageOcrNode = root.get("pageOcr");
+            com.fasterxml.jackson.databind.JsonNode pageOcrNode = inputRoot.get("pageOcr");
             if (pageOcrNode == null || pageOcrNode.isNull()) {
                 return null;
             }
             return objectMapper.treeToValue(pageOcrNode, OcrResult.class);
         } catch (Exception e) {
-            log.warn("解析任务 pageOcr 失败，忽略页面文字，taskId={}", taskId, e);
+            log.warn("解析任务 pageOcr 失败，忽略页面文字", e);
             return null;
         }
     }

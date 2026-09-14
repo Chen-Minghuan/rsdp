@@ -1061,13 +1061,13 @@ class ExcelAiImportCategoryModeTest {
     }
 
     private boolean isFilteredRow(Map<String, String> row, Map<String, String> mapping) throws Exception {
-        Method note = ExcelAiImportService.class.getDeclaredMethod("isNoteOrEmptyRow", Map.class);
+        Method note = ExcelAiImportService.class.getDeclaredMethod("isNoteOrEmptyRow", Map.class, Map.class);
         note.setAccessible(true);
         Method header = ExcelAiImportService.class.getDeclaredMethod("isRepeatedHeaderRow", Map.class);
         header.setAccessible(true);
         Method combo = ExcelAiImportService.class.getDeclaredMethod("isComboSummaryRow", Map.class, Map.class);
         combo.setAccessible(true);
-        return (boolean) note.invoke(excelAiImportService, row)
+        return (boolean) note.invoke(excelAiImportService, row, mapping)
             || (boolean) header.invoke(excelAiImportService, row)
             || (boolean) combo.invoke(excelAiImportService, row, mapping);
     }

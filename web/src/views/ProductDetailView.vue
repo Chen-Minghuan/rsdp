@@ -28,7 +28,7 @@ import VariantRskuTab from '@/components/product/VariantRskuTab.vue'
 import ImageGalleryTab from '@/components/product/ImageGalleryTab.vue'
 import RelationTab from '@/components/product/RelationTab.vue'
 import AiInsightTab from '@/components/product/AiInsightTab.vue'
-import { getProductDetail, listProducts, reviewProduct, updateProduct, deleteProduct, reRecognizeProduct } from '@/api/product'
+import { getProductDetail, listProducts, reviewProduct, updateProduct, patchProductSixDimTag, deleteProduct, reRecognizeProduct } from '@/api/product'
 import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
 import { listRskuByRspu, createRsku, deleteRsku, batchCreateRskus } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
@@ -659,12 +659,15 @@ async function handleUpdateProduct() {
     return
   }
 
-  // 六维标签由下拉/输入组装，空值维度不写入
-  const sixDimTags: Record<string, string> = {}
+  // 六维标签不再随整对象 PUT 读-改-写：逐维度 diff，变更的维度走单字段 PATCH（串行提交）
+  const originalSixDim = detail.value?.rspu.sixDimTags ?? {}
+  const sixDimPatches: { dimKey: string; value: string | null }[] = []
   sixDimEditKeys.forEach(k => {
-    const v = editForm.value.sixDimTagsEdit?.[k]
-    if (v && v.trim()) {
-      sixDimTags[k] = v.trim()
+    const raw = editForm.value.sixDimTagsEdit?.[k]
+    const next = raw && raw.trim() ? raw.trim() : null
+    const prev = originalSixDim[k] ?? null
+    if (next !== prev) {
+      sixDimPatches.push({ dimKey: k, value: next })
     }
   })
   let keySpecs: Record<string, string> | undefined
@@ -688,7 +691,6 @@ async function handleUpdateProduct() {
     materialTags: editForm.value.materialTags,
     fabricTags: editForm.value.fabricTags,
     sceneTags: editForm.value.sceneTags,
-    sixDimTags,
     referencePriceBand: editForm.value.referencePriceBand,
     retailPrice: editForm.value.retailPrice ?? undefined,
     productLevel: editForm.value.productLevel,
@@ -702,6 +704,10 @@ async function handleUpdateProduct() {
 
   try {
     await updateProduct(rspuId.value, request)
+    // 六维变更串行 PATCH（避免并发写同一 JSONB 列）
+    for (const patch of sixDimPatches) {
+      await patchProductSixDimTag(rspuId.value, patch.dimKey, patch.value)
+    }
     successMessage.value = '产品元数据已更新'
     showEditModal.value = false
     await loadDetail()
@@ -1237,6 +1243,8 @@ onBeforeRouteUpdate((to, from) => {
           />
         </n-form-item>
         <n-form-item label="出厂价" required>
+          <!-- 金额以 JS number 提交：JSON.stringify 输出可精确往返的十进制文本，后端 Jackson 反序列化为 BigDecimal；
+               ≤ 999,999,999.99（两位小数以内）全链路精确，超限需改字符串传输 -->
           <n-input-number v-model:value="rskuForm.factoryPrice" :min="0" placeholder="出厂价" />
         </n-form-item>
         <n-form-item label="材质编码">

@@ -86,6 +86,12 @@ public class FactoryProductEntryRequest {
 
     private String factorySku;
 
+    /**
+     * 出厂价（Jackson 按 JSON 十进制文本精确反序列化为 BigDecimal）。
+     *
+     * <p>精度口径同 {@link RskuCreateRequest#factoryPrice}：
+     * ≤ 999,999,999.99（两位小数以内）金额经前端 JS number → JSON → BigDecimal 全链路精确。</p>
+     */
     @NotNull(message = "出厂价不能为空")
     @Positive(message = "出厂价必须大于 0")
     private BigDecimal factoryPrice;

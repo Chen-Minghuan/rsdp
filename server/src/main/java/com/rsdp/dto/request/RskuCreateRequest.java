@@ -22,6 +22,13 @@ public class RskuCreateRequest {
     private String variantId;
     private String factorySku;
 
+    /**
+     * 出厂价（Jackson 按 JSON 十进制文本精确反序列化为 BigDecimal，入库前 AES 加密）。
+     *
+     * <p>精度口径：前端以 JS number 提交，JSON.stringify 输出的是可精确往返的十进制文本，
+     * 中间无浮点运算，因此 ≤ 999,999,999.99（两位小数以内）的金额全链路精确；
+     * 超过该口径或三位以上小数的金额需改字符串传输后再评估。</p>
+     */
     @NotNull(message = "出厂价不能为空")
     @Positive(message = "出厂价必须大于 0")
     private BigDecimal factoryPrice;

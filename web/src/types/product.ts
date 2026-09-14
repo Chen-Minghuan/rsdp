@@ -501,7 +501,15 @@ export interface ExcelAiMappingResponse {
   sheetIndex?: number
   /** 文件内全部工作表列表；多 sheet 时前端展示切换器 */
   sheets?: SheetInfo[]
+  /** 后端下发的可映射标准字段清单（缺省时前端用本地硬编码兜底） */
+  standardFields?: StandardFieldOption[]
   notes?: string
+}
+
+/** 可映射标准字段选项（后端 ExcelAiStandardFields 下发）。 */
+export interface StandardFieldOption {
+  label: string
+  value: string
 }
 
 /**

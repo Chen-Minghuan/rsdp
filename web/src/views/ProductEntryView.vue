@@ -22,7 +22,7 @@ import {
   useMessage,
   type UploadFileInfo
 } from 'naive-ui'
-import { uploadProductImages, updateProduct, detectProductRegions, entryByRegions } from '@/api/product'
+import { uploadProductImages, patchProductSixDimTag, detectProductRegions, entryByRegions } from '@/api/product'
 import StatusPill from '@/components/StatusPill.vue'
 import type { RegionProduct, RegionSelection } from '@/api/product'
 import { listDicts } from '@/api/dict'
@@ -79,17 +79,18 @@ function sixDimValue(task: TaskItem, dimKey: string): string | null {
   return tags?.[dimKey] ?? null
 }
 
-/** 修正某维度值：合并其余维度后整体提交，成功后同步本地任务结果。 */
+/** 修正某维度值：走单维度 PATCH（服务端只改目标 key），成功后同步本地任务结果。 */
 async function handleSixDimChange(task: TaskItem, dimKey: string, value: string | null) {
-  const tags: Record<string, string> = { ...((task.result.sixDimTags as Record<string, string>) || {}) }
-  if (value && value.trim()) {
-    tags[dimKey] = value.trim()
-  } else {
-    delete tags[dimKey]
-  }
+  const nextValue = value && value.trim() ? value.trim() : null
   sixDimSaving.value[task.taskId] = true
   try {
-    await updateProduct(task.rspuId, { sixDimTags: tags })
+    await patchProductSixDimTag(task.rspuId, dimKey, nextValue)
+    const tags: Record<string, string> = { ...((task.result.sixDimTags as Record<string, string>) || {}) }
+    if (nextValue) {
+      tags[dimKey] = nextValue
+    } else {
+      delete tags[dimKey]
+    }
     task.result.sixDimTags = tags
     saveTasks()
     message.success(`已修正「${currentSixDimSchema.value.dims[dimKey]?.label ?? `维度 ${dimKey}`}」`)
@@ -115,14 +116,17 @@ const splitSubmitting = ref(false)
 const splitImageUrl = ref('')
 /** 检测到的产品区域（含勾选/可编辑品名与品类）。 */
 const splitRegions = ref<Array<RegionProduct & { checked: boolean; productName: string; categoryCode: string | null }>>([])
+/** 拆分检测/提交请求的中断控制器（弹窗关闭或组件卸载时 abort，避免回调写已卸载状态）。 */
+let splitAbortController: AbortController | null = null
 
 /** 检测图内多个产品区域并打开确认弹窗。 */
 async function handleDetectRegions() {
   const file = selectedFiles.value[0]
   if (!file) return
   splitDetecting.value = true
+  splitAbortController = new AbortController()
   try {
-    const regions = await detectProductRegions(file)
+    const regions = await detectProductRegions(file, splitAbortController.signal)
     if (!regions || regions.length === 0) {
       message.warning('未检测到可拆分的产品区域，可直接整图录入')
       return
@@ -139,9 +143,12 @@ async function handleDetectRegions() {
     }))
     splitVisible.value = true
   } catch (e) {
-    message.error(e instanceof Error ? e.message : '区域检测失败')
+    if (!axios.isCancel(e)) {
+      message.error(e instanceof Error ? e.message : '区域检测失败')
+    }
   } finally {
     splitDetecting.value = false
+    splitAbortController = null
   }
 }
 
@@ -155,6 +162,7 @@ async function handleSplitSubmit() {
     return
   }
   splitSubmitting.value = true
+  splitAbortController = new AbortController()
   try {
     const selections: RegionSelection[] = chosen.map(r => ({
       bbox: r.bbox,
@@ -162,7 +170,7 @@ async function handleSplitSubmit() {
       productName: r.productName || undefined,
       dimensionText: r.nearbyText?.dimensionText ?? undefined
     }))
-    const results = await entryByRegions(file, selections)
+    const results = await entryByRegions(file, selections, splitAbortController.signal)
     // 收集式返回（5.1）：与输入区域同序，逐项成败——部分失败不再整单 500
     const succeeded = results.filter(r => r.success !== false)
     const failed = results.filter(r => r.success === false)
@@ -194,14 +202,19 @@ async function handleSplitSubmit() {
     saveTasks()
     ensurePolling()
   } catch (e) {
-    message.error(e instanceof Error ? e.message : '拆分导入失败')
+    if (!axios.isCancel(e)) {
+      message.error(e instanceof Error ? e.message : '拆分导入失败')
+    }
   } finally {
     splitSubmitting.value = false
+    splitAbortController = null
   }
 }
 
 /** 关闭拆分弹窗并释放预览 URL。 */
 function closeSplit() {
+  splitAbortController?.abort()
+  splitAbortController = null
   splitVisible.value = false
   if (splitImageUrl.value) {
     URL.revokeObjectURL(splitImageUrl.value)
@@ -430,6 +443,7 @@ onUnmounted(() => {
   viewUnmounted = true
   stopPolling()
   uploadAbortController?.abort()
+  splitAbortController?.abort()
   window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 

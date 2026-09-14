@@ -1285,6 +1285,65 @@ class ProductQueryServiceTest {
         assertThat(captor.getValue().getSqlSegment()).doesNotContain("factory_price");
     }
 
+    @Test
+    void updateSixDimTag_shouldUpdateSingleDimPreservingOthers() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setSixDimTags("{\"A\":\"SF-一字型\",\"C\":\"SF-宽厚扶手\"}");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        productQueryService.updateSixDimTag("RSPU-TEST01", "B", "SF-直排");
+
+        // 只改 B 维，A/C 两维原样保留（单字段 PATCH 消除整对象读-改-写竞态）
+        assertThat(rspu.getSixDimTags()).isEqualTo("{\"A\":\"SF-一字型\",\"C\":\"SF-宽厚扶手\",\"B\":\"SF-直排\"}");
+        verify(rspuMapper).updateById(rspu);
+        verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-TEST01"), any(), eq(rspu), eq("admin"));
+    }
+
+    @Test
+    void updateSixDimTag_shouldNormalizeLowerCaseDimKey() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        productQueryService.updateSixDimTag("RSPU-TEST01", "a", "SF-一字型");
+
+        assertThat(rspu.getSixDimTags()).isEqualTo("{\"A\":\"SF-一字型\"}");
+    }
+
+    @Test
+    void updateSixDimTag_shouldRejectInvalidDimKey() {
+        assertThatThrownBy(() -> productQueryService.updateSixDimTag("RSPU-TEST01", "Z", "任意值"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("非法的六维维度键");
+        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+    }
+
+    @Test
+    void updateSixDimTag_shouldClearDimWhenValueNull() {
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setSixDimTags("{\"A\":\"SF-一字型\",\"C\":\"SF-宽厚扶手\"}");
+
+        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+
+        productQueryService.updateSixDimTag("RSPU-TEST01", "C", null);
+
+        // value=null 表示清除该维度，其余维度保留
+        assertThat(rspu.getSixDimTags()).isEqualTo("{\"A\":\"SF-一字型\"}");
+        verify(rspuMapper).updateById(rspu);
+    }
+
+    @Test
+    void updateSixDimTag_shouldThrowWhenNotFound() {
+        when(rspuMapper.selectById(eq("RSPU-NOTEXIST"))).thenReturn(null);
+
+        assertThatThrownBy(() -> productQueryService.updateSixDimTag("RSPU-NOTEXIST", "A", "SF-一字型"))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
     private void authenticateWithRoles(String username, String... roles) {
         SecurityContextHolder.clearContext();
         var user = User.withUsername(username).password("").roles(roles).build();
