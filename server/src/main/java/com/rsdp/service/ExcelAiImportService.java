@@ -1131,12 +1131,15 @@ public class ExcelAiImportService {
         // 避免每个按行请求都重新解析整个 Excel（大文件并发时会导致 OOM）。
         List<PreviewRowImageRef> refs = listCachedPreviewImages(batchId, sheetIndex, rowIndex - 1);
         if (refs.isEmpty()) {
-            // 缓存未命中：可能是缓存过期或 getPreviewData 失败，回退到重新解析 Excel（仅当前行）
+            // 缓存未命中：可能是缓存过期或 getPreviewData 失败，回退到重新解析 Excel（仅当前行）。
+            // 提取后把全量结果写回缓存（5.9 遗留收口）：否则 N 行缓存未命中 = N 次整文件解析，
+            // 虽单次提取有 maxTotalImageMb 上限截断，重复解析的 CPU/IO 与瞬时堆占用仍会叠加
             byte[] fileBytes = readBatchFileBytes(batch);
             if (fileBytes == null || fileBytes.length == 0) {
                 return List.of();
             }
             EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(fileBytes, batch.getFileName(), batchId);
+            writeBackEmbeddedImagesToCache(batchId, embeddedImagesResult);
             String key = sheetIndex + "," + (rowIndex - 1);
             List<ExcelImageExtractor.EmbeddedImage> rowImages = embeddedImagesResult.images().getOrDefault(key, List.of());
             List<PreviewDataRow.PreviewRowImage> result = new ArrayList<>();
@@ -1504,6 +1507,42 @@ public class ExcelAiImportService {
             result.add(previewImage);
         }
         return result;
+    }
+
+    /**
+     * 缓存未命中回退整文件解析后，把提取结果写回行图缓存（best-effort），
+     * 让后续行的懒加载请求直接命中缓存，不再逐行重复整文件解析。
+     *
+     * @param batchId 批次 ID
+     * @param result  内嵌图片提取结果（key 为 "sheetIndex,rowIndex"）
+     */
+    private void writeBackEmbeddedImagesToCache(String batchId, EmbeddedImagesResult result) {
+        if (result == null || result.images() == null || result.images().isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, List<ExcelImageExtractor.EmbeddedImage>> entry : result.images().entrySet()) {
+            String[] parts = entry.getKey().split(",");
+            if (parts.length != 2) {
+                continue;
+            }
+            int sheetIndex;
+            int rowIndex;
+            try {
+                sheetIndex = Integer.parseInt(parts[0]);
+                rowIndex = Integer.parseInt(parts[1]);
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            List<ExcelImageExtractor.EmbeddedImage> rowImages = entry.getValue();
+            for (int i = 0; i < rowImages.size(); i++) {
+                ExcelImageExtractor.EmbeddedImage img = rowImages.get(i);
+                if (isUnsupportedWebImageFormat(img.extension())) {
+                    continue;
+                }
+                cachePreviewImage(batchId, buildPreviewImageKey(sheetIndex, rowIndex, img.colIndex(), i),
+                    img.extension(), img.bytes());
+            }
+        }
     }
 
     private String buildPreviewImageKey(int sheetIndex, int physicalRowIndex, int colIndex, int imageIndex) {
