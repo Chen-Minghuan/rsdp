@@ -72,8 +72,18 @@ const form = ref({
   factorySku: null as string | null,
   factoryPrice: null as number | null,
   moq: null as number | null,
-  leadTimeDays: null as number | null
+  leadTimeDays: null as number | null,
+  shippingFrom: '',
+  diffNotes: '',
+  quoteConfidence: null as string | null
 })
+
+/** 报价置信度选项（字典 quote_confidence：high/mid/low） */
+const quoteConfidenceOptions = [
+  { label: '高', value: 'high' },
+  { label: '中', value: 'mid' },
+  { label: '低', value: 'low' }
+]
 
 const factoryOptions = computed(() => {
   const codes = userStore.userInfo?.factoryCodes || []
@@ -280,7 +290,10 @@ async function handleSubmit() {
     factorySku: form.value.factorySku || undefined,
     factoryPrice: form.value.factoryPrice!,
     moq: form.value.moq || undefined,
-    leadTimeDays: form.value.leadTimeDays || undefined
+    leadTimeDays: form.value.leadTimeDays || undefined,
+    shippingFrom: form.value.shippingFrom || undefined,
+    diffNotes: form.value.diffNotes || undefined,
+    quoteConfidence: form.value.quoteConfidence || undefined
   }
 
   const formData = new FormData()
@@ -325,7 +338,10 @@ function resetForm() {
     factorySku: null,
     factoryPrice: null,
     moq: null,
-    leadTimeDays: null
+    leadTimeDays: null,
+    shippingFrom: '',
+    diffNotes: '',
+    quoteConfidence: null
   }
   fileList.value = []
   currentStep.value = 1
@@ -522,6 +538,7 @@ function viewCreatedProduct() {
         </n-form-item>
 
         <n-form-item label="出厂价" path="factoryPrice">
+          <!-- 金额以 JS number 提交：≤ 999,999,999.99（两位小数以内）经 JSON → 后端 BigDecimal 全链路精确 -->
           <n-input-number v-model:value="form.factoryPrice" placeholder="请输入出厂价" :min="0.01" style="width: 100%;" />
         </n-form-item>
 
@@ -531,6 +548,28 @@ function viewCreatedProduct() {
 
         <n-form-item label="交期（天）">
           <n-input-number v-model:value="form.leadTimeDays" placeholder="交期天数" :min="0" style="width: 100%;" />
+        </n-form-item>
+
+        <n-form-item label="发货地">
+          <n-input v-model:value="form.shippingFrom" placeholder="如：广东佛山（可选）" />
+        </n-form-item>
+
+        <n-form-item label="报价置信度">
+          <n-select
+            v-model:value="form.quoteConfidence"
+            :options="quoteConfidenceOptions"
+            placeholder="该报价的可信程度（可选）"
+            clearable
+          />
+        </n-form-item>
+
+        <n-form-item label="差异说明">
+          <n-input
+            v-model:value="form.diffNotes"
+            type="textarea"
+            placeholder="与主档描述/图的差异说明（可选）"
+            :autosize="{ minRows: 2, maxRows: 4 }"
+          />
         </n-form-item>
 
         <n-space justify="end">

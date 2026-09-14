@@ -1,6 +1,7 @@
 package com.rsdp.controller;
 
 import com.rsdp.common.Result;
+import com.rsdp.config.ExcelAiStandardFields;
 import com.rsdp.dto.request.ExcelAiClassifyCategoriesRequest;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
 import com.rsdp.dto.response.ExcelAiClassifyCategoriesResponse;
@@ -19,7 +20,6 @@ import lombok.RequiredArgsConstructor;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
@@ -57,7 +57,10 @@ public class ExcelAiImportController {
     public Result<ExcelAiMappingResponse> preview(
         @RequestPart("file") MultipartFile file,
         @RequestParam(value = "sheetIndex", required = false, defaultValue = "0") int sheetIndex) {
-        return Result.ok(excelAiImportService.previewMapping(file, sheetIndex));
+        ExcelAiMappingResponse response = excelAiImportService.previewMapping(file, sheetIndex);
+        // 可映射标准字段清单一并下发（清单定义见 ExcelAiStandardFields，含与映射提示词的同步义务）
+        response.setStandardFields(ExcelAiStandardFields.MAPPABLE_FIELDS);
+        return Result.ok(response);
     }
 
     /**
@@ -158,6 +161,9 @@ public class ExcelAiImportController {
     /**
      * 读取数据清洗阶段上传的临时图片。
      *
+     * <p>Content-Type 按实际存储扩展名解析（临时 key 本身不带扩展名，不能按 key 后缀猜），
+     * 并附带 {@code X-Content-Type-Options: nosniff} 防 MIME 嗅探（A5）。</p>
+     *
      * @param batchId      导入批次 ID
      * @param tempImageKey 临时图片 key
      */
@@ -167,22 +173,15 @@ public class ExcelAiImportController {
         @PathVariable @NotBlank String batchId,
         @PathVariable @NotBlank String tempImageKey) {
         excelAiImportService.getAccessibleBatch(batchId);
-        byte[] bytes = excelAiImportService.loadPreviewImage(batchId, tempImageKey);
-        if (bytes == null || bytes.length == 0) {
+        ExcelAiImportService.PreviewImageContent image = excelAiImportService.loadPreviewImage(batchId, tempImageKey);
+        if (image == null || image.bytes() == null || image.bytes().length == 0) {
             return ResponseEntity.notFound().build();
         }
-        String contentType = MediaType.IMAGE_JPEG_VALUE;
-        if (tempImageKey.toLowerCase().endsWith(".png")) {
-            contentType = MediaType.IMAGE_PNG_VALUE;
-        } else if (tempImageKey.toLowerCase().endsWith(".gif")) {
-            contentType = MediaType.IMAGE_GIF_VALUE;
-        } else if (tempImageKey.toLowerCase().endsWith(".webp")) {
-            contentType = "image/webp";
-        }
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_TYPE, contentType)
+            .header(HttpHeaders.CONTENT_TYPE, image.contentType())
+            .header("X-Content-Type-Options", "nosniff")
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + tempImageKey + "\"")
-            .body(bytes);
+            .body(image.bytes());
     }
 
     /**

@@ -25,6 +25,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -156,5 +157,29 @@ class ExcelAiImportControllerTest {
             .andExpect(jsonPath("$.data.rows[0].mappedFieldByHeader.名称").value("productName"));
 
         verify(excelAiImportService, times(1)).getPreviewData("BATCH-001");
+    }
+
+    @Test
+    void getPreviewImage_shouldReturnActualContentTypeAndNosniff() throws Exception {
+        // A5：Content-Type 按实际存储扩展名解析（临时 key 无后缀，不能默认 jpeg），
+        // 并附带 X-Content-Type-Options: nosniff 防 MIME 嗅探
+        when(excelAiImportService.loadPreviewImage("BATCH-001", "IMG-1"))
+            .thenReturn(new ExcelAiImportService.PreviewImageContent(
+                "png-bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8), "image/png"));
+
+        mockMvc.perform(get("/api/v1/products/excel-ai-import/BATCH-001/preview-images/IMG-1"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Content-Type", "image/png"))
+            .andExpect(header().string("X-Content-Type-Options", "nosniff"));
+
+        verify(excelAiImportService, times(1)).getAccessibleBatch("BATCH-001");
+    }
+
+    @Test
+    void getPreviewImage_shouldReturn404WhenImageMissing() throws Exception {
+        when(excelAiImportService.loadPreviewImage("BATCH-001", "IMG-X")).thenReturn(null);
+
+        mockMvc.perform(get("/api/v1/products/excel-ai-import/BATCH-001/preview-images/IMG-X"))
+            .andExpect(status().isNotFound());
     }
 }

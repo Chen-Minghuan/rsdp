@@ -58,6 +58,9 @@ const {
 } = storeToRefs(store)
 const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue, uploadRowImage, removeRowImage, cloneRowImages, setRowCategory, resetRowCategoryState } = store
 
+// 兜底可映射字段清单：优先使用 preview 响应下发的 standardFields（后端 ExcelAiStandardFields）。
+// 同步义务：字段真实出处是后端 ExcelAiImportService 的 AI 映射提示词标准字段列表，
+// 新增/删除字段需同步 后端提示词 + ExcelAiStandardFields + 本清单 三处。
 const STANDARD_FIELDS = [
   { label: '（不映射）', value: '' },
   { label: '品类码 (categoryCode)', value: 'categoryCode' },
@@ -81,6 +84,11 @@ const STANDARD_FIELDS = [
   { label: '尺寸文字 (dimensions)（W*D*H 数值尺寸选这个）', value: 'dimensions' },
   { label: '交期天数 (leadTimeDays)', value: 'leadTimeDays' }
 ]
+
+/** 可映射字段下拉选项：优先用 preview 响应下发值，硬编码 STANDARD_FIELDS 兜底 */
+const standardFieldOptions = computed(() =>
+  mappingResponse.value?.standardFields?.length ? mappingResponse.value.standardFields : STANDARD_FIELDS
+)
 
 const categoryOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
@@ -307,7 +315,7 @@ const mappingColumns = computed<DataTableColumns<{ header: string; value: string
     render: (row) => {
       return h(NSelect, {
         value: confirmedMapping.value[row.header] ?? '',
-        options: STANDARD_FIELDS,
+        options: standardFieldOptions.value,
         style: 'width: 260px;',
         onUpdateValue: (value: string) => {
           confirmedMapping.value[row.header] = value
@@ -403,7 +411,7 @@ const unmappedColumnsColumns = computed<DataTableColumns<UnmappedColumnInfo>>(()
     render: (row) => {
       return h(NSelect, {
         value: confirmedMapping.value[row.header] ?? '',
-        options: STANDARD_FIELDS,
+        options: standardFieldOptions.value,
         style: 'width: 260px;',
         onUpdateValue: (value: string) => {
           confirmedMapping.value[row.header] = value
@@ -464,7 +472,7 @@ const cleanTableData = computed(() => {
 function cleanColumnTitle(header: string): string {
   const mapped = previewData.value[0]?.mappedFieldByHeader[header]
   if (mapped) {
-    const fieldLabel = STANDARD_FIELDS.find(f => f.value === mapped)?.label ?? mapped
+    const fieldLabel = standardFieldOptions.value.find(f => f.value === mapped)?.label ?? mapped
     return `${header} → ${fieldLabel}`
   }
   return header

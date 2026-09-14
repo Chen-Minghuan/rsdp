@@ -9,6 +9,7 @@ import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductReviewRequest;
 import com.rsdp.dto.request.RspuMergeRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
+import com.rsdp.dto.request.SixDimTagPatchRequest;
 import com.rsdp.dto.response.ProductBatchDeleteResponse;
 import com.rsdp.dto.response.ProductDetailResponse;
 import com.rsdp.dto.response.ProductStatusCountsResponse;
@@ -25,6 +26,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -270,6 +272,20 @@ public class ProductController {
     public Result<Void> update(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                @Valid @RequestBody ProductUpdateRequest request) {
         productQueryService.updateProduct(rspuId, request);
+        return Result.ok();
+    }
+
+    /**
+     * 六维标签单维度修正（替代整对象读-改-写 PUT，缩小并发 lost update 窗口）。
+     *
+     * @param rspuId  RSPU ID
+     * @param request 修正请求（dimKey + value，value 为 null 表示清除该维度）
+     * @return 空结果
+     */
+    @PatchMapping("/{rspuId}/six-dim-tags")
+    public Result<Void> patchSixDimTag(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
+                                       @Valid @RequestBody SixDimTagPatchRequest request) {
+        productQueryService.updateSixDimTag(rspuId, request.getDimKey(), request.getValue());
         return Result.ok();
     }
 

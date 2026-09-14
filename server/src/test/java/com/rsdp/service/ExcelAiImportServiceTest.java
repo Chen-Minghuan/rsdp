@@ -248,6 +248,39 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void previewMapping_shouldNameOriginalFileObjectKeyWithBatchId() throws IOException {
+        // A10：新批次原始文件对象键与批次主键一致（excel-imports/{batchId}.xlsx），
+        // 不再出现 EXCEL- 对象键 / BATCH- 主键不一致
+        byte[] excelBytes = createMinimalExcelBytes();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"品类\":\"categoryCode\",\"名称\":\"productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            return 1;
+        });
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            excelAiImportService.previewMapping(file);
+        }
+
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(storageService).store(any(), keyCaptor.capture(), anyLong(), anyString());
+        String objectKey = keyCaptor.getValue();
+        assertTrue(savedBatch.getBatchId().startsWith("BATCH-"), "批次主键应为 BATCH- 前缀: " + savedBatch.getBatchId());
+        assertEquals("excel-imports/" + savedBatch.getBatchId() + ".xlsx", objectKey,
+            "原始文件对象键应以批次主键命名");
+        assertEquals(objectKey, savedBatch.getStoragePath(), "storage_path 应记录实际对象键");
+    }
+
+    @Test
     void confirmAndImport_shouldCreateRspuForEachRow() throws IOException {
         byte[] excelBytes = createMinimalExcelBytes();
         MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
@@ -1126,6 +1159,82 @@ class ExcelAiImportServiceTest {
         assertEquals(2, result.getTotalRows(), "原始数据行应包含 1 行数据 + 1 行说明");
         assertEquals(1, result.getSuccessCount(), "说明行应被跳过");
         assertEquals(0, result.getFailedCount());
+    }
+
+    @Test
+    void confirmAndImport_shouldNotSkipNormalRowWithNoteWordInDescription() throws IOException {
+        // A13：正常行有型号/品名，仅描述列含启发式词「注意事项」，不应被备注行启发式误杀
+        byte[] excelBytes = createExcelWithNoteWordInDescription();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号\":\"externalCode\",\"名称\":\"productName\",\"描述\":\"description\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithNoteWordInDescription()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+        when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+
+        when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
+            RspuMaster rspu = inv.getArgument(0);
+            rspu.setRspuId("RSPU-TEST");
+            return 1;
+        });
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-DEFAULT");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+
+        ExcelAiImportResult result = confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "有品名但描述含启发式词的正常行不得被误杀: " + result.getFailures());
+        assertEquals(0, result.getFailedCount());
+        verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
+    }
+
+    private byte[] createExcelWithNoteWordInDescription() {
+        try (var out = new java.io.ByteArrayOutputStream()) {
+            List<List<String>> data = List.of(
+                List.of("型号", "名称", "描述"),
+                List.of("ABC-001", "休闲椅 A", "注意事项：轻拿轻放")
+            );
+            com.alibaba.excel.EasyExcel.write(out).sheet("Sheet1").doWrite(data);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
@@ -2087,6 +2196,7 @@ class ExcelAiImportServiceTest {
         when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
             ExcelImportBatch batch = inv.getArgument(0);
             savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setFileName(batch.getFileName());
             savedBatch.setStoragePath(batch.getStoragePath());
             savedBatch.setStatus(batch.getStatus());
             savedBatch.setPreviewRows(batch.getPreviewRows());
@@ -3695,8 +3805,11 @@ class ExcelAiImportServiceTest {
 
     @org.junit.jupiter.api.Test
     void forwardFillKeyColumns_shouldAlsoFillCategoryCode() throws Exception {
+        // A9：下填拆分为结构性字段（整列）+ 自由文本字段（合并单元格范围内）；
+        // physicalLayout 传 null 时自由文本列不下填，结构性字段行为不变
+        Class<?> layoutClass = Class.forName("com.rsdp.service.ExcelAiImportService$PhysicalLayout");
         java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
-            "forwardFillKeyColumns", java.util.List.class, java.util.Map.class);
+            "forwardFillKeyColumns", java.util.List.class, java.util.Map.class, layoutClass);
         m.setAccessible(true);
 
         java.util.Map<String, String> mapping = java.util.Map.of(
@@ -3705,11 +3818,70 @@ class ExcelAiImportServiceTest {
         rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "A001", "类别", "茶桌")));
         rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "", "类别", "")));
 
-        m.invoke(excelAiImportService, rows, mapping);
+        m.invoke(excelAiImportService, rows, mapping, null);
 
         // 合并单元格语义的后续空行应继承上一行的型号与品类
         assertEquals("A001", rows.get(1).get("型号"));
         assertEquals("茶桌", rows.get(1).get("类别"));
+    }
+
+    @Test
+    void forwardFillKeyColumns_shouldNotFillDownDescriptionWithoutMergedRange() throws Exception {
+        // A9：description/materialTags 自由文本列无合并单元格信息（physicalLayout=null）时不下填，
+        // 避免整列无差别下填把上一产品的描述污染到无关行
+        Class<?> layoutClass = Class.forName("com.rsdp.service.ExcelAiImportService$PhysicalLayout");
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
+            "forwardFillKeyColumns", java.util.List.class, java.util.Map.class, layoutClass);
+        m.setAccessible(true);
+
+        java.util.Map<String, String> mapping = java.util.Map.of(
+            "型号", "externalCode", "描述", "description", "材质", "materialTags");
+        java.util.List<java.util.Map<String, String>> rows = new java.util.ArrayList<>();
+        rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "A001", "描述", "真皮沙发", "材质", "牛皮")));
+        rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "", "描述", "", "材质", "")));
+
+        m.invoke(excelAiImportService, rows, mapping, null);
+
+        // 结构性字段（型号）仍整列下填；自由文本字段（描述/材质）不下填
+        assertEquals("A001", rows.get(1).get("型号"));
+        assertEquals("", rows.get(1).get("描述"), "无合并单元格信息时描述不得下填");
+        assertEquals("", rows.get(1).get("材质"), "无合并单元格信息时材质标签不得下填");
+    }
+
+    @Test
+    void forwardFillKeyColumns_shouldFillDownDescriptionWithinMergedRange() throws Exception {
+        // A9：description 列存在纵向合并单元格时，仅在合并范围内下填，范围外的行不受影响
+        Class<?> layoutClass = Class.forName("com.rsdp.service.ExcelAiImportService$PhysicalLayout");
+        Class<?> rowRangeClass = Class.forName("com.rsdp.service.ExcelAiImportService$RowRange");
+
+        java.lang.reflect.Constructor<?> rangeCtor = rowRangeClass.getDeclaredConstructor(int.class, int.class);
+        rangeCtor.setAccessible(true);
+        // 合并范围覆盖物理行 1~2（两条数据行），不含物理行 3
+        Object mergedRange = rangeCtor.newInstance(1, 2);
+
+        java.lang.reflect.Constructor<?> layoutCtor = layoutClass.getDeclaredConstructor(
+            java.util.List.class, java.util.Set.class, int.class, int.class,
+            java.util.List.class, String.class, java.util.List.class, java.util.Map.class);
+        layoutCtor.setAccessible(true);
+        Object layout = layoutCtor.newInstance(
+            java.util.List.of(1, 2, 3), java.util.Set.of(), 0, 2,
+            java.util.List.of(), "Sheet1", java.util.List.of("型号", "描述"),
+            java.util.Map.of("描述", java.util.List.of(mergedRange)));
+
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
+            "forwardFillKeyColumns", java.util.List.class, java.util.Map.class, layoutClass);
+        m.setAccessible(true);
+
+        java.util.Map<String, String> mapping = java.util.Map.of("型号", "externalCode", "描述", "description");
+        java.util.List<java.util.Map<String, String>> rows = new java.util.ArrayList<>();
+        rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "A001", "描述", "真皮沙发")));
+        rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "", "描述", "")));
+        rows.add(new java.util.HashMap<>(java.util.Map.of("型号", "B002", "描述", "")));
+
+        m.invoke(excelAiImportService, rows, mapping, layout);
+
+        assertEquals("真皮沙发", rows.get(1).get("描述"), "合并范围内的空白行应继承合并值");
+        assertEquals("", rows.get(2).get("描述"), "合并范围外的行不得被污染");
     }
 
     @Test
@@ -4007,6 +4179,67 @@ class ExcelAiImportServiceTest {
         assertEquals("categoryCode", row.getMappedFieldByHeader().get("品类"));
         assertEquals("productName", row.getMappedFieldByHeader().get("名称"));
         assertEquals("positioningLabel", row.getMappedFieldByHeader().get("风格"));
+    }
+
+    @Test
+    void getPreviewData_shouldUsePhysicalHeaderOrderWhenJsonbShufflesKeys() throws IOException {
+        // A7：previewRows 经 JSONB 存储后键序不保序，表头与行内值顺序必须从原始文件的
+        // 物理表头重建（与 preview 接口 buildMappingResponse 的物理列序口径一致）
+        byte[] excelBytes = createMinimalExcelBytes();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"品类\":\"categoryCode\",\"名称\":\"productName\",\"风格\":\"positioningLabel\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            savedBatch.setCreatedBy(batch.getCreatedBy());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        // 模拟 JSONB 乱序：每行键序反转后重新序列化
+        List<Map<String, String>> storedRows = objectMapper.readValue(savedBatch.getPreviewRows(),
+            new com.fasterxml.jackson.core.type.TypeReference<List<Map<String, String>>>() {
+            });
+        List<Map<String, String>> shuffledRows = new ArrayList<>();
+        for (Map<String, String> storedRow : storedRows) {
+            List<String> keys = new ArrayList<>(storedRow.keySet());
+            java.util.Collections.reverse(keys);
+            Map<String, String> shuffled = new java.util.LinkedHashMap<>();
+            for (String key : keys) {
+                shuffled.put(key, storedRow.get(key));
+            }
+            shuffledRows.add(shuffled);
+        }
+        savedBatch.setPreviewRows(objectMapper.writeValueAsString(shuffledRows));
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+
+        ExcelAiPreviewDataResponse response = excelAiImportService.getPreviewData(preview.getBatchId());
+
+        assertEquals(List.of("品类", "名称", "风格"), response.getHeaders(),
+            "表头应按物理列序而非 JSONB 键序");
+        assertEquals(List.of("品类", "名称", "风格"),
+            new ArrayList<>(response.getRows().get(0).getRawValues().keySet()),
+            "行内原始值顺序应与表头一致");
+        assertEquals("FS", response.getRows().get(0).getRawValues().get("品类"));
     }
 
     @Test
@@ -4955,6 +5188,18 @@ class ExcelAiImportServiceTest {
         // 有图行新登记主图 → 建一次 AI 识别任务
         verify(asyncTaskMapper, times(1)).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
         assertEquals(1, result.getTaskIds().size());
+
+        // A11：AI 识别任务 input_data 的 originalFilename 存真实文件名（objectKey 已有独立字段）
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper, atLeastOnce()).insert(taskCaptor.capture());
+        AsyncTask entryTask = taskCaptor.getAllValues().stream()
+            .filter(t -> "product_entry".equals(t.getTaskType()))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("未找到 product_entry 任务"));
+        assertTrue(entryTask.getInputData().contains("\"originalFilename\":\"test.xlsx\""),
+            "originalFilename 应为真实文件名: " + entryTask.getInputData());
+        assertTrue(entryTask.getInputData().contains("\"objectKey\":"),
+            "objectKey 应保留独立字段: " + entryTask.getInputData());
     }
 
     private Map<String, String> previewMappingForUpdate(ExcelImportBatch savedBatch) {
@@ -5622,6 +5867,73 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void uploadPreviewImage_shouldRejectWhenBatchImporting() throws IOException {
+        // A8：清洗页写操作仅 pending 批次允许；importing 批次拒绝且不落存储
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-IMPORTING");
+        batch.setStatus("importing");
+        batch.setCreatedBy("user-1");
+        when(batchMapper.selectById("BATCH-IMPORTING")).thenReturn(batch);
+
+        MockMultipartFile file = new MockMultipartFile("file", "a.png", "image/png",
+            "x".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            BusinessException e = assertThrows(BusinessException.class,
+                () -> excelAiImportService.uploadPreviewImage("BATCH-IMPORTING", file));
+            assertTrue(e.getMessage().contains("不能再编辑"), "异常信息: " + e.getMessage());
+        }
+        verify(storageService, never()).store(any(), anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    void setRowImageOverrides_shouldRejectWhenBatchDone() {
+        // A8：done 批次（已结束）不允许再编辑行覆盖图
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-DONE");
+        batch.setStatus("done");
+        batch.setCreatedBy("user-1");
+        when(batchMapper.selectById("BATCH-DONE")).thenReturn(batch);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            BusinessException e = assertThrows(BusinessException.class,
+                () -> excelAiImportService.setRowImageOverrides("BATCH-DONE", 5, List.of("IMG-1")));
+            assertTrue(e.getMessage().contains("不能再编辑"), "异常信息: " + e.getMessage());
+        }
+        verify(excelImportRowService, never()).updateImageOverrides(anyLong(), anyList());
+        verify(excelImportRowService, never()).createPreviewPlaceholderRow(anyString(), anyInt());
+    }
+
+    @Test
+    void cloneRowImages_shouldRejectWhenBatchFailed() {
+        // A8：failed 批次（异步执行致命失败终态）不允许再克隆行图片
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-FAILED");
+        batch.setStatus("failed");
+        batch.setCreatedBy("user-1");
+        when(batchMapper.selectById("BATCH-FAILED")).thenReturn(batch);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            BusinessException e = assertThrows(BusinessException.class,
+                () -> excelAiImportService.cloneRowImages("BATCH-FAILED", 2, 5));
+            assertTrue(e.getMessage().contains("不能再编辑"), "异常信息: " + e.getMessage());
+        }
+        verify(excelImportRowService, never()).updateImageOverrides(anyLong(), anyList());
+    }
+
+    @Test
+    void safeErrorMessage_shouldFallbackToExceptionClassNameWhenMessageNull() throws Exception {
+        // A12：message 为 null 时回退异常类名，避免 "系统异常: null" 文案
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
+            "safeErrorMessage", Throwable.class);
+        m.setAccessible(true);
+        assertEquals("NullPointerException", m.invoke(null, new NullPointerException()));
+        assertEquals("自定义原因", m.invoke(null, new IllegalStateException("自定义原因")));
+    }
+
+    @Test
     void compareImageKeys_shouldSortNumericallyByComponents() {
         // 字典序会把 "0,1,10,0" 排在 "0,1,2,0" 前面，但数值序应相反
         assertTrue(ExcelAiImportService.compareImageKeys("0,1,2,0", "0,1,10,0") < 0);
@@ -5641,6 +5953,7 @@ class ExcelAiImportServiceTest {
         // P0：数据清洗阶段（导入前）ExcelImportRow 尚未创建，设置覆盖图时应自动创建占位行
         ExcelImportBatch batch = new ExcelImportBatch();
         batch.setBatchId("BATCH-TEST");
+        batch.setStatus("pending");
         batch.setCreatedBy("user-1");
         when(batchMapper.selectById("BATCH-TEST")).thenReturn(batch);
 
@@ -5661,6 +5974,7 @@ class ExcelAiImportServiceTest {
         // P0：复制粘贴的目标行在导入前不存在时，应自动创建占位行并写入覆盖图
         ExcelImportBatch batch = new ExcelImportBatch();
         batch.setBatchId("BATCH-TEST");
+        batch.setStatus("pending");
         batch.setCreatedBy("user-1");
         when(batchMapper.selectById("BATCH-TEST")).thenReturn(batch);
 
@@ -5691,6 +6005,7 @@ class ExcelAiImportServiceTest {
         String batchId = "BATCH-CLONE-CACHE";
         ExcelImportBatch batch = new ExcelImportBatch();
         batch.setBatchId(batchId);
+        batch.setStatus("pending");
         batch.setCreatedBy("user-1");
         batch.setFileName("test.xlsx");
         batch.setSheetIndex(0);

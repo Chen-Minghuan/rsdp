@@ -62,4 +62,10 @@ public class ExcelAiMappingResponse {
      * 工作簿全部工作表列表（多 Sheet 文件供用户切换预览）。
      */
     private List<ExcelSheetInfo> sheets = new ArrayList<>();
+
+    /**
+     * 可映射标准字段清单（Controller 层组装下发，前端硬编码清单作为兜底；
+     * 字段真实出处为 ExcelAiImportService 的 AI 映射提示词，见 ExcelAiStandardFields 同步义务说明）。
+     */
+    private List<StandardFieldOption> standardFields = new ArrayList<>();
 }

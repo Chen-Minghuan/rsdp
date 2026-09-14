@@ -106,7 +106,7 @@ async function handleDownloadTemplate() {
         </n-space>
 
         <n-alert type="info" :show-icon="true">
-          上传 Excel 批量导入工厂报价。同一工厂+同一变体已有报价时，可选择跳过或更新。
+          上传 Excel/CSV 批量导入工厂报价。同一工厂+同一变体已有报价时，可选择跳过或更新。
         </n-alert>
 
         <n-alert v-if="errorMessage" type="error" :show-icon="true">
@@ -116,7 +116,7 @@ async function handleDownloadTemplate() {
         <n-space align="center">
           <n-upload
             v-model:file-list="fileList"
-            accept=".xlsx,.xls"
+            accept=".xlsx,.xls,.csv"
             :max="1"
             :default-upload="false"
             @change="handleFileChange"

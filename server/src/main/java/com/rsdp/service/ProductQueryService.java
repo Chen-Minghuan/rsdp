@@ -6,6 +6,7 @@ import com.rsdp.security.datascope.DataScopeHelper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
 import com.rsdp.common.ReviewStatus;
@@ -65,8 +66,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -76,6 +79,12 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ProductQueryService {
+
+    /**
+     * 合法六维维度键（与 {@link SixDimSchemaService} 的 DIM_ORDER 一致；
+     * 六维修正 PATCH 的 dimKey 白名单校验用）。
+     */
+    private static final Set<String> SIX_DIM_KEYS = Set.of("A", "B", "C", "D", "E", "F");
 
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
@@ -978,6 +987,70 @@ public class ProductQueryService {
         }
 
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+    }
+
+    /**
+     * 六维标签单维度修正（六维修正入口，替代整对象读-改-写 PUT）。
+     *
+     * <p>校验 dimKey 合法（A-F，与 {@link SixDimSchemaService} 维度定义一致）后，
+     * 读当前 six_dim_tags JSONB、只改目标 key、写回并记审计快照，其余维度原样保留。</p>
+     *
+     * <p>并发语义：仍是列级读-改-写（同一维度并发修正时后写覆盖先写），
+     * 但相比整表单 PUT，修正某一维度不再用旧快照覆盖其它维度与其它元数据字段，
+     * lost update 窗口收敛到单维度单事务内；前端对同一产品的多维修正应串行提交。</p>
+     *
+     * @param rspuId RSPU ID
+     * @param dimKey 维度键（A/B/C/D/E/F，大小写不敏感）
+     * @param value  维度值；null 或空白表示清除该维度
+     */
+    @Transactional
+    public void updateSixDimTag(String rspuId, String dimKey, String value) {
+        String key = dimKey == null ? "" : dimKey.trim().toUpperCase();
+        if (!SIX_DIM_KEYS.contains(key)) {
+            throw new BusinessException("非法的六维维度键: " + dimKey);
+        }
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+
+        dataScopeHelper.assertCanAccessRspu(rspuId);
+
+        RspuMaster oldSnapshot = snapshot(rspu);
+
+        Map<String, String> tags = readSixDimTags(rspu.getSixDimTags());
+        if (StringUtils.hasText(value)) {
+            tags.put(key, value.trim());
+        } else {
+            tags.remove(key);
+        }
+        rspu.setSixDimTags(writeJson(tags));
+        rspu.setUpdatedAt(LocalDateTime.now());
+        rspuMapper.updateById(rspu);
+
+        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+    }
+
+    /**
+     * 解析 six_dim_tags JSONB 为可修改的 Map；解析失败按空标签处理（不阻断修正）。
+     */
+    private Map<String, String> readSixDimTags(String json) {
+        Map<String, String> tags = new LinkedHashMap<>();
+        if (!StringUtils.hasText(json)) {
+            return tags;
+        }
+        try {
+            Map<String, Object> raw = objectMapper.readValue(json, new TypeReference<>() {
+            });
+            raw.forEach((k, v) -> {
+                if (v != null) {
+                    tags.put(k, String.valueOf(v));
+                }
+            });
+        } catch (Exception e) {
+            log.warn("解析 six_dim_tags 失败，按空标签处理: {}", json, e);
+        }
+        return tags;
     }
 
     private void updatePrimaryStyle(String rspuId, String styleCode) {

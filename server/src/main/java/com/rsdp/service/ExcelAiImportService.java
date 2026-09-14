@@ -366,8 +366,11 @@ public class ExcelAiImportService {
         mappingResult.mapping = processed.mapping();
         mappingResult.priceColumns = processed.priceColumns();
 
-        String storagePath = storeOriginalFile(fileBytes, file.getOriginalFilename());
-        ExcelImportBatch batch = saveBatch(file.getOriginalFilename(), storagePath, mappingResult,
+        // 原始文件对象键与批次主键统一：新批次用同一 batchId 命名（A10）；
+        // 存量批次 storage_path 已记录不受影响，生命周期清理按 storage_path 删除，口径不变
+        String batchId = IdGenerator.batchId();
+        String storagePath = storeOriginalFile(fileBytes, file.getOriginalFilename(), batchId);
+        ExcelImportBatch batch = saveBatch(batchId, file.getOriginalFilename(), storagePath, mappingResult,
             mergedHeaders, dataRows, dataRowPhysicalIndexes, sheetIndex);
 
         ExcelAiMappingResponse response = buildMappingResponse(batch, mergedHeaders, mappingResult);
@@ -717,16 +720,18 @@ public class ExcelAiImportService {
         Map<Integer, List<String>> preservedOverrideImages = preserveRowOverrideImages(batch.getBatchId());
         excelImportRowService.deleteByBatch(batch.getBatchId());
 
-        // 型号/品名列向下填充（纵向合并单元格语义，模块行继承上行型号）
-        forwardFillKeyColumns(rawDataRows, mapping);
-
-        // 应用用户在「导入前全量预览」中的单元格编辑；编辑优先级高于 forward fill
-        applyPreviewEdits(rawDataRows, request.getPreviewEdits());
-
-        // 从 storage 读取原始 Excel，提取内嵌图片并重建数据行物理布局（图片锚点行/列对齐用）
+        // 从 storage 读取原始 Excel，提取内嵌图片并重建数据行物理布局（图片锚点行/列对齐用）；
+        // 物理布局需先于下填加载：description/materialTags 自由文本列的下填限定在合并单元格范围内（A9）
         EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(batch);
         Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages = embeddedImagesResult.images();
         PhysicalLayout physicalLayout = loadPhysicalLayout(batch);
+
+        // 型号/品名列向下填充（纵向合并单元格语义，模块行继承上行型号）；
+        // description/materialTags 仅在各自列的合并单元格范围内下填，无合并信息时不下填（防整列污染无关行）
+        forwardFillKeyColumns(rawDataRows, mapping, physicalLayout);
+
+        // 应用用户在「导入前全量预览」中的单元格编辑；编辑优先级高于 forward fill
+        applyPreviewEdits(rawDataRows, request.getPreviewEdits());
 
         // 按图片列合并单元格分组，把组内分散的描述/材质解析聚合到每个成员行
         propagateGroupFields(rawDataRows, mapping, physicalLayout);
@@ -753,7 +758,8 @@ public class ExcelAiImportService {
             if (physicalLayout != null) {
                 physicalLayout = new PhysicalLayout(filteredPhysicalIndexes, physicalLayout.imageColumns(),
                     physicalLayout.minDataColumn(), physicalLayout.maxDataColumn(),
-                    physicalLayout.imageMergedGroups(), physicalLayout.sheetName());
+                    physicalLayout.imageMergedGroups(), physicalLayout.sheetName(),
+                    physicalLayout.orderedHeaders(), physicalLayout.mergedRangesByHeader());
             }
         }
 
@@ -848,7 +854,7 @@ public class ExcelAiImportService {
                 RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
                     selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
                     currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId(),
-                    importCache, rowCategorySelection);
+                    importCache, rowCategorySelection, batch.getFileName());
                 if (rowResult.rspuId != null) {
                     // 行内部分失败（如某价格列 RSKU 创建失败）不吞掉：记入批次失败明细，用户可见。
                     // 必须先于 markSuccess 追加：markSuccess 抛异常时行落入 catch 记失败，
@@ -901,7 +907,7 @@ public class ExcelAiImportService {
             } catch (Exception e) {
                 failedRowCount++;
                 log.error("Excel AI 导入行处理异常，rowIndex={}", rowIndex, e);
-                failures.add(new ExcelAiImportFailure(displayRowIndex, "系统异常: " + e.getMessage()));
+                failures.add(new ExcelAiImportFailure(displayRowIndex, "系统异常: " + safeErrorMessage(e)));
                 if (importRowId != null) {
                     excelImportRowService.markFailed(importRowId, "system", e.getMessage());
                 }
@@ -1014,16 +1020,6 @@ public class ExcelAiImportService {
         }
 
         Map<String, String> mapping = loadColumnMapping(batch);
-        List<String> headers = new ArrayList<>();
-        if (!rawDataRows.isEmpty()) {
-            for (String key : rawDataRows.get(0).keySet()) {
-                if ("__rowIndex__".equals(key)) {
-                    continue;
-                }
-                headers.add(key);
-            }
-        }
-        response.setHeaders(headers);
 
         // 预览阶段同时需要图片与物理布局：一次性读取文件字节，避免重复从 storage 拉取/解析（P2-XX）
         byte[] fileBytes = null;
@@ -1038,6 +1034,22 @@ public class ExcelAiImportService {
         PhysicalLayout physicalLayout = loadPhysicalLayout(fileBytes, batch);
         int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
         Set<Integer> imageColumns = physicalLayout != null ? physicalLayout.imageColumns() : Collections.emptySet();
+
+        // 表头顺序以物理表头为准（A7）：previewRows 经 JSONB 存储后键序不保序，
+        // 不能取 keySet；物理布局不可得（原始文件缺失/解析失败）时回退 keySet 旧行为。
+        // 与 preview 接口（buildMappingResponse 按物理列序输出表头）口径一致
+        List<String> headers = new ArrayList<>();
+        if (physicalLayout != null && !physicalLayout.orderedHeaders().isEmpty()) {
+            headers.addAll(physicalLayout.orderedHeaders());
+        } else {
+            for (String key : rawDataRows.get(0).keySet()) {
+                if ("__rowIndex__".equals(key)) {
+                    continue;
+                }
+                headers.add(key);
+            }
+        }
+        response.setHeaders(headers);
 
         // 加载用户在数据清洗页对该批次各行设置的覆盖图片（临时图片 key 列表）
         Map<Integer, List<String>> rowOverrideImages = loadRowOverrideImages(batchId);
@@ -1176,7 +1188,7 @@ public class ExcelAiImportService {
      * @return 临时图片 key，前端用它作为 overrideImageAssetIds 的元素
      */
     public String uploadPreviewImage(String batchId, MultipartFile file) {
-        getAccessibleBatch(batchId);
+        assertBatchEditable(getAccessibleBatch(batchId));
         if (file == null || file.isEmpty()) {
             throw new BusinessException("上传图片不能为空");
         }
@@ -1187,29 +1199,62 @@ public class ExcelAiImportService {
             storageService.store(file.getInputStream(), objectKey, file.getSize(), file.getContentType());
         } catch (IOException e) {
             log.error("上传预览图片失败，batchId={}", batchId, e);
-            throw new BusinessException("上传预览图片失败: " + e.getMessage());
+            throw new BusinessException("上传预览图片失败: " + safeErrorMessage(e));
         }
         return tempImageKey;
     }
 
     /**
-     * 读取数据清洗阶段上传的临时图片字节。
+     * 读取数据清洗阶段上传的临时图片（字节 + 按实际存储扩展名解析的内容类型）。
+     *
+     * @param batchId      导入批次 ID
+     * @param tempImageKey 临时图片 key
+     * @return 图片内容与 Content-Type；不存在时返回 null
      */
-    public byte[] loadPreviewImage(String batchId, String tempImageKey) {
+    public PreviewImageContent loadPreviewImage(String batchId, String tempImageKey) {
         getAccessibleBatch(batchId);
         if (!StringUtils.hasText(tempImageKey)) {
             return null;
         }
-        // 临时图片扩展名在存储时已规范化为 web 格式；按 key 反查文件
+        // 临时图片扩展名在存储时已规范化为 web 格式；按 key 反查文件，
+        // 命中哪个扩展名就按该扩展名回 Content-Type（不再由调用方猜默认 jpeg）
         for (String ext : List.of("jpeg", "png", "gif", "webp")) {
             String objectKey = previewUploadObjectKey(batchId, tempImageKey, ext);
             try (InputStream in = storageService.get(objectKey)) {
-                return in.readAllBytes();
+                return new PreviewImageContent(in.readAllBytes(), previewImageContentType(ext));
             } catch (IOException e) {
                 // 该扩展名不存在，继续尝试下一个
             }
         }
         return null;
+    }
+
+    /**
+     * 数据清洗写操作前置状态校验（A8）：仅 pending 批次允许编辑；
+     * importing/done/failed 一律拒绝，防止导入进行中/结束后清洗页继续写脏数据。
+     *
+     * @param batch 已完成归属校验的批次
+     * @throws BusinessException 批次非 pending 状态（400）
+     */
+    public void assertBatchEditable(ExcelImportBatch batch) {
+        if (!"pending".equals(batch.getStatus())) {
+            throw new BusinessException("批次正在导入中或已结束，不能再编辑（当前状态: " + batch.getStatus() + "）");
+        }
+    }
+
+    private String previewImageContentType(String extension) {
+        return switch (extension.toLowerCase()) {
+            case "png" -> "image/png";
+            case "gif" -> "image/gif";
+            case "webp" -> "image/webp";
+            default -> "image/jpeg";
+        };
+    }
+
+    /**
+     * 数据清洗阶段临时图片内容：字节 + 按实际存储扩展名解析的 Content-Type。
+     */
+    public record PreviewImageContent(byte[] bytes, String contentType) {
     }
 
     /**
@@ -1221,7 +1266,7 @@ public class ExcelAiImportService {
      */
     @Transactional
     public void setRowImageOverrides(String batchId, int rowIndex, List<String> tempImageKeys) {
-        getAccessibleBatch(batchId);
+        assertBatchEditable(getAccessibleBatch(batchId));
         ExcelImportRow row = excelImportRowService.findByBatchAndRowNumber(batchId, rowIndex);
         Long rowId;
         if (row == null) {
@@ -1253,7 +1298,7 @@ public class ExcelAiImportService {
      */
     @Transactional
     public List<String> cloneRowImages(String batchId, int sourceRowIndex, int targetRowIndex) {
-        getAccessibleBatch(batchId);
+        assertBatchEditable(getAccessibleBatch(batchId));
         if (sourceRowIndex < 1 || targetRowIndex < 1) {
             throw new BusinessException("行号必须大于 0");
         }
@@ -2098,25 +2143,80 @@ public class ExcelAiImportService {
 
     /**
      * 判断一行是否是说明/备注行或完全空行，应跳过不导入。
+     *
+     * <p>映射上下文校验（A13）：启发式词命中仅在「除命中列外没有任何已映射标准字段
+     * （品名/编码/价格等）有值」时才判为备注行——有品名但某单元格含启发式词
+     * （如描述里写「注意事项」）的正常行不再被误杀；备注文字写在首列（已映射列）
+     * 且其余映射列皆空的经典备注行仍判为备注行。</p>
+     *
+     * @param dataRow 数据行（表头 → 值）
+     * @param mapping 字段映射（表头 → 标准字段），可为 null（无映射信息时维持旧启发式）
+     * @return true 表示应跳过
      */
-    private boolean isNoteOrEmptyRow(Map<String, String> dataRow) {
+    private boolean isNoteOrEmptyRow(Map<String, String> dataRow, Map<String, String> mapping) {
         if (dataRow == null || dataRow.isEmpty()) {
             return true;
         }
         boolean hasAnyValue = false;
-        for (String value : dataRow.values()) {
-            if (!StringUtils.hasText(value)) {
+        for (Map.Entry<String, String> entry : dataRow.entrySet()) {
+            String value = entry.getValue();
+            if (!StringUtils.hasText(value) || "__rowIndex__".equals(entry.getKey())) {
                 continue;
             }
             hasAnyValue = true;
-            String v = value.trim();
-            if (v.contains("产品下单说明") || v.contains("注意事项") || v.contains("温馨提示")
-                || v.startsWith("由于") || v.contains("特别声明") || v.contains("免责声明")
-                || v.contains("更新日期") || v.contains("修订日期") || v.startsWith("更新：")) {
+            if (containsNoteWord(value) && !hasOtherMappedValue(dataRow, mapping, entry.getKey())) {
                 return true;
             }
         }
         return !hasAnyValue;
+    }
+
+    /**
+     * 备注行启发式词匹配（单元格值级别）。
+     *
+     * <p>下填（forward fill）会跳过命中启发式词的行，避免备注行被上一产品的型号/品名
+     * 回填后逃脱 {@link #isNoteOrEmptyRow} 的映射上下文校验。</p>
+     */
+    private boolean containsNoteWord(String value) {
+        String v = value.trim();
+        return v.contains("产品下单说明") || v.contains("注意事项") || v.contains("温馨提示")
+            || v.startsWith("由于") || v.contains("特别声明") || v.contains("免责声明")
+            || v.contains("更新日期") || v.contains("修订日期") || v.startsWith("更新：");
+    }
+
+    /**
+     * 行内任一单元格命中备注启发式词（跳过 {@code __rowIndex__} 系统键）。
+     */
+    private boolean containsNoteWordInAnyCell(Map<String, String> row) {
+        for (Map.Entry<String, String> entry : row.entrySet()) {
+            if ("__rowIndex__".equals(entry.getKey()) || !StringUtils.hasText(entry.getValue())) {
+                continue;
+            }
+            if (containsNoteWord(entry.getValue())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 除指定列外，是否存在其他已映射标准字段有值（备注行误判防护）。
+     * 无映射信息时按没有处理，维持旧启发式行为。
+     */
+    private boolean hasOtherMappedValue(Map<String, String> dataRow, Map<String, String> mapping,
+                                        String excludeHeader) {
+        if (mapping == null || mapping.isEmpty()) {
+            return false;
+        }
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+            if (!StringUtils.hasText(entry.getValue()) || entry.getKey().equals(excludeHeader)) {
+                continue;
+            }
+            if (StringUtils.hasText(dataRow.get(entry.getKey()))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -2226,25 +2326,65 @@ public class ExcelAiImportService {
      * 避免表头文本污染。品类列（categoryCode）同样按合并单元格语义向下填充，
      * 修复合并「类别」单元格的后续行品类为空导致校验失败的问题。</p>
      *
-     * @param dataRows 数据行列表（就地修改）
-     * @param mapping  确认后的字段映射（表头 → 标准字段）
+     * <p>description/materialTags 自由文本字段的下填限定在各自列的合并单元格范围内（A9）：
+     * 整列无差别下填会把上一产品的描述/材质污染到无关行；无合并单元格信息
+     * （physicalLayout 为 null 或该列无合并区域）时不下填这两列，仅结构性字段下填。</p>
+     *
+     * @param dataRows       数据行列表（就地修改）
+     * @param mapping        确认后的字段映射（表头 → 标准字段）
+     * @param physicalLayout 物理布局（含各表头列的合并单元格范围），可为 null
      */
-    private void forwardFillKeyColumns(List<Map<String, String>> dataRows, Map<String, String> mapping) {
-        List<String> fillHeaders = mapping.entrySet().stream()
+    private void forwardFillKeyColumns(List<Map<String, String>> dataRows, Map<String, String> mapping,
+                                       PhysicalLayout physicalLayout) {
+        List<String> structuralHeaders = mapping.entrySet().stream()
             .filter(e -> {
                 String field = e.getValue();
                 return field != null && (field.contains("externalCode") || field.contains("productName")
-                    || field.contains("categoryCode") || field.contains("description")
-                    || field.contains("materialTags"));
+                    || field.contains("categoryCode"));
             })
             .map(Map.Entry::getKey)
             .toList();
+        fillDownColumns(dataRows, structuralHeaders);
+
+        List<String> freeTextHeaders = mapping.entrySet().stream()
+            .filter(e -> {
+                String field = e.getValue();
+                return field != null && (field.contains("description") || field.contains("materialTags"));
+            })
+            .map(Map.Entry::getKey)
+            .toList();
+        if (physicalLayout == null || freeTextHeaders.isEmpty()) {
+            return;
+        }
+        // 物理行号 -> 逻辑数据行索引（dataRowPhysicalIndexes 与 dataRows 顺序一一对应）
+        Map<Integer, Integer> physicalToLogical = new LinkedHashMap<>();
+        for (int i = 0; i < dataRows.size() && i < physicalLayout.dataRowPhysicalIndexes().size(); i++) {
+            if (isRepeatedHeaderRow(dataRows.get(i))) {
+                continue;
+            }
+            physicalToLogical.put(physicalLayout.dataRowPhysicalIndexes().get(i), i);
+        }
+        for (String header : freeTextHeaders) {
+            fillDownWithinMergedRanges(dataRows, physicalToLogical,
+                physicalLayout.mergedRangesByHeader().getOrDefault(header, List.of()), header);
+        }
+    }
+
+    /**
+     * 整列向下填充（纵向合并单元格语义；重复表头行不参与填充）。
+     *
+     * @param dataRows    数据行列表（就地修改）
+     * @param fillHeaders 参与下填的表头列
+     */
+    private void fillDownColumns(List<Map<String, String>> dataRows, List<String> fillHeaders) {
         if (fillHeaders.isEmpty()) {
             return;
         }
         Map<String, String> lastValues = new HashMap<>();
         for (Map<String, String> row : dataRows) {
-            if (isRepeatedHeaderRow(row)) {
+            // 重复表头行与备注词命中行不参与填充：备注行若被上一产品的型号/品名回填，
+            // 会带着「有映射字段值」的假象逃脱 isNoteOrEmptyRow 的映射上下文校验（A13）
+            if (isRepeatedHeaderRow(row) || containsNoteWordInAnyCell(row)) {
                 continue;
             }
             for (String header : fillHeaders) {
@@ -2257,6 +2397,44 @@ public class ExcelAiImportService {
                         row.put(header, last);
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * 自由文本列的下填限定在合并单元格范围内：范围内空白行继承范围内首个非空值
+     * （纵向合并单元格的值物理上落在首行），范围外的行一律不动。
+     *
+     * @param dataRows          数据行列表（就地修改）
+     * @param physicalToLogical 物理行号 → 逻辑数据行索引
+     * @param ranges            该表头列的合并单元格物理行范围
+     * @param header            目标表头列
+     */
+    private void fillDownWithinMergedRanges(List<Map<String, String>> dataRows,
+                                            Map<Integer, Integer> physicalToLogical,
+                                            List<RowRange> ranges, String header) {
+        for (RowRange range : ranges) {
+            String mergedValue = null;
+            List<Integer> blankLogicalIndexes = new ArrayList<>();
+            for (int physicalRow = range.startRow(); physicalRow <= range.endRow(); physicalRow++) {
+                Integer logicalIndex = physicalToLogical.get(physicalRow);
+                if (logicalIndex == null) {
+                    continue;
+                }
+                String value = dataRows.get(logicalIndex).get(header);
+                if (StringUtils.hasText(value)) {
+                    if (mergedValue == null) {
+                        mergedValue = value;
+                    }
+                } else {
+                    blankLogicalIndexes.add(logicalIndex);
+                }
+            }
+            if (mergedValue == null) {
+                continue;
+            }
+            for (Integer logicalIndex : blankLogicalIndexes) {
+                dataRows.get(logicalIndex).put(header, mergedValue);
             }
         }
     }
@@ -2481,8 +2659,7 @@ public class ExcelAiImportService {
         return null;
     }
 
-    private String storeOriginalFile(byte[] fileBytes, String originalFilename) {
-        String batchId = IdGenerator.excelBatchId();
+    private String storeOriginalFile(byte[] fileBytes, String originalFilename, String batchId) {
         String extension = resolveFileExtension(originalFilename);
         String objectKey = "excel-imports/" + batchId + "." + extension;
         try {
@@ -2502,11 +2679,11 @@ public class ExcelAiImportService {
         return filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
     }
 
-    private ExcelImportBatch saveBatch(String fileName, String storagePath, AiMappingResult mappingResult,
+    private ExcelImportBatch saveBatch(String batchId, String fileName, String storagePath, AiMappingResult mappingResult,
                                        Map<Integer, String> headerMap, List<Map<Integer, String>> dataRows,
                                        List<Integer> dataRowPhysicalIndexes, int sheetIndex) {
         ExcelImportBatch batch = new ExcelImportBatch();
-        batch.setBatchId(IdGenerator.batchId());
+        batch.setBatchId(batchId);
         batch.setFileName(fileName);
         batch.setStoragePath(storagePath);
         batch.setStatus("pending");
@@ -2828,23 +3005,34 @@ public class ExcelAiImportService {
             Set<Integer> imageColumns = new HashSet<>();
             int minCol = Integer.MAX_VALUE;
             int maxCol = -1;
+            List<String> orderedHeaders = new ArrayList<>();
+            Map<String, List<RowRange>> mergedRangesByHeader = new HashMap<>();
             if (headerLayout.headerRowCount() > 0 && rawValues.size() > headerLayout.headerStartIndex()) {
                 List<Map<Integer, String>> headerRows = headerLayout.mergeSubHeader()
                     ? rawValues.subList(headerLayout.headerStartIndex(), headerLayout.dataStartIndex())
                     : List.of(rawValues.get(headerLayout.headerStartIndex()));
-                Map<Integer, String> headerMap = ExcelHeaderNormalizer.mergeHeaderRows(headerRows);
-                for (Map.Entry<Integer, String> entry : headerMap.entrySet()) {
+                // 与 previewMapping 同一表头管线（合并 + 同名消歧）：表头名与 previewRows 键一致，
+                // 顺序按物理列索引（供 preview-data 重建表头顺序，A7）
+                Map<Integer, String> headerMap = ExcelHeaderNormalizer.disambiguateDuplicateHeaders(
+                    ExcelHeaderNormalizer.mergeHeaderRows(headerRows));
+                for (Map.Entry<Integer, String> entry : headerMap.entrySet().stream()
+                        .sorted(Map.Entry.comparingByKey()).toList()) {
                     minCol = Math.min(minCol, entry.getKey());
                     maxCol = Math.max(maxCol, entry.getKey());
                     if (isEmbeddedImageHeader(entry.getValue())) {
                         imageColumns.add(entry.getKey());
                     }
+                    if (StringUtils.hasText(entry.getValue())) {
+                        orderedHeaders.add(entry.getValue());
+                    }
                 }
+                // 各表头列的纵向合并单元格范围（A9）：自由文本列下填限定在该范围内
+                mergedRangesByHeader = collectMergedRangesByHeader(fileBytes, sheetIndex, headerMap);
             }
             // 图片列合并单元格分组：用于把跨多行的组合图所覆盖行的描述/材质聚合到组内每一行
             List<RowRange> imageMergedGroups = collectImageMergedGroups(fileBytes, sheetIndex, imageColumns);
             return new PhysicalLayout(indexes, imageColumns, minCol, maxCol, imageMergedGroups,
-                resolveSheetName(fileBytes, sheetIndex));
+                resolveSheetName(fileBytes, sheetIndex), orderedHeaders, mergedRangesByHeader);
         } catch (Exception e) {
             log.warn("重建数据行物理布局失败，batchId={}", batch.getBatchId(), e);
             return null;
@@ -2895,6 +3083,51 @@ public class ExcelAiImportService {
         } catch (Exception e) {
             log.warn("收集图片列合并区域失败，sheetIndex={}", sheetIndex, e);
             return List.of();
+        }
+    }
+
+    /**
+     * 收集各表头列上的纵向合并单元格范围（按表头名分组）。
+     *
+     * <p>自由文本列（描述/材质标签等）的下填只允许发生在真实合并单元格覆盖的行范围内，
+     * 避免无差别整列下填把上一产品的描述/材质污染到无关行（A9）。仅收集纵向
+     * （跨行）合并区域；横向合并与表头区合并不影响下填（下填只作用于数据行）。</p>
+     *
+     * @param fileBytes  原始 Excel 字节
+     * @param sheetIndex 工作表索引
+     * @param headerMap  物理列索引 → 表头名（与 previewRows 键同名）
+     * @return 表头名 → 合并单元格物理行范围列表（0-based，含首尾行）
+     */
+    private Map<String, List<RowRange>> collectMergedRangesByHeader(byte[] fileBytes, int sheetIndex,
+                                                                    Map<Integer, String> headerMap) {
+        if (headerMap.isEmpty()) {
+            return Map.of();
+        }
+        try (InputStream stream = new ByteArrayInputStream(fileBytes);
+             Workbook workbook = WorkbookFactory.create(stream)) {
+            if (sheetIndex < 0 || sheetIndex >= workbook.getNumberOfSheets()) {
+                return Map.of();
+            }
+            Sheet sheet = workbook.getSheetAt(sheetIndex);
+            Map<String, List<RowRange>> result = new HashMap<>();
+            for (int i = 0; i < sheet.getNumMergedRegions(); i++) {
+                CellRangeAddress region = sheet.getMergedRegion(i);
+                if (region.getFirstRow() == region.getLastRow()) {
+                    // 非纵向合并，与下填无关
+                    continue;
+                }
+                String header = headerMap.get(region.getFirstColumn());
+                if (!StringUtils.hasText(header)) {
+                    continue;
+                }
+                result.computeIfAbsent(header, k -> new ArrayList<>())
+                    .add(new RowRange(region.getFirstRow(), region.getLastRow()));
+            }
+            result.values().forEach(ranges -> ranges.sort(Comparator.comparingInt(RowRange::startRow)));
+            return result;
+        } catch (Exception e) {
+            log.warn("收集表头列合并区域失败，sheetIndex={}", sheetIndex, e);
+            return Map.of();
         }
     }
 
@@ -3078,7 +3311,7 @@ public class ExcelAiImportService {
                                               ProductGroup currentGroup, PhysicalLayout physicalLayout,
                                               int sheetIndex, String sheetName, String categoryGuess,
                                               String batchId, BatchImportCache importCache,
-                                              String rowCategorySelection) {
+                                              String rowCategorySelection, String originalFilename) {
         // 事务外预处理：行构建/校验、URL 图片下载、内嵌图提取。
         // 网络与文件 IO 耗时可达数十秒，绝不放入 DB 事务（长事务占用连接池会拖垮全系统）；
         // 同时 MinIO 不参与 DB 事务，先存文件、事务内只登记元数据。
@@ -3112,7 +3345,8 @@ public class ExcelAiImportService {
         TransactionStatus status = transactionManager.getTransaction(def);
         try {
             RowResult result = persistRow(prep, storedProductImages, storedVariantImages,
-                dataRow, priceColumns, request, dictCache, rowIndex, importRowId, currentGroup, importCache);
+                dataRow, priceColumns, request, dictCache, rowIndex, importRowId, currentGroup, importCache,
+                originalFilename);
             transactionManager.commit(status);
             // 提交成功后才把本行新建的 RSPU 并入批次缓存（回滚行的幻影数据不得被后续行命中）
             importCache.commitRow();
@@ -3136,7 +3370,7 @@ public class ExcelAiImportService {
                 throw new BusinessException(ConstraintViolations.toUserMessage(dive,
                     "外部编码或变体属性组合与已有数据冲突，请检查是否重复导入"));
             }
-            throw new BusinessException("系统异常: " + e.getMessage());
+            throw new BusinessException("系统异常: " + safeErrorMessage(e));
         }
     }
 
@@ -3153,7 +3387,7 @@ public class ExcelAiImportService {
                                    ProductGroup currentGroup, PhysicalLayout physicalLayout,
                                    int sheetIndex, String sheetName, String categoryGuess, String batchId,
                                    BatchImportCache importCache, String rowCategorySelection) {
-        if (isNoteOrEmptyRow(dataRow)) {
+        if (isNoteOrEmptyRow(dataRow, mapping)) {
             log.debug("第 {} 行为说明或空行，已跳过", rowIndex);
             return PreparedRow.skip(RowResult.skipped("说明或空行"));
         }
@@ -3242,7 +3476,7 @@ public class ExcelAiImportService {
                                  Map<String, String> dataRow, List<PriceColumnInfo> priceColumns,
                                  ExcelAiMappingRequest request, Map<String, List<CategoryDict>> dictCache,
                                  int rowIndex, Long importRowId, ProductGroup currentGroup,
-                                 BatchImportCache importCache) {
+                                 BatchImportCache importCache, String originalFilename) {
         ProductImportRow row = prep.row();
         List<String> rowIssues = prep.rowIssues();
         String groupKey = prep.groupKey();
@@ -3318,7 +3552,7 @@ public class ExcelAiImportService {
         if (newPrimaryRegistered) {
             boolean needTask = !prep.sameProduct() || !currentGroup.hasAiTask;
             if (needTask) {
-                taskId = createAsyncTask(rspuId, primaryObjectKey);
+                taskId = createAsyncTask(rspuId, primaryObjectKey, originalFilename, rowIndex);
             }
         }
 
@@ -3855,8 +4089,9 @@ public class ExcelAiImportService {
         if (rows.isEmpty()) {
             return response;
         }
-        // 与正式导入同口径的型号/品名/类别列向下填充（纵向合并单元格语义）
-        forwardFillKeyColumns(rows, mapping);
+        // 与正式导入同口径的型号/品名/类别列向下填充（纵向合并单元格语义）；
+        // 分类只依赖结构性字段，description/materialTags 自由文本下填不参与，免读原始文件重建物理布局
+        forwardFillKeyColumns(rows, mapping, null);
         Map<String, List<CategoryDict>> dictCache = Map.of("category", categories);
         List<String> groupKeys = computeLogicalGroupKeys(rows, mapping);
 
@@ -4112,9 +4347,9 @@ public class ExcelAiImportService {
             }
         }
 
-        // 与正式导入同口径的行准备：forward-fill → 预览编辑 → 跳过行过滤
+        // 与正式导入同口径的行准备：forward-fill（仅结构性字段，免读原始文件重建物理布局）→ 预览编辑 → 跳过行过滤
         List<Map<String, String>> rows = loadRawDataRows(batch);
-        forwardFillKeyColumns(rows, mapping);
+        forwardFillKeyColumns(rows, mapping, null);
         applyPreviewEdits(rows, request.getPreviewEdits());
         Set<Integer> skipRowSet = request.getSkipRows() != null ? new HashSet<>(request.getSkipRows()) : Set.of();
         rows = rows.stream()
@@ -4217,7 +4452,7 @@ public class ExcelAiImportService {
         String currentGroupKey = null;
         int seq = 0;
         for (Map<String, String> row : rows) {
-            if (isNoteOrEmptyRow(row) || isRepeatedHeaderRow(row) || isComboSummaryRow(row, mapping)) {
+            if (isNoteOrEmptyRow(row, mapping) || isRepeatedHeaderRow(row) || isComboSummaryRow(row, mapping)) {
                 keys.add(null);
                 continue;
             }
@@ -4464,35 +4699,19 @@ public class ExcelAiImportService {
         List<DownloadedImage> result = new ArrayList<>();
         boolean primaryAssigned = false;
         for (String key : tempImageKeys) {
-            byte[] bytes = loadPreviewImage(batchId, key);
-            if (bytes == null || bytes.length == 0) {
+            PreviewImageContent image = loadPreviewImage(batchId, key);
+            if (image == null || image.bytes() == null || image.bytes().length == 0) {
                 log.warn("第 {} 行覆盖图片临时文件缺失，tempImageKey={}", rowIndex, key);
                 rowIssues.add("覆盖图片临时文件缺失: " + key);
                 continue;
             }
-            String contentType = guessContentTypeFromPreviewImage(batchId, key);
-            result.add(new DownloadedImage("override://" + key, bytes, contentType, !primaryAssigned, false,
+            byte[] bytes = image.bytes();
+            // Content-Type 由 loadPreviewImage 按实际存储扩展名解析，不再二次探测
+            result.add(new DownloadedImage("override://" + key, bytes, image.contentType(), !primaryAssigned, false,
                 hashBytes(bytes)));
             primaryAssigned = true;
         }
         return result;
-    }
-
-    private String guessContentTypeFromPreviewImage(String batchId, String tempImageKey) {
-        for (String ext : List.of("jpeg", "png", "gif", "webp")) {
-            String objectKey = previewUploadObjectKey(batchId, tempImageKey, ext);
-            try (InputStream ignored = storageService.get(objectKey)) {
-                return switch (ext) {
-                    case "png" -> "image/png";
-                    case "gif" -> "image/gif";
-                    case "webp" -> "image/webp";
-                    default -> "image/jpeg";
-                };
-            } catch (IOException e) {
-                // 尝试下一个扩展名
-            }
-        }
-        return "image/jpeg";
     }
 
     private List<DownloadedImage> extractEmbeddedImagesForRow(
@@ -5015,7 +5234,7 @@ public class ExcelAiImportService {
                             // 捕获业务异常后仅跳过当前价格列，不影响同一行其他价格列/变体提交
                             rethrowIfTransactionPoisoned(e);
                             log.warn("为价格列创建/更新 RSKU 失败，header={}", priceColumn.getHeader(), e);
-                            rowIssues.add("工厂报价失败: " + priceColumn.getHeader() + " - " + e.getMessage());
+                            rowIssues.add("工厂报价失败: " + priceColumn.getHeader() + " - " + safeErrorMessage(e));
                         }
                     }
                 }
@@ -5677,7 +5896,7 @@ public class ExcelAiImportService {
         return new ImageRegistration(primaryObjectKey, newPrimaryRegistered);
     }
 
-    private String createAsyncTask(String rspuId, String primaryObjectKey) {
+    private String createAsyncTask(String rspuId, String primaryObjectKey, String originalFilename, int rowIndex) {
         String taskId = IdGenerator.taskId();
         String imageId = primaryObjectKey.substring(primaryObjectKey.lastIndexOf('/') + 1, primaryObjectKey.lastIndexOf('.'));
         AsyncTask task = new AsyncTask();
@@ -5690,7 +5909,9 @@ public class ExcelAiImportService {
                 "rspuId", rspuId,
                 "imageId", imageId,
                 "objectKey", primaryObjectKey,
-                "originalFilename", primaryObjectKey,
+                // originalFilename 存真实文件名（A11）；文件名不可得时用行号占位，objectKey 已有独立字段
+                "originalFilename", StringUtils.hasText(originalFilename)
+                    ? originalFilename : "excel-import-第" + rowIndex + "行",
                 // Excel 导入图片为表格内嵌/链接直接提取的成品图，不做 AI 主体裁剪
                 "source", "excel_import"
             )));
@@ -5805,6 +6026,16 @@ public class ExcelAiImportService {
 
     private String trim(String value) {
         return value != null ? value.trim() : null;
+    }
+
+    /**
+     * 异常文案兜底（A12）：message 为 null 时回退异常类名，避免 "系统异常: null" 这类不可读文案。
+     *
+     * @param e 异常
+     * @return 用户可读的错误文案
+     */
+    private static String safeErrorMessage(Throwable e) {
+        return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     private static class AiMappingResult {
@@ -5999,10 +6230,14 @@ public class ExcelAiImportService {
      * @param minDataColumn          数据区域最小列索引
      * @param maxDataColumn          数据区域最大列索引（界外视为 logo/装饰图）
      * @param sheetName              批次工作表名（品类线索，不可得为 null）
+     * @param orderedHeaders         物理表头顺序（按列索引升序、与 previewRows 键同名）：
+     *                               previewRows 经 JSONB 存储后键序不保序，表头顺序以此为准（A7）
+     * @param mergedRangesByHeader   各表头列的纵向合并单元格物理行范围（自由文本列下填边界，A9）
      */
     private record PhysicalLayout(List<Integer> dataRowPhysicalIndexes, Set<Integer> imageColumns,
                                   int minDataColumn, int maxDataColumn, List<RowRange> imageMergedGroups,
-                                  String sheetName) {
+                                  String sheetName, List<String> orderedHeaders,
+                                  Map<String, List<RowRange>> mergedRangesByHeader) {
     }
 
     /**

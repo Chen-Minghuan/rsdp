@@ -172,6 +172,8 @@ public class SecurityConfig {
 
                 // 产品更新/删除
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_UPDATE)
+                // 六维标签单维度修正（PATCH 不被上方 PUT 规则覆盖，单列）
+                .requestMatchers(HttpMethod.PATCH, "/api/v1/products/*/six-dim-tags").hasAuthority(Permissions.PRODUCT_UPDATE)
                 // 回收站：彻底删除仅 ADMIN（物理删除不可恢复），恢复走 product:delete 权限
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/*/permanent").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/products/**").hasAuthority(Permissions.PRODUCT_DELETE)

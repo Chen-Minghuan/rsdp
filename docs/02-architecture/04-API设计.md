@@ -265,6 +265,12 @@ PUT    /api/v1/products/{rspuId}
        # 说明：工厂管理员/业务员只能更新本厂已录入 RSKU 的 RSPU；非本厂产品返回 403
        # 2026-07-22：新增 productName 字段（≤256，空串视为清空）；产品列表摘要响应同步返回 productName
 
+PATCH  /api/v1/products/{rspuId}/six-dim-tags
+       # 六维标签单维度修正（权限 product:update，数据口径同 PUT；新增）
+       # Request: { dimKey: "A".."F", value: string | null }   # value=null/空白 = 清除该维度
+       # 说明：只改写 six_dim_tags JSONB 中的目标 key，其余维度原样保留（替代整对象读-改-写，
+       #       缩小并发修正不同维度的 lost update 窗口）；非法 dimKey 返回 400；写审计快照
+
 DELETE /api/v1/products/{rspuId}
        # 软删除（已实现）
        # Response: void
@@ -360,7 +366,8 @@ POST   /api/v1/products/excel-ai-import/preview
        #   categoryGuess: string,
        #   notes: string,
        #   sheetIndex: number,                            // 回显本次解析的工作表
-       #   sheets: [{ index: number, name: string, rowCount: number }]  // 工作簿全部工作表（rowCount 为近似行数）
+       #   sheets: [{ index: number, name: string, rowCount: number }],  // 工作簿全部工作表（rowCount 为近似行数）
+       #   standardFields: [{ label: string, value: string }]  // 可映射标准字段清单（ExcelAiStandardFields 下发；前端硬编码仅作兜底）
        # }
        # 说明：
        #   - 支持单行/多行表头：先清洗表头（去掉英文备注、括号单位），再合并父子表头
