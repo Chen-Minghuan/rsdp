@@ -114,6 +114,7 @@ public class RspuVariantService {
         variant.setMaterialMix(toJson(request.getMaterialMix()));
         variant.setReferencePriceBand(request.getReferencePriceBand());
         variant.setProductLevel(request.getProductLevel());
+        variant.setQuantity(request.getQuantity());
         variant.setStatus("active");
         variant.setCreatedAt(LocalDateTime.now());
         variant.setUpdatedAt(LocalDateTime.now());
@@ -407,6 +408,7 @@ public class RspuVariantService {
         response.setMaterialMix(parseJsonList(variant.getMaterialMix()));
         response.setReferencePriceBand(variant.getReferencePriceBand());
         response.setProductLevel(variant.getProductLevel());
+        response.setQuantity(variant.getQuantity());
         response.setStatus(variant.getStatus());
         response.setCreatedAt(variant.getCreatedAt());
         response.setUpdatedAt(variant.getUpdatedAt());

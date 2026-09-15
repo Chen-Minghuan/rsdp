@@ -17,13 +17,16 @@ import com.rsdp.dto.request.PriceColumnSelection;
 import com.rsdp.dto.request.RspuFactoryMappingRequest;
 import com.rsdp.dto.request.RskuCreateRequest;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
+import com.rsdp.config.ExcelAiStandardFields;
 import com.rsdp.dto.response.ExcelAiImportFailure;
 import com.rsdp.dto.response.ExcelAiImportResult;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
 import com.rsdp.dto.response.ExcelAiImportSubmitResult;
 import com.rsdp.dto.response.ExcelAiMappingResponse;
 import com.rsdp.dto.response.ExcelAiPreviewDataResponse;
+import com.rsdp.dto.response.PreviewDataGroup;
 import com.rsdp.dto.response.PreviewDataRow;
+import com.rsdp.dto.response.PreviewDataVariant;
 import com.rsdp.dto.response.CategoryMappingItem;
 import com.rsdp.dto.response.ExcelAiClassifyCategoriesResponse;
 import com.rsdp.dto.response.ExcelSheetInfo;
@@ -229,7 +232,8 @@ public class ExcelAiImportService {
         - materialCode（材质码，仅限字典码如 WO/PE/FA；对应：材质码、面料码、MATERIAL CODE。材质名称/说明请映射 materialTags）
         - dimensions（尺寸文字，如 800*900*1000mm；对应：尺寸、产品尺寸、规格（数值尺寸）、SIZE CM、DIMENSIONS）
         - leadTimeDays（交期天数，数字，单位天；对应：交期、货期、生产周期、交货期、PRODUCTION CYCLE、LEAD TIME）
-        - description（长文本描述/配置说明原文，原样保留不加工；对应：材质解析、材质说明、功能配置、配置说明、备注、备注说明、说明、产品说明、DISPOSE）
+        - description（长文本描述/配置说明原文，原样保留不加工；对应：材质解析、材质说明、功能配置、配置说明、配置、说明、产品说明、DISPOSE）
+        - quantity（数量/件数，仅限单元格为数字时；对应：数量、件数、qty、quantity。当「备注」列单元格为纯数字时映射为 quantity，文本备注仍映射为 description）
         - retailPrice（零售参考价，数字；对应：销售价、含税价、零售价、市场价）
 
         复合表头处理规则：
@@ -1021,7 +1025,7 @@ public class ExcelAiImportService {
 
         Map<String, String> mapping = loadColumnMapping(batch);
 
-        // 预览阶段同时需要图片与物理布局：一次性读取文件字节，避免重复从 storage 拉取/解析（P2-XX）
+        // 预览阶段同时需要图片与物理布局：一次性读取文件字节，避免重复从 storage 拉取/解析
         byte[] fileBytes = null;
         if (StringUtils.hasText(batch.getStoragePath())) {
             try (InputStream in = storageService.get(batch.getStoragePath())) {
@@ -1032,6 +1036,9 @@ public class ExcelAiImportService {
         }
         EmbeddedImagesResult embeddedImagesResult = loadEmbeddedImages(fileBytes, batch.getFileName(), batch.getBatchId());
         PhysicalLayout physicalLayout = loadPhysicalLayout(fileBytes, batch);
+
+        // 型号/品名/品类列向下填充（纵向合并单元格语义），确保预览页同一型号模块行都能显示外部编码
+        forwardFillKeyColumns(rawDataRows, mapping, physicalLayout);
         int sheetIndex = batch.getSheetIndex() != null ? batch.getSheetIndex() : 0;
         Set<Integer> imageColumns = physicalLayout != null ? physicalLayout.imageColumns() : Collections.emptySet();
 
@@ -1075,7 +1082,97 @@ public class ExcelAiImportService {
             rows.add(row);
         }
         response.setRows(rows);
+
+        // 按商品（externalCode）聚合预览行，供新版商品校验视图使用
+        List<PreviewDataGroup> groups = buildPreviewDataGroups(rows, mapping, headers);
+        response.setGroups(groups);
+        response.setProductHeaders(headers.stream()
+            .filter(h -> isProductLevelHeader(h, mapping))
+            .collect(Collectors.toList()));
+        response.setVariantHeaders(headers.stream()
+            .filter(h -> !isProductLevelHeader(h, mapping))
+            .collect(Collectors.toList()));
         return response;
+    }
+
+    /**
+     * 按 externalCode 把 PreviewDataRow 聚合成 PreviewDataGroup。
+     *
+     * <p>没有 externalCode 且被判定为说明/空行的数据不进入商品组，避免页脚、空白行、重复表头行
+     * 在清洗页显示为「第 X 行」商品。</p>
+     */
+    private List<PreviewDataGroup> buildPreviewDataGroups(List<PreviewDataRow> rows, Map<String, String> mapping,
+                                                          List<String> headers) {
+        Map<String, List<PreviewDataRow>> grouped = new LinkedHashMap<>();
+        for (PreviewDataRow row : rows) {
+            String externalCode = resolveRowExternalCode(row, mapping);
+            if (!StringUtils.hasText(externalCode)) {
+                // 无外部编码的行：若是说明/空行/重复表头，直接跳过；否则按行号兜底保留
+                if (isNoteOrEmptyRow(row.getRawValues(), mapping) || isRepeatedHeaderRow(row.getRawValues())) {
+                    continue;
+                }
+                externalCode = "__ROW_" + row.getRowIndex() + "__";
+            }
+            grouped.computeIfAbsent(externalCode, k -> new ArrayList<>()).add(row);
+        }
+
+        List<PreviewDataGroup> groups = new ArrayList<>();
+        for (List<PreviewDataRow> members : grouped.values()) {
+            PreviewDataRow representative = members.get(0);
+            PreviewDataGroup group = new PreviewDataGroup();
+            group.setExternalCode(resolveRowExternalCode(representative, mapping));
+            group.setRepresentativeRowIndex(representative.getRowIndex());
+            group.setImages(representative.getImages());
+            group.setOverrideImageAssetIds(representative.getOverrideImageAssetIds());
+
+            Map<String, String> productRawValues = new LinkedHashMap<>();
+            Map<String, String> productMappedFieldByHeader = new LinkedHashMap<>();
+            for (String header : headers) {
+                if (isProductLevelHeader(header, mapping)) {
+                    productRawValues.put(header, representative.getRawValues().getOrDefault(header, ""));
+                    productMappedFieldByHeader.put(header, mapping.get(header));
+                }
+            }
+            group.setProductRawValues(productRawValues);
+            group.setProductMappedFieldByHeader(productMappedFieldByHeader);
+
+            List<PreviewDataVariant> variants = new ArrayList<>();
+            for (PreviewDataRow member : members) {
+                PreviewDataVariant variant = new PreviewDataVariant();
+                variant.setRowIndex(member.getRowIndex());
+                Map<String, String> variantRawValues = new LinkedHashMap<>();
+                Map<String, String> variantMappedFieldByHeader = new LinkedHashMap<>();
+                for (String header : headers) {
+                    if (!isProductLevelHeader(header, mapping)) {
+                        variantRawValues.put(header, member.getRawValues().getOrDefault(header, ""));
+                        variantMappedFieldByHeader.put(header, mapping.get(header));
+                    }
+                }
+                variant.setRawValues(variantRawValues);
+                variant.setMappedFieldByHeader(variantMappedFieldByHeader);
+                variants.add(variant);
+            }
+            group.setVariants(variants);
+            groups.add(group);
+        }
+        return groups;
+    }
+
+    private String resolveRowExternalCode(PreviewDataRow row, Map<String, String> mapping) {
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+            if ("externalCode".equals(entry.getValue())) {
+                return row.getRawValues().getOrDefault(entry.getKey(), "");
+            }
+        }
+        return "";
+    }
+
+    private boolean isProductLevelHeader(String header, Map<String, String> mapping) {
+        String field = mapping.get(header);
+        if (!StringUtils.hasText(field)) {
+            return false;
+        }
+        return ExcelAiStandardFields.PRODUCT_LEVEL_FIELDS.contains(field);
     }
 
     private Map<Integer, List<String>> loadRowOverrideImages(String batchId) {
@@ -2220,7 +2317,11 @@ public class ExcelAiImportService {
         String v = value.trim();
         return v.contains("产品下单说明") || v.contains("注意事项") || v.contains("温馨提示")
             || v.startsWith("由于") || v.contains("特别声明") || v.contains("免责声明")
-            || v.contains("更新日期") || v.contains("修订日期") || v.startsWith("更新：");
+            || v.contains("更新日期") || v.contains("修订日期") || v.startsWith("更新：")
+            || v.contains("公司") || v.contains("地址") || v.contains("电话") || v.contains("Tel")
+            || v.contains("传真") || v.contains("Fax") || v.contains("官方微信") || v.contains("公众号")
+            || v.contains("二维码") || v.contains("网址") || v.contains("邮箱") || v.contains("邮编")
+            || v.contains("联系人") || v.contains("版权") || v.contains("备案") || v.contains("网址");
     }
 
     /**
@@ -3669,6 +3770,7 @@ public class ExcelAiImportService {
         // 长文本描述原文（材质解析/功能配置/配置说明等），零售参考价数字解析（复用多行容忍）
         row.setDescription(getValue(standardValues, "description"));
         row.setRetailPrice(parsePrice(getValue(standardValues, "retailPrice")));
+        row.setQuantity(parseInt(getValue(standardValues, "quantity")));
 
         // 品类兜底链：行类别列 > sheet 名归一 > 用户品类提示 > AI 品类猜测
         String categoryCode = getValue(standardValues, "categoryCode");
@@ -5029,6 +5131,7 @@ public class ExcelAiImportService {
         request.setProductLevel(StringUtils.hasText(row.getProductLevel())
             ? normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level"))
             : defaultProductLevel);
+        request.setQuantity(row.getQuantity());
 
         // 重复/更新导入与组内重复属性：同"码或原文"组合的变体直接复用，
         // 不触发 uk_variant_attrs 唯一索引冲突导致整行失败（与价格列分支同语义）
@@ -5229,6 +5332,7 @@ public class ExcelAiImportService {
                         variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
                             ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
                             : defaultProductLevel);
+                        variantRequest.setQuantity(baseRow.getQuantity());
                         // 新建 RSPU 首次建档走录入旁路（跳过 assertCanAccessRspu）；
                         // 更新已有 RSPU 的行不旁路，保留原数据权限校验
                         var variantResponse = createdNewRspu
