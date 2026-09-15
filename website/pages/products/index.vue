@@ -1,19 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { CategoryNode, PageResult, PublicProduct } from '~/types/api'
+import type { CategoryNode, PageResult, PublicProduct, SceneItem } from '~/types/api'
 
 /**
  * 商品列表页（PLP）：面包屑 + 类目头 + 吸顶筛选药丸条 + 已选 chips
- * + 4 列商品网格 + 加载更多 + 商品对比抽屉。
+ * + 4 列商品网格 + 加载更多 + 心愿单（全局抽屉见 WishlistDrawer）。
  * 筛选条件与 URL query 双向同步；数据走 /api/v1/public/products。
  * 视觉参照 docs/09-design/products.html（docs/09-design/ 已删除，现行以本文件 tokens/实现为准）。
  */
 const route = useRoute()
 const router = useRouter()
-const { get, imageUrl } = usePublicApi()
+const { get } = usePublicApi()
 
 const PAGE_SIZE = 8
-const COMPARE_MAX = 3
 
 // ---------- URL query 双向同步 ----------
 
@@ -25,7 +24,10 @@ function queryString(key: string): string | undefined {
 /** 当前生效筛选（单一事实来源 = URL query）。 */
 const filters = computed(() => ({
   sort: queryString('sort') || 'newest',
+  keyword: queryString('keyword'),
   category: queryString('category'),
+  style: queryString('style'),
+  scene: queryString('scene'),
   seatCount: queryString('seatCount'),
   color: queryString('color'),
   material: queryString('material'),
@@ -94,6 +96,35 @@ const priceRangeOptions = [
   { label: '¥10,000 以上', min: '10000', max: undefined }
 ] as const
 
+/**
+ * 风格筛选项：官网暂无公开风格字典接口，硬编码对齐 database/schema/zz_seed.sql
+ * category_dict（dict_type='style'）的 11 个独立风格。
+ */
+const styleOptions: FilterOption[] = [
+  { label: '中古风', value: 'MC' },
+  { label: '包豪斯', value: 'BA' },
+  { label: '意式', value: 'IT' },
+  { label: '法式', value: 'FR' },
+  { label: '侘寂', value: 'WJ' },
+  { label: '新中式', value: 'NC' },
+  { label: '奶油风', value: 'CR' },
+  { label: '工业风', value: 'IN' },
+  { label: '孟菲斯', value: 'MP' },
+  { label: '意式极简轻奢', value: 'IL' },
+  { label: '新中式宋式', value: 'ZS' }
+]
+
+// ---------- 场景数据（场景药丸） ----------
+
+const { data: scenes } = await useAsyncData(
+  'plp-scenes',
+  () => get<SceneItem[]>('/api/v1/public/scenes')
+)
+
+const sceneOptions = computed<FilterOption[]>(() =>
+  (scenes.value ?? []).map(s => ({ label: s.sceneName, value: s.sceneCode }))
+)
+
 // ---------- 类目数据（面包屑/类目头/分类药丸） ----------
 
 const { data: categories } = await useAsyncData(
@@ -138,7 +169,10 @@ function fetchProducts(targetPage: number) {
     page: targetPage,
     size: PAGE_SIZE,
     sort: f.sort,
+    keyword: f.keyword ?? '',
     category: f.category ?? '',
+    style: f.style ?? '',
+    scene: f.scene ?? '',
     seatCount: f.seatCount ?? '',
     color: f.color ?? '',
     material: f.material ?? '',
@@ -183,7 +217,10 @@ const activeChips = computed(() => {
   if (f.sort !== 'newest') {
     chips.push({ key: 'sort', label: sortOptions.find(o => o.value === f.sort)?.label ?? f.sort })
   }
+  if (f.keyword) chips.push({ key: 'keyword', label: `搜索：${f.keyword}` })
   if (f.category) chips.push({ key: 'category', label: currentCategory.value?.dictName ?? f.category })
+  if (f.style) chips.push({ key: 'style', label: styleOptions.find(o => o.value === f.style)?.label ?? f.style })
+  if (f.scene) chips.push({ key: 'scene', label: sceneOptions.value.find(o => o.value === f.scene)?.label ?? f.scene })
   if (f.seatCount) chips.push({ key: 'seatCount', label: seatOptions.find(o => o.value === f.seatCount)?.label ?? f.seatCount })
   if (f.color) chips.push({ key: 'color', label: colorOptions.find(o => o.value === f.color)?.label ?? f.color })
   if (f.material) chips.push({ key: 'material', label: f.material })
@@ -244,29 +281,6 @@ const currentPriceRangeLabel = computed(() => {
   return priceRangeOptions.find(r => r.min === f.priceMin && r.max === f.priceMax)?.label
 })
 
-// ---------- 商品对比 ----------
-
-const compareOn = ref(false)
-const compareList = ref<PublicProduct[]>([])
-
-function toggleCompare(product: PublicProduct) {
-  const idx = compareList.value.findIndex(p => p.rspuId === product.rspuId)
-  if (idx >= 0) {
-    compareList.value.splice(idx, 1)
-    return
-  }
-  if (compareList.value.length >= COMPARE_MAX) return
-  compareList.value.push(product)
-}
-
-function isCompared(product: PublicProduct) {
-  return compareList.value.some(p => p.rspuId === product.rspuId)
-}
-
-watch(compareOn, (on) => {
-  if (!on) compareList.value = []
-})
-
 useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`) })
 </script>
 
@@ -308,6 +322,30 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
               v-for="opt in categoryOptions" :key="opt.value"
               class="panel-opt" :class="{ on: filters.category === opt.value }"
               @click="pickOption('category', filters.category === opt.value ? undefined : opt.value)"
+            >{{ opt.label }}</span>
+          </span>
+        </span>
+        <span class="pill-wrap">
+          <span class="pill" :class="{ on: !!filters.style }" @click="togglePanel('style')">
+            风格<span class="caret">▾</span>
+          </span>
+          <span v-if="openPanel === 'style'" class="panel">
+            <span
+              v-for="opt in styleOptions" :key="opt.value"
+              class="panel-opt" :class="{ on: filters.style === opt.value }"
+              @click="pickOption('style', filters.style === opt.value ? undefined : opt.value)"
+            >{{ opt.label }}</span>
+          </span>
+        </span>
+        <span v-if="sceneOptions.length" class="pill-wrap">
+          <span class="pill" :class="{ on: !!filters.scene }" @click="togglePanel('scene')">
+            场景<span class="caret">▾</span>
+          </span>
+          <span v-if="openPanel === 'scene'" class="panel">
+            <span
+              v-for="opt in sceneOptions" :key="opt.value"
+              class="panel-opt" :class="{ on: filters.scene === opt.value }"
+              @click="pickOption('scene', filters.scene === opt.value ? undefined : opt.value)"
             >{{ opt.label }}</span>
           </span>
         </span>
@@ -359,11 +397,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
             >{{ opt.label }}</span>
           </span>
         </span>
-        <div class="filter-right">
-          <span class="switch" :class="{ on: compareOn }" @click="compareOn = !compareOn">
-            <span class="track" />商品对比
-          </span>
-        </div>
       </div>
 
       <!-- 已选筛选 chips -->
@@ -383,9 +416,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
           :class="{ 'p-card-enter': enteringDelay.has(product.rspuId) }"
           :style="enteringDelay.has(product.rspuId) ? { '--d': `${enteringDelay.get(product.rspuId)}ms` } : undefined"
           :product="product"
-          :compare-on="compareOn"
-          :compared="isCompared(product)"
-          @toggle-compare="toggleCompare"
         />
         <!-- 加载更多骨架卡：点击即渲染，数据回来后整体替换 -->
         <div v-for="i in skeletonCount" :key="`sk-${i}`" class="sk-card" aria-hidden="true">
@@ -407,32 +437,7 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
           {{ loadingMore ? '加载中…' : '加载更多商品' }}
         </button>
         <div class="more-info">
-          已显示 {{ products.length }} / {{ total }} 件商品 · 商品对比（{{ compareList.length }}/{{ COMPARE_MAX }}）
-        </div>
-      </div>
-    </div>
-
-    <!-- 对比抽屉 -->
-    <div v-if="compareList.length" class="compare-drawer">
-      <div class="wrap compare-inner">
-        <div
-          v-for="product in compareList" :key="product.rspuId"
-          class="compare-card"
-        >
-          <img
-            v-if="imageUrl(product.primaryImageUrl)"
-            :src="imageUrl(product.primaryImageUrl)"
-            :alt="product.productName ?? ''"
-          >
-          <div class="cc-name">{{ product.productName || product.categoryPath }}</div>
-          <div class="cc-row">风格：{{ product.positioningLabel || '-' }}</div>
-          <div class="cc-row">主色：{{ product.colorPrimaryName || '-' }}</div>
-          <div class="cc-row">材质：{{ product.materialTags?.join('、') || '-' }}</div>
-          <PriceText v-if="product.retailPrice != null" :value="product.retailPrice" />
-          <button type="button" class="cc-remove" @click="toggleCompare(product)">移出对比</button>
-        </div>
-        <div v-for="i in COMPARE_MAX - compareList.length" :key="`empty-${i}`" class="compare-card is-empty">
-          还可添加 {{ COMPARE_MAX - compareList.length }} 件
+          已显示 {{ products.length }} / {{ total }} 件商品
         </div>
       </div>
     </div>
@@ -560,54 +565,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   background: var(--suppl);
 }
 
-.filter-right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  font-size: 12px;
-  color: var(--ink);
-  letter-spacing: 2px;
-}
-
-.switch {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.switch .track {
-  width: 34px;
-  height: 18px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  position: relative;
-  transition: .2s;
-}
-
-.switch .track::after {
-  content: "";
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  background: var(--ink2);
-  top: 2px;
-  left: 2px;
-  transition: .2s;
-}
-
-.switch.on .track {
-  background: var(--card);
-  border-color: var(--ink);
-}
-
-.switch.on .track::after {
-  left: 16px;
-  background: var(--ink);
-}
-
 /* ===== 已选筛选（直角） ===== */
 .active-filters {
   display: flex;
@@ -725,75 +682,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
   letter-spacing: 2px;
 }
 
-/* ===== 对比抽屉（细线顶边，零阴影） ===== */
-.compare-drawer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 60;
-  background: var(--card);
-  border-top: 1px solid var(--line);
-  padding: 16px 0;
-}
-
-.compare-inner {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
-}
-
-.compare-card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 14px;
-  font-size: 12px;
-  color: var(--ink2);
-}
-
-.compare-card img {
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
-  background: #fff;
-}
-
-.compare-card.is-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-style: dashed;
-  min-height: 120px;
-}
-
-.cc-name {
-  font-family: var(--font-serif);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
-  margin: 8px 0 6px;
-  letter-spacing: 1px;
-}
-
-.cc-row {
-  margin-top: 2px;
-}
-
-.cc-remove {
-  margin-top: 8px;
-  border: none;
-  background: none;
-  color: var(--accent);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-  letter-spacing: 1px;
-}
-
-.cc-remove:hover {
-  border-bottom: 1px solid var(--accent);
-}
-
 @media (max-width: 1199px) {
   .grid {
     grid-template-columns: repeat(3, 1fr);
@@ -803,10 +691,6 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
 @media (max-width: 767px) {
   .grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  .compare-inner {
-    grid-template-columns: 1fr;
   }
 }
 </style>

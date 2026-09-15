@@ -179,6 +179,37 @@ function restart() {
   budgetLimit.value = null
 }
 
+// ---------- 方案结果：心愿单 + 留资摘要 ----------
+
+const { has: wishHas, toggle: wishToggle } = useWishlist()
+
+function toggleSchemeWish(item: SchemeItem) {
+  wishToggle({
+    rspuId: item.rspuId,
+    productName: item.productName || item.categoryPath,
+    primaryImageUrl: item.primaryImageUrl,
+    retailPrice: item.retailPrice,
+    positioningLabel: item.positioningLabel
+  })
+}
+
+/** 留资 intent：AI 搭配方案摘要（空间 + 风格 + 预算 + 件数）。 */
+const schemeLeadIntent = computed(() => {
+  const parts: string[] = [livingRoom.value?.roomName || '客厅']
+  const styleLabel = styleOptions.find(o => o.value === stylePreference.value)?.label
+  if (stylePreference.value && styleLabel) parts.push(`${styleLabel}`)
+  if (budgetLimit.value) {
+    parts.push(
+      budgetLimit.value >= 10000
+        ? `预算${Number((budgetLimit.value / 10000).toFixed(1))}万`
+        : `预算${budgetLimit.value}元`
+    )
+  }
+  const n = scheme.value?.items.length ?? 0
+  if (n) parts.push(`含${n}件商品`)
+  return `AI 搭配方案：${parts.join('，')}`
+})
+
 onBeforeUnmount(() => {
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
 })
@@ -274,27 +305,40 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
         <p v-if="scheme.reasoning" class="reasoning">{{ scheme.reasoning }}</p>
         <div class="scheme-grid">
           <div v-for="item in scheme.items" :key="item.rspuId" class="scheme-card">
-            <img
-              v-if="imageUrl(item.primaryImageUrl)"
-              :src="imageUrl(item.primaryImageUrl)"
-              :alt="item.productName ?? ''"
-              loading="lazy"
+            <button
+              type="button"
+              class="sc-wish"
+              :class="{ on: wishHas(item.rspuId) }"
+              :aria-pressed="wishHas(item.rspuId)"
+              :title="wishHas(item.rspuId) ? '移出心愿单' : '加入心愿单'"
+              @click="toggleSchemeWish(item)"
             >
-            <div class="sc-name">{{ item.productName || item.categoryPath }}</div>
-            <div class="sc-meta">{{ [item.positioningLabel].filter(Boolean).join(' · ') }}</div>
-            <PriceText v-if="item.retailPrice != null" :value="item.retailPrice" />
+              {{ wishHas(item.rspuId) ? '♥' : '♡' }}
+            </button>
+            <NuxtLink :to="`/products/${item.rspuId}`" class="scheme-link">
+              <img
+                v-if="imageUrl(item.primaryImageUrl)"
+                :src="imageUrl(item.primaryImageUrl)"
+                :alt="item.productName ?? ''"
+                loading="lazy"
+              >
+              <div class="sc-name">{{ item.productName || item.categoryPath }}</div>
+              <div class="sc-meta">{{ [item.positioningLabel].filter(Boolean).join(' · ') }}</div>
+              <PriceText v-if="item.retailPrice != null" :value="item.retailPrice" />
+            </NuxtLink>
           </div>
         </div>
         <div v-if="scheme.totalRetailPrice != null" class="scheme-total">
           参考总价：<PriceText :value="scheme.totalRetailPrice" />
         </div>
 
-        <!-- 方案页内嵌留资（source=ai_match） -->
+        <!-- 方案页内嵌留资（source=ai_match，intent 带方案摘要） -->
         <CtaLead
           title="想要这套方案的完整报价？"
           desc="留下联系方式，设计师将为你复核方案并给出落地报价。"
           btn-text="免费获取方案报价"
           source="ai_match"
+          :intent="schemeLeadIntent"
         />
       </section>
     </div>
@@ -539,9 +583,44 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 }
 
 .scheme-card {
+  position: relative;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 14px;
+}
+
+.scheme-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.scheme-card:hover {
+  border-color: var(--ink);
+}
+
+/* 心愿单按钮：直角方块贴卡片右上角 */
+.sc-wish {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: rgba(255, 255, 255, .94);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--ink);
+  z-index: 2;
+  cursor: pointer;
+}
+
+.sc-wish:hover,
+.sc-wish.on {
+  background: var(--ink);
+  color: #fff;
 }
 
 .scheme-card img {

@@ -14,7 +14,7 @@ const { imageUrl } = usePublicApi()
 
 <template>
   <div class="rooms">
-    <div v-for="room in rooms" :key="room.sceneCode" class="room">
+    <NuxtLink v-for="room in rooms" :key="room.sceneCode" class="room" :to="`/products?scene=${room.sceneCode}`">
       <div class="rim">
         <img
           v-if="imageUrl(room.imageUrl)"
@@ -26,7 +26,7 @@ const { imageUrl } = usePublicApi()
       <div class="cap">
         <b>{{ room.sceneName }}</b>
       </div>
-    </div>
+    </NuxtLink>
   </div>
 </template>
 
@@ -39,6 +39,8 @@ const { imageUrl } = usePublicApi()
 
 .room {
   cursor: pointer;
+  color: inherit;
+  text-decoration: none;
 }
 
 .room .rim {

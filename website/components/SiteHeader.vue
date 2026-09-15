@@ -45,6 +45,31 @@ function toggleMenu(menu: 'categories' | 'rooms') {
 
 const route = useRoute()
 
+// ---------- 搜索框（回车/按钮 → /products?keyword=xxx） ----------
+
+const searchKeyword = ref('')
+
+/** 已在列表页时合并现有 query（route.query 变化触发列表自动刷新），否则只带 keyword 跳转。 */
+function submitSearch() {
+  const kw = searchKeyword.value.trim()
+  const query: Record<string, string> = {}
+  if (route.path === '/products') {
+    for (const [k, v] of Object.entries(route.query)) {
+      if (typeof v === 'string') query[k] = v
+    }
+  }
+  if (kw) {
+    query.keyword = kw
+  } else {
+    delete query.keyword
+  }
+  navigateTo({ path: '/products', query })
+}
+
+// ---------- 心愿单（全站抽屉，挂载于 app.vue） ----------
+
+const { count: wishlistCount, openDrawer: openWishlist } = useWishlist()
+
 /** 主导航当前页高亮：/products?sort=newest → 新品；/products → 所有商品；/ai-match → AI 户型搭配。 */
 const activeNav = computed(() => {
   if (route.path === '/ai-match') return 'ai-match'
@@ -73,11 +98,11 @@ const activeNav = computed(() => {
           <span class="brand-sub">家居全案</span>
         </a>
         <div class="search">
-          <input placeholder="搜索商品、系列或空间灵感，试试「三人沙发」">
-          <button type="button">搜索</button>
+          <input v-model="searchKeyword" placeholder="搜索商品、系列或空间灵感，试试「三人沙发」" @keyup.enter="submitSearch">
+          <button type="button" @click="submitSearch">搜索</button>
         </div>
         <div class="hd-links">
-          <a>门店</a><i /><a>登录 / 注册</a><i /><a>心愿单</a><i /><a>购物车</a>
+          <a>门店</a><i /><a>登录 / 注册</a><i /><a @click="openWishlist">心愿单<span v-if="wishlistCount">（{{ wishlistCount }}）</span></a><i /><a>购物车</a>
         </div>
       </div>
       <nav class="main">
@@ -96,7 +121,7 @@ const activeNav = computed(() => {
           <div class="nav-item" @mouseenter="openMenu = 'rooms'" @mouseleave="openMenu = ''">
             <a href="#" class="mega" @click.prevent="toggleMenu('rooms')">房间</a>
             <div v-if="openMenu === 'rooms'" class="mega-panel">
-              <a v-for="scene in menuScenes" :key="scene.sceneCode" class="mega-link" href="#">
+              <a v-for="scene in menuScenes" :key="scene.sceneCode" class="mega-link" :href="`/products?scene=${scene.sceneCode}`">
                 {{ scene.sceneName }}
               </a>
             </div>
