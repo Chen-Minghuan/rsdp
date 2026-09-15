@@ -11,6 +11,7 @@ import {
   NFormItemGi,
   NGrid,
   NInput,
+  NInputNumber,
   NModal,
   NPagination,
   NRadioGroup,
@@ -42,7 +43,7 @@ import { PERMISSIONS, ROLES } from '@/utils/constants'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import { useRequestAbort } from '@/composables/useRequestAbort'
-import type { ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
+import type { ProductSort, ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
 import type { DictItem } from '@/types/dict'
 import dayjs from 'dayjs'
 
@@ -74,6 +75,16 @@ const styleCode = ref<string | null>(null)
 const sceneCode = ref<string | null>(null)
 const materialTag = ref<string | null>(null)
 const createdRange = ref<[number, number] | null>(null)
+// 价格区间（闭区间；平台员工按最低出厂价、其他角色按零售参考价，后端自动区分）
+const priceMin = ref<number | null>(null)
+const priceMax = ref<number | null>(null)
+// 排序（默认最新）
+const sort = ref<ProductSort>('newest')
+const sortOptions: { label: string; value: ProductSort }[] = [
+  { label: '最新', value: 'newest' },
+  { label: '价格升序', value: 'price_asc' },
+  { label: '价格降序', value: 'price_desc' }
+]
 // 图片资产筛选（服务 AI 搭配数据补齐：'true'=仅有 / 'false'=仅无 / null=不限）
 const hasPrimaryImage = ref<string | null>(null)
 const imageAssetOptions = [
@@ -137,6 +148,8 @@ const activeAdvancedCount = computed(
       materialTag.value,
       createdRange.value,
       hasPrimaryImage.value,
+      priceMin.value,
+      priceMax.value,
       dimA.value,
       dimB.value,
       dimC.value,
@@ -303,6 +316,9 @@ function buildParams(includeTab: boolean): import('@/types/product').ProductList
     materialTag: materialTag.value || undefined,
     createdFrom: createdRange.value ? dayjs(createdRange.value[0]).format('YYYY-MM-DD') : undefined,
     createdTo: createdRange.value ? dayjs(createdRange.value[1]).format('YYYY-MM-DD') : undefined,
+    priceMin: priceMin.value ?? undefined,
+    priceMax: priceMax.value ?? undefined,
+    sort: sort.value === 'newest' ? undefined : sort.value,
     dimA: dimA.value || undefined,
     dimB: dimB.value || undefined,
     dimC: dimC.value || undefined,
@@ -371,6 +387,9 @@ function handleReset() {
   materialTag.value = null
   createdRange.value = null
   hasPrimaryImage.value = null
+  priceMin.value = null
+  priceMax.value = null
+  sort.value = 'newest'
   sixDimFilterKeys.forEach(k => {
     sixDimRefs[k].value = null
   })
@@ -967,7 +986,7 @@ onMounted(async () => {
 })
 
 // 下拉类筛选变化即刷新（文本输入与日期范围由「搜索」按钮触发）
-watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialTag, hasPrimaryImage, dimA, dimB, dimC, dimD, dimF, factoryCode], () => {
+watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialTag, hasPrimaryImage, dimA, dimB, dimC, dimD, dimF, factoryCode, sort], () => {
   page.value = 1
   refreshAll()
 })
@@ -1041,6 +1060,18 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
               filterable
               @update:value="(v: string | null) => (sixDimRefs[dimKey].value = v)"
             />
+          </n-form-item-gi>
+          <!-- 价格区间筛选（平台员工按最低出厂价、其他角色按零售参考价，后端自动区分），由「搜索」按钮触发 -->
+          <n-form-item-gi label="价格区间">
+            <n-space align="center" :wrap="false">
+              <n-input-number v-model:value="priceMin" :min="0" placeholder="最低价" clearable style="width: 100%;" @keydown.enter="handleSearch" />
+              <span>-</span>
+              <n-input-number v-model:value="priceMax" :min="0" placeholder="最高价" clearable style="width: 100%;" @keydown.enter="handleSearch" />
+            </n-space>
+          </n-form-item-gi>
+          <!-- 排序（默认最新，变化即刷新） -->
+          <n-form-item-gi label="排序">
+            <n-select v-model:value="sort" :options="sortOptions" />
           </n-form-item-gi>
           <n-form-item-gi label="创建时间" :span="2">
             <n-date-picker v-model:value="createdRange" type="daterange" clearable style="width: 100%;" />
