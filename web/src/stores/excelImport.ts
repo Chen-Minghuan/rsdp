@@ -6,7 +6,7 @@ import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, get
 import { useTaskPolling } from '@/composables/useTaskPolling'
 import { useUserStore } from './user'
 import type { TaskItem } from '@/types/task'
-import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, ExcelCategoryMode, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataRow, PreviewEdit } from '@/types/product'
+import type { ExcelAiMappingResponse, ExcelAiImportResult, ExcelAiImportStatus, ExcelCategoryMode, PriceColumnImportMode, PriceColumnRole, SheetInfo, PreviewDataGroup, PreviewDataRow, PreviewEdit } from '@/types/product'
 
 /**
  * Excel AI 导入向导状态（跨路由保持）。
@@ -61,8 +61,14 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   /** 默认材质码（material 字典码）；价格列与行内材质均无法识别时使用 */
   const defaultMaterialCode = ref<string | null>(null)
 
-  /** 导入前全量预览数据（原始表头视角） */
+  /** 导入前全量预览数据（原始表头视角，兼容旧接口） */
   const previewData = ref<PreviewDataRow[]>([])
+  /** 导入前全量预览数据按商品（externalCode）聚合后的商品组列表 */
+  const previewGroups = ref<PreviewDataGroup[]>([])
+  /** 商品级字段原始表头 */
+  const productHeaders = ref<string[]>([])
+  /** 变体级字段原始表头 */
+  const variantHeaders = ref<string[]>([])
   /** 用户对预览数据的编辑项：以 rowIndex + header 为键 */
   const previewEdits = ref<Record<string, PreviewEdit>>({})
   /** 用户在数据清洗页标记跳过的 Excel 物理行号（1-based） */
@@ -268,6 +274,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   async function loadPreviewData(batchId: string) {
     const response = await getExcelAiPreviewData(batchId)
     previewData.value = response.rows
+    previewGroups.value = response.groups ?? []
+    productHeaders.value = response.productHeaders ?? []
+    variantHeaders.value = response.variantHeaders ?? []
     previewEdits.value = {}
     skippedRows.value = new Set()
     const overrides: Record<number, string[]> = {}
@@ -912,6 +921,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultProductLevel,
     defaultMaterialCode,
     previewData,
+    previewGroups,
+    productHeaders,
+    variantHeaders,
     previewEdits,
     skippedRows,
     rowImageOverrides,

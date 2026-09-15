@@ -28,6 +28,7 @@ public class RspuVariantResponse {
     private List<String> materialMix;
     private String referencePriceBand;
     private String productLevel;
+    private Integer quantity;
     private String status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
