@@ -6,23 +6,30 @@ import type { PublicProduct } from '~/types/api'
  * 商品卡（v2 高级沉稳版 · 去容器化）：
  * 图（suppl 底）+ 下方文字直接落页面，无白卡、无阴影、hover 仅图片 scale(1.03)。
  * tag 直角小方块贴左上角（热卖=ink / 新品=accent / 即将下架=terra）；
+ * 右上角 ♡/♥ 心愿单按钮（localStorage 持久化，见 useWishlist）；
  * 星级评分改「N 条评价」小字（有 ratingCount 数据才展示）。
  */
 const props = defineProps<{
   product: PublicProduct
   /** 评价条数（无数据不展示评价行） */
   ratingCount?: number
-  /** 对比开关开启时图区右上角显示 ＋ 按钮 */
-  compareOn?: boolean
-  /** 当前已选中对比 */
-  compared?: boolean
-}>()
-
-const emit = defineEmits<{
-  (e: 'toggle-compare', product: PublicProduct): void
 }>()
 
 const { imageUrl } = usePublicApi()
+const { has, toggle } = useWishlist()
+
+const wished = computed(() => has(props.product.rspuId))
+
+function toggleWish() {
+  toggle({
+    rspuId: props.product.rspuId,
+    productName: name.value,
+    primaryImageUrl: props.product.primaryImageUrl,
+    retailPrice: props.product.retailPrice,
+    positioningLabel: props.product.positioningLabel,
+    colorPrimaryName: props.product.colorPrimaryName
+  })
+}
 
 const NEW_DAYS = 30
 
@@ -69,14 +76,14 @@ const variantsText = computed(() => {
         <span v-for="tag in tags" :key="tag.text" class="tag" :class="tag.cls">{{ tag.text }}</span>
       </div>
       <button
-        v-if="compareOn"
         type="button"
-        class="compare"
-        :class="{ on: compared }"
-        :aria-pressed="compared"
-        @click.stop.prevent="emit('toggle-compare', product)"
+        class="wish"
+        :class="{ on: wished }"
+        :aria-pressed="wished"
+        :title="wished ? '移出心愿单' : '加入心愿单'"
+        @click.stop.prevent="toggleWish"
       >
-        {{ compared ? '×' : '＋' }}
+        {{ wished ? '♥' : '♡' }}
       </button>
       <img
         v-if="displayImage"
@@ -163,8 +170,8 @@ const variantsText = computed(() => {
 .tag.new { background: var(--accent); }
 .tag.end { background: var(--terra); }
 
-/* 对比按钮：直角方块贴右上角 */
-.compare {
+/* 心愿单按钮：直角方块贴右上角 */
+.wish {
   position: absolute;
   top: 0;
   right: 0;
@@ -175,14 +182,14 @@ const variantsText = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 15px;
   color: var(--ink);
   z-index: 2;
   cursor: pointer;
 }
 
-.compare:hover,
-.compare.on {
+.wish:hover,
+.wish.on {
   background: var(--ink);
   color: #fff;
 }

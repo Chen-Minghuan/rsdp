@@ -114,6 +114,24 @@ const related = computed(() =>
   (relatedPage.value?.rows ?? []).filter(p => p.rspuId !== rspuId.value).slice(0, 4)
 )
 
+// ---------- 心愿单 ----------
+
+const { has: wishHas, toggle: wishToggle } = useWishlist()
+const wished = computed(() => wishHas(rspuId.value))
+
+function toggleWish() {
+  const p = product.value
+  if (!p) return
+  wishToggle({
+    rspuId: p.rspuId,
+    productName: name.value,
+    primaryImageUrl: activeImage.value?.url,
+    retailPrice: p.retailPrice,
+    positioningLabel: p.positioningLabel,
+    colorPrimaryName: p.colorPrimaryName
+  })
+}
+
 // ---------- 留资 CTA（带入当前商品与选中组合） ----------
 
 const leadIntent = computed(() => {
@@ -221,7 +239,12 @@ useHead({
               <li>免费搭配咨询，设计师复核方案</li>
             </ul>
 
-            <a class="btn-a p-cta" href="#pdp-cta">免费咨询这款商品</a>
+            <div class="p-actions">
+              <a class="btn-a p-cta" href="#pdp-cta">免费咨询这款商品</a>
+              <button type="button" class="btn-b p-wish" :class="{ on: wished }" @click="toggleWish">
+                {{ wished ? '♥ 已在心愿单' : '♡ 加入心愿单' }}
+              </button>
+            </div>
           </div>
         </section>
 
@@ -485,9 +508,21 @@ useHead({
   font-weight: 700;
 }
 
+.p-actions {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .p-cta {
   display: inline-block;
   text-decoration: none;
+}
+
+.p-wish.on {
+  color: var(--accent-deep);
+  border-color: var(--accent-deep);
 }
 
 /* ===== 描述与规格 ===== */

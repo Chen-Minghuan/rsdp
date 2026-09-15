@@ -6,4 +6,5 @@
 
 <template>
   <NuxtPage />
+  <WishlistDrawer />
 </template>
