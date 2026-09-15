@@ -2,14 +2,12 @@
 import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { NSelect, NTag, NInput, NUpload, NButton, NSpace, NRadioGroup, NRadioButton, useMessage, type DataTableColumns, type UploadFileInfo } from 'naive-ui'
-import 'vxe-table/lib/style.css'
+import { NSelect, NTag, NInput, NUpload, NButton, NSpace, useMessage, type DataTableColumns } from 'naive-ui'
 import { listDicts } from '@/api/dict'
 import { listFactories } from '@/api/factory'
-import { getExcelAiImportRows, getExcelAiPreviewImageUrl } from '@/api/product'
+import { getExcelAiImportRows } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
 import ExcelCleanReviewView from '@/components/excel-import/ExcelCleanReviewView.vue'
-import ExcelCleanTableView from '@/components/excel-import/ExcelCleanTableView.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
@@ -35,13 +33,15 @@ const {
   candidateCategoryCodes,
   rowCategorySelections,
   rowCategorySourceTags,
-  classifyingCategories,
   undeterminedCategoryRowIndexes,
   updateIfExists,
   importResult,
   taskList,
   priceColumnRoles,
   previewData,
+  previewGroups,
+  productHeaders,
+  variantHeaders,
   previewEdits,
   skippedRows,
   rowImageOverrides,
@@ -57,10 +57,7 @@ const {
   pendingTaskCount,
   batchRecovering
 } = storeToRefs(store)
-const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue, uploadRowImage, removeRowImage, cloneRowImages, setRowCategory, resetRowCategoryState } = store
-
-/** 数据清洗视图模式：review 商品校验视图 / table 完整表格视图 */
-const cleanViewMode = ref<'review' | 'table'>('review')
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, uploadRowImage, removeRowImage, cloneRowImages, setRowCategory, resetRowCategoryState } = store
 
 // 兜底可映射字段清单：优先使用 preview 响应下发的 standardFields（后端 ExcelAiStandardFields）。
 // 同步义务：字段真实出处是后端 ExcelAiImportService 的 AI 映射提示词标准字段列表，
@@ -70,6 +67,7 @@ const STANDARD_FIELDS = [
   { label: '品类码 (categoryCode)', value: 'categoryCode' },
   { label: '外部编码 (externalCode)', value: 'externalCode' },
   { label: '产品名称 (productName)', value: 'productName' },
+  { label: '描述/配置说明 (description)', value: 'description' },
   { label: '风格 (positioningLabel)', value: 'positioningLabel' },
   { label: '主色 (colorPrimaryName)', value: 'colorPrimaryName' },
   { label: '材质标签 (materialTags)', value: 'materialTags' },
@@ -86,6 +84,7 @@ const STANDARD_FIELDS = [
   { label: '颜色码 (colorCode)（仅字典码，颜色名请选主色）', value: 'colorCode' },
   { label: '材质码 (materialCode)（仅字典码 WO/PE/FA，材质名请选材质标签）', value: 'materialCode' },
   { label: '尺寸文字 (dimensions)（W*D*H 数值尺寸选这个）', value: 'dimensions' },
+  { label: '数量/件数 (quantity)', value: 'quantity' },
   { label: '交期天数 (leadTimeDays)', value: 'leadTimeDays' }
 ]
 
@@ -376,10 +375,6 @@ const unmappedColumnsColumns = computed<DataTableColumns<UnmappedColumnInfo>>(()
 // ===== 数据清洗（步骤 3） =====
 /** 只看「商品品类未确定」的行（Step 3→4 被拦截时自动开启） */
 const showOnlyUndetermined = ref(false)
-/** 批量设置商品品类选中的品类码 */
-const batchCategoryCode = ref<string | null>(null)
-/** 清洗表格勾选行（批量设置品类用） */
-const selectedCleanRowIndexes = ref<number[]>([])
 
 /** 图片预览弹窗状态 */
 const imagePreviewVisible = ref(false)
@@ -392,48 +387,6 @@ function previewImage(src: string) {
 
 function handleUpdatePreviewEdit(payload: { rowIndex: number; header: string; value: string | null }) {
   updatePreviewEdit(payload.rowIndex, payload.header, payload.value)
-}
-
-/**
- * 单元格编辑关闭后，把变更写回 store 的 previewEdits。
- * 若值与原始值相同，则移除编辑项。
- */
-function onCleanEditClosed({ row, column }: { row: Record<string, unknown>; column: { field: string } }) {
-  const rowIndex = Number(row.__rowIndex__)
-  const header = column.field
-  const newValue = String(row[header] ?? '')
-  const originalRow = previewData.value.find(r => r.rowIndex === rowIndex)
-  const originalValue = originalRow ? (originalRow.rawValues[header] ?? '') : ''
-  if (newValue === originalValue) {
-    // 与原始值一致时移除编辑缓存
-    const key = `${rowIndex}:${header}`
-    if (previewEdits.value[key]) {
-      const rest = { ...previewEdits.value }
-      delete rest[key]
-      previewEdits.value = rest
-    }
-  } else {
-    updatePreviewEdit(rowIndex, header, newValue)
-  }
-}
-
-/** 应用按列填充默认值 */
-function applyCleanFill(header: string, value: string) {
-  fillDefaultValue(header, value)
-}
-
-/** 批量设置勾选行的商品品类（§13 第一版只做普通批量设置，不做自动分组/聚类） */
-function applyBatchCategory() {
-  const code = batchCategoryCode.value
-  if (!code || selectedCleanRowIndexes.value.length === 0) return
-  let applied = 0
-  for (const rowIndex of selectedCleanRowIndexes.value) {
-    if (skippedRows.value.has(rowIndex)) continue
-    setRowCategory(rowIndex, code)
-    applied++
-  }
-  message.success(`已批量设置 ${applied} 行商品品类`)
-  batchCategoryCode.value = null
 }
 
 /** 数据清洗 → 确认导入：被拦截（仍有未确定品类行）时自动切到「只看未确定商品」 */
@@ -701,26 +654,16 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
     <n-card v-if="currentStep === 3" title="数据清洗">
       <n-spin :show="uploading">
         <n-space vertical :size="16">
-          <n-radio-group v-model:value="cleanViewMode">
-            <n-radio-button value="review">
-              商品校验视图
-            </n-radio-button>
-            <n-radio-button value="table">
-              完整表格视图
-            </n-radio-button>
-          </n-radio-group>
-
-          <n-alert v-if="cleanViewMode === 'review'" type="info" :show-icon="false">
-            左侧选择商品，右侧逐条检查字段并编辑。编辑结果会实时同步到完整表格视图。
-          </n-alert>
-          <n-alert v-else type="info" :show-icon="false">
-            以下按 Excel 原始表头展示全部数据行，可直接双击单元格编辑。编辑仅影响本次导入，不会修改原始文件。
+          <n-alert type="info" :show-icon="false">
+            左侧选择商品，右侧检查商品字段与变体信息。编辑结果会应用到本次导入。
           </n-alert>
 
           <ExcelCleanReviewView
-            v-if="cleanViewMode === 'review'"
             v-model:show-only-undetermined="showOnlyUndetermined"
             :preview-data="previewData"
+            :preview-groups="previewGroups"
+            :product-headers="productHeaders"
+            :variant-headers="variantHeaders"
             :preview-edits="previewEdits"
             :row-image-overrides="rowImageOverrides"
             :row-category-selections="rowCategorySelections"
@@ -733,36 +676,6 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             :standard-field-options="standardFieldOptions"
             :copied-image-row-index="copiedImageRowIndex"
             @update:preview-edit="handleUpdatePreviewEdit"
-            @toggle-skip-row="toggleSkipRow"
-            @set-row-category="setRowCategory"
-            @preview-image="previewImage"
-            @upload-row-image="handleUploadRowImage"
-            @delete-row-image="handleDeleteRowImage"
-            @copy-row-images="handleCopyRowImages"
-            @paste-row-images="handlePasteRowImages"
-          />
-
-          <ExcelCleanTableView
-            v-else
-            v-model:show-only-undetermined="showOnlyUndetermined"
-            v-model:batch-category-code="batchCategoryCode"
-            v-model:selected-clean-row-indexes="selectedCleanRowIndexes"
-            :preview-data="previewData"
-            :preview-edits="previewEdits"
-            :skipped-rows="skippedRows"
-            :row-image-overrides="rowImageOverrides"
-            :row-category-selections="rowCategorySelections"
-            :row-category-source-tags="rowCategorySourceTags"
-            :category-mode="categoryMode"
-            :category-select-options="categorySelectOptions"
-            :undetermined-category-row-indexes="undeterminedCategoryRowIndexes"
-            :mapping-response="mappingResponse"
-            :standard-field-options="standardFieldOptions"
-            :batch-category-code="batchCategoryCode"
-            :copied-image-row-index="copiedImageRowIndex"
-            @on-clean-edit-closed="onCleanEditClosed"
-            @apply-clean-fill="applyCleanFill"
-            @apply-batch-category="applyBatchCategory"
             @toggle-skip-row="toggleSkipRow"
             @set-row-category="setRowCategory"
             @preview-image="previewImage"

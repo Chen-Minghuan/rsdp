@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { NButton, NCheckbox, NEmpty, NList, NListItem, NSpace, NTag } from 'naive-ui'
+import { NButton, NCheckbox, NEmpty, NInput, NList, NListItem, NSpace, NTag } from 'naive-ui'
 import ExcelRowInspector from './ExcelRowInspector.vue'
 import { getExcelAiPreviewImageUrl } from '@/api/product'
-import type { PreviewDataRow } from '@/types/product'
+import type { PreviewDataGroup, PreviewDataRow, PreviewRowImage } from '@/types/product'
 
 interface Props {
   previewData: PreviewDataRow[]
+  previewGroups: PreviewDataGroup[]
+  productHeaders: string[]
+  variantHeaders: string[]
   previewEdits: Record<string, import('@/types/product').PreviewEdit>
   rowImageOverrides: Record<number, string[]>
   rowCategorySelections: Record<number, string>
@@ -35,92 +38,116 @@ const emit = defineEmits<{
   'pasteRowImages': [targetRowIndex: number]
 }>()
 
-const currentReviewRowIndex = ref<number | null>(null)
+const currentGroupExternalCode = ref<string | null>(null)
+const searchKeyword = ref('')
 
-const displayedRows = computed(() => {
-  const rows = props.showOnlyUndetermined
-    ? props.previewData.filter(r => props.undeterminedCategoryRowIndexes.includes(r.rowIndex))
-    : props.previewData
-  // 系统过滤行不进入校验列表（与 undetermined 逻辑一致）
-  return rows.filter(r => !props.skippedRows.has(r.rowIndex))
+const filteredGroups = computed(() => {
+  let groups = props.previewGroups
+  if (props.showOnlyUndetermined) {
+    groups = groups.filter(g =>
+      g.variants.some(v => props.undeterminedCategoryRowIndexes.includes(v.rowIndex))
+    )
+  }
+  const kw = searchKeyword.value.trim().toLowerCase()
+  if (!kw) return groups
+  return groups.filter(g => {
+    const externalMatch = (g.externalCode ?? '').toLowerCase().includes(kw)
+    const nameHeader = Object.keys(g.productMappedFieldByHeader)
+      .find(h => g.productMappedFieldByHeader[h] === 'productName')
+    const nameMatch = nameHeader
+      ? (g.productRawValues[nameHeader] ?? '').toLowerCase().includes(kw)
+      : false
+    const variantMatch = g.variants.some(v =>
+      Object.values(v.rawValues).some(val => String(val).toLowerCase().includes(kw))
+    )
+    return externalMatch || nameMatch || variantMatch
+  })
 })
 
-const currentRow = computed(() => {
-  if (currentReviewRowIndex.value == null) return null
-  return props.previewData.find(r => r.rowIndex === currentReviewRowIndex.value) ?? null
+const displayedGroups = computed(() => filteredGroups.value)
+
+const currentGroup = computed(() => {
+  if (currentGroupExternalCode.value == null) return null
+  return props.previewGroups.find(g => g.externalCode === currentGroupExternalCode.value) ?? null
 })
 
 function resetToFirstDisplayed() {
-  const displayed = displayedRows.value
+  const displayed = displayedGroups.value
   if (displayed.length === 0) {
-    currentReviewRowIndex.value = null
+    currentGroupExternalCode.value = null
     return
   }
-  const exists = displayed.some(r => r.rowIndex === currentReviewRowIndex.value)
+  const exists = displayed.some(g => g.externalCode === currentGroupExternalCode.value)
   if (!exists) {
-    currentReviewRowIndex.value = displayed[0].rowIndex
+    currentGroupExternalCode.value = displayed[0].externalCode
   }
 }
 
-watch(() => props.previewData.length, (len) => {
+watch(() => props.previewGroups.length, (len) => {
   if (len === 0) {
-    currentReviewRowIndex.value = null
+    currentGroupExternalCode.value = null
     return
   }
   resetToFirstDisplayed()
 }, { immediate: true })
 
 watch(() => props.showOnlyUndetermined, resetToFirstDisplayed)
+watch(searchKeyword, resetToFirstDisplayed)
 
-function selectRow(rowIndex: number) {
-  currentReviewRowIndex.value = rowIndex
+function selectGroup(externalCode: string) {
+  currentGroupExternalCode.value = externalCode
 }
 
 function goPrevious() {
-  const displayed = displayedRows.value
-  if (!currentRow.value || displayed.length === 0) return
-  const idx = displayed.findIndex(r => r.rowIndex === currentReviewRowIndex.value)
+  const displayed = displayedGroups.value
+  if (!currentGroup.value || displayed.length === 0) return
+  const idx = displayed.findIndex(g => g.externalCode === currentGroupExternalCode.value)
   if (idx > 0) {
-    currentReviewRowIndex.value = displayed[idx - 1].rowIndex
+    currentGroupExternalCode.value = displayed[idx - 1].externalCode
   }
 }
 
 function goNext() {
-  const displayed = displayedRows.value
-  if (!currentRow.value || displayed.length === 0) return
-  const idx = displayed.findIndex(r => r.rowIndex === currentReviewRowIndex.value)
+  const displayed = displayedGroups.value
+  if (!currentGroup.value || displayed.length === 0) return
+  const idx = displayed.findIndex(g => g.externalCode === currentGroupExternalCode.value)
   if (idx >= 0 && idx < displayed.length - 1) {
-    currentReviewRowIndex.value = displayed[idx + 1].rowIndex
+    currentGroupExternalCode.value = displayed[idx + 1].externalCode
   }
 }
 
-function rowStatus(row: PreviewDataRow): { text: string; type: 'default' | 'success' | 'warning' | 'info' } {
-  if (props.skippedRows.has(row.rowIndex)) {
+function groupStatus(group: PreviewDataGroup): { text: string; type: 'default' | 'success' | 'warning' | 'info' } {
+  const allSkipped = group.variants.every(v => props.skippedRows.has(v.rowIndex))
+  if (allSkipped) {
     return { text: '已跳过', type: 'default' }
   }
-  if (props.undeterminedCategoryRowIndexes.includes(row.rowIndex)) {
+  const hasUndetermined = group.variants.some(v => props.undeterminedCategoryRowIndexes.includes(v.rowIndex))
+  if (hasUndetermined) {
     return { text: '品类未确定', type: 'warning' }
   }
-  const hasEdit = Object.keys(props.previewEdits).some(key => key.startsWith(`${row.rowIndex}:`))
+  const hasEdit = group.variants.some(v =>
+    Object.keys(props.previewEdits).some(key => key.startsWith(`${v.rowIndex}:`))
+  )
   if (hasEdit) {
     return { text: '已修改', type: 'info' }
   }
   return { text: '已确认', type: 'success' }
 }
 
-function primaryIdentifier(row: PreviewDataRow): string {
-  const mapping = row.mappedFieldByHeader
-  const externalHeader = Object.keys(mapping).find(h => mapping[h] === 'externalCode')
-  if (externalHeader) {
-    const value = row.rawValues[externalHeader]
-    if (value) return String(value)
+function primaryIdentifier(group: PreviewDataGroup): string {
+  const externalValue = group.externalCode
+  const nameHeader = Object.keys(group.productMappedFieldByHeader).find(h => group.productMappedFieldByHeader[h] === 'productName')
+  const nameValue = nameHeader ? (group.productRawValues[nameHeader] ?? '') : ''
+  if (externalValue && nameValue) {
+    return `${externalValue}（${nameValue}）`
   }
-  const nameHeader = Object.keys(mapping).find(h => mapping[h] === 'productName')
-  if (nameHeader) {
-    const value = row.rawValues[nameHeader]
-    if (value) return String(value)
+  if (externalValue) {
+    return String(externalValue)
   }
-  return `第 ${row.rowIndex} 行`
+  if (nameValue) {
+    return String(nameValue)
+  }
+  return `第 ${group.representativeRowIndex} 行`
 }
 
 function categoryLabel(code: string | undefined): string {
@@ -128,16 +155,45 @@ function categoryLabel(code: string | undefined): string {
   return props.categorySelectOptions.find(c => c.value === code)?.label ?? code
 }
 
-function rowThumbnail(row: PreviewDataRow): string | null {
-  const overrides = props.rowImageOverrides[row.rowIndex] ?? []
+/** 已懒加载的缩略图缓存：rowIndex -> PreviewRowImage[] */
+const loadedThumbnails = ref<Map<number, PreviewRowImage[]>>(new Map())
+/** 正在加载缩略图的行，防止重复请求 */
+const loadingThumbnails = ref<Set<number>>(new Set())
+
+async function loadRowThumbnails(rowIndex: number, batchId: string) {
+  if (loadedThumbnails.value.has(rowIndex) || loadingThumbnails.value.has(rowIndex)) {
+    return
+  }
+  loadingThumbnails.value.add(rowIndex)
+  try {
+    const { getExcelAiPreviewRowImages } = await import('@/api/product')
+    const images = await getExcelAiPreviewRowImages(batchId, rowIndex)
+    loadedThumbnails.value.set(rowIndex, images)
+  } catch (e) {
+    console.error(`加载第 ${rowIndex} 行缩略图失败`, e)
+  } finally {
+    loadingThumbnails.value.delete(rowIndex)
+  }
+}
+
+function groupThumbnail(group: PreviewDataGroup): string | null {
+  const overrides = props.rowImageOverrides[group.representativeRowIndex] ?? []
   if (overrides.length > 0 && props.mappingResponse) {
     return getExcelAiPreviewImageUrl(props.mappingResponse.batchId, overrides[0])
   }
-  const images = row.images ?? []
-  if (images.length > 0) {
-    return images[0].thumbnailBase64 ?? null
+  const metaImages = group.images ?? []
+  if (metaImages.length === 0) {
+    return null
   }
-  return null
+  const loaded = loadedThumbnails.value.get(group.representativeRowIndex)
+  if (!loaded) {
+    const batchId = props.mappingResponse?.batchId
+    if (batchId) {
+      loadRowThumbnails(group.representativeRowIndex, batchId)
+    }
+    return metaImages[0].thumbnailBase64 ?? null
+  }
+  return loaded[0]?.thumbnailBase64 ?? metaImages[0].thumbnailBase64 ?? null
 }
 
 function onPreviewEdit(payload: { rowIndex: number; header: string; value: string | null }) {
@@ -165,7 +221,8 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
   <n-space vertical :size="12" style="height: 100%;">
     <n-space align="center" justify="space-between" wrap style="padding: 0 4px;">
       <n-space align="center" wrap>
-        <n-tag type="default">共 {{ previewData.length }} 行</n-tag>
+        <n-tag type="default">共 {{ previewGroups.length }} 件商品</n-tag>
+        <n-tag type="info">{{ previewData.length }} 行 Excel 数据</n-tag>
         <n-tag v-if="undeterminedCategoryRowIndexes.length > 0" type="error">
           {{ undeterminedCategoryRowIndexes.length }} 行商品品类未确定
         </n-tag>
@@ -177,41 +234,51 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
         </n-checkbox>
       </n-space>
       <n-space>
-        <n-button size="small" :disabled="!currentRow" @click="goPrevious">上一条</n-button>
-        <n-button size="small" :disabled="!currentRow" @click="goNext">下一条</n-button>
+        <n-input
+          v-model:value="searchKeyword"
+          placeholder="搜索型号 / 品名 / 变体内容"
+          clearable
+          size="small"
+          style="width: 220px;"
+        />
+        <n-button size="small" :disabled="!currentGroup" @click="goPrevious">上一条</n-button>
+        <n-button size="small" :disabled="!currentGroup" @click="goNext">下一条</n-button>
       </n-space>
     </n-space>
 
     <div class="review-layout">
       <!-- 左侧商品列表 -->
       <div class="review-list">
-        <n-empty v-if="displayedRows.length === 0" description="没有可展示的商品" />
+        <n-empty v-if="displayedGroups.length === 0" description="没有可展示的商品" />
         <n-list v-else hoverable clickable style="max-height: 600px; overflow-y: auto;">
           <n-list-item
-            v-for="row in displayedRows"
-            :key="row.rowIndex"
-            :class="{ 'review-item-active': currentReviewRowIndex === row.rowIndex }"
-            @click="selectRow(row.rowIndex)"
+            v-for="group in displayedGroups"
+            :key="group.externalCode || group.representativeRowIndex"
+            :class="{ 'review-item-active': currentGroupExternalCode === group.externalCode }"
+            @click="selectGroup(group.externalCode)"
           >
             <n-space align="center" style="width: 100%;">
               <img
-                v-if="rowThumbnail(row)"
-                :src="rowThumbnail(row)!"
+                v-if="groupThumbnail(group)"
+                :src="groupThumbnail(group)!"
                 style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; flex-shrink: 0;"
               >
-              <div v-else style="width: 48px; height: 48px; border-radius: 4px; border: 1px dashed #ccc; display: flex; align-items: center; justify-content: center; color: #999; font-size: 11px; flex-shrink: 0;">
+              <div
+                v-else
+                style="width: 48px; height: 48px; border-radius: 4px; border: 1px dashed #ccc; display: flex; align-items: center; justify-content: center; color: #999; font-size: 11px; flex-shrink: 0;"
+              >
                 无图
               </div>
               <div style="flex: 1; min-width: 0;">
                 <div style="font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                  {{ primaryIdentifier(row) }}
+                  {{ primaryIdentifier(group) }}
                 </div>
                 <n-space size="small" style="margin-top: 4px;">
-                  <span v-if="categoryMode" style="color: #666; font-size: 12px;">{{ categoryLabel(rowCategorySelections[row.rowIndex]) }}</span>
-                  <n-tag :type="rowStatus(row).type" size="tiny" :bordered="false">{{ rowStatus(row).text }}</n-tag>
+                  <span v-if="categoryMode" style="color: #666; font-size: 12px;">{{ categoryLabel(rowCategorySelections[group.representativeRowIndex]) }}</span>
+                  <n-tag :type="groupStatus(group).type" size="tiny" :bordered="false">{{ groupStatus(group).text }}</n-tag>
                 </n-space>
               </div>
-              <span style="color: #999; font-size: 12px; flex-shrink: 0;">{{ row.rowIndex }}</span>
+              <span style="color: #999; font-size: 12px; flex-shrink: 0;">{{ group.variants.length }} 变体</span>
             </n-space>
           </n-list-item>
         </n-list>
@@ -220,7 +287,9 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
       <!-- 右侧字段检查器 -->
       <div class="review-inspector">
         <ExcelRowInspector
-          :row="currentRow"
+          :group="currentGroup"
+          :product-headers="productHeaders"
+          :variant-headers="variantHeaders"
           :preview-edits="previewEdits"
           :row-image-overrides="rowImageOverrides"
           :row-category-selections="rowCategorySelections"
@@ -256,7 +325,7 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
 }
 
 .review-list {
-  width: 320px;
+  width: 360px;
   flex-shrink: 0;
   border-right: 1px solid #eee;
   overflow-y: auto;

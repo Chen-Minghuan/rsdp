@@ -660,6 +660,32 @@ export interface PreviewDataRow {
   overrideImageAssetIds?: string[]
 }
 
+export interface PreviewDataVariant {
+  /** Excel 物理行号（1-based） */
+  rowIndex: number
+  /** 变体级原始表头 → 单元格值 */
+  rawValues: Record<string, string>
+  /** 变体级原始表头 → 系统字段 */
+  mappedFieldByHeader: Record<string, string | null>
+}
+
+export interface PreviewDataGroup {
+  /** 商品外部编码（型号） */
+  externalCode: string
+  /** 商品级原始表头 → 单元格值 */
+  productRawValues: Record<string, string>
+  /** 商品级原始表头 → 系统字段 */
+  productMappedFieldByHeader: Record<string, string | null>
+  /** 商品图片（取组内第一行） */
+  images: PreviewRowImage[]
+  /** 用户在数据清洗页覆盖到该商品组的图片 asset ID 列表 */
+  overrideImageAssetIds?: string[]
+  /** 该商品下的全部变体行 */
+  variants: PreviewDataVariant[]
+  /** 组内代表行的 Excel 物理行号 */
+  representativeRowIndex: number
+}
+
 /**
  * Excel AI 导入前全量预览响应。
  */
@@ -670,8 +696,14 @@ export interface ExcelAiPreviewDataResponse {
   totalRows: number
   /** 原始表头列表（按列顺序） */
   headers: string[]
-  /** 全量数据行 */
+  /** 商品级字段原始表头 */
+  productHeaders: string[]
+  /** 变体级字段原始表头 */
+  variantHeaders: string[]
+  /** 全量数据行（兼容旧接口） */
   rows: PreviewDataRow[]
+  /** 按商品聚合后的商品组列表 */
+  groups: PreviewDataGroup[]
 }
 
 /**
