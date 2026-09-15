@@ -63,11 +63,15 @@ public class PublicCatalogService {
      * @param priceMin  零售参考价下限
      * @param priceMax  零售参考价上限
      * @param sort      排序：newest（默认）/ price_asc / price_desc
+     * @param keyword   商品名称模糊匹配（仅 product_name，不泄露内部字段）
+     * @param style     风格/定位标签筛选（rspu_style 关联表 EXISTS）
+     * @param scene     场景编码筛选（rspu_scene 关联表 EXISTS）
      * @return 分页商品列表
      */
     public PageResult<PublicProductItemResponse> listProducts(int page, int size, String category,
             String seatCount, String color, String material,
-            BigDecimal priceMin, BigDecimal priceMax, String sort) {
+            BigDecimal priceMin, BigDecimal priceMax, String sort,
+            String keyword, String style, String scene) {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, MAX_PAGE_SIZE));
 
@@ -75,6 +79,19 @@ public class PublicCatalogService {
         wrapper.eq("status", STATUS_ACTIVE);
         if (StringUtils.hasText(category)) {
             wrapper.eq("category_code", category.trim());
+        }
+        if (StringUtils.hasText(keyword)) {
+            wrapper.like("product_name", keyword.trim());
+        }
+        if (StringUtils.hasText(style)) {
+            wrapper.exists(
+                "SELECT 1 FROM rspu_style s WHERE s.rspu_id = rspu_master.rspu_id AND s.style_code = {0}",
+                style.trim());
+        }
+        if (StringUtils.hasText(scene)) {
+            wrapper.exists(
+                "SELECT 1 FROM rspu_scene s WHERE s.rspu_id = rspu_master.rspu_id AND s.scene_code = {0}",
+                scene.trim());
         }
         if (StringUtils.hasText(seatCount)) {
             // 座位数存于变体 dimensions JSONB（键名兼容 seat_count / seatCount 两种写法）

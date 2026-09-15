@@ -43,6 +43,9 @@ public class PublicCatalogController {
      * @param priceMin  零售参考价下限
      * @param priceMax  零售参考价上限
      * @param sort      排序：newest（默认）/ price_asc / price_desc
+     * @param keyword   商品名称模糊匹配
+     * @param style     风格/定位标签筛选（rspu_style 关联）
+     * @param scene     场景编码筛选（rspu_scene 关联）
      * @return 分页商品列表
      */
     @GetMapping("/products")
@@ -55,9 +58,13 @@ public class PublicCatalogController {
         @RequestParam(required = false) String material,
         @RequestParam(required = false) BigDecimal priceMin,
         @RequestParam(required = false) BigDecimal priceMax,
-        @RequestParam(required = false) String sort) {
+        @RequestParam(required = false) String sort,
+        @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) String style,
+        @RequestParam(required = false) String scene) {
         return Result.ok(publicCatalogService.listProducts(
-            page, size, category, seatCount, color, material, priceMin, priceMax, sort));
+            page, size, category, seatCount, color, material, priceMin, priceMax, sort,
+            keyword, style, scene));
     }
 
     /**

@@ -152,7 +152,7 @@ public class ProductQueryService {
         }
 
         Page<RspuMaster> pageParam = new Page<>(request.getPage(), request.getSize());
-        wrapper.orderByDesc("created_at");
+        applyListSort(wrapper, request.getSort());
         Page<RspuMaster> page = rspuMapper.selectPage(pageParam, wrapper);
 
         List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
@@ -246,6 +246,7 @@ public class ProductQueryService {
         }
         applyStatusTab(wrapper, request.getStatusTab());
         applyPrimaryImageFilter(wrapper, request.getHasPrimaryImage());
+        applyPriceRangeFilter(wrapper, request.getPriceMin(), request.getPriceMax());
         if (StringUtils.hasText(request.getKeyword())) {
             String keyword = "%" + request.getKeyword().trim() + "%";
             wrapper.and(w -> w.like("category_path", keyword).or().like("rspu_id", keyword));
@@ -309,6 +310,58 @@ public class ProductQueryService {
         } else {
             wrapper.notExists(subquery);
         }
+    }
+
+    /**
+     * 价格区间筛选（闭区间，含上下限）。
+     *
+     * <p>口径按角色区分：平台员工（ADMIN/EDITOR）按价格投影表
+     * {@code rspu_price_summary.min_factory_price}（与列表 minFactoryPrice 同源）筛选，
+     * 其他角色按 {@code rspu_master.retail_price} 筛选。价格为 NULL 的产品
+     * SQL 比较结果为 UNKNOWN，在任何价格区间筛选下自然不返回。</p>
+     *
+     * @param wrapper  查询构造器
+     * @param priceMin 价格下限（可空）
+     * @param priceMax 价格上限（可空）
+     */
+    private void applyPriceRangeFilter(QueryWrapper<RspuMaster> wrapper, BigDecimal priceMin, BigDecimal priceMax) {
+        if (priceMin != null) {
+            wrapper.apply(priceColumnExpression() + " >= {0}", priceMin);
+        }
+        if (priceMax != null) {
+            wrapper.apply(priceColumnExpression() + " <= {0}", priceMax);
+        }
+    }
+
+    /**
+     * 列表排序。缺省/newest 保持原有 created_at DESC；价格排序与价格筛选同口径，
+     * 价格为 NULL 的排在最后（NULLS LAST），同价按创建时间倒序稳定分页。
+     *
+     * @param wrapper 查询构造器
+     * @param sort    newest / price_asc / price_desc（可空，未知值回退 newest）
+     */
+    private void applyListSort(QueryWrapper<RspuMaster> wrapper, String sort) {
+        String mode = StringUtils.hasText(sort) ? sort.trim() : "newest";
+        switch (mode) {
+            // NULLS LAST 需内联进 ORDER BY，列表达式为服务端常量拼接（无用户输入），无注入面
+            case "price_asc" -> wrapper.last(
+                "ORDER BY " + priceColumnExpression() + " ASC NULLS LAST, created_at DESC");
+            case "price_desc" -> wrapper.last(
+                "ORDER BY " + priceColumnExpression() + " DESC NULLS LAST, created_at DESC");
+            default -> wrapper.orderByDesc("created_at");
+        }
+    }
+
+    /**
+     * 价格列表达式（筛选与排序共用口径）：平台员工按价格投影表最低出厂价
+     * （标量子查询，与列表 minFactoryPrice 同源），其他角色按零售参考价列。
+     *
+     * @return SQL 价格表达式
+     */
+    private String priceColumnExpression() {
+        return SecurityOperatorContext.isPlatformStaff()
+            ? "(SELECT ps.min_factory_price FROM rspu_price_summary ps WHERE ps.rspu_id = rspu_master.rspu_id)"
+            : "retail_price";
     }
     /**
      * 回收站分页查询（已软删除的 RSPU，绕过 @TableLogic 自动过滤）。

@@ -17,6 +17,7 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -29,6 +30,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -90,7 +92,7 @@ class PublicCatalogServiceTest {
         when(rspuVariantMapper.selectMaps(any(QueryWrapper.class))).thenReturn(List.of(countRow));
 
         PageResult<PublicProductItemResponse> result = publicCatalogService.listProducts(
-            1, 12, null, null, null, null, null, null, "newest");
+            1, 12, null, null, null, null, null, null, "newest", null, null, null);
 
         assertThat(result.getTotal()).isEqualTo(1);
         PublicProductItemResponse item = result.getRows().get(0);
@@ -109,10 +111,56 @@ class PublicCatalogServiceTest {
         when(rspuMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
 
         PageResult<PublicProductItemResponse> result = publicCatalogService.listProducts(
-            1, 12, "SF", "3", "米白", "布艺", new BigDecimal("1000"), new BigDecimal("5000"), "price_asc");
+            1, 12, "SF", "3", "米白", "布艺", new BigDecimal("1000"), new BigDecimal("5000"), "price_asc",
+            null, null, null);
 
         assertThat(result.getTotal()).isEqualTo(0);
         assertThat(result.getRows()).isEmpty();
+    }
+
+    @Test
+    void listProducts_keywordStyleScene_shouldAppendConditions() {
+        Page<RspuMaster> page = new Page<>(1, 12);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(rspuMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+
+        publicCatalogService.listProducts(
+            1, 12, null, null, null, null, null, null, null, "云朵", "MC", "LIVING");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        // keyword 只模糊商品名称（不泄露内部编码字段）；风格/场景走关联表 EXISTS
+        assertThat(sqlSegment).contains("product_name");
+        assertThat(sqlSegment).doesNotContain("rspu_id LIKE");
+        assertThat(sqlSegment).contains("rspu_style");
+        assertThat(sqlSegment).contains("rspu_scene");
+        assertThat(sqlSegment).contains("style_code");
+        assertThat(sqlSegment).contains("scene_code");
+        // 硬过滤在售状态不变，且绝不联查 rsku_supply
+        assertThat(sqlSegment).contains("status");
+        assertThat(sqlSegment).doesNotContain("rsku_supply");
+    }
+
+    @Test
+    void listProducts_withoutKeywordStyleScene_shouldNotAppendExtraConditions() {
+        Page<RspuMaster> page = new Page<>(1, 12);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(rspuMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+
+        publicCatalogService.listProducts(
+            1, 12, "SF", null, null, null, null, null, null, null, null, null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        assertThat(sqlSegment).doesNotContain("product_name");
+        assertThat(sqlSegment).doesNotContain("rspu_style");
+        assertThat(sqlSegment).doesNotContain("rspu_scene");
     }
 
     @Test

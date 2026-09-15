@@ -155,7 +155,14 @@ GET    /api/v1/products
        #                 onSale=status=active, warehouse=status!=active,
        #                 soldOut=恒空, recycled=回收站即已软删除记录),
        #        hasPrimaryImage: boolean (可选, 主图资产有无三态筛选,
-       #                 true=仅有主图, false=仅无主图, 缺省不过滤; 服务 AI 搭配数据补齐)
+       #                 true=仅有主图, false=仅无主图, 缺省不过滤; 服务 AI 搭配数据补齐),
+       #        priceMin / priceMax: number (可选, 价格区间闭区间; 口径按角色区分:
+       #                 平台员工按 rspu_price_summary.min_factory_price 投影列
+       #                 与 minFactoryPrice 同源, 其他角色按 retail_price;
+       #                 价格为 null 的产品在任何价格区间筛选下不返回),
+       #        sort: "newest"|"price_asc"|"price_desc" (可选, 默认 newest
+       #                 = created_at DESC 原行为; 价格排序与价格筛选同口径,
+       #                 价格为 null 的排在最后, 同价按 created_at DESC)
        # Response: { total, page, size, rows: [ProductSummary...] }
        # 说明：
        #   - positioningLabel / sceneCode / materialTag 均按字典码精确查询
@@ -1583,8 +1590,12 @@ GET    /api/v1/public/products
        # 公开商品分页列表（仅 status=active；红线：绝不包含 RSKU 工厂报价字段）
        # Query: page=1&size=12（上限 50）&category=SF&seatCount=3&color=米白&material=布艺
        #        &priceMin=1000&priceMax=5000&sort=newest|price_asc|price_desc
+       #        &keyword=云朵&style=MC&scene=LIVING
        #        seatCount 匹配变体 dimensions JSONB 的 seat_count/seatCount 键；
-       #        价格区间为零售参考价 retail_price（不加密），非工厂报价
+       #        价格区间为零售参考价 retail_price（不加密），非工厂报价；
+       #        keyword 仅模糊商品名称 product_name（不泄露内部编码字段）；
+       #        style 走 rspu_style 关联表 EXISTS，scene 走 rspu_scene 关联表 EXISTS，
+       #        三者均可空、可叠加，不影响现有参数行为
        # Response: PageResult<{ rspuId, rspuCode, productName, categoryCode, categoryPath,
        #            positioningLabel, colorPrimaryName, materialTags[], retailPrice,
        #            primaryImageUrl, variantCount, createdAt }>
