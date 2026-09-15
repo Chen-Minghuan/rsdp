@@ -1344,6 +1344,149 @@ class ProductQueryServiceTest {
             .isInstanceOf(ResourceNotFoundException.class);
     }
 
+    @Test
+    void listProducts_priceRangeAsPlatformStaff_shouldFilterByPriceSummarySubquery() {
+        // 默认安全上下文为 ADMIN（@BeforeEach），平台员工按价格投影表最低出厂价筛选
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setPriceMin(new java.math.BigDecimal("100"));
+        request.setPriceMax(new java.math.BigDecimal("500"));
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        assertThat(sqlSegment).contains("rspu_price_summary");
+        assertThat(sqlSegment).contains("min_factory_price");
+        assertThat(sqlSegment).doesNotContain("retail_price");
+    }
+
+    @Test
+    void listProducts_priceRangeAsDesigner_shouldFilterByRetailPrice() {
+        // 非平台员工按零售参考价筛选，不触碰价格投影表
+        authenticateWithRoles("designer", "DESIGNER");
+        when(userFactoryService.getFactoryCodesByUsername("designer")).thenReturn(List.of());
+
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setPriceMin(new java.math.BigDecimal("100"));
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String sqlSegment = captor.getValue().getSqlSegment();
+        assertThat(sqlSegment).contains("retail_price >=");
+        assertThat(sqlSegment).doesNotContain("rspu_price_summary");
+    }
+
+    @Test
+    void listProducts_withoutPriceRange_shouldNotAppendPriceCondition() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment())
+            .doesNotContain("retail_price")
+            .doesNotContain("min_factory_price");
+    }
+
+    @Test
+    void listProducts_priceSortAsPlatformStaff_shouldOrderByMinFactoryPriceNullsLast() {
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setSort("price_desc");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String customSql = captor.getValue().getCustomSqlSegment();
+        assertThat(customSql).contains("ORDER BY");
+        assertThat(customSql).contains("min_factory_price");
+        assertThat(customSql).contains("DESC NULLS LAST");
+        assertThat(customSql).contains("created_at DESC");
+    }
+
+    @Test
+    void listProducts_priceSortAsDesigner_shouldOrderByRetailPriceNullsLast() {
+        authenticateWithRoles("designer", "DESIGNER");
+        when(userFactoryService.getFactoryCodesByUsername("designer")).thenReturn(List.of());
+
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+        request.setSort("price_asc");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String customSql = captor.getValue().getCustomSqlSegment();
+        assertThat(customSql).contains("retail_price ASC NULLS LAST");
+        assertThat(customSql).doesNotContain("rspu_price_summary");
+    }
+
+    @Test
+    void listProducts_defaultSort_shouldKeepCreatedAtDesc() {
+        // 不传 sort：行为与现状一致（created_at DESC），不追加 NULLS LAST
+        ProductListRequest request = new ProductListRequest();
+        request.setPage(1L);
+        request.setSize(10L);
+
+        Page<RspuMaster> page = new Page<>(1, 10, 0);
+        page.setRecords(List.of());
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        productQueryService.listProducts(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
+        String customSql = captor.getValue().getCustomSqlSegment();
+        assertThat(customSql).contains("created_at");
+        assertThat(customSql).doesNotContain("NULLS LAST");
+    }
+
     private void authenticateWithRoles(String username, String... roles) {
         SecurityContextHolder.clearContext();
         var user = User.withUsername(username).password("").roles(roles).build();

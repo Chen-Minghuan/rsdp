@@ -53,7 +53,7 @@ class PublicCatalogControllerTest {
         item.setPrimaryImageUrl("/api/v1/images/IMG-1");
         item.setVariantCount(3);
 
-        when(publicCatalogService.listProducts(anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+        when(publicCatalogService.listProducts(anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn(PageResult.of(1, 1, 12, List.of(item)));
 
         mockMvc.perform(get("/api/v1/public/products"))
@@ -66,7 +66,7 @@ class PublicCatalogControllerTest {
 
     @Test
     void products_withFilters_shouldPassParamsToService() throws Exception {
-        when(publicCatalogService.listProducts(anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+        when(publicCatalogService.listProducts(anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn(PageResult.of(0, 1, 12, List.of()));
 
         mockMvc.perform(get("/api/v1/public/products")
@@ -76,7 +76,10 @@ class PublicCatalogControllerTest {
                 .param("material", "布艺")
                 .param("priceMin", "1000")
                 .param("priceMax", "5000")
-                .param("sort", "price_asc"))
+                .param("sort", "price_asc")
+                .param("keyword", "云朵")
+                .param("style", "MC")
+                .param("scene", "LIVING"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200));
 
@@ -86,7 +89,10 @@ class PublicCatalogControllerTest {
             org.mockito.ArgumentMatchers.eq("米白"), org.mockito.ArgumentMatchers.eq("布艺"),
             org.mockito.ArgumentMatchers.eq(new BigDecimal("1000")),
             org.mockito.ArgumentMatchers.eq(new BigDecimal("5000")),
-            org.mockito.ArgumentMatchers.eq("price_asc"));
+            org.mockito.ArgumentMatchers.eq("price_asc"),
+            org.mockito.ArgumentMatchers.eq("云朵"),
+            org.mockito.ArgumentMatchers.eq("MC"),
+            org.mockito.ArgumentMatchers.eq("LIVING"));
     }
 
     @Test

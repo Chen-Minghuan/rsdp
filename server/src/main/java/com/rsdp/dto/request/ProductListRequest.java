@@ -4,6 +4,8 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.Data;
 
+import java.math.BigDecimal;
+
 /**
  * 产品列表查询请求。
  */
@@ -53,4 +55,20 @@ public class ProductListRequest {
 
     /** 主图资产筛选：true=仅有主图，false=仅无主图，缺省不过滤（服务 AI 搭配数据补齐）。 */
     private Boolean hasPrimaryImage;
+
+    /**
+     * 价格下限（含）。口径按角色区分：平台员工按价格投影表最低出厂价
+     * （与 minFactoryPrice 同源），其他角色按零售参考价 retail_price；
+     * 价格为 null 的产品在任何价格区间筛选下都不返回。
+     */
+    private BigDecimal priceMin;
+
+    /** 价格上限（含），口径同 {@link #priceMin}。 */
+    private BigDecimal priceMax;
+
+    /**
+     * 排序：newest（默认，created_at DESC）/ price_asc / price_desc。
+     * 价格排序口径同 {@link #priceMin}，价格为 null 的排在最后。
+     */
+    private String sort;
 }
