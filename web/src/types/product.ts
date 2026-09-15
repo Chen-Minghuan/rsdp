@@ -81,7 +81,18 @@ export interface ProductListParams {
   statusTab?: SpuStatusTab
   /** 主图资产筛选：true=仅有主图，false=仅无主图 */
   hasPrimaryImage?: boolean
+  /** 价格区间下限（闭区间；平台员工按最低出厂价、其他角色按零售参考价，后端自动区分） */
+  priceMin?: number
+  /** 价格区间上限（闭区间，口径同 priceMin） */
+  priceMax?: number
+  /** 排序：newest=最新（默认，可不传）、price_asc=价格升序、price_desc=价格降序 */
+  sort?: ProductSort
 }
+
+/**
+ * 产品列表排序方式。
+ */
+export type ProductSort = 'newest' | 'price_asc' | 'price_desc'
 
 /**
  * 商品列表状态页签。

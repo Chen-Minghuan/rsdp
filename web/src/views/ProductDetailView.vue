@@ -21,6 +21,8 @@ import {
   useMessage
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
+import HoverZoomImage from '@/components/HoverZoomImage.vue'
+import ProductPicker from '@/components/ProductPicker.vue'
 import DimsEditor from '@/components/DimsEditor.vue'
 import DetailHero from '@/components/product/DetailHero.vue'
 import BasicInfoTab from '@/components/product/BasicInfoTab.vue'
@@ -28,7 +30,7 @@ import VariantRskuTab from '@/components/product/VariantRskuTab.vue'
 import ImageGalleryTab from '@/components/product/ImageGalleryTab.vue'
 import RelationTab from '@/components/product/RelationTab.vue'
 import AiInsightTab from '@/components/product/AiInsightTab.vue'
-import { getProductDetail, listProducts, reviewProduct, updateProduct, patchProductSixDimTag, deleteProduct, reRecognizeProduct } from '@/api/product'
+import { getProductDetail, reviewProduct, updateProduct, patchProductSixDimTag, deleteProduct, reRecognizeProduct } from '@/api/product'
 import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
 import { listRskuByRspu, createRsku, deleteRsku, batchCreateRskus } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
@@ -360,9 +362,10 @@ const priceBandOptions = ref<DictItem[]>([
 
 const showRelationModal = ref(false)
 const submittingRelation = ref(false)
-const relationSearchKeyword = ref('')
-const relationSearchLoading = ref(false)
-const relationSearchResults = ref<ProductSummary[]>([])
+/** 关联产品选品弹窗（ProductPicker 单选） */
+const showRelationPicker = ref(false)
+/** ProductPicker 选中的关联产品（用于表单回显） */
+const relationPickedProduct = ref<ProductSummary | null>(null)
 const relationForm = ref<RspuRelationCreateRequest>({
   relatedRspuId: '',
   relationType: 'official',
@@ -913,26 +916,18 @@ function openRelationModal() {
     reason: '',
     sortOrder: 0
   }
-  relationSearchKeyword.value = ''
-  relationSearchResults.value = []
+  relationPickedProduct.value = null
   showRelationModal.value = true
 }
 
-async function searchRelationProducts() {
-  if (!relationSearchKeyword.value.trim()) return
-  relationSearchLoading.value = true
-  try {
-    const result = await listProducts({
-      keyword: relationSearchKeyword.value.trim(),
-      page: 1,
-      size: 10
-    })
-    relationSearchResults.value = result.rows.filter(r => r.rspuId !== rspuId.value)
-  } catch (e) {
-    console.error('搜索产品失败', e)
-  } finally {
-    relationSearchLoading.value = false
+/** ProductPicker 单选确认：回填关联产品 ID 并回显。 */
+function handleRelationPicked(products: ProductSummary[]) {
+  const picked = products[0]
+  if (picked) {
+    relationForm.value.relatedRspuId = picked.rspuId
+    relationPickedProduct.value = picked
   }
+  showRelationPicker.value = false
 }
 
 async function handleCreateRelation() {
@@ -1723,26 +1718,22 @@ onBeforeRouteUpdate((to, from) => {
       style="width: 600px;"
     >
       <n-form label-placement="left" label-width="100">
-        <n-form-item label="搜索产品">
-          <n-space>
-            <n-input
-              v-model:value="relationSearchKeyword"
-              placeholder="输入 RSPU ID 或品类/风格"
-              style="width: 320px;"
-              @keydown.enter="searchRelationProducts"
-            />
-            <n-button :loading="relationSearchLoading" @click="searchRelationProducts">
-              搜索
+        <n-form-item label="关联产品" required>
+          <n-space align="center">
+            <template v-if="relationPickedProduct">
+              <HoverZoomImage
+                :src="relationPickedProduct.primaryImageUrl"
+                :width="40"
+                :height="40"
+                object-fit="contain"
+              />
+              <span>{{ relationPickedProduct.productName || relationPickedProduct.categoryPath }}（{{ relationPickedProduct.rspuId }}）</span>
+            </template>
+            <span v-else style="color: #999;">未选择</span>
+            <n-button size="small" @click="showRelationPicker = true">
+              {{ relationPickedProduct ? '重新选择' : '选择产品' }}
             </n-button>
           </n-space>
-        </n-form-item>
-
-        <n-form-item label="选择产品" required>
-          <n-select
-            v-model:value="relationForm.relatedRspuId"
-            :options="relationSearchResults.map(r => ({ label: `${r.categoryPath || r.rspuId} (${r.rspuId})`, value: r.rspuId }))"
-            placeholder="先搜索并选择要搭配的产品"
-          />
         </n-form-item>
 
         <n-form-item label="关系类型">
@@ -1771,6 +1762,22 @@ onBeforeRouteUpdate((to, from) => {
           添加
         </n-button>
       </n-space>
+    </n-modal>
+
+    <!-- 关联产品选品弹窗（ProductPicker 单选，排除当前产品自身） -->
+    <n-modal
+      v-model:show="showRelationPicker"
+      title="选择关联产品"
+      preset="card"
+      style="width: 960px; max-width: 95vw;"
+    >
+      <ProductPicker
+        v-if="showRelationPicker"
+        :multiple="false"
+        :disabled-ids="[rspuId]"
+        @confirm="handleRelationPicked"
+        @cancel="showRelationPicker = false"
+      />
     </n-modal>
 
     <!-- 收藏文件夹选择弹窗 -->

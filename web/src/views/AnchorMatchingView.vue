@@ -6,6 +6,7 @@ import {
   NButton,
   NSpace,
   NInput,
+  NModal,
   NAlert,
   NEmpty,
   NSpin,
@@ -13,20 +14,40 @@ import {
   NTag
 } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
+import ProductPicker from '@/components/ProductPicker.vue'
 import { recommendByAnchor } from '@/api/matching'
 import type { AnchorMatchingResponse, AiSchemeItem } from '@/types/matching'
+import type { ProductSummary } from '@/types/product'
 
 const router = useRouter()
 
 const existingRspuId = ref('')
+/** ProductPicker 单选的锚点产品（选定后回显名称+图） */
+const anchorProduct = ref<ProductSummary | null>(null)
+const showAnchorPicker = ref(false)
 const targetCategoryCode = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
 const result = ref<AnchorMatchingResponse | null>(null)
 
+/** ProductPicker 单选确认：回填锚点 RSPU ID 并回显产品。 */
+function handleAnchorPicked(products: ProductSummary[]) {
+  const picked = products[0]
+  if (picked) {
+    anchorProduct.value = picked
+    existingRspuId.value = picked.rspuId
+  }
+  showAnchorPicker.value = false
+}
+
+function clearAnchor() {
+  anchorProduct.value = null
+  existingRspuId.value = ''
+}
+
 async function handleRecommend() {
   if (!existingRspuId.value.trim() || !targetCategoryCode.value.trim()) {
-    errorMessage.value = '请填写锚点 RSPU ID 和目标品类代码'
+    errorMessage.value = '请选择锚点产品并填写目标品类代码'
     return
   }
 
@@ -70,11 +91,19 @@ function navigateToDetail(item: AiSchemeItem) {
         </n-alert>
 
         <n-space align="center">
-          <n-input
-            v-model:value="existingRspuId"
-            placeholder="锚点 RSPU ID"
-            style="width: 240px;"
-          />
+          <n-button @click="showAnchorPicker = true">选择锚点产品</n-button>
+          <n-space v-if="anchorProduct" align="center">
+            <HoverZoomImage
+              :src="anchorProduct.primaryImageUrl"
+              :width="48"
+              :height="48"
+              object-fit="contain"
+            />
+            <span>{{ anchorProduct.productName || anchorProduct.categoryPath }}</span>
+            <n-tag size="small">{{ anchorProduct.rspuId }}</n-tag>
+            <n-button size="tiny" quaternary type="error" @click="clearAnchor">清除</n-button>
+          </n-space>
+          <span v-else style="color: #999; font-size: 13px;">未选择锚点产品</span>
           <n-input
             v-model:value="targetCategoryCode"
             placeholder="目标品类代码，如 FS/DT/CB"
@@ -84,6 +113,21 @@ function navigateToDetail(item: AiSchemeItem) {
             获取推荐
           </n-button>
         </n-space>
+
+        <!-- 锚点产品选品弹窗（ProductPicker 单选） -->
+        <n-modal
+          v-model:show="showAnchorPicker"
+          title="选择锚点产品"
+          preset="card"
+          style="width: 960px; max-width: 95vw;"
+        >
+          <ProductPicker
+            v-if="showAnchorPicker"
+            :multiple="false"
+            @confirm="handleAnchorPicked"
+            @cancel="showAnchorPicker = false"
+          />
+        </n-modal>
 
         <n-divider />
 

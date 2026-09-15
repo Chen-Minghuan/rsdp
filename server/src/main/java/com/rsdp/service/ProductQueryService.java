@@ -249,7 +249,7 @@ public class ProductQueryService {
         applyPriceRangeFilter(wrapper, request.getPriceMin(), request.getPriceMax());
         if (StringUtils.hasText(request.getKeyword())) {
             String keyword = "%" + request.getKeyword().trim() + "%";
-            wrapper.and(w -> w.like("category_path", keyword).or().like("rspu_id", keyword));
+            wrapper.and(w -> w.like("product_name", keyword).or().like("category_path", keyword).or().like("rspu_id", keyword));
         }
 
         return wrapper;

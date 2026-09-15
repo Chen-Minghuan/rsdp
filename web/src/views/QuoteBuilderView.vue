@@ -19,22 +19,20 @@ import {
   NForm,
   NFormItem,
   NInput,
-  NPagination,
   NRadioGroup,
   NRadioButton,
   type DataTableColumns
 } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
-import { getProductDetail, listProducts } from '@/api/product'
+import ProductPicker from '@/components/ProductPicker.vue'
+import { getProductDetail } from '@/api/product'
 import { listRskuByRspu } from '@/api/rsku'
 import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
 import { listProjects } from '@/api/project'
-import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { PERMISSIONS } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
-import type { DictItem } from '@/types/dict'
 import type { ProductDetail, ProductSummary } from '@/types/product'
 import type { Rsku } from '@/types/rsku'
 import type { QuoteResponse, QuoteItem, QuoteMode } from '@/types/quote'
@@ -153,100 +151,23 @@ const originalSpaceTagMap = computed(() => {
   return map
 })
 
-/** 添加产品弹窗「放入分区」选择（rspuId → 场景字典码；未选=跟随产品推导） */
+/** 添加产品所选分区（rspuId → 场景字典码；未选=跟随产品推导），由 ProductPicker 确认时携带 */
 const zoneSelectionMap = reactive<Record<string, string>>({})
-const addZoneCode = ref<string | null>(null)
-const sceneDicts = ref<DictItem[]>([])
-let sceneDictsLoaded = false
 
-const addZoneOptions = computed(() => [
-  { label: '跟随产品标签（默认）', value: '' },
-  ...sceneDicts.value.map(d => ({ label: d.dictName, value: d.dictCode }))
-])
-
-async function loadSceneDictsOnce() {
-  if (sceneDictsLoaded) return
-  try {
-    sceneDicts.value = await listDicts('scene', { signal })
-    sceneDictsLoaded = true
-  } catch {
-    // 场景字典加载失败不阻塞添加产品（分区选择不可用而已）
-  }
-}
-
-// ---------- 添加产品弹窗（构建器内直接选品，解决项目入口空构建器无法选产品的问题） ----------
+// ---------- 添加产品弹窗（统一选品组件 ProductPicker，解决项目入口空构建器无法选产品的问题） ----------
 const showAddModal = ref(false)
-const addKeyword = ref('')
-const addLoading = ref(false)
-const addRows = ref<ProductSummary[]>([])
-const addTotal = ref(0)
-const addPage = ref(1)
-const ADD_PAGE_SIZE = 10
-const addCheckedKeys = ref<string[]>([])
 const addingProducts = ref(false)
 
 /** 已在构建器中的产品 ID（弹窗中禁选防重复） */
 const existingIds = computed(() => new Set(products.value.map((p) => p.rspu.rspuId)))
 
-const baseAddColumns: DataTableColumns<ProductSummary> = [
-  { type: 'selection', disabled: (row: ProductSummary) => existingIds.value.has(row.rspuId) },
-  {
-    title: '图片',
-    key: 'image',
-    width: 70,
-    render: (row) => h(HoverZoomImage, { src: row.primaryImageUrl, width: 44, height: 44, objectFit: 'contain' })
-  },
-  {
-    title: '产品',
-    key: 'productName',
-    render: (row) => row.productName || row.categoryPath
-  },
-  { title: '编码', key: 'rspuCode', width: 150, render: (row) => row.rspuCode || row.rspuId },
-  {
-    title: '最低出厂价',
-    key: 'minFactoryPrice',
-    width: 110,
-    render: (row) => (row.minFactoryPrice != null ? `¥${row.minFactoryPrice.toFixed(2)}` : '暂无报价')
-  }
-]
-
-// 「最低出厂价」列仅平台运营（ADMIN/EDITOR）可见；数据源与产品库列表同接口，
-// 后端已将 minFactoryPrice 掩码为 null，此处隐藏列为体验层。
-const addColumns = computed<DataTableColumns<ProductSummary>>(() =>
-  userStore.isPlatformStaff
-    ? baseAddColumns
-    : baseAddColumns.filter((c) => (c as { key?: string }).key !== 'minFactoryPrice')
-)
-
 function openAddModal() {
-  addKeyword.value = ''
-  addCheckedKeys.value = []
-  addPage.value = 1
-  addZoneCode.value = null
   showAddModal.value = true
-  loadAddRows()
-  loadSceneDictsOnce()
-}
-
-async function loadAddRows() {
-  addLoading.value = true
-  try {
-    const result = await listProducts(
-      { keyword: addKeyword.value.trim() || undefined, status: 'active', page: addPage.value, size: ADD_PAGE_SIZE },
-      { signal }
-    )
-    addRows.value = result.rows
-    addTotal.value = result.total
-  } catch (e) {
-    errorMessage.value = e instanceof Error ? e.message : '加载产品列表失败'
-  } finally {
-    addLoading.value = false
-  }
 }
 
 /** 确认添加：逐个拉产品详情与 RSKU 报价，默认选中有报价的最低价 RSKU（与 URL 带入时的逻辑一致）。 */
-async function handleAddProducts() {
-  const newIds = addCheckedKeys.value.filter((id) => !existingIds.value.has(id))
+async function handleAddProducts(picked: ProductSummary[], spaceTag: string | null) {
+  const newIds = picked.map((p) => p.rspuId).filter((id) => !existingIds.value.has(id))
   if (newIds.length === 0) {
     showAddModal.value = false
     return
@@ -264,8 +185,8 @@ async function handleAddProducts() {
       rskuMap.value[rspuId] = list
       quantityMap[rspuId] = 1
       // 「放入分区」选择随产品项暂存，保存方案时携带 spaceTag
-      if (addZoneCode.value) {
-        zoneSelectionMap[rspuId] = addZoneCode.value
+      if (spaceTag) {
+        zoneSelectionMap[rspuId] = spaceTag
       } else {
         delete zoneSelectionMap[rspuId]
       }
@@ -866,54 +787,15 @@ onBeforeRouteUpdate((to) => {
       </n-space>
     </n-card>
 
-    <!-- 添加产品弹窗 -->
-    <n-modal v-model:show="showAddModal" title="添加产品" preset="card" style="width: 760px;">
-      <n-space vertical>
-        <n-space>
-          <n-input
-            v-model:value="addKeyword"
-            placeholder="按名称/编码搜索"
-            clearable
-            style="width: 260px;"
-            @keyup.enter="addPage = 1; loadAddRows()"
-          />
-          <n-button :loading="addLoading" @click="addPage = 1; loadAddRows()">搜索</n-button>
-        </n-space>
-        <n-data-table
-          v-model:checked-row-keys="addCheckedKeys"
-          :columns="addColumns"
-          :data="addRows"
-          :loading="addLoading"
-          :row-key="(row: ProductSummary) => row.rspuId"
-          size="small"
-        />
-        <n-space justify="space-between" align="center">
-          <n-pagination
-            v-model:page="addPage"
-            :item-count="addTotal"
-            :page-size="ADD_PAGE_SIZE"
-            @update:page="loadAddRows"
-          />
-          <n-space align="center">
-            <span style="font-size: 12px; color: var(--rsdp-text-secondary);">放入分区</span>
-            <n-select
-              v-model:value="addZoneCode"
-              :options="addZoneOptions"
-              placeholder="跟随产品标签（默认）"
-              style="width: 180px;"
-            />
-            <n-button @click="showAddModal = false">取消</n-button>
-            <n-button
-              type="primary"
-              :loading="addingProducts"
-              :disabled="addCheckedKeys.length === 0"
-              @click="handleAddProducts"
-            >
-              添加（{{ addCheckedKeys.length }}）
-            </n-button>
-          </n-space>
-        </n-space>
-      </n-space>
+    <!-- 添加产品弹窗（统一选品组件；v-if 重挂载保证每次打开状态干净） -->
+    <n-modal v-model:show="showAddModal" title="添加产品" preset="card" style="width: 960px; max-width: 95vw;" :mask-closable="!addingProducts">
+      <ProductPicker
+        v-if="showAddModal"
+        :disabled-ids="[...existingIds]"
+        show-space-tag
+        @confirm="handleAddProducts"
+        @cancel="showAddModal = false"
+      />
     </n-modal>
 
     <n-modal
