@@ -39,6 +39,7 @@ import { updateMyPreferences } from '@/api/auth'
 import { listDicts } from '@/api/dict'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
 import { useUserStore } from '@/stores/user'
+import { useSelectionStore, describeAddManyResult, MAX_SELECTION_ITEMS } from '@/stores/selection'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import StatusPill from '@/components/StatusPill.vue'
@@ -52,6 +53,7 @@ const route = useRoute()
 const dialog = useDialog()
 const message = useMessage()
 const userStore = useUserStore()
+const selectionStore = useSelectionStore()
 const signal = useRequestAbort()
 
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
@@ -672,6 +674,21 @@ const baseColumns: DataTableColumns<ProductSummary> = [
         )
       ]
       if (!isRecycledTab.value) {
+        // 选品篮：已入篮的项按钮置灰为「已入篮」
+        const inBasket = selectionStore.has(row.rspuId)
+        buttons.push(
+          h(
+            NButton,
+            {
+              text: true,
+              type: inBasket ? 'default' : 'primary',
+              size: 'small',
+              disabled: inBasket,
+              onClick: () => handleAddToBasket(row)
+            },
+            { default: () => (inBasket ? '已入篮' : '入篮') }
+          )
+        )
         if (canUpdateProduct.value && !isReadOnlyFullCatalog.value) {
           buttons.push(
             h(
@@ -839,6 +856,42 @@ function handleBatchPrice() {
 function handleBuildQuote() {
   if (selectedRowKeys.value.length === 0) return
   router.push(`/quotes/build?rspuIds=${selectedRowKeys.value.join(',')}`)
+}
+
+// ---------- 选品篮 ----------
+function toSelectionItem(row: ProductSummary) {
+  return {
+    rspuId: row.rspuId,
+    productName: row.productName || formatCategoryPath(row.categoryPath),
+    rspuCode: row.rspuCode,
+    primaryImageUrl: row.primaryImageUrl,
+    retailPrice: row.retailPrice,
+    minFactoryPrice: row.minFactoryPrice
+  }
+}
+
+function handleAddToBasket(row: ProductSummary) {
+  const result = selectionStore.add(toSelectionItem(row))
+  if (result === 'added') {
+    message.success('已加入选品篮')
+  } else if (result === 'full') {
+    message.warning(`选品篮最多暂存 ${MAX_SELECTION_ITEMS} 个产品`)
+  }
+}
+
+function handleBatchAddToBasket() {
+  if (selectedRowKeys.value.length === 0) {
+    message.warning('请先选择商品')
+    return
+  }
+  const selected = new Set(selectedRowKeys.value.map(String))
+  const rows = products.value.filter(r => selected.has(r.rspuId))
+  const result = selectionStore.addMany(rows.map(toSelectionItem))
+  if (result.added > 0) {
+    message.success(describeAddManyResult(result))
+  } else {
+    message.warning(describeAddManyResult(result))
+  }
 }
 
 // ---------- 字典 ----------
@@ -1124,9 +1177,10 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
           >
             批量删除（{{ deletableSelectedKeys.length }}）
           </n-button>
-          <template v-if="hasSelection && canGenerateQuote">
+          <template v-if="hasSelection">
             <span>已选择 {{ selectedRowKeys.length }} 个产品</span>
-            <n-button type="primary" secondary @click="handleBuildQuote">生成报价单</n-button>
+            <n-button secondary @click="handleBatchAddToBasket">批量入篮</n-button>
+            <n-button v-if="canGenerateQuote" type="primary" secondary @click="handleBuildQuote">生成报价单</n-button>
           </template>
         </n-space>
         <n-space v-else style="margin-bottom: 4px;">

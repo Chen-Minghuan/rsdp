@@ -31,6 +31,7 @@ import { generateQuote, exportQuote } from '@/api/quote'
 import { createScheme, updateScheme, getSchemeDetail } from '@/api/scheme'
 import { listProjects } from '@/api/project'
 import { useUserStore } from '@/stores/user'
+import { useSelectionStore } from '@/stores/selection'
 import { PERMISSIONS } from '@/utils/constants'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductDetail, ProductSummary } from '@/types/product'
@@ -41,6 +42,7 @@ import type { Scheme } from '@/types/scheme'
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const selectionStore = useSelectionStore()
 const signal = useRequestAbort()
 
 const editSchemeId = computed(() => (route.query.editSchemeId as string) || '')
@@ -70,6 +72,9 @@ const rawQuantities = computed(() => {
     return Number.isNaN(n) || n < 1 ? 1 : Math.floor(n)
   })
 })
+
+/** 是否来自全局选品篮注入（?from=basket，与 URL rspuIds 旧链路互斥，编辑模式优先） */
+const fromBasket = computed(() => !isEditMode.value && route.query.from === 'basket')
 
 const duplicateRspuIds = computed(() => {
   const seen = new Set<string>()
@@ -277,6 +282,22 @@ async function loadData() {
         selectedRskuMap[key] = item.rskuId
         quantityMap[key] = (quantityMap[key] ?? 0) + (item.quantity ?? 1)
       })
+    } else if (fromBasket.value) {
+      // 选品篮注入：预填数量与分区（zoneSelectionMap），详情/RSKU 拉取与默认选价沿用下方统一逻辑
+      const basketItems = selectionStore.items
+      ids = basketItems.map(item => item.rspuId)
+      if (ids.length > MAX_ITEMS) {
+        errorMessage.value = `选品篮产品数量超过 ${MAX_ITEMS}，已自动截断前 ${MAX_ITEMS} 个`
+        ids = ids.slice(0, MAX_ITEMS)
+      }
+      const idSet = new Set(ids)
+      basketItems.forEach(item => {
+        if (!idSet.has(item.rspuId)) return
+        quantityMap[item.rspuId] = Math.max(1, Math.floor(item.quantity || 1))
+        if (item.spaceTag) {
+          zoneSelectionMap[item.rspuId] = item.spaceTag
+        }
+      })
     } else {
       ids = rspuIds.value
       if (uniqueRawCount.value > MAX_ITEMS) {
@@ -305,7 +326,7 @@ async function loadData() {
     }
 
     if (ids.length === 0) {
-      errorMessage.value = '未选择任何产品'
+      errorMessage.value = fromBasket.value ? '选品篮为空，请先在其他页面加入产品' : '未选择任何产品'
       return
     }
 
@@ -340,6 +361,12 @@ async function loadData() {
       }
     })
     rskuMap.value = map
+
+    // 选品篮注入成功：数量/分区已恢复，清空篮子避免二次注入
+    if (fromBasket.value) {
+      selectionStore.clear()
+      successMessage.value = `已从选品篮注入 ${products.value.length} 个产品，选品篮已清空`
+    }
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载产品或报价失败'
   } finally {
@@ -610,8 +637,8 @@ onMounted(() => {
 })
 
 onBeforeRouteUpdate((to) => {
-  // 同组件切换编辑方案或清空编辑方案时，重置状态并重新加载
-  if (to.query.editSchemeId !== route.query.editSchemeId) {
+  // 同组件切换编辑方案、清空编辑方案或从选品篮再次注入时，重置状态并重新加载
+  if (to.query.editSchemeId !== route.query.editSchemeId || to.query.from !== route.query.from) {
     originalScheme.value = null
     schemeName.value = ''
     for (const key of Object.keys(selectedRskuMap)) {
@@ -619,6 +646,9 @@ onBeforeRouteUpdate((to) => {
     }
     for (const key of Object.keys(quantityMap)) {
       delete quantityMap[key]
+    }
+    for (const key of Object.keys(zoneSelectionMap)) {
+      delete zoneSelectionMap[key]
     }
     products.value = []
     loadData()

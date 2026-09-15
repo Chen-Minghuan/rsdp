@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, h } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NCard,
@@ -13,11 +13,13 @@ import {
   NDescriptionsItem,
   NDataTable,
   NEmpty,
+  useMessage,
   type DataTableColumns
 } from 'naive-ui'
 import { generateRoomScheme } from '@/api/matching'
 import { listDicts } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
+import { useSelectionStore, MAX_SELECTION_ITEMS } from '@/stores/selection'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import { PERMISSIONS } from '@/utils/constants'
 import type { RoomSchemeResponse, AiSchemeItem } from '@/types/matching'
@@ -25,6 +27,8 @@ import type { DictItem } from '@/types/dict'
 
 const router = useRouter()
 const userStore = useUserStore()
+const selectionStore = useSelectionStore()
+const message = useMessage()
 const signal = useRequestAbort()
 
 const roomTypes = ref<DictItem[]>([])
@@ -49,8 +53,44 @@ const schemeColumns: DataTableColumns<AiSchemeItem> = [
   { title: 'RSKU ID', key: 'rskuId', width: 160 },
   { title: '工厂', key: 'factoryName' },
   { title: '参考售价', key: 'salePrice', width: 120 },
-  { title: '交期(天)', key: 'leadTimeDays', width: 100 }
+  { title: '交期(天)', key: 'leadTimeDays', width: 100 },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 90,
+    render(row) {
+      const inBasket = selectionStore.has(row.rspuId)
+      return h(
+        NButton,
+        {
+          size: 'small',
+          secondary: true,
+          type: inBasket ? 'default' : 'primary',
+          disabled: inBasket,
+          onClick: () => handleAddToBasket(row)
+        },
+        { default: () => (inBasket ? '已入篮' : '入篮') }
+      )
+    }
+  }
 ]
+
+/** 加入选品篮（AI 搭配项快照：名称/主图/售价/出厂价；分区在篮子抽屉里再指派） */
+function handleAddToBasket(item: AiSchemeItem) {
+  const result = selectionStore.add({
+    rspuId: item.rspuId,
+    productName: item.rspuName,
+    primaryImageUrl: item.primaryImageUrl,
+    retailPrice: item.salePrice,
+    minFactoryPrice: item.factoryPrice,
+    quantity: item.quantity ?? 1
+  })
+  if (result === 'added') {
+    message.success('已加入选品篮')
+  } else if (result === 'full') {
+    message.warning(`选品篮最多暂存 ${MAX_SELECTION_ITEMS} 个产品`)
+  }
+}
 
 async function loadDicts() {
   loadingDicts.value = true

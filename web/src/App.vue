@@ -8,6 +8,7 @@ import { navGroups, type NavGroup, type NavItem } from '@/config/navigation'
 import { getPublicContent } from '@/api/platform'
 import { getLeadSourceStats } from '@/api/lead'
 import { sanitizeHtml } from '@/utils/htmlSanitizer'
+import SelectionBasket from '@/components/SelectionBasket.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -60,6 +61,11 @@ onMounted(async () => {
 })
 
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+
+/** 全局选品篮：仅登录后的管理端页面可见（公开页/无头页不显示）。 */
+const showSelectionBasket = computed(
+  () => userStore.isLoggedIn && !route.meta.public && !route.meta.hideHeader
+)
 
 /** 意向客户待跟进数（导航「意向客户」角标，仅平台运营角色拉取）。 */
 const leadPendingCount = ref(0)
@@ -228,6 +234,7 @@ async function openConsult() {
           <n-notification-provider>
             <n-dialog-provider>
               <router-view />
+              <SelectionBasket v-if="showSelectionBasket" />
             </n-dialog-provider>
           </n-notification-provider>
         </n-message-provider>

@@ -18,6 +18,7 @@ import {
   NStep,
   NSteps,
   NUpload,
+  useMessage,
   type DataTableColumns,
   type UploadFileInfo
 } from 'naive-ui'
@@ -34,6 +35,7 @@ import { getSchemeDetail } from '@/api/scheme'
 import { getProductDetail } from '@/api/product'
 import { listVariantsByRspu } from '@/api/variant'
 import { useRequestAbort } from '@/composables/useRequestAbort'
+import { useSelectionStore, describeAddManyResult } from '@/stores/selection'
 import type {
   DimensionConfidence,
   FloorPlanAnalysisResponse,
@@ -60,6 +62,8 @@ interface EditableRoom {
 const router = useRouter()
 const route = useRoute()
 const signal = useRequestAbort()
+const message = useMessage()
+const selectionStore = useSelectionStore()
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/png', 'application/pdf']
@@ -671,6 +675,39 @@ function goSchemeDetail() {
   }
 }
 
+// ---------- 选品篮 ----------
+const addingToBasket = ref(false)
+
+/** 步骤 4：把已生成方案的全部产品加入选品篮（沿用方案的数量与空间分区标签）。 */
+async function handleAddSchemeToBasket() {
+  if (!schemeId.value || addingToBasket.value) return
+  addingToBasket.value = true
+  try {
+    const scheme = await getSchemeDetail(schemeId.value, { signal })
+    const result = selectionStore.addMany(
+      (scheme.items ?? []).map(item => ({
+        rspuId: item.rspuId,
+        productName: item.rspuName,
+        primaryImageUrl: item.primaryImageUrl,
+        retailPrice: item.salePrice ?? undefined,
+        minFactoryPrice: item.factoryPrice ?? undefined,
+        quantity: item.quantity ?? 1,
+        spaceTag: item.spaceTag ?? null
+      }))
+    )
+    if (result.added > 0) {
+      message.success(describeAddManyResult(result))
+    } else {
+      message.warning(describeAddManyResult(result))
+    }
+  } catch (e) {
+    if (axios.isCancel(e)) return
+    message.error(e instanceof Error ? e.message : '加入选品篮失败')
+  } finally {
+    addingToBasket.value = false
+  }
+}
+
 function resetAll() {
   if (pollTimer) {
     clearTimeout(pollTimer)
@@ -1068,6 +1105,7 @@ onUnmounted(() => {
           </div>
           <n-space>
             <n-button type="primary" @click="goSchemeDetail">查看方案详情</n-button>
+            <n-button :loading="addingToBasket" @click="handleAddSchemeToBasket">全部加入选品篮</n-button>
             <n-button quaternary @click="resetAll">再上传一张户型图</n-button>
           </n-space>
         </n-space>
