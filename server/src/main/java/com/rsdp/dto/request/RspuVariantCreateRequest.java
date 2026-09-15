@@ -50,4 +50,7 @@ public class RspuVariantCreateRequest {
 
     /** 产品等级覆盖，为空时继承 RSPU。 */
     private String productLevel;
+
+    /** 数量/件数（Excel 导入时携带，可选） */
+    private Integer quantity;
 }

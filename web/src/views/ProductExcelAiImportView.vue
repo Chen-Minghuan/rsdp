@@ -2,18 +2,17 @@
 import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { NSelect, NTag, NInput, NUpload, NButton, NSpace, useMessage, type DataTableColumns, type UploadFileInfo } from 'naive-ui'
-import { VxeTable, VxeColumn } from 'vxe-table'
-import 'vxe-table/lib/style.css'
+import { NSelect, NTag, NInput, NUpload, NButton, NSpace, useMessage, type DataTableColumns } from 'naive-ui'
 import { listDicts } from '@/api/dict'
 import { listFactories } from '@/api/factory'
-import { getExcelAiImportRows, getExcelAiPreviewRowImages, getExcelAiPreviewImageUrl } from '@/api/product'
+import { getExcelAiImportRows } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
+import ExcelCleanReviewView from '@/components/excel-import/ExcelCleanReviewView.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
 import type { Factory } from '@/types/factory'
-import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow, UnmappedColumnInfo, PreviewRowImage } from '@/types/product'
+import type { ExcelAiImportFailure, CategoryMappingItem, PriceColumnImportMode, ExcelImportRow, UnmappedColumnInfo } from '@/types/product'
 
 const router = useRouter()
 const message = useMessage()
@@ -34,13 +33,15 @@ const {
   candidateCategoryCodes,
   rowCategorySelections,
   rowCategorySourceTags,
-  classifyingCategories,
   undeterminedCategoryRowIndexes,
   updateIfExists,
   importResult,
   taskList,
   priceColumnRoles,
   previewData,
+  previewGroups,
+  productHeaders,
+  variantHeaders,
   previewEdits,
   skippedRows,
   rowImageOverrides,
@@ -56,7 +57,7 @@ const {
   pendingTaskCount,
   batchRecovering
 } = storeToRefs(store)
-const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, fillDefaultValue, getPreviewCellValue, uploadRowImage, removeRowImage, cloneRowImages, setRowCategory, resetRowCategoryState } = store
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, uploadRowImage, removeRowImage, cloneRowImages, setRowCategory, resetRowCategoryState } = store
 
 // 兜底可映射字段清单：优先使用 preview 响应下发的 standardFields（后端 ExcelAiStandardFields）。
 // 同步义务：字段真实出处是后端 ExcelAiImportService 的 AI 映射提示词标准字段列表，
@@ -66,6 +67,7 @@ const STANDARD_FIELDS = [
   { label: '品类码 (categoryCode)', value: 'categoryCode' },
   { label: '外部编码 (externalCode)', value: 'externalCode' },
   { label: '产品名称 (productName)', value: 'productName' },
+  { label: '描述/配置说明 (description)', value: 'description' },
   { label: '风格 (positioningLabel)', value: 'positioningLabel' },
   { label: '主色 (colorPrimaryName)', value: 'colorPrimaryName' },
   { label: '材质标签 (materialTags)', value: 'materialTags' },
@@ -82,6 +84,7 @@ const STANDARD_FIELDS = [
   { label: '颜色码 (colorCode)（仅字典码，颜色名请选主色）', value: 'colorCode' },
   { label: '材质码 (materialCode)（仅字典码 WO/PE/FA，材质名请选材质标签）', value: 'materialCode' },
   { label: '尺寸文字 (dimensions)（W*D*H 数值尺寸选这个）', value: 'dimensions' },
+  { label: '数量/件数 (quantity)', value: 'quantity' },
   { label: '交期天数 (leadTimeDays)', value: 'leadTimeDays' }
 ]
 
@@ -201,52 +204,11 @@ function goToProduct(rspuId: string) {
   router.push(`/products/${rspuId}`)
 }
 
-/** 已懒加载的缩略图缓存：rowIndex -> PreviewRowImage[] */
-const loadedThumbnails = ref<Map<number, PreviewRowImage[]>>(new Map())
-/** 正在加载缩略图的行，防止重复请求 */
-const loadingThumbnails = ref<Set<number>>(new Set())
-
-async function loadRowThumbnails(rowIndex: number, batchId: string) {
-  if (loadedThumbnails.value.has(rowIndex) || loadingThumbnails.value.has(rowIndex)) {
-    return
-  }
-  loadingThumbnails.value.add(rowIndex)
-  try {
-    const images = await getExcelAiPreviewRowImages(batchId, rowIndex)
-    loadedThumbnails.value.set(rowIndex, images)
-  } catch (e) {
-    console.error(`加载第 ${rowIndex} 行缩略图失败`, e)
-  } finally {
-    loadingThumbnails.value.delete(rowIndex)
-  }
-}
-
-function getRowImages(row: Record<string, unknown>): PreviewRowImage[] {
-  const rowIndex = Number(row.__rowIndex__)
-  const metaImages = (row.__images__ as PreviewRowImage[] | undefined) ?? []
-  const loaded = loadedThumbnails.value.get(rowIndex)
-  if (!loaded) {
-    // 触发懒加载（组件渲染时调用，VxeTable 虚拟滚动保证仅可视行执行）
-    const batchId = mappingResponse.value?.batchId
-    if (batchId && metaImages.length > 0) {
-      loadRowThumbnails(rowIndex, batchId)
-    }
-    return metaImages
-  }
-  // 把已加载的 Base64 合并回元数据，保持 columnHeader/primaryCandidate 等信息
-  return metaImages.map((meta, idx) => ({
-    ...meta,
-    thumbnailBase64: loaded[idx]?.thumbnailBase64 ?? meta.thumbnailBase64
-  }))
-}
-
-/** 复制图片的源行 rowIndex */
+/** 复制图片的源行 rowIndex（商品校验视图与完整表格视图共用） */
 const copiedImageRowIndex = ref<number | null>(null)
 
-// 批次切换（换文件/切换 sheet 重新 preview）后，按 rowIndex 缓存的缩略图与复制源行即失效，必须清空
+// 批次切换（换文件/切换 sheet 重新 preview）后，复制源行即失效，必须清空
 watch(() => mappingResponse.value?.batchId, () => {
-  loadedThumbnails.value = new Map()
-  loadingThumbnails.value = new Set()
   copiedImageRowIndex.value = null
 })
 
@@ -261,11 +223,6 @@ async function handleUploadRowImage(rowIndex: number, file: File) {
     message.error(msg)
     console.error('上传行图片失败', e)
   }
-}
-
-function onBeforeUploadRowImage(rowIndex: number, data: { file: UploadFileInfo }) {
-  handleUploadRowImage(rowIndex, data.file.file as File)
-  return false
 }
 
 async function handleDeleteRowImage(rowIndex: number, tempImageKey: string) {
@@ -296,12 +253,6 @@ async function handlePasteRowImages(targetRowIndex: number) {
     message.error(msg)
     console.error('粘贴行图片失败', e)
   }
-}
-
-function hasRowImages(row: Record<string, unknown>): boolean {
-  const overrideCount = (row.__overrideKeys__ as string[] | undefined)?.length ?? 0
-  const embeddedCount = (row.__images__ as PreviewRowImage[] | undefined)?.length ?? 0
-  return overrideCount > 0 || embeddedCount > 0
 }
 
 const mappingColumns = computed<DataTableColumns<{ header: string; value: string }>>(() => [
@@ -422,15 +373,8 @@ const unmappedColumnsColumns = computed<DataTableColumns<UnmappedColumnInfo>>(()
 ])
 
 // ===== 数据清洗（步骤 3） =====
-const cleanTableRef = ref<InstanceType<typeof VxeTable> | null>(null)
-const cleanFillHeader = ref<string | null>(null)
-const cleanFillValue = ref('')
 /** 只看「商品品类未确定」的行（Step 3→4 被拦截时自动开启） */
 const showOnlyUndetermined = ref(false)
-/** 批量设置商品品类选中的品类码 */
-const batchCategoryCode = ref<string | null>(null)
-/** 清洗表格勾选行（批量设置品类用） */
-const selectedCleanRowIndexes = ref<number[]>([])
 
 /** 图片预览弹窗状态 */
 const imagePreviewVisible = ref(false)
@@ -441,115 +385,8 @@ function previewImage(src: string) {
   imagePreviewVisible.value = true
 }
 
-/** 数据清洗表格列：过滤掉内部字段 __rowIndex__ */
-const cleanHeaders = computed(() => {
-  if (previewData.value.length === 0) return []
-  return Object.keys(previewData.value[0].rawValues)
-})
-
-/** 把 PreviewDataRow 转换成 VxeTable 行数据，带内部行号字段与图片 */
-const cleanTableData = computed(() => {
-  const overrides = rowImageOverrides.value
-  const rows = showOnlyUndetermined.value
-    ? previewData.value.filter(r => undeterminedCategoryRowIndexes.value.includes(r.rowIndex))
-    : previewData.value
-  return rows.map(row => {
-    const record: Record<string, string | number | PreviewRowImage[] | string[]> = {
-      __rowIndex__: row.rowIndex,
-      __images__: row.images ?? [],
-      // 把覆盖图 key 嵌入行数据，让 VxeTable 在复制/粘贴/删除图片后立刻重新渲染该行。
-      __overrideKeys__: overrides[row.rowIndex] ?? []
-    }
-    for (const header of cleanHeaders.value) {
-      const value = getPreviewCellValue(row, header)
-      record[header] = value ?? ''
-    }
-    return record
-  })
-})
-
-/** 列标题：未映射列只显示原始表头；已映射列追加系统字段名 */
-function cleanColumnTitle(header: string): string {
-  const mapped = previewData.value[0]?.mappedFieldByHeader[header]
-  if (mapped) {
-    const fieldLabel = standardFieldOptions.value.find(f => f.value === mapped)?.label ?? mapped
-    return `${header} → ${fieldLabel}`
-  }
-  return header
-}
-
-/**
- * 数据列宽：按映射字段类型定宽。
- * 不能用 min-width——vxe-table 会把容器剩余宽度均摊给 min-width 列，宽屏下列被拉得很长。
- */
-function cleanColumnWidth(header: string): number {
-  if (mappingResponse.value?.priceColumns.some(p => p.header === header)) return 110
-  switch (previewData.value[0]?.mappedFieldByHeader[header]) {
-    case 'description': return 240
-    case 'productName': return 200
-    case 'keySpecs': return 180
-    case 'externalCode':
-    case 'variantDisplayName':
-    case 'dimensions': return 160
-    case 'warrantyYears':
-    case 'leadTimeDays':
-    case 'sizeCode':
-    case 'colorCode':
-    case 'materialCode': return 110
-    default: return 150
-  }
-}
-
-/**
- * 单元格编辑关闭后，把变更写回 store 的 previewEdits。
- * 若值与原始值相同，则移除编辑项。
- */
-function onCleanEditClosed({ row, column }: { row: Record<string, unknown>; column: { field: string } }) {
-  const rowIndex = Number(row.__rowIndex__)
-  const header = column.field
-  const newValue = String(row[header] ?? '')
-  const originalRow = previewData.value.find(r => r.rowIndex === rowIndex)
-  const originalValue = originalRow ? (originalRow.rawValues[header] ?? '') : ''
-  if (newValue === originalValue) {
-    // 与原始值一致时移除编辑缓存
-    const key = `${rowIndex}:${header}`
-    if (previewEdits.value[key]) {
-      const rest = { ...previewEdits.value }
-      delete rest[key]
-      previewEdits.value = rest
-    }
-  } else {
-    updatePreviewEdit(rowIndex, header, newValue)
-  }
-}
-
-/** 应用按列填充默认值 */
-function applyCleanFill() {
-  const header = cleanFillHeader.value
-  const value = cleanFillValue.value
-  if (!header || value === '') return
-  fillDefaultValue(header, value)
-  cleanFillValue.value = ''
-}
-
-/** 勾选行变化时同步选中行号（批量设置品类的「已选择 N 行」展示） */
-function onCleanSelectionChange() {
-  const records = (cleanTableRef.value?.getCheckboxRecords?.() ?? []) as Record<string, unknown>[]
-  selectedCleanRowIndexes.value = records.map(r => Number(r.__rowIndex__))
-}
-
-/** 批量设置勾选行的商品品类（§13 第一版只做普通批量设置，不做自动分组/聚类） */
-function applyBatchCategory() {
-  const code = batchCategoryCode.value
-  if (!code || selectedCleanRowIndexes.value.length === 0) return
-  let applied = 0
-  for (const rowIndex of selectedCleanRowIndexes.value) {
-    if (skippedRows.value.has(rowIndex)) continue
-    setRowCategory(rowIndex, code)
-    applied++
-  }
-  message.success(`已批量设置 ${applied} 行商品品类`)
-  batchCategoryCode.value = null
+function handleUpdatePreviewEdit(payload: { rowIndex: number; header: string; value: string | null }) {
+  updatePreviewEdit(payload.rowIndex, payload.header, payload.value)
 }
 
 /** 数据清洗 → 确认导入：被拦截（仍有未确定品类行）时自动切到「只看未确定商品」 */
@@ -557,18 +394,6 @@ function goToConfirmStep() {
   if (!handleGoToConfirmStep()) {
     showOnlyUndetermined.value = true
   }
-}
-
-/** 被跳过行的视觉样式 */
-function cleanRowStyle({ row }: { row: Record<string, unknown> }) {
-  const rowIndex = Number(row.__rowIndex__)
-  if (skippedRows.value.has(rowIndex)) {
-    return { backgroundColor: '#fff1f0', textDecoration: 'line-through', color: '#999' }
-  }
-  if (copiedImageRowIndex.value != null && copiedImageRowIndex.value === rowIndex) {
-    return { backgroundColor: '#e6f7ff' }
-  }
-  return {}
 }
 
 const failureColumns: DataTableColumns<ExcelAiImportFailure> = [
@@ -826,211 +651,39 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
     </n-card>
 
     <!-- 步骤 3：数据清洗 -->
-    <n-card v-if="currentStep === 3" title="数据清洗（原始表头视角）">
+    <n-card v-if="currentStep === 3" title="数据清洗">
       <n-spin :show="uploading">
         <n-space vertical :size="16">
           <n-alert type="info" :show-icon="false">
-            以下按 Excel 原始表头展示全部数据行，可直接双击单元格编辑。编辑仅影响本次导入，不会修改原始文件。
+            左侧选择商品，右侧检查商品字段与变体信息。编辑结果会应用到本次导入。
           </n-alert>
 
-          <n-space align="center" wrap>
-            <n-tag type="default">共 {{ previewData.length }} 行</n-tag>
-            <n-tag v-if="skippedRows.size > 0" type="warning">
-              已跳过 {{ skippedRows.size }} 行，导入时不会录入
-            </n-tag>
-            <template v-if="categoryMode">
-              <n-tag v-if="classifyingCategories" type="info">
-                正在识别商品品类…
-              </n-tag>
-              <n-tag v-else-if="undeterminedCategoryRowIndexes.length > 0" type="error">
-                {{ undeterminedCategoryRowIndexes.length }} 行商品品类未确定
-              </n-tag>
-              <n-tag v-else type="success">
-                全部行已确定商品品类
-              </n-tag>
-              <n-checkbox v-model:checked="showOnlyUndetermined">
-                只看未确定商品
-              </n-checkbox>
-            </template>
-          </n-space>
-
-          <!-- 批量设置商品品类（§13：第一版只做普通批量设置） -->
-          <n-space v-if="categoryMode" align="center">
-            <n-text depth="3">已选择 {{ selectedCleanRowIndexes.length }} 行</n-text>
-            <n-select
-              v-model:value="batchCategoryCode"
-              :options="categorySelectOptions"
-              placeholder="批量设置商品品类"
-              clearable
-              filterable
-              style="width: 220px;"
-            />
-            <n-button
-              :disabled="!batchCategoryCode || selectedCleanRowIndexes.length === 0"
-              @click="applyBatchCategory"
-            >
-              批量设置品类
-            </n-button>
-          </n-space>
-
-          <n-space>
-            <n-select
-              v-model:value="cleanFillHeader"
-              placeholder="选择要填充的列"
-              :options="cleanHeaders.map(h => ({ label: cleanColumnTitle(h), value: h }))"
-              clearable
-              style="width: 220px;"
-            />
-            <n-input
-              v-model:value="cleanFillValue"
-              placeholder="默认值"
-              style="width: 200px;"
-              @keydown.enter="applyCleanFill"
-            />
-            <n-button :disabled="!cleanFillHeader || cleanFillValue === ''" @click="applyCleanFill">
-              按列填充
-            </n-button>
-          </n-space>
-
-          <vxe-table
-            ref="cleanTableRef"
-            :data="cleanTableData"
-            height="520"
-            :scroll-y="{ enabled: true, gt: 0 }"
-            :scroll-x="{ enabled: true, gt: 0 }"
-            :edit-config="{ trigger: 'dblclick', mode: 'cell' }"
-            :row-config="{ keyField: '__rowIndex__' }"
-            :cell-config="{ height: 102 }"
-            :row-style="cleanRowStyle"
-            border
-            show-overflow="title"
-            @edit-closed="onCleanEditClosed"
-            @checkbox-change="onCleanSelectionChange"
-            @checkbox-all="onCleanSelectionChange"
-          >
-            <vxe-column v-if="categoryMode" type="checkbox" width="46" fixed="left" />
-            <vxe-column type="seq" title="行号" width="70" fixed="left" />
-            <vxe-column title="跳过" width="70" fixed="left">
-              <template #default="{ row }">
-                <n-checkbox
-                  :checked="skippedRows.has(Number(row.__rowIndex__))"
-                  @update:checked="toggleSkipRow(Number(row.__rowIndex__))"
-                />
-              </template>
-            </vxe-column>
-            <vxe-column title="图片" width="200" fixed="left">
-              <template #default="{ row }">
-                <div style="display: flex; flex-direction: column; gap: 8px; padding: 4px 0;">
-                  <div style="display: flex; gap: 6px; flex-wrap: wrap; min-height: 48px; align-items: center;">
-                    <template v-if="(row.__overrideKeys__ as string[] | undefined)?.length || (row.__images__ as PreviewRowImage[] | undefined)?.length">
-                      <div
-                        v-for="key in row.__overrideKeys__ as string[]"
-                        :key="key"
-                        style="position: relative;"
-                      >
-                        <img
-                          :src="getExcelAiPreviewImageUrl(mappingResponse!.batchId, key)"
-                          title="用户覆盖图片"
-                          style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 2px solid #52c41a;"
-                          @click="previewImage(getExcelAiPreviewImageUrl(mappingResponse!.batchId, key))"
-                        >
-                        <n-button
-                          size="tiny"
-                          circle
-                          style="position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; padding: 0;"
-                          @click.stop="handleDeleteRowImage(Number(row.__rowIndex__), key)"
-                        >
-                          ×
-                        </n-button>
-                      </div>
-                      <template v-for="(img, idx) in getRowImages(row)" :key="`excel-${idx}`">
-                        <img
-                          v-if="img.thumbnailBase64"
-                          :src="img.thumbnailBase64"
-                          :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '') + ((row.__overrideKeys__ as string[] | undefined)?.length ? '；导入时将被覆盖图替换' : '')"
-                          :style="{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', border: '1px solid #999', opacity: (row.__overrideKeys__ as string[] | undefined)?.length ? 0.4 : 1 }"
-                          @click="previewImage(img.thumbnailBase64)"
-                        >
-                        <div
-                          v-else
-                          style="width: 48px; height: 48px; border-radius: 4px; border: 1px dashed #ccc; display: flex; align-items: center; justify-content: center; color: #999; font-size: 10px;"
-                        >
-                          加载中
-                        </div>
-                      </template>
-                    </template>
-                    <span v-else style="color: #999; font-size: 12px;">无图</span>
-                  </div>
-                  <n-space size="small">
-                    <n-upload :show-file-list="false" :on-before-upload="(data) => onBeforeUploadRowImage(Number(row.__rowIndex__), data)">
-                      <n-button size="tiny" type="primary">
-                        上传
-                      </n-button>
-                    </n-upload>
-                    <n-button
-                      size="tiny"
-                      :disabled="!hasRowImages(row)"
-                      @click="handleCopyRowImages(Number(row.__rowIndex__))"
-                    >
-                      复制
-                    </n-button>
-                    <n-button
-                      size="tiny"
-                      :disabled="copiedImageRowIndex == null"
-                      @click="handlePasteRowImages(Number(row.__rowIndex__))"
-                    >
-                      粘贴
-                    </n-button>
-                  </n-space>
-                </div>
-              </template>
-            </vxe-column>
-            <!-- 商品品类列（§10/§12：AI 只预填候选集内建议，人工可选全量字典品类） -->
-            <vxe-column v-if="categoryMode" title="商品品类" width="220" fixed="left">
-              <template #default="{ row }">
-                <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
-                  <n-select
-                    :value="rowCategorySelections[Number(row.__rowIndex__)] ?? null"
-                    :options="categorySelectOptions"
-                    placeholder="请选择品类"
-                    clearable
-                    filterable
-                    size="small"
-                    style="width: 180px;"
-                    @update:value="(value: string | null) => setRowCategory(Number(row.__rowIndex__), value)"
-                  />
-                  <n-tag v-if="rowCategorySourceTags[Number(row.__rowIndex__)] === 'manual'" size="tiny" :bordered="false">
-                    人工修改
-                  </n-tag>
-                  <n-tag v-else-if="rowCategorySourceTags[Number(row.__rowIndex__)] === 'ai'" size="tiny" type="info" :bordered="false">
-                    AI 建议
-                  </n-tag>
-                  <n-tag v-else-if="rowCategorySourceTags[Number(row.__rowIndex__)] === 'dict'" size="tiny" type="success" :bordered="false">
-                    类别列识别
-                  </n-tag>
-                  <n-tag v-else-if="rowCategorySourceTags[Number(row.__rowIndex__)] === 'default'" size="tiny" type="default" :bordered="false">
-                    默认品类
-                  </n-tag>
-                  <n-tag
-                    v-else-if="!rowCategorySelections[Number(row.__rowIndex__)] && !skippedRows.has(Number(row.__rowIndex__))"
-                    size="tiny"
-                    type="warning"
-                    :bordered="false"
-                  >
-                    未识别
-                  </n-tag>
-                </div>
-              </template>
-            </vxe-column>
-            <vxe-column
-              v-for="header in cleanHeaders"
-              :key="header"
-              :field="header"
-              :title="cleanColumnTitle(header)"
-              :width="cleanColumnWidth(header)"
-              :edit-render="{ name: 'input' }"
-            />
-          </vxe-table>
+          <ExcelCleanReviewView
+            v-model:show-only-undetermined="showOnlyUndetermined"
+            :preview-data="previewData"
+            :preview-groups="previewGroups"
+            :product-headers="productHeaders"
+            :variant-headers="variantHeaders"
+            :preview-edits="previewEdits"
+            :row-image-overrides="rowImageOverrides"
+            :row-category-selections="rowCategorySelections"
+            :row-category-source-tags="rowCategorySourceTags"
+            :category-mode="categoryMode"
+            :category-select-options="categorySelectOptions"
+            :skipped-rows="skippedRows"
+            :undetermined-category-row-indexes="undeterminedCategoryRowIndexes"
+            :mapping-response="mappingResponse"
+            :standard-field-options="standardFieldOptions"
+            :copied-image-row-index="copiedImageRowIndex"
+            @update:preview-edit="handleUpdatePreviewEdit"
+            @toggle-skip-row="toggleSkipRow"
+            @set-row-category="setRowCategory"
+            @preview-image="previewImage"
+            @upload-row-image="handleUploadRowImage"
+            @delete-row-image="handleDeleteRowImage"
+            @copy-row-images="handleCopyRowImages"
+            @paste-row-images="handlePasteRowImages"
+          />
 
           <n-space>
             <n-button @click="currentStep = 2">
