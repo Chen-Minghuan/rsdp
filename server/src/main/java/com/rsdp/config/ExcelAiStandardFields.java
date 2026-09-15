@@ -21,6 +21,40 @@ public final class ExcelAiStandardFields {
     }
 
     /**
+     * 商品级字段：同一型号下所有变体共享的字段。
+     */
+    public static final List<String> PRODUCT_LEVEL_FIELDS = List.of(
+        "categoryCode",
+        "externalCode",
+        "productName",
+        "positioningLabel",
+        "colorPrimaryName",
+        "materialTags",
+        "sceneTags",
+        "productLevel",
+        "warrantyYears",
+        "referencePriceBand",
+        "sixDimTags",
+        "keySpecs",
+        "primaryImageUrl",
+        "detailImageUrls",
+        "description"
+    );
+
+    /**
+     * 变体级字段：同一型号下每行可能不同的字段。
+     */
+    public static final List<String> VARIANT_LEVEL_FIELDS = List.of(
+        "variantDisplayName",
+        "sizeCode",
+        "colorCode",
+        "materialCode",
+        "dimensions",
+        "leadTimeDays",
+        "quantity"
+    );
+
+    /**
      * 可映射标准字段清单（含「不映射」空值项，顺序即前端下拉顺序）。
      */
     public static final List<StandardFieldOption> MAPPABLE_FIELDS = List.of(
@@ -28,6 +62,7 @@ public final class ExcelAiStandardFields {
         new StandardFieldOption("品类码 (categoryCode)", "categoryCode"),
         new StandardFieldOption("外部编码 (externalCode)", "externalCode"),
         new StandardFieldOption("产品名称 (productName)", "productName"),
+        new StandardFieldOption("描述/配置说明 (description)", "description"),
         new StandardFieldOption("风格 (positioningLabel)", "positioningLabel"),
         new StandardFieldOption("主色 (colorPrimaryName)", "colorPrimaryName"),
         new StandardFieldOption("材质标签 (materialTags)", "materialTags"),
@@ -44,6 +79,7 @@ public final class ExcelAiStandardFields {
         new StandardFieldOption("颜色码 (colorCode)（仅字典码，颜色名请选主色）", "colorCode"),
         new StandardFieldOption("材质码 (materialCode)（仅字典码 WO/PE/FA，材质名请选材质标签）", "materialCode"),
         new StandardFieldOption("尺寸文字 (dimensions)（W*D*H 数值尺寸选这个）", "dimensions"),
+        new StandardFieldOption("数量/件数 (quantity)", "quantity"),
         new StandardFieldOption("交期天数 (leadTimeDays)", "leadTimeDays")
     );
 }

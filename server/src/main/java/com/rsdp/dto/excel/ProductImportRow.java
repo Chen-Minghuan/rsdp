@@ -102,4 +102,8 @@ public class ProductImportRow {
     /** 零售参考价（销售价/含税价/零售价/市场价列或 sales 角色价格列） */
     @ExcelProperty("零售参考价")
     private java.math.BigDecimal retailPrice;
+
+    /** 数量/件数（当 Excel 备注列等为纯数字时） */
+    @ExcelProperty("数量")
+    private Integer quantity;
 }
