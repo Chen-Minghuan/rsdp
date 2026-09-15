@@ -15,16 +15,20 @@ import {
   NGridItem,
   NImage,
   NTag,
-  NTooltip
+  NTooltip,
+  useMessage
 } from 'naive-ui'
 import type { UploadFileInfo } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { searchSimilarProducts } from '@/api/retrieval'
 import { listDicts } from '@/api/dict'
+import { useSelectionStore, MAX_SELECTION_ITEMS } from '@/stores/selection'
 import type { SimilarProductResponse } from '@/types/retrieval'
 import type { DictItem } from '@/types/dict'
 
 const router = useRouter()
+const message = useMessage()
+const selectionStore = useSelectionStore()
 
 const categories = ref<DictItem[]>([])
 const styles = ref<DictItem[]>([])
@@ -116,6 +120,19 @@ async function handleSearch() {
 
 function goToDetail(rspuId: string) {
   router.push(`/products/${rspuId}`)
+}
+
+/** 加入选品篮（检索结果无名称/价格字段，仅快照 rspuId + 主图）。 */
+function handleAddToBasket(item: SimilarProductResponse) {
+  const result = selectionStore.add({
+    rspuId: item.rspuId,
+    primaryImageUrl: item.mainImageUrl
+  })
+  if (result === 'added') {
+    message.success('已加入选品篮')
+  } else if (result === 'full') {
+    message.warning(`选品篮最多暂存 ${MAX_SELECTION_ITEMS} 个产品`)
+  }
 }
 
 function confidenceType(confidence?: string): 'success' | 'warning' | 'error' | 'default' {
@@ -218,14 +235,25 @@ onUnmounted(() => {
 
                 <n-space justify="space-between" align="center">
                   <span class="rspu-id">{{ item.rspuId }}</span>
-                  <n-tooltip trigger="hover">
-                    <template #trigger>
-                      <n-tag size="small" type="info">
-                        {{ (item.finalScore * 100).toFixed(1) }}%
-                      </n-tag>
-                    </template>
-                    向量相似度 {{ (item.vectorScore * 100).toFixed(1) }}%
-                  </n-tooltip>
+                  <n-space align="center" :wrap="false">
+                    <n-button
+                      size="tiny"
+                      secondary
+                      :type="selectionStore.has(item.rspuId) ? 'default' : 'primary'"
+                      :disabled="selectionStore.has(item.rspuId)"
+                      @click.stop="handleAddToBasket(item)"
+                    >
+                      {{ selectionStore.has(item.rspuId) ? '已入篮' : '入篮' }}
+                    </n-button>
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-tag size="small" type="info">
+                          {{ (item.finalScore * 100).toFixed(1) }}%
+                        </n-tag>
+                      </template>
+                      向量相似度 {{ (item.vectorScore * 100).toFixed(1) }}%
+                    </n-tooltip>
+                  </n-space>
                 </n-space>
 
                 <n-space>

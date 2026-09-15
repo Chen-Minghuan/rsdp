@@ -37,12 +37,14 @@ import {
   exportFavorites
 } from '@/api/favorite'
 import { useUserStore } from '@/stores/user'
+import { useSelectionStore, describeAddManyResult, MAX_SELECTION_ITEMS } from '@/stores/selection'
 import { PERMISSIONS } from '@/utils/constants'
 import type { FavoriteFolder, FavoriteItem } from '@/types/favorite'
 
 const router = useRouter()
 const message = useMessage()
 const userStore = useUserStore()
+const selectionStore = useSelectionStore()
 
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 const canViewFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_READ))
@@ -219,6 +221,36 @@ function handleBuildQuote() {
   router.push(`/quotes/build?rspuIds=${selectedRspuIds.value.join(',')}`)
 }
 
+// ---------- 选品篮 ----------
+function toSelectionItem(item: FavoriteItem) {
+  return {
+    rspuId: item.rspuId,
+    productName: item.productName,
+    primaryImageUrl: item.primaryImageUrl
+  }
+}
+
+function handleAddToBasket(item: FavoriteItem) {
+  const result = selectionStore.add(toSelectionItem(item))
+  if (result === 'added') {
+    message.success('已加入选品篮')
+  } else if (result === 'full') {
+    message.warning(`选品篮最多暂存 ${MAX_SELECTION_ITEMS} 个产品`)
+  }
+}
+
+function handleBatchAddToBasket() {
+  if (selectedRspuIds.value.length === 0) return
+  const selected = new Set(selectedRspuIds.value)
+  const list = favorites.value.filter(f => selected.has(f.rspuId))
+  const result = selectionStore.addMany(list.map(toSelectionItem))
+  if (result.added > 0) {
+    message.success(describeAddManyResult(result))
+  } else {
+    message.warning(describeAddManyResult(result))
+  }
+}
+
 function formatTime(value?: string): string {
   if (!value) return '-'
   return value.replace('T', ' ').slice(0, 16)
@@ -229,6 +261,9 @@ function formatTime(value?: string): string {
   <PageContainer title="我的收藏" subtitle="收藏的产品可批量生成报价单">
     <template #actions>
       <n-button :disabled="favorites.length === 0" @click="openExportModal">导出 Excel</n-button>
+      <n-button :disabled="!hasSelection" @click="handleBatchAddToBasket">
+        批量入篮{{ hasSelection ? `（${selectedRspuIds.length}）` : '' }}
+      </n-button>
       <n-button
         v-if="canGenerateQuote"
         type="primary"
@@ -338,15 +373,26 @@ function formatTime(value?: string): string {
                       加入报价单
                     </n-checkbox>
                     <span v-else />
-                    <n-button
-                      size="small"
-                      quaternary
-                      type="error"
-                      :loading="removingId === item.rspuId"
-                      @click="handleRemove(item)"
-                    >
-                      取消收藏
-                    </n-button>
+                    <n-space align="center" :wrap="false">
+                      <n-button
+                        size="small"
+                        quaternary
+                        :type="selectionStore.has(item.rspuId) ? 'default' : 'primary'"
+                        :disabled="selectionStore.has(item.rspuId)"
+                        @click="handleAddToBasket(item)"
+                      >
+                        {{ selectionStore.has(item.rspuId) ? '已入篮' : '入篮' }}
+                      </n-button>
+                      <n-button
+                        size="small"
+                        quaternary
+                        type="error"
+                        :loading="removingId === item.rspuId"
+                        @click="handleRemove(item)"
+                      >
+                        取消收藏
+                      </n-button>
+                    </n-space>
                   </n-space>
                 </div>
               </n-card>
