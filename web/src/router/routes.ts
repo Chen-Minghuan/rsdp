@@ -98,6 +98,18 @@ export const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
   },
   {
+    path: '/collections',
+    name: 'CollectionList',
+    component: () => import('@/views/CollectionListView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.COLLECTION_READ] }
+  },
+  {
+    path: '/scheme-candidates',
+    name: 'SchemeCandidateList',
+    component: () => import('@/views/SchemeCandidateView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.SCHEME_CANDIDATE_READ] }
+  },
+  {
     path: '/projects',
     name: 'ProjectList',
     component: () => import('@/views/ProjectListView.vue'),

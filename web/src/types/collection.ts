@@ -21,6 +21,8 @@ export interface ProductCollection {
   styleCodes?: string[]
   targetSegments?: string[]
   isFeatured?: boolean
+  /** 是否已发布到官网（仅平台运营可修改） */
+  isPublished?: boolean
   sortOrder?: number
   status: string
   createdBy: string
@@ -47,6 +49,19 @@ export interface ProductCollectionCreateRequest {
 }
 
 /**
- * 更新产品集请求。
+ * 更新产品集请求（创建字段全可选，另支持发布开关与状态；isPublished 仅平台运营可传）。
  */
-export type ProductCollectionUpdateRequest = ProductCollectionCreateRequest
+export interface ProductCollectionUpdateRequest {
+  collectionCode?: string
+  name?: string
+  description?: string
+  categoryCodes?: string[]
+  styleCodes?: string[]
+  targetSegments?: string[]
+  isFeatured?: boolean
+  isPublished?: boolean
+  sortOrder?: number
+  status?: string
+  /** 覆盖包含的 RSPU ID 列表（按顺序） */
+  rspuIds?: string[]
+}
