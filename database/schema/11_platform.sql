@@ -79,8 +79,11 @@ CREATE TABLE IF NOT EXISTS platform_lead (
     assignee    VARCHAR(64),
     follow_log  JSONB,
     created_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+    updated_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    designer_id VARCHAR(64)                           -- 归属设计师（sys_user.user_id，V9 增量并入；列位置与 ALTER 追加一致保持在末尾）
 );
+COMMENT ON COLUMN platform_lead.designer_id IS '归属设计师（sys_user.user_id，官网设计师分享链接带入，可空；弱关联不加外键）';
 CREATE INDEX IF NOT EXISTS idx_platform_lead_status ON platform_lead(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_platform_lead_source ON platform_lead(source, created_at);
+CREATE INDEX IF NOT EXISTS idx_platform_lead_designer ON platform_lead(designer_id, created_at);
 

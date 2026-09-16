@@ -47,6 +47,9 @@ public class ProductCollectionService {
     /**
      * 查询产品集列表。
      *
+     * <p>归属隔离：平台运营人员（ADMIN/EDITOR）可见全部；
+     * 其他登录用户（设计师/普通用户）仅可见自己创建的集合。</p>
+     *
      * @param status 状态筛选（可选）
      * @return 产品集响应列表
      */
@@ -55,6 +58,13 @@ public class ProductCollectionService {
             .orderByDesc("is_featured", "sort_order", "created_at");
         if (StringUtils.hasText(status)) {
             wrapper.eq("status", status);
+        }
+        if (!SecurityOperatorContext.isPlatformStaff()) {
+            String currentUserId = SecurityOperatorContext.currentUserId();
+            if (!StringUtils.hasText(currentUserId)) {
+                return Collections.emptyList();
+            }
+            wrapper.eq("created_by", currentUserId);
         }
         return collectionMapper.selectList(wrapper).stream()
             .map(this::toSummaryResponse)
@@ -68,11 +78,7 @@ public class ProductCollectionService {
      * @return 产品集详情响应
      */
     public ProductCollectionResponse getDetail(String collectionId) {
-        ProductCollection collection = collectionMapper.selectById(collectionId);
-        if (collection == null) {
-            throw new ResourceNotFoundException("产品集不存在: " + collectionId);
-        }
-        return enrichItems(toSummaryResponse(collection));
+        return enrichItems(toSummaryResponse(requireAccessibleCollection(collectionId)));
     }
 
     /**
@@ -94,6 +100,7 @@ public class ProductCollectionService {
         collection.setStyleCodes(toJson(request.getStyleCodes()));
         collection.setTargetSegments(toJson(request.getTargetSegments()));
         collection.setIsFeatured(request.getIsFeatured() != null ? request.getIsFeatured() : false);
+        collection.setIsPublished(false);
         collection.setSortOrder(request.getSortOrder() != null ? request.getSortOrder() : 0);
         collection.setStatus("ACTIVE");
         String createdBy = SecurityOperatorContext.currentUserId();
@@ -118,10 +125,7 @@ public class ProductCollectionService {
      */
     @Transactional
     public ProductCollectionResponse update(String collectionId, ProductCollectionUpdateRequest request) {
-        ProductCollection collection = collectionMapper.selectById(collectionId);
-        if (collection == null) {
-            throw new ResourceNotFoundException("产品集不存在: " + collectionId);
-        }
+        ProductCollection collection = requireAccessibleCollection(collectionId);
         assertCollectionCodeUnique(request.getCollectionCode(), collectionId);
 
         if (StringUtils.hasText(request.getCollectionCode())) {
@@ -145,6 +149,13 @@ public class ProductCollectionService {
         if (request.getIsFeatured() != null) {
             collection.setIsFeatured(request.getIsFeatured());
         }
+        if (request.getIsPublished() != null) {
+            // 发布到官网是对外动作，仅平台运营人员可执行
+            if (!SecurityOperatorContext.isPlatformStaff()) {
+                throw new BusinessException("仅平台运营人员可发布/下架产品集到官网");
+            }
+            collection.setIsPublished(request.getIsPublished());
+        }
         if (request.getSortOrder() != null) {
             collection.setSortOrder(request.getSortOrder());
         }
@@ -167,12 +178,32 @@ public class ProductCollectionService {
      */
     @Transactional
     public void delete(String collectionId) {
-        ProductCollection collection = collectionMapper.selectById(collectionId);
-        if (collection == null) {
-            throw new ResourceNotFoundException("产品集不存在: " + collectionId);
-        }
+        ProductCollection collection = requireAccessibleCollection(collectionId);
         itemMapper.deleteByCollectionId(collectionId);
         collectionMapper.deleteById(collectionId);
+    }
+
+    /**
+     * 加载产品集并做归属校验：平台运营人员可访问全部，
+     * 其他用户仅可访问自己创建的集合；不存在或无权限均返回 404（不泄露存在性）。
+     *
+     * @param collectionId 产品集 ID
+     * @return 产品集实体
+     */
+    private ProductCollection requireAccessibleCollection(String collectionId) {
+        ProductCollection collection = collectionMapper.selectById(collectionId);
+        if (collection == null || !canAccess(collection)) {
+            throw new ResourceNotFoundException("产品集不存在: " + collectionId);
+        }
+        return collection;
+    }
+
+    private boolean canAccess(ProductCollection collection) {
+        if (SecurityOperatorContext.isPlatformStaff()) {
+            return true;
+        }
+        String currentUserId = SecurityOperatorContext.currentUserId();
+        return currentUserId != null && currentUserId.equals(collection.getCreatedBy());
     }
 
     private void assertCollectionCodeUnique(String collectionCode, String excludeId) {
@@ -272,6 +303,7 @@ public class ProductCollectionService {
         response.setStyleCodes(fromJson(collection.getStyleCodes()));
         response.setTargetSegments(fromJson(collection.getTargetSegments()));
         response.setIsFeatured(collection.getIsFeatured());
+        response.setIsPublished(collection.getIsPublished());
         response.setSortOrder(collection.getSortOrder());
         response.setStatus(collection.getStatus());
         response.setCreatedBy(collection.getCreatedBy());

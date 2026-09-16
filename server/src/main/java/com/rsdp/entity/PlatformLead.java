@@ -55,6 +55,9 @@ public class PlatformLead {
     /** 跟进人（管理端分配，存用户名）。 */
     private String assignee;
 
+    /** 归属设计师（sys_user.user_id，官网设计师分享链接带入，可空）。 */
+    private String designerId;
+
     /** 跟进记录 JSON 数组（追加式）。 */
     @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)

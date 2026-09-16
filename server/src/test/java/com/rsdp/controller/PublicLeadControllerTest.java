@@ -108,4 +108,28 @@ class PublicLeadControllerTest {
             .andExpect(jsonPath("$.code").value(400))
             .andExpect(jsonPath("$.message").value("非法的留资来源: hack"));
     }
+
+    @Test
+    void createLead_withDesignerId_shouldPassThroughToService() throws Exception {
+        LeadCreateResponse created = new LeadCreateResponse();
+        created.setLeadId("LEAD-2");
+        created.setStatus("pending");
+        when(platformLeadService.createLead(any(LeadCreateRequest.class))).thenReturn(created);
+
+        LeadCreateRequest request = new LeadCreateRequest();
+        request.setName("李先生");
+        request.setPhone("13900001111");
+        request.setSource("site_form");
+        request.setDesignerId("USER-D1");
+
+        mockMvc.perform(post("/api/v1/public/leads")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.leadId").value("LEAD-2"));
+
+        org.mockito.Mockito.verify(platformLeadService)
+            .createLead(org.mockito.ArgumentMatchers.argThat(r -> "USER-D1".equals(r.getDesignerId())));
+    }
 }

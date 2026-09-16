@@ -103,8 +103,10 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ,
+    quantity INTEGER,                                -- 数量/件数（V8 增量并入；Excel 导入时携带，可选）
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
+COMMENT ON COLUMN rspu_variant.quantity IS '数量/件数（Excel 导入时携带，可选）';
 
 -- 变体编码流水计数器（按 RSPU 维度生成变体顺序号）
 CREATE TABLE IF NOT EXISTS variant_code_counter (

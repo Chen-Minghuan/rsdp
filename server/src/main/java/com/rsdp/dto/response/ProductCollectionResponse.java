@@ -19,6 +19,7 @@ public class ProductCollectionResponse {
     private List<String> styleCodes;
     private List<String> targetSegments;
     private Boolean isFeatured;
+    private Boolean isPublished;
     private Integer sortOrder;
     private String status;
     private String createdBy;
