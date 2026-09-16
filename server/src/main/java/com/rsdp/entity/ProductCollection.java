@@ -35,6 +35,7 @@ public class ProductCollection {
     private String targetSegments;
 
     private Boolean isFeatured;
+    private Boolean isPublished;
     private Integer sortOrder;
     private String status;
     private String createdBy;

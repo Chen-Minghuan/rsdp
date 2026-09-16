@@ -211,10 +211,12 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ,
+    quantity INTEGER,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
+COMMENT ON COLUMN rspu_variant.quantity IS '数量/件数（Excel 导入时携带，可选）';
 
--- 变体编码流水计数器
+-- 变体编码流水计数器（按 RSPU 维度生成变体顺序号）
 CREATE TABLE IF NOT EXISTS variant_code_counter (
     rspu_id VARCHAR(64) NOT NULL,
     sequence_value BIGINT NOT NULL DEFAULT 1,
@@ -1130,10 +1132,13 @@ CREATE TABLE IF NOT EXISTS product_collection (
     created_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
+    is_published BOOLEAN NOT NULL DEFAULT false,
     FOREIGN KEY (created_by) REFERENCES sys_user(user_id)
 );
+COMMENT ON COLUMN product_collection.is_published IS '是否发布到官网（/api/v1/public/collections 仅返回已发布集合；仅平台运营可发布）';
 CREATE INDEX IF NOT EXISTS idx_product_collection_status ON product_collection(status);
 CREATE INDEX IF NOT EXISTS idx_product_collection_featured ON product_collection(is_featured, sort_order);
+CREATE INDEX IF NOT EXISTS idx_product_collection_published ON product_collection(is_published, sort_order);
 
 -- 产品集与 RSPU 关联
 CREATE TABLE IF NOT EXISTS product_collection_item (
@@ -2434,12 +2439,12 @@ WHERE r.role_code = 'FACTORY_ADMIN'
   AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'product:import', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
 ON CONFLICT DO NOTHING;
 
--- DESIGNER：方案/报价 + 只读
+-- DESIGNER：方案/报价 + 产品集自建 + 只读
 INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'DESIGNER'
-  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'quote:generate', 'quote:export', 'scheme:read', 'scheme:create', 'scheme:update', 'scheme:delete', 'collection:read', 'capability:read', 'designer:profile:read', 'designer:profile:update', 'scheme:candidate:read', 'scheme:candidate:create', 'scheme:candidate:update', 'scheme:candidate:delete')
+  AND p.permission_code IN ('product:read', 'factory:read', 'rsku:read', 'quote:read', 'quote:generate', 'quote:export', 'scheme:read', 'scheme:create', 'scheme:update', 'scheme:delete', 'collection:read', 'collection:create', 'collection:update', 'collection:delete', 'capability:read', 'designer:profile:read', 'designer:profile:update', 'scheme:candidate:read', 'scheme:candidate:create', 'scheme:candidate:update', 'scheme:candidate:delete')
 ON CONFLICT DO NOTHING;
 
 -- USER：只读
@@ -2726,10 +2731,13 @@ CREATE TABLE IF NOT EXISTS platform_lead (
     assignee    VARCHAR(64),
     follow_log  JSONB,
     created_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+    updated_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    designer_id VARCHAR(64)
 );
+COMMENT ON COLUMN platform_lead.designer_id IS '归属设计师（sys_user.user_id，官网设计师分享链接带入，可空；弱关联不加外键）';
 CREATE INDEX IF NOT EXISTS idx_platform_lead_status ON platform_lead(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_platform_lead_source ON platform_lead(source, created_at);
+CREATE INDEX IF NOT EXISTS idx_platform_lead_designer ON platform_lead(designer_id, created_at);
 
 -- 官网内容种子（V15 并入）：服务协议 + 客服咨询（占位文案，运营可在管理端修改）
 INSERT INTO platform_content (content_id, code, title, content_type, content) VALUES

@@ -35,6 +35,9 @@ public class ProductCollectionUpdateRequest {
     /** 是否首页推荐。 */
     private Boolean isFeatured;
 
+    /** 是否发布到官网（仅平台运营人员可修改）。 */
+    private Boolean isPublished;
+
     /** 排序号。 */
     private Integer sortOrder;
 

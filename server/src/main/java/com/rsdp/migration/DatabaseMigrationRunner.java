@@ -20,6 +20,7 @@ public class DatabaseMigrationRunner implements ApplicationRunner, Ordered {
     private final PriceSummaryBackfillMigration priceSummaryBackfillMigration;
     private final SixDimNormalizationMigration sixDimNormalizationMigration;
     private final FactoryAdminImportPermissionMigration factoryAdminImportPermissionMigration;
+    private final DesignerCollectionPermissionMigration designerCollectionPermissionMigration;
     private final RspuCreatedByBackfillMigration rspuCreatedByBackfillMigration;
 
     @Override
@@ -34,6 +35,7 @@ public class DatabaseMigrationRunner implements ApplicationRunner, Ordered {
         priceSummaryBackfillMigration.execute();
         sixDimNormalizationMigration.execute();
         factoryAdminImportPermissionMigration.execute();
+        designerCollectionPermissionMigration.execute();
         rspuCreatedByBackfillMigration.execute();
         log.info("启动期数据修正任务完成");
     }
