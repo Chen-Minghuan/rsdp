@@ -80,11 +80,14 @@ CREATE TABLE IF NOT EXISTS product_collection (
     status VARCHAR(20) DEFAULT 'ACTIVE',
     created_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ,
+    is_published BOOLEAN NOT NULL DEFAULT false      -- 是否发布到官网（V9 增量并入；仅平台运营可发布，列位置与 ALTER 追加一致保持在末尾）
     -- created_by 外键跨域（09_user_team 在 07 之后执行），在 cross_domain_fk.sql 补加
 );
+COMMENT ON COLUMN product_collection.is_published IS '是否发布到官网（/api/v1/public/collections 仅返回已发布集合；仅平台运营可发布）';
 CREATE INDEX IF NOT EXISTS idx_product_collection_status ON product_collection(status);
 CREATE INDEX IF NOT EXISTS idx_product_collection_featured ON product_collection(is_featured, sort_order);
+CREATE INDEX IF NOT EXISTS idx_product_collection_published ON product_collection(is_published, sort_order);
 
 -- 产品集与 RSPU 关联
 CREATE TABLE IF NOT EXISTS product_collection_item (

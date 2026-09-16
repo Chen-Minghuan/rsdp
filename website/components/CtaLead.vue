@@ -43,7 +43,9 @@ async function submit() {
       name: name.value.trim(),
       phone: phone.value.trim(),
       source: props.source,
-      intent: intent.value.trim() || undefined
+      intent: intent.value.trim() || undefined,
+      // 设计师推广归因：会话内经 ?designerId= 进入则自动附带（见 plugins/designer-attribution.client.ts）
+      designerId: (import.meta.client ? sessionStorage.getItem('rooom-designer-id') : null) || undefined
     })
     done.value = true
   } catch (e) {

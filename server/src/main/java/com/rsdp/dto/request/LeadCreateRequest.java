@@ -32,4 +32,8 @@ public class LeadCreateRequest {
     /** 预算区间（可选，如 1-3万）。 */
     @Size(max = 32, message = "预算长度不能超过 32")
     private String budget;
+
+    /** 归属设计师用户 ID（可选，设计师分享链接带入；非法值忽略置空，不影响留资）。 */
+    @Size(max = 64, message = "设计师 ID 长度不能超过 64")
+    private String designerId;
 }

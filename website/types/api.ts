@@ -129,3 +129,61 @@ export interface CategoryNode {
   sortOrder?: number
   children: CategoryNode[]
 }
+
+/** 登录用户信息（POST /auth/login、GET /auth/me 响应；token 仅经 HttpOnly Cookie 下发，响应体不含）。 */
+export interface AuthUser {
+  userId: string
+  username: string
+  nickname?: string
+  role?: string
+  roles: string[]
+  permissions?: string[]
+  certifiedDesigner?: boolean
+  companyId?: string
+}
+
+/** 已发布产品集列表项（GET /public/collections）。 */
+export interface PublicCollectionSummary {
+  collectionId: string
+  name: string
+  description?: string
+  categoryCodes?: string[]
+  styleCodes?: string[]
+  targetSegments?: string[]
+  coverImageUrl?: string
+  itemCount?: number
+}
+
+/** 已发布产品集详情（GET /public/collections/{id}；产品项字段口径同 /public/products）。 */
+export interface PublicCollectionDetail extends PublicCollectionSummary {
+  items: PublicProduct[]
+}
+
+/** 产品集项（/api/v1/collections 详情内嵌）。 */
+export interface DesignerCollectionItem {
+  id: number
+  rspuId: string
+  rspuName?: string
+  primaryImageUrl?: string
+  sortOrder?: number
+}
+
+/** 设计师云端清单（/api/v1/collections，按创建人归属隔离；详情含 items）。 */
+export interface DesignerCollection {
+  collectionId: string
+  name: string
+  description?: string
+  status: string
+  createdBy?: string
+  createdAt?: string
+  updatedAt?: string
+  items?: DesignerCollectionItem[]
+  itemCount?: number
+}
+
+/** 清单创建/更新请求（存为清单仅需 name + rspuIds；更新省略 rspuIds 时保留原有产品项）。 */
+export interface DesignerCollectionSaveRequest {
+  name: string
+  description?: string
+  rspuIds?: string[]
+}
