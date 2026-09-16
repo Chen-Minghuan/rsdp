@@ -35,4 +35,16 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
         + " WHERE ur.user_id = u.user_id AND r.role_code IN ('ADMIN', 'EDITOR'))"
         + " ORDER BY u.username")
     java.util.List<SysUser> selectPlatformOperators();
+
+    /**
+     * 按用户 ID 查询启用状态的设计师（DESIGNER 角色）用户，用于留资归属校验。
+     *
+     * @param userId 用户 ID
+     * @return 用户实体；不存在/非设计师/已停用返回 {@code null}
+     */
+    @org.apache.ibatis.annotations.Select("SELECT u.user_id, u.username, u.nickname FROM sys_user u"
+        + " WHERE u.user_id = #{userId} AND u.status = 'active' AND EXISTS (SELECT 1 FROM sys_user_role ur"
+        + " JOIN sys_role r ON r.role_id = ur.role_id"
+        + " WHERE ur.user_id = u.user_id AND r.role_code = 'DESIGNER')")
+    SysUser selectActiveDesignerById(@Param("userId") String userId);
 }

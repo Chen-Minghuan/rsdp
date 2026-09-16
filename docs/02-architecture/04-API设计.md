@@ -1425,27 +1425,29 @@ POST   /api/v1/factories/{factoryCode}/capabilities/sync
 ```
 GET    /api/v1/collections
        # 查询产品集列表（需 collection:read）
+       # 归属隔离（V9）：平台运营（ADMIN/EDITOR）可见全部，其他登录用户仅见自己创建的集合
        # Query: status? (ACTIVE|INACTIVE)
-       # Response: [ProductCollectionResponse...]
+       # Response: [ProductCollectionResponse...]（含 isPublished）
 
 GET    /api/v1/collections/{collectionId}
-       # 查询产品集详情（需 collection:read）
+       # 查询产品集详情（需 collection:read；非归属人/非平台运营 404，不泄露存在性）
        # Response: ProductCollectionResponse（含 items）
 
 POST   /api/v1/collections
-       # 创建产品集（需 collection:create）
+       # 创建产品集（需 collection:create；isPublished 恒为 false，发布走更新接口）
        # Request: { collectionCode?, name, description?, categoryCodes?: string[],
        #            styleCodes?: string[], targetSegments?: string[],
        #            isFeatured?: boolean, sortOrder?: int, rspuIds?: string[] }
        # Response: ProductCollectionResponse
 
 PUT    /api/v1/collections/{collectionId}
-       # 更新产品集（需 collection:update）
-       # Request: 同创建，字段可选；rspuIds 存在时覆盖原有项
+       # 更新产品集（需 collection:update；非归属人/非平台运营 404）
+       # Request: 同创建，字段可选；rspuIds 存在时覆盖原有项；
+       #          isPublished?: boolean 发布/下架到官网——仅平台运营可改，其他角色传值 400
        # Response: ProductCollectionResponse
 
 DELETE /api/v1/collections/{collectionId}
-       # 删除产品集（需 collection:delete）
+       # 删除产品集（需 collection:delete；非归属人/非平台运营 404）
        # Response: void
 ```
 
@@ -1620,11 +1622,24 @@ GET    /api/v1/public/categories
        # 类目两级树：category_dict 按 parent_code 组装（当前种子为单层，roots 即全部类目）
        # Response: [{ dictCode, dictName, dictNameEn, sortOrder, children: [...] }]
 
+GET    /api/v1/public/collections
+       # 已发布产品集列表（V9；仅 is_published=true，按推荐/排序号/创建时间倒序）
+       # Response: [{ collectionId, name, description, categoryCodes[], styleCodes[],
+       #            targetSegments[], coverImageUrl（首个在售产品主图，可空）, itemCount（在售产品数） }]
+
+GET    /api/v1/public/collections/{collectionId}
+       # 已发布产品集详情（未发布/不存在返回 code=404「产品集不存在或未发布」）
+       # 产品项仅 status=active 在售产品，字段口径同 /public/products 列表项；
+       # 红线：绝不含出厂价/工厂/RSKU 字段
+       # Response: { 同上列表项字段, items: [PublicProductItemResponse...] }
+
 POST   /api/v1/public/leads
        # 留资提交（V34 platform_lead；source 限 ai_match/site_form/design_booking，
        # 非法来源 400；初始状态 pending；审计操作人记 anonymous）
        # ⚠️ 限流：IP 维度 5 次/60s（PublicRateLimitFilter，超限 429「请求过于频繁」）
-       # Request: { name*, phone*, source*, intent?, budget? }
+       # Request: { name*, phone*, source*, intent?, budget?, designerId? }
+       #          designerId（V9）：设计师分享链接带入的归属设计师 user_id，
+       #          非空时须为存在的启用 DESIGNER 角色用户，非法值忽略置 null（不阻断留资）
        # Response: { leadId, status }
 
 POST   /api/v1/public/ai-match/analyze
@@ -1755,7 +1770,8 @@ GET    /api/v1/leads
        # 线索分页列表（手机号脱敏 phoneMasked）
        # Query: status?（pending/contacted/done）&source?（ai_match/site_form/design_booking）&page=1&size=10（上限 100）
        # Response: PageResult<{ leadId, name, phoneMasked, source, intent, budget,
-       #            status, assignee, followLogCount, createdAt }>
+       #            status, assignee, designerId?, designerName?（V9 归属设计师联查昵称）,
+       #            followLogCount, createdAt }>
 
 GET    /api/v1/leads/source-stats
        # 来源分布统计（导航「留资线索」角标同用 pending 字段）

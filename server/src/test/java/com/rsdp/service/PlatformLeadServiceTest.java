@@ -100,6 +100,36 @@ class PlatformLeadServiceTest {
         verify(auditLogService, never()).logCreate(anyString(), anyString(), any(), anyString());
     }
 
+    @Test
+    void createLead_validDesignerId_shouldWriteAttribution() {
+        SysUser designer = new SysUser();
+        designer.setUserId("USER-D1");
+        designer.setUsername("designer1");
+        when(sysUserMapper.selectActiveDesignerById("USER-D1")).thenReturn(designer);
+
+        LeadCreateRequest request = validRequest();
+        request.setDesignerId("USER-D1");
+        platformLeadService.createLead(request);
+
+        ArgumentCaptor<PlatformLead> captor = ArgumentCaptor.forClass(PlatformLead.class);
+        verify(platformLeadMapper).insert(captor.capture());
+        assertThat(captor.getValue().getDesignerId()).isEqualTo("USER-D1");
+    }
+
+    @Test
+    void createLead_invalidDesignerId_shouldIgnoreAndKeepNull() {
+        when(sysUserMapper.selectActiveDesignerById("USER-GHOST")).thenReturn(null);
+
+        LeadCreateRequest request = validRequest();
+        request.setDesignerId("USER-GHOST");
+        LeadCreateResponse response = platformLeadService.createLead(request);
+
+        ArgumentCaptor<PlatformLead> captor = ArgumentCaptor.forClass(PlatformLead.class);
+        verify(platformLeadMapper).insert(captor.capture());
+        assertThat(captor.getValue().getDesignerId()).isNull();
+        assertThat(response.getStatus()).isEqualTo("pending");
+    }
+
     // ---------- 管理端：列表 / 统计 / 分配 / 跟进 / 状态流转 ----------
 
     private PlatformLead sampleLead() {
@@ -125,6 +155,27 @@ class PlatformLeadServiceTest {
         LeadListItemResponse item = result.getRows().get(0);
         assertThat(item.getPhoneMasked()).isEqualTo("138****6621");
         assertThat(item.getFollowLogCount()).isEqualTo(0);
+    }
+
+    @Test
+    void listLeads_withDesigner_shouldFillDesignerName() {
+        PlatformLead lead = sampleLead();
+        lead.setDesignerId("USER-D1");
+        Page<PlatformLead> page = new Page<>(1, 10);
+        page.setRecords(List.of(lead));
+        page.setTotal(1);
+        when(platformLeadMapper.selectPage(any(Page.class), any(QueryWrapper.class))).thenReturn(page);
+        SysUser designer = new SysUser();
+        designer.setUserId("USER-D1");
+        designer.setUsername("designer1");
+        designer.setNickname("陈设计");
+        when(sysUserMapper.selectBatchIds(List.of("USER-D1"))).thenReturn(List.of(designer));
+
+        var result = platformLeadService.listLeads(null, null, 1, 10);
+
+        LeadListItemResponse item = result.getRows().get(0);
+        assertThat(item.getDesignerId()).isEqualTo("USER-D1");
+        assertThat(item.getDesignerName()).isEqualTo("陈设计");
     }
 
     @Test

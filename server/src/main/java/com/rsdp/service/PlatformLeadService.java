@@ -77,6 +77,7 @@ public class PlatformLeadService {
         lead.setSource(request.getSource());
         lead.setIntent(request.getIntent());
         lead.setBudget(request.getBudget());
+        lead.setDesignerId(resolveDesignerId(request.getDesignerId()));
         lead.setStatus(PlatformLead.STATUS_PENDING);
         lead.setCreatedAt(LocalDateTime.now());
         lead.setUpdatedAt(LocalDateTime.now());
@@ -110,10 +111,46 @@ public class PlatformLeadService {
         }
         wrapper.orderByDesc("created_at");
         Page<PlatformLead> pageResult = platformLeadMapper.selectPage(new Page<>(safePage, safeSize), wrapper);
+        Map<String, String> designerNames = batchDesignerNames(pageResult.getRecords());
         List<LeadListItemResponse> rows = pageResult.getRecords().stream()
-            .map(this::toListItem)
+            .map(lead -> toListItem(lead, designerNames))
             .toList();
         return PageResult.of(pageResult.getTotal(), safePage, safeSize, rows);
+    }
+
+    /**
+     * 校验留资归属设计师：非空时必须是存在的启用 DESIGNER 角色用户，非法值返回 null（不阻断留资）。
+     *
+     * @param designerId 请求携带的设计师用户 ID（可空）
+     * @return 合法的设计师用户 ID 或 null
+     */
+    private String resolveDesignerId(String designerId) {
+        if (!StringUtils.hasText(designerId)) {
+            return null;
+        }
+        SysUser designer = sysUserMapper.selectActiveDesignerById(designerId.trim());
+        return designer != null ? designer.getUserId() : null;
+    }
+
+    /**
+     * 批量查询线索归属设计师的昵称（userId → 展示名，优先昵称回退用户名）。
+     *
+     * @param leads 线索列表
+     * @return 设计师 ID → 展示名映射
+     */
+    private Map<String, String> batchDesignerNames(List<PlatformLead> leads) {
+        List<String> designerIds = leads.stream()
+            .map(PlatformLead::getDesignerId)
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList();
+        if (designerIds.isEmpty()) {
+            return Map.of();
+        }
+        return sysUserMapper.selectBatchIds(designerIds).stream()
+            .collect(java.util.stream.Collectors.toMap(SysUser::getUserId,
+                u -> StringUtils.hasText(u.getNickname()) ? u.getNickname() : u.getUsername(),
+                (a, b) -> a));
     }
 
     /**
@@ -227,6 +264,10 @@ public class PlatformLeadService {
     }
 
     private LeadListItemResponse toListItem(PlatformLead lead) {
+        return toListItem(lead, batchDesignerNames(List.of(lead)));
+    }
+
+    private LeadListItemResponse toListItem(PlatformLead lead, Map<String, String> designerNames) {
         LeadListItemResponse item = new LeadListItemResponse();
         item.setLeadId(lead.getLeadId());
         item.setName(lead.getName());
@@ -236,6 +277,9 @@ public class PlatformLeadService {
         item.setBudget(lead.getBudget());
         item.setStatus(lead.getStatus());
         item.setAssignee(lead.getAssignee());
+        item.setDesignerId(lead.getDesignerId());
+        item.setDesignerName(StringUtils.hasText(lead.getDesignerId())
+            ? designerNames.get(lead.getDesignerId()) : null);
         item.setFollowLogCount(followLogCount(lead.getFollowLog()));
         item.setCreatedAt(lead.getCreatedAt());
         return item;

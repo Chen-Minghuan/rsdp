@@ -30,6 +30,12 @@ public class LeadListItemResponse {
     /** 跟进人用户名。 */
     private String assignee;
 
+    /** 归属设计师用户 ID（可空）。 */
+    private String designerId;
+
+    /** 归属设计师昵称（可空）。 */
+    private String designerName;
+
     /** 跟进记录条数。 */
     private Integer followLogCount;
 
