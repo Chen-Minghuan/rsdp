@@ -156,6 +156,12 @@ export const navGroups: NavGroup[] = [
         label: '我的收藏',
         path: '/favorites',
         permission: PERMISSIONS.PRODUCT_READ
+      },
+      {
+        key: 'collections',
+        label: '产品集管理',
+        path: '/collections',
+        permission: PERMISSIONS.COLLECTION_READ
       }
     ]
   },
@@ -194,6 +200,12 @@ export const navGroups: NavGroup[] = [
         key: 'floor-plan-history',
         label: '分析记录',
         path: '/floor-plan/history'
+      },
+      {
+        key: 'scheme-candidates',
+        label: 'AI 候选清单',
+        path: '/scheme-candidates',
+        permission: PERMISSIONS.SCHEME_CANDIDATE_READ
       }
     ]
   },
