@@ -884,6 +884,7 @@ public class ProductQueryService {
         productPurgeMapper.deleteMatchingFeedback(rspuId);
         productPurgeMapper.deleteCollectionItems(rspuId);
         productPurgeMapper.deleteSchemeCandidates(rspuId);
+        productPurgeMapper.deleteDuplicateSuspects(rspuId);
         // ④ 变体/RSKU 的子表
         productPurgeMapper.deleteFactoryVariantCapacity(rspuId);
         productPurgeMapper.deletePriceHistory(rspuId);

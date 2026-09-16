@@ -786,6 +786,7 @@ class ProductQueryServiceTest {
         verify(productPurgeMapper).deleteMatchingFeedback("RSPU-DEL01");
         verify(productPurgeMapper).deleteCollectionItems("RSPU-DEL01");
         verify(productPurgeMapper).deleteSchemeCandidates("RSPU-DEL01");
+        verify(productPurgeMapper).deleteDuplicateSuspects("RSPU-DEL01");
         verify(productPurgeMapper).deleteFactoryVariantCapacity("RSPU-DEL01");
         verify(productPurgeMapper).deletePriceHistory("RSPU-DEL01");
         verify(productPurgeMapper).deleteVariantCodeCounter("RSPU-DEL01");
