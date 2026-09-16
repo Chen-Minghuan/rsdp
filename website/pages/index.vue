@@ -9,6 +9,7 @@ import type {
   HomeBanner,
   HomeResponse,
   PageResult,
+  PublicCollectionSummary,
   PublicProduct,
   SceneItem
 } from '~/types/api'
@@ -34,17 +35,18 @@ function parseContentItems<T>(resp: ContentResponse | null): T[] | null {
 const HIDDEN_SCENE_CODES = new Set(['HOTEL'])
 
 const { data } = await useAsyncData('home-page', async () => {
-  const [home, scenes, products, categories, trioContent, serviceContent] = await Promise.all([
+  const [home, scenes, products, categories, trioContent, serviceContent, collections] = await Promise.all([
     get<HomeResponse>('/api/v1/public/home'),
     get<SceneItem[]>('/api/v1/public/scenes'),
     get<PageResult<PublicProduct>>('/api/v1/public/products', { sort: 'newest', size: 4 }),
     get<CategoryNode[]>('/api/v1/public/categories'),
     get<ContentResponse>('/api/v1/public/content/home_trio_cards'),
-    get<ContentResponse>('/api/v1/public/content/home_service_cards')
+    get<ContentResponse>('/api/v1/public/content/home_service_cards'),
+    get<PublicCollectionSummary[]>('/api/v1/public/collections')
   ])
   // 数据源处过滤下线空间，SSR 水合 payload 也不再携带
   const visibleScenes = (scenes ?? []).filter(s => !HIDDEN_SCENE_CODES.has(s.sceneCode))
-  return { home, scenes: visibleScenes, products, categories, trioContent, serviceContent }
+  return { home, scenes: visibleScenes, products, categories, trioContent, serviceContent, collections }
 })
 
 // ---------- 区块 1+2：导航数据（Mega Menu） ----------
@@ -115,6 +117,9 @@ const serviceItems = computed<ServiceCardItem[]>(() =>
 
 // ---------- 区块 7：新品上架 ----------
 const products = computed(() => data.value?.products?.rows ?? [])
+
+// ---------- 区块 7.5：精选套系（已发布产品集，无数据隐藏区块，最多展示 3 套） ----------
+const featuredCollections = computed(() => (data.value?.collections ?? []).slice(0, 3))
 
 // ---------- 区块 8：家居灵感（platform_case 驱动；无案例时隐藏区块） ----------
 const inspirations = computed<InspirationItem[]>(() =>
@@ -218,6 +223,37 @@ const customizeds = computed(() => data.value?.home?.customizeds ?? [])
             :key="product.rspuId"
             :product="product"
           />
+        </div>
+      </section>
+
+      <!-- 区块 7.5 · 精选套系（已发布产品集驱动，无数据隐藏） -->
+      <section v-if="featuredCollections.length" class="section">
+        <div class="section-head">
+          <div class="section-title">精选套系</div>
+          <span class="head-right">
+            <a class="section-more" style="margin-left: 0;" href="/collections">查看全部套系</a>
+          </span>
+        </div>
+        <div class="grid3">
+          <a
+            v-for="c in featuredCollections"
+            :key="c.collectionId"
+            class="coll-card"
+            :href="`/collections/${c.collectionId}`"
+          >
+            <div class="coll-img">
+              <img
+                v-if="imageUrl(c.coverImageUrl)"
+                :src="imageUrl(c.coverImageUrl)"
+                :alt="c.name"
+                loading="lazy"
+              >
+            </div>
+            <div class="coll-body">
+              <div class="coll-name">{{ c.name }}</div>
+              <div v-if="c.itemCount != null" class="coll-meta">{{ c.itemCount }} 件商品</div>
+            </div>
+          </a>
         </div>
       </section>
 
@@ -441,6 +477,63 @@ const customizeds = computed(() => data.value?.home?.customizeds ?? [])
   gap: 32px 24px;
 }
 
+/* 精选套系卡（3 列，封面 + 名称，复用商品卡的暖底与 hover 语言） */
+.grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px 24px;
+}
+
+.coll-card {
+  display: block;
+  color: inherit;
+  cursor: pointer;
+}
+
+.coll-img {
+  aspect-ratio: 4 / 3;
+  background: var(--suppl);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.coll-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: transform .35s;
+}
+
+.coll-card:hover .coll-img img {
+  transform: scale(1.03);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coll-img img {
+    transition: none;
+  }
+}
+
+.coll-body {
+  padding: 14px 2px 0;
+}
+
+.coll-name {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+
+.coll-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ink2);
+  letter-spacing: 1px;
+}
+
 .head-right {
   margin-left: auto;
   display: flex;
@@ -451,6 +544,10 @@ const customizeds = computed(() => data.value?.home?.customizeds ?? [])
 @media (max-width: 1199px) {
   .grid4 {
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .grid3 {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
@@ -474,6 +571,10 @@ const customizeds = computed(() => data.value?.home?.customizeds ?? [])
 
   .grid4 {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .grid3 {
+    grid-template-columns: 1fr;
   }
 
   .custom-grid {
