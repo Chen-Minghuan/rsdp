@@ -70,9 +70,19 @@ function submitSearch() {
 
 const { count: wishlistCount, openDrawer: openWishlist } = useWishlist()
 
+// ---------- 设计师登录态（useState + localStorage 快照，鉴权本体为 HttpOnly Cookie） ----------
+
+const { isLoggedIn: designerLoggedIn, nickname: designerNickname, logout: designerLogout } = useDesignerAuth()
+
+async function logoutDesigner() {
+  await designerLogout()
+  navigateTo('/')
+}
+
 /** 主导航当前页高亮：/products?sort=newest → 新品；/products → 所有商品；/ai-match → AI 户型搭配。 */
 const activeNav = computed(() => {
   if (route.path === '/ai-match') return 'ai-match'
+  if (route.path.startsWith('/collections')) return 'collections'
   if (route.path === '/products') return route.query.sort === 'newest' ? 'newest' : 'products'
   return ''
 })
@@ -102,7 +112,12 @@ const activeNav = computed(() => {
           <button type="button" @click="submitSearch">搜索</button>
         </div>
         <div class="hd-links">
-          <a>门店</a><i /><a>登录 / 注册</a><i /><a @click="openWishlist">心愿单<span v-if="wishlistCount">（{{ wishlistCount }}）</span></a><i /><a>购物车</a>
+          <a>门店</a><i />
+          <template v-if="designerLoggedIn">
+            <a href="/designer/lists">{{ designerNickname || '我的清单' }}</a><i /><a @click="logoutDesigner">退出</a>
+          </template>
+          <a v-else href="/designer/login">设计师登录</a>
+          <i /><a @click="openWishlist">心愿单<span v-if="wishlistCount">（{{ wishlistCount }}）</span></a><i /><a>购物车</a>
         </div>
       </div>
       <nav class="main">
@@ -129,6 +144,7 @@ const activeNav = computed(() => {
           <a href="#">优惠活动</a>
           <a href="#">设计和服务</a>
           <a href="#">家居灵感</a>
+          <a href="/collections" :class="{ active: activeNav === 'collections' }">精选套系</a>
           <a href="/products?sort=newest" :class="{ active: activeNav === 'newest' }">新品</a>
           <a href="/ai-match" :class="{ active: activeNav === 'ai-match' }">AI 户型搭配</a>
         </div>

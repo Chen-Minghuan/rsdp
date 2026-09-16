@@ -5,16 +5,55 @@ import { computed, ref, watch } from 'vue'
  * 心愿单抽屉（全站挂载于 app.vue）：右下角悬浮按钮（♡ + 数量徽标）
  * + 右侧抽屉（缩略图列表 / 逐个移除 / 清空 / 内嵌留资）。
  * 留资 intent 自动拼接「咨询：商品A、商品B 等 N 件」，source=site_form。
+ * 登录设计师额外显示「存为清单」：把当前心愿单 rspuIds 创建为云端产品集。
  */
 const { items, count, drawerOpen, remove, clear, openDrawer, closeDrawer } = useWishlist()
 const { imageUrl } = usePublicApi()
+const { isLoggedIn: designerLoggedIn } = useDesignerAuth()
+const designerApi = useDesignerApi()
 
 /** 留资模式：点击「免费咨询这些商品」后抽屉内切换为 CtaLead 表单。 */
 const consultMode = ref(false)
 
+// ---------- 存为云端清单（仅登录设计师可见；心愿单本体仍走 localStorage 兜底） ----------
+const saveMode = ref(false)
+const saveName = ref('')
+const saving = ref(false)
+const saveError = ref('')
+const saveDone = ref('')
+
 watch(drawerOpen, (open) => {
-  if (!open) consultMode.value = false
+  if (!open) {
+    consultMode.value = false
+    saveMode.value = false
+    saveDone.value = ''
+    saveError.value = ''
+  }
 })
+
+/** 当前心愿单 rspuIds 创建为云端集合（/api/v1/collections）。 */
+async function saveAsList() {
+  const name = saveName.value.trim()
+  if (!name) {
+    saveError.value = '请输入清单名称'
+    return
+  }
+  saving.value = true
+  saveError.value = ''
+  try {
+    await designerApi.post('/api/v1/collections', {
+      name,
+      rspuIds: items.value.map(i => i.rspuId)
+    })
+    saveDone.value = `已存为清单「${name}」，可在「我的清单」中查看`
+    saveMode.value = false
+    saveName.value = ''
+  } catch (e) {
+    saveError.value = e instanceof Error ? e.message : '保存失败，请稍后重试'
+  } finally {
+    saving.value = false
+  }
+}
 
 /** intent 预填：前 3 件品名（单名截 10 字）+「等 N 件」。 */
 const consultIntent = computed(() => {
@@ -76,9 +115,39 @@ function metaLine(item: { positioningLabel?: string, colorPrimaryName?: string }
       </div>
       <div v-if="items.length" class="wd-foot">
         <button type="button" class="wd-clear" @click="clear">清空</button>
+        <button
+          v-if="designerLoggedIn"
+          type="button"
+          class="btn-b wd-save-btn"
+          @click="saveMode = !saveMode; saveDone = ''"
+        >
+          存为清单
+        </button>
         <button type="button" class="btn-a wd-consult-btn" @click="consultMode = true">
           免费咨询这些商品
         </button>
+      </div>
+
+      <!-- 存为云端清单（仅登录设计师）：输入名称 → 当前心愿单创建为产品集 -->
+      <div v-if="designerLoggedIn && items.length && (saveMode || saveDone)" class="wd-save">
+        <template v-if="saveDone">
+          <div class="wd-save-done">{{ saveDone }}</div>
+        </template>
+        <template v-else>
+          <div class="wd-save-row">
+            <input
+              v-model="saveName"
+              type="text"
+              placeholder="清单名称，如「陈先生 · 客厅整配」"
+              maxlength="64"
+              @keyup.enter="saveAsList"
+            >
+            <button type="button" class="btn-a" :disabled="saving" @click="saveAsList">
+              {{ saving ? '保存中…' : '保存' }}
+            </button>
+          </div>
+          <div v-if="saveError" class="wd-save-error">{{ saveError }}</div>
+        </template>
       </div>
     </template>
 
@@ -293,6 +362,59 @@ function metaLine(item: { positioningLabel?: string, colorPrimaryName?: string }
 .wd-consult-btn {
   flex: 1;
   text-align: center;
+}
+
+.wd-save-btn {
+  padding: 10px 18px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ===== 存为云端清单（设计师） ===== */
+.wd-save {
+  padding: 14px 24px;
+  border-top: 1px solid var(--line);
+}
+
+.wd-save-row {
+  display: flex;
+  gap: 10px;
+}
+
+.wd-save-row input {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 0 14px;
+  height: 40px;
+  font-size: 12px;
+  outline: none;
+  color: var(--ink);
+  letter-spacing: 1px;
+}
+
+.wd-save-row input:focus {
+  border-color: var(--ink);
+}
+
+.wd-save-row .btn-a {
+  padding: 0 20px;
+  font-size: 12px;
+}
+
+.wd-save-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--terra);
+  letter-spacing: 1px;
+}
+
+.wd-save-done {
+  font-size: 12px;
+  color: var(--accent-deep);
+  letter-spacing: 1px;
+  line-height: 1.9;
 }
 
 /* ===== 抽屉内留资（压缩 CtaLead 默认的外边距与大留白） ===== */
