@@ -29,8 +29,10 @@ public abstract class AbstractAgentNode implements NodeAction {
     public Map<String, Object> apply(OverAllState state) throws Exception {
         String runId = state.value(AgentStateKeys.STATE_RUN_ID, "");
         AgentRunContext ctx = AgentRunContext.require(runId);
-        eventBus.emitNode(runId, nodeName(), AgentStateKeys.labelOf(nodeName()));
+        String label = AgentStateKeys.labelOf(nodeName());
+        eventBus.emitNode(runId, nodeName(), label);
         runRecorder.updateCurrentNode(runId, nodeName());
+        ctx.recordStep(nodeName(), label);
         return doApply(state, ctx);
     }
 
