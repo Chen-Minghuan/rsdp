@@ -49,6 +49,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Value("${rsdp.jwt.cookie-name:rsdp_token}")
     private String cookieName;
 
+    /**
+     * SSE 等异步请求的 ASYNC 重分发也要执行本过滤器。
+     *
+     * <p>Spring MVC 异步（SseEmitter）完成/超时时容器会把请求按 ASYNC 分发重新走一遍
+     * 过滤器链；OncePerRequestFilter 默认只在 REQUEST 分发执行，导致重分发时
+     * SecurityContext 为空，AuthorizationFilter 以匿名身份拒绝（Access Denied +
+     * response already committed）。token 从 header/cookie 读取，重分发时仍在请求上，
+     * 重复认证是幂等且安全的（已认证则跳过，见下方 null 判断）。</p>
+     */
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return false;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,

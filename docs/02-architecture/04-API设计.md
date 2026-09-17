@@ -1904,3 +1904,23 @@ DELETE /api/v1/scheme-candidates/{candidateId}
        # 删除候选（需 scheme:candidate:delete）
        # Response: void
 ```
+
+
+## 营销选品 Agent（MVP）
+
+统一前缀 `/api/v1/agent`，全部接口要求 `agent:use` 权限。平台员工可查看全部会话，其他用户仅可访问自己创建或归属自己的会话；返回的产品信息不含出厂价。
+
+| 方法 | 路径（相对统一前缀） | 请求 | 响应 data / 行为 |
+|:---|:---|:---|:---|
+| POST | `/sessions` | 可选 `{ customerName }` | 新会话 |
+| GET | `/sessions` | 无 | 可访问的会话列表 |
+| GET | `/sessions/{sessionId}` | 无 | 会话、消息、需求档案、已确认清单 |
+| POST | `/sessions/{sessionId}/messages/stream` | `{ clientMessageId, content }` | SSE 对话流 |
+| POST | `/sessions/{sessionId}/confirm` | `{ recommendItemId, quantity, idempotencyKey }` | 已确认条目，重复幂等键返回已有记录 |
+| POST | `/sessions/{sessionId}/close` | 无 | 结束后的会话；运行中拒绝关闭 |
+
+`clientMessageId` 必填且最长 64 字符，`content` 必填且最长 4000 字符；确认数量至少为 1，`idempotencyKey` 必填且最长 128 字符。
+
+普通接口使用 `{ code, message, data }`。流式接口同步校验失败返回真实 HTTP 错误状态和统一错误响应（会话忙为 HTTP 409、`SESSION_BUSY`）；校验通过后返回 `text/event-stream`，事件包括 `meta/node/token/requirement/cards/done/error`，数据带 `runId/seq`，心跳采用 SSE 注释。异步运行失败通过 `error` 事件通知。
+
+数据库迁移为 `V10__marketing_agent.sql`；基线、重置脚本和 deploy 整理留待后续。实现边界见 [营销 Agent 架构设计](10-营销Agent架构设计-方案C落地与Argus借鉴.md)。

@@ -67,9 +67,9 @@ class RspuPriceSummaryServiceTest {
 
     @Test
     void recalculateQueryFiltersOnlyPricedActiveRskus() {
-        // 新口径（阶段 5 拍板）：active_rsku_count 与 min/max 只统计
-        // 「factory_price 非空 且 status='active'」的 RSKU 行——NULL 价行与
-        // discontinued/paused 行在 DB 查询侧即被排除，不参与聚合
+        // 口径（f39976e 修正）：active_rsku_count 与 min/max 只统计
+        // 「factory_price 非空」的 RSKU 行——rsku_supply 无 status 列，
+        // 不得再按 status 过滤（否则 SQL 报错），NULL 价行在 DB 查询侧即被排除
         when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
 
         service.recalculate("RSPU-1");
@@ -78,7 +78,7 @@ class RspuPriceSummaryServiceTest {
         verify(rskuSupplyMapper).selectList(captor.capture());
         String sqlSegment = captor.getValue().getSqlSegment();
         assertThat(sqlSegment).contains("rspu_id");
-        assertThat(sqlSegment).contains("status");
+        assertThat(sqlSegment).doesNotContain("status");
         assertThat(sqlSegment).contains("factory_price IS NOT NULL");
     }
 

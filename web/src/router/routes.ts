@@ -207,6 +207,12 @@ export const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
   },
   {
+    path: '/marketing/agent',
+    name: 'MarketingAgent',
+    component: () => import('@/views/MarketingAgentView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.AGENT_USE] }
+  },
+  {
     // 静态路径优先于带 query 的 /floor-plan 匹配，声明顺序保持在向导之前
     path: '/floor-plan/history',
     name: 'FloorPlanHistory',

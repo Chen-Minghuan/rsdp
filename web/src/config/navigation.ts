@@ -190,6 +190,12 @@ export const navGroups: NavGroup[] = [
         activeMatch: 'prefix'
       },
       {
+        key: 'marketing-agent',
+        label: '智能选品',
+        path: '/marketing/agent',
+        permission: PERMISSIONS.AGENT_USE
+      },
+      {
         // 户型图搭配：登录即可上传识别（与后端 analyze 接口 product:read 一致），不设权限门槛
         key: 'floor-plan',
         label: '户型图搭配',

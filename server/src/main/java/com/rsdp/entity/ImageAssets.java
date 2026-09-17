@@ -31,7 +31,7 @@ public class ImageAssets {
     /** 图片内容 SHA-256 哈希（录入查重用，V31） */
     private String contentHash;
     /** 图片内容版本：替换/裁剪覆盖时递增（+1），向量按版本防旧写（P0） */
-    private Long contentRevision;
+    private Long contentRevision = 1L;
     private String uploadedBy;
     private LocalDateTime createdAt;
 

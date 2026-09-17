@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.0</version>
+        <version>3.5.16</version>
         <relativePath/>
     </parent>
 
@@ -21,7 +21,21 @@
         <java.version>21</java.version>
         <mybatis-plus.version>3.5.9</mybatis-plus.version>
         <postgresql.version>42.7.4</postgresql.version>
+        <spring-ai-alibaba.version>1.1.2.3</spring-ai-alibaba.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Spring AI Alibaba BOM：营销 Agent 模块（DashScope 模型 + Graph 编排） -->
+            <dependency>
+                <groupId>com.alibaba.cloud.ai</groupId>
+                <artifactId>spring-ai-alibaba-bom</artifactId>
+                <version>${spring-ai-alibaba.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Web -->
@@ -152,6 +166,17 @@
             <artifactId>wiremock-standalone</artifactId>
             <version>3.9.1</version>
             <scope>test</scope>
+        </dependency>
+
+        <!-- Spring AI Alibaba：营销 Agent（DashScope 模型接入 + Graph 状态机编排） -->
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
+            <version>${spring-ai-alibaba.version}</version><!-- BOM 未收录，显式固定 -->
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-graph-core</artifactId>
         </dependency>
 
         <!-- Flyway：数据库结构版本治理（唯一迁移状态源，V 脚本不可变，版本由 Spring Boot BOM 管理） -->
