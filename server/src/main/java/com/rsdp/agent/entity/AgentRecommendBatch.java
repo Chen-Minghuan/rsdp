@@ -29,5 +29,14 @@ public class AgentRecommendBatch {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String queryCriteria;
 
+    /** 执行推荐的 Skill ID（如 living-room-matching），空=非 Skill 链路（V11）。 */
+    private String skillId;
+
+    /** Skill 版本号（V11）。 */
+    private String skillVersion;
+
+    /** 批次类型：primary（主体选品）/companion（配套推荐）（V11）。 */
+    private String batchType;
+
     private LocalDateTime createdAt;
 }
