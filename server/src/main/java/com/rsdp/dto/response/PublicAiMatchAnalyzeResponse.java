@@ -28,6 +28,12 @@ public class PublicAiMatchAnalyzeResponse {
     private String analysisId;
 
     /**
+     * 自动标定建议（户型图优化二期）：status=auto/candidates/null，
+     * 结构见 {@link ScaleSuggestionResponse}（前端契约，字段名不可改）。
+     */
+    private ScaleSuggestionResponse scaleSuggestion;
+
+    /**
      * 单个空间的识别结果。
      */
     @Data
@@ -55,5 +61,17 @@ public class PublicAiMatchAnalyzeResponse {
 
         /** 尺寸置信度：high（图上标注解析成功）/ low（无标注）。 */
         private String confidence;
+
+        /** 空间位置框左上角 x（相对原图归一化 [0,1]），未识别出位置为 null。 */
+        private Double x;
+
+        /** 空间位置框左上角 y（相对原图归一化 [0,1]）。 */
+        private Double y;
+
+        /** 空间位置框宽 w（相对原图归一化 [0,1]）。 */
+        private Double w;
+
+        /** 空间位置框高 h（相对原图归一化 [0,1]）。 */
+        private Double h;
     }
 }

@@ -711,6 +711,47 @@ class VisionServiceTest {
     }
 
     @Test
+    void detectFloorPlanRooms_shouldSendJsonObjectFormatAndMaxTokens() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"rooms\": [], \"scaleText\": null}"))));
+
+        visionService.detectFloorPlanRooms("fake-plan".getBytes(), null);
+
+        // 工程保险：response_format=json_object + maxTokens 8192（防截断）
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.response_format.type", equalTo("json_object")))
+            .withRequestBody(matchingJsonPath("$.max_tokens", equalTo("8192"))));
+    }
+
+    @Test
+    void detectFloorPlanRooms_shouldRecoverFromTruncatedJson() throws Exception {
+        // maxTokens 截断：rooms 数组最后一个对象不完整，截尾修复后保留已完整房间
+        String aiJson = """
+            {"rooms": [
+              {"roomType": "living_room", "bbox": {"x": 0.1, "y": 0.2, "w": 0.4, "h": 0.3}, "dimensionText": "4200×3800", "label": "客厅"},
+              {"roomType": "bedroom", "bbox": {"x": 0.6, "y": 0.2, "w": 0.3, "h
+            """;
+
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(aiJson))));
+
+        var result = visionService.detectFloorPlanRooms("fake-plan".getBytes(), null);
+
+        assertThat(result.getRooms()).hasSize(1);
+        var room = result.getRooms().get(0);
+        assertThat(room.getRoomType()).isEqualTo("living_room");
+        assertThat(room.getLabel()).isEqualTo("客厅");
+        assertThat(room.getDimensionText()).isEqualTo("4200×3800");
+        assertThat(room.getX()).isEqualTo(0.1);
+    }
+
+    @Test
     void detectFloorPlanRooms_invalidJson_shouldThrowExternalServiceException() throws Exception {
         stubFor(post(urlEqualTo("/chat/completions"))
             .willReturn(aResponse()
@@ -721,5 +762,377 @@ class VisionServiceTest {
         assertThatThrownBy(() -> visionService.detectFloorPlanRooms("fake-plan".getBytes(), null))
             .isInstanceOf(com.rsdp.exception.ExternalServiceException.class)
             .hasMessageContaining("解析 AI 识别结果失败");
+    }
+
+    // ========== 两阶段识别：户型本体区域检测 + 裁剪 + 坐标映射 ==========
+
+    @Test
+    void isPlausibleFloorPlanRegion_shouldAcceptNormalRegion() {
+        // 户型本体约占原图 50%：采信
+        assertThat(VisionService.isPlausibleFloorPlanRegion(
+            new ProductBoundingBox(0.2, 0.1, 0.6, 0.8))).isTrue();
+    }
+
+    @Test
+    void isPlausibleFloorPlanRegion_shouldRejectTooSmallOrTooLarge() {
+        // 面积 <25%（可能误框了标题栏/图例）：不采信
+        assertThat(VisionService.isPlausibleFloorPlanRegion(
+            new ProductBoundingBox(0.1, 0.8, 0.4, 0.15))).isFalse();
+        // 面积 >95%（几乎整图，等于没定位）：不采信
+        assertThat(VisionService.isPlausibleFloorPlanRegion(
+            new ProductBoundingBox(0.01, 0.01, 0.98, 0.98))).isFalse();
+        // null / 非法 bbox：不采信
+        assertThat(VisionService.isPlausibleFloorPlanRegion(null)).isFalse();
+        assertThat(VisionService.isPlausibleFloorPlanRegion(
+            new ProductBoundingBox(0.9, 0.9, 0.5, 0.5))).isFalse();
+    }
+
+    @Test
+    void mapToOriginalCoords_shouldMapCroppedBoxBackToOriginal() {
+        // 裁剪区域 x=0.2,y=0.1,w=0.6,h=0.8；裁剪图内框 x=0.5,y=0.25,w=0.25,h=0.25
+        // 映射回原图：x=0.2+0.5*0.6=0.5, y=0.1+0.25*0.8=0.3, w=0.25*0.6=0.15, h=0.25*0.8=0.2
+        ProductBoundingBox mapped = VisionService.mapToOriginalCoords(
+            new ProductBoundingBox(0.5, 0.25, 0.25, 0.25),
+            new ProductBoundingBox(0.2, 0.1, 0.6, 0.8));
+
+        assertThat(mapped).isNotNull();
+        assertThat(mapped.getX()).isCloseTo(0.5, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(mapped.getY()).isCloseTo(0.3, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(mapped.getWidth()).isCloseTo(0.15, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(mapped.getHeight()).isCloseTo(0.2, org.assertj.core.data.Offset.offset(1e-6));
+    }
+
+    @Test
+    void cropRegionToPng_shouldCropByNormalizedRegion() throws Exception {
+        byte[] png = newPngBytes(200, 100);
+        byte[] cropped = VisionService.cropRegionToPng(png, new ProductBoundingBox(0.25, 0.2, 0.5, 0.6));
+
+        assertThat(cropped).isNotNull();
+        var image = javax.imageio.ImageIO.read(new ByteArrayInputStream(cropped));
+        // 裁剪得 100×60，低于最小宽度 2000 触发等比放大 → 2000×1200
+        assertThat(image.getWidth()).isEqualTo(2000);
+        assertThat(image.getHeight()).isEqualTo(1200);
+    }
+
+    @Test
+    void cropRegionToPng_shouldReturnNullOnUndecodableImage() {
+        assertThat(VisionService.cropRegionToPng("fake-plan".getBytes(),
+            new ProductBoundingBox(0.2, 0.1, 0.6, 0.8))).isNull();
+    }
+
+    @Test
+    void overlayCoordinateGrid_shouldKeepSizeAndNotThrow() throws Exception {
+        var source = javax.imageio.ImageIO.read(new ByteArrayInputStream(newPngBytes(300, 200)));
+        var overlaid = VisionService.overlayCoordinateGrid(source);
+        assertThat(overlaid.getWidth()).isEqualTo(300);
+        assertThat(overlaid.getHeight()).isEqualTo(200);
+    }
+
+    @Test
+    void detectFloorPlanRegion_shouldParseBbox() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"bbox\": {\"x\": 0.23, \"y\": 0.05, \"w\": 0.55, \"h\": 0.83}}"))));
+
+        var region = visionService.detectFloorPlanRegion("fake-plan".getBytes());
+
+        assertThat(region).isNotNull();
+        assertThat(region.getX()).isEqualTo(0.23);
+        assertThat(region.getWidth()).isEqualTo(0.55);
+    }
+
+    @Test
+    void detectFloorPlanRegion_shouldReturnNullOnInvalidJson() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("这不是 JSON"))));
+
+        assertThat(visionService.detectFloorPlanRegion("fake-plan".getBytes())).isNull();
+    }
+
+    @Test
+    void detectFloorPlanRooms_twoStage_shouldCropAndMapBackToOriginalCoords() throws Exception {
+        // 第一阶段（区域检测）：提示词含"户型图本体"，返回合法区域
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("户型图本体"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"bbox\": {\"x\": 0.2, \"y\": 0.1, \"w\": 0.6, \"h\": 0.8}}"))));
+        // 第二阶段（空间识别，裁剪图上）：返回裁剪图内坐标
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("识别其中的各个功能空间"))
+            .atPriority(5)
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("""
+                    {"rooms": [
+                      {"roomType": "living_room", "bbox": {"x": 0.5, "y": 0.25, "w": 0.25, "h": 0.25}, "dimensionText": null, "label": "客厅"}
+                    ], "scaleText": null}
+                    """))));
+
+        var result = visionService.detectFloorPlanRooms(newPngBytes(200, 100), null);
+
+        assertThat(result.getRooms()).hasSize(1);
+        var room = result.getRooms().get(0);
+        // 裁剪前先外扩 4%：region (0.2,0.1,0.6,0.8) → (0.16,0.06,0.68,0.88)
+        // 映射回原图：x=0.16+0.5*0.68=0.50, y=0.06+0.25*0.88=0.28, w=0.25*0.68=0.17, h=0.25*0.88=0.22
+        assertThat(room.getX()).isCloseTo(0.5, org.assertj.core.data.Offset.offset(1e-3));
+        assertThat(room.getY()).isCloseTo(0.28, org.assertj.core.data.Offset.offset(1e-3));
+        assertThat(room.getW()).isCloseTo(0.17, org.assertj.core.data.Offset.offset(1e-3));
+        assertThat(room.getH()).isCloseTo(0.22, org.assertj.core.data.Offset.offset(1e-3));
+    }
+
+    @Test
+    void expandRegion_shouldExpandByMarginOnAllSides() {
+        ProductBoundingBox expanded = VisionService.expandRegion(
+            new ProductBoundingBox(0.2, 0.1, 0.6, 0.8), 0.04);
+
+        assertThat(expanded.getX()).isCloseTo(0.16, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(expanded.getY()).isCloseTo(0.06, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(expanded.getWidth()).isCloseTo(0.68, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(expanded.getHeight()).isCloseTo(0.88, org.assertj.core.data.Offset.offset(1e-6));
+    }
+
+    @Test
+    void expandRegion_shouldClampToImageBounds() {
+        // 贴边区域外扩后不得越界：x/y 钳到 0，右/下边钳到 1
+        ProductBoundingBox expanded = VisionService.expandRegion(
+            new ProductBoundingBox(0.01, 0.02, 0.98, 0.97), 0.04);
+
+        assertThat(expanded.getX()).isEqualTo(0.0);
+        assertThat(expanded.getY()).isEqualTo(0.0);
+        assertThat(expanded.getWidth()).isEqualTo(1.0);
+        assertThat(expanded.getHeight()).isEqualTo(1.0);
+    }
+
+    @Test
+    void detectFloorPlanRegion_shouldSendPixelBudgetInImagePart() throws Exception {
+        org.springframework.test.util.ReflectionTestUtils.setField(visionService, "floorPlanMinPixels", 200704);
+        org.springframework.test.util.ReflectionTestUtils.setField(visionService, "floorPlanMaxPixels", 4194304);
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"bbox\": {\"x\": 0.23, \"y\": 0.05, \"w\": 0.55, \"h\": 0.83}}"))));
+
+        visionService.detectFloorPlanRegion("fake-plan".getBytes());
+
+        // 像素预算必须放在 content 的 image_url 部分内（DashScope qwen-vl 扩展参数，顶层无效）
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[0].min_pixels", equalTo("200704")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[0].max_pixels", equalTo("4194304"))));
+    }
+
+    @Test
+    void detectFloorPlanRooms_shouldSendPixelBudgetInImagePart() throws Exception {
+        org.springframework.test.util.ReflectionTestUtils.setField(visionService, "floorPlanMinPixels", 200704);
+        org.springframework.test.util.ReflectionTestUtils.setField(visionService, "floorPlanMaxPixels", 4194304);
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("{\"rooms\": [], \"scaleText\": null}"))));
+
+        visionService.detectFloorPlanRooms("fake-plan".getBytes(), null);
+
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[0].min_pixels", equalTo("200704")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[0].max_pixels", equalTo("4194304"))));
+    }
+
+    @Test
+    void detectFloorPlanRooms_shouldFallbackToFullImageWhenRegionImplausible() throws Exception {
+        // 区域检测返回过小区域（面积 <25%）：不采信，直接整图识别，bbox 不做映射
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("户型图本体"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"bbox\": {\"x\": 0.1, \"y\": 0.8, \"w\": 0.4, \"h\": 0.15}}"))));
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("识别其中的各个功能空间"))
+            .atPriority(5)
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("""
+                    {"rooms": [
+                      {"roomType": "living_room", "bbox": {"x": 0.3, "y": 0.55, "w": 0.38, "h": 0.28}, "dimensionText": null, "label": "客厅"}
+                    ], "scaleText": null}
+                    """))));
+
+        var result = visionService.detectFloorPlanRooms(newPngBytes(200, 100), null);
+
+        var room = result.getRooms().get(0);
+        // 回退整图：坐标原样保留，不做区域映射
+        assertThat(room.getX()).isCloseTo(0.3, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(room.getY()).isCloseTo(0.55, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(room.getW()).isCloseTo(0.38, org.assertj.core.data.Offset.offset(1e-6));
+    }
+
+    /** 生成纯白色 PNG 测试图字节。 */
+    private static byte[] newPngBytes(int width, int height) throws Exception {
+        var image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        var out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(image, "png", out);
+        return out.toByteArray();
+    }
+
+    // ========== 户型图优化二期：逐房间二次精修 ==========
+
+    private void stubRefineResponse(String contentJson) throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("裁剪出的一个空间"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(contentJson))));
+    }
+
+    private static com.rsdp.dto.FloorPlanDetectResult detectResultWith(
+        com.rsdp.dto.FloorPlanDetectResult.Room... rooms) {
+        var result = new com.rsdp.dto.FloorPlanDetectResult();
+        result.setRooms(java.util.Arrays.asList(rooms));
+        return result;
+    }
+
+    @Test
+    void refineFloorPlanRooms_shouldReplaceBboxWithMappedRefinedBox() throws Exception {
+        // 初检 bbox (0.4,0.2,0.2,0.2)；外扩 25%（自身尺寸）→ 裁剪区 (0.35,0.15,0.3,0.3)
+        // 精修返回小图内 bbox (0.1,0.1,0.7,0.7) → 映射回原图 (0.38,0.18,0.21,0.21)
+        // （面积比 1.10，在 [0.8, 3] 合法区间内采信）
+        stubRefineResponse("""
+            {"bbox": {"x": 0.1, "y": 0.1, "w": 0.7, "h": 0.7}, "roomType": "bedroom", "label": "主卧"}
+            """);
+        var room = new com.rsdp.dto.FloorPlanDetectResult.Room(
+            "bedroom", "主卧", null, 0.4, 0.2, 0.2, 0.2);
+        var result = detectResultWith(room);
+
+        visionService.refineFloorPlanRooms(newPngBytes(200, 100), result);
+
+        assertThat(room.getX()).isCloseTo(0.38, org.assertj.core.data.Offset.offset(1e-3));
+        assertThat(room.getY()).isCloseTo(0.18, org.assertj.core.data.Offset.offset(1e-3));
+        assertThat(room.getW()).isCloseTo(0.21, org.assertj.core.data.Offset.offset(1e-3));
+        assertThat(room.getH()).isCloseTo(0.21, org.assertj.core.data.Offset.offset(1e-3));
+    }
+
+    @Test
+    void refineFloorPlanRooms_shouldKeepInitialWhenAreaShrinksTooMuch() throws Exception {
+        // 精修返回极小框：映射后面积 < 初检 1/3，判定失控保留初检
+        stubRefineResponse("""
+            {"bbox": {"x": 0.4, "y": 0.4, "w": 0.1, "h": 0.1}, "roomType": "bedroom", "label": "主卧"}
+            """);
+        var room = new com.rsdp.dto.FloorPlanDetectResult.Room(
+            "bedroom", "主卧", null, 0.4, 0.4, 0.1, 0.1);
+        var result = detectResultWith(room);
+
+        visionService.refineFloorPlanRooms(newPngBytes(200, 100), result);
+
+        assertThat(room.getX()).isEqualTo(0.4);
+        assertThat(room.getY()).isEqualTo(0.4);
+        assertThat(room.getW()).isEqualTo(0.1);
+        assertThat(room.getH()).isEqualTo(0.1);
+    }
+
+    @Test
+    void refineFloorPlanRooms_shouldKeepInitialWhenResponseInvalid() throws Exception {
+        stubRefineResponse("这不是 JSON");
+        var room = new com.rsdp.dto.FloorPlanDetectResult.Room(
+            "bedroom", "主卧", null, 0.4, 0.2, 0.2, 0.2);
+        var result = detectResultWith(room);
+
+        visionService.refineFloorPlanRooms(newPngBytes(200, 100), result);
+
+        assertThat(room.getX()).isEqualTo(0.4);
+        assertThat(room.getW()).isEqualTo(0.2);
+    }
+
+    @Test
+    void refineFloorPlanRooms_shouldAdoptChangedRoomTypeAndLabel() throws Exception {
+        // 精修看得更清：AI 把 bedroom/次卧 修正为 study/书房，采信（bbox 合法时）
+        stubRefineResponse("""
+            {"bbox": {"x": 0.1, "y": 0.1, "w": 0.7, "h": 0.7}, "roomType": "study", "label": "书房"}
+            """);
+        var room = new com.rsdp.dto.FloorPlanDetectResult.Room(
+            "bedroom", "次卧", null, 0.4, 0.2, 0.2, 0.2);
+        var result = detectResultWith(room);
+
+        visionService.refineFloorPlanRooms(newPngBytes(200, 100), result);
+
+        assertThat(room.getRoomType()).isEqualTo("study");
+        assertThat(room.getLabel()).isEqualTo("书房");
+    }
+
+    @Test
+    void refineFloorPlanRooms_shouldIgnoreEnumOutOfRangeRoomType() throws Exception {
+        // AI 编造枚举外 roomType：不采信，bbox 精修仍生效
+        stubRefineResponse("""
+            {"bbox": {"x": 0.1, "y": 0.1, "w": 0.7, "h": 0.7}, "roomType": "garage", "label": "车库"}
+            """);
+        var room = new com.rsdp.dto.FloorPlanDetectResult.Room(
+            "bedroom", "主卧", null, 0.4, 0.2, 0.2, 0.2);
+        var result = detectResultWith(room);
+
+        visionService.refineFloorPlanRooms(newPngBytes(200, 100), result);
+
+        assertThat(room.getRoomType()).isEqualTo("bedroom");
+        assertThat(room.getLabel()).isEqualTo("车库");
+        assertThat(room.getX()).isCloseTo(0.38, org.assertj.core.data.Offset.offset(1e-3));
+    }
+
+    @Test
+    void refineFloorPlanRooms_shouldLimitRoomsByMaxRoomsConfig() throws Exception {
+        // refineMaxRooms=1：仅面积最大的房间发起精修调用
+        org.springframework.test.util.ReflectionTestUtils.setField(visionService, "refineMaxRooms", 1);
+        stubRefineResponse("""
+            {"bbox": {"x": 0.2, "y": 0.1, "w": 0.5, "h": 0.6}, "roomType": "bedroom", "label": "主卧"}
+            """);
+        var big = new com.rsdp.dto.FloorPlanDetectResult.Room(
+            "living_room", "客厅", null, 0.1, 0.1, 0.4, 0.4);
+        var small = new com.rsdp.dto.FloorPlanDetectResult.Room(
+            "bathroom", "卫生间", null, 0.6, 0.6, 0.1, 0.1);
+        var result = detectResultWith(big, small);
+
+        visionService.refineFloorPlanRooms(newPngBytes(200, 100), result);
+
+        // 仅 1 次精修请求（大房间），小房间保持初检
+        verify(1, postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(containing("裁剪出的一个空间")));
+        assertThat(small.getX()).isEqualTo(0.6);
+        assertThat(small.getW()).isEqualTo(0.1);
+    }
+
+    @Test
+    void expandRoomBox_shouldExpandByOwnSizeAndClamp() {
+        // 外扩量跟随房间自身尺寸：mx=0.5*0.25=0.125，my=0.6*0.25=0.15；x/y 钳到 0
+        ProductBoundingBox expanded = VisionService.expandRoomBox(
+            new ProductBoundingBox(0.01, 0.02, 0.5, 0.6), 0.25);
+
+        assertThat(expanded.getX()).isEqualTo(0.0);
+        assertThat(expanded.getY()).isEqualTo(0.0);
+        assertThat(expanded.getWidth()).isCloseTo(0.75, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(expanded.getHeight()).isCloseTo(0.9, org.assertj.core.data.Offset.offset(1e-6));
+    }
+
+    @Test
+    void cropRoomToPng_shouldUpscaleShortEdgeTo768() throws Exception {
+        // 裁剪 100×60，短边 60 < 768 → 等比放大到 1280×768
+        byte[] crop = VisionService.cropRoomToPng(newPngBytes(200, 100),
+            new ProductBoundingBox(0.25, 0.2, 0.5, 0.6));
+
+        assertThat(crop).isNotNull();
+        var image = javax.imageio.ImageIO.read(new ByteArrayInputStream(crop));
+        assertThat(image.getWidth()).isEqualTo(1280);
+        assertThat(image.getHeight()).isEqualTo(768);
     }
 }

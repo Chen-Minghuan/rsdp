@@ -781,6 +781,124 @@ class FloorPlanServiceTest {
         verify(visionService, never()).chatText(anyString(), anyString());
     }
 
+    // ---------- 自动标定建议（二期，随 getAnalysis 返回） ----------
+
+    @Test
+    void getAnalysis_scaleSuggestion_consistentEstimates_shouldReturnAuto() {
+        // 原图 2000×1500px；两房间 OCR 尺寸 + bbox 反推比例一致（均 5.0 mm/px）→ auto
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setWidth(2000);
+        imageAsset.setHeight(1500);
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+        // 客厅：4000/(0.4×2000)=5.0，3000/(0.4×1500)=5.0；主卧：3000/(0.3×2000)=5.0，3000/(0.4×1500)=5.0
+        when(roomMapper.selectList(any())).thenReturn(List.of(
+            roomWithDim("FPR-1", "LIVING_ROOM", "4000×3000", 0.4, 0.4),
+            roomWithDim("FPR-2", "BEDROOM", "3000×3000", 0.3, 0.4)));
+
+        FloorPlanAnalysisResponse response = floorPlanService.getAnalysis("FPA-1");
+
+        assertThat(response.getScaleSuggestion()).isNotNull();
+        assertThat(response.getScaleSuggestion().getStatus()).isEqualTo("auto");
+        assertThat(response.getScaleSuggestion().getMmPerPx())
+            .isEqualByComparingTo(new BigDecimal("5.00"));
+        assertThat(response.getScaleSuggestion().getBasisLabel()).isEqualTo("客厅");
+    }
+
+    @Test
+    void getAnalysis_scaleSuggestion_stretchedRoomOutlier_shouldExcludeAndReport() {
+        // 原图 2000×1500px；客厅/主卧反推 5.0 mm/px（主簇），书房图块被拉伸（15.0/6.2）→ 离群剔除并上报
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setWidth(2000);
+        imageAsset.setHeight(1500);
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+        when(roomMapper.selectList(any())).thenReturn(List.of(
+            roomWithDim("FPR-1", "LIVING_ROOM", "4000×3000", 0.4, 0.4),
+            roomWithDim("FPR-2", "BEDROOM", "3000×3000", 0.3, 0.4),
+            roomWithDim("FPR-3", "STUDY", "2100×1860", 0.07, 0.2)));
+
+        FloorPlanAnalysisResponse response = floorPlanService.getAnalysis("FPA-1");
+
+        assertThat(response.getScaleSuggestion().getStatus()).isEqualTo("auto");
+        assertThat(response.getScaleSuggestion().getMmPerPx())
+            .isEqualByComparingTo(new BigDecimal("5.00"));
+        assertThat(response.getScaleSuggestion().getBasisLabel()).isEqualTo("客厅");
+        assertThat(response.getScaleSuggestion().getOutliers()).hasSize(2);
+        assertThat(response.getScaleSuggestion().getOutliers().get(0).getLabel()).isEqualTo("书房");
+        assertThat(response.getScaleSuggestion().getOutliers().get(0).getMmPerPx())
+            .isEqualByComparingTo(new BigDecimal("6.20"));
+        assertThat(response.getScaleSuggestion().getOutliers().get(1).getMmPerPx())
+            .isEqualByComparingTo(new BigDecimal("15.00"));
+    }
+
+    @Test
+    void getAnalysis_scaleSuggestion_divergentEstimates_shouldReturnCandidates() {
+        // 各房间估计互不一致（5.0/6.0/6.5/7.0，两两偏差 >5%，最大最小偏差 40% >8%）→ candidates
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setWidth(2000);
+        imageAsset.setHeight(1500);
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+        // 客厅：4000/800=5.0，3600/600=6.0（均值 5.5）；主卧：3900/600=6.5，4200/600=7.0（均值 6.75）
+        when(roomMapper.selectList(any())).thenReturn(List.of(
+            roomWithDim("FPR-1", "LIVING_ROOM", "4000×3600", 0.4, 0.4),
+            roomWithDim("FPR-2", "BEDROOM", "3900×4200", 0.3, 0.4)));
+
+        FloorPlanAnalysisResponse response = floorPlanService.getAnalysis("FPA-1");
+
+        assertThat(response.getScaleSuggestion().getStatus()).isEqualTo("candidates");
+        assertThat(response.getScaleSuggestion().getMmPerPx()).isNull();
+        assertThat(response.getScaleSuggestion().getCandidates()).hasSize(2);
+        assertThat(response.getScaleSuggestion().getCandidates().get(0).getLabel()).isEqualTo("客厅");
+        assertThat(response.getScaleSuggestion().getCandidates().get(0).getMmPerPx())
+            .isEqualByComparingTo(new BigDecimal("5.50"));
+        assertThat(response.getScaleSuggestion().getCandidates().get(0).getDimensionText())
+            .isEqualTo("4000×3600");
+        assertThat(response.getScaleSuggestion().getCandidates().get(1).getMmPerPx())
+            .isEqualByComparingTo(new BigDecimal("6.75"));
+        // 两个候选相对偏差 22.7% >5% → 互不一致
+        assertThat(response.getScaleSuggestion().getCandidates().get(0).getAgreed()).isFalse();
+        assertThat(response.getScaleSuggestion().getCandidates().get(1).getAgreed()).isFalse();
+        assertThat(response.getScaleSuggestion().getOutliers()).isNull();
+    }
+
+    @Test
+    void getAnalysis_scaleSuggestion_noParseableRoom_shouldReturnNullStatus() {
+        // 无可解析尺寸标注房间 → status=null（不下发 mmPerPx/candidates）
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setWidth(2000);
+        imageAsset.setHeight(1500);
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+        when(roomMapper.selectList(any())).thenReturn(List.of(
+            roomWithDim("FPR-1", "LIVING_ROOM", null, 0.4, 0.4)));
+
+        FloorPlanAnalysisResponse response = floorPlanService.getAnalysis("FPA-1");
+
+        assertThat(response.getScaleSuggestion()).isNotNull();
+        assertThat(response.getScaleSuggestion().getStatus()).isNull();
+        assertThat(response.getScaleSuggestion().getMmPerPx()).isNull();
+        assertThat(response.getScaleSuggestion().getCandidates()).isNull();
+    }
+
+    /** 构造带尺寸标注与 bbox 的空间明细（标定建议测试用）。 */
+    private FloorPlanRoom roomWithDim(String roomId, String roomType,
+                                      String dimensionText, double bboxW, double bboxH) {
+        FloorPlanRoom room = roomOf(roomId, "FPA-1", roomType);
+        room.setDimensionText(dimensionText);
+        room.setBbox("{\"x\":0.1,\"y\":0.2,\"w\":" + bboxW + ",\"h\":" + bboxH + "}");
+        return room;
+    }
+
     // ---------- 接口 5：软删 ----------
 
     @Test

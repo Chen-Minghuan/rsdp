@@ -215,6 +215,54 @@ class PublicAiMatchServiceTest {
         }
     }
 
+    // ---------- analyze：自动标定建议（二期） ----------
+
+    @Test
+    void analyze_shouldPopulateScaleSuggestionFromOcrDimsAndBbox() throws Exception {
+        // 原图 2000×1500px；两房间 OCR 尺寸 + bbox 反推比例一致（5.0 mm/px）→ auto
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", "4000×3000", 0.1, 0.1, 0.4, 0.4),
+            new FloorPlanDetectResult.Room("bedroom", "主卧", "3000×3000", 0.5, 0.1, 0.3, 0.4)));
+        when(visionService.detectFloorPlanRooms(any(byte[].class), any())).thenReturn(detected);
+
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "plan.png", "image/png", newPngBytes(2000, 1500));
+
+        PublicAiMatchAnalyzeResponse response = publicAiMatchService.analyze(file, null);
+
+        assertThat(response.getScaleSuggestion()).isNotNull();
+        assertThat(response.getScaleSuggestion().getStatus()).isEqualTo("auto");
+        assertThat(response.getScaleSuggestion().getMmPerPx())
+            .isEqualByComparingTo(new BigDecimal("5.00"));
+        assertThat(response.getScaleSuggestion().getBasisLabel()).isEqualTo("客厅");
+    }
+
+    @Test
+    void analyze_undecodableImage_shouldReturnNullScaleSuggestionStatus() {
+        // 图片无法解码（无天然宽高）→ status=null，不影响 rooms 主流程
+        FloorPlanDetectResult detected = new FloorPlanDetectResult();
+        detected.setRooms(List.of(
+            new FloorPlanDetectResult.Room("living_room", "客厅", "4200×3800", 0.1, 0.2, 0.4, 0.3)));
+        when(visionService.detectFloorPlanRooms(any(byte[].class), any())).thenReturn(detected);
+
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "plan.jpg", "image/jpeg", "fake-plan".getBytes());
+
+        PublicAiMatchAnalyzeResponse response = publicAiMatchService.analyze(file, null);
+
+        assertThat(response.getRooms()).hasSize(1);
+        assertThat(response.getScaleSuggestion()).isNotNull();
+        assertThat(response.getScaleSuggestion().getStatus()).isNull();
+    }
+
+    private static byte[] newPngBytes(int width, int height) throws java.io.IOException {
+        var image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        var out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(image, "png", out);
+        return out.toByteArray();
+    }
+
     // ---------- generateScheme ----------
 
     @Test

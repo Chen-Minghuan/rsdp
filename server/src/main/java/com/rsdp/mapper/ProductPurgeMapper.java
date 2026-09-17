@@ -95,6 +95,15 @@ public interface ProductPurgeMapper {
     int deleteSchemeCandidates(String rspuId);
 
     /**
+     * 物理删除疑似同款配对记录（双向：被标存疑方与命中方都解除引用）。
+     *
+     * @param rspuId RSPU ID
+     * @return 影响行数
+     */
+    @Delete("DELETE FROM rspu_duplicate_suspect WHERE rspu_id = #{rspuId} OR matched_rspu_id = #{rspuId}")
+    int deleteDuplicateSuspects(String rspuId);
+
+    /**
      * 物理删除该 RSPU 全部变体的工厂产能记录。
      *
      * @param rspuId RSPU ID

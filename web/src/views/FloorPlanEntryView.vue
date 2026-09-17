@@ -10,6 +10,7 @@ import {
   NEmpty,
   NInput,
   NInputNumber,
+  NModal,
   NRadioButton,
   NRadioGroup,
   NSelect,
@@ -24,6 +25,7 @@ import {
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
 import StatusPill from '@/components/StatusPill.vue'
+import FloorPlanEditor from '@/components/floorplan/FloorPlanEditor.vue'
 import {
   analyzeFloorPlan,
   confirmFloorPlanRooms,
@@ -36,28 +38,19 @@ import { getProductDetail } from '@/api/product'
 import { listVariantsByRspu } from '@/api/variant'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import { useSelectionStore, describeAddManyResult } from '@/stores/selection'
+import { meanMmPerPx } from '@/types/floorPlan'
 import type {
+  CalibSegment,
   DimensionConfidence,
+  EditableRoom,
   FloorPlanAnalysisResponse,
   FloorPlanRoom,
+  FloorPlanScaleCandidate,
+  FloorPlanScaleSuggestion,
   RoomBBox,
   SofaWallDirection
 } from '@/types/floorPlan'
 import type { DictItem } from '@/types/dict'
-
-/** 步骤 2 空间表格的本地编辑行模型（roomId 为空表示人工新增）。 */
-interface EditableRoom {
-  /** 前端行键（渲染与选中高亮用，不提交） */
-  localId: string
-  roomId: string | null
-  roomType: string
-  widthMm: number | null
-  depthMm: number | null
-  bbox: RoomBBox | null
-  dimensionSource: string | null
-  dimensionConfidence: DimensionConfidence | null
-  dimensionText: string | null
-}
 
 const router = useRouter()
 const route = useRoute()
@@ -74,7 +67,8 @@ const DIMENSION_SOURCE_LABELS: Record<string, string> = {
   ocr_text: '图上标注',
   scale_calc: '比例尺换算',
   ai_estimate: 'AI 估算',
-  manual: '人工校正'
+  manual: '人工校正',
+  user_calib: '人工标定'
 }
 
 const currentStep = ref(1)
@@ -98,13 +92,87 @@ const rooms = ref<EditableRoom[]>([])
 const selectedLocalId = ref<string | null>(null)
 const confirming = ref(false)
 
-// ---------- 步骤 2：手绘新空间（误识别修正 / 纯手工补框） ----------
+// ---------- 步骤 2：手绘新空间（误识别修正 / 纯手工补框，绘制交互在 FloorPlanEditor 内） ----------
 const drawMode = ref(false)
-/** 拖拽中的草稿框（归一化坐标），用于虚线框视觉反馈。 */
-const draftBox = ref<RoomBBox | null>(null)
-const imageWrapRef = ref<HTMLElement | null>(null)
-/** 拖拽起点（归一化坐标），非空表示正在拖拽。 */
-let drawStart: { x: number; y: number } | null = null
+/** 标定比例（mm / 图片天然像素），宿主持有：内嵌与全屏两个编辑器实例共享同一比例。 */
+const mmPerPx = ref<number | null>(null)
+/** 手工标定段列表（宿主持有供两个编辑器实例共享）；有效比例 = 各段均值。 */
+const calibSegments = ref<CalibSegment[]>([])
+/** 步骤 2 全屏精细编辑弹窗（内嵌同一编辑器组件，rooms/选中/标定比例均为宿主状态，关闭不丢状态）。 */
+const editorMaximized = ref(false)
+/** 后端返回的图上标注反推比例建议（无建议为 null，走手动画线标定）。 */
+const scaleSuggestion = ref<FloorPlanScaleSuggestion | null>(null)
+/** "选择标定基准"弹窗（status=candidates 时进入步骤 2 自动弹出，工具栏「自动标定」可复开）。 */
+const autoCalibModalVisible = ref(false)
+
+/** 比例建议候选列表（status=candidates 时非空）。 */
+const scaleCandidates = computed<FloorPlanScaleCandidate[]>(() =>
+  scaleSuggestion.value?.status === 'candidates' ? (scaleSuggestion.value.candidates ?? []) : []
+)
+
+/** 工具栏「自动标定」入口可见性：有候选基准可选。 */
+const hasScaleCandidates = computed(() => scaleCandidates.value.length > 0)
+
+/**
+ * 进入步骤 2 时应用比例建议：
+ * auto → 直接采用 mmPerPx（并清空手工标定段，比例来源切换避免混搭）；candidates → 弹基准选择窗；
+ * 无建议 → 保持手动标定现状。auto 且后端返回 outliers 时追加离群忽略提示。
+ */
+function applyScaleSuggestion() {
+  const s = scaleSuggestion.value
+  if (!s) return
+  if (s.status === 'auto' && s.mmPerPx) {
+    calibSegments.value = []
+    mmPerPx.value = s.mmPerPx
+    const outlierCount = s.outliers?.length ?? 0
+    message.success(
+      `已按图上标注自动标定（基准：${s.basisLabel ?? '图上标注'}）` +
+      (outlierCount > 0 ? `；另有 ${outlierCount} 个标注与其他不一致，已自动忽略` : '')
+    )
+  } else if (hasScaleCandidates.value) {
+    autoCalibModalVisible.value = true
+  }
+}
+
+/** 用户点选候选基准：用其 mmPerPx 完成标定（比例来源切换，清空手工标定段；后续行为与手动标定一致）。 */
+function pickScaleCandidate(c: FloorPlanScaleCandidate) {
+  calibSegments.value = []
+  mmPerPx.value = c.mmPerPx
+  autoCalibModalVisible.value = false
+  message.success(`已按图上标注自动标定（基准：${c.label}）`)
+}
+
+/** 编辑器标定段变更（新增/删除/清空）：有效比例 = 各段均值，空数组回到未标定态。 */
+function handleUpdateCalibSegments(segments: CalibSegment[]) {
+  calibSegments.value = segments
+  mmPerPx.value = meanMmPerPx(segments)
+}
+
+function toggleDrawMode() {
+  drawMode.value = !drawMode.value
+}
+
+/** 编辑器拖框/标定改了行数据：以编辑器携带的快照替换该行，强制 NDataTable 重渲染（宽/深/面积/来源/置信度列随之刷新）。 */
+function handleRoomMutated(localId: string, snapshot: EditableRoom) {
+  rooms.value = rooms.value.map(r => (r.localId === localId ? snapshot : r))
+}
+
+/** 编辑器手绘完成回调：新增一行人工空间并选中（已标定比例时编辑器会为该行补算宽深）。 */
+function handleAddBox(bbox: RoomBBox) {
+  const row: EditableRoom = {
+    localId: nextLocalId(),
+    roomId: null,
+    roomType: 'LIVING',
+    widthMm: null,
+    depthMm: null,
+    bbox: { ...bbox },
+    dimensionSource: 'manual',
+    dimensionConfidence: 'high',
+    dimensionText: null
+  }
+  rooms.value.push(row)
+  selectedLocalId.value = row.localId
+}
 
 // ---------- 步骤 3：搭配生成 ----------
 const targetRoomIds = ref<string[]>([])
@@ -273,6 +341,7 @@ async function pollAnalysis(id: string) {
     if (result.status === 'awaiting_confirm' || result.status === 'confirmed') {
       analyzing.value = false
       currentStep.value = 2
+      applyScaleSuggestion()
       return
     }
     if (result.status === 'failed') {
@@ -289,6 +358,9 @@ async function pollAnalysis(id: string) {
 }
 
 function applyAnalysisResult(result: FloorPlanAnalysisResponse) {
+  // 联调点（后端并行开发中）：详情接口返回 scaleSuggestion 后此处自动生效；
+  // 自测三种 status 分支可临时在此注入假数据（如 { status:'auto', mmPerPx:3.42, basisLabel:'客厅' }）
+  scaleSuggestion.value = result.scaleSuggestion ?? null
   rooms.value = (result.rooms ?? [])
     .slice()
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
@@ -308,6 +380,7 @@ async function loadExistingAnalysis(id: string) {
     applyAnalysisResult(result)
     if (result.status === 'awaiting_confirm' || result.status === 'confirmed') {
       currentStep.value = 2
+      applyScaleSuggestion()
       return
     }
     if (result.status === 'failed') {
@@ -345,97 +418,6 @@ function removeRoom(row: EditableRoom) {
 
 function selectRoom(row: EditableRoom) {
   selectedLocalId.value = row.localId
-}
-
-// ---------- 手绘新空间 ----------
-
-/** 手绘框最小边长（归一化），小于视为误触忽略。 */
-const MIN_DRAW_BOX_SIZE = 0.01
-
-function toggleDrawMode() {
-  drawMode.value = !drawMode.value
-  if (!drawMode.value) {
-    cancelDraft()
-  }
-}
-
-function exitDrawMode() {
-  drawMode.value = false
-  cancelDraft()
-}
-
-function cancelDraft() {
-  drawStart = null
-  draftBox.value = null
-  removeDragListeners()
-}
-
-function removeDragListeners() {
-  window.removeEventListener('mousemove', handleDrawMove)
-  window.removeEventListener('mouseup', handleDrawEnd)
-}
-
-/** 鼠标位置换算为相对户型图的归一化坐标（钳制到 [0,1]，图片缩放时比例始终正确）。 */
-function normalizedPoint(e: MouseEvent): { x: number; y: number } | null {
-  const wrap = imageWrapRef.value
-  if (!wrap) return null
-  const rect = wrap.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) return null
-  return {
-    x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-    y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
-  }
-}
-
-function handleDrawStart(e: MouseEvent) {
-  if (!drawMode.value) return
-  const p = normalizedPoint(e)
-  if (!p) return
-  e.preventDefault()
-  drawStart = p
-  draftBox.value = { x: p.x, y: p.y, w: 0, h: 0 }
-  window.addEventListener('mousemove', handleDrawMove)
-  window.addEventListener('mouseup', handleDrawEnd)
-}
-
-function handleDrawMove(e: MouseEvent) {
-  if (!drawStart) return
-  const p = normalizedPoint(e)
-  if (!p) return
-  draftBox.value = {
-    x: Math.min(drawStart.x, p.x),
-    y: Math.min(drawStart.y, p.y),
-    w: Math.abs(p.x - drawStart.x),
-    h: Math.abs(p.y - drawStart.y)
-  }
-}
-
-function handleDrawEnd() {
-  removeDragListeners()
-  const box = draftBox.value
-  draftBox.value = null
-  drawStart = null
-  if (!box || box.w < MIN_DRAW_BOX_SIZE || box.h < MIN_DRAW_BOX_SIZE) return
-  const row: EditableRoom = {
-    localId: nextLocalId(),
-    roomId: null,
-    roomType: 'LIVING',
-    widthMm: null,
-    depthMm: null,
-    bbox: { x: box.x, y: box.y, w: box.w, h: box.h },
-    dimensionSource: 'manual',
-    dimensionConfidence: 'high',
-    dimensionText: null
-  }
-  rooms.value.push(row)
-  selectedLocalId.value = row.localId
-}
-
-/** ESC 退出手绘态（挂在 window，仅绘制态响应）。 */
-function handleGlobalKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && drawMode.value) {
-    exitDrawMode()
-  }
 }
 
 async function handleConfirmRooms() {
@@ -713,7 +695,12 @@ function resetAll() {
     clearTimeout(pollTimer)
     pollTimer = null
   }
-  exitDrawMode()
+  drawMode.value = false
+  mmPerPx.value = null
+  calibSegments.value = []
+  editorMaximized.value = false
+  scaleSuggestion.value = null
+  autoCalibModalVisible.value = false
   revokePreviewUrl()
   currentStep.value = 1
   errorMessage.value = ''
@@ -736,9 +723,9 @@ function resetAll() {
 
 const roomColumns: DataTableColumns<EditableRoom> = [
   {
+    // 空间名列不固定宽：吃侧栏剩余空间，保证表格整体恰好撑满、无横向滚动条
     title: '空间名',
     key: 'roomType',
-    width: 150,
     render: (row) =>
       h(NSelect, {
         value: row.roomType,
@@ -753,7 +740,7 @@ const roomColumns: DataTableColumns<EditableRoom> = [
   {
     title: '宽 (mm)',
     key: 'widthMm',
-    width: 130,
+    width: 88,
     render: (row) =>
       h(NInputNumber, {
         value: row.widthMm,
@@ -761,16 +748,20 @@ const roomColumns: DataTableColumns<EditableRoom> = [
         max: 100000,
         precision: 0,
         size: 'small',
+        showButton: false,
         placeholder: '开间',
+        style: 'width: 100%;',
         onUpdateValue: (v: number | null) => {
           row.widthMm = v
+          // 表格手改数字为人工最终值，覆盖标定推算的来源标记
+          row.dimensionSource = 'manual'
         }
       })
   },
   {
     title: '深 (mm)',
     key: 'depthMm',
-    width: 130,
+    width: 88,
     render: (row) =>
       h(NInputNumber, {
         value: row.depthMm,
@@ -778,38 +769,38 @@ const roomColumns: DataTableColumns<EditableRoom> = [
         max: 100000,
         precision: 0,
         size: 'small',
+        showButton: false,
         placeholder: '进深',
+        style: 'width: 100%;',
         onUpdateValue: (v: number | null) => {
           row.depthMm = v
+          row.dimensionSource = 'manual'
         }
       })
   },
   {
     title: '面积 (㎡)',
     key: 'areaM2',
-    width: 90,
+    width: 56,
     render: (row) => h('span', { class: 'rsdp-mono' }, calcAreaM2(row))
   },
   {
-    title: '尺寸来源',
-    key: 'dimensionSource',
-    width: 100,
-    render: (row) => DIMENSION_SOURCE_LABELS[row.dimensionSource ?? ''] ?? '-'
-  },
-  {
-    title: '置信度',
-    key: 'dimensionConfidence',
-    width: 80,
+    title: '来源/置信',
+    key: 'dimensionMeta',
+    width: 120,
     render: (row) =>
-      h(StatusPill, {
-        value: row.dimensionConfidence,
-        label: row.dimensionConfidence ? CONFIDENCE_LABELS[row.dimensionConfidence] : '-'
-      })
+      h('div', { class: 'dim-meta-cell' }, [
+        h('span', { class: 'dim-source-text' }, DIMENSION_SOURCE_LABELS[row.dimensionSource ?? ''] ?? '-'),
+        h(StatusPill, {
+          value: row.dimensionConfidence,
+          label: row.dimensionConfidence ? CONFIDENCE_LABELS[row.dimensionConfidence] : '-'
+        })
+      ])
   },
   {
     title: '操作',
     key: 'actions',
-    width: 70,
+    width: 52,
     render: (row) =>
       h(
         NButton,
@@ -842,7 +833,6 @@ async function loadDicts() {
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', handleGlobalKeydown)
   loadDicts()
   // 带 analysisId 进入（分析记录「去校正 / 查看」）：跳过步骤 1 直接拉取已有分析结果
   const existingId = route.query.analysisId
@@ -852,8 +842,6 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleGlobalKeydown)
-  removeDragListeners()
   if (pollTimer) {
     clearTimeout(pollTimer)
     pollTimer = null
@@ -863,7 +851,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <PageContainer title="户型图搭配" subtitle="上传户型图 → 确认识别空间 → 按尺寸生成客厅搭配方案">
+  <PageContainer wide title="户型图搭配" subtitle="上传户型图 → 确认识别空间 → 按尺寸生成客厅搭配方案">
     <n-space vertical :size="24">
       <n-steps :current="currentStep" status="process">
         <n-step title="上传户型图" description="CAD 导出图或简易平面图" />
@@ -920,54 +908,38 @@ onUnmounted(() => {
       <n-card v-if="currentStep === 2" title="确认空间识别结果">
         <n-space vertical :size="16">
           <p class="hint-text">
-            点击左侧编号框或右侧表格行可联动高亮；空间名、宽、深可直接修改，也可删除误识别空间或手工添加。置信度低的尺寸请务必核对。
+            左侧图纸支持放大平移与框编辑（点选高亮、拖动移动、拉角/边调整大小，可点「放大编辑」全屏精细操作），与右侧表格行联动；「画标定线」或「以框宽/深标定」输入真实长度后，拖框即可按标定比例自动推算宽深。空间名、宽、深也可在表格中直接修改。置信度低的尺寸请务必核对。
           </p>
           <div class="room-layout">
             <div class="room-image-pane">
-              <div
+              <FloorPlanEditor
                 v-if="imagePreviewUrl"
-                ref="imageWrapRef"
-                class="room-image-wrap"
-                :class="{ drawing: drawMode }"
-                @mousedown="handleDrawStart"
-              >
-                <img :src="imagePreviewUrl" alt="户型图" class="room-image">
-                <div
-                  v-for="(row, index) in rooms.filter(r => r.bbox)"
-                  :key="row.localId"
-                  class="room-bbox"
-                  :class="{ active: row.localId === selectedLocalId }"
-                  :style="{
-                    left: `${(row.bbox?.x ?? 0) * 100}%`,
-                    top: `${(row.bbox?.y ?? 0) * 100}%`,
-                    width: `${(row.bbox?.w ?? 0) * 100}%`,
-                    height: `${(row.bbox?.h ?? 0) * 100}%`
-                  }"
-                  @click="selectRoom(row)"
-                >
-                  <span class="room-bbox-no rsdp-mono">{{ index + 1 }}</span>
-                </div>
-                <div
-                  v-if="draftBox"
-                  class="room-draft-box"
-                  :style="{
-                    left: `${draftBox.x * 100}%`,
-                    top: `${draftBox.y * 100}%`,
-                    width: `${draftBox.w * 100}%`,
-                    height: `${draftBox.h * 100}%`
-                  }"
-                />
-              </div>
+                class="room-editor-inline"
+                :image-url="imagePreviewUrl"
+                v-model:selected-local-id="selectedLocalId"
+                v-model:draw-mode="drawMode"
+                :mm-per-px="mmPerPx"
+                :calib-segments="calibSegments"
+                :rooms="rooms"
+                :auto-calib-available="hasScaleCandidates"
+                @update:calib-segments="handleUpdateCalibSegments"
+                @add-box="handleAddBox"
+                @exit-draw="drawMode = false"
+                @toggle-maximize="editorMaximized = true"
+                @room-mutated="handleRoomMutated"
+                @open-auto-calib="autoCalibModalVisible = true"
+              />
               <div v-else-if="pdfSource" class="pdf-placeholder">
                 <p class="pdf-placeholder-title">PDF 户型图已上传（第 1 页）</p>
                 <p class="hint-text">
-                  PDF 来源无法在此叠加编号框，手绘补框亦不可用；请直接通过右侧表格校正空间与尺寸。
+                  PDF 来源无法在此叠加编号框，可视化编辑与手绘补框亦不可用；请直接通过右侧表格校正空间与尺寸。
                 </p>
               </div>
               <n-empty v-else description="原图不可用（重新上传后可预览）" />
             </div>
             <div class="room-table-pane">
               <n-data-table
+                class="room-table"
                 :columns="roomColumns"
                 :data="rooms"
                 :row-key="(row: EditableRoom) => row.localId"
@@ -1111,6 +1083,64 @@ onUnmounted(() => {
         </n-space>
       </n-card>
     </n-space>
+
+    <!-- 步骤 2 全屏精细编辑：内嵌同一编辑器组件，rooms/选中/标定比例均为宿主状态，关闭回到原布局不丢状态 -->
+    <n-modal
+      v-model:show="editorMaximized"
+      preset="card"
+      title="图纸精细编辑"
+      style="width: 95vw; max-width: 95vw;"
+      :bordered="false"
+    >
+      <FloorPlanEditor
+        v-if="imagePreviewUrl"
+        class="room-editor-modal"
+        :image-url="imagePreviewUrl"
+        v-model:selected-local-id="selectedLocalId"
+        v-model:draw-mode="drawMode"
+        :mm-per-px="mmPerPx"
+        :calib-segments="calibSegments"
+        :rooms="rooms"
+        :draw-button="true"
+        :maximized="true"
+        :auto-calib-available="hasScaleCandidates"
+        @update:calib-segments="handleUpdateCalibSegments"
+        @add-box="handleAddBox"
+        @exit-draw="drawMode = false"
+        @toggle-maximize="editorMaximized = false"
+        @room-mutated="handleRoomMutated"
+        @open-auto-calib="autoCalibModalVisible = true"
+      />
+    </n-modal>
+
+    <!-- 选择标定基准（比例建议 status=candidates：图上多个标注互不一致，由用户选可信基准） -->
+    <n-modal
+      v-model:show="autoCalibModalVisible"
+      preset="card"
+      title="选择标定基准"
+      style="width: 480px; max-width: 90vw;"
+      :bordered="false"
+    >
+      <n-space vertical :size="12">
+        <p class="hint-text">
+          图上多个尺寸标注互相不一致，请选择一个可信的标注作为比例基准；也可以关闭后手动画线标定。
+        </p>
+        <div
+          v-for="c in scaleCandidates"
+          :key="c.label"
+          class="scale-candidate"
+          @click="pickScaleCandidate(c)"
+        >
+          <span class="scale-candidate-label">{{ c.label }}</span>
+          <span v-if="c.agreed" class="scale-candidate-agreed">与其他标注一致</span>
+          <span class="rsdp-mono hint-text">{{ c.dimensionText ?? '-' }}</span>
+          <span class="hint-text">1px ≈ {{ c.mmPerPx.toFixed(2) }}mm</span>
+        </div>
+        <n-button size="small" style="align-self: flex-start;" @click="autoCalibModalVisible = false">
+          手动画线标定
+        </n-button>
+      </n-space>
+    </n-modal>
   </PageContainer>
 </template>
 
@@ -1127,9 +1157,18 @@ onUnmounted(() => {
   align-items: flex-start;
 }
 
+/* 编辑器占主区，高度适中（默认 46vh，精细操作用"放大编辑"全屏模式） */
 .room-image-pane {
-  flex: 0 0 42%;
+  flex: 1;
   min-width: 0;
+}
+
+.room-editor-inline {
+  min-height: 42vh;
+}
+
+.room-editor-modal {
+  min-height: 80vh;
 }
 
 .room-image-wrap {
@@ -1146,59 +1185,72 @@ onUnmounted(() => {
   height: auto;
 }
 
-.room-bbox {
-  position: absolute;
-  border: 1.5px solid var(--rsdp-warning);
-  cursor: pointer;
-}
-
-.room-bbox.active {
-  border-color: var(--rsdp-primary);
-  border-width: 2px;
-  background: rgba(0, 0, 0, 0.08);
-}
-
-.room-bbox-no {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  padding: 0 5px;
-  font-size: 11px;
-  line-height: 1.6;
-  background: var(--rsdp-warning-bg);
-  color: var(--rsdp-warning);
-  border-radius: 3px;
-}
-
-.room-bbox.active .room-bbox-no {
-  background: var(--rsdp-primary);
-  color: var(--rsdp-card-bg);
-}
-
+/* 表格收窄为固定宽侧栏 */
 .room-table-pane {
-  flex: 1;
+  flex: 0 0 600px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  align-items: flex-start;
+  align-items: stretch;
 }
 
-/* 手绘态：十字光标，既有编号框暂不可点，避免与拖拽冲突 */
-.room-image-wrap.drawing {
-  cursor: crosshair;
+/* 来源/置信合并列 */
+.dim-meta-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.room-image-wrap.drawing .room-bbox {
-  pointer-events: none;
+/* 校正表格紧凑化：小字号 + 窄内边距，侧栏内完整展示不裁切 */
+.room-table :deep(.n-data-table-th),
+.room-table :deep(.n-data-table-td) {
+  padding: 6px 8px;
+  font-size: 12px;
 }
 
-/* 手绘拖拽中的虚线草稿框 */
-.room-draft-box {
-  position: absolute;
-  border: 1.5px dashed var(--rsdp-primary);
-  background: rgba(0, 0, 0, 0.06);
-  pointer-events: none;
+.dim-source-text {
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+  white-space: nowrap;
+}
+
+.dim-source-text {
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+  white-space: nowrap;
+}
+
+/* 选择标定基准弹窗的候选条目 */
+.scale-candidate {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  cursor: pointer;
+}
+
+.scale-candidate:hover {
+  border-color: var(--rsdp-primary);
+  background: var(--rsdp-primary-suppl);
+}
+
+.scale-candidate-label {
+  font-size: 13px;
+  color: var(--rsdp-text);
+}
+
+/* 候选基准的"与其他标注一致"可信标记（后端 candidates[].agreed） */
+.scale-candidate-agreed {
+  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+  background: var(--rsdp-success-bg);
+  color: var(--rsdp-success);
+  border-radius: 3px;
 }
 
 /* 步骤 4 产品摆放示意 */

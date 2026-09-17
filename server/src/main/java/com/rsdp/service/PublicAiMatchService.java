@@ -13,6 +13,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.util.Dimensions;
+import com.rsdp.util.FloorPlanScaleSuggestion;
 import com.rsdp.util.ImageUploadValidator;
 import com.rsdp.util.PdfRenderer;
 import lombok.RequiredArgsConstructor;
@@ -71,9 +72,16 @@ public class PublicAiMatchService {
     private final RspuMapper rspuMapper;
     private final ImageAssetsMapper imageAssetsMapper;
 
-    /** PDF 首页渲染 DPI（v3.0 §8 P2，默认 200 与 PDF 导入链路既有默认一致）。 */
-    @Value("${rsdp.floor-plan.pdf-render-dpi:200}")
+    /** PDF 首页渲染 DPI（v3.0 §8 P2，默认 300，提升小字/尺寸标注清晰度）。 */
+    @Value("${rsdp.floor-plan.pdf-render-dpi:300}")
     private float pdfRenderDpi;
+
+    /**
+     * 官网同步链路逐房间二次精修开关（二期，默认 false 保响应速度）：
+     * 识别精度评分实测时临时开 true，测完恢复 false（官网同步链路不加时延）。
+     */
+    @Value("${rsdp.floor-plan.refine-public-enabled:false}")
+    private boolean refinePublicEnabled;
 
     /**
      * 分析户型图：识别功能空间并解析尺寸标注。
@@ -109,12 +117,27 @@ public class PublicAiMatchService {
         }
 
         FloorPlanDetectResult detected = visionService.detectFloorPlanRooms(imageBytes, hint);
+        // 逐房间二次精修（二期）：官网同步链路默认关闭保响应速度，评分实测时临时开
+        if (refinePublicEnabled) {
+            visionService.refineFloorPlanRooms(imageBytes, detected);
+        }
 
         PublicAiMatchAnalyzeResponse response = new PublicAiMatchAnalyzeResponse();
         List<PublicAiMatchAnalyzeResponse.RoomItem> rooms = detected.getRooms().stream()
             .map(this::toRoomItem)
             .collect(Collectors.toList());
         response.setRooms(rooms);
+
+        // 自动标定建议（二期）：OCR 尺寸 + bbox 反推全图比例（天然宽高经 ImageIO 读取）
+        int[] pixelSize = readImagePixelSize(imageBytes);
+        List<FloorPlanScaleSuggestion.RoomExtent> extents = detected.getRooms().stream()
+            .map(room -> new FloorPlanScaleSuggestion.RoomExtent(
+                StringUtils.hasText(room.getLabel()) ? room.getLabel()
+                    : ROOM_TYPE_NAMES.get(room.getRoomType()),
+                room.getDimensionText(), room.getW(), room.getH()))
+            .collect(Collectors.toList());
+        response.setScaleSuggestion(FloorPlanScaleSuggestion.suggest(
+            extents, pixelSize != null ? pixelSize[0] : null, pixelSize != null ? pixelSize[1] : null));
 
         try {
             response.setAnalysisId(floorPlanService.savePublicAnalysis(
@@ -205,7 +228,31 @@ public class PublicAiMatchService {
         } else {
             item.setConfidence(CONFIDENCE_LOW);
         }
+        // 空间位置框（相对原图归一化坐标）：前端叠加展示与识别精度评测使用，无敏感信息
+        item.setX(room.getX());
+        item.setY(room.getY());
+        item.setW(room.getW());
+        item.setH(room.getH());
         return item;
+    }
+
+    /**
+     * 读取图片像素宽/高（自动标定建议的换算参照）；读取失败返回 null（建议降级为 status=null）。
+     *
+     * @param imageBytes 图片字节
+     * @return [widthPx, heightPx]，失败返回 null
+     */
+    private int[] readImagePixelSize(byte[] imageBytes) {
+        try {
+            java.awt.image.BufferedImage image =
+                javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(imageBytes));
+            if (image != null && image.getWidth() > 0 && image.getHeight() > 0) {
+                return new int[] {image.getWidth(), image.getHeight()};
+            }
+        } catch (Exception e) {
+            log.warn("读取户型图像素尺寸失败，标定建议按无像素尺寸处理", e);
+        }
+        return null;
     }
 
     private Map<String, RspuMaster> batchRspuMap(List<String> rspuIds) {

@@ -11,6 +11,7 @@ import com.rsdp.dto.request.FloorPlanConfirmRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.dto.response.FloorPlanRoomResponse;
+import com.rsdp.dto.response.ScaleSuggestionResponse;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.FloorPlanAnalysis;
 import com.rsdp.entity.FloorPlanRoom;
@@ -24,6 +25,7 @@ import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.Dimensions;
+import com.rsdp.util.FloorPlanScaleSuggestion;
 import com.rsdp.util.IdGenerator;
 import com.rsdp.util.ImageUploadValidator;
 import com.rsdp.util.PdfRenderer;
@@ -114,8 +116,8 @@ public class FloorPlanService {
     @Value("${rsdp.floor-plan.max-file-size-mb:10}")
     private long maxFileSizeMb;
 
-    /** PDF 首页渲染 DPI（v3.0 §8 P2，默认 200 与 PDF 导入链路既有默认一致）。 */
-    @Value("${rsdp.floor-plan.pdf-render-dpi:200}")
+    /** PDF 首页渲染 DPI（v3.0 §8 P2，默认 300，提升小字/尺寸标注清晰度）。 */
+    @Value("${rsdp.floor-plan.pdf-render-dpi:300}")
     private float pdfRenderDpi;
 
     /**
@@ -287,7 +289,55 @@ public class FloorPlanService {
         List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
             .eq("analysis_id", analysisId)
             .orderByAsc("sort_order"));
-        return toResponse(analysis, rooms);
+        FloorPlanAnalysisResponse response = toResponse(analysis, rooms);
+        response.setScaleSuggestion(buildScaleSuggestion(analysis, rooms));
+        return response;
+    }
+
+    /**
+     * 自动标定建议（户型图优化二期）：用落库房间的高置信 OCR 尺寸 + bbox 反推全图比例
+     * （mm/px）。在查询时基于已落库明细实时计算（不落库、不改表），像素宽/高取自
+     * image_assets（上传时落库的天然宽高）；图片或像素尺寸缺失时 status=null。
+     */
+    private ScaleSuggestionResponse buildScaleSuggestion(FloorPlanAnalysis analysis,
+                                                         List<FloorPlanRoom> rooms) {
+        Integer imageWidthPx = null;
+        Integer imageHeightPx = null;
+        if (StringUtils.hasText(analysis.getImageId())) {
+            ImageAssets imageAsset = imageAssetsMapper.selectById(analysis.getImageId());
+            if (imageAsset != null) {
+                imageWidthPx = imageAsset.getWidth();
+                imageHeightPx = imageAsset.getHeight();
+            }
+        }
+        List<FloorPlanScaleSuggestion.RoomExtent> extents = rooms.stream()
+            .map(room -> {
+                FloorPlanBBox bbox = parseBBox(room.getBbox());
+                return new FloorPlanScaleSuggestion.RoomExtent(
+                    roomTypeLabel(room.getRoomType()), room.getDimensionText(),
+                    bbox != null ? bbox.getW() : null,
+                    bbox != null ? bbox.getH() : null);
+            })
+            .toList();
+        return FloorPlanScaleSuggestion.suggest(extents, imageWidthPx, imageHeightPx);
+    }
+
+    /** room_type 字典码 → 中文标注名（标定建议 basisLabel 展示用）。 */
+    private static String roomTypeLabel(String roomType) {
+        if (!StringUtils.hasText(roomType)) {
+            return null;
+        }
+        return switch (roomType.trim().toUpperCase()) {
+            case "LIVING_ROOM" -> "客厅";
+            case "DINING_ROOM" -> "餐厅";
+            case "BEDROOM" -> "卧室";
+            case "KITCHEN" -> "厨房";
+            case "BATHROOM" -> "卫生间";
+            case "BALCONY" -> "阳台";
+            case "STUDY_ROOM", "STUDY" -> "书房";
+            case "HALLWAY" -> "过道";
+            default -> "其他";
+        };
     }
 
     /**

@@ -31,6 +31,11 @@ rsdp:
   order:
     invite-secret: ${RSDP_ORDER_INVITE_SECRET}
 
+  security:
+    # 开发环境 CORS 白名单：5173=管理端 dev，3000=官网 Nuxt dev
+    # （浏览器 POST 会带 Origin 头，经 nitro devProxy 同源代理仍原样转发，必须在白名单内否则 403）
+    allowed-origins: ${RSDP_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+
   import:
     # 开发/测试环境可放开本地图片地址；生产环境应留空，仅允许公网地址
     allowed-image-hosts: 127.0.0.1,localhost
