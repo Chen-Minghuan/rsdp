@@ -34,6 +34,46 @@ class DimensionsTest {
     }
 
     @Test
+    void parseDimensionMm_mmUnitNotation_shouldParseAsMm() {
+        // 防御性放宽：AI 未守"纯数字"契约而带 mm 单位时仍可解析
+        assertThat(Dimensions.parseDimensionMm("4200mm×3800mm"))
+            .containsExactly(4200, 3800);
+        assertThat(Dimensions.parseDimensionMm("4200mm*3800"))
+            .containsExactly(4200, 3800);
+        assertThat(Dimensions.parseDimensionMm("4200×3800mm"))
+            .containsExactly(4200, 3800);
+        assertThat(Dimensions.parseDimensionMm("4200MM×3800MM"))
+            .containsExactly(4200, 3800);
+    }
+
+    @Test
+    void parseDimensionMm_cmUnitNotation_shouldConvertToMm() {
+        // 厘米标注 ×10 换算
+        assertThat(Dimensions.parseDimensionMm("420cm×380cm"))
+            .containsExactly(4200, 3800);
+        assertThat(Dimensions.parseDimensionMm("420cm×380"))
+            .containsExactly(4200, 3800);
+        assertThat(Dimensions.parseDimensionMm("客厅 420CM×380CM"))
+            .containsExactly(4200, 3800);
+    }
+
+    @Test
+    void parseDimensionMm_dimensionChain_shouldNotMisMatch() {
+        // 尺寸链分段不是房间尺寸，严禁脑补（含带 × 的混合链）
+        assertThat(Dimensions.parseDimensionMm("1200+2400+900")).isNull();
+        assertThat(Dimensions.parseDimensionMm("1200+2400")).isNull();
+        assertThat(Dimensions.parseDimensionMm("1200+2400×900")).isNull();
+    }
+
+    @Test
+    void parseDimensionMm_singleValueWithUnit_shouldReturnNull() {
+        // 契约要求两数，单值即使带单位也不做脑补
+        assertThat(Dimensions.parseDimensionMm("4200mm")).isNull();
+        assertThat(Dimensions.parseDimensionMm("420cm")).isNull();
+        assertThat(Dimensions.parseDimensionMm("4.2m")).isNull();
+    }
+
+    @Test
     void parseDimensionMm_noDimension_shouldReturnNull() {
         assertThat(Dimensions.parseDimensionMm(null)).isNull();
         assertThat(Dimensions.parseDimensionMm("")).isNull();

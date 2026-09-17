@@ -93,6 +93,13 @@ public class AsyncTaskProcessor {
     private double duplicateSimilarThreshold;
 
     /**
+     * 户型图逐房间二次精修开关（二期，默认开）：初检完成后按房间 bbox 外扩 25% 裁剪
+     * 单独精修 bbox/类型。管理端为异步链路，可承担逐房间串行调用的时延。
+     */
+    @Value("${rsdp.floor-plan.refine-enabled:true}")
+    private boolean floorPlanRefineEnabled;
+
+    /**
      * 异步处理产品录入任务：AI 视觉识别并更新相关记录。
      *
      * @param taskId    任务 ID
@@ -332,6 +339,10 @@ public class AsyncTaskProcessor {
 
         try {
             FloorPlanDetectResult detected = visionService.detectFloorPlanRooms(imageBytes, hint);
+            // 逐房间二次精修（二期）：精修后的 bbox 随 buildRooms 落库
+            if (floorPlanRefineEnabled) {
+                visionService.refineFloorPlanRooms(imageBytes, detected);
+            }
             updateTaskStatus(taskId, "processing", 60, null, null);
 
             // 尺寸三级提取 + 空间明细落库：v3.0 §4.4 收敛在 FloorPlanService 内实现（唯一出口）

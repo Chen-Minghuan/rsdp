@@ -21,7 +21,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.util.StringUtils;
 
+import javax.imageio.ImageIO;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
@@ -47,6 +55,28 @@ public class VisionService {
 
     @Value("${rsdp.ai.mock.enabled:false}")
     private boolean mockEnabled;
+
+    /**
+     * 户型图识别像素预算下限（DashScope qwen-vl content-part 参数 min_pixels）。
+     * 默认 256×28×28=200704：保证小尺寸裁剪图不被服务端过度降采样，细墙线/尺寸小字可辨。
+     */
+    @Value("${rsdp.ai.floor-plan-min-pixels:200704}")
+    private Integer floorPlanMinPixels;
+
+    /**
+     * 户型图识别像素预算上限（DashScope qwen-vl content-part 参数 max_pixels）。
+     * 默认 4194304（4M px）：高于 qwen3-vl-plus 默认上限 2621440，避免 2000px 放大后的
+     * 裁剪图（约 2.7M px）被服务端二次压缩丢失墙线细节；端点允许上限 16777216。
+     */
+    @Value("${rsdp.ai.floor-plan-max-pixels:4194304}")
+    private Integer floorPlanMaxPixels;
+
+    /**
+     * 逐房间二次精修房间数上限（rsdp.floor-plan.refine-max-rooms，默认 12）。
+     * 初检房间数超限时按 bbox 面积从大到小取前 N 个精修，避免精修调用过多触发限流。
+     */
+    @Value("${rsdp.floor-plan.refine-max-rooms:12}")
+    private Integer refineMaxRooms;
 
     private static final String SYSTEM_PROMPT = """
         你是家具产品分析专家。请对用户提供的产品图片进行分析，输出 JSON 格式。
@@ -1049,7 +1079,7 @@ public class VisionService {
      * 户型图空间识别提示词：识别户型平面图中的功能空间，输出 roomType/bbox/尺寸标注。
      */
     private static final String FLOOR_PLAN_SYSTEM_PROMPT = """
-        你是建筑户型图分析专家。请分析这张户型平面图，识别其中的各个功能空间。
+        你是精通中国住宅 CAD 户型图制图规范的建筑识图专家。请分析这张户型平面图，识别其中的各个功能空间。
 
         只输出 JSON，不要任何其他文字。输出格式：
         {
@@ -1064,34 +1094,300 @@ public class VisionService {
           "scaleText": "1:50"
         }
 
-        规则：
+        字段规则：
         1. roomType 只能从以下枚举选择：living_room(客厅) / dining_room(餐厅) / bedroom(卧室) / kitchen(厨房) / bathroom(卫生间) / balcony(阳台) / study(书房) / hallway(过道) / other
         2. bbox 为归一化坐标，x,y 为左上角，w,h 为宽高，取值范围 [0,1]，框要紧贴该空间的墙体边界
-        3. dimensionText 提取该空间内或附近标注的尺寸文字原文（如 "4200×3800"、"4.2m*3.8m"、"4200"），没有标注则为 null
-        4. 每个空间单独一个框，不得合并多个空间，不得遗漏闭合空间
-        5. 图上如有比例尺标注（如 "1:50"、"1:100"），提取到 scaleText，没有则为 null
+        3. 每个闭合空间单独一个框，不得合并多个空间，不得遗漏任何闭合空间（含阳台、卫生间等小空间）
+        4. 图上如有比例尺标注（如 "1:50"、"1:100"），原样提取到 scaleText，没有则为 null
+
+        空间边界判定（严格遵守）：
+        1. 忽略图框、标题栏、图例、装订线、外部尺寸链等一切非户型本体元素；它们不是空间，不得框出，也不得作为定位参照
+        2. 只有墙体（含填充墙图案，通常为粗黑线或斜线填充的厚线）围合出的闭合区域才是空间边界；家具、洁具、橱柜、植物的轮廓线不是空间边界
+        3. bbox 必须紧贴墙体内侧（净空间），不得把墙体厚度、外部尺寸链或相邻空间框进来
+        4. 输出每个 bbox 前先核对：它的四条边必须都落在墙体上；如果某条边落在床、沙发、桌椅、洁具等家具边缘上，说明框小了，必须继续向外延伸到墙体。只框住家具或空间中央一小块是典型错误
+
+        dimensionText 输出契约（严格遵守，只允许两种结果）：
+        A. 两个纯数字用 × 连接，单位一律为毫米，不带任何单位字符，顺序为"水平方向尺寸×垂直方向尺寸"，如 "4200×3800"；
+        B. null —— 没有可靠依据时必须输出 null。
+
+        尺寸识读方法（CAD 制图常识）：
+        1. 尺寸标注多沿墙体外侧布置，呈尺寸链形式分段标注（如 1200+2400+900），房间净尺寸常需将同向连续分段相加，或用轴线尺寸减去墙厚得到
+        2. 房间内可能直接标注尺寸，形式多样（如 "4200×3800"、"4.2m×3.8m"、"420cm×380cm" 或仅一个方向的单值），统一换算成毫米后按契约 A 输出（4.2m→4200，380cm→3800）
+        3. 只有单向尺寸、另一方向无法从尺寸链或轴线尺寸可靠推算时，dimensionText 输出 null，不要只填一个方向
+        4. 每个尺寸必须能在图上找到明确数字依据；dimensionText 只写最终毫米结果，不要写计算过程
+
+        严禁事项（防幻觉，违反即为错误输出）：
+        1. 没有可靠数字依据时严禁编造尺寸，必须输出 null
+        2. 严禁把门窗洞口宽度（常见 700/800/900/1000）、墙体厚度（常见 100/200/240）、家具电器尺寸当作房间尺寸
+        3. 严禁输出面积（如 "12.5㎡"）代替尺寸
+        4. 严禁输出带单位的字符串（如 "4200mm×3800mm"、"4.2m×3.8m"），dimensionText 只能是纯数字两数相连或 null
+
+        示例：
+        示例1（房间内有标注）：图中客厅内标注 "4.2m×3.8m"，换算为毫米后输出
+        {"roomType": "living_room", "bbox": {"x": 0.10, "y": 0.28, "w": 0.42, "h": 0.36}, "dimensionText": "4200×3800", "label": "客厅"}
+        示例2（无标注空间）：主卧内无任何尺寸标注，外侧尺寸链也无法对应，输出
+        {"roomType": "bedroom", "bbox": {"x": 0.55, "y": 0.60, "w": 0.30, "h": 0.28}, "dimensionText": null, "label": "主卧"}
+        示例3（尺寸链推算）：厨房水平方向外侧尺寸链为 1200+2100 两段，相加得 3300，垂直方向标注 2400，输出
+        {"roomType": "kitchen", "bbox": {"x": 0.60, "y": 0.08, "w": 0.22, "h": 0.18}, "dimensionText": "3300×2400", "label": "厨房"}
+        （若尺寸链与墙体的对应关系不明确，则该方向不得推算，dimensionText 输出 null）
+
         只输出 JSON，不要任何其他文字说明。
         """;
 
     private static final String FLOOR_PLAN_USER_PROMPT =
         "请分析这张户型平面图，识别其中的各个功能空间并输出 JSON。";
 
+    /** 网格叠加说明：仅在 {@link #GRID_OVERLAY_ENABLED} 开启时注入用户提示词。 */
+    private static final String GRID_OVERLAY_NOTE =
+        "\n提示：图上叠加了浅灰色 10% 间隔坐标网格（边缘有 0.1~0.9 刻度字），可用于辅助定位 bbox 坐标；网格线不是墙体，不得当作空间边界。";
+
+    /** 是否在空间识别图上叠加 10% 间隔坐标网格（实测开关：变差则改为 false）。 */
+    private static final boolean GRID_OVERLAY_ENABLED = true;
+
+    /**
+     * 户型本体区域检测提示词（两阶段识别第一阶段）：
+     * 框出墙体围合的居住空间区域，排除图框/标题栏/图例/装订线/外部尺寸链/空白边距。
+     */
+    private static final String FLOOR_PLAN_REGION_SYSTEM_PROMPT = """
+        你是精通中国住宅 CAD 图纸的建筑识图专家。请在整张图纸图片中定位"户型图本体"区域。
+
+        户型图本体 = 由墙体围合出的居住空间平面区域（含房间内家具布置与房间内文字标注）。
+        必须排除：图纸外框边框线、底部标题栏（工程名称/设计/制图等表格）、左下角图例表、
+        左侧装订线、墙体外侧的尺寸链标注（外墙尺寸数字与引线）、四周空白边距。
+
+        bbox 使用相对于整张图片宽高的归一化坐标（0.0 ~ 1.0）：
+        {"bbox": {"x": 左上角x, "y": 左上角y, "w": 宽度, "h": 高度}}
+
+        规则：
+        - bbox 紧贴最外层墙体外边缘，不多带尺寸链与空白，也不切断任何墙体
+        - 图中没有户型平面图时输出 {"bbox": null}
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    private static final String FLOOR_PLAN_REGION_USER_PROMPT =
+        "请定位这张图纸中户型图本体区域，输出 JSON。";
+
+    /** 户型本体区域合法性下限/上限（占原图面积比例）：超出范围视为 AI 误判，回退原图。 */
+    private static final double REGION_MIN_AREA_RATIO = 0.25;
+    private static final double REGION_MAX_AREA_RATIO = 0.95;
+
+    /** 裁剪图送识别前的最小宽度（px）：低于该值按比例放大，避免细墙线在小图下不可辨。 */
+    private static final int CROP_UPSCALE_MIN_WIDTH = 2000;
+
+    /**
+     * 户型本体裁剪外扩边距（归一化坐标，四边各外扩该值并钳制到 [0,1]）。
+     * AI 框出的本体区域紧贴外墙，直接裁剪会把贴墙尺寸链裁掉导致尺寸幻觉；
+     * 外扩 4% 保住墙体外侧的尺寸标注，坐标映射基于外扩后的裁剪框，逻辑不变。
+     */
+    private static final double CROP_MARGIN_RATIO = 0.04;
+
+    /**
+     * 将户型本体区域四边外扩指定比例（归一化坐标），钳制到 [0,1]。
+     *
+     * @param region      AI 检测的户型本体区域
+     * @param marginRatio 四边各外扩的归一化比例
+     * @return 外扩后的区域
+     */
+    static ProductBoundingBox expandRegion(ProductBoundingBox region, double marginRatio) {
+        double x = clamp01(region.getX() - marginRatio);
+        double y = clamp01(region.getY() - marginRatio);
+        double w = Math.min(clamp01(region.getWidth() + 2 * marginRatio), 1.0 - x);
+        double h = Math.min(clamp01(region.getHeight() + 2 * marginRatio), 1.0 - y);
+        return new ProductBoundingBox(x, y, w, h);
+    }
+
+    /** 按目标宽度等比放大图片（双线性平滑）。 */
+    static BufferedImage upscale(BufferedImage source, int targetWidth) {
+        int targetHeight = Math.max(1, Math.round(source.getHeight() * (targetWidth / (float) source.getWidth())));
+        BufferedImage scaled = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = scaled.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.drawImage(source, 0, 0, targetWidth, targetHeight, null);
+        } finally {
+            g.dispose();
+        }
+        return scaled;
+    }
+
+    /**
+     * 检测户型图本体区域（两阶段识别第一阶段）。
+     *
+     * <p>一次轻量 AI 调用返回户型本体（墙体围合的居住空间区域）的归一化 bbox，
+     * 排除标题栏/图框边框/图例/装订线/外部尺寸链/空白边距。
+     * Mock 模式、AI 异常或输出不合法时返回 null，由调用方回退原图。</p>
+     *
+     * @param imageBytes 户型图原图字节
+     * @return 户型本体区域 bbox（归一化）；不可用时返回 null
+     */
+    public ProductBoundingBox detectFloorPlanRegion(byte[] imageBytes) {
+        if (imageBytes == null || imageBytes.length == 0 || mockEnabled) {
+            return null;
+        }
+        try {
+            String base64 = Base64.getEncoder().encodeToString(imageBytes);
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", FLOOR_PLAN_REGION_SYSTEM_PROMPT),
+                    OpenAiChatMessage.vision("user", FLOOR_PLAN_REGION_USER_PROMPT, base64,
+                        floorPlanMinPixels, floorPlanMaxPixels)
+                ))
+                .temperature(0.1)
+                .maxTokens(512)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+                .build();
+            String json = executeChat(request, "户型图本体区域检测");
+            return parseSubjectBbox(json);
+        } catch (Exception e) {
+            log.warn("户型图本体区域检测失败，回退整图识别：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 户型本体区域合法性判定：bbox 合法且面积占原图 25%~95% 才采信，
+     * 防止 AI 把标题栏/整张图误判为本体。
+     */
+    static boolean isPlausibleFloorPlanRegion(ProductBoundingBox region) {
+        if (region == null || !region.isValid()) {
+            return false;
+        }
+        double area = region.getWidth() * region.getHeight();
+        return area >= REGION_MIN_AREA_RATIO && area <= REGION_MAX_AREA_RATIO;
+    }
+
+    /**
+     * 把裁剪图内的归一化 bbox 映射回原图坐标。
+     */
+    static ProductBoundingBox mapToOriginalCoords(ProductBoundingBox roomBox, ProductBoundingBox region) {
+        double x = region.getX() + roomBox.getX() * region.getWidth();
+        double y = region.getY() + roomBox.getY() * region.getHeight();
+        double w = roomBox.getWidth() * region.getWidth();
+        double h = roomBox.getHeight() * region.getHeight();
+        ProductBoundingBox mapped = new ProductBoundingBox(
+            clamp01(x), clamp01(y), clamp01(w), clamp01(h));
+        return mapped.isValid() ? mapped : null;
+    }
+
+    /**
+     * 按区域裁剪原图并编码为 PNG；图片无法解码时返回 null（调用方回退原图）。
+     */
+    static byte[] cropRegionToPng(byte[] imageBytes, ProductBoundingBox region) {
+        try {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(imageBytes));
+            if (source == null) {
+                return null;
+            }
+            int sx = (int) Math.round(region.getX() * source.getWidth());
+            int sy = (int) Math.round(region.getY() * source.getHeight());
+            int sw = (int) Math.round(region.getWidth() * source.getWidth());
+            int sh = (int) Math.round(region.getHeight() * source.getHeight());
+            sx = Math.max(0, Math.min(sx, source.getWidth() - 1));
+            sy = Math.max(0, Math.min(sy, source.getHeight() - 1));
+            sw = Math.max(1, Math.min(sw, source.getWidth() - sx));
+            sh = Math.max(1, Math.min(sh, source.getHeight() - sy));
+            BufferedImage cropped = source.getSubimage(sx, sy, sw, sh);
+            // 裁剪图过小时放大：细墙线在小分辨率下易被模型忽略，放大提升墙体可见性
+            if (cropped.getWidth() < CROP_UPSCALE_MIN_WIDTH) {
+                cropped = upscale(cropped, CROP_UPSCALE_MIN_WIDTH);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ImageIO.write(cropped, "png", out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            log.warn("户型图本体裁剪失败，回退整图识别：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 在图上叠加浅色 10% 间隔坐标网格与边缘刻度小字（0.1~0.9），辅助 AI 定位 bbox。
+     * 线宽 1px、低透明度，不遮盖图纸线条。
+     */
+    static BufferedImage overlayCoordinateGrid(BufferedImage source) {        int w = source.getWidth();
+        int h = source.getHeight();
+        BufferedImage overlaid = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = overlaid.createGraphics();
+        try {
+            g.drawImage(source, 0, 0, null);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setStroke(new BasicStroke(1f));
+            g.setColor(new Color(150, 150, 150, 70));
+            for (int i = 1; i < 10; i++) {
+                int x = Math.round(w * i / 10f);
+                int y = Math.round(h * i / 10f);
+                g.drawLine(x, 0, x, h);
+                g.drawLine(0, y, w, y);
+            }
+            g.setColor(new Color(110, 110, 110, 160));
+            g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.max(10, Math.min(w, h) / 60)));
+            for (int i = 1; i < 10; i++) {
+                String label = "0." + i;
+                int x = Math.round(w * i / 10f);
+                int y = Math.round(h * i / 10f);
+                g.drawString(label, x + 2, g.getFontMetrics().getHeight() + 2);
+                g.drawString(label, 2, y - 2);
+            }
+        } finally {
+            g.dispose();
+        }
+        return overlaid;
+    }
+
     /**
      * 识别户型平面图中的功能空间。
      *
+     * <p>两阶段识别（精度提升）：先 {@link #detectFloorPlanRegion} 定位户型本体区域
+     * （排除标题栏/图例/尺寸链干扰），区域合法（面积占原图 25%~95%）则裁剪出该区域
+     * 并叠加坐标网格后送空间识别，返回的归一化 bbox 再映射回原图坐标；
+     * 区域检测失败/不合法/图片无法解码时回退为整图识别，行为与改造前一致。</p>
+     *
      * <p>解析容错沿用 PDF 链路成熟模式：去 markdown 围栏（executeChat 已处理）、
-     * bbox 越界收敛（{@link #parseBoundingBoxClamped}）、rooms 缺省返回空列表不抛错。</p>
+     * bbox 越界收敛（{@link #parseBoundingBoxClamped}）、rooms 缺省返回空列表不抛错；
+     * 并补齐工程保险：response_format=json_object、maxTokens=8192、截断截尾修复
+     * （{@link #recoverTruncatedFloorPlanRooms}，思路同 {@code parsePageRegionsStreaming}）。</p>
      *
      * @param imageBytes 户型图片字节（jpg/png）
      * @param hint       用户补充说明（如 "这是三室两厅"），可空
-     * @return 空间识别结果
+     * @return 空间识别结果（bbox 为相对原图的归一化坐标）
      */
     public FloorPlanDetectResult detectFloorPlanRooms(byte[] imageBytes, String hint) {
         if (imageBytes == null || imageBytes.length == 0) {
             throw new ExternalServiceException("户型图片为空");
         }
-        String base64 = Base64.getEncoder().encodeToString(imageBytes);
+
+        // 第一阶段：定位户型本体区域并裁剪（不合法则回退整图）
+        ProductBoundingBox region = detectFloorPlanRegion(imageBytes);
+        byte[] analysisImage = imageBytes;
+        if (isPlausibleFloorPlanRegion(region)) {
+            // 外扩 4% 再裁剪：保住贴墙尺寸链（防尺寸幻觉）；后续坐标映射基于外扩后的裁剪框
+            ProductBoundingBox expanded = expandRegion(region, CROP_MARGIN_RATIO);
+            byte[] cropped = cropRegionToPng(imageBytes, expanded);
+            if (cropped != null) {
+                analysisImage = cropped;
+                region = expanded;
+                log.info("户型图本体区域采信：region=[{},{},{},{}]，外扩 {} 后裁剪送识别",
+                    region.getX(), region.getY(), region.getWidth(), region.getHeight(), CROP_MARGIN_RATIO);
+            } else {
+                region = null;
+                log.warn("户型图本体裁剪失败，回退整图识别");
+            }
+        } else {
+            region = null;
+            log.info("户型图本体区域未采信（检测失败或面积越界），回退整图识别");
+        }
+
+        // 网格叠加（裁剪图或整图上）：辅助 AI 定位坐标
+        if (GRID_OVERLAY_ENABLED) {
+            analysisImage = overlayGridOnImage(analysisImage);
+        }
+
+        String base64 = Base64.getEncoder().encodeToString(analysisImage);
         String userPrompt = FLOOR_PLAN_USER_PROMPT;
+        if (GRID_OVERLAY_ENABLED) {
+            userPrompt += GRID_OVERLAY_NOTE;
+        }
         if (StringUtils.hasText(hint)) {
             userPrompt += "\n用户补充说明：" + hint.trim();
         }
@@ -1100,57 +1396,396 @@ public class VisionService {
             .model(model)
             .messages(List.of(
                 OpenAiChatMessage.text("system", FLOOR_PLAN_SYSTEM_PROMPT),
-                OpenAiChatMessage.multiVision("user", userPrompt, List.of(base64))
+                OpenAiChatMessage.multiVision("user", userPrompt, List.of(base64),
+                    floorPlanMinPixels, floorPlanMaxPixels)
             ))
             .temperature(0.2)
-            .maxTokens(4096)
+            .maxTokens(8192)
+            .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
             .build();
 
         String json = executeChat(request, "户型图空间识别");
-        return parseFloorPlanRooms(json);
+        FloorPlanDetectResult result = parseFloorPlanRooms(json);
+
+        // 第二阶段坐标回映射：裁剪图内坐标 → 原图坐标
+        if (region != null) {
+            mapRoomsToOriginal(result, region);
+        }
+        return result;
+    }
+
+    /** 在图片字节上叠加坐标网格；解码失败时原样返回（不阻断主流程）。 */
+    private static byte[] overlayGridOnImage(byte[] imageBytes) {
+        try {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(imageBytes));
+            if (source == null) {
+                return imageBytes;
+            }
+            BufferedImage overlaid = overlayCoordinateGrid(source);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ImageIO.write(overlaid, "png", out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            log.warn("坐标网格叠加失败，使用原图：{}", e.getMessage());
+            return imageBytes;
+        }
+    }
+
+    /** 将识别结果中各房间 bbox 从裁剪图坐标映射回原图坐标。 */
+    private static void mapRoomsToOriginal(FloorPlanDetectResult result, ProductBoundingBox region) {
+        for (FloorPlanDetectResult.Room room : result.getRooms()) {
+            if (room.getX() == null || room.getY() == null || room.getW() == null || room.getH() == null) {
+                continue;
+            }
+            ProductBoundingBox mapped = mapToOriginalCoords(
+                new ProductBoundingBox(room.getX(), room.getY(), room.getW(), room.getH()), region);
+            if (mapped != null) {
+                room.setX(mapped.getX());
+                room.setY(mapped.getY());
+                room.setW(mapped.getWidth());
+                room.setH(mapped.getHeight());
+            }
+        }
     }
 
     /**
-     * 解析户型图空间识别结果。JSON 解析失败抛 {@link ExternalServiceException}；
-     * rooms 缺失/为空时返回空列表，不抛错。
+     * 解析户型图空间识别结果。JSON 解析失败先尝试截尾修复（rooms 数组截断时
+     * 丢弃不完整的最后一个对象），恢复成功返回已解析的房间；仍失败才抛
+     * {@link ExternalServiceException}。rooms 缺失/为空时返回空列表，不抛错。
      */
     private FloorPlanDetectResult parseFloorPlanRooms(String json) {
         try {
             Map<?, ?> map = objectMapper.readValue(json, Map.class);
-            FloorPlanDetectResult result = new FloorPlanDetectResult();
-            Object scaleText = map.get("scaleText");
-            result.setScaleText(scaleText != null ? scaleText.toString() : null);
-
-            List<FloorPlanDetectResult.Room> rooms = new ArrayList<>();
-            Object rawRooms = map.get("rooms");
-            if (rawRooms instanceof List<?> roomList) {
-                for (Object r : roomList) {
-                    if (r instanceof Map<?, ?> rm) {
-                        FloorPlanDetectResult.Room room = new FloorPlanDetectResult.Room();
-                        room.setRoomType(toTextValue(rm.get("roomType")));
-                        room.setLabel(toTextValue(rm.get("label")));
-                        room.setDimensionText(toTextValue(rm.get("dimensionText")));
-                        ProductBoundingBox bbox = parseBoundingBoxClamped(rm.get("bbox"));
-                        if (bbox != null) {
-                            room.setX(bbox.getX());
-                            room.setY(bbox.getY());
-                            room.setW(bbox.getWidth());
-                            room.setH(bbox.getHeight());
-                        }
-                        rooms.add(room);
-                    }
-                }
-            }
-            result.setRooms(rooms);
-            return result;
+            return buildFloorPlanResult(map);
         } catch (Exception e) {
+            log.warn("户型图空间识别结果 JSON 可能截断，尝试截尾修复");
+            FloorPlanDetectResult recovered = recoverTruncatedFloorPlanRooms(json);
+            if (recovered != null) {
+                log.info("截尾修复恢复 {} 个空间", recovered.getRooms().size());
+                return recovered;
+            }
             log.error("解析户型图空间识别结果失败，json={}", json, e);
             throw new ExternalServiceException("解析 AI 识别结果失败", e);
         }
     }
 
+    /** 由完整解析的 JSON Map 构建识别结果（rooms 缺省/为空时返回空列表）。 */
+    private FloorPlanDetectResult buildFloorPlanResult(Map<?, ?> map) {
+        FloorPlanDetectResult result = new FloorPlanDetectResult();
+        Object scaleText = map.get("scaleText");
+        result.setScaleText(scaleText != null ? scaleText.toString() : null);
+
+        List<FloorPlanDetectResult.Room> rooms = new ArrayList<>();
+        Object rawRooms = map.get("rooms");
+        if (rawRooms instanceof List<?> roomList) {
+            for (Object r : roomList) {
+                if (r instanceof Map<?, ?> rm) {
+                    rooms.add(toFloorPlanRoom(rm));
+                }
+            }
+        }
+        result.setRooms(rooms);
+        return result;
+    }
+
+    /** 单个房间 Map → Room 实体（bbox 越界收敛，解析失败仅坐标留空不整行丢弃）。 */
+    private FloorPlanDetectResult.Room toFloorPlanRoom(Map<?, ?> rm) {
+        FloorPlanDetectResult.Room room = new FloorPlanDetectResult.Room();
+        room.setRoomType(toTextValue(rm.get("roomType")));
+        room.setLabel(toTextValue(rm.get("label")));
+        room.setDimensionText(toTextValue(rm.get("dimensionText")));
+        ProductBoundingBox bbox = parseBoundingBoxClamped(rm.get("bbox"));
+        if (bbox != null) {
+            room.setX(bbox.getX());
+            room.setY(bbox.getY());
+            room.setW(bbox.getWidth());
+            room.setH(bbox.getHeight());
+        }
+        return room;
+    }
+
+    /**
+     * 截尾修复：流式读取 rooms 数组中已完整的房间对象，丢弃截断处不完整的
+     * 最后一个对象。一个完整房间都读不出时返回 null（交由调用方抛错）。
+     */
+    @SuppressWarnings("unchecked")
+    private FloorPlanDetectResult recoverTruncatedFloorPlanRooms(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        FloorPlanDetectResult result = new FloorPlanDetectResult();
+        List<FloorPlanDetectResult.Room> rooms = new ArrayList<>();
+        try (JsonParser parser = objectMapper.getFactory().createParser(json)) {
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
+                return null;
+            }
+            while (parser.nextToken() == JsonToken.FIELD_NAME) {
+                String field = parser.currentName();
+                JsonToken valueToken = parser.nextToken();
+                if ("rooms".equals(field) && valueToken == JsonToken.START_ARRAY) {
+                    while (parser.nextToken() == JsonToken.START_OBJECT) {
+                        Map<String, Object> rm = parser.readValueAs(Map.class);
+                        rooms.add(toFloorPlanRoom(rm));
+                    }
+                } else if ("scaleText".equals(field) && valueToken != null && valueToken.isScalarValue()) {
+                    result.setScaleText(parser.getValueAsString());
+                } else if (valueToken != null) {
+                    parser.skipChildren();
+                }
+            }
+        } catch (Exception e) {
+            log.warn("流式解析户型图识别结果中断，已恢复 {} 个空间", rooms.size());
+        }
+        if (rooms.isEmpty()) {
+            return null;
+        }
+        result.setRooms(rooms);
+        return result;
+    }
+
     private String toTextValue(Object value) {
         return value != null ? value.toString() : null;
+    }
+
+    // ========== 户型图优化二期：逐房间二次精修（refinement pass） ==========
+
+    /** 精修裁剪外扩比例：按房间 bbox 自身宽高的 25% 四边外扩（钳制图内）。 */
+    private static final double REFINE_CROP_MARGIN_RATIO = 0.25;
+
+    /** 精修小图短边放大目标（px）：提升细墙线/尺寸小字可辨度。 */
+    private static final int REFINE_UPSCALE_SHORT_EDGE = 768;
+
+    /** 精修框与初检框面积比上限（3 倍）：超出视为精修失控，保留初检结果。 */
+    private static final double REFINE_AREA_TOLERANCE = 3.0;
+
+    /**
+     * 精修框面积下限（初检的 0.8 倍）：一期实测残留问题是初检框偏小/锚家具，
+     * 精修显著缩小（<0.8×）基本是进一步锚向家具的劣化，判定失控保留初检。
+     */
+    private static final double REFINE_MIN_AREA_RATIO = 0.8;
+
+    /** 精修 roomType 合法枚举（与空间识别一致的 9 类）。 */
+    private static final java.util.Set<String> VALID_ROOM_TYPES = java.util.Set.of(
+        "living_room", "dining_room", "bedroom", "kitchen", "bathroom",
+        "balcony", "study", "hallway", "other");
+
+    private static final String FLOOR_PLAN_REFINE_SYSTEM_PROMPT = """
+        你是精通中国住宅 CAD 户型图制图规范的建筑识图专家。
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    private static final String FLOOR_PLAN_REFINE_USER_PROMPT_TEMPLATE = """
+        这是户型图中裁剪出的一个空间（疑似 %s）。
+        请输出该空间墙体内侧边界框（相对本小图的归一化坐标）、确认后的 roomType 和 label。
+
+        roomType 只能从以下枚举选择：living_room(客厅) / dining_room(餐厅) / bedroom(卧室) / kitchen(厨房) / bathroom(卫生间) / balcony(阳台) / study(书房) / hallway(过道) / other
+
+        bbox 规则（严格遵守）：
+        - 格式 {"x": 左上角x, "y": 左上角y, "w": 宽度, "h": 高度}，归一化取值 [0,1]，满足 0<=x、0<=y、x+w<=1、y+h<=1
+        - 四条边必须都落在墙体内侧（净空间），不得包含墙体厚度，也不得把相邻空间框进来
+        - 严禁按床、沙发、桌椅、洁具、橱柜等家具边缘收缩：若某条边落在家具边缘上，必须向外延伸到墙体
+        - 目标空间可能延伸到裁剪图边缘（初检框常偏小、锚在房间中央家具上，裁剪未必包含全部墙体）：
+          墙体在哪边贴到裁剪图边缘，bbox 哪条边就贴到边缘（坐标取 0 或 1），严禁把可见的家具群当作空间边界
+
+        只输出 JSON：{"bbox": {...}, "roomType": "...", "label": "..."}
+        """;
+
+    /**
+     * 逐房间二次精修（户型图优化二期）：对初检的每个房间按其 bbox 外扩 25% 从原图
+     * 裁小图（短边放大到约 768px），单独问 AI 输出该空间墙体内侧边界框 + 确认
+     * roomType/label，映射回原图坐标后替换初检 bbox。
+     *
+     * <p>容错：精修调用失败、返回非法（bbox 解析失败、映射越界、面积与初检偏差超
+     * 3 倍、或面积缩到初检 0.8 倍以下——一期实测残留为框偏小/锚家具，显著缩小即劣化）
+     * 一律保留初检结果；roomType/label 仅在 bbox 采信时才随精修采用（AI 改了
+     * 就采用，变化记日志）。逐房间串行调用（避免限流），房间数超
+     * {@code rsdp.floor-plan.refine-max-rooms} 时按 bbox 面积从大到小截取。
+     * 本方法只做精修，开关由调用方控制（管理端 refine-enabled / 官网 refine-public-enabled）。</p>
+     *
+     * @param imageBytes 户型原图字节
+     * @param result     初检识别结果（就地精修 bbox/roomType/label）
+     */
+    public void refineFloorPlanRooms(byte[] imageBytes, FloorPlanDetectResult result) {
+        if (result == null || result.getRooms() == null || result.getRooms().isEmpty()
+            || imageBytes == null || imageBytes.length == 0 || mockEnabled) {
+            return;
+        }
+        int maxRooms = refineMaxRooms != null && refineMaxRooms > 0 ? refineMaxRooms : 12;
+        List<FloorPlanDetectResult.Room> candidates = result.getRooms().stream()
+            .filter(r -> r.getX() != null && r.getY() != null && r.getW() != null && r.getH() != null
+                && r.getW() > 0 && r.getH() > 0)
+            .sorted(java.util.Comparator.comparingDouble(r -> -(r.getW() * r.getH())))
+            .limit(maxRooms)
+            .toList();
+        if (candidates.size() < result.getRooms().size()) {
+            log.info("户型图精修房间数超限，按 bbox 面积从大到小取前 {} 个（初检共 {} 个）",
+                candidates.size(), result.getRooms().size());
+        }
+        int refined = 0;
+        for (FloorPlanDetectResult.Room room : candidates) {
+            try {
+                if (refineOneRoom(imageBytes, room)) {
+                    refined++;
+                }
+            } catch (Exception e) {
+                log.warn("户型图空间精修异常，保留初检结果，label={}：{}", room.getLabel(), e.getMessage());
+            }
+        }
+        log.info("户型图逐房间精修完成：候选 {} 间，采信 {} 间", candidates.size(), refined);
+    }
+
+    /**
+     * 精修单个房间：外扩裁剪 → 小图独立识别 → 坐标映射回原图 → 合法性校验 → 采信。
+     *
+     * @return 精修结果被采信返回 true；任何一步失败返回 false（保留初检结果）
+     */
+    private boolean refineOneRoom(byte[] imageBytes, FloorPlanDetectResult.Room room) {
+        ProductBoundingBox initial =
+            new ProductBoundingBox(room.getX(), room.getY(), room.getW(), room.getH());
+        if (!initial.isValid()) {
+            return false;
+        }
+        ProductBoundingBox cropRegion = expandRoomBox(initial, REFINE_CROP_MARGIN_RATIO);
+        byte[] crop = cropRoomToPng(imageBytes, cropRegion);
+        if (crop == null) {
+            return false;
+        }
+
+        String suspected = StringUtils.hasText(room.getLabel()) ? room.getLabel()
+            : (room.getRoomType() != null ? room.getRoomType() : "空间");
+        OpenAiChatRequest request = OpenAiChatRequest.builder()
+            .model(model)
+            .messages(List.of(
+                OpenAiChatMessage.text("system", FLOOR_PLAN_REFINE_SYSTEM_PROMPT),
+                OpenAiChatMessage.vision("user",
+                    FLOOR_PLAN_REFINE_USER_PROMPT_TEMPLATE.formatted(suspected),
+                    Base64.getEncoder().encodeToString(crop),
+                    floorPlanMinPixels, floorPlanMaxPixels)
+            ))
+            .temperature(0.1)
+            .maxTokens(1024)
+            .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+            .build();
+
+        String json = executeChat(request, "户型图空间精修");
+        ProductBoundingBox refinedSmall = parseBoundingBoxClamped(extractJsonField(json, "bbox"));
+        if (refinedSmall == null) {
+            log.warn("户型图空间精修未返回合法 bbox，保留初检结果，label={}，json={}", room.getLabel(), json);
+            return false;
+        }
+        ProductBoundingBox mapped = mapToOriginalCoords(refinedSmall, cropRegion);
+        if (mapped == null) {
+            log.warn("户型图空间精修坐标映射越界，保留初检结果，label={}", room.getLabel());
+            return false;
+        }
+        double areaRatio = (mapped.getWidth() * mapped.getHeight())
+            / (initial.getWidth() * initial.getHeight());
+        if (areaRatio < REFINE_MIN_AREA_RATIO || areaRatio > REFINE_AREA_TOLERANCE) {
+            log.warn("户型图空间精修面积偏差超限（{} 倍，合法区间 [{}~{}]），保留初检结果，label={}",
+                String.format("%.2f", areaRatio), REFINE_MIN_AREA_RATIO, REFINE_AREA_TOLERANCE, room.getLabel());
+            return false;
+        }
+
+        room.setX(mapped.getX());
+        room.setY(mapped.getY());
+        room.setW(mapped.getWidth());
+        room.setH(mapped.getHeight());
+
+        // 类型确认：精修时看得更清，AI 改了 roomType/label 就采用（变化记日志）
+        String refinedType = extractJsonTextField(json, "roomType");
+        if (StringUtils.hasText(refinedType) && VALID_ROOM_TYPES.contains(refinedType.trim())
+            && !refinedType.trim().equals(room.getRoomType())) {
+            log.info("户型图精修修正 roomType：{} → {}（label={}）",
+                room.getRoomType(), refinedType.trim(), room.getLabel());
+            room.setRoomType(refinedType.trim());
+        }
+        String refinedLabel = extractJsonTextField(json, "label");
+        if (StringUtils.hasText(refinedLabel) && !refinedLabel.trim().equals(room.getLabel())) {
+            log.info("户型图精修修正 label：{} → {}", room.getLabel(), refinedLabel.trim());
+            room.setLabel(refinedLabel.trim());
+        }
+        return true;
+    }
+
+    /** 从精修返回 JSON 提取对象字段（如 bbox）；解析失败返回 null。 */
+    private Object extractJsonField(String json, String field) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            Map<?, ?> map = objectMapper.readValue(json, Map.class);
+            return map.get(field);
+        } catch (Exception e) {
+            log.warn("解析户型图精修结果失败，json={}", json, e);
+            return null;
+        }
+    }
+
+    /** 从精修返回 JSON 提取文本字段（如 roomType/label）；解析失败或缺失返回 null。 */
+    private String extractJsonTextField(String json, String field) {
+        Object value = extractJsonField(json, field);
+        return value != null ? value.toString() : null;
+    }
+
+    /**
+     * 按房间 bbox 自身宽高的指定比例四边外扩（钳制到 [0,1]）。
+     * 与 {@link #expandRegion}（按全图归一化比例外扩）不同：精修外扩量跟随房间自身尺寸。
+     */
+    static ProductBoundingBox expandRoomBox(ProductBoundingBox box, double marginRatio) {
+        double mx = box.getWidth() * marginRatio;
+        double my = box.getHeight() * marginRatio;
+        double x = clamp01(box.getX() - mx);
+        double y = clamp01(box.getY() - my);
+        double w = Math.min(box.getWidth() + 2 * mx, 1.0 - x);
+        double h = Math.min(box.getHeight() + 2 * my, 1.0 - y);
+        return new ProductBoundingBox(x, y, w, h);
+    }
+
+    /**
+     * 按区域从原图裁剪小图并编码为 PNG（精修专用）：裁剪图短边不足
+     * {@link #REFINE_UPSCALE_SHORT_EDGE} 时等比放大；图片无法解码返回 null（调用方保留初检）。
+     */
+    static byte[] cropRoomToPng(byte[] imageBytes, ProductBoundingBox region) {
+        try {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(imageBytes));
+            if (source == null) {
+                return null;
+            }
+            int sx = (int) Math.round(region.getX() * source.getWidth());
+            int sy = (int) Math.round(region.getY() * source.getHeight());
+            int sw = (int) Math.round(region.getWidth() * source.getWidth());
+            int sh = (int) Math.round(region.getHeight() * source.getHeight());
+            sx = Math.max(0, Math.min(sx, source.getWidth() - 1));
+            sy = Math.max(0, Math.min(sy, source.getHeight() - 1));
+            sw = Math.max(1, Math.min(sw, source.getWidth() - sx));
+            sh = Math.max(1, Math.min(sh, source.getHeight() - sy));
+            BufferedImage cropped = source.getSubimage(sx, sy, sw, sh);
+            if (Math.min(cropped.getWidth(), cropped.getHeight()) < REFINE_UPSCALE_SHORT_EDGE) {
+                cropped = upscaleToShortEdge(cropped, REFINE_UPSCALE_SHORT_EDGE);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ImageIO.write(cropped, "png", out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            log.warn("户型图空间精修裁剪失败，保留初检结果：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 等比放大图片使短边达到目标像素（双线性平滑）。 */
+    static BufferedImage upscaleToShortEdge(BufferedImage source, int targetShortEdge) {
+        double scale = targetShortEdge / (double) Math.min(source.getWidth(), source.getHeight());
+        int targetWidth = Math.max(1, (int) Math.round(source.getWidth() * scale));
+        int targetHeight = Math.max(1, (int) Math.round(source.getHeight() * scale));
+        BufferedImage scaled = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = scaled.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.drawImage(source, 0, 0, targetWidth, targetHeight, null);
+        } finally {
+            g.dispose();
+        }
+        return scaled;
     }
 
     /**

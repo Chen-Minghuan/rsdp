@@ -15,13 +15,20 @@ import java.util.regex.Pattern;
  */
 public final class Dimensions {
 
-    /** 毫米标注：4200×3800 / 4200*3800。 */
+    /** 毫米标注（可带 mm 单位）：4200×3800 / 4200*3800 / 4200mm×3800mm。
+     * 边界约束：前置不得为数字/小数点/加号（防尺寸链 "1200+2400×900" 误匹配），后置不得紧跟数字/小数点。 */
     private static final Pattern DIM_MM_PATTERN =
-        Pattern.compile("(\\d{3,5})\\s*[×xX*]\\s*(\\d{3,5})");
+        Pattern.compile("(?<![\\d.+])(\\d{3,5})\\s*(?:mm)?\\s*[×xX*]\\s*(\\d{3,5})\\s*(?:mm)?(?![\\d.])",
+            Pattern.CASE_INSENSITIVE);
 
-    /** 米标注：4.2m*3.8m / 4.2×3.8m。 */
+    /** 厘米标注：420cm×380cm（×10 换算），同样带尺寸链边界约束。 */
+    private static final Pattern DIM_CM_PATTERN =
+        Pattern.compile("(?<![\\d.+])(\\d{2,4}(?:\\.\\d+)?)\\s*cm\\s*[×xX*]\\s*(\\d{2,4}(?:\\.\\d+)?)\\s*(?:cm)?(?![\\d.])",
+            Pattern.CASE_INSENSITIVE);
+
+    /** 米标注：4.2m*3.8m / 4.2×3.8m，同样带尺寸链边界约束。 */
     private static final Pattern DIM_M_PATTERN =
-        Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*m\\s*[×xX*]\\s*(\\d+(?:\\.\\d+)?)\\s*m?");
+        Pattern.compile("(?<![\\d.+])(\\d+(?:\\.\\d+)?)\\s*m\\s*[×xX*]\\s*(\\d+(?:\\.\\d+)?)\\s*m?");
 
     /** 长度单位（毫米/厘米/米，mm 须在 m 前避免前缀误配）。 */
     private static final String UNIT = "(毫米|厘米|米|mm|cm|m)";
@@ -63,9 +70,10 @@ public final class Dimensions {
     /**
      * 从尺寸标注原文解析开间/进深（mm）。
      *
-     * <p>优先匹配毫米标注（如 "4200×3800"、"4200*3800"），
-     * 其次匹配米标注（如 "4.2m*3.8m"、"4.2×3.8m"）并 ×1000 换算；
-     * 无法解析时返回 null。</p>
+     * <p>优先匹配毫米标注（如 "4200×3800"、"4200*3800"、"4200mm×3800mm"），
+     * 其次厘米标注（如 "420cm×380cm"，×10 换算），再次米标注
+     * （如 "4.2m*3.8m"、"4.2×3.8m"，×1000 换算）；
+     * 单值（如 "4200"）与尺寸链分段（如 "1200+2400"）不做脑补，无法解析时返回 null。</p>
      *
      * @param dimensionText 尺寸标注原文，可空
      * @return [widthMm, depthMm]，解析失败返回 null
@@ -77,6 +85,14 @@ public final class Dimensions {
         Matcher mmMatcher = DIM_MM_PATTERN.matcher(dimensionText);
         if (mmMatcher.find()) {
             return new int[] {Integer.parseInt(mmMatcher.group(1)), Integer.parseInt(mmMatcher.group(2))};
+        }
+        Matcher cmMatcher = DIM_CM_PATTERN.matcher(dimensionText);
+        if (cmMatcher.find()) {
+            int widthMm = BigDecimal.valueOf(Double.parseDouble(cmMatcher.group(1)))
+                .multiply(BigDecimal.valueOf(10)).intValue();
+            int depthMm = BigDecimal.valueOf(Double.parseDouble(cmMatcher.group(2)))
+                .multiply(BigDecimal.valueOf(10)).intValue();
+            return new int[] {widthMm, depthMm};
         }
         Matcher mMatcher = DIM_M_PATTERN.matcher(dimensionText);
         if (mMatcher.find()) {
