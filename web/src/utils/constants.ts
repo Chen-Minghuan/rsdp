@@ -84,6 +84,8 @@ export const PERMISSIONS = {
   FAVORITE_READ: 'favorite:read',
   FAVORITE_WRITE: 'favorite:write',
 
+  AGENT_USE: 'agent:use',
+
   ADMIN_ASYNC_METRICS: 'admin:async-metrics',
   ADMIN_VECTOR_BACKFILL: 'admin:vector-backfill'
 } as const

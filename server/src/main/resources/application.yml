@@ -35,6 +35,17 @@ spring:
     multipart:
       max-file-size: 200MB
       max-request-size: 200MB
+  ai:
+    # 营销 Agent 模块专用（SAA DashScope ChatModel）。
+    # 与下方 rsdp.ai.* 并存：rsdp.ai 服务现有 Vision/Embedding 手写调用，互不影响。
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          # 营销 Agent 为纯文本对话，用文本模型 qwen-plus（更便宜）。
+          # 注意：qwen3-vl-plus 属多模态端点（multimodal-generation），
+          # SAA ChatModel 走文本链路会 400，勿在此配置 VL 模型。
+          model: qwen-plus
   jackson:
     # JSON 时间渲染时区（TIMESTAMPTZ 列统一按 Asia/Shanghai 输出，与 JVM/DB 会话时区一致）
     time-zone: Asia/Shanghai
@@ -87,6 +98,16 @@ rsdp:
     embedding-base-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding
     embedding-timeout-seconds: 30
     embedding-max-retries: 2
+  # 营销 Agent（com.rsdp.agent）
+  marketing-agent:
+    # 每轮产品检索返回上限
+    search-top-n: 20
+    # 连续追问最大轮次（超过则直接进入检索）
+    max-followup-rounds: 3
+    # SSE 心跳间隔（秒），防网关空闲断连
+    sse-heartbeat-seconds: 15
+    # 一次 Agent Run 的最长执行时间（秒），超时强制失败释放 active_run_id
+    run-timeout-seconds: 120
   # 重复导入检测
   dedup:
     # 同款检测：向量相似度阈值（0~1），录入新品与库内产品相似度超过该值时标记"存疑-疑似同款"

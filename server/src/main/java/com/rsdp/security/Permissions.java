@@ -101,4 +101,12 @@ public final class Permissions {
     // 管理后台
     public static final String ADMIN_ASYNC_METRICS = "admin:async-metrics";
     public static final String ADMIN_VECTOR_BACKFILL = "admin:vector-backfill";
+
+    // 营销选品 Agent
+    //
+    // TODO(数据修复)：agent:use 需入库授权后生效——sys_permission 插入 ('agent:use','营销选品 Agent')，
+    // 并为 ADMIN/EDITOR/DESIGNER 插入 sys_role_permission（ADMIN 种子为全量权限自动包含，
+    // EDITOR/DESIGNER 种子为显式清单需单独授权）；客户角色（注册即 USER 等）如需开放按同模式追加。
+    // 参照 V1__baseline.sql 角色-权限种子模式，建议以数据修复脚本落地（不新增 Flyway 迁移避免越权改动）。
+    public static final String AGENT_USE = "agent:use";
 }

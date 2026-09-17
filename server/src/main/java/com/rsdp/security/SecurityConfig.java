@@ -256,6 +256,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/template-tags/simple-list").authenticated()
                 .requestMatchers("/api/v1/template-tags/**").hasAnyRole("ADMIN", "EDITOR")
 
+                // 营销选品 Agent（数据隔离在 Service 层按 created_by/customer_user_id 校验）
+                .requestMatchers("/api/v1/agent/**").hasAuthority(Permissions.AGENT_USE)
+
                 // 官网 CMS 管理端：限 ADMIN/EDITOR（公开读取走 /api/v1/public/**）
                 .requestMatchers("/api/v1/platform/**").hasAnyRole("ADMIN", "EDITOR")
 

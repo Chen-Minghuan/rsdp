@@ -22,6 +22,7 @@ public class DatabaseMigrationRunner implements ApplicationRunner, Ordered {
     private final FactoryAdminImportPermissionMigration factoryAdminImportPermissionMigration;
     private final DesignerCollectionPermissionMigration designerCollectionPermissionMigration;
     private final RspuCreatedByBackfillMigration rspuCreatedByBackfillMigration;
+    private final AgentUsePermissionMigration agentUsePermissionMigration;
 
     @Override
     public int getOrder() {
@@ -37,6 +38,7 @@ public class DatabaseMigrationRunner implements ApplicationRunner, Ordered {
         factoryAdminImportPermissionMigration.execute();
         designerCollectionPermissionMigration.execute();
         rspuCreatedByBackfillMigration.execute();
+        agentUsePermissionMigration.execute();
         log.info("启动期数据修正任务完成");
     }
 }
