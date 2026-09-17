@@ -10,11 +10,13 @@ defineProps<{
   title?: string
   /** 标题下方的辅助说明 */
   subtitle?: string
+  /** 宽屏模式：取消居中限宽（图纸编辑等需要大操作面的页面） */
+  wide?: boolean
 }>()
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="page-container" :class="{ wide }">
     <header v-if="title || $slots.actions" class="page-header">
       <div class="page-title-group">
         <h1 v-if="title" class="page-title">{{ title }}</h1>
@@ -35,6 +37,10 @@ defineProps<{
   max-width: var(--rsdp-page-max-width);
   margin: 0 auto;
   padding: var(--rsdp-page-padding);
+}
+
+.page-container.wide {
+  max-width: none;
 }
 
 .page-header {
