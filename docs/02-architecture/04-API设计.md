@@ -1659,7 +1659,23 @@ POST   /api/v1/public/ai-match/analyze
        # 不阻断公开接口。配套：floor_plan 原图匿名可见（ImageService.isPubliclyVisible）
        # Form: file*, hint?
        # Response: { analysisId, rooms: [{ roomType, roomName, widthMm, depthMm, areaM2,
-       #            dimensionText, confidence }] }
+       #            dimensionText, confidence, x, y, w, h }], scaleSuggestion }
+       # （x/y/w/h 为空间位置框，相对原图归一化坐标 [0,1]，未识别出位置为 null；
+       #  前端叠加展示与识别精度评测使用）
+       # scaleSuggestion（二期自动标定建议，双端统一结构，前端契约字段名不可改）：
+       #   { status: "auto"|"candidates"|null,
+       #     mmPerPx: 3.42,        // status=auto 时给（簇中位数）
+       #     basisLabel: "客厅",   // status=auto 时给（簇内首个房间）
+       #     candidates: [{ label, mmPerPx, dimensionText, agreed }],  // status=candidates 时给
+       #     outliers: [{ label, mmPerPx, dimensionText }] }  // status=auto 时给（可空数组）
+       # agreed：该候选与任何其他候选的相对偏差 ≤5% 即为 true（更可信），仅 candidates 分支给；
+       # outliers：status=auto 时被最大一致簇剔除的离群估计（按 mmPerPx 升序，无离群为空数组；
+       #  status=candidates/null 时为 null），前端据此提示「另有 N 个标注不一致已忽略」。
+       # 规则：OCR 尺寸可解析且有 bbox 的房间反推 mm/px（宽深两估计），存在 ≥2 个
+       # 相互偏差 ≤5% 的簇 → auto（最大一致簇中位数，簇外估计剔除为离群；两簇规模
+       # 并列时取簇中位数更接近全集中位数者）；各估计互不一致（最大最小偏差 >8%）但
+       # 可解析房间 ≥2 → candidates；否则 status=null。官网同步链路精修默认关闭
+       # （rsdp.floor-plan.refine-public-enabled=false 保响应速度，评分实测时临时开）
 
 POST   /api/v1/public/ai-match/scheme
        # AI 户型搭配方案（P0-B 起统一走 FloorPlanMatchingService 双端唯一出口：
@@ -1712,7 +1728,10 @@ GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # Response: { analysisId, imageId, imageUrl, status, taskId, scaleRatio,
        #            source, errorMessage, createdBy, createdAt, updatedAt,
        #            rooms: [{ roomId, roomType, bbox, widthMm, depthMm, areaM2,
-       #            dimensionSource, dimensionConfidence, dimensionText, sortOrder }] }
+       #            dimensionSource, dimensionConfidence, dimensionText, sortOrder }],
+       #            scaleSuggestion }
+       # scaleSuggestion（二期自动标定建议）：结构与规则同官网 analyze 响应
+       # （查询时基于落库明细实时计算，像素宽/高取 image_assets 天然宽高）
 
 PUT    /api/v1/floor-plan/{analysisId}/rooms   [登录 + 归属校验]
        # 人工校正（整体替换语义：带 roomId 就地更新 / 不带新增 / 未提交的软删），
