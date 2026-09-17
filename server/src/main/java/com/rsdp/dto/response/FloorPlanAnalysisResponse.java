@@ -42,4 +42,10 @@ public class FloorPlanAnalysisResponse {
 
     /** 空间列表（未软删，按 sort_order 升序）。 */
     private List<FloorPlanRoomResponse> rooms;
+
+    /**
+     * 自动标定建议（户型图优化二期）：status=auto/candidates/null，
+     * 结构见 {@link ScaleSuggestionResponse}（前端契约，字段名不可改）。
+     */
+    private ScaleSuggestionResponse scaleSuggestion;
 }
