@@ -10,6 +10,7 @@ import {
   NList,
   NListItem,
   NModal,
+  NPopconfirm,
   NSpace,
   NSpin,
   NTag,
@@ -36,8 +37,9 @@ const {
   confirmedItems,
   confirmedItemIds,
   streaming,
-  currentNodeLabel,
   confirmingItemId,
+  generatingQuote,
+  exportingScheme,
   loadingSessions,
   loadingDetail,
   errorMessage
@@ -102,6 +104,31 @@ async function handleCloseSession() {
   }
 }
 
+async function handleDeleteSession(sessionId: string) {
+  try {
+    await store.deleteSession(sessionId)
+    message.success('会话已删除')
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '删除会话失败')
+  }
+}
+
+async function handleGenerateQuote() {
+  const ok = await store.generateQuote()
+  if (!ok && errorMessage.value) {
+    message.error(errorMessage.value)
+  }
+}
+
+async function handleExportScheme(quoteId?: string) {
+  const exported = await store.exportScheme(quoteId)
+  if (exported) {
+    message.success(`已生成方案「${exported.schemeName}」`)
+  } else if (errorMessage.value) {
+    message.error(errorMessage.value)
+  }
+}
+
 function sessionTitle(session: { sessionId: string; customerName: string | null; summary: string | null }): string {
   return session.customerName || session.summary || `会话 ${session.sessionId.slice(0, 8)}`
 }
@@ -132,7 +159,27 @@ function formatTime(iso: string): string {
             @click="handleSelectSession(session.sessionId)"
           >
             <div class="session-item">
-              <div class="session-title">{{ sessionTitle(session) }}</div>
+              <div class="session-title-row">
+                <div class="session-title">{{ sessionTitle(session) }}</div>
+                <n-popconfirm
+                  positive-text="删除"
+                  negative-text="取消"
+                  @positive-click="handleDeleteSession(session.sessionId)"
+                >
+                  <template #trigger>
+                    <n-button
+                      class="session-delete"
+                      text
+                      type="error"
+                      size="tiny"
+                      @click.stop
+                    >
+                      删除
+                    </n-button>
+                  </template>
+                  确定删除该会话吗？删除后不可恢复
+                </n-popconfirm>
+              </div>
               <div class="session-meta">
                 <n-tag size="tiny" :type="session.status === 'active' ? 'success' : 'default'">
                   {{ session.status === 'active' ? '进行中' : '已结束' }}
@@ -171,11 +218,12 @@ function formatTime(iso: string): string {
         <ChatMessageList
           :messages="messages"
           :streaming="streaming"
-          :node-label="currentNodeLabel"
           :confirming-item-id="confirmingItemId"
           :confirmed-item-ids="confirmedItemIds"
+          :exporting-scheme="exportingScheme"
           :session-closed="sessionClosed"
           @confirm="handleConfirm"
+          @export-scheme="handleExportScheme"
         />
 
         <div class="input-area">
@@ -209,7 +257,13 @@ function formatTime(iso: string): string {
 
     <!-- 右栏：需求档案 + 已确认清单 -->
     <aside class="panel-column">
-      <RequirementPanel :requirement="requirement" :confirmed-items="confirmedItems" />
+      <RequirementPanel
+        :requirement="requirement"
+        :confirmed-items="confirmedItems"
+        :generating-quote="generatingQuote"
+        :session-closed="sessionClosed"
+        @generate-quote="handleGenerateQuote"
+      />
     </aside>
 
     <!-- 新建会话弹窗（设计师代录可填客户名） -->
@@ -267,6 +321,23 @@ function formatTime(iso: string): string {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.session-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 删除按钮默认隐藏，hover 会话项时显示，避免误点 */
+.session-delete {
+  flex-shrink: 0;
+  opacity: 0;
+}
+
+.n-list-item:hover .session-delete {
+  opacity: 1;
 }
 
 .session-item--active {

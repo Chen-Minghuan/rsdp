@@ -15,6 +15,11 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('category', 'LT', '灯具', 9)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
+-- 品类常用叫法别名（营销 Agent 品类归一：椅子/沙发椅等口语词 → 字典码）
+UPDATE category_dict SET aliases = '["椅子","凳子","餐椅","靠背椅","休闲椅"]' WHERE dict_type='category' AND dict_code='FS';
+UPDATE category_dict SET aliases = '["吧凳","高脚椅"]' WHERE dict_type='category' AND dict_code='BS';
+UPDATE category_dict SET aliases = '["沙发椅","单人沙发"]' WHERE dict_type='category' AND dict_code='SF';
+
 -- 家装风格（扩展为 11 个独立风格，保留 2 位编码）
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('style', 'MC', '中古风', 1),

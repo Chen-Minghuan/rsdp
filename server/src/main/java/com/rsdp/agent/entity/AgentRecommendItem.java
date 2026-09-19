@@ -42,5 +42,8 @@ public class AgentRecommendItem {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String reason;
 
+    /** 配套分组标签（品类码 TB/FS/FC 等），主体选品为空（V11）。 */
+    private String groupTag;
+
     private LocalDateTime createdAt;
 }

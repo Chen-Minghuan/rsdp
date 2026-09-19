@@ -28,6 +28,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -189,6 +190,29 @@ class AgentStreamServiceTest {
                 eq(properties.getSseHeartbeatSeconds()));
             verify(taskExecutor).execute(any(Runnable.class));
         }
+    }
+
+    @Test
+    void buildMessageMetadataShouldIncludeFollowupAndSteps() throws Exception {
+        com.rsdp.agent.service.AgentRunContext ctx =
+            new com.rsdp.agent.service.AgentRunContext("SES-1", "RUN-1", "user-1", "找沙发");
+        ctx.setFollowup(true);
+        ctx.recordStep("requirement_patch", "正在理解需求");
+        ctx.recordStep("product_search", "正在检索产品");
+
+        String metadata = streamService.buildMessageMetadata(ctx);
+
+        Map<?, ?> parsed = objectMapper.readValue(metadata, Map.class);
+        assertThat(parsed.get("followup")).isEqualTo(true);
+        assertThat(parsed.get("steps")).asList().hasSize(2);
+    }
+
+    @Test
+    void buildMessageMetadataShouldBeNullWhenNoFollowupAndNoSteps() {
+        com.rsdp.agent.service.AgentRunContext ctx =
+            new com.rsdp.agent.service.AgentRunContext("SES-1", "RUN-1", "user-1", "找沙发");
+
+        assertThat(streamService.buildMessageMetadata(ctx)).isNull();
     }
 
     @Test

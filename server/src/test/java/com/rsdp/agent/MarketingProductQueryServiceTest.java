@@ -14,6 +14,9 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.service.DictAliasService;
 import com.rsdp.service.DictResolverService;
+import com.rsdp.service.EmbeddingService;
+import com.rsdp.service.vector.ProductVectorStore;
+import com.rsdp.service.vector.VectorHit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -55,6 +58,12 @@ class MarketingProductQueryServiceTest {
     @Mock
     private ProductVisibilityPolicy visibilityPolicy;
 
+    @Mock
+    private EmbeddingService embeddingService;
+
+    @Mock
+    private ProductVectorStore productVectorStore;
+
     private final MarketingAgentProperties properties = new MarketingAgentProperties();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -63,7 +72,8 @@ class MarketingProductQueryServiceTest {
     @BeforeEach
     void setUp() {
         service = new MarketingProductQueryService(rspuMapper, rspuVariantMapper, imageAssetsMapper,
-            dictAliasService, dictResolverService, visibilityPolicy, properties, objectMapper);
+            dictAliasService, dictResolverService, visibilityPolicy, properties, objectMapper,
+            embeddingService, productVectorStore);
     }
 
     private RspuMaster rspu(String rspuId, String name) {
@@ -284,5 +294,114 @@ class MarketingProductQueryServiceTest {
 
         assertThat(result.getTotalMatched()).isEqualTo(3);
         verify(visibilityPolicy).applyScope(any(QueryWrapper.class));
+    }
+
+    // ==================== P2：向量召回 + RRF ====================
+
+    @Test
+    void vectorDisabledShouldKeepStructuredBehavior() {
+        properties.setVectorRecallEnabled(false);
+        ProductSearchCriteria criteria = new ProductSearchCriteria();
+        criteria.setKeyword("中古沙发");
+        when(rspuMapper.selectCount(any(QueryWrapper.class))).thenReturn(1L);
+        when(rspuMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(rspu("RSPU-1", "中古沙发")));
+        when(rspuVariantMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        ProductSearchResult result = service.search(criteria);
+
+        // 向量关闭：不走 embedText，结果与 P1 一致且无向量留痕
+        org.mockito.Mockito.verifyNoInteractions(embeddingService, productVectorStore);
+        assertThat(result.isVectorChannelUsed()).isFalse();
+        assertThat(result.getItems()).extracting("rspuId").containsExactly("RSPU-1");
+    }
+
+    @Test
+    void vectorChannelHitsShouldFusionRankAndFillRankScore() {
+        ProductSearchCriteria criteria = new ProductSearchCriteria();
+        criteria.setKeyword("中古沙发");
+        when(embeddingService.embedText("中古沙发")).thenReturn(new float[] {0.1f, 0.2f});
+        // 向量命中：V1（距离0.2）、S2（距离0.4）
+        when(productVectorStore.search(any(float[].class), eq(100), eq(null), eq(true)))
+            .thenReturn(List.of(
+                new VectorHit("IMG-1", "RSPU-V1", 0.2),
+                new VectorHit("IMG-2", "RSPU-S2", 0.4)));
+        // selectList 调用顺序：①向量可见性过滤 → ②结构化候选窗 → ③并集重查
+        when(rspuMapper.selectList(any(QueryWrapper.class)))
+            .thenReturn(List.of(rspu("RSPU-V1", "向量一"), rspu("RSPU-S2", "结构化二")))
+            .thenReturn(List.of(rspu("RSPU-S1", "结构化一"), rspu("RSPU-S2", "结构化二")))
+            .thenReturn(List.of(rspu("RSPU-S1", "结构化一"), rspu("RSPU-S2", "结构化二"), rspu("RSPU-V1", "向量一")));
+        when(rspuVariantMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        ProductSearchResult result = service.search(criteria);
+
+        assertThat(result.isVectorChannelUsed()).isTrue();
+        // S2 双通道命中排最前；S1（结构化 rank1）与 V1（向量 rank1）同分，字典序 S1 在前
+        assertThat(result.getItems().get(0).getRspuId()).isEqualTo("RSPU-S2");
+        assertThat(result.getItems()).allSatisfy(item -> assertThat(item.getRankScore()).isNotNull());
+        assertThat(result.getItems()).extracting("rspuId")
+            .containsExactly("RSPU-S2", "RSPU-S1", "RSPU-V1");
+        assertThat(result.getTotalMatched()).isEqualTo(3);
+    }
+
+    @Test
+    void vectorHitNotPassingVisibilityShouldBeExcluded() {
+        ProductSearchCriteria criteria = new ProductSearchCriteria();
+        criteria.setKeyword("沙发");
+        when(embeddingService.embedText("沙发")).thenReturn(new float[] {0.1f});
+        when(productVectorStore.search(any(float[].class), eq(100), eq(null), eq(true)))
+            .thenReturn(List.of(new VectorHit("IMG-1", "RSPU-HIDDEN", 0.1)));
+        // 结构化空、向量可见性剔除 RSPU-HIDDEN → 向量通道为空 → 退化纯结构化
+        when(rspuMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        when(rspuMapper.selectCount(any(QueryWrapper.class))).thenReturn(0L);
+
+        ProductSearchResult result = service.search(criteria);
+
+        assertThat(result.getItems()).isEmpty();
+        assertThat(result.isVectorChannelUsed()).isFalse();
+    }
+
+    @Test
+    void embedTextFailureShouldDegradeToStructured() {
+        ProductSearchCriteria criteria = new ProductSearchCriteria();
+        criteria.setKeyword("沙发");
+        when(embeddingService.embedText("沙发")).thenThrow(new RuntimeException("DashScope 故障"));
+        when(rspuMapper.selectCount(any(QueryWrapper.class))).thenReturn(1L);
+        when(rspuMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(rspu("RSPU-1", "沙发")));
+        when(rspuVariantMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        ProductSearchResult result = service.search(criteria);
+
+        assertThat(result.isVectorChannelUsed()).isFalse();
+        assertThat(result.getItems()).extracting("rspuId").containsExactly("RSPU-1");
+    }
+
+    @Test
+    void budgetMaxShouldApplyToVectorOnlyHitsInFusion() {
+        ProductSearchCriteria criteria = new ProductSearchCriteria();
+        criteria.setKeyword("沙发");
+        criteria.setBudgetMax(new BigDecimal("20000"));
+        when(embeddingService.embedText("沙发")).thenReturn(new float[] {0.1f});
+        when(productVectorStore.search(any(float[].class), eq(100), eq(null), eq(true)))
+            .thenReturn(List.of(new VectorHit("IMG-1", "RSPU-EXPENSIVE", 0.1)));
+        RspuMaster expensive = rspu("RSPU-EXPENSIVE", "高价沙发");
+        expensive.setRetailPrice(new BigDecimal("50000"));
+        // selectList 调用顺序：①向量可见性过滤（通过）→ ②结构化候选窗（空）→ ③并集重查（预算剔除）
+        when(rspuMapper.selectList(any(QueryWrapper.class)))
+            .thenReturn(List.of(expensive))
+            .thenReturn(List.of())
+            .thenReturn(List.of());
+
+        ProductSearchResult result = service.search(criteria);
+
+        // 纯向量命中的高价产品被并集重查的预算条件剔除
+        assertThat(result.getItems()).isEmpty();
+        assertThat(result.getTotalMatched()).isZero();
+        // 并集重查（最后一次 selectList）必须带 retail_price <= 条件
+        ArgumentCaptor<QueryWrapper> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rspuMapper, org.mockito.Mockito.times(3)).selectList(captor.capture());
+        assertThat(captor.getAllValues().get(2).getSqlSegment()).contains("retail_price <=");
     }
 }

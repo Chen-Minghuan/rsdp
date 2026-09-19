@@ -42,13 +42,13 @@ public class RequirementPatchNode extends AbstractAgentNode {
     private static final String SYSTEM_PROMPT = """
         你是家居选品需求理解助手。从对话中识别用户意图并抽取需求约束变更，只输出严格 JSON，不要 markdown 代码块，不要任何解释文字：
         {
-          "intent": "NEW_REQUIREMENT | REFINE | FEEDBACK_MODIFY | CONFIRM_REQUIREMENT | CONFIRM_ITEM | CHITCHAT",
+          "intent": "NEW_REQUIREMENT | REFINE | FEEDBACK_MODIFY | CONFIRM_REQUIREMENT | CONFIRM_ITEM | MATCH_COMPANION | REQUEST_QUOTE | EXPORT_SCHEME | CHITCHAT",
           "operations": [
             {"field": "字段名", "operation": "set | clear", "value": "值", "evidence": "用户原话片段"}
           ]
         }
         规则：
-        - intent 含义：NEW_REQUIREMENT=首次提出选品需求；REFINE=补充或修改需求；FEEDBACK_MODIFY=针对推荐结果提出调整；CONFIRM_REQUIREMENT=明确表示需求就这些、可以开始推荐（如"就按这个找""可以推荐了"）；CONFIRM_ITEM=明确表示选定某一款产品（如"就要第一款"）；CHITCHAT=与选品无关的闲聊
+        - intent 含义：NEW_REQUIREMENT=首次提出选品需求；REFINE=补充或修改需求；FEEDBACK_MODIFY=针对推荐结果提出调整；CONFIRM_REQUIREMENT=明确表示需求就这些、可以开始推荐（如"就按这个找""可以推荐了"）；CONFIRM_ITEM=明确表示选定某一款产品（如"就要第一款"）；MATCH_COMPANION=想要围绕已确认产品搭配配套产品（如"帮我配个茶几""搭配一下客厅"）；REQUEST_QUOTE=要求报价或问整体价格（如"帮我报价""这些一共多少钱"）；EXPORT_SCHEME=明确表示要生成方案或下单（如"生成方案""我要下单"）；CHITCHAT=与选品无关的闲聊
         - operations 只包含用户明确提到的字段，不要臆测；无约束变更时输出空数组
         - field 仅限：categoryCode, categoryName, style, material, color, budgetMax, maxWidthMm, minWidthMm, sofaForm, areaM2, note
         - value 一律用字符串；budgetMax 单位为元（"两万"→"20000"）；maxWidthMm/minWidthMm 单位为毫米（"2.4米"→"2400"）；areaM2 单位为平方米

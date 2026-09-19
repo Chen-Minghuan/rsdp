@@ -15,9 +15,20 @@ export interface AgentSession {
 }
 
 export type AgentMessageRole = 'user' | 'assistant' | 'system'
-export type AgentMessageType = 'text' | 'cards' | 'requirement' | 'notice'
+export type AgentMessageType = 'text' | 'cards' | 'requirement' | 'notice' | 'quote' | 'scheme'
 
-/** 会话消息。messageType=cards 时 metadata.items 为 RecommendItem[]。 */
+/** 思考过程步骤（assistant 消息 metadata.steps：本 run 执行过的图节点轨迹）。 */
+export interface ThoughtStep {
+  node: string
+  /** 节点展示文案，如「正在理解需求」「正在检索产品」 */
+  label: string
+}
+
+/**
+ * 会话消息。
+ * messageType=cards 时 metadata.items 为 RecommendItem[]；
+ * assistant 文本消息 metadata.steps 为 ThoughtStep[]（思考过程，可折叠展示）。
+ */
 export interface AgentMessage {
   messageId: string
   role: AgentMessageRole
@@ -75,6 +86,8 @@ export interface RecommendItem {
   rank: number
   snapshot: ProductSnapshot
   reason: { highlights: RecommendHighlight[] } | null
+  /** 配套批次（batchType=companion）的品类分组标签（如 TB 茶几）；主体推荐为 null */
+  groupTag?: string | null
 }
 
 /** 已确认的主体产品。 */
@@ -111,6 +124,57 @@ export interface SendAgentMessageRequest {
 export interface ConfirmAgentItemRequest {
   recommendItemId: string
   quantity: number
+  idempotencyKey: string
+}
+
+// ==================== P2 报价 / 方案导出 ====================
+
+/** 报价行项（售价口径，不含成本字段）。 */
+export interface AgentQuoteLine {
+  confirmedItemId: string
+  rspuId: string
+  rskuId: string | null
+  productName: string
+  primaryImageUrl?: string | null
+  quantity: number
+  unitSalePrice: number | null
+  priceSource: string | null
+  subtotal: number | null
+  leadTimeDays: number | null
+  /** false 表示该商品暂不可报价（不参与合计） */
+  quotable: boolean
+}
+
+/** 会话报价卡片（POST /v1/agent/sessions/{sessionId}/quote 响应，亦作为 quote 消息 metadata）。 */
+export interface AgentQuote {
+  quoteId: string
+  lines: AgentQuoteLine[]
+  listTotal: number
+  priceRate: number
+  dealTotal: number
+  maxLeadTimeDays: number | null
+  generatedAt?: string
+  priceNote: string
+}
+
+/** 生成报价请求。 */
+export interface GenerateAgentQuoteRequest {
+  confirmedItemIds?: string[]
+  idempotencyKey: string
+}
+
+/** 方案导出结果（POST /v1/agent/sessions/{sessionId}/scheme 响应，亦作为 scheme 消息 metadata）。 */
+export interface AgentSchemeExport {
+  schemeId: string
+  schemeName: string
+  itemCount: number
+  detailUrl: string
+}
+
+/** 导出方案请求。 */
+export interface ExportAgentSchemeRequest {
+  quoteId?: string
+  schemeName?: string
   idempotencyKey: string
 }
 

@@ -33,6 +33,9 @@ public class ProductSearchItem {
 
     private BigDecimal retailPrice;
 
+    /** 融合排名分（P2 RRF 融合分；纯结构化检索时为结构化通道 RRF 分），落 agent_recommend_item.rank_score。 */
+    private BigDecimal rankScore;
+
     /** 命中条件描述（用于 evidence）。 */
     private List<String> matchedConditions;
 }

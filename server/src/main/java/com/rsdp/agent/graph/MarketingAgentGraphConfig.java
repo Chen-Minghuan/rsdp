@@ -9,6 +9,8 @@ import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
 import com.alibaba.cloud.ai.graph.exception.GraphStateException;
 import com.rsdp.agent.graph.nodes.ChitchatNode;
+import com.rsdp.agent.graph.nodes.CompanionMatchNode;
+import com.rsdp.agent.graph.nodes.ActionHintNode;
 import com.rsdp.agent.graph.nodes.ConfirmHintNode;
 import com.rsdp.agent.graph.nodes.FollowupNode;
 import com.rsdp.agent.graph.nodes.ProductSearchNode;
@@ -25,8 +27,9 @@ import java.util.Map;
  * 营销 Agent 图装配（SAA StateGraph）。
  *
  * <p>拓扑：START → requirement_patch →（条件边）→ followup / product_search → recommend /
- * chitchat / confirm_hint → END。每轮用户消息跑一次完整图（run 边界即 HITL 边界），
- * 不做图内中断恢复；checkpoint 以 threadId=runId 经 {@link AgentCheckpointStore} 留痕。</p>
+ * chitchat / confirm_hint / companion_match / action_hint → END。每轮用户消息跑一次完整图
+ * （run 边界即 HITL 边界），不做图内中断恢复；checkpoint 以 threadId=runId 经
+ * {@link AgentCheckpointStore} 留痕。</p>
  *
  * <p>OverAllState 只放 ID 与小字符串（sessionId/runId/userMessage/intent），
  * 候选产品等运行期对象经 {@link AgentRunContext} 传递。</p>
@@ -41,6 +44,8 @@ public class MarketingAgentGraphConfig {
                                              RecommendNode recommendNode,
                                              ChitchatNode chitchatNode,
                                              ConfirmHintNode confirmHintNode,
+                                             CompanionMatchNode companionMatchNode,
+                                             ActionHintNode actionHintNode,
                                              AgentRouter router,
                                              AgentCheckpointStore checkpointStore) throws GraphStateException {
         StateGraph graph = new StateGraph("marketing-agent", this::keyStrategies)
@@ -50,6 +55,8 @@ public class MarketingAgentGraphConfig {
             .addNode(AgentStateKeys.NODE_RECOMMEND, AsyncNodeAction.node_async(recommendNode))
             .addNode(AgentStateKeys.NODE_CHITCHAT, AsyncNodeAction.node_async(chitchatNode))
             .addNode(AgentStateKeys.NODE_CONFIRM_HINT, AsyncNodeAction.node_async(confirmHintNode))
+            .addNode(AgentStateKeys.NODE_COMPANION_MATCH, AsyncNodeAction.node_async(companionMatchNode))
+            .addNode(AgentStateKeys.NODE_ACTION_HINT, AsyncNodeAction.node_async(actionHintNode))
             .addEdge(StateGraph.START, AgentStateKeys.NODE_REQUIREMENT_PATCH)
             .addConditionalEdges(AgentStateKeys.NODE_REQUIREMENT_PATCH,
                 AsyncEdgeAction.edge_async(state -> {
@@ -61,12 +68,16 @@ public class MarketingAgentGraphConfig {
                     AgentStateKeys.ROUTE_FOLLOWUP, AgentStateKeys.NODE_FOLLOWUP,
                     AgentStateKeys.ROUTE_SEARCH, AgentStateKeys.NODE_PRODUCT_SEARCH,
                     AgentStateKeys.ROUTE_CHITCHAT, AgentStateKeys.NODE_CHITCHAT,
-                    AgentStateKeys.ROUTE_CONFIRM_HINT, AgentStateKeys.NODE_CONFIRM_HINT))
+                    AgentStateKeys.ROUTE_CONFIRM_HINT, AgentStateKeys.NODE_CONFIRM_HINT,
+                    AgentStateKeys.ROUTE_COMPANION, AgentStateKeys.NODE_COMPANION_MATCH,
+                    AgentStateKeys.ROUTE_ACTION_HINT, AgentStateKeys.NODE_ACTION_HINT))
             .addEdge(AgentStateKeys.NODE_FOLLOWUP, StateGraph.END)
             .addEdge(AgentStateKeys.NODE_PRODUCT_SEARCH, AgentStateKeys.NODE_RECOMMEND)
             .addEdge(AgentStateKeys.NODE_RECOMMEND, StateGraph.END)
             .addEdge(AgentStateKeys.NODE_CHITCHAT, StateGraph.END)
-            .addEdge(AgentStateKeys.NODE_CONFIRM_HINT, StateGraph.END);
+            .addEdge(AgentStateKeys.NODE_CONFIRM_HINT, StateGraph.END)
+            .addEdge(AgentStateKeys.NODE_COMPANION_MATCH, StateGraph.END)
+            .addEdge(AgentStateKeys.NODE_ACTION_HINT, StateGraph.END);
 
         CompileConfig compileConfig = CompileConfig.builder()
             .saverConfig(SaverConfig.builder().register(checkpointStore.saver()).build())

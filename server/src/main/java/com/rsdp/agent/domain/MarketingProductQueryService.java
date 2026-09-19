@@ -12,17 +12,24 @@ import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.service.DictAliasService;
 import com.rsdp.service.DictResolverService;
+import com.rsdp.service.EmbeddingService;
+import com.rsdp.service.vector.ProductVectorStore;
+import com.rsdp.service.vector.VectorHit;
 import com.rsdp.util.SizeSpecParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -53,12 +60,19 @@ public class MarketingProductQueryService {
     private final ProductVisibilityPolicy visibilityPolicy;
     private final MarketingAgentProperties properties;
     private final ObjectMapper objectMapper;
+    private final EmbeddingService embeddingService;
+    private final ProductVectorStore productVectorStore;
 
     /**
      * 按条件检索在售产品。
      *
      * <p>流程：别名归一 → 可见性 + SQL 条件下推 → 尺寸硬过滤（SQL 粗筛 + 内存精筛）
      * → 补主图/尺寸原文/命中条件 → topN 截断。</p>
+     *
+     * <p>P2 向量召回 + RRF：开启 {@code vectorRecallEnabled} 且检索文本非空时，
+     * 额外走向量通道（embedText → pgvector → rspu 聚合 → 可见性过滤），
+     * 与结构化通道做 RRF(k=60) 融合；向量通道不可用（无文本/异常/空结果）时
+     * 自动退化为纯结构化检索，行为与 P1 一致。</p>
      *
      * @param criteria 检索条件
      * @return 检索结果（items 已截断，totalMatched 为截断前总数）
@@ -74,15 +88,205 @@ public class MarketingProductQueryService {
         String styleCode = resolveDictCode(DICT_TYPE_STYLE, criteria.getStyle());
         String materialCode = resolveDictCode(DICT_TYPE_MATERIAL, criteria.getMaterial());
         String colorCode = resolveDictCode(DICT_TYPE_COLOR, criteria.getColor());
-
-        // 2. 构建查询：可见性收口 + 条件下推
+        // LLM 抽取的是品类词（如 沙发/座椅），rspu_master.category_code 存的是字典码（SF/FS），
+        // 先经 category_dict 名称/别名归一；归一失败保留原文（等值不命中，等价空结果）
+        String categoryCode = StringUtils.hasText(criteria.getCategoryCode())
+            ? normalizeCategoryCode(criteria.getCategoryCode().trim()) : null;
         boolean hasSizeFilter = criteria.getMaxWidthMm() != null || criteria.getMinWidthMm() != null;
+
+        // 2. 向量通道（P2）：不可用 → 纯结构化（P1 行为）
+        List<String> vectorRanked = properties.isVectorRecallEnabled()
+            ? vectorChannelRankedIds(criteria, categoryCode, topN) : List.of();
+        if (vectorRanked.isEmpty()) {
+            return structuredSearch(criteria, styleCode, materialCode, colorCode, categoryCode,
+                hasSizeFilter, topN, false);
+        }
+        return fusedSearch(criteria, styleCode, materialCode, colorCode, categoryCode,
+            hasSizeFilter, topN, vectorRanked);
+    }
+
+    /**
+     * 纯结构化检索（P1 行为）：可见性收口 + SQL 条件下推 → 尺寸硬过滤 → topN 截断。
+     */
+    private ProductSearchResult structuredSearch(ProductSearchCriteria criteria,
+                                                 String styleCode, String materialCode, String colorCode,
+                                                 String categoryCode, boolean hasSizeFilter, int topN,
+                                                 boolean vectorChannelUsed) {
         QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
         visibilityPolicy.applyScope(wrapper);
+        applyConditions(wrapper, criteria, styleCode, materialCode, colorCode, categoryCode);
+
+        List<RspuMaster> rspus;
+        int totalMatched;
+        if (hasSizeFilter) {
+            // 尺寸硬过滤：SQL 粗筛（有未删除变体的产品）→ 内存按变体尺寸精筛
+            wrapper.exists("SELECT 1 FROM rspu_variant v WHERE v.rspu_id = rspu_master.rspu_id"
+                + " AND v.deleted_at IS NULL");
+            wrapper.orderByDesc("created_at").last("LIMIT " + SIZE_FILTER_PREFETCH_LIMIT);
+            rspus = filterByWidthMm(rspuMapper.selectList(wrapper), criteria);
+            totalMatched = rspus.size();
+            rspus = rspus.stream().limit(topN).toList();
+        } else {
+            Long total = rspuMapper.selectCount(wrapper);
+            totalMatched = total != null ? total.intValue() : 0;
+            wrapper.orderByDesc("created_at").last("LIMIT " + topN);
+            rspus = rspuMapper.selectList(wrapper);
+        }
+        List<ProductSearchItem> items = assembleItems(rspus, describeMatchedConditions(criteria));
+        applyStructuredRankScores(items);
+
+        ProductSearchResult result = new ProductSearchResult();
+        result.setItems(items);
+        result.setTotalMatched(totalMatched);
+        result.setVectorChannelUsed(vectorChannelUsed);
+        return result;
+    }
+
+    /**
+     * 结构化 + 向量双通道 RRF 融合检索。
+     *
+     * <p>结构化通道按 P1 口径取候选窗（topN × vectorCandidateMultiplier），向量通道
+     * 按相似度排名；RRF 融合后并集重查（可见性 + 预算硬过滤）→ 尺寸硬过滤
+     * → 融合分降序截 topN。totalMatched 为融合 + 硬过滤后的候选总数（口径与 P1 不同，
+     * 随向量通道启用而变化）。</p>
+     */
+    private ProductSearchResult fusedSearch(ProductSearchCriteria criteria,
+                                            String styleCode, String materialCode, String colorCode,
+                                            String categoryCode, boolean hasSizeFilter, int topN,
+                                            List<String> vectorRanked) {
+        // 1. 结构化通道候选窗（rank = 结果位置）
+        QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
+        visibilityPolicy.applyScope(wrapper);
+        applyConditions(wrapper, criteria, styleCode, materialCode, colorCode, categoryCode);
+        List<RspuMaster> structuredHits;
+        if (hasSizeFilter) {
+            wrapper.exists("SELECT 1 FROM rspu_variant v WHERE v.rspu_id = rspu_master.rspu_id"
+                + " AND v.deleted_at IS NULL");
+            wrapper.orderByDesc("created_at").last("LIMIT " + SIZE_FILTER_PREFETCH_LIMIT);
+            structuredHits = filterByWidthMm(rspuMapper.selectList(wrapper), criteria);
+        } else {
+            int window = topN * Math.max(properties.getVectorCandidateMultiplier(), 1);
+            wrapper.orderByDesc("created_at").last("LIMIT " + window);
+            structuredHits = rspuMapper.selectList(wrapper);
+        }
+        List<String> structuredRanked = structuredHits.stream().map(RspuMaster::getRspuId).toList();
+
+        // 2. RRF 融合
+        LinkedHashMap<String, Double> fused = RrfRanker.fuse(
+            List.of(structuredRanked, vectorRanked), properties.getRrfK());
+
+        // 3. 并集重查：可见性收口 + 预算硬过滤（结构化通道 SQL 已下推，此处对向量命中补齐）
+        QueryWrapper<RspuMaster> union = new QueryWrapper<>();
+        visibilityPolicy.applyScope(union);
+        union.in("rspu_id", fused.keySet());
+        if (criteria.getBudgetMax() != null) {
+            union.le("retail_price", criteria.getBudgetMax());
+        }
+        List<RspuMaster> unionHits = rspuMapper.selectList(union);
+        if (hasSizeFilter) {
+            unionHits = filterByWidthMm(unionHits, criteria);
+        }
+        Map<String, RspuMaster> byId = unionHits.stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+        List<RspuMaster> ordered = fused.keySet().stream()
+            .map(byId::get).filter(r -> r != null).toList();
+
+        int totalMatched = ordered.size();
+        List<RspuMaster> page = ordered.stream().limit(topN).toList();
+        List<ProductSearchItem> items = assembleItems(page, describeMatchedConditions(criteria));
+        for (ProductSearchItem item : items) {
+            Double score = fused.get(item.getRspuId());
+            if (score != null) {
+                item.setRankScore(BigDecimal.valueOf(score).setScale(4, RoundingMode.HALF_UP));
+            }
+        }
+
+        ProductSearchResult result = new ProductSearchResult();
+        result.setItems(items);
+        result.setTotalMatched(totalMatched);
+        result.setVectorChannelUsed(true);
+        return result;
+    }
+
+    /**
+     * 向量通道：检索文本 → embedText → pgvector 相似检索 → 按 rspu 聚合取最佳相似度
+     * → 可见性过滤 → 相似度降序的 rspuId 排名列表。
+     *
+     * <p>降级策略（任一不满足即返回空列表，整体退化为纯结构化检索）：
+     * 检索文本为空；embedText 异常或返回空向量；向量库异常或无命中。</p>
+     */
+    private List<String> vectorChannelRankedIds(ProductSearchCriteria criteria, String categoryCode, int topN) {
+        String queryText = buildVectorQueryText(criteria);
+        if (!StringUtils.hasText(queryText)) {
+            return List.of();
+        }
+        try {
+            float[] queryVector = embeddingService.embedText(queryText);
+            if (queryVector == null || queryVector.length == 0) {
+                return List.of();
+            }
+            int limit = topN * Math.max(properties.getVectorCandidateMultiplier(), 1);
+            List<VectorHit> hits = productVectorStore.search(queryVector, limit, categoryCode, true);
+            if (hits == null || hits.isEmpty()) {
+                return List.of();
+            }
+            // 按 rspuId 聚合取最佳（距离最小），分数换算 clamp(1 - distance / 2)，与 RetrievalService 同口径
+            Map<String, Double> bestScoreByRspu = new LinkedHashMap<>();
+            for (VectorHit hit : hits) {
+                if (hit == null || hit.rspuId() == null) {
+                    continue;
+                }
+                double score = Math.max(0.0, Math.min(1.0, 1.0 - hit.distance() / 2.0));
+                bestScoreByRspu.merge(hit.rspuId(), score, Math::max);
+            }
+            if (bestScoreByRspu.isEmpty()) {
+                return List.of();
+            }
+            // 可见性收口（active + 非平台员工强制已确认），与结构化通道同口径
+            QueryWrapper<RspuMaster> visible = new QueryWrapper<>();
+            visibilityPolicy.applyScope(visible);
+            visible.in("rspu_id", bestScoreByRspu.keySet());
+            Set<String> visibleIds = rspuMapper.selectList(visible).stream()
+                .map(RspuMaster::getRspuId).collect(Collectors.toSet());
+            return bestScoreByRspu.entrySet().stream()
+                .filter(e -> visibleIds.contains(e.getKey()))
+                .sorted((e1, e2) -> {
+                    int cmp = Double.compare(e2.getValue(), e1.getValue());
+                    return cmp != 0 ? cmp : e1.getKey().compareTo(e2.getKey());
+                })
+                .map(Map.Entry::getKey)
+                .toList();
+        } catch (Exception e) {
+            log.warn("向量召回通道失败，降级为纯结构化检索，queryText={}", queryText, e);
+            return List.of();
+        }
+    }
+
+    /** 拼接向量通道查询文本（品类词/风格/材质/颜色/关键词；全空返回空串跳过该通道）。 */
+    private String buildVectorQueryText(ProductSearchCriteria criteria) {
+        List<String> parts = new ArrayList<>();
         if (StringUtils.hasText(criteria.getCategoryCode())) {
-            // LLM 抽取的是品类词（如 沙发/座椅），rspu_master.category_code 存的是字典码（SF/FS），
-            // 先经 category_dict 名称/别名归一；归一失败保留原文（等值不命中，等价空结果）
-            String categoryCode = normalizeCategoryCode(criteria.getCategoryCode().trim());
+            parts.add(criteria.getCategoryCode().trim());
+        }
+        if (StringUtils.hasText(criteria.getStyle())) {
+            parts.add(criteria.getStyle().trim());
+        }
+        if (StringUtils.hasText(criteria.getMaterial())) {
+            parts.add(criteria.getMaterial().trim());
+        }
+        if (StringUtils.hasText(criteria.getColor())) {
+            parts.add(criteria.getColor().trim());
+        }
+        if (StringUtils.hasText(criteria.getKeyword())) {
+            parts.add(criteria.getKeyword().trim());
+        }
+        return String.join(" ", parts);
+    }
+
+    /** SQL 条件下推（结构化通道与融合通道共用）。 */
+    private void applyConditions(QueryWrapper<RspuMaster> wrapper, ProductSearchCriteria criteria,
+                                 String styleCode, String materialCode, String colorCode, String categoryCode) {
+        if (StringUtils.hasText(categoryCode)) {
             wrapper.eq("category_code", categoryCode);
         }
         if (StringUtils.hasText(styleCode)) {
@@ -115,37 +319,55 @@ public class MarketingProductQueryService {
             wrapper.and(w -> w.like("product_name", like)
                 .or().like("positioning_label", like));
         }
+    }
 
-        List<RspuMaster> rspus;
-        int totalMatched;
-        if (hasSizeFilter) {
-            // 3. 尺寸硬过滤：SQL 粗筛（有未删除变体的产品）→ 内存按变体尺寸精筛
-            wrapper.exists("SELECT 1 FROM rspu_variant v WHERE v.rspu_id = rspu_master.rspu_id"
-                + " AND v.deleted_at IS NULL");
-            wrapper.orderByDesc("created_at").last("LIMIT " + SIZE_FILTER_PREFETCH_LIMIT);
-            rspus = filterByWidthMm(rspuMapper.selectList(wrapper), criteria);
-            totalMatched = rspus.size();
-            rspus = rspus.stream().limit(topN).toList();
-        } else {
-            Long total = rspuMapper.selectCount(wrapper);
-            totalMatched = total != null ? total.intValue() : 0;
-            wrapper.orderByDesc("created_at").last("LIMIT " + topN);
-            rspus = rspuMapper.selectList(wrapper);
+    /** 纯结构化检索的 rank_score：单通道 RRF 分（1/(k+rank)，与融合分同口径可比）。 */
+    private void applyStructuredRankScores(List<ProductSearchItem> items) {
+        int rank = 0;
+        for (ProductSearchItem item : items) {
+            rank++;
+            item.setRankScore(BigDecimal.valueOf(1.0 / (properties.getRrfK() + rank))
+                .setScale(4, RoundingMode.HALF_UP));
         }
-        if (rspus.isEmpty()) {
-            ProductSearchResult empty = new ProductSearchResult();
-            empty.setItems(List.of());
-            empty.setTotalMatched(totalMatched);
-            return empty;
-        }
+    }
 
-        // 4. 装配：代表规格 sizeText、主图、命中条件
+    /**
+     * 按 ID 批量取产品卡片项（过可见性过滤 + 主图/尺寸装配）。
+     *
+     * <p>供 Skill 读工具把 rspu_relation 置顶关系产品装配成可直接进推荐卡片的结构；
+     * 不可见/不存在的产品静默剔除（关系数据稀疏，不应阻断推荐）。</p>
+     *
+     * @param rspuIds 产品 ID 集合
+     * @return 卡片项列表（顺序与入参一致，仅保留可见产品）
+     */
+    public List<ProductSearchItem> findItemsByIds(java.util.Collection<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> ids = rspuIds.stream().filter(StringUtils::hasText).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
+        visibilityPolicy.applyScope(wrapper);
+        wrapper.in("rspu_id", ids);
+        List<RspuMaster> rspus = rspuMapper.selectList(wrapper);
+        Map<String, RspuMaster> byId = rspus.stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+        List<RspuMaster> ordered = ids.stream().map(byId::get).filter(r -> r != null).toList();
+        return assembleItems(ordered, List.of());
+    }
+
+    /** 装配：代表规格 sizeText、主图、命中条件。 */
+    private List<ProductSearchItem> assembleItems(List<RspuMaster> rspus, List<String> matchedConditions) {
+        if (rspus == null || rspus.isEmpty()) {
+            return List.of();
+        }
         List<String> rspuIds = rspus.stream().map(RspuMaster::getRspuId).toList();
         Map<String, String> sizeTextMap = representativeSizeTexts(rspuIds);
         Map<String, String> primaryImageMap = batchPrimaryImageUrls(rspuIds);
-        List<String> matchedConditions = describeMatchedConditions(criteria);
 
-        List<ProductSearchItem> items = rspus.stream().map(rspu -> {
+        return rspus.stream().map(rspu -> {
             ProductSearchItem item = new ProductSearchItem();
             item.setRspuId(rspu.getRspuId());
             item.setProductName(StringUtils.hasText(rspu.getProductName())
@@ -159,11 +381,6 @@ public class MarketingProductQueryService {
             item.setMatchedConditions(matchedConditions);
             return item;
         }).toList();
-
-        ProductSearchResult result = new ProductSearchResult();
-        result.setItems(items);
-        result.setTotalMatched(totalMatched);
-        return result;
     }
 
     /**
@@ -302,6 +519,9 @@ public class MarketingProductQueryService {
      */
     private Map<String, String> representativeSizeTexts(List<String> rspuIds) {
         Map<String, String> result = new HashMap<>();
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return result;
+        }
         Map<String, List<RspuVariant>> variantMap = rspuVariantMapper.selectList(
                 new QueryWrapper<RspuVariant>().in("rspu_id", rspuIds))
             .stream().collect(Collectors.groupingBy(RspuVariant::getRspuId));
@@ -322,6 +542,9 @@ public class MarketingProductQueryService {
      * 与 PricingPreviewService 同口径）。
      */
     private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
+        if (rspuIds == null || rspuIds.isEmpty()) {
+            return Map.of();
+        }
         return imageAssetsMapper.selectList(new QueryWrapper<ImageAssets>()
                 .in("rspu_id", rspuIds)
                 .eq("is_primary", true))

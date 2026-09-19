@@ -25,6 +25,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -227,6 +228,55 @@ class AgentSessionServiceTest {
             verify(sessionMapper).updateById(captor.capture());
             assertThat(captor.getValue().getStatus()).isEqualTo("closed");
             assertThat(response.getStatus()).isEqualTo("closed");
+        }
+    }
+
+    @Test
+    void deleteWithoutRunningRunShouldSoftDelete() {
+        AgentSession session = session("SES-1", "user-1", null);
+        when(sessionMapper.selectById("SES-1")).thenReturn(session);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            sessionService.delete("SES-1");
+
+            verify(sessionMapper).deleteById("SES-1");
+        }
+    }
+
+    @Test
+    void deleteWithRunningRunShouldReturn409() {
+        AgentSession session = session("SES-1", "user-1", null);
+        session.setActiveRunId("RUN-1");
+        when(sessionMapper.selectById("SES-1")).thenReturn(session);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            assertThatThrownBy(() -> sessionService.delete("SES-1"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409))
+                .hasMessageContaining("SESSION_BUSY");
+            verify(sessionMapper, never()).deleteById(anyString());
+        }
+    }
+
+    @Test
+    void deleteOthersSessionShouldReturn403() {
+        AgentSession session = session("SES-1", "user-1", null);
+        when(sessionMapper.selectById("SES-1")).thenReturn(session);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-9");
+
+            assertThatThrownBy(() -> sessionService.delete("SES-1"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+            verify(sessionMapper, never()).deleteById(anyString());
         }
     }
 }
