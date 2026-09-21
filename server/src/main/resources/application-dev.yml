@@ -2,8 +2,8 @@ spring:
   datasource:
     driver-class-name: org.postgresql.Driver
     url: jdbc:postgresql://localhost:5432/rsdp?currentSchema=public
-    username: ${DB_USERNAME:your-username}
-    password: ${DB_PASSWORD:your-password}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
   data:
     redis:
       host: localhost

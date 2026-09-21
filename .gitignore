@@ -4,6 +4,7 @@ server/*.jar
 web/dist/
 web/node_modules/
 web/.vite/
+web/package-lock.json
 
 # 依赖目录
 node_modules/

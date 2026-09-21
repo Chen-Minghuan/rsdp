@@ -32,7 +32,6 @@ public abstract class AbstractAgentNode implements NodeAction {
         String label = AgentStateKeys.labelOf(nodeName());
         eventBus.emitNode(runId, nodeName(), label);
         runRecorder.updateCurrentNode(runId, nodeName());
-        ctx.recordStep(nodeName(), label);
         return doApply(state, ctx);
     }
 
