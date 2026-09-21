@@ -1,14 +1,25 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NDivider, NEmpty, NTag } from 'naive-ui'
+import { NButton, NDivider, NEmpty, NTag } from 'naive-ui'
 import type { ConfirmedItem, RequirementProfile } from '@/types/marketingAgent'
 
 /**
- * 右栏：当前需求档案（只读字段 + 版本号徽标）+ 已确认主体产品清单。
+ * 右栏：当前需求档案（只读字段 + 版本号徽标）+ 已确认主体产品清单 + 「生成报价」入口。
  */
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   requirement: RequirementProfile | null
   confirmedItems: ConfirmedItem[]
+  /** 正在生成报价（按钮 loading） */
+  generatingQuote?: boolean
+  /** 会话已结束（禁用按钮） */
+  sessionClosed?: boolean
+}>(), {
+  generatingQuote: false,
+  sessionClosed: false
+})
+
+const emit = defineEmits<{
+  generateQuote: []
 }>()
 
 interface FieldRow {
@@ -88,6 +99,17 @@ function widthRangeText(min?: number, max?: number): string | undefined {
           <n-tag size="tiny">{{ item.status }}</n-tag>
         </div>
       </div>
+
+      <n-button
+        type="primary"
+        size="small"
+        block
+        :loading="generatingQuote"
+        :disabled="sessionClosed"
+        @click="emit('generateQuote')"
+      >
+        生成报价
+      </n-button>
     </div>
   </div>
 </template>

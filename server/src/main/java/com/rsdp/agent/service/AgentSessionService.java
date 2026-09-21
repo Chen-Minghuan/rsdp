@@ -120,6 +120,20 @@ public class AgentSessionService {
     }
 
     /**
+     * 删除会话（软删除：deleted_at 置位，列表/详情不可见；子表数据留痕可溯）。
+     * 存在 running run（active_run_id 非空）时返回 409。
+     *
+     * @param sessionId 会话 ID
+     */
+    public void delete(String sessionId) {
+        AgentSession session = requireAccessibleSession(sessionId);
+        if (StringUtils.hasText(session.getActiveRunId())) {
+            throw new BusinessException(409, "SESSION_BUSY");
+        }
+        sessionMapper.deleteById(sessionId);
+    }
+
+    /**
      * 加载会话并校验当前用户访问权限。
      *
      * @param sessionId 会话 ID

@@ -88,7 +88,7 @@ class OrderServiceTest {
     private ConfigService configService;
 
     @Mock
-    private CompanyService companyService;
+    private EffectivePriceRateResolver priceRateResolver;
 
     @Mock
     private PricingService pricingService;
@@ -163,7 +163,7 @@ class OrderServiceTest {
         living.setDictCode("LIVING");
         living.setDictName("客厅");
         when(categoryDictMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(living));
-        when(configService.getOrderPriceRate()).thenReturn(new BigDecimal("0.8"));
+        when(priceRateResolver.resolve()).thenReturn(new BigDecimal("0.8"));
         // 标准售价：RSPU 建议销售价 2500 优先
         when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("2500.00"));
         when(orderNoGenerator.generate()).thenReturn("DO-20260715-001");
@@ -239,7 +239,7 @@ class OrderServiceTest {
         // 无建议销售价：标准售价由 PricingService 自动加价（成本 1000 × 2.5）
         when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(new RspuMaster()));
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
-        when(configService.getOrderPriceRate()).thenReturn(BigDecimal.ONE);
+        when(priceRateResolver.resolve()).thenReturn(BigDecimal.ONE);
         when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("2500.00"));
         when(orderNoGenerator.generate()).thenReturn("DO-20260715-003");
 
@@ -297,7 +297,7 @@ class OrderServiceTest {
         when(rskuSupplyMapper.selectBatchIds(anyList())).thenReturn(List.of(rsku));
         when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(new RspuMaster()));
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
-        when(configService.getOrderPriceRate()).thenReturn(BigDecimal.ONE);
+        when(priceRateResolver.resolve()).thenReturn(BigDecimal.ONE);
         // 无建议销售价且无出厂价：无法定价
         when(pricingService.resolveSalePrice(any(), any())).thenReturn(null);
 
@@ -342,7 +342,7 @@ class OrderServiceTest {
         rspu.setPositioningLabel("布艺沙发");
         when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(rspu));
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
-        when(configService.getOrderPriceRate()).thenReturn(BigDecimal.ONE);
+        when(priceRateResolver.resolve()).thenReturn(BigDecimal.ONE);
         // 清库存：建议销售价 800 低于成本 1000，允许继续但给出警告
         when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("800.00"));
         when(orderNoGenerator.generate()).thenReturn("DO-20260715-004");
@@ -406,8 +406,8 @@ class OrderServiceTest {
         when(rskuSupplyMapper.selectBatchIds(anyList())).thenReturn(List.of(rsku));
         when(rspuMapper.selectBatchIds(anyList())).thenReturn(List.of(new RspuMaster()));
         when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
-        // 企业折扣率 0.9 优先于全局 0.8
-        when(companyService.resolveOrderPriceRate("user-1")).thenReturn(new BigDecimal("0.9"));
+        // 企业折扣率 0.9 优先于全局 0.8（由 EffectivePriceRateResolver 收口）
+        when(priceRateResolver.resolve()).thenReturn(new BigDecimal("0.9"));
         when(pricingService.resolveSalePrice(any(), any())).thenReturn(new BigDecimal("1000.00"));
         when(orderNoGenerator.generate()).thenReturn("DO-20260715-002");
 

@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -155,9 +156,27 @@ public class AgentStreamService {
         return emitter;
     }
 
+    /**
+     * 组装 assistant 消息 metadata：followup 标记 + 本 run 节点轨迹（思考过程，前端折叠面板展示）。
+     * 两者皆无时返回 null。
+     */
+    public String buildMessageMetadata(AgentRunContext ctx) {
+        try {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            if (ctx.isFollowup()) {
+                metadata.put("followup", true);
+            }
+            if (!ctx.steps().isEmpty()) {
+                metadata.put("steps", ctx.steps());
+            }
+            return metadata.isEmpty() ? null : objectMapper.writeValueAsString(metadata);
+        } catch (Exception e) {
+            throw new IllegalStateException("assistant 消息 metadata 序列化失败", e);
+        }
+    }
+
     /** 异步段：跑图 → assistant 文本落库 → done/error → 释放认领。 */
-    private void executeRun(AgentRunContext ctx) {
-        String runId = ctx.getRunId();
+    private void executeRun(AgentRunContext ctx) {        String runId = ctx.getRunId();
         String sessionId = ctx.getSessionId();
         try {
             eventBus.emitMeta(runId, sessionId);
@@ -176,7 +195,7 @@ public class AgentStreamService {
                 text = "好的。";
             }
             String messageType = ctx.isNotice() ? "notice" : "text";
-            String metadata = ctx.isFollowup() ? "{\"followup\":true}" : null;
+            String metadata = buildMessageMetadata(ctx);
             AgentMessage assistant = messageStore.persistAssistantMessage(
                 sessionId, runId, messageType, text, metadata);
             runRecorder.markDone(runId);

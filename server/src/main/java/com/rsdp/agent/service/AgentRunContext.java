@@ -6,6 +6,8 @@ import com.rsdp.agent.patch.RequirementConstraints;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -54,11 +56,30 @@ public class AgentRunContext {
     /** assistant 消息是否为追问（metadata 留痕，供追问轮次统计）。 */
     private boolean followup;
 
+    /** 本 run 已执行的节点轨迹（{node, label}，按执行顺序；done 时写入 assistant 消息 metadata）。 */
+    private final List<Map<String, String>> steps = new ArrayList<>();
+
     public AgentRunContext(String sessionId, String runId, String operatorUserId, String userMessage) {
         this.sessionId = sessionId;
         this.runId = runId;
         this.operatorUserId = operatorUserId;
         this.userMessage = userMessage;
+    }
+
+    /** 记录节点执行步骤（连续重复节点去重，如循环回边重入同一节点）。 */
+    public synchronized void recordStep(String node, String label) {
+        if (!steps.isEmpty()) {
+            Map<String, String> last = steps.get(steps.size() - 1);
+            if (last.get("node").equals(node)) {
+                return;
+            }
+        }
+        steps.add(Map.of("node", node, "label", label));
+    }
+
+    /** 节点轨迹（只读视图，按执行顺序）。 */
+    public synchronized List<Map<String, String>> steps() {
+        return List.copyOf(steps);
     }
 
     /** 追加 assistant 输出文本。 */

@@ -2,11 +2,17 @@ package com.rsdp.agent.controller;
 
 import com.rsdp.agent.dto.AgentSessionDetailResponse;
 import com.rsdp.agent.dto.AgentSessionResponse;
+import com.rsdp.agent.dto.AgentQuoteResponse;
+import com.rsdp.agent.dto.AgentSchemeExportResponse;
 import com.rsdp.agent.dto.ConfirmItemRequest;
 import com.rsdp.agent.dto.ConfirmedItemResponse;
 import com.rsdp.agent.dto.CreateSessionRequest;
+import com.rsdp.agent.dto.ExportSchemeRequest;
+import com.rsdp.agent.dto.GenerateQuoteRequest;
 import com.rsdp.agent.dto.SendMessageRequest;
 import com.rsdp.agent.service.AgentConfirmService;
+import com.rsdp.agent.service.AgentQuoteService;
+import com.rsdp.agent.service.AgentSchemeExportService;
 import com.rsdp.agent.service.AgentSessionBusyException;
 import com.rsdp.agent.service.AgentSessionService;
 import com.rsdp.agent.service.AgentStreamService;
@@ -18,6 +24,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -44,6 +51,8 @@ public class AgentSessionController {
     private final AgentSessionService sessionService;
     private final AgentStreamService streamService;
     private final AgentConfirmService confirmService;
+    private final AgentQuoteService quoteService;
+    private final AgentSchemeExportService schemeExportService;
 
     /**
      * 创建选品会话（设计师代录时填客户名）。
@@ -126,5 +135,47 @@ public class AgentSessionController {
     @PostMapping("/sessions/{sessionId}/close")
     public Result<AgentSessionResponse> closeSession(@PathVariable String sessionId) {
         return Result.ok(sessionService.close(sessionId));
+    }
+
+    /**
+     * 删除会话（软删除：列表/详情不可见，子表数据留痕；存在 running run 时返回 409 SESSION_BUSY）。
+     *
+     * @param sessionId 会话 ID
+     * @return 空结果
+     */
+    @DeleteMapping("/sessions/{sessionId}")
+    public Result<Void> deleteSession(@PathVariable String sessionId) {
+        sessionService.delete(sessionId);
+        return Result.ok();
+    }
+
+    /**
+     * 生成会话报价（P2 一键报价，幂等：重复提交返回已存在报价）。
+     *
+     * <p>售价口径卡片（无成本字段）；需 quote:generate 权限（Service 层校验）。</p>
+     *
+     * @param sessionId 会话 ID
+     * @param request   生成请求
+     * @return 报价卡片
+     */
+    @PostMapping("/sessions/{sessionId}/quote")
+    public Result<AgentQuoteResponse> generateQuote(@PathVariable String sessionId,
+                                                    @RequestBody @Valid GenerateQuoteRequest request) {
+        return Result.ok(quoteService.generate(sessionId, request));
+    }
+
+    /**
+     * 导出会话确认清单为方案（P2 对话外下单出口，幂等：同键重复提交返回首个导出结果）。
+     *
+     * <p>需 scheme:create 权限（Service 层校验）；导出后跳方案详情页走既有报价单/下单流程。</p>
+     *
+     * @param sessionId 会话 ID
+     * @param request   导出请求
+     * @return 方案导出结果
+     */
+    @PostMapping("/sessions/{sessionId}/scheme")
+    public Result<AgentSchemeExportResponse> exportScheme(@PathVariable String sessionId,
+                                                          @RequestBody @Valid ExportSchemeRequest request) {
+        return Result.ok(schemeExportService.exportScheme(sessionId, request));
     }
 }

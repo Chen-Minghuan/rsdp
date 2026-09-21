@@ -5,6 +5,8 @@ import com.rsdp.agent.controller.AgentSessionController;
 import com.rsdp.agent.dto.AgentSessionResponse;
 import com.rsdp.agent.dto.ConfirmedItemResponse;
 import com.rsdp.agent.service.AgentConfirmService;
+import com.rsdp.agent.service.AgentQuoteService;
+import com.rsdp.agent.service.AgentSchemeExportService;
 import com.rsdp.agent.service.AgentSessionBusyException;
 import com.rsdp.agent.service.AgentSessionService;
 import com.rsdp.agent.service.AgentStreamService;
@@ -28,6 +30,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -55,6 +58,12 @@ class AgentSessionControllerTest {
 
     @MockBean
     private AgentConfirmService confirmService;
+
+    @MockBean
+    private AgentQuoteService quoteService;
+
+    @MockBean
+    private AgentSchemeExportService schemeExportService;
 
     @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
@@ -198,5 +207,74 @@ class AgentSessionControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(409))
             .andExpect(jsonPath("$.message").value("SESSION_BUSY"));
+    }
+
+    @Test
+    void deleteSessionShouldReturn200() throws Exception {
+        mockMvc.perform(delete("/api/v1/agent/sessions/SES-1"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+        verify(sessionService).delete("SES-1");
+    }
+
+    @Test
+    void deleteSessionWithRunningRunShouldReturn409Code() throws Exception {
+        org.mockito.Mockito.doThrow(new BusinessException(409, "SESSION_BUSY"))
+            .when(sessionService).delete("SES-1");
+
+        mockMvc.perform(delete("/api/v1/agent/sessions/SES-1"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(409))
+            .andExpect(jsonPath("$.message").value("SESSION_BUSY"));
+    }
+
+    @Test
+    void generateQuoteShouldReturnQuoteCard() throws Exception {
+        com.rsdp.agent.dto.AgentQuoteResponse quote = new com.rsdp.agent.dto.AgentQuoteResponse();
+        quote.setQuoteId("AQT-1");
+        quote.setListTotal(new java.math.BigDecimal("7000"));
+        when(quoteService.generate(eq("SES-1"), any())).thenReturn(quote);
+
+        mockMvc.perform(post("/api/v1/agent/sessions/SES-1/quote")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"idempotencyKey\":\"idem-1\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.quoteId").value("AQT-1"));
+    }
+
+    @Test
+    void generateQuoteWithoutIdempotencyKeyShouldReturn400() throws Exception {
+        mockMvc.perform(post("/api/v1/agent/sessions/SES-1/quote")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400));
+    }
+
+    @Test
+    void exportSchemeShouldReturnSchemeRef() throws Exception {
+        com.rsdp.agent.dto.AgentSchemeExportResponse exported = new com.rsdp.agent.dto.AgentSchemeExportResponse();
+        exported.setSchemeId("SCH-1");
+        exported.setSchemeName("Agent方案-SES-1-20260917");
+        exported.setDetailUrl("/schemes/SCH-1");
+        when(schemeExportService.exportScheme(eq("SES-1"), any())).thenReturn(exported);
+
+        mockMvc.perform(post("/api/v1/agent/sessions/SES-1/scheme")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"idempotencyKey\":\"idem-2\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.schemeId").value("SCH-1"))
+            .andExpect(jsonPath("$.data.detailUrl").value("/schemes/SCH-1"));
+    }
+
+    @Test
+    void exportSchemeWithoutIdempotencyKeyShouldReturn400() throws Exception {
+        mockMvc.perform(post("/api/v1/agent/sessions/SES-1/scheme")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400));
     }
 }

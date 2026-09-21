@@ -81,8 +81,8 @@ public class OrderService {
     private final CategoryDictMapper categoryDictMapper;
     private final ProjectService projectService;
     private final ConfigService configService;
-    private final CompanyService companyService;
     private final PricingService pricingService;
+    private final EffectivePriceRateResolver priceRateResolver;
     private final OrderNoGenerator orderNoGenerator;
     private final DataScopeHelper dataScopeHelper;
     private final AuditLogService auditLogService;
@@ -236,13 +236,13 @@ public class OrderService {
     }
 
     /**
-     * 解析生效的订单折扣率（乘标准售价的客户折扣）：当前用户归属企业时企业 price_ratio 优先，否则回退全局 price_rate。
+     * 解析生效的订单折扣率（乘标准售价的客户折扣）：委托 {@link EffectivePriceRateResolver}
+     * （口径单点，营销 Agent 报价共用）。
      *
      * @return 生效折扣率
      */
     private BigDecimal resolveEffectivePriceRate() {
-        BigDecimal companyRate = companyService.resolveOrderPriceRate(SecurityOperatorContext.currentUserId());
-        return companyRate != null ? companyRate : configService.getOrderPriceRate();
+        return priceRateResolver.resolve();
     }
 
     /**

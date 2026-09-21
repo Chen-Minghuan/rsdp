@@ -1,41 +1,67 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
-import { NEmpty, NSpin } from 'naive-ui'
+import { NEmpty } from 'naive-ui'
 import RecommendCardList from './RecommendCardList.vue'
-import type { AgentMessage, RecommendItem } from '@/types/marketingAgent'
+import QuoteCard from './QuoteCard.vue'
+import type { AgentMessage, AgentQuote, AgentSchemeExport, RecommendItem, ThoughtStep } from '@/types/marketingAgent'
 
 /**
  * 消息流：用户右气泡 / 助手左气泡；
- * messageType=cards 渲染推荐卡片列表，notice 居中灰色小字。
+ * messageType=cards 渲染推荐卡片列表，quote 渲染报价卡片，scheme 渲染方案卡片，notice 居中灰色小字。
  */
 const props = withDefaults(defineProps<{
   messages: AgentMessage[]
-  /** 流式进行中（底部显示节点状态） */
+  /** 流式进行中（最后一条助手消息的思考过程面板保持展开） */
   streaming?: boolean
-  /** 当前 Agent 节点文案（「正在理解需求」等） */
-  nodeLabel?: string
   /** 正在确认中的推荐项 itemId */
   confirmingItemId?: string | null
   /** 已确认的推荐项 itemId 列表（卡片按钮置灰） */
   confirmedItemIds?: string[]
+  /** 正在导出方案（报价卡片按钮 loading） */
+  exportingScheme?: boolean
   /** 会话已结束（禁用确认按钮） */
   sessionClosed?: boolean
 }>(), {
   streaming: false,
-  nodeLabel: '',
   confirmingItemId: null,
   confirmedItemIds: () => [],
+  exportingScheme: false,
   sessionClosed: false
 })
 
 const emit = defineEmits<{
   confirm: [item: RecommendItem]
+  exportScheme: [quoteId: string]
 }>()
 
 /** 从 cards 消息 metadata 中取推荐项列表（防御 metadata 缺失/结构不符）。 */
 function cardItems(message: AgentMessage): RecommendItem[] {
   const items = message.metadata?.items
   return Array.isArray(items) ? (items as RecommendItem[]) : []
+}
+
+/** 从 quote 消息 metadata 中取报价卡片数据（防御结构不符）。 */
+function quoteOf(message: AgentMessage): AgentQuote | null {
+  const metadata = message.metadata
+  if (metadata && typeof metadata.quoteId === 'string' && Array.isArray(metadata.lines)) {
+    return metadata as unknown as AgentQuote
+  }
+  return null
+}
+
+/** 从 scheme 消息 metadata 中取方案导出结果（防御结构不符）。 */
+function schemeOf(message: AgentMessage): AgentSchemeExport | null {
+  const metadata = message.metadata
+  if (metadata && typeof metadata.schemeId === 'string' && typeof metadata.detailUrl === 'string') {
+    return metadata as unknown as AgentSchemeExport
+  }
+  return null
+}
+
+/** 从 assistant 消息 metadata 中取思考过程步骤（防御结构不符）。 */
+function stepsOf(message: AgentMessage): ThoughtStep[] {
+  const steps = message.metadata?.steps
+  return Array.isArray(steps) ? (steps as ThoughtStep[]) : []
 }
 
 const listRef = ref<HTMLElement | null>(null)
@@ -76,24 +102,47 @@ watch(
         />
       </div>
 
+      <div v-else-if="message.messageType === 'quote' && quoteOf(message)" class="cards-row">
+        <QuoteCard
+          :quote="quoteOf(message)!"
+          :exporting="exportingScheme"
+          :disabled="sessionClosed"
+          @export-scheme="emit('exportScheme', $event)"
+        />
+      </div>
+
+      <div v-else-if="message.messageType === 'scheme' && schemeOf(message)" class="scheme-card">
+        <div class="scheme-title">已生成方案「{{ schemeOf(message)!.schemeName }}」</div>
+        <div class="scheme-meta">共 {{ schemeOf(message)!.itemCount }} 项产品，请到方案详情页走报价单 / 下单流程</div>
+        <router-link :to="schemeOf(message)!.detailUrl" class="scheme-link">查看方案去下单 →</router-link>
+      </div>
+
       <div
         v-else
         class="bubble-row"
         :class="message.role === 'user' ? 'bubble-row--user' : 'bubble-row--assistant'"
       >
-        <div
-          class="bubble"
-          :class="message.role === 'user' ? 'bubble--user' : 'bubble--assistant'"
-        >
-          {{ message.content }}
+        <div class="bubble-column">
+          <details
+            v-if="message.role === 'assistant' && stepsOf(message).length > 0"
+            class="thinking"
+            :open="streaming && message.messageId === messages[messages.length - 1]?.messageId"
+          >
+            <summary>思考过程（{{ stepsOf(message).length }} 步）</summary>
+            <ol class="thinking-steps">
+              <li v-for="(step, index) in stepsOf(message)" :key="index">{{ step.label }}</li>
+            </ol>
+          </details>
+          <div
+            v-if="message.content"
+            class="bubble"
+            :class="message.role === 'user' ? 'bubble--user' : 'bubble--assistant'"
+          >
+            {{ message.content }}
+          </div>
         </div>
       </div>
     </template>
-
-    <div v-if="streaming" class="node-status">
-      <n-spin size="small" />
-      <span>{{ nodeLabel || '正在思考' }}</span>
-    </div>
   </div>
 </template>
 
@@ -130,8 +179,31 @@ watch(
   justify-content: flex-start;
 }
 
-.bubble {
+.bubble-column {
   max-width: 72%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 思考过程折叠面板：流式中默认展开，定稿后收起可再展开 */
+.thinking {
+  font-size: 12px;
+  color: #999;
+}
+
+.thinking summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking-steps {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  line-height: 1.8;
+}
+
+.bubble {
   padding: 8px 12px;
   border-radius: 8px;
   font-size: 14px;
@@ -156,11 +228,33 @@ watch(
   /* 卡片列表占满中栏宽度 */
 }
 
-.node-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.scheme-card {
+  max-width: 560px;
+  padding: 12px;
+  border: 1px solid #efefef;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.scheme-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.scheme-meta {
   color: #999;
   font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.scheme-link {
+  color: #18a058;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.scheme-link:hover {
+  text-decoration: underline;
 }
 </style>

@@ -23,6 +23,9 @@ public class RecommendItemResponse {
 
     private Integer rank;
 
+    /** 配套分组标签（品类码 TB/FS/FC 等），主体选品卡片为 null（P2 配套推荐分组渲染用）。 */
+    private String groupTag;
+
     /** 产品事实快照（key 集合见类注释，值为快照字段值）。 */
     private Map<String, Object> snapshot;
 

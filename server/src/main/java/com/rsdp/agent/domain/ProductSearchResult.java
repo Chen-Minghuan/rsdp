@@ -15,4 +15,7 @@ public class ProductSearchResult {
 
     /** 截断前的命中总数（含尺寸硬过滤后的真实总数）。 */
     private int totalMatched;
+
+    /** 本次检索是否使用了向量召回通道（P2，批次留痕用）。 */
+    private boolean vectorChannelUsed;
 }
