@@ -15,6 +15,8 @@ import com.rsdp.entity.FloorPlanRoom;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.floorplan.parser.FloorPlanFileType;
+import com.rsdp.floorplan.parser.dto.CadParseResult;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.FloorPlanAnalysisMapper;
 import com.rsdp.mapper.FloorPlanRoomMapper;
@@ -50,6 +52,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -91,6 +94,9 @@ class FloorPlanServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private com.rsdp.floorplan.parser.FloorPlanParserRegistry parserRegistry;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -100,9 +106,10 @@ class FloorPlanServiceTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(floorPlanService, "maxFileSizeMb", 10);
+        ReflectionTestUtils.setField(floorPlanService, "maxCadFileSizeMb", 20);
         ReflectionTestUtils.setField(floorPlanService, "pdfRenderDpi", 200f);
-        // 上传校验器默认判定为图片（PDF 用例单独 stub）
-        lenient().when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+        // 上传校验器默认判定为图片（PDF/CAD 用例单独 stub）
+        lenient().when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
             .thenReturn(ImageUploadValidator.UploadKind.IMAGE);
     }
 
@@ -148,14 +155,14 @@ class FloorPlanServiceTest {
         // 非事务环境直接触发异步处理
         verify(asyncTaskProcessor).processFloorPlanAnalysis(
             response.get("taskId"), response.get("analysisId"), "images/stored.jpg", "三室两厅");
-        verify(imageUploadValidator).validateImageOrPdf(file, 10L * 1024 * 1024);
+        verify(imageUploadValidator).validateImageOrPdfOrCad(file, 10L * 1024 * 1024, 20L * 1024 * 1024);
     }
 
     // ---------- 接口 1：PDF 户型图支持（v3.0 §8 P2） ----------
 
     @Test
     void analyze_pdf_shouldRenderFirstPageAndStorePng() throws Exception {
-        when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+        when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
             .thenReturn(ImageUploadValidator.UploadKind.PDF);
         when(storageService.store(any(InputStream.class), anyString(), anyLong(), any()))
             .thenReturn("images/stored.png");
@@ -189,7 +196,7 @@ class FloorPlanServiceTest {
 
     @Test
     void analyze_invalidPdf_shouldThrowBadRequest() throws Exception {
-        when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+        when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
             .thenReturn(ImageUploadValidator.UploadKind.PDF);
 
         MockMultipartFile file = new MockMultipartFile(
@@ -204,7 +211,7 @@ class FloorPlanServiceTest {
 
     @Test
     void analyze_encryptedPdf_shouldThrowBadRequest() throws Exception {
-        when(imageUploadValidator.validateImageOrPdf(any(), anyLong()))
+        when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
             .thenReturn(ImageUploadValidator.UploadKind.PDF);
 
         MockMultipartFile file = new MockMultipartFile(
@@ -238,6 +245,370 @@ class FloorPlanServiceTest {
         }
     }
 
+    // ---------- 接口 1：CAD 户型图支持（CAD 户型导入 P3） ----------
+
+    @Test
+    void analyze_cad_shouldStoreOriginalFileAndRouteToCadParser() throws Exception {
+        when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.CAD);
+        when(storageService.store(any(), anyString())).thenReturn("images/stored.dwg");
+
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "户型图.dwg", "application/octet-stream", "fake-dwg".getBytes());
+
+        Map<String, String> response = floorPlanService.analyze(file, null);
+
+        assertThat(response.get("analysisId")).startsWith("FPA-");
+
+        // CAD 原文件留存（format=dwg，供失败重试沿用；非图片字节，像素宽/高留空）
+        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper).insert(imageCaptor.capture());
+        ImageAssets imageAsset = imageCaptor.getValue();
+        assertThat(imageAsset.getFormat()).isEqualTo("dwg");
+        assertThat(imageAsset.getStoragePath()).isEqualTo("images/stored.dwg");
+        assertThat(imageAsset.getWidth()).isNull();
+        // 不走 PDF 渲染（存储走 MultipartFile 重载，原样留存）
+        verify(storageService, never()).store(any(InputStream.class), anyString(), anyLong(), any());
+
+        // 按文件类型路由解析器（CAD → CadFloorPlanParser）
+        verify(parserRegistry).resolve(FloorPlanFileType.CAD);
+        verify(asyncTaskProcessor).processFloorPlanAnalysis(
+            response.get("taskId"), response.get("analysisId"), "images/stored.dwg", null);
+    }
+
+    // ---------- 接口 1：图片+CAD 双文件通道（CAD 户型导入增强） ----------
+
+    @Test
+    void analyze_imageAndCad_shouldRouteCadChannelWithoutVision() throws Exception {
+        when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.CAD);
+        // 对象键原样返回作存储路径，便于区分底图（images/）与 CAD 原文件（cad/）
+        when(storageService.store(any(), anyString())).thenAnswer(inv -> inv.getArgument(1));
+
+        MockMultipartFile image = new MockMultipartFile(
+            "image", "plan.png", "image/png", createPngBytes(100, 80));
+        MockMultipartFile cad = new MockMultipartFile(
+            "cad", "户型图.dwg", "application/octet-stream", "fake-dwg".getBytes());
+
+        Map<String, String> response = floorPlanService.analyze(image, cad, "三室两厅");
+
+        assertThat(response.get("analysisId")).startsWith("FPA-");
+        assertThat(response.get("taskId")).startsWith("TASK-");
+
+        // 底图落 image_assets：format=png + 像素宽/高（供前端底图渲染）
+        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper).insert(imageCaptor.capture());
+        ImageAssets imageAsset = imageCaptor.getValue();
+        assertThat(imageAsset.getImageType()).isEqualTo("floor_plan");
+        assertThat(imageAsset.getFormat()).isEqualTo("png");
+        assertThat(imageAsset.getWidth()).isEqualTo(100);
+        assertThat(imageAsset.getHeight()).isEqualTo(80);
+
+        // analysis.imageId 指向底图（imageUrl 即预览图地址）
+        ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
+        verify(analysisMapper).insert(analysisCaptor.capture());
+        assertThat(analysisCaptor.getValue().getImageId()).isEqualTo(imageAsset.getImageId());
+
+        // 任务 input_data 携带 cadObjectKey + codeNameMode（失败重试沿用）
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).insert(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getInputData()).contains("cadObjectKey").contains("codeNameMode");
+
+        // 固定路由 CAD 解析通道（不跑视觉识别），底图对象键 + CAD 对象键 + 代号模式透传
+        verify(parserRegistry).resolve(FloorPlanFileType.CAD);
+        verify(asyncTaskProcessor).processFloorPlanAnalysis(
+            org.mockito.ArgumentMatchers.eq(response.get("taskId")),
+            org.mockito.ArgumentMatchers.eq(response.get("analysisId")),
+            org.mockito.ArgumentMatchers.matches("images/.*\\.png"),
+            org.mockito.ArgumentMatchers.eq("三室两厅"),
+            org.mockito.ArgumentMatchers.matches("cad/.*\\.dwg"),
+            org.mockito.ArgumentMatchers.eq(true));
+        // 双文件各自校验：cad 走 CAD 规则，image 走图片规则
+        verify(imageUploadValidator).validateImageOrPdfOrCad(cad, 10L * 1024 * 1024, 20L * 1024 * 1024);
+        verify(imageUploadValidator).validate(image, 10L * 1024 * 1024);
+        verify(visionService, never()).chatText(anyString(), anyString());
+    }
+
+    @Test
+    void analyze_cadOnlyViaCadField_shouldKeepP3CadBehavior() throws Exception {
+        when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.CAD);
+        when(storageService.store(any(), anyString())).thenReturn("images/stored.dwg");
+
+        MockMultipartFile cad = new MockMultipartFile(
+            "cad", "户型图.dwg", "application/octet-stream", "fake-dwg".getBytes());
+
+        Map<String, String> response = floorPlanService.analyze(null, cad, null);
+
+        // 仅 cad（无底图）：等同 P3 单文件 CAD 通道（原文件落 image_assets、4 参异步形态、保留自动命名）
+        ArgumentCaptor<ImageAssets> imageCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper).insert(imageCaptor.capture());
+        assertThat(imageCaptor.getValue().getFormat()).isEqualTo("dwg");
+        verify(parserRegistry).resolve(FloorPlanFileType.CAD);
+        verify(asyncTaskProcessor).processFloorPlanAnalysis(
+            response.get("taskId"), response.get("analysisId"), "images/stored.dwg", null);
+    }
+
+    @Test
+    void analyze_noFile_shouldThrowBadRequest() {
+        assertThatThrownBy(() -> floorPlanService.analyze(null, null, null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("请上传户型图片或 CAD 图纸文件");
+        verify(analysisMapper, never()).insert(any(FloorPlanAnalysis.class));
+        verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
+    }
+
+    private byte[] createPngBytes(int width, int height) throws IOException {
+        java.awt.image.BufferedImage image =
+            new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(image, "png", out);
+        return out.toByteArray();
+    }
+
+    // ---------- CAD 解析结果落库（buildCadRooms，由异步任务调用） ----------
+
+    @Test
+    void buildCadRooms_shouldPersistRoomsWithGeometryAndUnnamedRegions() {
+        CadParseResult cad = new CadParseResult();
+        cad.setSuccess(true);
+        CadParseResult.Bounds bounds = new CadParseResult.Bounds();
+        bounds.setMinX(0.0);
+        bounds.setMinY(0.0);
+        bounds.setMaxX(10000.0);
+        bounds.setMaxY(8000.0);
+        cad.setDrawingBounds(bounds);
+
+        CadParseResult.Room bedroom = new CadParseResult.Room();
+        bedroom.setLabel("主卧");
+        bedroom.setRoomType("BEDROOM");
+        bedroom.setPolygon(List.of(
+            List.of(1000.0, 1000.0), List.of(5200.0, 1000.0),
+            List.of(5200.0, 4800.0), List.of(1000.0, 4800.0)));
+        bedroom.setWidthMm(4200.0);
+        bedroom.setDepthMm(3800.0);
+        bedroom.setAreaM2(15.96);
+        CadParseResult.DimensionCheck check = new CadParseResult.DimensionCheck();
+        check.setAnnotated("4200×3800");
+        check.setConsistent(true);
+        bedroom.setDimensionCheck(check);
+        bedroom.setConfidence("high");
+        cad.setRooms(List.of(bedroom));
+
+        CadParseResult.UnnamedRegion region = new CadParseResult.UnnamedRegion();
+        region.setPolygon(List.of(
+            List.of(6000.0, 1000.0), List.of(7000.0, 1000.0),
+            List.of(7000.0, 2000.0), List.of(6000.0, 2000.0)));
+        region.setAreaM2(1.0);
+        region.setWidthMm(1000.0);
+        region.setDepthMm(1000.0);
+        region.setHint("距 主卧 1.2m");
+        cad.setUnnamedRegions(List.of(region));
+
+        floorPlanService.buildCadRooms("FPA-1", cad);
+
+        ArgumentCaptor<FloorPlanRoom> captor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper, times(2)).insert(captor.capture());
+
+        FloorPlanRoom room = captor.getAllValues().get(0);
+        assertThat(room.getLabel()).isEqualTo("主卧");
+        assertThat(room.getRoomType()).isEqualTo("BEDROOM");
+        assertThat(room.getWidthMm()).isEqualTo(4200);
+        assertThat(room.getDepthMm()).isEqualTo(3800);
+        assertThat(room.getAreaM2()).isEqualByComparingTo(new BigDecimal("15.96"));
+        assertThat(room.getDimensionSource()).isEqualTo("cad_geometry");
+        assertThat(room.getDimensionConfidence()).isEqualTo("high");
+        assertThat(room.getGeometrySource()).isEqualTo("cad_geometry");
+        assertThat(room.getDimensionText()).isEqualTo("4200×3800");
+        assertThat(room.getPolygon()).contains("5200.0");
+        // 质心 = 顶点均值：x=(1000+5200+5200+1000)/4=3100，y=(1000+1000+4800+4800)/4=2900
+        assertThat(room.getCentroid()).contains("3100.0").contains("2900.0");
+        // bbox 由 polygon 外包络按 drawingBounds 归一化：x=0.1，y=0.125，w=0.42，h=0.475
+        assertThat(room.getBbox()).contains("\"x\":0.1").contains("\"w\":0.42");
+
+        FloorPlanRoom unnamed = captor.getAllValues().get(1);
+        assertThat(unnamed.getRoomType()).isEqualTo("OTHER");
+        assertThat(unnamed.getLabel()).isEqualTo("未命名空间 1");
+        assertThat(unnamed.getDimensionConfidence()).isEqualTo("low");
+        assertThat(unnamed.getDimensionSource()).isEqualTo("cad_geometry");
+        assertThat(unnamed.getGeometrySource()).isEqualTo("cad_geometry");
+        assertThat(unnamed.getWidthMm()).isEqualTo(1000);
+        assertThat(unnamed.getDepthMm()).isEqualTo(1000);
+        assertThat(unnamed.getSortOrder()).isEqualTo(1);
+    }
+
+    @Test
+    void buildCadRooms_legacyCodeNameMode_shouldPreserveDetectedSemantics() {
+        CadParseResult cad = new CadParseResult();
+        cad.setSuccess(true);
+        CadParseResult.Bounds bounds = new CadParseResult.Bounds();
+        bounds.setMinX(0.0);
+        bounds.setMinY(0.0);
+        bounds.setMaxX(10000.0);
+        bounds.setMaxY(8000.0);
+        cad.setDrawingBounds(bounds);
+
+        CadParseResult.Room bedroom = new CadParseResult.Room();
+        bedroom.setLabel("主卧");
+        bedroom.setRoomType("BEDROOM");
+        bedroom.setPolygon(List.of(
+            List.of(1000.0, 1000.0), List.of(5200.0, 1000.0),
+            List.of(5200.0, 4800.0), List.of(1000.0, 4800.0)));
+        bedroom.setWidthMm(4200.0);
+        bedroom.setDepthMm(3800.0);
+        bedroom.setAreaM2(15.96);
+        bedroom.setConfidence("high");
+        cad.setRooms(List.of(bedroom));
+
+        CadParseResult.UnnamedRegion region = new CadParseResult.UnnamedRegion();
+        region.setPolygon(List.of(
+            List.of(6000.0, 1000.0), List.of(7000.0, 1000.0), List.of(7000.0, 2000.0)));
+        region.setAreaM2(1.0);
+        cad.setUnnamedRegions(List.of(region));
+
+        floorPlanService.buildCadRooms("FPA-1", cad, true);
+
+        ArgumentCaptor<FloorPlanRoom> captor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper, times(2)).insert(captor.capture());
+
+        // 历史代号参数仅为兼容旧任务保留，不再丢弃 CAD 已识别出的语义。
+        FloorPlanRoom room = captor.getAllValues().get(0);
+        assertThat(room.getLabel()).isEqualTo("主卧");
+        assertThat(room.getRoomType()).isEqualTo("BEDROOM");
+        assertThat(room.getWidthMm()).isEqualTo(4200);
+        assertThat(room.getDepthMm()).isEqualTo(3800);
+        assertThat(room.getAreaM2()).isEqualByComparingTo(new BigDecimal("15.96"));
+        assertThat(room.getDimensionSource()).isEqualTo("cad_geometry");
+        assertThat(room.getDimensionConfidence()).isEqualTo("high");
+        assertThat(room.getGeometrySource()).isEqualTo("cad_geometry");
+        assertThat(room.getPolygon()).contains("5200.0");
+        assertThat(room.getSortOrder()).isEqualTo(0);
+
+        // 未命名区域仍清晰标记，交给用户确认。
+        FloorPlanRoom unnamed = captor.getAllValues().get(1);
+        assertThat(unnamed.getLabel()).isEqualTo("未命名空间 1");
+        assertThat(unnamed.getRoomType()).isEqualTo("OTHER");
+        assertThat(unnamed.getDimensionConfidence()).isEqualTo("low");
+        assertThat(unnamed.getSortOrder()).isEqualTo(1);
+    }
+
+    @Test
+    void storeCadPreview_shouldPersistDerivedImageAndLinkAnalysis() throws Exception {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_ANALYZING);
+        analysis.setCreatedBy("tester");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(storageService.store(any(InputStream.class), anyString(), anyLong(), anyString()))
+            .thenReturn("images/cad-preview/stored.png");
+        CadParseResult.Preview preview = new CadParseResult.Preview();
+        preview.setWidth(1361);
+        preview.setHeight(1400);
+
+        floorPlanService.storeCadPreview("FPA-1", new byte[] { 1, 2, 3 }, preview);
+
+        ArgumentCaptor<ImageAssets> assetCaptor = ArgumentCaptor.forClass(ImageAssets.class);
+        verify(imageAssetsMapper).insert(assetCaptor.capture());
+        ImageAssets asset = assetCaptor.getValue();
+        assertThat(asset.getImageType()).isEqualTo("floor_plan_cad_preview");
+        assertThat(asset.getStoragePath()).isEqualTo("images/cad-preview/stored.png");
+        assertThat(asset.getWidth()).isEqualTo(1361);
+        assertThat(asset.getHeight()).isEqualTo(1400);
+        assertThat(asset.getFormat()).isEqualTo("png");
+        assertThat(analysis.getPreviewImageId()).isEqualTo(asset.getImageId());
+        verify(analysisMapper).updateById(analysis);
+    }
+
+    @Test
+    void getAnalysis_cadPath_shouldExposeDrawingBounds() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        analysis.setPreviewImageId("IMG-PREVIEW-1");
+        analysis.setRawResult("{\"success\":true,\"units\":\"mm\","
+            + "\"drawingBounds\":{\"minX\":0.0,\"minY\":0.0,\"maxX\":10000.0,\"maxY\":8000.0},"
+            + "\"preview\":{\"width\":1000,\"height\":800,\"bounds\":"
+            + "{\"minX\":10.0,\"minY\":20.0,\"maxX\":9990.0,\"maxY\":7980.0}},"
+            + "\"qualityIssues\":[]}");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom room = buildRoom("FPR-1", "OTHER");
+        room.setGeometrySource("cad_geometry");
+        room.setLabel("空间 1");
+        when(roomMapper.selectList(any())).thenReturn(List.of(room));
+
+        FloorPlanAnalysisResponse response = floorPlanService.getAnalysis("FPA-1");
+
+        assertThat(response.getDrawingBounds()).isNotNull();
+        assertThat(response.getDrawingBounds().getMinX()).isEqualTo(0.0);
+        assertThat(response.getDrawingBounds().getMinY()).isEqualTo(0.0);
+        assertThat(response.getDrawingBounds().getMaxX()).isEqualTo(10000.0);
+        assertThat(response.getDrawingBounds().getMaxY()).isEqualTo(8000.0);
+        assertThat(response.getPreviewImageId()).isEqualTo("IMG-PREVIEW-1");
+        assertThat(response.getPreviewUrl()).isEqualTo("/api/v1/images/IMG-PREVIEW-1");
+        assertThat(response.getPreviewBounds().getMinX()).isEqualTo(10.0);
+        assertThat(response.getPreviewBounds().getMaxY()).isEqualTo(7980.0);
+        assertThat(response.getGeometrySource()).isEqualTo("cad_geometry");
+        assertThat(response.getScaleSuggestion()).isNull();
+    }
+
+    @Test
+    void buildCadRooms_unknownRoomType_shouldFallbackToOther() {
+        CadParseResult cad = new CadParseResult();
+        cad.setSuccess(true);
+        CadParseResult.Room weird = new CadParseResult.Room();
+        weird.setLabel("设备井");
+        weird.setRoomType("ELEVATOR_SHAFT");
+        weird.setPolygon(List.of(
+            List.of(0.0, 0.0), List.of(1000.0, 0.0), List.of(1000.0, 1000.0)));
+        weird.setConfidence("mid");
+        cad.setRooms(List.of(weird));
+
+        floorPlanService.buildCadRooms("FPA-1", cad);
+
+        ArgumentCaptor<FloorPlanRoom> captor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper).insert(captor.capture());
+        assertThat(captor.getValue().getRoomType()).isEqualTo("OTHER");
+        assertThat(captor.getValue().getLabel()).isEqualTo("设备井");
+    }
+
+    @Test
+    void getAnalysis_cadPath_shouldReturnGeometrySourceAndQualityIssuesAndSkipScaleSuggestion() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        analysis.setRawResult("{\"success\":true,\"qualityIssues\":["
+            + "{\"level\":\"warn\",\"code\":\"UNIT_ASSUMED\",\"message\":\"图纸未声明单位，按毫米处理\"}]}");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom room = buildRoom("FPR-1", "BEDROOM");
+        room.setGeometrySource("cad_geometry");
+        room.setLabel("主卧");
+        room.setPolygon("[[1000.0,1000.0],[5200.0,1000.0]]");
+        when(roomMapper.selectList(any())).thenReturn(List.of(room));
+
+        FloorPlanAnalysisResponse response = floorPlanService.getAnalysis("FPA-1");
+
+        assertThat(response.getGeometrySource()).isEqualTo("cad_geometry");
+        assertThat(response.getQualityIssues()).hasSize(1);
+        assertThat(response.getQualityIssues().get(0).getLevel()).isEqualTo("warn");
+        assertThat(response.getQualityIssues().get(0).getCode()).isEqualTo("UNIT_ASSUMED");
+        // CAD 通道跳过自动标定建议
+        assertThat(response.getScaleSuggestion()).isNull();
+        assertThat(response.getRooms().get(0).getLabel()).isEqualTo("主卧");
+        assertThat(response.getRooms().get(0).getPolygon()).contains(List.of(1000.0, 1000.0));
+    }
+
+    @Test
+    void getAnalysis_visionPath_shouldDefaultAiVisionAndEmptyQualityIssues() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        analysis.setRawResult("{\"rooms\":[{\"roomType\":\"living_room\",\"label\":\"客厅\"}]}");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        FloorPlanRoom room = buildRoom("FPR-1", "LIVING_ROOM");
+        room.setGeometrySource("ai_vision");
+        when(roomMapper.selectList(any())).thenReturn(List.of(room));
+
+        FloorPlanAnalysisResponse response = floorPlanService.getAnalysis("FPA-1");
+
+        assertThat(response.getGeometrySource()).isEqualTo("ai_vision");
+        assertThat(response.getQualityIssues()).isEmpty();
+        assertThat(response.getRooms().get(0).getPolygon()).isNull();
+        // 视觉通道无 CAD 图纸外包络
+        assertThat(response.getDrawingBounds()).isNull();
+    }
+
     // ---------- 尺寸三级提取（buildRooms，由异步任务调用） ----------
 
     @Test
@@ -252,6 +623,7 @@ class FloorPlanServiceTest {
         verify(roomMapper).insert(captor.capture());
         FloorPlanRoom room = captor.getValue();
         assertThat(room.getRoomType()).isEqualTo("LIVING_ROOM");
+        assertThat(room.getLabel()).isEqualTo("客厅");
         assertThat(room.getWidthMm()).isEqualTo(4200);
         assertThat(room.getDepthMm()).isEqualTo(3800);
         assertThat(room.getAreaM2()).isEqualByComparingTo(new BigDecimal("15.96"));
@@ -527,6 +899,52 @@ class FloorPlanServiceTest {
     }
 
     @Test
+    void confirmRooms_cadRoom_shouldPreserveExactGeometryAndArea() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+
+        FloorPlanRoom cadRoom = buildRoom("FPR-CAD-1", "OTHER");
+        cadRoom.setLabel("原始空间");
+        cadRoom.setWidthMm(10110);
+        cadRoom.setDepthMm(8360);
+        cadRoom.setAreaM2(new BigDecimal("47.43"));
+        cadRoom.setBbox("{\"x\":0.1,\"y\":0.2,\"w\":0.3,\"h\":0.4}");
+        cadRoom.setPolygon("[[1,2],[3,4],[5,6]]");
+        cadRoom.setCentroid("{\"x\":3,\"y\":4}");
+        cadRoom.setGeometrySource(FloorPlanService.GEOMETRY_SOURCE_CAD);
+        cadRoom.setDimensionSource("cad_geometry");
+        cadRoom.setDimensionConfidence("mid");
+        when(roomMapper.selectList(any())).thenReturn(List.of(cadRoom));
+
+        FloorPlanConfirmRequest.RoomItem item = new FloorPlanConfirmRequest.RoomItem();
+        item.setRoomId("FPR-CAD-1");
+        item.setRoomType("LIVING_ROOM");
+        item.setLabel("客厅");
+        // CAD 尺寸在前端只读；即使旧客户端仍传空值或错误矩形，也不能破坏精确几何。
+        item.setWidthMm(null);
+        item.setDepthMm(null);
+        item.setBbox(new FloorPlanBBox(0.8, 0.8, 0.1, 0.1));
+        FloorPlanConfirmRequest request = new FloorPlanConfirmRequest();
+        request.setRooms(List.of(item));
+
+        floorPlanService.confirmRooms("FPA-1", request);
+
+        ArgumentCaptor<FloorPlanRoom> captor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper).updateById(captor.capture());
+        FloorPlanRoom updated = captor.getValue();
+        assertThat(updated.getRoomType()).isEqualTo("LIVING_ROOM");
+        assertThat(updated.getLabel()).isEqualTo("客厅");
+        assertThat(updated.getWidthMm()).isEqualTo(10110);
+        assertThat(updated.getDepthMm()).isEqualTo(8360);
+        assertThat(updated.getAreaM2()).isEqualByComparingTo("47.43");
+        assertThat(updated.getBbox()).isEqualTo("{\"x\":0.1,\"y\":0.2,\"w\":0.3,\"h\":0.4}");
+        assertThat(updated.getPolygon()).isEqualTo("[[1,2],[3,4],[5,6]]");
+        assertThat(updated.getCentroid()).isEqualTo("{\"x\":3,\"y\":4}");
+        assertThat(updated.getDimensionSource()).isEqualTo("cad_geometry");
+        assertThat(updated.getDimensionConfidence()).isEqualTo("mid");
+    }
+
+    @Test
     void confirmRooms_unknownRoomId_shouldThrow() {
         FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
         when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
@@ -707,6 +1125,40 @@ class FloorPlanServiceTest {
     }
 
     @Test
+    void retry_dualFileAnalysis_shouldCarryCadContext() throws Exception {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_FAILED);
+        analysis.setErrorMessage("CAD 解析服务连接失败");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        AsyncTask oldTask = new AsyncTask();
+        oldTask.setTaskId("TASK-1");
+        oldTask.setStatus("failed");
+        oldTask.setInputData("{\"analysisId\":\"FPA-1\",\"objectKey\":\"images/fp.png\","
+            + "\"cadObjectKey\":\"cad/fp.dwg\",\"codeNameMode\":true,\"hint\":\"三室两厅\"}");
+        when(asyncTaskMapper.selectById("TASK-1")).thenReturn(oldTask);
+        ImageAssets imageAsset = new ImageAssets();
+        imageAsset.setImageId("IMG-1");
+        imageAsset.setStoragePath("images/fp.png");
+        when(imageAssetsMapper.selectById("IMG-1")).thenReturn(imageAsset);
+
+        Map<String, String> result = floorPlanService.retry("FPA-1");
+
+        // 新任务 input_data 沿用 CAD 对象键与代号模式标记
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper).insert(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getInputData())
+            .contains("cad/fp.dwg").contains("codeNameMode").contains("三室两厅");
+
+        // 双文件通道路由 6 参异步形态（CAD 通道 + 代号模式）
+        verify(asyncTaskProcessor).processFloorPlanAnalysis(
+            org.mockito.ArgumentMatchers.eq(result.get("taskId")),
+            org.mockito.ArgumentMatchers.eq("FPA-1"),
+            org.mockito.ArgumentMatchers.eq("images/fp.png"),
+            org.mockito.ArgumentMatchers.eq("三室两厅"),
+            org.mockito.ArgumentMatchers.eq("cad/fp.dwg"),
+            org.mockito.ArgumentMatchers.eq(true));
+    }
+
+    @Test
     void retry_nonFailedStatus_shouldThrow() {
         FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
         when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
@@ -768,6 +1220,7 @@ class FloorPlanServiceTest {
         FloorPlanRoom living = roomCaptor.getAllValues().get(0);
         assertThat(living.getAnalysisId()).isEqualTo(analysisId);
         assertThat(living.getRoomType()).isEqualTo("LIVING_ROOM");
+        assertThat(living.getLabel()).isEqualTo("客厅");
         assertThat(living.getWidthMm()).isEqualTo(4200);
         assertThat(living.getDepthMm()).isEqualTo(3800);
         assertThat(living.getDimensionSource()).isEqualTo("ocr_text");

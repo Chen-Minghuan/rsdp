@@ -15,6 +15,12 @@ import com.rsdp.mapper.FloorPlanAnalysisMapper;
 import com.rsdp.mapper.RspuDuplicateSuspectMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.floorplan.parser.FloorPlanFileType;
+import com.rsdp.floorplan.parser.CadVisionSemanticMatcher;
+import com.rsdp.floorplan.parser.FloorPlanParseRequest;
+import com.rsdp.floorplan.parser.FloorPlanParseResult;
+import com.rsdp.floorplan.parser.FloorPlanParserRegistry;
+import com.rsdp.floorplan.parser.dto.CadParseResult;
 import com.rsdp.service.EmbeddingService.ImageEmbedding;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.service.storage.StorageService;
@@ -66,6 +72,8 @@ public class AsyncTaskProcessor {
     private final ProductSubjectCropService subjectCropService;
     private final FloorPlanAnalysisMapper floorPlanAnalysisMapper;
     private final RspuDuplicateSuspectMapper duplicateSuspectMapper;
+    /** 户型图解析器注册表（CAD 户型导入 P3）：按扩展名路由 dwg/dxf → CAD，图片/PDF → 视觉识别。 */
+    private final FloorPlanParserRegistry floorPlanParserRegistry;
     /**
      * 户型图分析服务（延迟解析，打破 FloorPlanService ↔ AsyncTaskProcessor 循环依赖）。
      */
@@ -91,13 +99,6 @@ public class AsyncTaskProcessor {
     /** 同款检测：向量相似度阈值（0~1），超过则标记"存疑-疑似同款" */
     @Value("${rsdp.dedup.similar-threshold:0.95}")
     private double duplicateSimilarThreshold;
-
-    /**
-     * 户型图逐房间二次精修开关（二期，默认开）：初检完成后按房间 bbox 外扩 25% 裁剪
-     * 单独精修 bbox/类型。管理端为异步链路，可承担逐房间串行调用的时延。
-     */
-    @Value("${rsdp.floor-plan.refine-enabled:true}")
-    private boolean floorPlanRefineEnabled;
 
     /**
      * 异步处理产品录入任务：AI 视觉识别并更新相关记录。
@@ -304,20 +305,43 @@ public class AsyncTaskProcessor {
     }
 
     /**
-     * 异步处理户型图分析任务：AI 识别空间划分与尺寸标注，落 floor_plan_room 明细。
+     * 异步处理户型图分析任务：按文件类型路由解析器（CAD 户型导入 P3：
+     * dwg/dxf → CAD 解析服务；图片/PDF → 视觉识别两阶段链路），落 floor_plan_room 明细。
      *
      * <p>照 {@link #processProductEntry} 模式：claimPendingTask 原子认领；
-     * AI 调用在事务外执行，DB 写入直接走 Mapper 短操作。尺寸三级提取与空间明细落库
-     * 收敛在 {@link FloorPlanService#buildRooms}（OCR 标注解析 high → 比例尺换算
-     * scale_calc mid（P1，需可解析的 像素↔毫米 关系）→ AI 估算 low → 留空待人工校正）。</p>
+     * 解析调用在事务外执行，DB 写入直接走 Mapper 短操作。视觉通道尺寸三级提取与
+     * 空间明细落库收敛在 {@link FloorPlanService#buildRooms}（OCR 标注解析 high → 比例尺换算
+     * scale_calc mid（P1，需可解析的 像素↔毫米 关系）→ AI 估算 low → 留空待人工校正）；
+     * CAD 通道尺寸来自真实几何，走 {@link FloorPlanService#buildCadRooms} 直接落库
+     * （dimension_source=cad_geometry），跳过精修与自动标定。</p>
      *
      * @param taskId     任务 ID
      * @param analysisId 户型图分析批次 ID
-     * @param objectKey  户型原图存储对象键
+     * @param objectKey  户型原图存储对象键（扩展名决定解析路由）
      * @param hint       用户补充说明，可空
      */
     @Async("taskExecutor")
     public void processFloorPlanAnalysis(String taskId, String analysisId, String objectKey, String hint) {
+        processFloorPlanAnalysis(taskId, analysisId, objectKey, hint, null, false);
+    }
+
+    /**
+     * 异步处理户型图分析任务（重载，CAD 户型导入增强·图片+CAD 双文件通道）：
+     * cadObjectKey 非空时，读取 CAD 原文件字节并固定路由 CAD 解析器（不再按扩展名路由），
+     * codeNameMode 仅为兼容历史已入队任务继续透传，当前不再丢弃 CAD 语义；
+     * 用户图片（objectKey）会额外做一次空间语义识别，再把名称/类型匹配到 CAD 精确几何上，
+     * 但不会用视觉 bbox 覆盖 CAD polygon、面积或尺寸。
+     *
+     * @param taskId       任务 ID
+     * @param analysisId   户型图分析批次 ID
+     * @param objectKey    户型参考图存储对象键
+     * @param hint         用户补充说明，可空
+     * @param cadObjectKey CAD 原文件存储对象键（非空即双文件/显式 CAD 通道），可空
+     * @param codeNameMode 历史代号模式标记（兼容保留，当前不改变落库语义）
+     */
+    @Async("taskExecutor")
+    public void processFloorPlanAnalysis(String taskId, String analysisId, String objectKey, String hint,
+                                         String cadObjectKey, boolean codeNameMode) {
         log.info("开始异步处理户型图分析任务，taskId={}，analysisId={}", taskId, analysisId);
         // 原子认领任务：仅 pending 状态可置为 processing，防止多执行器并发重复处理同一任务
         if (asyncTaskMapper.claimPendingTask(taskId) == 0) {
@@ -327,37 +351,105 @@ public class AsyncTaskProcessor {
 
         safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_ANALYZING, null, null);
 
-        byte[] imageBytes;
-        try (InputStream imageStream = storageService.get(objectKey)) {
-            imageBytes = imageStream.readAllBytes();
+        // 双文件通道读 CAD 原文件并固定路由 CAD 解析器；单文件通道按 objectKey 扩展名路由（既有行为）
+        boolean explicitCad = StringUtils.hasText(cadObjectKey);
+        String sourceKey = explicitCad ? cadObjectKey : objectKey;
+        byte[] fileBytes;
+        try (InputStream fileStream = storageService.get(sourceKey)) {
+            fileBytes = fileStream.readAllBytes();
         } catch (Exception e) {
-            log.error("读取户型图失败，taskId={}，analysisId={}", taskId, analysisId, e);
+            log.error("读取户型文件失败，taskId={}，analysisId={}，sourceKey={}", taskId, analysisId, sourceKey, e);
             safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_FAILED, null, "读取户型图失败: " + e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
             return;
         }
 
+        // 双文件通道同时读取阅览图：CAD 提供几何，阅览图仅提供房间名称/类型语义。
+        byte[] referenceImageBytes = null;
+        if (explicitCad && StringUtils.hasText(objectKey) && !objectKey.equals(sourceKey)) {
+            try (InputStream imageStream = storageService.get(objectKey)) {
+                referenceImageBytes = imageStream.readAllBytes();
+            } catch (Exception e) {
+                // 参考图不可用不应让精确 CAD 几何任务整体失败。
+                log.warn("读取 CAD 阅览图失败，将仅保留 CAD 几何，analysisId={}，objectKey={}",
+                    analysisId, objectKey, e);
+            }
+        }
+
         try {
-            FloorPlanDetectResult detected = visionService.detectFloorPlanRooms(imageBytes, hint);
-            // 逐房间二次精修（二期）：精修后的 bbox 随 buildRooms 落库
-            if (floorPlanRefineEnabled) {
-                visionService.refineFloorPlanRooms(imageBytes, detected);
+            FloorPlanParseResult parsed = explicitCad
+                ? floorPlanParserRegistry.resolve(FloorPlanFileType.CAD)
+                    .parse(new FloorPlanParseRequest(fileBytes, sourceKey, hint))
+                : floorPlanParserRegistry.resolveByExtension(extensionOf(objectKey))
+                    .parse(new FloorPlanParseRequest(fileBytes, objectKey, hint));
+
+            if (parsed.isCad() && referenceImageBytes != null && referenceImageBytes.length > 0) {
+                try {
+                    FloorPlanDetectResult semanticResult =
+                        visionService.detectFloorPlanRooms(referenceImageBytes, hint);
+                    CadVisionSemanticMatcher.FusionSummary summary =
+                        CadVisionSemanticMatcher.fuse(
+                            parsed.cadResult(), semanticResult, referenceImageBytes);
+                    log.info("CAD/阅览图语义融合完成，analysisId={}，命中={}/{}，视觉候选={}",
+                        analysisId, summary.matchedCount(), summary.cadCandidateCount(),
+                        summary.visionCandidateCount());
+                } catch (Exception e) {
+                    // 视觉语义是增强项：失败时继续交付 CAD 精确几何，并明确提示人工命名。
+                    addCadQualityIssue(parsed.cadResult(), "VISION_SEMANTICS_FAILED",
+                        "阅览图空间名称识别失败，请人工确认名称与类型");
+                    log.warn("CAD 阅览图语义识别失败，保留 CAD 几何结果，analysisId={}", analysisId, e);
+                }
             }
             updateTaskStatus(taskId, "processing", 60, null, null);
 
-            // 尺寸三级提取 + 空间明细落库：v3.0 §4.4 收敛在 FloorPlanService 内实现（唯一出口）
-            floorPlanServiceProvider.getObject().buildRooms(analysisId, detected);
+            // 空间明细落库：视觉通道尺寸三级提取 / CAD 通道真实几何直落（唯一出口均在 FloorPlanService）
+            String rawResult;
+            int roomCount;
+            if (parsed.isCad()) {
+                FloorPlanService floorPlanService = floorPlanServiceProvider.getObject();
+                floorPlanService.buildCadRooms(analysisId, parsed.cadResult(), codeNameMode);
+                floorPlanService.storeCadPreview(
+                    analysisId, parsed.previewBytes(), parsed.cadResult().getPreview());
+                rawResult = objectMapper.writeValueAsString(parsed.cadResult());
+                roomCount = (parsed.cadResult().getRooms() != null ? parsed.cadResult().getRooms().size() : 0)
+                    + (parsed.cadResult().getUnnamedRegions() != null
+                        ? parsed.cadResult().getUnnamedRegions().size() : 0);
+            } else {
+                floorPlanServiceProvider.getObject().buildRooms(analysisId, parsed.visionResult());
+                rawResult = objectMapper.writeValueAsString(parsed.visionResult());
+                roomCount = parsed.visionResult().getRooms().size();
+            }
 
-            String rawResult = objectMapper.writeValueAsString(detected);
             safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_AWAITING_CONFIRM, rawResult, null);
             updateTaskStatus(taskId, "done", 100, null, null);
             log.info("户型图分析异步任务完成，taskId={}，analysisId={}，识别空间数={}",
-                taskId, analysisId, detected.getRooms().size());
+                taskId, analysisId, roomCount);
         } catch (Exception e) {
             log.error("户型图空间识别失败，taskId={}，analysisId={}", taskId, analysisId, e);
             safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_FAILED, null, e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
         }
+    }
+
+    /** 取存储对象键扩展名（"images/xxx.dwg" → "dwg"）；无扩展名返回空串（路由兜底视觉通道）。 */
+    private String extensionOf(String objectKey) {
+        int dotIndex = objectKey != null ? objectKey.lastIndexOf('.') : -1;
+        return dotIndex >= 0 ? objectKey.substring(dotIndex + 1) : "";
+    }
+
+    /** 为 CAD 结果追加一条不阻断主流程的质量提示。 */
+    private void addCadQualityIssue(CadParseResult cadResult, String code, String message) {
+        if (cadResult == null) {
+            return;
+        }
+        List<CadParseResult.QualityIssue> issues = cadResult.getQualityIssues() != null
+            ? cadResult.getQualityIssues() : new java.util.ArrayList<>();
+        CadParseResult.QualityIssue issue = new CadParseResult.QualityIssue();
+        issue.setLevel("warn");
+        issue.setCode(code);
+        issue.setMessage(message);
+        issues.add(issue);
+        cadResult.setQualityIssues(issues);
     }
 
     /**

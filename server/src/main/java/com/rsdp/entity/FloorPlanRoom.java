@@ -47,6 +47,20 @@ public class FloorPlanRoom {
 
     private Integer sortOrder;
 
+    /** 空间标签原文（V11，CAD 通道落库；未命名空间为"未命名空间 N"）。 */
+    private String label;
+
+    /** 房间外环顶点，毫米坐标 [[x,y],...]（V11，CAD 通道）。 */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String polygon;
+
+    /** 质心 {"x":..,"y":..}（V11，CAD 通道）。 */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String centroid;
+
+    /** 几何来源（V11）：ai_vision（视觉识别）/ cad_geometry（CAD 解析）。 */
+    private String geometrySource;
+
     /** 人工删除误识别空间（软删，@TableLogic 模式）。 */
     @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;

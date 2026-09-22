@@ -124,4 +124,56 @@ class ImageUploadValidatorTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("图片格式");
     }
+
+    // ---------- CAD 感知重载（CAD 户型导入 P3，仅管理端户型图 analyze 入口使用） ----------
+
+    @Test
+    void validateImageOrPdfOrCad_dwg_shouldReturnCad() {
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "户型图.dwg", "application/octet-stream", "dwg".getBytes()
+        );
+        org.assertj.core.api.Assertions.assertThat(
+            validator.validateImageOrPdfOrCad(file, 1024 * 1024, 20L * 1024 * 1024))
+            .isEqualTo(ImageUploadValidator.UploadKind.CAD);
+    }
+
+    @Test
+    void validateImageOrPdfOrCad_dxf_shouldReturnCad() {
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "plan.dxf", "image/vnd.dxf", "dxf".getBytes()
+        );
+        org.assertj.core.api.Assertions.assertThat(
+            validator.validateImageOrPdfOrCad(file, 1024 * 1024, 20L * 1024 * 1024))
+            .isEqualTo(ImageUploadValidator.UploadKind.CAD);
+    }
+
+    @Test
+    void validateImageOrPdfOrCad_oversizedDwg_shouldReject() {
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "big.dwg", "application/octet-stream", "x".getBytes()
+        );
+        assertThatThrownBy(() -> validator.validateImageOrPdfOrCad(file, 1024 * 1024, 0))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("CAD 图纸大小超过限制");
+    }
+
+    @Test
+    void validateImageOrPdfOrCad_emptyDwg_shouldReject() {
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "empty.dwg", "application/octet-stream", new byte[0]
+        );
+        assertThatThrownBy(() -> validator.validateImageOrPdfOrCad(file, 1024 * 1024, 20L * 1024 * 1024))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("CAD 图纸");
+    }
+
+    @Test
+    void validateImageOrPdfOrCad_image_shouldDelegateToImageOrPdf() {
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "plan.png", "image/png", "fake".getBytes()
+        );
+        org.assertj.core.api.Assertions.assertThat(
+            validator.validateImageOrPdfOrCad(file, 1024 * 1024, 20L * 1024 * 1024))
+            .isEqualTo(ImageUploadValidator.UploadKind.IMAGE);
+    }
 }

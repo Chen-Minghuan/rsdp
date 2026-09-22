@@ -4,6 +4,7 @@ import com.rsdp.dto.FloorPlanBBox;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * 户型图单个空间响应。
@@ -16,6 +17,15 @@ public class FloorPlanRoomResponse {
 
     /** 空间类型字典码。 */
     private String roomType;
+
+    /** 空间标签原文（CAD 通道；未命名空间为"未命名空间 N"），可空。 */
+    private String label;
+
+    /** 房间外环顶点，毫米坐标 [[x,y],...]（CAD 通道），可空。 */
+    private List<List<Double>> polygon;
+
+    /** 保证位于房间内部的标签锚点（CAD 毫米坐标），可空。 */
+    private FloorPlanPoint labelPoint;
 
     /** 空间框（归一化坐标 [0,1]），可空。 */
     private FloorPlanBBox bbox;

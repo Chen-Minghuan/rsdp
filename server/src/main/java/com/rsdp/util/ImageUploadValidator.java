@@ -28,13 +28,21 @@ public class ImageUploadValidator {
     private static final String PDF_EXTENSION = "pdf";
 
     /**
+     * CAD 扩展名（CAD 户型导入 P3）。CAD 文件 content-type 不可靠
+     * （常为 application/octet-stream 或 image/vnd.dwg），仅按扩展名判定。
+     */
+    private static final Set<String> CAD_EXTENSIONS = Set.of("dwg", "dxf");
+
+    /**
      * 户型图链路上传类型（{@link #validateImageOrPdf} 的判定结果）。
      */
     public enum UploadKind {
         /** 图片（走既有图片校验规则）。 */
         IMAGE,
         /** PDF（由调用方渲染首页为图片后进入识别管线，PDF 原文件不留存）。 */
-        PDF
+        PDF,
+        /** CAD 图纸 dwg/dxf（走 rsdp-cad-parser 矢量解析，原文件留存供重试）。 */
+        CAD
     }
 
     /**
@@ -63,6 +71,32 @@ public class ImageUploadValidator {
         }
         validate(file, maxSizeBytes);
         return UploadKind.IMAGE;
+    }
+
+    /**
+     * CAD 感知校验（CAD 户型导入 P3，仅管理端户型图 analyze 入口使用）：
+     * 在 {@link #validateImageOrPdf} 基础上，扩展名为 .dwg/.dxf 时按 CAD 放行
+     * （仅做空文件/大小校验，内容由 rsdp-cad-parser 解析时核验；content-type
+     * 不可靠不参与判定）。CAD 大小上限独立于图片/PDF（真实图纸常达数 MB），
+     * 由调用方传入（配置 {@code rsdp.floor-plan.max-cad-file-size-mb}，默认 20MB）。
+     *
+     * @param file            上传文件
+     * @param maxSizeBytes    图片/PDF 最大允许字节数
+     * @param maxCadSizeBytes CAD 最大允许字节数
+     * @return 上传类型（IMAGE / PDF / CAD）
+     */
+    public UploadKind validateImageOrPdfOrCad(MultipartFile file, long maxSizeBytes, long maxCadSizeBytes) {
+        String extension = file != null ? getExtension(file.getOriginalFilename()) : "";
+        if (CAD_EXTENSIONS.contains(extension)) {
+            if (file.isEmpty()) {
+                throw new BusinessException("请上传 CAD 图纸文件（dwg/dxf）");
+            }
+            if (file.getSize() > maxCadSizeBytes) {
+                throw new BusinessException("CAD 图纸大小超过限制（最大 " + (maxCadSizeBytes / 1024 / 1024) + "MB）");
+            }
+            return UploadKind.CAD;
+        }
+        return validateImageOrPdf(file, maxSizeBytes);
     }
 
     /**
