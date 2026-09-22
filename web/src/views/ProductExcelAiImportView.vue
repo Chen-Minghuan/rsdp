@@ -2,7 +2,7 @@
 import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { NSelect, NTag, NInput, NUpload, NButton, NSpace, useMessage, type DataTableColumns } from 'naive-ui'
+import { NSelect, NTag, NInput, NUpload, NButton, NSpace, NProgress, useMessage, type DataTableColumns } from 'naive-ui'
 import { listDicts } from '@/api/dict'
 import { listFactories } from '@/api/factory'
 import { getExcelAiImportRows } from '@/api/product'
@@ -255,6 +255,50 @@ function statusText(status: TaskItem['status']) {
 function goToProduct(rspuId: string) {
   router.push(`/products/${rspuId}`)
 }
+
+/** 识别任务紧凑表格列：固定高度内滚动，任务多时不再撑长页面 */
+const taskColumns: DataTableColumns<TaskItem> = [
+  {
+    title: '状态',
+    key: 'status',
+    width: 96,
+    render: (row) => h(StatusPill, { value: row.status, label: statusText(row.status) })
+  },
+  {
+    title: '文件',
+    key: 'fileName',
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '进度',
+    key: 'progress',
+    width: 180,
+    render: (row) => h(NProgress, {
+      percentage: row.progress,
+      processing: row.status === 'pending' || row.status === 'processing',
+      status: row.status === 'failed' ? 'error' : 'default'
+    })
+  },
+  {
+    title: '异常',
+    key: 'errorMessage',
+    width: 200,
+    ellipsis: { tooltip: true },
+    render: (row) => {
+      if (row.errorMessage) return h('span', { style: 'color: #d03050;' }, row.errorMessage)
+      if (row.pollError) return h('span', { style: 'color: #f0a020;' }, `进度查询异常：${row.pollError}`)
+      return '-'
+    }
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 90,
+    render: (row) => row.rspuId
+      ? h(NButton, { size: 'small', onClick: () => goToProduct(row.rspuId) }, { default: () => '查看产品' })
+      : null
+  }
+]
 
 function goToProductList() {
   router.push('/products')
@@ -899,16 +943,21 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
         </div>
       </n-alert>
 
-      <template v-if="importResult.failures.length > 0">
-        <p v-if="currentSheetName" style="color: #999; font-size: 12px; margin: 16px 0 0;">
-          以下为工作表「{{ currentSheetName }}」的失败明细：
-        </p>
-        <n-data-table
-          :columns="failureColumns"
-          :data="importResult.failures"
-          style="margin-top: 8px;"
-        />
-      </template>
+      <n-collapse v-if="importResult.failures.length > 0" style="margin-top: 16px;">
+        <n-collapse-item name="failures">
+          <template #header>
+            <span style="font-size: 13px;">
+              失败明细（{{ importResult.failures.length }} 条<template v-if="currentSheetName">，工作表「{{ currentSheetName }}」</template>，点击展开）
+            </span>
+          </template>
+          <n-data-table
+            :columns="failureColumns"
+            :data="importResult.failures"
+            size="small"
+            :max-height="320"
+          />
+        </n-collapse-item>
+      </n-collapse>
 
       <n-space style="margin-top: 16px;">
         <n-button type="primary" @click="goToProductList">
@@ -923,47 +972,16 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
       </n-space>
     </n-card>
 
-    <!-- 识别任务 -->
+    <!-- 识别任务：紧凑表格 + 固定高度滚动，任务增多时不再撑长页面 -->
     <n-card v-if="taskList.length > 0" title="识别任务">
       <n-spin :show="pendingTaskCount > 0">
-        <n-space vertical :size="12">
-          <div
-            v-for="task in taskList"
-            :key="task.taskId"
-            style="border: 1px solid #eee; border-radius: 8px; padding: 12px;"
-          >
-            <n-space align="center" justify="space-between">
-              <n-space align="center">
-                <StatusPill :value="task.status" :label="statusText(task.status)" />
-                <span>{{ task.fileName }}</span>
-              </n-space>
-              <n-button
-                v-if="task.rspuId"
-                size="small"
-                @click="goToProduct(task.rspuId)"
-              >
-                查看产品
-              </n-button>
-            </n-space>
-            <n-progress :percentage="task.progress" style="margin-top: 8px;" />
-            <n-alert
-              v-if="task.errorMessage"
-              type="error"
-              :show-icon="false"
-              style="margin-top: 8px;"
-            >
-              {{ task.errorMessage }}
-            </n-alert>
-            <n-alert
-              v-if="task.pollError"
-              type="warning"
-              :show-icon="false"
-              style="margin-top: 8px;"
-            >
-              进度查询异常：{{ task.pollError }}（不影响后台识别，稍后自动恢复）
-            </n-alert>
-          </div>
-        </n-space>
+        <n-data-table
+          :columns="taskColumns"
+          :data="taskList"
+          size="small"
+          :max-height="360"
+          :row-key="(row: TaskItem) => row.taskId"
+        />
       </n-spin>
     </n-card>
 
