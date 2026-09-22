@@ -55,7 +55,8 @@ const {
   defaultMaterialCode,
   hasSelectedFile,
   pendingTaskCount,
-  batchRecovering
+  batchRecovering,
+  batchProgress
 } = storeToRefs(store)
 const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, uploadRowImage, removeRowImage, cloneRowImages, setRowCategory, resetRowCategoryState } = store
 
@@ -114,6 +115,57 @@ const factoryRequired = computed(() =>
     col => (priceColumnRoles.value[col.header] ?? 'factory') === 'factory'
   )
 )
+
+/** 导入进行中的处理进度百分比（总行数未知时退化为 0，进度条保持 processing 动画） */
+const batchProgressPercent = computed(() => {
+  const { processedRows, totalRows } = batchProgress.value
+  if (!totalRows || totalRows <= 0) return 0
+  return Math.min(100, Math.round((processedRows / totalRows) * 100))
+})
+
+/** 导入结果结论：success 全部成功 / partial 部分成功 / failed 全部失败 / empty 无数据行导入 */
+const importOutcome = computed<'success' | 'partial' | 'failed' | 'empty' | null>(() => {
+  const r = importResult.value
+  if (!r) return null
+  if (r.failedCount > 0 && r.successCount > 0) return 'partial'
+  if (r.failedCount > 0) return 'failed'
+  if (r.successCount > 0) return 'success'
+  return 'empty'
+})
+
+const outcomeAlertType = computed(() => {
+  switch (importOutcome.value) {
+    case 'success': return 'success'
+    case 'partial': return 'warning'
+    case 'failed': return 'error'
+    default: return 'info'
+  }
+})
+
+const outcomeText = computed(() => {
+  const r = importResult.value
+  if (!r) return ''
+  const skipped = r.skippedCount ?? 0
+  const skippedText = skipped > 0 ? `，${skipped} 行跳过` : ''
+  let base: string
+  switch (importOutcome.value) {
+    case 'success':
+      base = `导入完成：${r.successCount} 行全部成功${skippedText}`
+      break
+    case 'partial':
+      base = `部分导入成功：成功 ${r.successCount} 行，失败 ${r.failedCount} 行${skippedText}，失败明细见下方表格`
+      break
+    case 'failed':
+      base = `导入失败：${r.failedCount} 行未导入成功${skippedText}，请根据下方失败明细修正后重新导入`
+      break
+    default:
+      base = `没有数据行被导入${skipped > 0 ? `（${skipped} 行被跳过）` : ''}`
+  }
+  if (pendingTaskCount.value > 0) {
+    base += `；另有 ${pendingTaskCount.value} 个 AI 识别任务仍在进行，进度见下方「识别任务」`
+  }
+  return base
+})
 
 /** 价格列导入模式选项：出厂价/销售价/不导入 */
 const priceRoleOptions: { label: string; value: PriceColumnImportMode }[] = [
@@ -202,6 +254,10 @@ function statusText(status: TaskItem['status']) {
 
 function goToProduct(rspuId: string) {
   router.push(`/products/${rspuId}`)
+}
+
+function goToProductList() {
+  router.push('/products')
 }
 
 /** 复制图片的源行 rowIndex（商品校验视图与完整表格视图共用） */
@@ -787,14 +843,31 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
     </n-card>
 
     <n-card v-if="currentStep === 4 && batchRecovering" title="导入进行中">
-      <n-spin :show="true" description="正在查询批次导入进度…">
+      <n-space vertical :size="16">
         <n-alert type="info" :show-icon="true">
-          导入已在后台执行中（大行量含图片下载/存储，可能需要数分钟）。正在等待结果，完成后将自动展示，请勿重复提交。
+          导入已在后台执行中（大行量含图片下载/存储，可能需要数分钟）。完成后将自动展示结果，请勿重复提交。
         </n-alert>
-      </n-spin>
+        <n-progress
+          type="line"
+          :percentage="batchProgressPercent"
+          indicator-placement="inside"
+          processing
+        />
+        <n-text depth="3" style="font-size: 13px;">
+          已处理 {{ batchProgress.processedRows }} / {{ batchProgress.totalRows || '—' }} 行
+        </n-text>
+      </n-space>
     </n-card>
 
     <n-card v-if="currentStep === 4 && importResult" title="导入结果">
+      <n-alert
+        v-if="importOutcome"
+        :type="outcomeAlertType"
+        :show-icon="true"
+        style="margin-bottom: 16px;"
+      >
+        {{ outcomeText }}
+      </n-alert>
       <n-descriptions bordered :columns="3">
         <n-descriptions-item label="批次号">{{ importResult.batchId }}</n-descriptions-item>
         <n-descriptions-item v-if="currentSheetName" label="工作表">{{ currentSheetName }}</n-descriptions-item>
@@ -838,8 +911,11 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
       </template>
 
       <n-space style="margin-top: 16px;">
+        <n-button type="primary" @click="goToProductList">
+          完成，查看产品列表
+        </n-button>
         <n-button @click="clearAll">
-          重新导入
+          导入下一批
         </n-button>
         <n-button :loading="rowDetailLoading" @click="openRowDetails">
           查看行级明细

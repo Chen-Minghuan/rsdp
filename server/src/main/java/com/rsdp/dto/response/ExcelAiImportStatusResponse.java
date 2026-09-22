@@ -19,6 +19,11 @@ public class ExcelAiImportStatusResponse {
     private int successCount;
     private int failedCount;
     /**
+     * 已处理行数（从行级记录聚合 success/failed/skipped 终态行）：
+     * 导入进行中（importing）前端进度展示用；终态批次与 success+failed+skipped 口径一致。
+     */
+    private int processedRows;
+    /**
      * 跳过的行数（从行级记录聚合：说明行/重复表头行/已存在且未开启更新）。
      */
     private int skippedCount;

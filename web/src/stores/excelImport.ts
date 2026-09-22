@@ -647,6 +647,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       // 同批次可能重复 confirm（如更新模式重新导入），先清空旧结果与任务列表
       importResult.value = null
       taskList.value = []
+      batchProgress.value = { processedRows: 0, totalRows: 0 }
       startBatchStatusPolling(submit.batchId)
     } catch (e) {
       if (axios.isCancel(e)) {
@@ -739,6 +740,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
 
   /** 批次仍在 importing 时展示的中间态标记（结果尚未就绪，正在轮询批次状态） */
   const batchRecovering = ref(false)
+  /** 批次导入实时进度（importing 期间由批次状态轮询逐轮刷新，供「导入进行中」页渲染进度条） */
+  const batchProgress = ref<{ processedRows: number; totalRows: number }>({ processedRows: 0, totalRows: 0 })
   let batchPollTimeoutId: ReturnType<typeof setTimeout> | null = null
   /** 批次状态恢复轮询代际令牌：stopBatchPolling/重新发起时递增，防止在途响应复活已清空的结果页 */
   let batchPollGeneration = 0
@@ -778,6 +781,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       failures: status.failures
     }
     taskList.value = []
+    batchProgress.value = {
+      processedRows: status.processedRows ?? 0,
+      totalRows: status.totalRows || 0
+    }
     buildTaskList(importResult.value)
     currentStep.value = 4
     // 批次已终态且无待识别任务（如无图片行）：导入整体完成，清除持久化
@@ -805,12 +812,24 @@ export const useExcelImportStore = defineStore('excelImport', () => {
           return
         }
         if (status.status === 'importing') {
+          batchProgress.value = {
+            processedRows: status.processedRows ?? 0,
+            totalRows: status.totalRows || 0
+          }
           if (Date.now() - startedAt >= BATCH_RECOVER_TIMEOUT_MS) {
             batchRecovering.value = false
             errorMessage.value = '导入仍在进行中，请稍后到任务中心或刷新本页查看结果，请勿重复提交'
             return
           }
           startBatchStatusPolling(batchId, startedAt)
+          return
+        }
+        if (status.status === 'pending') {
+          // pending 不是终态：导入被异常中断（如服务重启/投递失败）后端会复位 pending。
+          // 此处不能进结果页（会展示一个 0 计数、无失败明细的空结果），回到配置页提示重新提交
+          batchRecovering.value = false
+          clearPersistedBatch()
+          errorMessage.value = '导入未执行完成（可能因服务重启或系统繁忙被中断），批次已复位，请确认配置后重新点击「开始导入」'
           return
         }
         batchRecovering.value = false
@@ -876,6 +895,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     rowImageOverrides.value = {}
     importResult.value = null
     taskList.value = []
+    batchProgress.value = { processedRows: 0, totalRows: 0 }
     currentStep.value = 1
     errorMessage.value = ''
     categoryHint.value = null
@@ -910,6 +930,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     updateIfExists,
     importResult,
     taskList,
+    batchProgress,
     selectedPriceColumns,
     priceColumnRoles,
     sheets,

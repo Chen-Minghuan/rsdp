@@ -988,6 +988,7 @@ public class ExcelAiImportService {
         }
         List<ExcelAiImportResult.TaskLink> tasks = new ArrayList<>();
         int skippedCount = 0;
+        int processedRows = 0;
         for (ExcelImportRow row : rows) {
             if (StringUtils.hasText(row.getAiTaskId()) && StringUtils.hasText(row.getGeneratedRspuId())) {
                 tasks.add(new ExcelAiImportResult.TaskLink(row.getAiTaskId(), row.getGeneratedRspuId()));
@@ -995,9 +996,15 @@ public class ExcelAiImportService {
             if ("skipped".equals(row.getStatus())) {
                 skippedCount++;
             }
+            // 终态行计入已处理进度：importing 期间前端据此渲染进度条，避免裸转圈无反馈
+            if ("success".equals(row.getStatus()) || "failed".equals(row.getStatus())
+                || "skipped".equals(row.getStatus())) {
+                processedRows++;
+            }
         }
         response.setTasks(tasks);
         response.setSkippedCount(skippedCount);
+        response.setProcessedRows(processedRows);
         return response;
     }
 

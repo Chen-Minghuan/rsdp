@@ -608,6 +608,8 @@ export interface ExcelAiImportStatus {
   totalRows: number
   successCount: number
   failedCount: number
+  /** 已处理行数（success+failed+skipped 终态行聚合），importing 期间前端进度展示用 */
+  processedRows?: number
   /** 跳过行数（说明行/重复表头/已存在跳过） */
   skippedCount?: number
   /** 异步任务与 RSPU 的配对列表（用于超时恢复识别进度轮询）。taskId 为 null 表示该 RSPU 无识别任务 */

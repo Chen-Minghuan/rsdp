@@ -521,6 +521,7 @@ GET    /api/v1/products/excel-ai-import/{batchId}
        #   totalRows: number,
        #   successCount: number,
        #   failedCount: number,
+       #   processedRows: number,            // success+failed+skipped 终态行聚合，importing 期间前端进度条展示用
        #   skippedCount: number,             // 说明行/重复表头行/已存在跳过 的行数
        #   tasks: [{ taskId, rspuId }],      // 从 excel_import_row 聚合，供前端超时恢复后重建识别轮询
        #   failures: [{ rowIndex, reason }]  // rowIndex 为 Excel 物理行号；rowIndex=0 为批次级问题（如图片提取截断）

@@ -16,6 +16,8 @@ import com.rsdp.util.IdGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -70,6 +72,24 @@ public class AsyncTaskReaper {
     /** Excel 导入批次 importing 超时（毫秒）：超过该时长未更新视为导入线程消亡，复位 pending 允许重试 */
     @Value("${rsdp.task.import-batch-timeout-ms:7200000}")
     private long importBatchTimeoutMs;
+
+    /**
+     * 启动即收割残留的 importing 导入批次：单实例部署下，本进程刚启动时不存在任何
+     * 存活导入线程，状态仍停留在 importing 的批次必然是上一进程崩溃/重启的遗留，
+     * 立即复位 pending 允许用户重试，避免用户傻等 2 小时收割阈值。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void reapImportBatchesOnStartup() {
+        try {
+            int reaped = excelImportBatchMapper.reapStaleImporting(LocalDateTime.now().plusSeconds(1));
+            if (reaped > 0) {
+                log.warn("启动收割残留 importing 导入批次 {} 个（上一进程中断遗留），已复位为 pending 允许重试", reaped);
+            }
+        } catch (Exception e) {
+            // 启动收割失败不阻断应用启动，交由定时收割兜底
+            log.error("启动收割 importing 导入批次失败: {}", e.getMessage());
+        }
+    }
 
     /**
      * 定时收割超时任务（默认每 10 分钟执行一次，启动 1 分钟后首次执行）。
