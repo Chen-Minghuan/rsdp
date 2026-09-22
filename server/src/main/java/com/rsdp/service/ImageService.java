@@ -28,6 +28,9 @@ import java.io.IOException;
 @RequiredArgsConstructor
 public class ImageService {
 
+    private static final String FLOOR_PLAN_IMAGE_TYPE = "floor_plan";
+    private static final String FLOOR_PLAN_CAD_PREVIEW_IMAGE_TYPE = "floor_plan_cad_preview";
+
     private final ImageAssetsMapper imageAssetsMapper;
     private final StorageService storageService;
     private final DataScopeHelper dataScopeHelper;
@@ -45,7 +48,8 @@ public class ImageService {
      * 根据图片 ID 加载图片文件资源与 MIME 类型。
      *
      * <p>公开资源（CMS 运营图、户型原图、在售产品图，即 /api/v1/public/** 已公开引用的图片）
-     * 允许匿名访问；其余图片仅允许已登录且对图片关联 RSPU/RSKU 有数据权限的用户访问。</p>
+     * 允许匿名访问；CAD 规范预览仅允许登录用户访问；其余图片要求当前用户对图片关联
+     * RSPU/RSKU 具有数据权限。</p>
      *
      * @param imageId 图片 ID
      * @return 加载结果
@@ -73,7 +77,7 @@ public class ImageService {
      * @return true 表示允许匿名访问
      */
     private boolean isPubliclyVisible(ImageAssets imageAsset) {
-        if ("cms".equals(imageAsset.getImageType()) || "floor_plan".equals(imageAsset.getImageType())) {
+        if ("cms".equals(imageAsset.getImageType()) || FLOOR_PLAN_IMAGE_TYPE.equals(imageAsset.getImageType())) {
             return true;
         }
         String rspuId = imageAsset.getRspuId();
@@ -137,15 +141,16 @@ public class ImageService {
     /**
      * 断言当前登录用户可访问指定图片。
      *
-     * <p>户型原图（image_type=floor_plan，不关联 RSPU/RSKU）：登录用户即可访问
-     * （管理端户型分析页回显场景；图片 ID 为完整 UUID 不可枚举，分析数据本身的
-     * 归属隔离由 FloorPlanService 负责）。</p>
+     * <p>户型原图及 CAD 规范预览（image_type=floor_plan / floor_plan_cad_preview，
+     * 均不关联 RSPU/RSKU）：登录用户即可访问（管理端户型分析页回显场景；图片 ID
+     * 为完整 UUID 不可枚举，分析数据本身的归属隔离由 FloorPlanService 负责）。</p>
      */
     private void assertLoggedInUserCanAccess(ImageAssets imageAsset) {
         if (!SecurityOperatorContext.isAuthenticated()) {
             throw new ResourceNotFoundException("图片不存在: " + imageAsset.getImageId());
         }
-        if ("floor_plan".equals(imageAsset.getImageType())) {
+        if (FLOOR_PLAN_IMAGE_TYPE.equals(imageAsset.getImageType())
+            || FLOOR_PLAN_CAD_PREVIEW_IMAGE_TYPE.equals(imageAsset.getImageType())) {
             return;
         }
         String rspuId = imageAsset.getRspuId();

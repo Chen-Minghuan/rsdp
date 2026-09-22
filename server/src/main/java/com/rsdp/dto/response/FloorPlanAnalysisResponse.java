@@ -21,6 +21,15 @@ public class FloorPlanAnalysisResponse {
     /** 户型原图访问地址。 */
     private String imageUrl;
 
+    /** 可直接展示的用户参考图地址；原始文件为 DWG/DXF 时为空。 */
+    private String referenceImageUrl;
+
+    /** CAD 规范预览图 ID；视觉通道为空。 */
+    private String previewImageId;
+
+    /** CAD 规范预览访问地址；作为 CAD 多边形叠加的默认底图。 */
+    private String previewUrl;
+
     /** 状态：pending/analyzing/awaiting_confirm/confirmed/failed。 */
     private String status;
 
@@ -44,8 +53,30 @@ public class FloorPlanAnalysisResponse {
     private List<FloorPlanRoomResponse> rooms;
 
     /**
+     * 几何来源（CAD 户型导入 P3，前端契约，字段名不可改）：
+     * cad_geometry（CAD 解析，跳过标定）/ ai_vision（视觉识别）。
+     */
+    private String geometrySource;
+
+    /**
+     * 质量问题清单（CAD 解析质量门报告；视觉识别通道恒为空数组）。
+     * 前端契约，字段名不可改；无问题为空数组而非 null。
+     */
+    private List<FloorPlanQualityIssue> qualityIssues;
+
+    /**
      * 自动标定建议（户型图优化二期）：status=auto/candidates/null，
      * 结构见 {@link ScaleSuggestionResponse}（前端契约，字段名不可改）。
      */
     private ScaleSuggestionResponse scaleSuggestion;
+
+    /**
+     * CAD 图纸外包络（毫米坐标系范围，CAD 户型导入增强·图片+CAD 双文件通道）：
+     * 前端用它把 rooms[].polygon 毫米坐标归一化叠加到底图上；自 raw_result 提取，
+     * 视觉识别通道恒为 null（前端契约，字段名不可改）。
+     */
+    private FloorPlanDrawingBounds drawingBounds;
+
+    /** CAD 规范预览对应的毫米坐标范围；缺失时前端可回退 drawingBounds。 */
+    private FloorPlanDrawingBounds previewBounds;
 }

@@ -45,6 +45,10 @@ public class FloorPlanConfirmRequest {
         @Size(max = 32, message = "空间类型长度不能超过 32")
         private String roomType;
 
+        /** 空间名称（如"客厅""主卧"），可空；人工命名未命名空间时提交。 */
+        @Size(max = 128, message = "空间名称长度不能超过 128")
+        private String label;
+
         /** 开间 mm。 */
         @Min(value = 1, message = "开间必须为正数（mm）")
         private Integer widthMm;

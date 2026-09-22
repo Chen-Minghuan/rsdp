@@ -117,10 +117,17 @@ rsdp:
   dedup:
     # 同款检测：向量相似度阈值（0~1），录入新品与库内产品相似度超过该值时标记"存疑-疑似同款"
     similar-threshold: 0.95
+  # CAD 户型解析微服务（rsdp-cad-parser，CAD 户型导入 P3；仅管理端 dwg/dxf 上传使用）
+  cad-parser:
+    base-url: ${RSDP_CAD_PARSER_BASE_URL:http://localhost:8090}   # 容器部署经环境变量指向 http://cad-parser:8090（仅内网）
+    timeout-seconds: 120              # 同步快调用（通常 <5s），大图纸给足余量
   # 户型图分析（户型图 → 空间尺寸 → 产品搭配 链路）
   floor-plan:
     detect-image-max-edge: 2688
     max-file-size-mb: 10
+    # CAD 图纸（dwg/dxf）上传大小上限（CAD 户型导入 P3；独立于图片/PDF 上限，
+    # 真实图纸常达数 MB，金样本 2.7MB）
+    max-cad-file-size-mb: 20
     pdf-render-dpi: 300           # PDF 户型图首页渲染 DPI（300 提升小字/尺寸标注清晰度，P2）
     # 逐房间二次精修（二期）：初检后按房间 bbox 外扩 25% 从原图裁小图（短边放大到约 768px）
     # 单独问 AI 精修墙体内侧 bbox + 确认 roomType/label，串行调用防限流；非法结果保留初检

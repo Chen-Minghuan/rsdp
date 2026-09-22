@@ -195,6 +195,40 @@ class ImageServiceTest {
     }
 
     @Test
+    void loadImageResource_shouldAllowLoggedInFloorPlanCadPreview() throws Exception {
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-FP-PREVIEW01");
+        asset.setImageType("floor_plan_cad_preview");
+        asset.setStoragePath("images/cad-preview/IMG-FP-PREVIEW01.png");
+        asset.setFormat("png");
+
+        when(imageAssetsMapper.selectById("IMG-FP-PREVIEW01")).thenReturn(asset);
+        when(storageService.get("images/cad-preview/IMG-FP-PREVIEW01.png"))
+            .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
+
+        ImageService.LoadedImage loaded = imageService.loadImageResource("IMG-FP-PREVIEW01");
+
+        assertThat(loaded).isNotNull();
+        assertThat(loaded.contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void loadImageResource_shouldDenyAnonymousFloorPlanCadPreview() {
+        securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(false);
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-FP-PREVIEW02");
+        asset.setImageType("floor_plan_cad_preview");
+        asset.setStoragePath("images/cad-preview/IMG-FP-PREVIEW02.png");
+        asset.setFormat("png");
+
+        when(imageAssetsMapper.selectById("IMG-FP-PREVIEW02")).thenReturn(asset);
+
+        assertThatThrownBy(() -> imageService.loadImageResource("IMG-FP-PREVIEW02"))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .hasMessageContaining("图片不存在");
+    }
+
+    @Test
     void loadImageResource_shouldAllowAnonymousFloorPlanImage() throws Exception {
         // v3.0 §4.6 策略 B：官网匿名分析落库后需匿名回显原图，floor_plan 公开可见
         securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(false);

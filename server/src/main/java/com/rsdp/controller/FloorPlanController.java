@@ -43,15 +43,22 @@ public class FloorPlanController {
     /**
      * 接口 1：上传户型图并创建异步分析任务。
      *
-     * @param image 户型图片（jpg/png，≤10MB）
+     * <p>三种组合（CAD 户型导入增强·图片+CAD 双文件通道）：仅 image → 视觉识别通道；
+     * 仅 cad → CAD 解析通道（同 P3 单文件 CAD 行为）；image + cad → 双文件新模式
+     * （CAD 出精确数据和规范预览，image 展示时仅作只读参考，并用于补全 CAD 空间名称和类型；
+     * 视觉结果不会覆盖 CAD polygon、面积和尺寸）。三者至少其一。</p>
+     *
+     * @param image 户型图片（jpg/png，≤10MB；双文件模式下作只读参考图及空间语义来源），可选
+     * @param cad   CAD 图纸（dwg/dxf，≤20MB），可选
      * @param hint  用户补充说明（可选）
      * @return analysisId + taskId
      */
     @PostMapping("/analyze")
     public Result<Map<String, String>> analyze(
-        @RequestParam("image") MultipartFile image,
+        @RequestParam(value = "image", required = false) MultipartFile image,
+        @RequestParam(value = "cad", required = false) MultipartFile cad,
         @RequestParam(required = false) String hint) {
-        return Result.ok(floorPlanService.analyze(image, hint));
+        return Result.ok(floorPlanService.analyze(image, cad, hint));
     }
 
     /**

@@ -22,6 +22,8 @@ public class FloorPlanAnalysis {
     @TableId
     private String analysisId;
     private String imageId;
+    /** CAD 规范预览图 ID；与房间 polygon 共用 drawingBounds，视觉通道为空。 */
+    private String previewImageId;
     private String status;
     private String taskId;
 

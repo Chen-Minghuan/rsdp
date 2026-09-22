@@ -1699,18 +1699,41 @@ POST   /api/v1/public/ai-match/scheme
 
 ```
 POST   /api/v1/floor-plan/analyze          [product:read]
-       # 上传户型图并创建异步分析任务（multipart；image 为 jpg/png 图片或 PDF（P2）
-       # ≤10MB，走 ImageUploadValidator.validateImageOrPdf；hint 可选补充说明）。
+       # 上传户型图并创建异步分析任务（multipart；image/cad 至少其一，hint 可选补充说明）。
+       # 三种组合（CAD 户型导入增强·图片+CAD 双文件通道）：
+       #   仅 image：jpg/png 图片或 PDF（P2）≤10MB，或 dwg/dxf CAD 图纸 ≤20MB
+       #     （CAD 户型导入 P3，配置 rsdp.floor-plan.max-cad-file-size-mb，走
+       #     ImageUploadValidator.validateImageOrPdfOrCad，CAD content-type 不可靠仅按扩展名
+       #     判定）——现有单文件通道，行为不变；
+       #   仅 cad：dwg/dxf ≤20MB，等同单文件 CAD 通道（无底图，保留自动命名）；
+       #   image + cad（双文件模式）：CAD 走 rsdp-cad-parser 出精确几何和规范 PNG 预览；
+       #     image 一方面作为只读阅览参考存 image_assets，另一方面只跑一次空间语义识别，
+       #     用于补全 CAD 区域的 label/roomType，绝不覆盖 CAD polygon、宽深和面积。
+       #     视觉坐标先按房间 bbox 并集 + CAD 主体纵横比消除整图白边/标题栏，再做 CAD
+       #     polygon 包含与一对一匹配；开放式主体区域可合并为“客厅、餐厅、厨房”等复合标签。
+       #     未命中区域仍以 "未命名空间 N"待人工确认；双文件各自校验（image 走图片规则，cad 走
+       #     CAD 规则）；CAD 原文件存存储（cad/ 前缀对象键）；历史 codeNameMode 标记仍存
+       #     task input_data 供已入队任务/失败重试兼容，但不再改变房间语义。
        # PDF 仅渲染第 1 页为 PNG（PdfRenderer.renderFirstPageAsPng，DPI 走
        # rsdp.floor-plan.pdf-render-dpi 默认 200）后进入既有识别管线，image_assets
        # 存渲染后 PNG（format=png），PDF 原文件不留存；PDF 非法/加密/空页 400 中文提示。
+       # CAD 原文件留存（format=dwg/dxf，失败重试沿用），解析走 FloorPlanParserRegistry
+       # 路由到 CadFloorPlanParser（rsdp-cad-parser 微服务 POST {rsdp.cad-parser.base-url}/parse，
+       # dev 默认 http://localhost:8090，超时 120s），跳过视觉识别/精修/自动标定；
+       # 解析失败（success=false/服务不可达）落 failed + 中文可读错误提示。
        # 落图（image_type=floor_plan）
        # → 建 analysis（source=admin，status=pending）→ 建 async_task
-       # （task_type=floor_plan_analysis）→ 事务提交后触发 AI 识别 + 尺寸三级提取
+       # （task_type=floor_plan_analysis）→ 事务提交后触发解析：
+       # 视觉通道 = AI 识别 + 尺寸三级提取
        # （OCR 标注 high / 比例尺换算 scale_calc mid（P1，需可解析的 像素↔毫米 关系，
-       # 原图像素宽/高上传时落 image_assets.width/height）/ AI 估算 low）
+       # 原图像素宽/高上传时落 image_assets.width/height）/ AI 估算 low）；
+       # CAD 通道 = 门洞共线端点闭合 + buildCadRooms 真实几何直落（dimension_source=cad_geometry，
+       # polygon/内部标签锚点毫米坐标落库，bbox 由 polygon 外包络按 drawingBounds 归一化派生，
+       # unnamedRegions 同样落宽深几何值，roomType=OTHER + label="未命名空间 N" + confidence=low，
+       # qualityIssues 随 CadParseResult 整体存 raw_result 备查）
+       # → 规范预览 PNG 落 image_assets（image_type=floor_plan_cad_preview），analysis.preview_image_id 关联
        # → status=awaiting_confirm
-       # Form: image*, hint?
+       # Form: image?, cad?, hint?（image/cad 至少其一）
        # Response: { analysisId, taskId }
 
 GET    /api/v1/floor-plan                  [登录 + 归属过滤]
@@ -1725,19 +1748,36 @@ GET    /api/v1/floor-plan                  [登录 + 归属过滤]
 GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # 查询分析状态与空间列表（前端轮询入口；以 task 状态同步校正 analysis 状态：
        # task=failed → analysis=failed + errorMessage 透传）
-       # Response: { analysisId, imageId, imageUrl, status, taskId, scaleRatio,
+       # Response: { analysisId, imageId, imageUrl, referenceImageUrl,
+       #            previewImageId, previewUrl, status, taskId, scaleRatio,
        #            source, errorMessage, createdBy, createdAt, updatedAt,
-       #            rooms: [{ roomId, roomType, bbox, widthMm, depthMm, areaM2,
-       #            dimensionSource, dimensionConfidence, dimensionText, sortOrder }],
-       #            scaleSuggestion }
+       #            rooms: [{ roomId, roomType, label, polygon, labelPoint, bbox, widthMm, depthMm,
+       #            areaM2, dimensionSource, dimensionConfidence, dimensionText, sortOrder }],
+       #            geometrySource, qualityIssues, scaleSuggestion, drawingBounds, previewBounds }
+       # geometrySource（CAD 户型导入 P3，前端契约字段名不可改）：
+       #   cad_geometry（CAD 解析，编辑器隐藏标定入口）/ ai_vision（视觉识别）；
+       #   判定：落库明细 geometry_source 优先，无明细按原图格式（dwg/dxf→cad_geometry）
+       # qualityIssues（P3，前端契约）：CAD 质量门报告 [{level, code, message}]，
+       #   自 raw_result 提取；视觉通道/无问题恒为空数组（非 null）
+       # rooms[].label（P3）：空间标签原文（未命名空间为"未命名空间 N"），可空；
+       #   单 CAD 保留解析器识别出的名称/类型；双文件还会用阅览图视觉语义补全未命名区域，
+       #   未匹配部分不猜测，继续保留“未命名空间 N”
+       # rooms[].polygon（P3）：毫米坐标 [[x,y],...]（CAD 通道），可空
+       # rooms[].labelPoint：保证位于 polygon 内部的毫米坐标标签锚点（CAD 通道），可空
+       # drawingBounds（CAD 户型导入增强，前端契约字段名不可改）：CAD 图纸毫米坐标系
+       #   范围 {minX, minY, maxX, maxY}，自 raw_result 提取
+       # previewUrl/previewBounds：解析器规范 PNG 及其毫米坐标范围；前端只在该图上叠加
+       #   polygon，原始 referenceImageUrl 独立页签只读参考，不参与配准；视觉通道恒为 null
        # scaleSuggestion（二期自动标定建议）：结构与规则同官网 analyze 响应
-       # （查询时基于落库明细实时计算，像素宽/高取 image_assets 天然宽高）
+       # （查询时基于落库明细实时计算，像素宽/高取 image_assets 天然宽高）；
+       # CAD 通道（geometrySource=cad_geometry）跳过，恒为 null（尺寸来自真实几何）
 
 PUT    /api/v1/floor-plan/{analysisId}/rooms   [登录 + 归属校验]
        # 人工校正（整体替换语义：带 roomId 就地更新 / 不带新增 / 未提交的软删），
-       # 仅 awaiting_confirm 或 confirmed 状态可提交；校正后尺寸来源=manual、置信度=high，
-       # 状态 → confirmed
-       # Request: { rooms: [{ roomId?, roomType*, widthMm?, depthMm?, bbox? }], scaleRatio? }
+       # 仅 awaiting_confirm 或 confirmed 状态可提交；视觉空间按提交尺寸重算并标记 manual/high；
+       # CAD 已识别空间仅更新 label/roomType/sortOrder，polygon/labelPoint/bbox/宽深/精确面积/
+       # dimensionSource/confidence 均保持不变；状态 → confirmed
+       # Request: { rooms: [{ roomId?, roomType*, label?, widthMm?, depthMm?, bbox? }], scaleRatio? }
        # Response: 同 GET（校正后的分析详情）
 
 POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
@@ -1765,7 +1805,8 @@ POST   /api/v1/floor-plan/{analysisId}/retry   [登录 + 归属校验]
        # 失败重试（P1）：仅 failed 状态可重试（其他状态 400 中文提示；状态判定前先以
        # task 状态同步校正，JVM 崩溃卡在 analyzing 的场景也可重试）。重置 analysis 状态为
        # pending + 清 errorMessage + 软删上一轮残留空间明细 + 新建异步任务（沿用原图与原
-       # hint）重新触发 processFloorPlanAnalysis
+       # hint；双文件通道沿用任务 input_data 中的 cadObjectKey + codeNameMode）重新触发
+       # processFloorPlanAnalysis
        # Response: { taskId }
 
 DELETE /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]

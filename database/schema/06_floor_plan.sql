@@ -19,9 +19,12 @@ CREATE TABLE IF NOT EXISTS floor_plan_analysis (
     created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at       TIMESTAMPTZ,
     deleted_at       TIMESTAMPTZ,
-    FOREIGN KEY (image_id) REFERENCES image_assets(image_id)
+    preview_image_id VARCHAR(64),                      -- V12：CAD 规范预览，指向 image_assets；视觉通道为空
+    FOREIGN KEY (image_id) REFERENCES image_assets(image_id),
+    FOREIGN KEY (preview_image_id) REFERENCES image_assets(image_id)
 );
 CREATE INDEX IF NOT EXISTS idx_fpa_created_by ON floor_plan_analysis(created_by, created_at) WHERE deleted_at IS NULL;
+COMMENT ON COLUMN floor_plan_analysis.preview_image_id IS 'CAD 解析生成的规范 PNG 预览（与房间 polygon 共用 drawingBounds）；视觉识别通道为空';
 -- 平台运营列表索引（V43）：运营查询无 created_by 条件、仅 orderByDesc created_at，左前缀索引用不上
 CREATE INDEX IF NOT EXISTS idx_fpa_created ON floor_plan_analysis(created_at DESC) WHERE deleted_at IS NULL;
 
@@ -34,14 +37,22 @@ CREATE TABLE IF NOT EXISTS floor_plan_room (
     width_mm         INTEGER,                          -- 开间（人工校正后为准）
     depth_mm         INTEGER,                          -- 进深
     area_m2          DECIMAL(8,2),
-    dimension_source VARCHAR(16),                      -- ocr_text / scale_calc / ai_estimate / manual
+    dimension_source VARCHAR(16),                      -- ocr_text / scale_calc / ai_estimate / manual / cad_geometry
     dimension_confidence VARCHAR(8) DEFAULT 'low',     -- high/mid/low
     dimension_text   VARCHAR(128),                     -- 图上尺寸标注原文
     sort_order       INTEGER DEFAULT 0,
     deleted_at       TIMESTAMPTZ,                        -- 人工删除误识别空间
     created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at       TIMESTAMPTZ,
+    label            VARCHAR(128),                     -- 空间标签原文（V11 增量并入；未命名空间"未命名空间 N"）
+    polygon          JSONB,                            -- 房间外环顶点，毫米坐标 [[x,y],...]（V11，CAD 通道）
+    centroid         JSONB,                            -- 质心 {"x":..,"y":..}（V11，CAD 通道）
+    geometry_source  VARCHAR(32),                      -- 几何来源（V11）：ai_vision / cad_geometry
     FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
 );
+COMMENT ON COLUMN floor_plan_room.label IS '空间标签原文（CAD 通道落库；未命名空间为"未命名空间 N"）';
+COMMENT ON COLUMN floor_plan_room.polygon IS '房间外环顶点，毫米坐标 [[x,y],...]，CAD 解析通道落库';
+COMMENT ON COLUMN floor_plan_room.centroid IS '房间质心 {"x":..,"y":..}（毫米），CAD 解析通道落库';
+COMMENT ON COLUMN floor_plan_room.geometry_source IS '几何来源：ai_vision / cad_geometry';
 CREATE INDEX IF NOT EXISTS idx_fpr_analysis ON floor_plan_room(analysis_id) WHERE deleted_at IS NULL;
 
