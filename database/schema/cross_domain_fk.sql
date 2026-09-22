@@ -38,6 +38,11 @@ ALTER TABLE user_favorite
 ALTER TABLE scheme DROP CONSTRAINT IF EXISTS fk_scheme_project;
 ALTER TABLE scheme ADD CONSTRAINT fk_scheme_project FOREIGN KEY (project_id) REFERENCES project(project_id);
 
+-- floor_plan_analysis.project_id 外键（06 户型域在 07 项目域之前执行，V14 后置补加）
+ALTER TABLE floor_plan_analysis DROP CONSTRAINT IF EXISTS fk_floor_plan_analysis_project;
+ALTER TABLE floor_plan_analysis
+    ADD CONSTRAINT fk_floor_plan_analysis_project FOREIGN KEY (project_id) REFERENCES project(project_id);
+
 -- ============================================================
 -- 按域拆分后的跨域外键后置（02_product 在 03_factory 之前、07/08 在 09_user_team 之前执行，
 -- 建表时目标表尚不存在，FK 统一在此补加；与既有循环引用后置同一模式）

@@ -32,4 +32,22 @@ public class FloorPlanAnalysisListItemResponse {
 
     /** 失败原因（status=failed 时有值）。 */
     private String errorMessage;
+
+    /** 缩略图访问地址（V14）：CAD 规范预览图优先，空则回退户型原图；均无图为 null。 */
+    private String thumbnailUrl;
+
+    /** 归属项目 ID（V14），无归属为 null。 */
+    private String projectId;
+
+    /** 归属项目名称（JOIN project 取 project_name），无归属为 null。 */
+    private String projectName;
+
+    /** 户型名称/备注（V14），可空。 */
+    private String sourceName;
+
+    /** 几何来源（V14）：批次下任一空间为 cad_geometry 则 cad_geometry，否则 ai_vision；无空间为 null。 */
+    private String geometrySource;
+
+    /** 解析质量提示数（V14，quality_issues 数组长度；无提示为 0）。 */
+    private Integer qualityIssueCount;
 }

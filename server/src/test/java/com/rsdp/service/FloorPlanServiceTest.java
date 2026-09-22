@@ -13,7 +13,9 @@ import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.FloorPlanAnalysis;
 import com.rsdp.entity.FloorPlanRoom;
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.Project;
 import com.rsdp.exception.BusinessException;
+import com.rsdp.exception.ForbiddenException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.floorplan.parser.FloorPlanFileType;
 import com.rsdp.floorplan.parser.dto.CadParseResult;
@@ -21,6 +23,7 @@ import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.FloorPlanAnalysisMapper;
 import com.rsdp.mapper.FloorPlanRoomMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.ProjectMapper;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.ImageUploadValidator;
 import org.junit.jupiter.api.AfterEach;
@@ -96,6 +99,12 @@ class FloorPlanServiceTest {
 
     @Mock
     private com.rsdp.floorplan.parser.FloorPlanParserRegistry parserRegistry;
+
+    @Mock
+    private ProjectService projectService;
+
+    @Mock
+    private ProjectMapper projectMapper;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -607,6 +616,206 @@ class FloorPlanServiceTest {
         assertThat(response.getRooms().get(0).getPolygon()).isNull();
         // 视觉通道无 CAD 图纸外包络
         assertThat(response.getDrawingBounds()).isNull();
+    }
+
+    // ---------- 接口 1：项目归属与户型名称透传（V14） ----------
+
+    @Test
+    void analyze_withProjectIdAndSourceName_shouldValidateAndPersist() throws Exception {
+        Project project = new Project();
+        project.setProjectId("PRJ-1");
+        project.setProjectName("滨江华府");
+        when(projectService.getAccessibleProject("PRJ-1")).thenReturn(project);
+        when(storageService.store(any(), anyString())).thenReturn("images/stored.jpg");
+
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "plan.jpg", "image/jpeg", "fake-plan".getBytes());
+
+        Map<String, String> response = floorPlanService.analyze(file, null, " PRJ-1 ", " 3-2-1 东边套 ");
+
+        ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
+        verify(analysisMapper).insert(analysisCaptor.capture());
+        assertThat(analysisCaptor.getValue().getProjectId()).isEqualTo("PRJ-1");
+        assertThat(analysisCaptor.getValue().getSourceName()).isEqualTo("3-2-1 东边套");
+        verify(projectService).getAccessibleProject("PRJ-1");
+        verify(asyncTaskProcessor).processFloorPlanAnalysis(
+            response.get("taskId"), response.get("analysisId"), "images/stored.jpg", null);
+    }
+
+    @Test
+    void analyze_inaccessibleProject_shouldThrowAndNotPersist() {
+        when(projectService.getAccessibleProject("PRJ-X"))
+            .thenThrow(new ForbiddenException("无权访问该项目: PRJ-X"));
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "plan.jpg", "image/jpeg", "fake-plan".getBytes());
+
+        assertThatThrownBy(() -> floorPlanService.analyze(file, null, "PRJ-X", null))
+            .isInstanceOf(ForbiddenException.class);
+        verify(analysisMapper, never()).insert(any(FloorPlanAnalysis.class));
+        verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
+    }
+
+    @Test
+    void analyze_sourceNameTooLong_shouldThrowBadRequest() {
+        MockMultipartFile file = new MockMultipartFile(
+            "image", "plan.jpg", "image/jpeg", "fake-plan".getBytes());
+
+        assertThatThrownBy(() -> floorPlanService.analyze(file, null, null, "x".repeat(129)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("128");
+        verify(analysisMapper, never()).insert(any(FloorPlanAnalysis.class));
+    }
+
+    // ---------- 接口 3：人工确认补挂/改挂项目（V14） ----------
+
+    @Test
+    void confirmRooms_withProjectId_shouldLinkProjectAndAudit() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(roomMapper.selectList(any())).thenReturn(List.of(buildRoom("FPR-1", "LIVING_ROOM")));
+        Project project = new Project();
+        project.setProjectId("PRJ-1");
+        project.setProjectName("滨江华府");
+        when(projectService.getAccessibleProject("PRJ-1")).thenReturn(project);
+        when(projectMapper.selectById("PRJ-1")).thenReturn(project);
+
+        FloorPlanConfirmRequest request = new FloorPlanConfirmRequest();
+        FloorPlanConfirmRequest.RoomItem item = new FloorPlanConfirmRequest.RoomItem();
+        item.setRoomId("FPR-1");
+        item.setRoomType("LIVING_ROOM");
+        request.setRooms(List.of(item));
+        request.setProjectId("PRJ-1");
+
+        FloorPlanAnalysisResponse response = floorPlanService.confirmRooms("FPA-1", request);
+
+        ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
+        verify(analysisMapper).updateById(analysisCaptor.capture());
+        assertThat(analysisCaptor.getValue().getProjectId()).isEqualTo("PRJ-1");
+        // 挂靠项目记审计日志（LINK_PROJECT）
+        verify(auditLogService).logAction(org.mockito.ArgumentMatchers.eq("floor_plan_analysis"),
+            org.mockito.ArgumentMatchers.eq("FPA-1"), org.mockito.ArgumentMatchers.eq("LINK_PROJECT"),
+            org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.eq(Map.of("projectId", "PRJ-1")), any());
+        assertThat(response.getProjectId()).isEqualTo("PRJ-1");
+        assertThat(response.getProjectName()).isEqualTo("滨江华府");
+    }
+
+    @Test
+    void confirmRooms_withoutProjectId_shouldKeepProjectUntouched() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        analysis.setProjectId("PRJ-OLD");
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(roomMapper.selectList(any())).thenReturn(List.of(buildRoom("FPR-1", "LIVING_ROOM")));
+
+        FloorPlanConfirmRequest request = new FloorPlanConfirmRequest();
+        FloorPlanConfirmRequest.RoomItem item = new FloorPlanConfirmRequest.RoomItem();
+        item.setRoomId("FPR-1");
+        item.setRoomType("LIVING_ROOM");
+        request.setRooms(List.of(item));
+
+        floorPlanService.confirmRooms("FPA-1", request);
+
+        ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
+        verify(analysisMapper).updateById(analysisCaptor.capture());
+        // 不传 projectId 则不动项目归属，也不做项目可见性校验
+        assertThat(analysisCaptor.getValue().getProjectId()).isEqualTo("PRJ-OLD");
+        verify(projectService, never()).getAccessibleProject(anyString());
+        verify(auditLogService, never()).logAction(anyString(), anyString(), org.mockito.ArgumentMatchers.eq("LINK_PROJECT"),
+            any(), any(), any());
+    }
+
+    // ---------- 分析历史列表增强（V14） ----------
+
+    @Test
+    void listAnalyses_shouldEnrichThumbnailProjectGeometryAndQualityCount() {
+        FloorPlanAnalysis cad = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        cad.setPreviewImageId("IMG-PREVIEW-1");
+        cad.setProjectId("PRJ-1");
+        cad.setSourceName("滨江华府 3-2-1");
+        cad.setQualityIssues("[{\"level\":\"warn\",\"code\":\"UNIT_ASSUMED\",\"message\":\"按毫米处理\"},"
+            + "{\"level\":\"warn\",\"code\":\"DIM_MISMATCH\",\"message\":\"标注不一致\"}]");
+        FloorPlanAnalysis vision = buildAnalysis("FPA-2", FloorPlanService.STATUS_CONFIRMED);
+        Page<FloorPlanAnalysis> page = new Page<>(1, 20);
+        page.setRecords(List.of(cad, vision));
+        page.setTotal(2);
+        when(analysisMapper.selectPage(org.mockito.ArgumentMatchers.<Page<FloorPlanAnalysis>>any(), any())).thenReturn(page);
+        FloorPlanRoom cadRoom = buildRoom("FPR-1", "BEDROOM");
+        cadRoom.setGeometrySource("cad_geometry");
+        FloorPlanRoom visionRoom = roomOf("FPR-2", "FPA-2", "LIVING_ROOM");
+        visionRoom.setGeometrySource("ai_vision");
+        when(roomMapper.selectList(any())).thenReturn(List.of(cadRoom, visionRoom));
+        Project project = new Project();
+        project.setProjectId("PRJ-1");
+        project.setProjectName("滨江华府");
+        when(projectMapper.selectBatchIds(List.of("PRJ-1"))).thenReturn(List.of(project));
+
+        PageResult<FloorPlanAnalysisListItemResponse> result = floorPlanService.listAnalyses(1, 20, null, null);
+
+        FloorPlanAnalysisListItemResponse cadItem = result.getRows().get(0);
+        assertThat(cadItem.getThumbnailUrl()).isEqualTo("/api/v1/images/IMG-PREVIEW-1");
+        assertThat(cadItem.getProjectId()).isEqualTo("PRJ-1");
+        assertThat(cadItem.getProjectName()).isEqualTo("滨江华府");
+        assertThat(cadItem.getSourceName()).isEqualTo("滨江华府 3-2-1");
+        assertThat(cadItem.getGeometrySource()).isEqualTo("cad_geometry");
+        assertThat(cadItem.getQualityIssueCount()).isEqualTo(2);
+
+        FloorPlanAnalysisListItemResponse visionItem = result.getRows().get(1);
+        // 无预览图回退原图；无质量提示为 0
+        assertThat(visionItem.getThumbnailUrl()).isEqualTo("/api/v1/images/IMG-1");
+        assertThat(visionItem.getGeometrySource()).isEqualTo("ai_vision");
+        assertThat(visionItem.getQualityIssueCount()).isEqualTo(0);
+        assertThat(visionItem.getProjectId()).isNull();
+        assertThat(visionItem.getProjectName()).isNull();
+    }
+
+    @Test
+    void listAnalyses_withProjectId_shouldApplyProjectFilter() {
+        Page<FloorPlanAnalysis> page = new Page<>(1, 20);
+        page.setRecords(List.of());
+        page.setTotal(0);
+        when(analysisMapper.selectPage(org.mockito.ArgumentMatchers.<Page<FloorPlanAnalysis>>any(), any())).thenReturn(page);
+
+        floorPlanService.listAnalyses(1, 20, null, "PRJ-1");
+
+        ArgumentCaptor<QueryWrapper<FloorPlanAnalysis>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(analysisMapper).selectPage(any(), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).contains("project_id =");
+    }
+
+    // ---------- 项目下户型图批次列表（V14） ----------
+
+    @Test
+    void listByProject_shouldValidateVisibilityAndReturnItems() {
+        Project project = new Project();
+        project.setProjectId("PRJ-1");
+        project.setProjectName("滨江华府");
+        when(projectService.getAccessibleProject("PRJ-1")).thenReturn(project);
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED);
+        analysis.setProjectId("PRJ-1");
+        when(analysisMapper.selectList(any())).thenReturn(List.of(analysis));
+        when(roomMapper.selectList(any())).thenReturn(List.of());
+        when(projectMapper.selectBatchIds(List.of("PRJ-1"))).thenReturn(List.of(project));
+
+        List<FloorPlanAnalysisListItemResponse> rows = floorPlanService.listByProject("PRJ-1");
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getAnalysisId()).isEqualTo("FPA-1");
+        assertThat(rows.get(0).getProjectName()).isEqualTo("滨江华府");
+        assertThat(rows.get(0).getThumbnailUrl()).isEqualTo("/api/v1/images/IMG-1");
+        // 批次无空间明细时几何来源为 null
+        assertThat(rows.get(0).getGeometrySource()).isNull();
+        assertThat(rows.get(0).getQualityIssueCount()).isEqualTo(0);
+        verify(projectService).getAccessibleProject("PRJ-1");
+    }
+
+    @Test
+    void listByProject_inaccessibleProject_shouldThrow() {
+        when(projectService.getAccessibleProject("PRJ-X"))
+            .thenThrow(new ForbiddenException("无权访问该项目: PRJ-X"));
+
+        assertThatThrownBy(() -> floorPlanService.listByProject("PRJ-X"))
+            .isInstanceOf(ForbiddenException.class);
+        verify(analysisMapper, never()).selectList(any());
     }
 
     // ---------- 尺寸三级提取（buildRooms，由异步任务调用） ----------

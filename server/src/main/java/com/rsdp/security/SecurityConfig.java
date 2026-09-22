@@ -114,6 +114,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/schemes/**").hasAuthority(Permissions.SCHEME_READ)
 
                 // 设计项目接口
+                // 项目下户型图批次列表（V14）：与 /floor-plan/** 查询口径一致——登录即可，
+                // 项目可见性由 FloorPlanService 复用 ProjectService.getAccessibleProject 校验
+                .requestMatchers(HttpMethod.GET, "/api/v1/projects/*/floor-plans").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/projects", "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/projects").hasAuthority(Permissions.PROJECT_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/projects/**").hasAuthority(Permissions.PROJECT_UPDATE)

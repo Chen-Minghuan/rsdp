@@ -4,8 +4,10 @@ import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.ProjectRequest;
 import com.rsdp.dto.request.ProjectShareRequest;
+import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.ProjectDetailResponse;
 import com.rsdp.dto.response.ProjectResponse;
+import com.rsdp.service.FloorPlanService;
 import com.rsdp.service.ProjectService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -22,6 +24,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /**
  * 设计项目接口。
  */
@@ -32,6 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class ProjectController {
 
     private final ProjectService projectService;
+    private final FloorPlanService floorPlanService;
 
     /**
      * 分页查询项目列表。
@@ -100,6 +105,19 @@ public class ProjectController {
         @PathVariable @NotBlank(message = "项目 ID 不能为空") String projectId,
         @RequestBody @Valid ProjectShareRequest request) {
         return Result.ok(projectService.updateShare(projectId, request));
+    }
+
+    /**
+     * 项目下户型图分析批次列表（V14）：返回该项目下未软删的全部批次（created_at DESC），
+     * 列表项结构与户型图历史列表一致；项目可见性校验在 Service 层（归属人或 ADMIN）。
+     *
+     * @param projectId 项目 ID
+     * @return 项目下分析批次列表
+     */
+    @GetMapping("/{projectId}/floor-plans")
+    public Result<List<FloorPlanAnalysisListItemResponse>> listFloorPlans(
+        @PathVariable @NotBlank(message = "项目 ID 不能为空") String projectId) {
+        return Result.ok(floorPlanService.listByProject(projectId));
     }
 
     /**

@@ -42,6 +42,15 @@ public class FloorPlanAnalysisResponse {
     /** 来源：admin（管理端）/ public（官网匿名）。 */
     private String source;
 
+    /** 归属项目 ID（V14），无归属为 null。 */
+    private String projectId;
+
+    /** 归属项目名称（JOIN project 取 project_name），无归属为 null。 */
+    private String projectName;
+
+    /** 户型名称/备注（V14），可空。 */
+    private String sourceName;
+
     /** 失败原因（status=failed 时透传任务错误信息）。 */
     private String errorMessage;
 

@@ -405,12 +405,18 @@ public class AsyncTaskProcessor {
             // 空间明细落库：视觉通道尺寸三级提取 / CAD 通道真实几何直落（唯一出口均在 FloorPlanService）
             String rawResult;
             int roomCount;
+            // V14：CAD 通道把 qualityIssues 冗余提升到 quality_issues 列（raw_result 语义不动）；
+            // 视觉通道无质量提示概念，保持 null 不写列
+            String qualityIssuesJson = null;
             if (parsed.isCad()) {
                 FloorPlanService floorPlanService = floorPlanServiceProvider.getObject();
                 floorPlanService.buildCadRooms(analysisId, parsed.cadResult(), codeNameMode);
                 floorPlanService.storeCadPreview(
                     analysisId, parsed.previewBytes(), parsed.cadResult().getPreview());
                 rawResult = objectMapper.writeValueAsString(parsed.cadResult());
+                qualityIssuesJson = objectMapper.writeValueAsString(
+                    parsed.cadResult().getQualityIssues() != null
+                        ? parsed.cadResult().getQualityIssues() : List.of());
                 roomCount = (parsed.cadResult().getRooms() != null ? parsed.cadResult().getRooms().size() : 0)
                     + (parsed.cadResult().getUnnamedRegions() != null
                         ? parsed.cadResult().getUnnamedRegions().size() : 0);
@@ -420,7 +426,8 @@ public class AsyncTaskProcessor {
                 roomCount = parsed.visionResult().getRooms().size();
             }
 
-            safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_AWAITING_CONFIRM, rawResult, null);
+            safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_AWAITING_CONFIRM, rawResult, null,
+                qualityIssuesJson);
             updateTaskStatus(taskId, "done", 100, null, null);
             log.info("户型图分析异步任务完成，taskId={}，analysisId={}，识别空间数={}",
                 taskId, analysisId, roomCount);
@@ -456,6 +463,16 @@ public class AsyncTaskProcessor {
      * 更新户型图分析状态；自身失败不中断任务状态更新。
      */
     private void safeUpdateAnalysis(String analysisId, String status, String rawResult, String errorMessage) {
+        safeUpdateAnalysis(analysisId, status, rawResult, errorMessage, null);
+    }
+
+    /**
+     * 更新户型图分析状态（重载，V14）：qualityIssuesJson 非 null 时同步写入
+     * quality_issues 冗余列（CAD 通道识别完成时透传 CadParseResult.qualityIssues）；
+     * 自身失败不中断任务状态更新。
+     */
+    private void safeUpdateAnalysis(String analysisId, String status, String rawResult,
+                                    String errorMessage, String qualityIssuesJson) {
         try {
             FloorPlanAnalysis analysis = floorPlanAnalysisMapper.selectById(analysisId);
             if (analysis == null) {
@@ -465,6 +482,9 @@ public class AsyncTaskProcessor {
             analysis.setStatus(status);
             if (rawResult != null) {
                 analysis.setRawResult(rawResult);
+            }
+            if (qualityIssuesJson != null) {
+                analysis.setQualityIssues(qualityIssuesJson);
             }
             analysis.setErrorMessage(errorMessage);
             analysis.setUpdatedAt(LocalDateTime.now());

@@ -32,6 +32,13 @@ public class FloorPlanConfirmRequest {
     private BigDecimal scaleRatio;
 
     /**
+     * 归属项目 ID（V14，可空）：传了则校验项目可见性后覆盖写入 analysis.project_id
+     * （补挂/改挂），不传则不动项目归属。
+     */
+    @Size(max = 64, message = "项目 ID 长度不能超过 64")
+    private String projectId;
+
+    /**
      * 单个空间校正项。
      */
     @Data

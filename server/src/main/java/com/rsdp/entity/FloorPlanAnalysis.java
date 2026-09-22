@@ -41,6 +41,16 @@ public class FloorPlanAnalysis {
     /** 来源：admin（管理端）/ public（官网匿名）。 */
     private String source;
 
+    /** 归属项目 ID（V14，可空：官网匿名/未归属）。 */
+    private String projectId;
+
+    /** 户型名称/备注（V14，历史列表辨识用），可空。 */
+    private String sourceName;
+
+    /** 解析质量提示数组（V14，由 raw_result 冗余提升，识别完成时写入），JSONB。 */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String qualityIssues;
+
     private String errorMessage;
     private String createdBy;
     private LocalDateTime createdAt;

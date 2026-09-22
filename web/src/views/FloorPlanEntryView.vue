@@ -31,6 +31,7 @@ import {
   getFloorPlanAnalysis
 } from '@/api/floorPlan'
 import { listDicts } from '@/api/dict'
+import { listProjects } from '@/api/project'
 import { getSchemeDetail } from '@/api/scheme'
 import { getProductDetail } from '@/api/product'
 import { listVariantsByRspu } from '@/api/variant'
@@ -76,6 +77,22 @@ const DIMENSION_SOURCE_LABELS: Record<string, string> = {
 
 const currentStep = ref(1)
 const errorMessage = ref('')
+
+/** 只读查看模式（?readonly=1，历史页「查看图纸」进入）：步骤 2 全部编辑交互隐藏，仅保留查看。 */
+const readonlyMode = computed(() => route.query.readonly === '1' || route.query.readonly === 'true')
+
+// ---------- 归属项目 / 户型名称 ----------
+/** 项目下拉数据源（当前用户可见项目，取前 100 条）。 */
+const projectOptions = ref<Array<{ label: string; value: string }>>([])
+/** 步骤 1 上传表单选中的归属项目（可选；支持 ?projectId=PRJ-xxx 预填）。 */
+const uploadProjectId = ref<string | null>(null)
+/** 步骤 1 上传表单填写的户型名称（sourceName，可选）。 */
+const sourceName = ref('')
+/** 当前分析批次已归属的项目（详情接口返回；空表示未归属，确认时可补挂）。 */
+const analysisProjectId = ref<string | null>(null)
+const analysisProjectName = ref<string | null>(null)
+/** 步骤 2 确认时一并提交的项目（未归属记录补挂用；默认沿用已归属项目）。 */
+const confirmProjectId = ref<string | null>(null)
 
 // ---------- 步骤 1：上传 ----------
 const fileList = ref<UploadFileInfo[]>([])
@@ -138,6 +155,8 @@ const hasScaleCandidates = computed(() => scaleCandidates.value.length > 0)
  * 无建议 → 保持手动标定现状。auto 且后端返回 outliers 时追加离群忽略提示。
  */
 function applyScaleSuggestion() {
+  // 只读查看模式不做标定交互（避免弹基准选择窗打扰）
+  if (readonlyMode.value) return
   const s = scaleSuggestion.value
   if (!s) return
   if (s.status === 'auto' && s.mmPerPx) {
@@ -374,7 +393,11 @@ async function handleAnalyze() {
     if (file && !pdfSource.value) {
       imagePreviewUrl.value = URL.createObjectURL(file)
     }
-    const result = await analyzeFloorPlan(file, cad, hint.value.trim() || undefined, signal)
+    const result = await analyzeFloorPlan(file, cad, hint.value.trim() || undefined, {
+      projectId: uploadProjectId.value,
+      sourceName: sourceName.value.trim() || undefined,
+      signal
+    })
     analysisId.value = result.analysisId
     uploading.value = false
     analyzing.value = true
@@ -434,6 +457,10 @@ function applyAnalysisResult(result: FloorPlanAnalysisResponse) {
   rooms.value.forEach((r, i) => {
     if (!r.label) r.label = `未命名空间 ${i + 1}`
   })
+  // 归属项目（详情接口返回；确认时默认沿用，未归属可在确认时补挂）
+  analysisProjectId.value = result.projectId ?? null
+  analysisProjectName.value = result.projectName ?? null
+  confirmProjectId.value = result.projectId ?? null
 }
 
 /**
@@ -513,7 +540,9 @@ async function handleConfirmRooms() {
         widthMm: r.widthMm,
         depthMm: r.depthMm,
         bbox: r.bbox
-      }))
+      })),
+      // 归属项目：未归属记录确认时补挂；已归属记录沿用原项目
+      projectId: confirmProjectId.value || undefined
     }, { signal })
     // 确认后进入搭配生成，默认选中第一个客厅（否则第一个空间）
     const living = rooms.value.find(r => r.roomType === 'LIVING' && r.roomId) ?? rooms.value.find(r => r.roomId)
@@ -798,6 +827,11 @@ function resetAll() {
   drawingBounds.value = null
   cadPreviewUrl.value = ''
   cadViewMode.value = 'canonical'
+  uploadProjectId.value = null
+  sourceName.value = ''
+  analysisProjectId.value = null
+  analysisProjectName.value = null
+  confirmProjectId.value = null
 }
 
 function updateRoomDimension(row: EditableRoom, field: 'widthMm' | 'depthMm', value: number | null) {
@@ -820,9 +854,26 @@ async function loadDicts() {
   }
 }
 
+/** 加载项目下拉数据源（当前用户可见项目，取前 100 条；失败不阻断主流程）。 */
+async function loadProjectOptions() {
+  try {
+    const result = await listProjects({ page: 1, size: 100 })
+    projectOptions.value = result.rows.map(p => ({ label: p.projectName, value: p.projectId }))
+  } catch (e) {
+    if (axios.isCancel(e)) return
+    console.warn('加载项目列表失败', e)
+  }
+}
+
 onMounted(() => {
   loadDicts()
-  // 带 analysisId 进入（分析记录「去校正 / 查看」）：跳过步骤 1 直接拉取已有分析结果
+  loadProjectOptions()
+  // 支持 ?projectId=PRJ-xxx 预填步骤 1 的归属项目
+  const presetProjectId = route.query.projectId
+  if (typeof presetProjectId === 'string' && presetProjectId) {
+    uploadProjectId.value = presetProjectId
+  }
+  // 带 analysisId 进入（分析记录「去校正 / 查看图纸」）：跳过步骤 1 直接拉取已有分析结果
   const existingId = route.query.analysisId
   if (typeof existingId === 'string' && existingId) {
     loadExistingAnalysis(existingId)
@@ -883,6 +934,23 @@ onUnmounted(() => {
                 <n-button secondary>选择 CAD 文件</n-button>
               </n-upload>
             </n-space>
+            <n-space align="center" :size="12">
+              <n-select
+                v-model:value="uploadProjectId"
+                :options="projectOptions"
+                clearable
+                filterable
+                placeholder="归属项目（可选）"
+                :disabled="uploading || analyzing"
+                style="width: 240px;"
+              />
+              <n-input
+                v-model:value="sourceName"
+                placeholder="户型名称（可选），如：滨江华府 3-2-1 东边套"
+                :disabled="uploading || analyzing"
+                style="width: 300px;"
+              />
+            </n-space>
             <n-input
               v-model:value="hint"
               type="textarea"
@@ -915,6 +983,25 @@ onUnmounted(() => {
           <p v-else class="hint-text">
             左侧图纸支持放大平移与框编辑（点选高亮、拖动移动、拉角/边调整大小，可点「放大编辑」全屏精细操作），与右侧表格行联动；「画标定线」或「以框宽/深标定」输入真实长度后，拖框即可按标定比例自动推算宽深。空间名、宽、深也可在表格中直接修改。置信度低的尺寸请务必核对。
           </p>
+          <!-- 只读查看模式提示（历史页「查看图纸」?readonly=1 进入） -->
+          <n-alert v-if="readonlyMode" type="info" :show-icon="true">
+            当前为只读查看模式，仅展示识别结果，不可编辑。
+          </n-alert>
+          <!-- 归属项目：已归属只读展示；未归属且可编辑时允许确认时一并补挂 -->
+          <n-space align="center" :size="8">
+            <span class="hint-text">归属项目：</span>
+            <span v-if="analysisProjectId">{{ analysisProjectName ?? analysisProjectId }}</span>
+            <n-select
+              v-else-if="!readonlyMode"
+              v-model:value="confirmProjectId"
+              :options="projectOptions"
+              clearable
+              filterable
+              placeholder="未归属（确认时可选择补挂）"
+              style="width: 280px;"
+            />
+            <span v-else class="hint-text">未归属</span>
+          </n-space>
           <!-- CAD 解析质量提示（后端 qualityIssues，可空） -->
           <n-alert v-if="qualityIssues.length > 0" type="warning" title="CAD 解析质量提示">
             <ul class="issue-list">
@@ -949,6 +1036,7 @@ onUnmounted(() => {
                 v-else-if="editorImageUrl"
                 class="room-editor-inline"
                 :image-url="editorImageUrl"
+                :readonly="readonlyMode"
                 v-model:selected-local-id="selectedLocalId"
                 v-model:draw-mode="drawMode"
                 :mm-per-px="mmPerPx"
@@ -1001,6 +1089,7 @@ onUnmounted(() => {
                         v-model:value="room.label"
                         size="small"
                         placeholder="请输入空间名称"
+                        :disabled="readonlyMode"
                       />
                     </label>
                     <label class="room-card-control room-type-control">
@@ -1010,9 +1099,11 @@ onUnmounted(() => {
                         :options="roomTypeOptions"
                         size="small"
                         placeholder="请选择空间类型"
+                        :disabled="readonlyMode"
                       />
                     </label>
                     <n-button
+                      v-if="!readonlyMode"
                       text
                       type="error"
                       size="small"
@@ -1031,7 +1122,7 @@ onUnmounted(() => {
                         :max="100000"
                         :precision="0"
                         :show-button="false"
-                        :disabled="isCadGeometry && !!room.roomId"
+                        :disabled="readonlyMode || (isCadGeometry && !!room.roomId)"
                         size="small"
                         placeholder="开间"
                         @update:value="value => updateRoomDimension(room, 'widthMm', value)"
@@ -1045,7 +1136,7 @@ onUnmounted(() => {
                         :max="100000"
                         :precision="0"
                         :show-button="false"
-                        :disabled="isCadGeometry && !!room.roomId"
+                        :disabled="readonlyMode || (isCadGeometry && !!room.roomId)"
                         size="small"
                         placeholder="进深"
                         @update:value="value => updateRoomDimension(room, 'depthMm', value)"
@@ -1069,7 +1160,7 @@ onUnmounted(() => {
                   </div>
                 </article>
               </div>
-              <n-space align="center" :size="12">
+              <n-space v-if="!readonlyMode" align="center" :size="12">
                 <n-button size="small" @click="addRoom">添加空间</n-button>
                 <n-button
                   v-if="imagePreviewUrl && !isCadGeometry"
@@ -1085,7 +1176,7 @@ onUnmounted(() => {
               </n-space>
             </div>
           </div>
-          <n-space>
+          <n-space v-if="!readonlyMode">
             <n-button type="primary" :loading="confirming" @click="handleConfirmRooms">
               确认识别结果
             </n-button>
@@ -1217,6 +1308,7 @@ onUnmounted(() => {
         v-if="editorImageUrl"
         class="room-editor-modal"
         :image-url="editorImageUrl"
+        :readonly="readonlyMode"
         v-model:selected-local-id="selectedLocalId"
         v-model:draw-mode="drawMode"
         :mm-per-px="mmPerPx"

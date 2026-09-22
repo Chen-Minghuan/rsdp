@@ -19,6 +19,7 @@ import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.FloorPlanAnalysis;
 import com.rsdp.entity.FloorPlanRoom;
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.Project;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.floorplan.parser.FloorPlanFileType;
@@ -28,6 +29,7 @@ import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.FloorPlanAnalysisMapper;
 import com.rsdp.mapper.FloorPlanRoomMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.ProjectMapper;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.storage.StorageService;
 import com.rsdp.util.Dimensions;
@@ -130,6 +132,8 @@ public class FloorPlanService {
     private final AsyncTaskProcessor asyncTaskProcessor;
     private final AuditLogService auditLogService;
     private final FloorPlanParserRegistry parserRegistry;
+    private final ProjectService projectService;
+    private final ProjectMapper projectMapper;
     private final ObjectMapper objectMapper;
 
     @Value("${rsdp.floor-plan.max-file-size-mb:10}")
@@ -163,6 +167,27 @@ public class FloorPlanService {
      */
     @Transactional
     public Map<String, String> analyze(MultipartFile file, String hint) {
+        return analyze(file, hint, null, null);
+    }
+
+    /**
+     * 接口 1（重载，V14 项目归属）：支持透传可选 projectId / sourceName。
+     *
+     * <p>projectId 非空时校验项目存在且当前用户可见
+     * （复用 {@link ProjectService#getAccessibleProject}：归属人或 ADMIN），
+     * 校验通过写入 floor_plan_analysis.project_id；sourceName 为户型名称/备注（≤128 字），
+     * 两者均为可空，官网匿名链路（{@link #savePublicAnalysis}）不经过本方法、project_id 恒为 NULL。</p>
+     *
+     * @param file       户型图（同 {@link #analyze(MultipartFile, String)}）
+     * @param hint       用户补充说明，可空
+     * @param projectId  归属项目 ID，可空
+     * @param sourceName 户型名称/备注，可空
+     * @return analysisId + taskId
+     */
+    @Transactional
+    public Map<String, String> analyze(MultipartFile file, String hint, String projectId, String sourceName) {
+        String accessibleProjectId = resolveAccessibleProjectId(projectId);
+        String normalizedSourceName = normalizeSourceName(sourceName);
         ImageUploadValidator.UploadKind uploadKind = imageUploadValidator.validateImageOrPdfOrCad(
             file, maxFileSizeMb * 1024L * 1024L, maxCadFileSizeMb * 1024L * 1024L);
         // 按文件类型路由解析器（CAD → rsdp-cad-parser，图片/PDF → 视觉识别）；无解析器 400
@@ -227,6 +252,8 @@ public class FloorPlanService {
         analysis.setStatus(STATUS_PENDING);
         analysis.setTaskId(taskId);
         analysis.setSource(SOURCE_ADMIN);
+        analysis.setProjectId(accessibleProjectId);
+        analysis.setSourceName(normalizedSourceName);
         analysis.setCreatedBy(operator);
         analysis.setCreatedAt(now);
         analysis.setUpdatedAt(now);
@@ -276,6 +303,26 @@ public class FloorPlanService {
      */
     @Transactional
     public Map<String, String> analyze(MultipartFile image, MultipartFile cad, String hint) {
+        return analyze(image, cad, hint, null, null);
+    }
+
+    /**
+     * 接口 1（双文件通道重载，V14 项目归属）：在
+     * {@link #analyze(MultipartFile, MultipartFile, String)} 基础上支持透传可选
+     * projectId / sourceName（校验规则同 {@link #analyze(MultipartFile, String, String, String)}）。
+     *
+     * @param image      户型底图，可空
+     * @param cad        CAD 图纸，可空
+     * @param hint       用户补充说明，可空
+     * @param projectId  归属项目 ID，可空
+     * @param sourceName 户型名称/备注，可空
+     * @return analysisId + taskId
+     */
+    @Transactional
+    public Map<String, String> analyze(MultipartFile image, MultipartFile cad, String hint,
+                                       String projectId, String sourceName) {
+        String accessibleProjectId = resolveAccessibleProjectId(projectId);
+        String normalizedSourceName = normalizeSourceName(sourceName);
         boolean hasImage = image != null && !image.isEmpty();
         boolean hasCad = cad != null && !cad.isEmpty();
         if (!hasImage && !hasCad) {
@@ -283,10 +330,10 @@ public class FloorPlanService {
         }
         // 单文件组合：完全沿用现有通道（行为零变化）
         if (!hasCad) {
-            return analyze(image, hint);
+            return analyze(image, hint, accessibleProjectId, normalizedSourceName);
         }
         if (!hasImage) {
-            return analyze(cad, hint);
+            return analyze(cad, hint, accessibleProjectId, normalizedSourceName);
         }
 
         // 双文件新模式：双文件各自校验（image 走图片规则，cad 走 CAD 规则）
@@ -356,6 +403,8 @@ public class FloorPlanService {
         analysis.setStatus(STATUS_PENDING);
         analysis.setTaskId(taskId);
         analysis.setSource(SOURCE_ADMIN);
+        analysis.setProjectId(accessibleProjectId);
+        analysis.setSourceName(normalizedSourceName);
         analysis.setCreatedBy(operator);
         analysis.setCreatedAt(now);
         analysis.setUpdatedAt(now);
@@ -402,6 +451,21 @@ public class FloorPlanService {
      * @return 分页列表
      */
     public PageResult<FloorPlanAnalysisListItemResponse> listAnalyses(long page, long size, String status) {
+        return listAnalyses(page, size, status, null);
+    }
+
+    /**
+     * 分析历史列表（重载，V14 项目归属）：支持按 projectId 过滤；
+     * 列表项增强缩略图、项目名称、几何来源与质量提示数（见 {@link #toListItems}）。
+     *
+     * @param page      页码（从 1 开始）
+     * @param size      每页条数（1~100，非法值按 20 处理）
+     * @param status    状态过滤（可空）
+     * @param projectId 归属项目过滤（可空）
+     * @return 分页列表
+     */
+    public PageResult<FloorPlanAnalysisListItemResponse> listAnalyses(long page, long size,
+                                                                      String status, String projectId) {
         long safePage = Math.max(1, page);
         long safeSize = size < 1 ? 20 : Math.min(size, 100);
 
@@ -409,16 +473,48 @@ public class FloorPlanService {
         if (StringUtils.hasText(status)) {
             wrapper.eq("status", status.trim());
         }
+        if (StringUtils.hasText(projectId)) {
+            wrapper.eq("project_id", projectId.trim());
+        }
         if (!SecurityOperatorContext.isPlatformStaff()) {
             wrapper.eq("created_by", SecurityOperatorContext.currentUsername());
         }
         wrapper.orderByDesc("created_at");
 
         Page<FloorPlanAnalysis> result = analysisMapper.selectPage(Page.of(safePage, safeSize), wrapper);
-        List<FloorPlanAnalysis> records = result.getRecords();
+        return PageResult.of(result.getTotal(), safePage, safeSize, toListItems(result.getRecords()));
+    }
 
-        Map<String, Long> roomCountMap = batchRoomCounts(
-            records.stream().map(FloorPlanAnalysis::getAnalysisId).toList());
+    /**
+     * 项目下户型图分析批次列表（V14，GET /api/v1/projects/{projectId}/floor-plans）：
+     * 校验项目可见性（复用 {@link ProjectService#getAccessibleProject}）后返回该项目下
+     * 未软删的全部批次（created_at DESC），列表项结构与历史列表一致。
+     *
+     * @param projectId 项目 ID
+     * @return 项目下分析批次列表
+     */
+    public List<FloorPlanAnalysisListItemResponse> listByProject(String projectId) {
+        projectService.getAccessibleProject(projectId);
+        List<FloorPlanAnalysis> records = analysisMapper.selectList(new QueryWrapper<FloorPlanAnalysis>()
+            .eq("project_id", projectId.trim())
+            .orderByDesc("created_at"));
+        return toListItems(records);
+    }
+
+    /**
+     * 列表项组装（V14 增强）：空间数与几何来源按页内 analysisId 批量聚合（一次查询避免 N+1），
+     * 项目名称按页内 projectId 批量取数；缩略图取 CAD 规范预览图优先、回退户型原图。
+     *
+     * @param records 分析批次记录
+     * @return 列表项
+     */
+    private List<FloorPlanAnalysisListItemResponse> toListItems(List<FloorPlanAnalysis> records) {
+        Map<String, Long> roomCountMap = new HashMap<>();
+        Map<String, String> geometrySourceMap = new HashMap<>();
+        batchRoomStats(records.stream().map(FloorPlanAnalysis::getAnalysisId).toList(),
+            roomCountMap, geometrySourceMap);
+        Map<String, String> projectNameMap = batchProjectNames(records.stream()
+            .map(FloorPlanAnalysis::getProjectId).filter(StringUtils::hasText).distinct().toList());
 
         List<FloorPlanAnalysisListItemResponse> rows = new ArrayList<>();
         for (FloorPlanAnalysis analysis : records) {
@@ -431,9 +527,52 @@ public class FloorPlanService {
             item.setCreatedAt(analysis.getCreatedAt());
             item.setUpdatedAt(analysis.getUpdatedAt());
             item.setErrorMessage(analysis.getErrorMessage());
+            item.setThumbnailUrl(thumbnailUrlOf(analysis));
+            item.setProjectId(analysis.getProjectId());
+            // Map.of() 不允许 null 键查询，无归属时直接置 null
+            item.setProjectName(StringUtils.hasText(analysis.getProjectId())
+                ? projectNameMap.get(analysis.getProjectId()) : null);
+            item.setSourceName(analysis.getSourceName());
+            item.setGeometrySource(geometrySourceMap.get(analysis.getAnalysisId()));
+            item.setQualityIssueCount(qualityIssueCount(analysis.getQualityIssues()));
             rows.add(item);
         }
-        return PageResult.of(result.getTotal(), safePage, safeSize, rows);
+        return rows;
+    }
+
+    /** 列表缩略图（V14）：CAD 规范预览图优先，空则回退户型原图；均无图为 null。 */
+    private String thumbnailUrlOf(FloorPlanAnalysis analysis) {
+        String imageId = StringUtils.hasText(analysis.getPreviewImageId())
+            ? analysis.getPreviewImageId() : analysis.getImageId();
+        return StringUtils.hasText(imageId) ? "/api/v1/images/" + imageId : null;
+    }
+
+    /** 质量提示数（V14）：quality_issues 数组长度；null/非数组/解析失败按 0 处理。 */
+    private int qualityIssueCount(String qualityIssuesJson) {
+        if (!StringUtils.hasText(qualityIssuesJson)) {
+            return 0;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(qualityIssuesJson);
+            return node.isArray() ? node.size() : 0;
+        } catch (Exception e) {
+            log.warn("解析户型分析质量提示列失败，按 0 处理", e);
+            return 0;
+        }
+    }
+
+    /**
+     * 按 projectId 批量取项目名称（列表/详情避免 N+1）；入参为空返回空 Map（不触库）。
+     *
+     * @param projectIds 项目 ID 列表（已去重、非空元素）
+     * @return projectId → projectName
+     */
+    private Map<String, String> batchProjectNames(List<String> projectIds) {
+        if (projectIds.isEmpty()) {
+            return Map.of();
+        }
+        return projectMapper.selectBatchIds(projectIds).stream()
+            .collect(Collectors.toMap(Project::getProjectId, Project::getProjectName, (a, b) -> a));
     }
 
     /**
@@ -603,6 +742,22 @@ public class FloorPlanService {
                 roomMapper.insert(room);
             }
             sort++;
+        }
+
+        // V14：传了 projectId 则校验项目可见性后覆盖写入项目归属（补挂/改挂），并记审计日志；
+        // 不传则不动 project_id
+        if (StringUtils.hasText(request.getProjectId())) {
+            String newProjectId = resolveAccessibleProjectId(request.getProjectId());
+            if (!newProjectId.equals(analysis.getProjectId())) {
+                String oldProjectId = analysis.getProjectId();
+                analysis.setProjectId(newProjectId);
+                auditLogService.logAction("floor_plan_analysis", analysisId, "LINK_PROJECT",
+                    oldProjectId != null ? Map.of("projectId", oldProjectId) : null,
+                    Map.of("projectId", newProjectId),
+                    SecurityOperatorContext.currentUsername());
+                log.info("户型图分析已挂靠项目，analysisId={}，projectId={} → {}",
+                    analysisId, oldProjectId, newProjectId);
+            }
         }
 
         analysis.setStatus(STATUS_CONFIRMED);
@@ -1192,20 +1347,31 @@ public class FloorPlanService {
     }
 
     /**
-     * 按 analysisId 批量统计未软删空间数（列表页避免 N+1）。
+     * 按 analysisId 批量聚合未软删空间数与几何来源（列表页避免 N+1，一次查询同时产出两项）。
      *
-     * @param analysisIds 页内分析批次 ID 列表
-     * @return analysisId → 空间数
+     * <p>几何来源（V14 列表契约）：批次下任一空间为 cad_geometry 则 cad_geometry，
+     * 否则有空间即 ai_vision；批次无空间则不写入 geometrySourceMap（列表项为 null）。</p>
+     *
+     * @param analysisIds       页内分析批次 ID 列表
+     * @param roomCountMap      输出：analysisId → 空间数
+     * @param geometrySourceMap 输出：analysisId → 几何来源
      */
-    private Map<String, Long> batchRoomCounts(List<String> analysisIds) {
+    private void batchRoomStats(List<String> analysisIds, Map<String, Long> roomCountMap,
+                                Map<String, String> geometrySourceMap) {
         if (analysisIds.isEmpty()) {
-            return Map.of();
+            return;
         }
         List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
-            .select("analysis_id")
+            .select("analysis_id", "geometry_source")
             .in("analysis_id", analysisIds));
-        return rooms.stream().collect(Collectors.groupingBy(
-            FloorPlanRoom::getAnalysisId, Collectors.counting()));
+        for (FloorPlanRoom room : rooms) {
+            roomCountMap.merge(room.getAnalysisId(), 1L, Long::sum);
+            if (GEOMETRY_SOURCE_CAD.equals(room.getGeometrySource())) {
+                geometrySourceMap.put(room.getAnalysisId(), GEOMETRY_SOURCE_CAD);
+            } else {
+                geometrySourceMap.putIfAbsent(room.getAnalysisId(), GEOMETRY_SOURCE_VISION);
+            }
+        }
     }
 
     /**
@@ -1265,11 +1431,51 @@ public class FloorPlanService {
     }
 
     /**
+     * 校验并规整归属项目 ID（V14）：非空时去首尾空白并复用
+     * {@link ProjectService#getAccessibleProject} 校验项目存在（未软删）且当前用户可见
+     * （归属人或 ADMIN）；空值返回 null（不挂项目）。
+     *
+     * @param projectId 项目 ID，可空
+     * @return 规整后的项目 ID，空入参返回 null
+     */
+    private String resolveAccessibleProjectId(String projectId) {
+        if (!StringUtils.hasText(projectId)) {
+            return null;
+        }
+        String trimmed = projectId.trim();
+        projectService.getAccessibleProject(trimmed);
+        return trimmed;
+    }
+
+    /**
+     * 规整户型名称/备注（V14）：去首尾空白，空值返回 null；
+     * 超过 source_name 列长（128）抛 400 中文提示。
+     */
+    private String normalizeSourceName(String sourceName) {
+        if (!StringUtils.hasText(sourceName)) {
+            return null;
+        }
+        String trimmed = sourceName.trim();
+        if (trimmed.length() > 128) {
+            throw new BusinessException("户型名称长度不能超过 128");
+        }
+        return trimmed;
+    }
+
+    /** 详情项目名称解析：无归属或项目已删除返回 null（防御性，不阻断详情查询）。 */
+    private String resolveProjectName(String projectId) {
+        if (!StringUtils.hasText(projectId)) {
+            return null;
+        }
+        Project project = projectMapper.selectById(projectId);
+        return project != null ? project.getProjectName() : null;
+    }
+
+    /**
      * 归属校验：平台运营人员（ADMIN/EDITOR）可访问任意分析，其他用户仅能访问自己创建的
      * （与 async_task 同口径，v3.0 §3 数据归属）。
      */
-    private void assertCanAccess(FloorPlanAnalysis analysis) {
-        if (!SecurityOperatorContext.isPlatformStaff()) {
+    private void assertCanAccess(FloorPlanAnalysis analysis) {        if (!SecurityOperatorContext.isPlatformStaff()) {
             String currentUser = SecurityOperatorContext.currentUsername();
             String creator = analysis.getCreatedBy();
             if (creator == null || !creator.equals(currentUser)) {
@@ -1355,6 +1561,9 @@ public class FloorPlanService {
         response.setTaskId(analysis.getTaskId());
         response.setScaleRatio(analysis.getScaleRatio());
         response.setSource(analysis.getSource());
+        response.setProjectId(analysis.getProjectId());
+        response.setProjectName(resolveProjectName(analysis.getProjectId()));
+        response.setSourceName(analysis.getSourceName());
         response.setErrorMessage(analysis.getErrorMessage());
         response.setCreatedBy(analysis.getCreatedBy());
         response.setCreatedAt(analysis.getCreatedAt());

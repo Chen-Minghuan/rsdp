@@ -20,11 +20,19 @@ CREATE TABLE IF NOT EXISTS floor_plan_analysis (
     updated_at       TIMESTAMPTZ,
     deleted_at       TIMESTAMPTZ,
     preview_image_id VARCHAR(64),                      -- V12：CAD 规范预览，指向 image_assets；视觉通道为空
+    project_id       VARCHAR(64),                      -- V14：归属项目，可空（官网匿名/未归属）；project 在 07 域，FK 在 cross_domain_fk.sql 补加
+    source_name      VARCHAR(128),                     -- V14：户型名称/备注，历史列表辨识用
+    quality_issues   JSONB,                            -- V14：解析质量提示冗余列（由 raw_result 提升，落库时写入）
     FOREIGN KEY (image_id) REFERENCES image_assets(image_id),
     FOREIGN KEY (preview_image_id) REFERENCES image_assets(image_id)
 );
 CREATE INDEX IF NOT EXISTS idx_fpa_created_by ON floor_plan_analysis(created_by, created_at) WHERE deleted_at IS NULL;
 COMMENT ON COLUMN floor_plan_analysis.preview_image_id IS 'CAD 解析生成的规范 PNG 预览（与房间 polygon 共用 drawingBounds）；视觉识别通道为空';
+COMMENT ON COLUMN floor_plan_analysis.project_id IS '归属项目（可空：官网匿名/未归属）；FK 见 cross_domain_fk.sql';
+COMMENT ON COLUMN floor_plan_analysis.source_name IS '户型名称/备注（如"滨江华府 3-2-1 东边套"），历史列表辨识用';
+COMMENT ON COLUMN floor_plan_analysis.quality_issues IS '解析质量提示数组（由 raw_result 冗余提升，落库时写入，支持过滤/统计）';
+-- 项目维度历史查询索引（V14）
+CREATE INDEX IF NOT EXISTS idx_fpa_project ON floor_plan_analysis(project_id, created_at DESC) WHERE deleted_at IS NULL;
 -- 平台运营列表索引（V43）：运营查询无 created_by 条件、仅 orderByDesc created_at，左前缀索引用不上
 CREATE INDEX IF NOT EXISTS idx_fpa_created ON floor_plan_analysis(created_at DESC) WHERE deleted_at IS NULL;
 

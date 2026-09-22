@@ -622,11 +622,18 @@ CREATE TABLE IF NOT EXISTS floor_plan_analysis (
     updated_at       TIMESTAMPTZ,
     deleted_at       TIMESTAMPTZ,
     preview_image_id VARCHAR(64),
+    project_id       VARCHAR(64),
+    source_name      VARCHAR(128),
+    quality_issues   JSONB,
     FOREIGN KEY (image_id) REFERENCES image_assets(image_id),
     FOREIGN KEY (preview_image_id) REFERENCES image_assets(image_id)
 );
 CREATE INDEX IF NOT EXISTS idx_fpa_created_by ON floor_plan_analysis(created_by, created_at) WHERE deleted_at IS NULL;
 COMMENT ON COLUMN floor_plan_analysis.preview_image_id IS 'CAD 解析生成的规范 PNG 预览（与房间 polygon 共用 drawingBounds）；视觉识别通道为空';
+COMMENT ON COLUMN floor_plan_analysis.project_id IS '归属项目（可空：官网匿名/未归属）；FK 见 cross_domain_fk.sql';
+COMMENT ON COLUMN floor_plan_analysis.source_name IS '户型名称/备注（如"滨江华府 3-2-1 东边套"），历史列表辨识用';
+COMMENT ON COLUMN floor_plan_analysis.quality_issues IS '解析质量提示数组（由 raw_result 冗余提升，落库时写入，支持过滤/统计）';
+CREATE INDEX IF NOT EXISTS idx_fpa_project ON floor_plan_analysis(project_id, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_fpa_created ON floor_plan_analysis(created_at DESC) WHERE deleted_at IS NULL;
 
 -- 户型图空间识别明细表（V36 并入；V11 扩 label/polygon/centroid/geometry_source 支持 CAD 几何落库）
@@ -1285,6 +1292,11 @@ CREATE INDEX IF NOT EXISTS idx_project_owner ON project(owner_id) WHERE deleted_
 -- scheme.project_id 外键（表创建顺序约束，单独补加）
 ALTER TABLE scheme DROP CONSTRAINT IF EXISTS fk_scheme_project;
 ALTER TABLE scheme ADD CONSTRAINT fk_scheme_project FOREIGN KEY (project_id) REFERENCES project(project_id);
+
+-- floor_plan_analysis.project_id 外键（06 户型域在 07 项目域之前执行，V14 后置补加）
+ALTER TABLE floor_plan_analysis DROP CONSTRAINT IF EXISTS fk_floor_plan_analysis_project;
+ALTER TABLE floor_plan_analysis
+    ADD CONSTRAINT fk_floor_plan_analysis_project FOREIGN KEY (project_id) REFERENCES project(project_id);
 
 -- 订单主表（V5 并入；价格字段 AES 加密 TypeHandler 读写）
 CREATE TABLE IF NOT EXISTS design_order (

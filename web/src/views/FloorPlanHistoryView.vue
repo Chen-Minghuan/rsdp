@@ -6,10 +6,12 @@ import {
   NButton,
   NDataTable,
   NEmpty,
+  NImage,
   NPopconfirm,
   NSelect,
   NSpace,
   NSpin,
+  NTag,
   useMessage,
   type DataTableColumns
 } from 'naive-ui'
@@ -18,17 +20,21 @@ import StatusPill from '@/components/StatusPill.vue'
 import {
   deleteFloorPlanAnalysis,
   listFloorPlanAnalyses,
-  retryFloorPlanAnalysis
+  retryFloorPlanAnalysis,
+  type FloorPlanListParams
 } from '@/api/floorPlan'
+import { listProjects } from '@/api/project'
 import {
+  FLOOR_PLAN_GEOMETRY_SOURCE_TEXT,
   FLOOR_PLAN_SOURCE_TEXT,
   FLOOR_PLAN_STATUS_TEXT,
   type FloorPlanAnalysisStatus,
+  type FloorPlanGeometrySource,
   type FloorPlanListItem
 } from '@/types/floorPlan'
 
 /**
- * 管理端「户型图分析记录」页：状态过滤 + 分页表格 + 行级操作（重试 / 去校正 / 查看 / 删除）。
+ * 管理端「户型图分析记录」页：状态/项目过滤 + 分页表格 + 行级操作（重试 / 去校正 / 查看图纸 / 删除）。
  * 契约来源：docs/05-status/户型图空间搭配链路完整方案v3.0.md §4.2。
  */
 const router = useRouter()
@@ -41,24 +47,55 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(10)
 const statusFilter = ref<string | null>(null)
+/** 项目过滤：''/null=全部项目；'__none__'=未归属（前端当前页内过滤）；其余=项目 ID（传后端精确过滤）。 */
+const projectFilter = ref<string | null>(null)
 /** 正在重试中的行（按 analysisId 防重复点击）。 */
 const retryingId = ref('')
+
+/** 「未归属」过滤的约定值（后端 projectId 参数仅支持精确匹配，未归属在前端当前页内过滤）。 */
+const PROJECT_NONE = '__none__'
+
+const projectOptions = ref<Array<{ label: string; value: string }>>([
+  { label: '全部项目', value: '' },
+  { label: '未归属', value: PROJECT_NONE }
+])
 
 const statusOptions = [
   { label: '全部状态', value: '' },
   ...Object.entries(FLOOR_PLAN_STATUS_TEXT).map(([value, label]) => ({ label, value }))
 ]
 
+/** 加载项目下拉数据源（当前用户可见项目，取前 100 条；失败不阻断列表展示）。 */
+async function loadProjectOptions() {
+  try {
+    const result = await listProjects({ page: 1, size: 100 })
+    projectOptions.value = [
+      { label: '全部项目', value: '' },
+      { label: '未归属', value: PROJECT_NONE },
+      ...result.rows.map(p => ({ label: p.projectName, value: p.projectId }))
+    ]
+  } catch (e) {
+    console.warn('加载项目列表失败', e)
+  }
+}
+
 async function loadList() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const result = await listFloorPlanAnalyses({
+    const params: FloorPlanListParams = {
       page: page.value,
       size: size.value,
       status: (statusFilter.value || undefined) as FloorPlanAnalysisStatus | undefined
-    })
-    rows.value = result.rows
+    }
+    // 指定项目走后端精确过滤；「未归属」不传参，前端在当前页内按 projectId 为空过滤（总数以后端为准）
+    if (projectFilter.value && projectFilter.value !== PROJECT_NONE) {
+      params.projectId = projectFilter.value
+    }
+    const result = await listFloorPlanAnalyses(params)
+    rows.value = projectFilter.value === PROJECT_NONE
+      ? result.rows.filter(r => !r.projectId)
+      : result.rows
     total.value = result.total
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载分析记录失败'
@@ -77,6 +114,11 @@ function handleStatusChange() {
   loadList()
 }
 
+function handleProjectChange() {
+  page.value = 1
+  loadList()
+}
+
 function formatTime(value?: string): string {
   if (!value) return '-'
   return value.replace('T', ' ').slice(0, 16)
@@ -85,6 +127,11 @@ function formatTime(value?: string): string {
 /** 跳转四步向导步骤 2（带 analysisId 直接进入空间校正）。 */
 function goCorrection(row: FloorPlanListItem) {
   router.push({ path: '/floor-plan', query: { analysisId: row.analysisId } })
+}
+
+/** 已确认记录只读查看图纸（步骤 2 隐藏全部编辑交互）。 */
+function goView(row: FloorPlanListItem) {
+  router.push({ path: '/floor-plan', query: { analysisId: row.analysisId, readonly: '1' } })
 }
 
 async function handleRetry(row: FloorPlanListItem) {
@@ -116,11 +163,48 @@ async function handleDelete(row: FloorPlanListItem) {
 
 const columns: DataTableColumns<FloorPlanListItem> = [
   {
+    title: '图纸',
+    key: 'thumbnailUrl',
+    width: 110,
+    render(row) {
+      if (row.thumbnailUrl) {
+        return h(NImage, {
+          src: row.thumbnailUrl,
+          width: 96,
+          height: 64,
+          objectFit: 'cover',
+          style: 'border-radius: 4px;'
+        })
+      }
+      return h('div', { class: 'thumb-placeholder' }, '无图')
+    }
+  },
+  {
     title: '分析批次',
     key: 'analysisId',
-    width: 200,
+    width: 180,
     render(row) {
       return h('span', { class: 'rsdp-mono', style: { fontSize: '12px' } }, row.analysisId)
+    }
+  },
+  {
+    title: '户型名称',
+    key: 'sourceName',
+    width: 150,
+    ellipsis: { tooltip: true },
+    render(row) {
+      if (row.sourceName) return row.sourceName
+      return h('span', { style: { color: 'var(--rsdp-text-secondary)' } }, '未命名识别')
+    }
+  },
+  {
+    title: '项目',
+    key: 'projectName',
+    width: 140,
+    ellipsis: { tooltip: true },
+    render(row) {
+      if (row.projectName) return row.projectName
+      return h('span', { style: { color: 'var(--rsdp-text-secondary)' } }, '未归属')
     }
   },
   {
@@ -143,11 +227,36 @@ const columns: DataTableColumns<FloorPlanListItem> = [
     }
   },
   {
+    title: '通道',
+    key: 'geometrySource',
+    width: 96,
+    render(row) {
+      const source = row.geometrySource
+      if (!source) return '-'
+      return h(
+        NTag,
+        { size: 'small', type: source === 'cad_geometry' ? 'success' : 'info', bordered: false },
+        { default: () => FLOOR_PLAN_GEOMETRY_SOURCE_TEXT[source as FloorPlanGeometrySource] ?? source }
+      )
+    }
+  },
+  {
     title: '空间数',
     key: 'roomCount',
-    width: 80,
+    width: 110,
     render(row) {
-      return h('span', { class: 'rsdp-mono' }, String(row.roomCount ?? 0))
+      const cells: ReturnType<typeof h>[] = [
+        h('span', { class: 'rsdp-mono' }, String(row.roomCount ?? 0))
+      ]
+      // CAD 解析质量徽标：有质量提示时紧跟空间数展示
+      if ((row.qualityIssueCount ?? 0) > 0) {
+        cells.push(h(
+          NTag,
+          { size: 'tiny', type: 'warning', bordered: false, title: 'CAD 解析质量提示数' },
+          { default: () => `⚠ ${row.qualityIssueCount}` }
+        ))
+      }
+      return h(NSpace, { size: 4, align: 'center', wrap: false }, { default: () => cells })
     }
   },
   {
@@ -203,8 +312,8 @@ const columns: DataTableColumns<FloorPlanListItem> = [
       if (row.status === 'confirmed') {
         buttons.push(h(
           NButton,
-          { text: true, type: 'primary', size: 'small', onClick: () => goCorrection(row) },
-          { default: () => '查看' }
+          { text: true, type: 'primary', size: 'small', onClick: () => goView(row) },
+          { default: () => '查看图纸' }
         ))
       }
       buttons.push(h(
@@ -220,7 +329,10 @@ const columns: DataTableColumns<FloorPlanListItem> = [
   }
 ]
 
-onMounted(loadList)
+onMounted(() => {
+  loadProjectOptions()
+  loadList()
+})
 </script>
 
 <template>
@@ -230,6 +342,14 @@ onMounted(loadList)
     </n-alert>
 
     <div class="filter-bar">
+      <n-select
+        v-model:value="projectFilter"
+        :options="projectOptions"
+        clearable
+        placeholder="项目过滤"
+        style="width: 200px;"
+        @update:value="handleProjectChange"
+      />
       <n-select
         v-model:value="statusFilter"
         :options="statusOptions"
@@ -263,6 +383,21 @@ onMounted(loadList)
 .filter-bar {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   margin-bottom: 12px;
+}
+
+/* 「图纸」列无缩略图占位 */
+.thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 64px;
+  border: 1px dashed var(--rsdp-border);
+  border-radius: 4px;
+  color: var(--rsdp-text-secondary);
+  font-size: 12px;
+  background: var(--rsdp-card-bg);
 }
 </style>

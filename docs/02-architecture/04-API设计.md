@@ -1731,27 +1731,39 @@ POST   /api/v1/floor-plan/analyze          [product:read]
        # CAD 通道 = 门洞共线端点闭合 + buildCadRooms 真实几何直落（dimension_source=cad_geometry，
        # polygon/内部标签锚点毫米坐标落库，bbox 由 polygon 外包络按 drawingBounds 归一化派生，
        # unnamedRegions 同样落宽深几何值，roomType=OTHER + label="未命名空间 N" + confidence=low，
-       # qualityIssues 随 CadParseResult 整体存 raw_result 备查）
+       # qualityIssues 随 CadParseResult 整体存 raw_result 备查；V14 起同时冗余提升到
+       # analysis.quality_issues 列（写入口在识别完成置 awaiting_confirm 时，raw_result 语义不动）
        # → 规范预览 PNG 落 image_assets（image_type=floor_plan_cad_preview），analysis.preview_image_id 关联
        # → status=awaiting_confirm
-       # Form: image?, cad?, hint?（image/cad 至少其一）
+       # Form: image?, cad?, hint?, projectId?, sourceName?（image/cad 至少其一）
+       # projectId/sourceName（V14，均可选）：projectId 非空时校验项目存在且当前用户可见
+       # （复用 ProjectService.getAccessibleProject：归属人或 ADMIN），校验通过写入
+       # analysis.project_id；sourceName 为户型名称/备注（≤128 字）；官网匿名链路 project_id 恒 NULL
        # Response: { analysisId, taskId }
 
 GET    /api/v1/floor-plan                  [登录 + 归属过滤]
-       # 分析历史列表（P1）：分页 + 可选 status 过滤，按创建时间倒序；
+       # 分析历史列表（P1）：分页 + 可选 status / projectId（V14）过滤，按创建时间倒序；
        # roomCount 按页内 analysisId 批量统计（避免 N+1）。
        # 归属过滤与详情同口径：平台运营（ADMIN/EDITOR）全见（含官网匿名 source=public
        # 记录），其他角色仅 created_by=本人
        # Query: page=1&size=20（上限 100）&status?=pending|analyzing|awaiting_confirm|confirmed|failed
+       #        &projectId?（V14，归属项目过滤）
        # Response: PageResult<{ analysisId, status, source, roomCount, createdBy,
-       #            createdAt, updatedAt, errorMessage }>
+       #            createdAt, updatedAt, errorMessage,
+       #            thumbnailUrl, projectId, projectName, sourceName,
+       #            geometrySource, qualityIssueCount }>
+       # 列表项增强（V14，只加不改旧字段）：thumbnailUrl = preview_image_id 图片地址优先、
+       #   回退 image_id；projectName JOIN project 取 project_name（无归属 null）；
+       #   geometrySource 聚合自批次 rooms（任一 cad_geometry → cad_geometry，否则
+       #   ai_vision，无 rooms 为 null）；qualityIssueCount = quality_issues 数组长度（null→0）
 
 GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # 查询分析状态与空间列表（前端轮询入口；以 task 状态同步校正 analysis 状态：
        # task=failed → analysis=failed + errorMessage 透传）
        # Response: { analysisId, imageId, imageUrl, referenceImageUrl,
        #            previewImageId, previewUrl, status, taskId, scaleRatio,
-       #            source, errorMessage, createdBy, createdAt, updatedAt,
+       #            source, projectId, projectName, sourceName,
+       #            errorMessage, createdBy, createdAt, updatedAt,
        #            rooms: [{ roomId, roomType, label, polygon, labelPoint, bbox, widthMm, depthMm,
        #            areaM2, dimensionSource, dimensionConfidence, dimensionText, sortOrder }],
        #            geometrySource, qualityIssues, scaleSuggestion, drawingBounds, previewBounds }
@@ -1778,7 +1790,10 @@ PUT    /api/v1/floor-plan/{analysisId}/rooms   [登录 + 归属校验]
        # 仅 awaiting_confirm 或 confirmed 状态可提交；视觉空间按提交尺寸重算并标记 manual/high；
        # CAD 已识别空间仅更新 label/roomType/sortOrder，polygon/labelPoint/bbox/宽深/精确面积/
        # dimensionSource/confidence 均保持不变；状态 → confirmed
-       # Request: { rooms: [{ roomId?, roomType*, label?, widthMm?, depthMm?, bbox? }], scaleRatio? }
+       # projectId（V14，可选）：传了则校验项目可见性（同 analyze）后覆盖写入
+       # analysis.project_id（补挂/改挂），并记审计日志（action=LINK_PROJECT）；不传不动
+       # Request: { rooms: [{ roomId?, roomType*, label?, widthMm?, depthMm?, bbox? }],
+       #            scaleRatio?, projectId? }
        # Response: 同 GET（校正后的分析详情）
 
 POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
@@ -1813,6 +1828,12 @@ POST   /api/v1/floor-plan/{analysisId}/retry   [登录 + 归属校验]
 DELETE /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # 软删分析批次（@TableLogic），级联软删其下空间明细
        # Response: null
+
+GET    /api/v1/projects/{projectId}/floor-plans   [登录，V14]
+       # 项目下户型图分析批次列表：未软删全部批次（created_at DESC），
+       # 列表项结构与 GET /api/v1/floor-plan 一致；项目可见性复用
+       # ProjectService.getAccessibleProject（归属人或 ADMIN）
+       # Response: [ 同户型图历史列表项 ]
 ```
 
 ### 管理端工作台统计带（GET 限 ADMIN/EDITOR）

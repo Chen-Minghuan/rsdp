@@ -48,34 +48,40 @@ public class FloorPlanController {
      * （CAD 出精确数据和规范预览，image 展示时仅作只读参考，并用于补全 CAD 空间名称和类型；
      * 视觉结果不会覆盖 CAD polygon、面积和尺寸）。三者至少其一。</p>
      *
-     * @param image 户型图片（jpg/png，≤10MB；双文件模式下作只读参考图及空间语义来源），可选
-     * @param cad   CAD 图纸（dwg/dxf，≤20MB），可选
-     * @param hint  用户补充说明（可选）
+     * @param image      户型图片（jpg/png，≤10MB；双文件模式下作只读参考图及空间语义来源），可选
+     * @param cad        CAD 图纸（dwg/dxf，≤20MB），可选
+     * @param hint       用户补充说明（可选）
+     * @param projectId  归属项目 ID（可选，V14；非空时校验项目存在且当前用户可见）
+     * @param sourceName 户型名称/备注（可选，V14，≤128 字）
      * @return analysisId + taskId
      */
     @PostMapping("/analyze")
     public Result<Map<String, String>> analyze(
         @RequestParam(value = "image", required = false) MultipartFile image,
         @RequestParam(value = "cad", required = false) MultipartFile cad,
-        @RequestParam(required = false) String hint) {
-        return Result.ok(floorPlanService.analyze(image, cad, hint));
+        @RequestParam(required = false) String hint,
+        @RequestParam(required = false) String projectId,
+        @RequestParam(required = false) String sourceName) {
+        return Result.ok(floorPlanService.analyze(image, cad, hint, projectId, sourceName));
     }
 
     /**
-     * 分析历史列表（P1）：分页 + 可选 status 过滤，按创建时间倒序。
+     * 分析历史列表（P1）：分页 + 可选 status / projectId（V14）过滤，按创建时间倒序。
      * 归属隔离与详情同口径（平台运营全见，其他角色仅本人创建）。
      *
-     * @param page   页码（从 1 开始）
-     * @param size   每页条数（1~100）
-     * @param status 状态过滤（可选）
-     * @return 分页列表（含 roomCount 批量统计）
+     * @param page      页码（从 1 开始）
+     * @param size      每页条数（1~100）
+     * @param status    状态过滤（可选）
+     * @param projectId 归属项目过滤（可选）
+     * @return 分页列表（含 roomCount 批量统计、缩略图、项目名称、几何来源与质量提示数）
      */
     @GetMapping
     public Result<PageResult<FloorPlanAnalysisListItemResponse>> listAnalyses(
         @RequestParam(defaultValue = "1") long page,
         @RequestParam(defaultValue = "20") long size,
-        @RequestParam(required = false) String status) {
-        return Result.ok(floorPlanService.listAnalyses(page, size, status));
+        @RequestParam(required = false) String status,
+        @RequestParam(required = false) String projectId) {
+        return Result.ok(floorPlanService.listAnalyses(page, size, status, projectId));
     }
 
     /**

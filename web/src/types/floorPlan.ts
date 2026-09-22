@@ -142,6 +142,11 @@ export function meanMmPerPx(segments: CalibSegment[]): number | null {
 /** 户型图分析结果（GET /floor-plan/{analysisId}）。 */
 export interface FloorPlanAnalysisResponse {
   analysisId: string
+  /** 归属项目（可空；确认接口可补挂/改挂） */
+  projectId?: string | null
+  projectName?: string | null
+  /** 户型名称（上传时可选填写，历史列表展示用） */
+  sourceName?: string | null
   imageId?: string | null
   imageUrl?: string | null
   /** 可直接展示的上传参考图；原始文件为 DWG/DXF 时为空 */
@@ -187,6 +192,8 @@ export interface FloorPlanConfirmRoom {
 export interface FloorPlanConfirmRequest {
   rooms: FloorPlanConfirmRoom[]
   scaleRatio?: number | null
+  /** 归属项目 ID（可选；确认时补挂/改挂项目） */
+  projectId?: string | null
 }
 
 /** 沙发靠墙方向：width=开间方向墙（默认）/ depth=进深方向墙（影响 R2 规则墙长取值）。 */
@@ -213,6 +220,9 @@ export interface FloorPlanSchemeResponse {
 /** 分析来源：admin=管理端上传 / public=官网用户上传。 */
 export type FloorPlanSource = 'admin' | 'public'
 
+/** 几何来源：cad_geometry=CAD 精确解析 / ai_vision=AI 视觉识别。 */
+export type FloorPlanGeometrySource = 'ai_vision' | 'cad_geometry'
+
 /** 分析批次列表项（GET /floor-plan 分页）。 */
 export interface FloorPlanListItem {
   analysisId: string
@@ -224,6 +234,17 @@ export interface FloorPlanListItem {
   createdAt: string
   updatedAt: string
   errorMessage?: string | null
+  /** 缩略图（CAD 规范预览图或原图 URL，可空） */
+  thumbnailUrl?: string | null
+  /** 归属项目（可空） */
+  projectId?: string | null
+  projectName?: string | null
+  /** 户型名称（可空，展示时回退"未命名识别"） */
+  sourceName?: string | null
+  /** 几何来源（缺失时按 ai_vision 处理） */
+  geometrySource?: FloorPlanGeometrySource | null
+  /** CAD 解析质量提示数（>0 时展示质量徽标） */
+  qualityIssueCount: number
 }
 
 /** 失败重试响应（POST /floor-plan/{analysisId}/retry，仅 failed 可重试）。 */
@@ -244,4 +265,10 @@ export const FLOOR_PLAN_STATUS_TEXT: Record<FloorPlanAnalysisStatus, string> = {
 export const FLOOR_PLAN_SOURCE_TEXT: Record<FloorPlanSource, string> = {
   admin: '管理端',
   public: '官网'
+}
+
+/** 几何来源展示文案（历史列表「通道」列）。 */
+export const FLOOR_PLAN_GEOMETRY_SOURCE_TEXT: Record<FloorPlanGeometrySource, string> = {
+  ai_vision: 'AI视觉',
+  cad_geometry: 'CAD精确'
 }

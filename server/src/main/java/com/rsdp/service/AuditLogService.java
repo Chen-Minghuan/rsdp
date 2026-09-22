@@ -115,6 +115,24 @@ public class AuditLogService {
     }
 
     /**
+     * 记录自定义业务动作（CREATE/UPDATE/DELETE/REVIEW 之外的领域操作，
+     * 如户型图挂靠项目 LINK_PROJECT；action 受 audit_log.action VARCHAR(16) 限制）。
+     *
+     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
+     *
+     * @param tableName 表名
+     * @param recordId  记录 ID
+     * @param action    动作码（≤16 字符，建议大写下划线风格）
+     * @param oldValue  变更前对象，可空
+     * @param newValue  变更后对象，可空
+     * @param operator  操作人
+     */
+    public void logAction(String tableName, String recordId, String action,
+                          Object oldValue, Object newValue, String operator) {
+        insert(tableName, recordId, action, oldValue, newValue, operator);
+    }
+
+    /**
      * 审计写入。
      *
      * <p>事务策略：实际写入经 {@link AuditLogWriter} 异步线程执行，与业务事务完全解耦。

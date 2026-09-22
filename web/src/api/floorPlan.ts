@@ -12,6 +12,16 @@ import type {
 import type { PageResult } from '@/types/product'
 import type { ApiOptions } from './product'
 
+/** 上传户型图触发分析的可选附加参数。 */
+export interface FloorPlanAnalyzeOptions {
+  /** 归属项目 ID（可选，仅非空时随 multipart 提交） */
+  projectId?: string | null
+  /** 户型名称（可选，仅非空时随 multipart 提交） */
+  sourceName?: string
+  /** 可选的 AbortSignal，用于取消请求 */
+  signal?: AbortSignal
+}
+
 /**
  * 上传户型图并触发识别（multipart）：
  * - 仅图片（jpg/png/pdf ≤10MB）：AI 视觉识别；
@@ -21,14 +31,14 @@ import type { ApiOptions } from './product'
  * @param image 户型图片（可选，与 cad 至少传一个）
  * @param cad CAD 文件（可选，字段名 cad）
  * @param hint 可选补充说明（如"这是三室两厅"）
- * @param signal 可选的 AbortSignal，用于取消请求
+ * @param options 可选附加参数（归属项目 / 户型名称 / AbortSignal）
  * @returns 分析批次 ID 与异步任务 ID
  */
 export async function analyzeFloorPlan(
   image: File | null,
   cad: File | null,
   hint?: string,
-  signal?: AbortSignal
+  options?: FloorPlanAnalyzeOptions
 ): Promise<FloorPlanAnalyzeResponse> {
   const formData = new FormData()
   if (image) {
@@ -40,10 +50,16 @@ export async function analyzeFloorPlan(
   if (hint) {
     formData.append('hint', hint)
   }
+  if (options?.projectId) {
+    formData.append('projectId', options.projectId)
+  }
+  if (options?.sourceName) {
+    formData.append('sourceName', options.sourceName)
+  }
   const { data: result } = await uploadClient.post<ApiResult<FloorPlanAnalyzeResponse>>(
     '/v1/floor-plan/analyze',
     formData,
-    { signal }
+    { signal: options?.signal }
   )
   return result.data
 }
@@ -122,6 +138,8 @@ export interface FloorPlanListParams {
   size?: number
   /** 按状态过滤（pending/analyzing/awaiting_confirm/confirmed/failed），不传查全部 */
   status?: FloorPlanAnalysisStatus
+  /** 按归属项目精确过滤（可选；"未归属"过滤暂由前端处理） */
+  projectId?: string
 }
 
 /**

@@ -39,6 +39,8 @@ interface Props {
   calibSegments: CalibSegment[]
   /** CAD 图纸范围（毫米坐标系；非空且 rooms 带 polygon 时进入多边形叠加模式，Vision 通道为 null） */
   drawingBounds?: FloorPlanDrawingBounds | null
+  /** 只读查看模式：隐藏框编辑/标定/手绘工具与缩放手柄，仅保留缩放、平移、点选与全屏 */
+  readonly?: boolean
 }
 
 const props = defineProps<Props>()
@@ -368,8 +370,8 @@ function removeDragListeners() {
 function handleOverlayMouseDown(e: MouseEvent) {
   if (e.button !== 0) return
   e.preventDefault()
-  // 多边形叠加模式使用同坐标系规范底图，仅允许平移整个视口。
-  if (isPolygonMode.value) {
+  // 多边形叠加模式使用同坐标系规范底图，仅允许平移整个视口；只读模式同样仅平移。
+  if (isPolygonMode.value || props.readonly) {
     startDrag({ kind: 'pan', startX: e.clientX, startY: e.clientY, origPanX: panX.value, origPanY: panY.value })
     return
   }
@@ -391,11 +393,12 @@ function handlePolygonMouseDown(e: MouseEvent) {
   e.stopPropagation()
 }
 
-/** 框体按下：选中 + 开始移动。 */
+/** 框体按下：选中 + 开始移动（只读模式仅选中联动表格，不进入拖拽）。 */
 function handleBoxMouseDown(e: MouseEvent, row: EditableRoom) {
   if (e.button !== 0 || props.drawMode || calibMode.value || !row.bbox) return
   e.preventDefault()
   emit('update:selectedLocalId', row.localId)
+  if (props.readonly) return
   const p = normalizedPoint(e)
   if (!p) return
   startDrag({ kind: 'move', room: row, startX: p.x, startY: p.y, orig: { ...row.bbox } })
@@ -815,7 +818,7 @@ onUnmounted(() => {
       <span class="fp-zoom-label rsdp-mono">{{ Math.round(zoom * 100) }}%</span>
       <n-button size="tiny" quaternary title="放大" @click="zoomByStep(1)">＋</n-button>
       <n-button size="tiny" quaternary title="恢复初始视图" @click="resetView">适应窗口</n-button>
-      <template v-if="!isPolygonMode">
+      <template v-if="!isPolygonMode && !readonly">
         <span class="fp-toolbar-divider" />
         <n-button
           size="tiny"
@@ -835,7 +838,7 @@ onUnmounted(() => {
         </template>
       </template>
       <n-button
-        v-if="drawButton && !isPolygonMode"
+        v-if="drawButton && !isPolygonMode && !readonly"
         size="tiny"
         :type="drawMode ? 'primary' : 'default'"
         title="拖拽框选新空间，松手自动新增一行"
@@ -847,6 +850,7 @@ onUnmounted(() => {
         {{ maximized ? '退出放大' : '放大编辑' }}
       </n-button>
       <span v-if="isPolygonMode" class="fp-scale-label">CAD 几何数据，无需标定</span>
+      <span v-else-if="readonly" class="fp-scale-label">只读查看</span>
       <template v-else>
         <span class="fp-scale-label">{{ scaleLabel }}</span>
         <span v-if="calibLinePx !== null" class="fp-scale-label">线段 {{ calibLinePx }} px</span>
@@ -918,6 +922,7 @@ onUnmounted(() => {
         </template>
       </template>
       <span v-if="isPolygonMode" class="fp-hint">规范底图与 CAD 多边形同坐标系；点击空间联动表格，Ctrl+滚轮缩放</span>
+      <span v-else-if="readonly" class="fp-hint">只读查看：Ctrl+滚轮缩放，空白处拖拽平移；点击空间框联动右侧表格</span>
       <span v-else class="fp-hint">Ctrl+滚轮缩放，空白处拖拽平移；拖框/拉边自动吸附对齐，按住 Alt 暂停吸附</span>
     </div>
     <div ref="canvasRef" class="fp-canvas" @wheel="handleWheel">
@@ -977,7 +982,7 @@ onUnmounted(() => {
               @mousedown.stop="handleBoxMouseDown($event, row)"
             >
               <span class="fp-bbox-no rsdp-mono">{{ index + 1 }}</span>
-              <template v-if="row.localId === selectedLocalId && !drawMode && !calibMode">
+              <template v-if="row.localId === selectedLocalId && !drawMode && !calibMode && !readonly">
                 <div
                   v-for="h in RESIZE_HANDLES"
                   :key="h"
