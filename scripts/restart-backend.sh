@@ -22,10 +22,15 @@ ORIGINAL_RSDP_ENCRYPTION_KEY="${RSDP_ENCRYPTION_KEY:-}"
 ORIGINAL_RSDP_JWT_SECRET="${RSDP_JWT_SECRET:-}"
 ORIGINAL_DASHSCOPE_API_KEY="${DASHSCOPE_API_KEY:-}"
 
-# 读取 .env 文件中的变量（兼容 Windows CRLF）
+# 读取 .env 文件中的变量（兼容 Windows CRLF）。
+# 注意：必须经临时文件 source——macOS 自带 bash 3.2 的 `source <(cmd)`
+# 进程替换形式会静默不执行（变量全部读不到），导致密钥校验误报未设置。
+ENV_TMP="$(mktemp)"
+trap 'rm -f "$ENV_TMP"' EXIT
+sed 's/\r$//' "$ENV_FILE" > "$ENV_TMP"
 set -a
 # shellcheck source=/dev/null
-source <(sed 's/\r$//' "$ENV_FILE")
+source "$ENV_TMP"
 set +a
 
 # 占位符集合（支持 .env.example 中的 <CHANGE_ME> 和 application.yml 里的 your-api-key-here）
