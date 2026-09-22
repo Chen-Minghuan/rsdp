@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { NButton, NInputNumber, NModal, NPopover, useMessage } from 'naive-ui'
 import { useFloorPlanCanvas } from '@/composables/useFloorPlanCanvas'
 import { meanMmPerPx } from '@/types/floorPlan'
-import type { CalibSegment, EditableRoom, RoomBBox } from '@/types/floorPlan'
+import type { CalibSegment, EditableRoom, FloorPlanDrawingBounds, RoomBBox } from '@/types/floorPlan'
 
 /**
  * 户型图可视化编辑器（步骤 2 左侧图纸区）：
@@ -37,6 +37,8 @@ interface Props {
   autoCalibAvailable?: boolean
   /** 手工标定段列表（宿主持有，内嵌与全屏两实例共享；有效比例 = 各段均值） */
   calibSegments: CalibSegment[]
+  /** CAD 图纸范围（毫米坐标系；非空且 rooms 带 polygon 时进入多边形叠加模式，Vision 通道为 null） */
+  drawingBounds?: FloorPlanDrawingBounds | null
 }
 
 const props = defineProps<Props>()
@@ -71,6 +73,8 @@ const imgRef = ref<HTMLImageElement | null>(null)
 /** 图片天然像素尺寸（bbox 归一化 → 像素换算的基准，img 加载后填充）。 */
 const naturalWidth = ref(0)
 const naturalHeight = ref(0)
+/** 图片接口失败时停止渲染依赖图片高度的叠加层，避免所有 CAD 多边形坍缩成一条横线。 */
+const imageLoadFailed = ref(false)
 
 const { zoom, panX, panY, resetView, zoomAt } = useFloorPlanCanvas()
 
@@ -114,6 +118,82 @@ const draftBox = ref<RoomBBox | null>(null)
 const snapGuides = ref<{ v: number[]; h: number[] }>({ v: [], h: [] })
 
 const boxedRooms = computed(() => props.rooms.filter(r => r.bbox))
+
+// ---------- CAD 多边形叠加模式 ----------
+
+/** 多边形叠加模式：CAD 通道（drawingBounds + rooms[].polygon）→ 展示 + 代号命名，框编辑/标定/手绘全部关闭。 */
+const isPolygonMode = computed(() =>
+  !!props.drawingBounds &&
+  props.rooms.some(r => r.polygon && (r.polygon as unknown[]).length > 0)
+)
+
+/** 带多边形的房间（叠加渲染与代号标签数据源）。 */
+const polygonRooms = computed(() =>
+  props.rooms.filter(r => r.polygon && (r.polygon as unknown[]).length > 0)
+)
+
+/** 解析 polygon 为点数组（三兼容：嵌套点对 [[x,y],...]（后端实际格式）/ 点对象 [{x,y}] / 平铺数组 [x1,y1,...]）。 */
+function parsePolygonPoints(polygon: EditableRoom['polygon']): Array<{ x: number; y: number }> {
+  if (!polygon || polygon.length === 0) return []
+  const first = polygon[0]
+  // 嵌套点对：[[x1,y1],[x2,y2],...]
+  if (Array.isArray(first)) {
+    return (polygon as Array<[number, number]>)
+      .filter(p => Array.isArray(p) && typeof p[0] === 'number' && typeof p[1] === 'number')
+      .map(p => ({ x: p[0], y: p[1] }))
+  }
+  // 平铺数组：[x1,y1,x2,y2,...]
+  if (typeof first === 'number') {
+    const nums = polygon as number[]
+    const pts: Array<{ x: number; y: number }> = []
+    for (let i = 0; i + 1 < nums.length; i += 2) {
+      pts.push({ x: nums[i], y: nums[i + 1] })
+    }
+    return pts
+  }
+  // 点对象数组：[{x,y},...]
+  return (polygon as Array<{ x: number; y: number }>).filter(p => typeof p?.x === 'number' && typeof p?.y === 'number')
+}
+
+/** 毫米坐标 → 归一化（drawingBounds 为基准）。CAD 坐标系 y 轴向上、图片像素 y 轴向下，必须翻转 y。 */
+function normalizePolygonPoint(p: { x: number; y: number }): { x: number; y: number } {
+  const b = props.drawingBounds as FloorPlanDrawingBounds
+  return {
+    x: (p.x - b.minX) / (b.maxX - b.minX || 1),
+    y: 1 - (p.y - b.minY) / (b.maxY - b.minY || 1)
+  }
+}
+
+/** SVG points 属性（viewBox 0 0 100 100 百分比坐标）。 */
+function polygonPointsAttr(room: EditableRoom): string {
+  return parsePolygonPoints(room.polygon)
+    .map(p => {
+      const n = normalizePolygonPoint(p)
+      return `${n.x * 100},${n.y * 100}`
+    })
+    .join(' ')
+}
+
+/** 多边形质心（归一化），代号/面积标签锚点。 */
+function polygonCentroid(room: EditableRoom): { x: number; y: number } {
+  if (room.labelPoint) return normalizePolygonPoint(room.labelPoint)
+  const pts = parsePolygonPoints(room.polygon)
+  if (pts.length === 0) return { x: 0.5, y: 0.5 }
+  let sx = 0
+  let sy = 0
+  pts.forEach(p => {
+    const n = normalizePolygonPoint(p)
+    sx += n.x
+    sy += n.y
+  })
+  return { x: sx / pts.length, y: sy / pts.length }
+}
+
+/** 标签面积文本：优先后端精确面积 areaM2，缺省按宽×深估算。 */
+function polygonAreaText(room: EditableRoom): string {
+  const a = room.areaM2 ?? (room.widthMm && room.depthMm ? (room.widthMm * room.depthMm) / 1_000_000 : null)
+  return a ? `${a.toFixed(2)}㎡` : ''
+}
 
 /** 当前选中的带框空间（"以框宽/深标定"入口的显示条件）。 */
 const selectedBoxedRoom = computed(() =>
@@ -287,9 +367,14 @@ function removeDragListeners() {
 /** 叠加层空白处按下：手绘 / 画标定线 / 平移（按当前模式分派）。 */
 function handleOverlayMouseDown(e: MouseEvent) {
   if (e.button !== 0) return
+  e.preventDefault()
+  // 多边形叠加模式使用同坐标系规范底图，仅允许平移整个视口。
+  if (isPolygonMode.value) {
+    startDrag({ kind: 'pan', startX: e.clientX, startY: e.clientY, origPanX: panX.value, origPanY: panY.value })
+    return
+  }
   const p = normalizedPoint(e)
   if (!p) return
-  e.preventDefault()
   if (props.drawMode) {
     draftBox.value = { x: p.x, y: p.y, w: 0, h: 0 }
     startDrag({ kind: 'draw', startX: p.x, startY: p.y })
@@ -299,6 +384,11 @@ function handleOverlayMouseDown(e: MouseEvent) {
   } else {
     startDrag({ kind: 'pan', startX: e.clientX, startY: e.clientY, origPanX: panX.value, origPanY: panY.value })
   }
+}
+
+/** 多边形/标签按下：阻断视口平移，保留点击选中。 */
+function handlePolygonMouseDown(e: MouseEvent) {
+  e.stopPropagation()
 }
 
 /** 框体按下：选中 + 开始移动。 */
@@ -677,9 +767,22 @@ function handleKeydown(e: KeyboardEvent) {
 function handleImageLoad() {
   const img = imgRef.value
   if (!img) return
+  imageLoadFailed.value = false
   naturalWidth.value = img.naturalWidth
   naturalHeight.value = img.naturalHeight
 }
+
+function handleImageError() {
+  imageLoadFailed.value = true
+  naturalWidth.value = 0
+  naturalHeight.value = 0
+}
+
+watch(() => props.imageUrl, () => {
+  imageLoadFailed.value = false
+  naturalWidth.value = 0
+  naturalHeight.value = 0
+})
 
 // 进入手绘态时退出画线标定，避免交互冲突
 watch(() => props.drawMode, v => {
@@ -712,25 +815,27 @@ onUnmounted(() => {
       <span class="fp-zoom-label rsdp-mono">{{ Math.round(zoom * 100) }}%</span>
       <n-button size="tiny" quaternary title="放大" @click="zoomByStep(1)">＋</n-button>
       <n-button size="tiny" quaternary title="恢复初始视图" @click="resetView">适应窗口</n-button>
-      <span class="fp-toolbar-divider" />
-      <n-button
-        size="tiny"
-        :type="calibMode === 'line' ? 'primary' : 'default'"
-        title="沿某段墙或已知物拖一条线，输入真实长度得出比例"
-        @click="toggleCalibLine"
-      >
-        画标定线
-      </n-button>
-      <template v-if="selectedBoxedRoom">
-        <n-button size="tiny" quaternary title="以选中框的宽边像素长度标定" @click="startEdgeCalib('w')">
-          以框宽标定
+      <template v-if="!isPolygonMode">
+        <span class="fp-toolbar-divider" />
+        <n-button
+          size="tiny"
+          :type="calibMode === 'line' ? 'primary' : 'default'"
+          title="沿某段墙或已知物拖一条线，输入真实长度得出比例"
+          @click="toggleCalibLine"
+        >
+          画标定线
         </n-button>
-        <n-button size="tiny" quaternary title="以选中框的深边像素长度标定" @click="startEdgeCalib('d')">
-          以框深标定
-        </n-button>
+        <template v-if="selectedBoxedRoom">
+          <n-button size="tiny" quaternary title="以选中框的宽边像素长度标定" @click="startEdgeCalib('w')">
+            以框宽标定
+          </n-button>
+          <n-button size="tiny" quaternary title="以选中框的深边像素长度标定" @click="startEdgeCalib('d')">
+            以框深标定
+          </n-button>
+        </template>
       </template>
       <n-button
-        v-if="drawButton"
+        v-if="drawButton && !isPolygonMode"
         size="tiny"
         :type="drawMode ? 'primary' : 'default'"
         title="拖拽框选新空间，松手自动新增一行"
@@ -741,78 +846,86 @@ onUnmounted(() => {
       <n-button size="tiny" quaternary title="在接近全屏的弹窗中精细编辑" @click="emit('toggle-maximize')">
         {{ maximized ? '退出放大' : '放大编辑' }}
       </n-button>
-      <span class="fp-scale-label">{{ scaleLabel }}</span>
-      <span v-if="calibLinePx !== null" class="fp-scale-label">线段 {{ calibLinePx }} px</span>
-      <n-button
-        v-if="autoCalibAvailable"
-        size="tiny"
-        :type="mmPerPx === null ? 'primary' : 'default'"
-        title="按图上尺寸标注自动得出比例（候选基准中选择一个）"
-        @click="emit('open-auto-calib')"
-      >
-        自动标定
-      </n-button>
-      <n-button
-        v-if="calibCheckRows.length > 0"
-        size="tiny"
-        quaternary
-        title="图上标注尺寸与标定推算逐房间对照"
-        @click="calibCheckVisible = true"
-      >
-        标定对照
-      </n-button>
-      <!-- 多段标定：段列表弹层（逐段删除 / 清除全部） -->
-      <n-popover
-        v-if="calibSegments.length > 0"
-        trigger="click"
-        placement="bottom-start"
-        style="max-width: 460px;"
-      >
-        <template #trigger>
-          <n-button size="tiny" quaternary title="查看/管理标定段（有效比例取各段均值）">
-            标定段 ×{{ calibSegments.length }}
-          </n-button>
-        </template>
-        <div class="fp-segments">
-          <div v-for="seg in calibSegments" :key="seg.id" class="fp-segment">
-            <div class="fp-segment-row">
-              <span class="fp-segment-source">{{ seg.sourceLabel }}</span>
-              <span class="rsdp-mono fp-segment-vals">
-                {{ seg.realMm }}mm / {{ Math.round(seg.pxLength) }}px → 1px≈{{ seg.mmPerPx.toFixed(2) }}mm
-              </span>
-              <n-button text type="error" size="tiny" @click="removeSegment(seg.id)">删除</n-button>
-            </div>
-            <p v-if="segmentDeviationPct(seg) > SEGMENT_DEVIATION_WARN_PCT" class="fp-segment-bad">
-              与其他段均值偏差 {{ segmentDeviationPct(seg).toFixed(1) }}%，可能选错基准（如误选家具图块）
-            </p>
-          </div>
-          <n-button size="tiny" quaternary style="align-self: flex-start;" @click="clearSegments">
-            清除全部标定段
-          </n-button>
-        </div>
-      </n-popover>
-      <!-- 标定输入（画线 / 选框边后在此填真实长度，不遮挡图纸） -->
-      <template v-if="calibInput">
-        <span class="fp-toolbar-divider" />
-        <span class="fp-scale-label">该段真实长度</span>
-        <n-input-number
-          v-model:value="calibRealMm"
-          :min="1"
-          :max="1000000"
-          :precision="0"
+      <span v-if="isPolygonMode" class="fp-scale-label">CAD 几何数据，无需标定</span>
+      <template v-else>
+        <span class="fp-scale-label">{{ scaleLabel }}</span>
+        <span v-if="calibLinePx !== null" class="fp-scale-label">线段 {{ calibLinePx }} px</span>
+        <n-button
+          v-if="autoCalibAvailable"
           size="tiny"
-          placeholder="mm"
-          style="width: 110px;"
-        />
-        <n-button size="tiny" type="primary" :disabled="!calibRealMm" @click="applyCalibInput">
-          确定
+          :type="mmPerPx === null ? 'primary' : 'default'"
+          title="按图上尺寸标注自动得出比例（候选基准中选择一个）"
+          @click="emit('open-auto-calib')"
+        >
+          自动标定
         </n-button>
-        <n-button size="tiny" quaternary @click="cancelCalib">取消</n-button>
+        <n-button
+          v-if="calibCheckRows.length > 0"
+          size="tiny"
+          quaternary
+          title="图上标注尺寸与标定推算逐房间对照"
+          @click="calibCheckVisible = true"
+        >
+          标定对照
+        </n-button>
+        <!-- 多段标定：段列表弹层（逐段删除 / 清除全部） -->
+        <n-popover
+          v-if="calibSegments.length > 0"
+          trigger="click"
+          placement="bottom-start"
+          style="max-width: 460px;"
+        >
+          <template #trigger>
+            <n-button size="tiny" quaternary title="查看/管理标定段（有效比例取各段均值）">
+              标定段 ×{{ calibSegments.length }}
+            </n-button>
+          </template>
+          <div class="fp-segments">
+            <div v-for="seg in calibSegments" :key="seg.id" class="fp-segment">
+              <div class="fp-segment-row">
+                <span class="fp-segment-source">{{ seg.sourceLabel }}</span>
+                <span class="rsdp-mono fp-segment-vals">
+                  {{ seg.realMm }}mm / {{ Math.round(seg.pxLength) }}px → 1px≈{{ seg.mmPerPx.toFixed(2) }}mm
+                </span>
+                <n-button text type="error" size="tiny" @click="removeSegment(seg.id)">删除</n-button>
+              </div>
+              <p v-if="segmentDeviationPct(seg) > SEGMENT_DEVIATION_WARN_PCT" class="fp-segment-bad">
+                与其他段均值偏差 {{ segmentDeviationPct(seg).toFixed(1) }}%，可能选错基准（如误选家具图块）
+              </p>
+            </div>
+            <n-button size="tiny" quaternary style="align-self: flex-start;" @click="clearSegments">
+              清除全部标定段
+            </n-button>
+          </div>
+        </n-popover>
+        <!-- 标定输入（画线 / 选框边后在此填真实长度，不遮挡图纸） -->
+        <template v-if="calibInput">
+          <span class="fp-toolbar-divider" />
+          <span class="fp-scale-label">该段真实长度</span>
+          <n-input-number
+            v-model:value="calibRealMm"
+            :min="1"
+            :max="1000000"
+            :precision="0"
+            size="tiny"
+            placeholder="mm"
+            style="width: 110px;"
+          />
+          <n-button size="tiny" type="primary" :disabled="!calibRealMm" @click="applyCalibInput">
+            确定
+          </n-button>
+          <n-button size="tiny" quaternary @click="cancelCalib">取消</n-button>
+        </template>
       </template>
-      <span class="fp-hint">Ctrl+滚轮缩放，空白处拖拽平移；拖框/拉边自动吸附对齐，按住 Alt 暂停吸附</span>
+      <span v-if="isPolygonMode" class="fp-hint">规范底图与 CAD 多边形同坐标系；点击空间联动表格，Ctrl+滚轮缩放</span>
+      <span v-else class="fp-hint">Ctrl+滚轮缩放，空白处拖拽平移；拖框/拉边自动吸附对齐，按住 Alt 暂停吸附</span>
     </div>
     <div ref="canvasRef" class="fp-canvas" @wheel="handleWheel">
-      <div class="fp-viewport" :style="viewportStyle">
+      <div v-if="imageLoadFailed" class="fp-image-error" role="alert">
+        <strong>户型预览加载失败</strong>
+        <span>请确认后端服务正常后刷新页面；为避免坐标误导，空间轮廓已暂停绘制。</span>
+      </div>
+      <div v-else class="fp-viewport" :style="viewportStyle">
         <img
           ref="imgRef"
           :src="imageUrl"
@@ -820,56 +933,86 @@ onUnmounted(() => {
           class="fp-image"
           draggable="false"
           @load="handleImageLoad"
+          @error="handleImageError"
         >
         <div
           class="fp-overlay"
           :class="{ drawing: drawMode, calibrating: calibMode === 'line' }"
           @mousedown="handleOverlayMouseDown"
         >
-          <div
-            v-for="(row, index) in boxedRooms"
-            :key="row.localId"
-            class="fp-bbox"
-            :class="{ active: row.localId === selectedLocalId }"
-            :style="bboxStyle(row.bbox)"
-            @mousedown.stop="handleBoxMouseDown($event, row)"
-          >
-            <span class="fp-bbox-no rsdp-mono">{{ index + 1 }}</span>
-            <template v-if="row.localId === selectedLocalId && !drawMode && !calibMode">
-              <div
-                v-for="h in RESIZE_HANDLES"
-                :key="h"
-                class="fp-handle"
-                :class="`fp-handle-${h}`"
-                :style="handleStyle"
-                @mousedown.stop="handleResizeMouseDown($event, row, h)"
+          <!-- CAD 多边形叠加层：与规范底图共用 previewBounds，无额外人工变换。 -->
+          <div v-if="isPolygonMode" class="fp-polygon-layer">
+            <svg class="fp-polygon-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polygon
+                v-for="room in polygonRooms"
+                :key="room.localId"
+                :points="polygonPointsAttr(room)"
+                class="fp-polygon"
+                :class="{ active: room.localId === selectedLocalId }"
+                vector-effect="non-scaling-stroke"
+                @mousedown="handlePolygonMouseDown"
+                @click="emit('update:selectedLocalId', room.localId)"
               />
-            </template>
+            </svg>
+            <div
+              v-for="room in polygonRooms"
+              :key="`label-${room.localId}`"
+              class="fp-polygon-label"
+              :class="{ active: room.localId === selectedLocalId }"
+              :style="{ left: `${polygonCentroid(room).x * 100}%`, top: `${polygonCentroid(room).y * 100}%` }"
+              @mousedown="handlePolygonMouseDown"
+              @click="emit('update:selectedLocalId', room.localId)"
+            >
+              <span class="fp-polygon-code">{{ room.label || '空间' }}</span>
+              <span v-if="polygonAreaText(room)" class="fp-polygon-area rsdp-mono">{{ polygonAreaText(room) }}</span>
+            </div>
           </div>
-          <div v-if="draftBox" class="fp-draft" :style="bboxStyle(draftBox)" />
-          <!-- 边缘吸附参考线（贯穿图纸的细虚线，吸附生效期间显示） -->
-          <div
-            v-for="gx in snapGuides.v"
-            :key="`gv-${gx}`"
-            class="fp-snap-guide-v"
-            :style="{ left: `${gx * 100}%` }"
-          />
-          <div
-            v-for="gy in snapGuides.h"
-            :key="`gh-${gy}`"
-            class="fp-snap-guide-h"
-            :style="{ top: `${gy * 100}%` }"
-          />
-          <svg v-if="calibLine" class="fp-calib-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-            <line
-              :x1="calibLine.x1 * 100"
-              :y1="calibLine.y1 * 100"
-              :x2="calibLine.x2 * 100"
-              :y2="calibLine.y2 * 100"
-              class="fp-calib-line"
-              vector-effect="non-scaling-stroke"
+          <template v-if="!isPolygonMode">
+            <div
+              v-for="(row, index) in boxedRooms"
+              :key="row.localId"
+              class="fp-bbox"
+              :class="{ active: row.localId === selectedLocalId }"
+              :style="bboxStyle(row.bbox)"
+              @mousedown.stop="handleBoxMouseDown($event, row)"
+            >
+              <span class="fp-bbox-no rsdp-mono">{{ index + 1 }}</span>
+              <template v-if="row.localId === selectedLocalId && !drawMode && !calibMode">
+                <div
+                  v-for="h in RESIZE_HANDLES"
+                  :key="h"
+                  class="fp-handle"
+                  :class="`fp-handle-${h}`"
+                  :style="handleStyle"
+                  @mousedown.stop="handleResizeMouseDown($event, row, h)"
+                />
+              </template>
+            </div>
+            <div v-if="draftBox" class="fp-draft" :style="bboxStyle(draftBox)" />
+            <!-- 边缘吸附参考线（贯穿图纸的细虚线，吸附生效期间显示） -->
+            <div
+              v-for="gx in snapGuides.v"
+              :key="`gv-${gx}`"
+              class="fp-snap-guide-v"
+              :style="{ left: `${gx * 100}%` }"
             />
-          </svg>
+            <div
+              v-for="gy in snapGuides.h"
+              :key="`gh-${gy}`"
+              class="fp-snap-guide-h"
+              :style="{ top: `${gy * 100}%` }"
+            />
+            <svg v-if="calibLine" class="fp-calib-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <line
+                :x1="calibLine.x1 * 100"
+                :y1="calibLine.y1 * 100"
+                :x2="calibLine.x2 * 100"
+                :y2="calibLine.y2 * 100"
+                class="fp-calib-line"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </template>
         </div>
       </div>
     </div>
@@ -936,6 +1079,24 @@ onUnmounted(() => {
   position: relative;
   flex: 1;
   overflow: hidden;
+}
+
+.fp-image-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--rsdp-text-secondary);
+  text-align: center;
+}
+
+.fp-image-error strong {
+  color: var(--rsdp-text);
+  font-weight: 500;
 }
 
 /* 变换层在正常文档流中撑起画布高度（transform 不影响布局），缩放平移仅视觉变换；
@@ -1065,6 +1226,63 @@ onUnmounted(() => {
   stroke: var(--rsdp-primary);
   stroke-width: 2;
   stroke-dasharray: 6 4;
+}
+
+/* CAD 多边形叠加层：与规范底图共用同一坐标范围。 */
+.fp-polygon-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.fp-polygon-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fp-polygon {
+  fill: rgba(194, 98, 43, 0.12);
+  stroke: var(--rsdp-warning);
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+
+.fp-polygon.active {
+  fill: rgba(26, 26, 26, 0.14);
+  stroke: var(--rsdp-primary);
+  stroke-width: 2;
+}
+
+/* 多边形代号/面积标签（质心锚点，点击选中联动表格） */
+.fp-polygon-label {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 8px;
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.fp-polygon-label.active {
+  border-color: var(--rsdp-primary);
+}
+
+.fp-polygon-code {
+  font-size: 12px;
+  color: var(--rsdp-text);
+}
+
+.fp-polygon-area {
+  font-size: 11px;
+  color: var(--rsdp-text-secondary);
 }
 
 .fp-zoom-label {

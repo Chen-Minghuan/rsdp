@@ -23,11 +23,21 @@ export interface RoomBBox {
   h: number
 }
 
+/** CAD 解析质量提示（GET /floor-plan/{analysisId} 返回，可能空数组/缺失，可选兼容）。 */
+export interface FloorPlanQualityIssue {
+  /** 级别（warning / error 等，原样展示） */
+  level: string
+  code: string
+  message: string
+}
+
 /** 识别出的单个空间。 */
 export interface FloorPlanRoom {
   roomId: string
   /** 空间类型码，引用 room_type 字典（LIVING/BEDROOM/...） */
   roomType: string
+  /** 空间名称（如"客厅"；CAD 通道由后端给出，未命名时前端预填"未命名空间 N"引导人工命名） */
+  label?: string | null
   bbox?: RoomBBox | null
   /** 开间（mm） */
   widthMm?: number | null
@@ -40,7 +50,19 @@ export interface FloorPlanRoom {
   dimensionConfidence?: DimensionConfidence | null
   /** 图上尺寸标注原文（如 "4200×3800"） */
   dimensionText?: string | null
+  /** CAD 房间多边形（毫米坐标，可空）。后端实际格式为嵌套点对 [[x,y],...]，渲染侧三兼容（嵌套点对/点对象/平铺数组） */
+  polygon?: Array<[number, number]> | Array<{ x: number; y: number }> | number[] | null
+  /** CAD 标签内部锚点（毫米坐标），由几何引擎保证位于空间内 */
+  labelPoint?: { x: number; y: number } | null
   sortOrder?: number
+}
+
+/** CAD 图纸范围（毫米坐标系，drawingBounds 归一化换算基准；Vision 通道为 null）。 */
+export interface FloorPlanDrawingBounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
 }
 
 /**
@@ -52,8 +74,15 @@ export interface EditableRoom {
   localId: string
   roomId: string | null
   roomType: string
+  /** 空间名称（可编辑；空时预填"未命名空间 N"） */
+  label: string
   widthMm: number | null
   depthMm: number | null
+  /** 精确面积（㎡，CAD 通道由后端按多边形给出；展示优先于宽×深估算） */
+  areaM2?: number | null
+  /** CAD 房间多边形（毫米坐标，可空；多边形叠加模式渲染用） */
+  polygon?: Array<[number, number]> | Array<{ x: number; y: number }> | number[] | null
+  labelPoint?: { x: number; y: number } | null
   bbox: RoomBBox | null
   dimensionSource: string | null
   dimensionConfidence: DimensionConfidence | null
@@ -113,12 +142,27 @@ export function meanMmPerPx(segments: CalibSegment[]): number | null {
 /** 户型图分析结果（GET /floor-plan/{analysisId}）。 */
 export interface FloorPlanAnalysisResponse {
   analysisId: string
+  imageId?: string | null
+  imageUrl?: string | null
+  /** 可直接展示的上传参考图；原始文件为 DWG/DXF 时为空 */
+  referenceImageUrl?: string | null
+  /** CAD 解析器生成、与 polygon 同坐标系的规范底图 */
+  previewImageId?: string | null
+  previewUrl?: string | null
   taskId?: string | null
   status: FloorPlanAnalysisStatus
   errorMessage?: string | null
   scaleRatio?: number | null
   /** 图上标注反推的比例建议（后端并行开发中，未上线前恒为 undefined，前端按无建议处理） */
   scaleSuggestion?: FloorPlanScaleSuggestion | null
+  /** 几何来源：cad_geometry=CAD 精确解析（尺寸来自图纸坐标，无需标定）/ ai_vision=AI 视觉识别（缺失时按此处理） */
+  geometrySource?: 'cad_geometry' | 'ai_vision' | null
+  /** CAD 解析质量提示（可空/缺失） */
+  qualityIssues?: FloorPlanQualityIssue[] | null
+  /** CAD 图纸范围（毫米坐标系；Vision 通道为 null/缺失，polygon 叠加的归一化基准） */
+  drawingBounds?: FloorPlanDrawingBounds | null
+  /** 规范预览对应范围；旧数据缺失时回退 drawingBounds */
+  previewBounds?: FloorPlanDrawingBounds | null
   rooms: FloorPlanRoom[]
 }
 
@@ -132,6 +176,8 @@ export interface FloorPlanAnalyzeResponse {
 export interface FloorPlanConfirmRoom {
   roomId?: string | null
   roomType: string
+  /** 空间名称（联调点：后端确认接口若暂未接收 label 字段，前端照常传） */
+  label?: string | null
   widthMm?: number | null
   depthMm?: number | null
   bbox?: RoomBBox | null

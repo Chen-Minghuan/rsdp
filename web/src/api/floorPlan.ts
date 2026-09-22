@@ -13,20 +13,30 @@ import type { PageResult } from '@/types/product'
 import type { ApiOptions } from './product'
 
 /**
- * 上传户型图并触发 AI 空间识别（multipart，jpg/png/pdf ≤10MB；PDF 仅渲染第 1 页识别）。
+ * 上传户型图并触发识别（multipart）：
+ * - 仅图片（jpg/png/pdf ≤10MB）：AI 视觉识别；
+ * - 图片 + CAD（dwg/dxf ≤20MB）：CAD 出精确数据、图片做底图（polygon 叠加模式）；
+ * - 仅 CAD：无底图模式（表格确认）。
  *
- * @param file 户型图文件（CAD 导出图 / 简易平面图）
+ * @param image 户型图片（可选，与 cad 至少传一个）
+ * @param cad CAD 文件（可选，字段名 cad）
  * @param hint 可选补充说明（如"这是三室两厅"）
  * @param signal 可选的 AbortSignal，用于取消请求
  * @returns 分析批次 ID 与异步任务 ID
  */
 export async function analyzeFloorPlan(
-  file: File,
+  image: File | null,
+  cad: File | null,
   hint?: string,
   signal?: AbortSignal
 ): Promise<FloorPlanAnalyzeResponse> {
   const formData = new FormData()
-  formData.append('image', file)
+  if (image) {
+    formData.append('image', image)
+  }
+  if (cad) {
+    formData.append('cad', cad)
+  }
   if (hint) {
     formData.append('hint', hint)
   }

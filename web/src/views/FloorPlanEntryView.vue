@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, h, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import {
   NAlert,
   NButton,
   NCard,
-  NDataTable,
   NEmpty,
   NInput,
   NInputNumber,
@@ -20,7 +19,6 @@ import {
   NSteps,
   NUpload,
   useMessage,
-  type DataTableColumns,
   type UploadFileInfo
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
@@ -44,6 +42,8 @@ import type {
   DimensionConfidence,
   EditableRoom,
   FloorPlanAnalysisResponse,
+  FloorPlanDrawingBounds,
+  FloorPlanQualityIssue,
   FloorPlanRoom,
   FloorPlanScaleCandidate,
   FloorPlanScaleSuggestion,
@@ -59,6 +59,8 @@ const message = useMessage()
 const selectionStore = useSelectionStore()
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+/** CAD 文件（DWG/DXF）大小上限：图纸矢量数据较大，放宽到 20MB。 */
+const MAX_CAD_FILE_SIZE_BYTES = 20 * 1024 * 1024
 const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/png', 'application/pdf']
 const POLL_INTERVAL_MS = 2000
 
@@ -68,7 +70,8 @@ const DIMENSION_SOURCE_LABELS: Record<string, string> = {
   scale_calc: '比例尺换算',
   ai_estimate: 'AI 估算',
   manual: '人工校正',
-  user_calib: '人工标定'
+  user_calib: '人工标定',
+  cad_geometry: 'CAD 几何'
 }
 
 const currentStep = ref(1)
@@ -76,14 +79,30 @@ const errorMessage = ref('')
 
 // ---------- 步骤 1：上传 ----------
 const fileList = ref<UploadFileInfo[]>([])
+/** CAD 文件上传位（可选；image+cad 同传 = CAD 出精确数据、图片做底图）。 */
+const cadFileList = ref<UploadFileInfo[]>([])
 const hint = ref('')
 const uploading = ref(false)
 const analyzing = ref(false)
 const analysisId = ref('')
 /** 上传图片的本地预览地址（Object URL，用于步骤 2 叠加 bbox，不依赖后端回显）。 */
 const imagePreviewUrl = ref('')
+/** CAD 解析器生成的规范底图；与 polygon 共用同一 previewBounds。 */
+const cadPreviewUrl = ref('')
 /** 本次上传是否为 PDF（PDF 无本地图像预览，步骤 2 左侧走占位降级，表格校正不受影响）。 */
 const pdfSource = ref(false)
+/** 几何来源（详情接口返回）：cad_geometry=CAD 精确解析 / ai_vision=AI 视觉（默认）。 */
+const geometrySource = ref<'cad_geometry' | 'ai_vision'>('ai_vision')
+/** CAD 解析质量提示（详情接口返回，可空）。 */
+const qualityIssues = ref<FloorPlanQualityIssue[]>([])
+/** CAD 图纸范围（毫米坐标系；polygon 叠加的归一化基准，Vision 通道 null）。 */
+const drawingBounds = ref<FloorPlanDrawingBounds | null>(null)
+/** CAD 查看模式：规范图可叠加交互；原始阅览图仅供肉眼参考。 */
+const cadViewMode = ref<'canonical' | 'reference'>('canonical')
+
+/** 是否 CAD 精确解析通道（尺寸来自图纸坐标：编辑器标定入口隐藏；有底图时走多边形叠加模式）。 */
+const isCadGeometry = computed(() => geometrySource.value === 'cad_geometry')
+const editorImageUrl = computed(() => isCadGeometry.value ? cadPreviewUrl.value : imagePreviewUrl.value)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 let localIdCounter = 0
 
@@ -152,7 +171,7 @@ function toggleDrawMode() {
   drawMode.value = !drawMode.value
 }
 
-/** 编辑器拖框/标定改了行数据：以编辑器携带的快照替换该行，强制 NDataTable 重渲染（宽/深/面积/来源/置信度列随之刷新）。 */
+/** 编辑器拖框/标定改了行数据：以编辑器携带的快照替换该行，保证校对卡片同步刷新。 */
 function handleRoomMutated(localId: string, snapshot: EditableRoom) {
   rooms.value = rooms.value.map(r => (r.localId === localId ? snapshot : r))
 }
@@ -163,8 +182,10 @@ function handleAddBox(bbox: RoomBBox) {
     localId: nextLocalId(),
     roomId: null,
     roomType: 'LIVING',
+    label: '',
     widthMm: null,
     depthMm: null,
+    areaM2: null,
     bbox: { ...bbox },
     dimensionSource: 'manual',
     dimensionConfidence: 'high',
@@ -211,6 +232,7 @@ const roomTypeDicts = ref<DictItem[]>([])
 const styleDicts = ref<DictItem[]>([])
 
 const selectedFile = computed<File | null>(() => fileList.value[0]?.file ?? null)
+const selectedCadFile = computed<File | null>(() => cadFileList.value[0]?.file ?? null)
 
 const roomTypeOptions = computed(() =>
   roomTypeDicts.value.map(d => ({ label: d.dictName, value: d.dictCode }))
@@ -243,22 +265,24 @@ const placementRooms = computed(() =>
 )
 
 /** 步骤 4 摆放示意展示条件：需有本地原图 + 至少一个可绘制空间（PDF/历史页跳入无原图时整块隐藏）。 */
-const canShowPlacement = computed(() => !!imagePreviewUrl.value && placementRooms.value.length > 0)
+const canShowPlacement = computed(() => !!editorImageUrl.value && placementRooms.value.length > 0)
 
 function roomTypeName(code: string): string {
   return roomTypeDicts.value.find(d => d.dictCode === code)?.dictName ?? code
 }
 
 function calcAreaM2(row: EditableRoom): string {
+  // CAD 通道优先后端精确面积（多边形非矩形时宽×深会失真）
+  if (row.areaM2 && row.areaM2 > 0) return row.areaM2.toFixed(2)
   if (!row.widthMm || !row.depthMm || row.widthMm <= 0 || row.depthMm <= 0) return '-'
   return ((row.widthMm * row.depthMm) / 1_000_000).toFixed(2)
 }
 
 function revokePreviewUrl() {
-  if (imagePreviewUrl.value) {
+  if (imagePreviewUrl.value.startsWith('blob:')) {
     URL.revokeObjectURL(imagePreviewUrl.value)
-    imagePreviewUrl.value = ''
   }
+  imagePreviewUrl.value = ''
 }
 
 function nextLocalId(): string {
@@ -271,8 +295,12 @@ function toEditableRoom(room: FloorPlanRoom): EditableRoom {
     localId: nextLocalId(),
     roomId: room.roomId ?? null,
     roomType: room.roomType,
+    label: room.label ?? '',
     widthMm: room.widthMm ?? null,
     depthMm: room.depthMm ?? null,
+    areaM2: room.areaM2 ?? null,
+    polygon: room.polygon ?? null,
+    labelPoint: room.labelPoint ?? null,
     bbox: room.bbox ?? null,
     dimensionSource: room.dimensionSource ?? null,
     dimensionConfidence: room.dimensionConfidence ?? null,
@@ -285,18 +313,24 @@ function isPdfFile(file: File): boolean {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
 }
 
+/** 判断是否为 CAD 文件（DWG/DXF 无标准 MIME，用扩展名判定）。 */
+function isCadFile(file: File): boolean {
+  return /\.(dwg|dxf)$/i.test(file.name)
+}
+
+/** 图片上传位校验（JPG/PNG/PDF ≤10MB；CAD 走独立上传位）。 */
 function handleFileChange({ fileList: files }: { fileList: UploadFileInfo[] }) {
   errorMessage.value = ''
   const file = files[0]?.file
   if (file) {
     if (!ALLOWED_FILE_TYPES.includes(file.type) && !isPdfFile(file)) {
-      errorMessage.value = '仅支持 JPG / PNG / PDF 格式的户型图（PDF 仅识别第 1 页）'
+      errorMessage.value = '户型图片仅支持 JPG / PNG / PDF 格式（≤10MB）'
       fileList.value = []
       pdfSource.value = false
       return
     }
     if (file.size > MAX_FILE_SIZE_BYTES) {
-      errorMessage.value = '文件大小不能超过 10MB'
+      errorMessage.value = '户型图片大小不能超过 10MB'
       fileList.value = []
       pdfSource.value = false
       return
@@ -306,21 +340,41 @@ function handleFileChange({ fileList: files }: { fileList: UploadFileInfo[] }) {
   fileList.value = files
 }
 
+/** CAD 上传位校验（DWG/DXF ≤20MB）。 */
+function handleCadFileChange({ fileList: files }: { fileList: UploadFileInfo[] }) {
+  errorMessage.value = ''
+  const file = files[0]?.file
+  if (file) {
+    if (!isCadFile(file)) {
+      errorMessage.value = 'CAD 文件仅支持 DWG / DXF 格式（≤20MB）'
+      cadFileList.value = []
+      return
+    }
+    if (file.size > MAX_CAD_FILE_SIZE_BYTES) {
+      errorMessage.value = 'CAD 文件大小不能超过 20MB'
+      cadFileList.value = []
+      return
+    }
+  }
+  cadFileList.value = files
+}
+
 async function handleAnalyze() {
   const file = selectedFile.value
-  if (!file) {
-    errorMessage.value = '请先选择户型图文件'
+  const cad = selectedCadFile.value
+  if (!file && !cad) {
+    errorMessage.value = '请先选择户型图片或 CAD 文件（至少一项）'
     return
   }
   uploading.value = true
   errorMessage.value = ''
   try {
     revokePreviewUrl()
-    // PDF 无本地图像预览：步骤 2 左侧走占位提示，bbox 叠加与手绘框隐藏
-    if (!pdfSource.value) {
+    // 本地预览只来自图片位（PDF / 仅 CAD 无预览：步骤 2 左侧走占位提示）
+    if (file && !pdfSource.value) {
       imagePreviewUrl.value = URL.createObjectURL(file)
     }
-    const result = await analyzeFloorPlan(file, hint.value.trim() || undefined, signal)
+    const result = await analyzeFloorPlan(file, cad, hint.value.trim() || undefined, signal)
     analysisId.value = result.analysisId
     uploading.value = false
     analyzing.value = true
@@ -361,10 +415,25 @@ function applyAnalysisResult(result: FloorPlanAnalysisResponse) {
   // 联调点（后端并行开发中）：详情接口返回 scaleSuggestion 后此处自动生效；
   // 自测三种 status 分支可临时在此注入假数据（如 { status:'auto', mmPerPx:3.42, basisLabel:'客厅' }）
   scaleSuggestion.value = result.scaleSuggestion ?? null
+  // CAD 通道：geometrySource/qualityIssues/drawingBounds（字段缺失按 ai_vision / 无提示 / 无叠加处理）
+  geometrySource.value = result.geometrySource ?? 'ai_vision'
+  qualityIssues.value = result.qualityIssues ?? []
+  drawingBounds.value = result.previewBounds ?? result.drawingBounds ?? null
+  cadPreviewUrl.value = result.previewUrl ?? ''
+  if (!imagePreviewUrl.value && result.referenceImageUrl) {
+    imagePreviewUrl.value = result.referenceImageUrl
+  }
+  if (geometrySource.value === 'cad_geometry' && cadPreviewUrl.value) {
+    cadViewMode.value = 'canonical'
+  }
   rooms.value = (result.rooms ?? [])
     .slice()
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     .map(toEditableRoom)
+  // 未命名空间预填"未命名空间 N"，引导人工命名（可编辑，提交时随 rooms 一并 PUT）
+  rooms.value.forEach((r, i) => {
+    if (!r.label) r.label = `未命名空间 ${i + 1}`
+  })
 }
 
 /**
@@ -400,8 +469,10 @@ function addRoom() {
     localId: nextLocalId(),
     roomId: null,
     roomType: 'LIVING',
+    label: '',
     widthMm: null,
     depthMm: null,
+    areaM2: null,
     bbox: null,
     dimensionSource: 'manual',
     dimensionConfidence: 'high',
@@ -437,6 +508,8 @@ async function handleConfirmRooms() {
       rooms: rooms.value.map(r => ({
         roomId: r.roomId,
         roomType: r.roomType,
+        // 联调点：后端确认接口若暂未接收 label 字段，前端照常传（CAD 通道必须，AI 通道无害）
+        label: r.label,
         widthMm: r.widthMm,
         depthMm: r.depthMm,
         bbox: r.bbox
@@ -602,7 +675,7 @@ function layoutPlacements(
 async function loadPlacement() {
   placementGroups.value = []
   const roomsToDraw = placementRooms.value
-  if (!imagePreviewUrl.value || roomsToDraw.length === 0) return
+  if (!editorImageUrl.value || roomsToDraw.length === 0) return
   placementLoading.value = true
   try {
     const scheme = await getSchemeDetail(schemeId.value, { signal })
@@ -719,103 +792,18 @@ function resetAll() {
   placementGroups.value = []
   placementLoading.value = false
   pdfSource.value = false
+  cadFileList.value = []
+  geometrySource.value = 'ai_vision'
+  qualityIssues.value = []
+  drawingBounds.value = null
+  cadPreviewUrl.value = ''
+  cadViewMode.value = 'canonical'
 }
 
-const roomColumns: DataTableColumns<EditableRoom> = [
-  {
-    // 空间名列不固定宽：吃侧栏剩余空间，保证表格整体恰好撑满、无横向滚动条
-    title: '空间名',
-    key: 'roomType',
-    render: (row) =>
-      h(NSelect, {
-        value: row.roomType,
-        options: roomTypeOptions.value,
-        size: 'small',
-        placeholder: '空间类型',
-        onUpdateValue: (v: string) => {
-          row.roomType = v
-        }
-      })
-  },
-  {
-    title: '宽 (mm)',
-    key: 'widthMm',
-    width: 88,
-    render: (row) =>
-      h(NInputNumber, {
-        value: row.widthMm,
-        min: 0,
-        max: 100000,
-        precision: 0,
-        size: 'small',
-        showButton: false,
-        placeholder: '开间',
-        style: 'width: 100%;',
-        onUpdateValue: (v: number | null) => {
-          row.widthMm = v
-          // 表格手改数字为人工最终值，覆盖标定推算的来源标记
-          row.dimensionSource = 'manual'
-        }
-      })
-  },
-  {
-    title: '深 (mm)',
-    key: 'depthMm',
-    width: 88,
-    render: (row) =>
-      h(NInputNumber, {
-        value: row.depthMm,
-        min: 0,
-        max: 100000,
-        precision: 0,
-        size: 'small',
-        showButton: false,
-        placeholder: '进深',
-        style: 'width: 100%;',
-        onUpdateValue: (v: number | null) => {
-          row.depthMm = v
-          row.dimensionSource = 'manual'
-        }
-      })
-  },
-  {
-    title: '面积 (㎡)',
-    key: 'areaM2',
-    width: 56,
-    render: (row) => h('span', { class: 'rsdp-mono' }, calcAreaM2(row))
-  },
-  {
-    title: '来源/置信',
-    key: 'dimensionMeta',
-    width: 120,
-    render: (row) =>
-      h('div', { class: 'dim-meta-cell' }, [
-        h('span', { class: 'dim-source-text' }, DIMENSION_SOURCE_LABELS[row.dimensionSource ?? ''] ?? '-'),
-        h(StatusPill, {
-          value: row.dimensionConfidence,
-          label: row.dimensionConfidence ? CONFIDENCE_LABELS[row.dimensionConfidence] : '-'
-        })
-      ])
-  },
-  {
-    title: '操作',
-    key: 'actions',
-    width: 52,
-    render: (row) =>
-      h(
-        NButton,
-        { text: true, type: 'error', size: 'small', onClick: () => removeRoom(row) },
-        { default: () => '删除' }
-      )
-  }
-]
-
-function roomRowProps(row: EditableRoom) {
-  return {
-    class: row.localId === selectedLocalId.value ? 'room-row-selected' : '',
-    style: 'cursor: pointer;',
-    onClick: () => selectRoom(row)
-  }
+function updateRoomDimension(row: EditableRoom, field: 'widthMm' | 'depthMm', value: number | null) {
+  row[field] = value
+  // 人工手改数字为最终值，覆盖标定推算的来源标记。
+  row.dimensionSource = 'manual'
 }
 
 async function loadDicts() {
@@ -869,18 +857,32 @@ onUnmounted(() => {
         <n-spin :show="uploading || analyzing">
           <n-space vertical :size="16">
             <p class="hint-text">
-              支持 JPG / PNG / PDF（最大 10MB，PDF 仅识别第 1 页）。系统会识别图中的空间划分与尺寸标注，识别结果可在下一步人工修正。
+              单独上传户型图片走 AI 识别；图片 + CAD 一起上传走 CAD 精确解析（图片做底图叠加精确空间轮廓）；也可仅传 CAD（无底图）。识别结果均可在下一步人工修正。
             </p>
-            <n-upload
-              v-model:file-list="fileList"
-              :default-upload="false"
-              accept=".jpg,.jpeg,.png,.pdf"
-              :max="1"
-              :disabled="uploading || analyzing"
-              @change="handleFileChange"
-            >
-              <n-button>选择户型图</n-button>
-            </n-upload>
+            <n-space vertical :size="8" align="start">
+              <span class="hint-text">户型图片（展示用，JPG / PNG / PDF ≤10MB）</span>
+              <n-upload
+                v-model:file-list="fileList"
+                :default-upload="false"
+                accept=".jpg,.jpeg,.png,.pdf"
+                :max="1"
+                :disabled="uploading || analyzing"
+                @change="handleFileChange"
+              >
+                <n-button>选择户型图片</n-button>
+              </n-upload>
+              <span class="hint-text">CAD 文件（精确数据，DWG / DXF ≤20MB，可选）</span>
+              <n-upload
+                v-model:file-list="cadFileList"
+                :default-upload="false"
+                accept=".dwg,.dxf"
+                :max="1"
+                :disabled="uploading || analyzing"
+                @change="handleCadFileChange"
+              >
+                <n-button secondary>选择 CAD 文件</n-button>
+              </n-upload>
+            </n-space>
             <n-input
               v-model:value="hint"
               type="textarea"
@@ -892,7 +894,7 @@ onUnmounted(() => {
             <n-space align="center">
               <n-button
                 type="primary"
-                :disabled="!selectedFile || uploading || analyzing"
+                :disabled="(!selectedFile && !selectedCadFile) || uploading || analyzing"
                 :loading="uploading"
                 @click="handleAnalyze"
               >
@@ -907,19 +909,51 @@ onUnmounted(() => {
       <!-- 步骤 2：空间识别（人工校正） -->
       <n-card v-if="currentStep === 2" title="确认空间识别结果">
         <n-space vertical :size="16">
-          <p class="hint-text">
+          <p v-if="isCadGeometry" class="hint-text">
+            CAD 精确解析结果，尺寸和面积来自图纸几何、无需标定。默认规范图与空间轮廓共用同一坐标系；原始阅览图仅用于核对文字和制图细节。请确认空间名称与类型后提交。
+          </p>
+          <p v-else class="hint-text">
             左侧图纸支持放大平移与框编辑（点选高亮、拖动移动、拉角/边调整大小，可点「放大编辑」全屏精细操作），与右侧表格行联动；「画标定线」或「以框宽/深标定」输入真实长度后，拖框即可按标定比例自动推算宽深。空间名、宽、深也可在表格中直接修改。置信度低的尺寸请务必核对。
           </p>
+          <!-- CAD 解析质量提示（后端 qualityIssues，可空） -->
+          <n-alert v-if="qualityIssues.length > 0" type="warning" title="CAD 解析质量提示">
+            <ul class="issue-list">
+              <li v-for="(issue, i) in qualityIssues" :key="i">
+                [{{ issue.level }}] {{ issue.message }}
+              </li>
+            </ul>
+          </n-alert>
           <div class="room-layout">
             <div class="room-image-pane">
+              <n-space v-if="isCadGeometry && cadPreviewUrl && imagePreviewUrl" :size="8" class="cad-view-switch">
+                <n-button
+                  size="small"
+                  :type="cadViewMode === 'canonical' ? 'primary' : 'default'"
+                  @click="cadViewMode = 'canonical'"
+                >
+                  CAD 规范图（可点选）
+                </n-button>
+                <n-button
+                  size="small"
+                  :type="cadViewMode === 'reference' ? 'primary' : 'default'"
+                  @click="cadViewMode = 'reference'"
+                >
+                  原始阅览图（仅参考）
+                </n-button>
+              </n-space>
+              <div v-if="isCadGeometry && cadViewMode === 'reference' && imagePreviewUrl" class="reference-image-wrap">
+                <img :src="imagePreviewUrl" alt="原始户型阅览图" class="room-image">
+                <span class="reference-badge">仅供参考，不叠加识别轮廓</span>
+              </div>
               <FloorPlanEditor
-                v-if="imagePreviewUrl"
+                v-else-if="editorImageUrl"
                 class="room-editor-inline"
-                :image-url="imagePreviewUrl"
+                :image-url="editorImageUrl"
                 v-model:selected-local-id="selectedLocalId"
                 v-model:draw-mode="drawMode"
                 :mm-per-px="mmPerPx"
                 :calib-segments="calibSegments"
+                :drawing-bounds="drawingBounds"
                 :rooms="rooms"
                 :auto-calib-available="hasScaleCandidates"
                 @update:calib-segments="handleUpdateCalibSegments"
@@ -929,6 +963,12 @@ onUnmounted(() => {
                 @room-mutated="handleRoomMutated"
                 @open-auto-calib="autoCalibModalVisible = true"
               />
+              <div v-else-if="isCadGeometry" class="pdf-placeholder">
+                <p class="pdf-placeholder-title">CAD 解析结果（毫米精度）</p>
+                <p class="hint-text">
+                  CAD 图纸无本地预览图，空间尺寸来自图纸坐标、无需标定；请在右侧表格确认即可。
+                </p>
+              </div>
               <div v-else-if="pdfSource" class="pdf-placeholder">
                 <p class="pdf-placeholder-title">PDF 户型图已上传（第 1 页）</p>
                 <p class="hint-text">
@@ -938,20 +978,101 @@ onUnmounted(() => {
               <n-empty v-else description="原图不可用（重新上传后可预览）" />
             </div>
             <div class="room-table-pane">
-              <n-data-table
-                class="room-table"
-                :columns="roomColumns"
-                :data="rooms"
-                :row-key="(row: EditableRoom) => row.localId"
-                :row-props="roomRowProps"
-                :bordered="true"
-                :single-line="false"
-                size="small"
-              />
+              <div class="room-list-heading">
+                <div>
+                  <strong>空间校对</strong>
+                  <span>共 {{ rooms.length }} 个空间</span>
+                </div>
+                <span>点击卡片可联动左侧图纸</span>
+              </div>
+              <div class="room-card-list">
+                <article
+                  v-for="(room, index) in rooms"
+                  :key="room.localId"
+                  class="room-card"
+                  :class="{ selected: room.localId === selectedLocalId }"
+                  @click="selectRoom(room)"
+                >
+                  <div class="room-card-head">
+                    <span class="room-index rsdp-mono">{{ String(index + 1).padStart(2, '0') }}</span>
+                    <label class="room-card-control">
+                      <span>空间名称</span>
+                      <n-input
+                        v-model:value="room.label"
+                        size="small"
+                        placeholder="请输入空间名称"
+                      />
+                    </label>
+                    <label class="room-card-control room-type-control">
+                      <span>空间类型</span>
+                      <n-select
+                        v-model:value="room.roomType"
+                        :options="roomTypeOptions"
+                        size="small"
+                        placeholder="请选择空间类型"
+                      />
+                    </label>
+                    <n-button
+                      text
+                      type="error"
+                      size="small"
+                      class="room-delete"
+                      @click.stop="removeRoom(room)"
+                    >
+                      删除
+                    </n-button>
+                  </div>
+                  <div class="room-card-details">
+                    <label class="room-detail-field">
+                      <span>开间（mm）</span>
+                      <n-input-number
+                        :value="room.widthMm"
+                        :min="0"
+                        :max="100000"
+                        :precision="0"
+                        :show-button="false"
+                        :disabled="isCadGeometry && !!room.roomId"
+                        size="small"
+                        placeholder="开间"
+                        @update:value="value => updateRoomDimension(room, 'widthMm', value)"
+                      />
+                    </label>
+                    <label class="room-detail-field">
+                      <span>进深（mm）</span>
+                      <n-input-number
+                        :value="room.depthMm"
+                        :min="0"
+                        :max="100000"
+                        :precision="0"
+                        :show-button="false"
+                        :disabled="isCadGeometry && !!room.roomId"
+                        size="small"
+                        placeholder="进深"
+                        @update:value="value => updateRoomDimension(room, 'depthMm', value)"
+                      />
+                    </label>
+                    <div class="room-detail-metric">
+                      <span>面积</span>
+                      <strong class="rsdp-mono">{{ calcAreaM2(room) }} ㎡</strong>
+                    </div>
+                    <div class="room-detail-metric">
+                      <span>数据来源</span>
+                      <strong>{{ DIMENSION_SOURCE_LABELS[room.dimensionSource ?? ''] ?? '未知' }}</strong>
+                    </div>
+                    <div class="room-detail-metric confidence">
+                      <span>置信度</span>
+                      <StatusPill
+                        :value="room.dimensionConfidence"
+                        :label="room.dimensionConfidence ? CONFIDENCE_LABELS[room.dimensionConfidence] : '未知'"
+                      />
+                    </div>
+                  </div>
+                </article>
+              </div>
               <n-space align="center" :size="12">
                 <n-button size="small" @click="addRoom">添加空间</n-button>
                 <n-button
-                  v-if="imagePreviewUrl"
+                  v-if="imagePreviewUrl && !isCadGeometry"
                   size="small"
                   :type="drawMode ? 'primary' : 'default'"
                   @click="toggleDrawMode"
@@ -1048,7 +1169,7 @@ onUnmounted(() => {
                     {{ group.roomName }}（<span class="rsdp-mono">{{ group.room.widthMm ?? '?' }}×{{ group.room.depthMm ?? '?' }}</span>mm）
                   </p>
                   <div class="room-image-wrap placement-wrap">
-                    <img :src="imagePreviewUrl" alt="户型图" class="room-image">
+                    <img :src="editorImageUrl" alt="户型图" class="room-image">
                     <div
                       v-if="group.room.bbox"
                       class="placement-room"
@@ -1093,13 +1214,14 @@ onUnmounted(() => {
       :bordered="false"
     >
       <FloorPlanEditor
-        v-if="imagePreviewUrl"
+        v-if="editorImageUrl"
         class="room-editor-modal"
-        :image-url="imagePreviewUrl"
+        :image-url="editorImageUrl"
         v-model:selected-local-id="selectedLocalId"
         v-model:draw-mode="drawMode"
         :mm-per-px="mmPerPx"
         :calib-segments="calibSegments"
+        :drawing-bounds="drawingBounds"
         :rooms="rooms"
         :draw-button="true"
         :maximized="true"
@@ -1171,6 +1293,30 @@ onUnmounted(() => {
   min-height: 80vh;
 }
 
+.cad-view-switch {
+  margin-bottom: 8px;
+}
+
+.reference-image-wrap {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  background: var(--rsdp-card-bg);
+}
+
+.reference-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+  background: color-mix(in srgb, var(--rsdp-card-bg) 88%, transparent);
+  border: 1px solid var(--rsdp-border);
+  border-radius: 4px;
+}
+
 .room-image-wrap {
   position: relative;
   border: 1px solid var(--rsdp-border);
@@ -1185,40 +1331,183 @@ onUnmounted(() => {
   height: auto;
 }
 
-/* 表格收窄为固定宽侧栏 */
+/* 空间校对侧栏：卡片分层展示，避免窄表格把名称、类型和来源截断。 */
 .room-table-pane {
-  flex: 0 0 600px;
-  min-width: 0;
+  flex: 0 1 700px;
+  min-width: 620px;
+  max-width: 760px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   align-items: stretch;
 }
 
-/* 来源/置信合并列 */
-.dim-meta-cell {
+.room-list-heading {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px;
+  color: var(--rsdp-text-secondary);
+  font-size: 12px;
+}
+
+.room-list-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.room-list-heading strong {
+  color: var(--rsdp-text);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.room-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 64vh;
+  padding-right: 4px;
+  overflow-y: auto;
+}
+
+.room-card {
+  padding: 12px;
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  background: var(--rsdp-card-bg);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.room-card:hover {
+  border-color: var(--rsdp-text-secondary);
+}
+
+.room-card.selected {
+  border-color: var(--rsdp-primary);
+  box-shadow: 0 0 0 1px var(--rsdp-primary);
+}
+
+.room-card-head {
+  display: grid;
+  grid-template-columns: 34px minmax(150px, 1fr) minmax(160px, 0.85fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.room-index {
+  align-self: center;
+  color: var(--rsdp-text-secondary);
+  font-size: 13px;
+}
+
+.room-card.selected .room-index {
+  color: var(--rsdp-primary);
+}
+
+.room-card-control,
+.room-detail-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.room-card-control > span,
+.room-detail-field > span,
+.room-detail-metric > span {
+  color: var(--rsdp-text-secondary);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.room-delete {
+  align-self: center;
+  margin-bottom: 3px;
+}
+
+.room-card-details {
+  display: grid;
+  grid-template-columns: minmax(105px, 1fr) minmax(105px, 1fr) minmax(76px, 0.65fr) minmax(92px, 0.8fr) minmax(72px, 0.6fr);
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+  padding: 10px 0 0 44px;
+  border-top: 1px dashed var(--rsdp-border);
+}
+
+.room-detail-field :deep(.n-input-number) {
+  width: 100%;
+}
+
+.room-detail-metric {
+  display: flex;
+  min-width: 0;
+  min-height: 34px;
+  flex-direction: column;
+  justify-content: center;
   gap: 6px;
 }
 
-/* 校正表格紧凑化：小字号 + 窄内边距，侧栏内完整展示不裁切 */
-.room-table :deep(.n-data-table-th),
-.room-table :deep(.n-data-table-td) {
-  padding: 6px 8px;
+.room-detail-metric strong {
+  overflow: hidden;
+  color: var(--rsdp-text);
   font-size: 12px;
-}
-
-.dim-source-text {
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
+  font-weight: 500;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.dim-source-text {
-  font-size: 12px;
-  color: var(--rsdp-text-secondary);
-  white-space: nowrap;
+.room-detail-metric.confidence {
+  align-items: flex-start;
+}
+
+/* CAD 解析质量提示列表 */
+.issue-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+@media (max-width: 1280px) {
+  .room-layout {
+    flex-direction: column;
+  }
+
+  .room-image-pane,
+  .room-table-pane {
+    width: 100%;
+    max-width: none;
+  }
+
+  .room-table-pane {
+    min-width: 0;
+  }
+
+  .room-card-list {
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .room-card-head {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+  }
+
+  .room-type-control {
+    grid-column: 2 / 3;
+  }
+
+  .room-card-details {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-left: 40px;
+  }
+
+  .room-list-heading > span {
+    display: none;
+  }
 }
 
 /* 选择标定基准弹窗的候选条目 */
