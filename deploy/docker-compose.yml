@@ -56,6 +56,15 @@ services:
       - minio-data:/data
     command: server /data --console-address ":9001"
 
+  # CAD 户型解析微服务（DWG/DXF 精确解析；内网服务，宿主机映射仅供本地 dev（IDEA 起后端）联调）
+  cad-parser:
+    build:
+      context: ../rsdp-cad-parser
+      dockerfile: Dockerfile
+    container_name: rsdp-cad-parser
+    ports:
+      - "127.0.0.1:8090:8090"
+
   server:
     build:
       context: ../server
@@ -86,11 +95,13 @@ services:
       - RSDP_ORDER_INVITE_EXPIRE_DAYS=${RSDP_ORDER_INVITE_EXPIRE_DAYS:-7}
       - RSDP_ALLOWED_ORIGINS=${RSDP_ALLOWED_ORIGINS}
       - RSDP_IMPORT_ALLOWED_IMAGE_HOSTS=${RSDP_IMPORT_ALLOWED_IMAGE_HOSTS:-}
+      - RSDP_CAD_PARSER_BASE_URL=http://cad-parser:8090
     depends_on:
       - postgres
       - ollama
       - redis
       - minio
+      - cad-parser
     volumes:
       - server-data:/data
 
