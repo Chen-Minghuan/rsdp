@@ -1,4 +1,4 @@
--- V11：floor_plan_room 扩列支持 CAD 几何落库（CAD 户型导入 P3，docs/08-roadmap/CAD户型导入架构设计.md §7）
+-- V13：floor_plan_room 扩列支持 CAD 几何落库（CAD 户型导入 P3，docs/08-roadmap/CAD户型导入架构设计.md §7）
 -- 同步约定：database/schema/06_floor_plan.sql 与 database/ops/reset_db.sql 已同步修改
 ALTER TABLE floor_plan_room
     ADD COLUMN IF NOT EXISTS label VARCHAR(128),          -- 空间标签原文（如"主卧"；未命名空间落"未命名空间 N"）
