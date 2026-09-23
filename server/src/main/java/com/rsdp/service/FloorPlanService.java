@@ -10,6 +10,7 @@ import com.rsdp.dto.FloorPlanDetectResult;
 import com.rsdp.dto.request.FloorPlanConfirmRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
+import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
 import com.rsdp.dto.response.FloorPlanDrawingBounds;
 import com.rsdp.dto.response.FloorPlanQualityIssue;
 import com.rsdp.dto.response.FloorPlanRoomResponse;
@@ -41,9 +42,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -56,6 +60,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -135,6 +140,7 @@ public class FloorPlanService {
     private final ProjectService projectService;
     private final ProjectMapper projectMapper;
     private final ObjectMapper objectMapper;
+    private final PlatformTransactionManager transactionManager;
 
     @Value("${rsdp.floor-plan.max-file-size-mb:10}")
     private long maxFileSizeMb;
@@ -451,7 +457,7 @@ public class FloorPlanService {
      * @return 分页列表
      */
     public PageResult<FloorPlanAnalysisListItemResponse> listAnalyses(long page, long size, String status) {
-        return listAnalyses(page, size, status, null);
+        return listAnalyses(page, size, status, null, false);
     }
 
     /**
@@ -466,6 +472,23 @@ public class FloorPlanService {
      */
     public PageResult<FloorPlanAnalysisListItemResponse> listAnalyses(long page, long size,
                                                                       String status, String projectId) {
+        return listAnalyses(page, size, status, projectId, false);
+    }
+
+    /**
+     * 分析历史列表：支持项目精确过滤或仅查询未归属记录，筛选在数据库分页前完成，
+     * 保证总数与分页结果一致。
+     *
+     * @param page       页码（从 1 开始）
+     * @param size       每页条数（1~100，非法值按 20 处理）
+     * @param status     状态过滤（可空）
+     * @param projectId  归属项目过滤（可空）
+     * @param unassigned 是否只查询 project_id 为空的记录；为 true 时忽略 projectId
+     * @return 分页列表
+     */
+    public PageResult<FloorPlanAnalysisListItemResponse> listAnalyses(long page, long size,
+                                                                      String status, String projectId,
+                                                                      boolean unassigned) {
         long safePage = Math.max(1, page);
         long safeSize = size < 1 ? 20 : Math.min(size, 100);
 
@@ -473,7 +496,9 @@ public class FloorPlanService {
         if (StringUtils.hasText(status)) {
             wrapper.eq("status", status.trim());
         }
-        if (StringUtils.hasText(projectId)) {
+        if (unassigned) {
+            wrapper.isNull("project_id");
+        } else if (StringUtils.hasText(projectId)) {
             wrapper.eq("project_id", projectId.trim());
         }
         if (!SecurityOperatorContext.isPlatformStaff()) {
@@ -534,7 +559,7 @@ public class FloorPlanService {
                 ? projectNameMap.get(analysis.getProjectId()) : null);
             item.setSourceName(analysis.getSourceName());
             item.setGeometrySource(geometrySourceMap.get(analysis.getAnalysisId()));
-            item.setQualityIssueCount(qualityIssueCount(analysis.getQualityIssues()));
+            item.setQualityIssueCount(qualityIssueCount(analysis.getQualityIssues(), analysis.getRawResult()));
             rows.add(item);
         }
         return rows;
@@ -547,16 +572,23 @@ public class FloorPlanService {
         return StringUtils.hasText(imageId) ? "/api/v1/images/" + imageId : null;
     }
 
-    /** 质量提示数（V14）：quality_issues 数组长度；null/非数组/解析失败按 0 处理。 */
-    private int qualityIssueCount(String qualityIssuesJson) {
-        if (!StringUtils.hasText(qualityIssuesJson)) {
-            return 0;
-        }
+    /**
+     * 质量提示数（V14）：优先读 quality_issues 冗余列；历史 CAD 记录该列为空时，
+     * 回退 raw_result.qualityIssues，确保迁移前的分析记录也能正确展示质量提示数。
+     */
+    private int qualityIssueCount(String qualityIssuesJson, String rawResultJson) {
         try {
-            JsonNode node = objectMapper.readTree(qualityIssuesJson);
-            return node.isArray() ? node.size() : 0;
+            if (StringUtils.hasText(qualityIssuesJson)) {
+                JsonNode node = objectMapper.readTree(qualityIssuesJson);
+                return node.isArray() ? node.size() : 0;
+            }
+            if (StringUtils.hasText(rawResultJson)) {
+                JsonNode qualityIssues = objectMapper.readTree(rawResultJson).path("qualityIssues");
+                return qualityIssues.isArray() ? qualityIssues.size() : 0;
+            }
+            return 0;
         } catch (Exception e) {
-            log.warn("解析户型分析质量提示列失败，按 0 处理", e);
+            log.warn("解析户型分析质量提示失败，按 0 处理", e);
             return 0;
         }
     }
@@ -794,6 +826,40 @@ public class FloorPlanService {
         auditLogService.logDelete("floor_plan_analysis", analysisId, analysis,
             SecurityOperatorContext.currentUsername());
         log.info("户型图分析已软删，analysisId={}", analysisId);
+    }
+
+    /**
+     * 批量软删户型图分析记录。
+     *
+     * <p>去重后逐条在独立事务中复用 {@link #deleteAnalysis}，保留原有归属校验、
+     * 空间级联软删和审计语义；单条失败不会回滚已成功的其他记录。</p>
+     *
+     * @param analysisIds 待删除的分析批次 ID 列表
+     * @return 删除结果（成功数 + 失败明细）
+     */
+    public FloorPlanBatchDeleteResponse batchDeleteAnalyses(List<String> analysisIds) {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        List<FloorPlanBatchDeleteResponse.Failure> failures = new ArrayList<>();
+        int deletedCount = 0;
+        LinkedHashSet<String> normalizedIds = analysisIds.stream()
+            .map(analysisId -> analysisId != null ? analysisId.trim() : null)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (String analysisId : normalizedIds) {
+            if (!StringUtils.hasText(analysisId)) {
+                failures.add(new FloorPlanBatchDeleteResponse.Failure(analysisId, "分析批次 ID 不能为空"));
+                continue;
+            }
+            try {
+                transactionTemplate.executeWithoutResult(status -> deleteAnalysis(analysisId));
+                deletedCount++;
+            } catch (Exception e) {
+                String reason = StringUtils.hasText(e.getMessage()) ? e.getMessage() : "删除失败";
+                log.warn("批量删除户型图分析记录失败，analysisId={}，reason={}", analysisId, reason);
+                failures.add(new FloorPlanBatchDeleteResponse.Failure(analysisId, reason));
+            }
+        }
+        return new FloorPlanBatchDeleteResponse(deletedCount, failures.size(), failures);
     }
 
     /**
@@ -1475,7 +1541,8 @@ public class FloorPlanService {
      * 归属校验：平台运营人员（ADMIN/EDITOR）可访问任意分析，其他用户仅能访问自己创建的
      * （与 async_task 同口径，v3.0 §3 数据归属）。
      */
-    private void assertCanAccess(FloorPlanAnalysis analysis) {        if (!SecurityOperatorContext.isPlatformStaff()) {
+    private void assertCanAccess(FloorPlanAnalysis analysis) {
+        if (!SecurityOperatorContext.isPlatformStaff()) {
             String currentUser = SecurityOperatorContext.currentUsername();
             String creator = analysis.getCreatedBy();
             if (creator == null || !creator.equals(currentUser)) {

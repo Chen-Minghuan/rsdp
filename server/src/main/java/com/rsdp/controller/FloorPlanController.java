@@ -2,10 +2,12 @@ package com.rsdp.controller;
 
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
+import com.rsdp.dto.request.FloorPlanBatchDeleteRequest;
 import com.rsdp.dto.request.FloorPlanConfirmRequest;
 import com.rsdp.dto.request.FloorPlanSchemeRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
+import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.FloorPlanMatchingService;
 import com.rsdp.service.FloorPlanService;
@@ -73,6 +75,7 @@ public class FloorPlanController {
      * @param size      每页条数（1~100）
      * @param status    状态过滤（可选）
      * @param projectId 归属项目过滤（可选）
+     * @param unassigned 是否只查询未归属项目的记录（默认 false；为 true 时忽略 projectId）
      * @return 分页列表（含 roomCount 批量统计、缩略图、项目名称、几何来源与质量提示数）
      */
     @GetMapping
@@ -80,8 +83,9 @@ public class FloorPlanController {
         @RequestParam(defaultValue = "1") long page,
         @RequestParam(defaultValue = "20") long size,
         @RequestParam(required = false) String status,
-        @RequestParam(required = false) String projectId) {
-        return Result.ok(floorPlanService.listAnalyses(page, size, status, projectId));
+        @RequestParam(required = false) String projectId,
+        @RequestParam(defaultValue = "false") boolean unassigned) {
+        return Result.ok(floorPlanService.listAnalyses(page, size, status, projectId, unassigned));
     }
 
     /**
@@ -147,5 +151,17 @@ public class FloorPlanController {
     public Result<Void> deleteAnalysis(@PathVariable String analysisId) {
         floorPlanService.deleteAnalysis(analysisId);
         return Result.ok();
+    }
+
+    /**
+     * 批量软删分析批次。每条记录使用独立事务，单条失败不影响其余记录。
+     *
+     * @param request 批量删除请求（分析批次 ID 列表，单次最多 100 条）
+     * @return 删除结果（成功数 + 失败明细）
+     */
+    @PostMapping("/batch-delete")
+    public Result<FloorPlanBatchDeleteResponse> batchDeleteAnalyses(
+        @Valid @RequestBody FloorPlanBatchDeleteRequest request) {
+        return Result.ok(floorPlanService.batchDeleteAnalyses(request.getAnalysisIds()));
     }
 }

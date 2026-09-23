@@ -132,14 +132,39 @@ export async function deleteFloorPlanAnalysis(analysisId: string, options?: ApiO
   await apiClient.delete<ApiResult<null>>(`/v1/floor-plan/${analysisId}`, { signal: options?.signal })
 }
 
+/** 户型图分析记录批量软删除结果。 */
+export interface FloorPlanBatchDeleteResult {
+  deletedCount: number
+  failedCount: number
+  failures: Array<{ analysisId: string; reason: string }>
+}
+
+/**
+ * 批量软删除户型图分析记录（单次最多 100 条）。单条失败不影响其他记录。
+ *
+ * @param analysisIds 待删除的分析批次 ID 列表
+ * @returns 删除结果（成功数 + 失败明细）
+ */
+export async function batchDeleteFloorPlanAnalyses(
+  analysisIds: string[]
+): Promise<FloorPlanBatchDeleteResult> {
+  const { data: result } = await apiClient.post<ApiResult<FloorPlanBatchDeleteResult>>(
+    '/v1/floor-plan/batch-delete',
+    { analysisIds }
+  )
+  return result.data
+}
+
 /** 分析历史分页查询参数。 */
 export interface FloorPlanListParams {
   page?: number
   size?: number
   /** 按状态过滤（pending/analyzing/awaiting_confirm/confirmed/failed），不传查全部 */
   status?: FloorPlanAnalysisStatus
-  /** 按归属项目精确过滤（可选；"未归属"过滤暂由前端处理） */
+  /** 按归属项目精确过滤（可选） */
   projectId?: string
+  /** 只查询未归属项目的记录；为 true 时后端忽略 projectId */
+  unassigned?: boolean
 }
 
 /**

@@ -106,6 +106,9 @@ class FloorPlanServiceTest {
     @Mock
     private ProjectMapper projectMapper;
 
+    @Mock
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -780,6 +783,40 @@ class FloorPlanServiceTest {
         ArgumentCaptor<QueryWrapper<FloorPlanAnalysis>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
         verify(analysisMapper).selectPage(any(), captor.capture());
         assertThat(captor.getValue().getSqlSegment()).contains("project_id =");
+    }
+
+    @Test
+    void listAnalyses_unassigned_shouldFilterBeforePagination() {
+        Page<FloorPlanAnalysis> resultPage = new Page<>(1, 20);
+        resultPage.setRecords(List.of());
+        resultPage.setTotal(0);
+        when(analysisMapper.selectPage(org.mockito.ArgumentMatchers.<Page<FloorPlanAnalysis>>any(), any()))
+            .thenReturn(resultPage);
+
+        floorPlanService.listAnalyses(1, 20, null, "PRJ-IGNORED", true);
+
+        ArgumentCaptor<QueryWrapper<FloorPlanAnalysis>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(analysisMapper).selectPage(any(), captor.capture());
+        assertThat(captor.getValue().getSqlSegment())
+            .contains("project_id IS NULL")
+            .doesNotContain("project_id =");
+    }
+
+    @Test
+    void listAnalyses_historicalCadRecord_shouldReadQualityIssuesFromRawResult() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-OLD", FloorPlanService.STATUS_CONFIRMED);
+        analysis.setRawResult("{\"qualityIssues\":[{\"code\":\"DIM_MISMATCH\"},{\"code\":\"UNIT_ASSUMED\"}]}");
+        Page<FloorPlanAnalysis> resultPage = new Page<>(1, 20);
+        resultPage.setRecords(List.of(analysis));
+        resultPage.setTotal(1);
+        when(analysisMapper.selectPage(org.mockito.ArgumentMatchers.<Page<FloorPlanAnalysis>>any(), any()))
+            .thenReturn(resultPage);
+        when(roomMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<FloorPlanAnalysisListItemResponse> result =
+            floorPlanService.listAnalyses(1, 20, null, null);
+
+        assertThat(result.getRows().get(0).getQualityIssueCount()).isEqualTo(2);
     }
 
     // ---------- 项目下户型图批次列表（V14） ----------
@@ -1572,6 +1609,31 @@ class FloorPlanServiceTest {
 
         verify(roomMapper).delete(any());
         verify(analysisMapper).deleteById("FPA-1");
+    }
+
+    @Test
+    void batchDeleteAnalyses_shouldReturnPartialFailuresAndDeduplicateIds() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_CONFIRMED);
+        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(analysisMapper.selectById("FPA-MISSING")).thenReturn(null);
+
+        var result = floorPlanService.batchDeleteAnalyses(
+            List.of(" FPA-1 ", "FPA-MISSING", "FPA-1"));
+
+        assertThat(result.getDeletedCount()).isEqualTo(1);
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getAnalysisId()).isEqualTo("FPA-MISSING");
+        verify(analysisMapper, times(1)).deleteById("FPA-1");
+    }
+
+    @Test
+    void batchDeleteAnalyses_blankId_shouldReturnFailureWithoutDeleting() {
+        var result = floorPlanService.batchDeleteAnalyses(List.of("  "));
+
+        assertThat(result.getDeletedCount()).isZero();
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailures().get(0).getReason()).contains("不能为空");
+        verify(analysisMapper, never()).deleteById(anyString());
     }
 
     // ---------- 归属校验 ----------

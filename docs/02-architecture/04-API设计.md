@@ -1742,12 +1742,14 @@ POST   /api/v1/floor-plan/analyze          [product:read]
        # Response: { analysisId, taskId }
 
 GET    /api/v1/floor-plan                  [登录 + 归属过滤]
-       # 分析历史列表（P1）：分页 + 可选 status / projectId（V14）过滤，按创建时间倒序；
+       # 分析历史列表（P1）：分页 + 可选 status / projectId / unassigned 过滤，按创建时间倒序；
        # roomCount 按页内 analysisId 批量统计（避免 N+1）。
        # 归属过滤与详情同口径：平台运营（ADMIN/EDITOR）全见（含官网匿名 source=public
        # 记录），其他角色仅 created_by=本人
        # Query: page=1&size=20（上限 100）&status?=pending|analyzing|awaiting_confirm|confirmed|failed
-       #        &projectId?（V14，归属项目过滤）
+       #        &projectId?（V14，归属项目过滤）&unassigned?=true|false
+       # unassigned=true 时在数据库分页前筛选 project_id IS NULL，并忽略 projectId，
+       # 确保“未归属”筛选的总数与分页结果一致
        # Response: PageResult<{ analysisId, status, source, roomCount, createdBy,
        #            createdAt, updatedAt, errorMessage,
        #            thumbnailUrl, projectId, projectName, sourceName,
@@ -1755,7 +1757,8 @@ GET    /api/v1/floor-plan                  [登录 + 归属过滤]
        # 列表项增强（V14，只加不改旧字段）：thumbnailUrl = preview_image_id 图片地址优先、
        #   回退 image_id；projectName JOIN project 取 project_name（无归属 null）；
        #   geometrySource 聚合自批次 rooms（任一 cad_geometry → cad_geometry，否则
-       #   ai_vision，无 rooms 为 null）；qualityIssueCount = quality_issues 数组长度（null→0）
+       #   ai_vision，无 rooms 为 null）；qualityIssueCount 优先取 quality_issues 数组长度，
+       #   历史 CAD 记录该列为空时回退 raw_result.qualityIssues（均无则 0）
 
 GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # 查询分析状态与空间列表（前端轮询入口；以 task 状态同步校正 analysis 状态：
@@ -1828,6 +1831,11 @@ POST   /api/v1/floor-plan/{analysisId}/retry   [登录 + 归属校验]
 DELETE /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # 软删分析批次（@TableLogic），级联软删其下空间明细
        # Response: null
+
+POST   /api/v1/floor-plan/batch-delete     [登录 + 逐条归属校验]
+       # 批量软删分析批次，Request: { analysisIds: string[] }（1~100 条）
+       # ID 去重后逐条使用独立事务复用单删逻辑；单条失败不影响其他记录，失败项可重试
+       # Response: { deletedCount, failedCount, failures: [{ analysisId, reason }] }
 
 GET    /api/v1/projects/{projectId}/floor-plans   [登录，V14]
        # 项目下户型图分析批次列表：未软删全部批次（created_at DESC），

@@ -12,12 +12,14 @@ import {
   NSpace,
   NSpin,
   NTag,
+  useDialog,
   useMessage,
   type DataTableColumns
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import {
+  batchDeleteFloorPlanAnalyses,
   deleteFloorPlanAnalysis,
   listFloorPlanAnalyses,
   retryFloorPlanAnalysis,
@@ -39,6 +41,7 @@ import {
  */
 const router = useRouter()
 const message = useMessage()
+const dialog = useDialog()
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -47,12 +50,15 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(10)
 const statusFilter = ref<string | null>(null)
-/** 项目过滤：''/null=全部项目；'__none__'=未归属（前端当前页内过滤）；其余=项目 ID（传后端精确过滤）。 */
+/** 项目过滤：''/null=全部项目；'__none__'=未归属；其余=项目 ID。 */
 const projectFilter = ref<string | null>(null)
 /** 正在重试中的行（按 analysisId 防重复点击）。 */
 const retryingId = ref('')
+/** 表格勾选的分析批次 ID。 */
+const selectedRowKeys = ref<string[]>([])
+const batchDeleting = ref(false)
 
-/** 「未归属」过滤的约定值（后端 projectId 参数仅支持精确匹配，未归属在前端当前页内过滤）。 */
+/** 「未归属」过滤的约定值。 */
 const PROJECT_NONE = '__none__'
 
 const projectOptions = ref<Array<{ label: string; value: string }>>([
@@ -88,14 +94,13 @@ async function loadList() {
       size: size.value,
       status: (statusFilter.value || undefined) as FloorPlanAnalysisStatus | undefined
     }
-    // 指定项目走后端精确过滤；「未归属」不传参，前端在当前页内按 projectId 为空过滤（总数以后端为准）
-    if (projectFilter.value && projectFilter.value !== PROJECT_NONE) {
+    if (projectFilter.value === PROJECT_NONE) {
+      params.unassigned = true
+    } else if (projectFilter.value) {
       params.projectId = projectFilter.value
     }
     const result = await listFloorPlanAnalyses(params)
-    rows.value = projectFilter.value === PROJECT_NONE
-      ? result.rows.filter(r => !r.projectId)
-      : result.rows
+    rows.value = result.rows
     total.value = result.total
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载分析记录失败'
@@ -105,16 +110,19 @@ async function loadList() {
 }
 
 function handlePageChange(value: number) {
+  selectedRowKeys.value = []
   page.value = value
   loadList()
 }
 
 function handleStatusChange() {
+  selectedRowKeys.value = []
   page.value = 1
   loadList()
 }
 
 function handleProjectChange() {
+  selectedRowKeys.value = []
   page.value = 1
   loadList()
 }
@@ -150,6 +158,7 @@ async function handleRetry(row: FloorPlanListItem) {
 async function handleDelete(row: FloorPlanListItem) {
   try {
     await deleteFloorPlanAnalysis(row.analysisId)
+    selectedRowKeys.value = selectedRowKeys.value.filter(id => id !== row.analysisId)
     message.success('已删除')
     // 删除本页最后一条时回退一页，避免停在空页
     if (rows.value.length === 1 && page.value > 1) {
@@ -161,7 +170,49 @@ async function handleDelete(row: FloorPlanListItem) {
   }
 }
 
+function handleBatchDelete() {
+  const ids = selectedRowKeys.value
+  if (ids.length === 0 || batchDeleting.value) return
+  dialog.warning({
+    title: '批量删除确认',
+    content: `确定要删除选中的 ${ids.length} 条户型图分析记录吗？删除后不可恢复。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchDeleting.value = true
+      try {
+        const result = await batchDeleteFloorPlanAnalyses(ids)
+        if (result.failedCount === 0) {
+          message.success(`已删除 ${result.deletedCount} 条分析记录`)
+          selectedRowKeys.value = []
+        } else {
+          selectedRowKeys.value = result.failures.map(item => item.analysisId)
+          dialog.warning({
+            title: `删除完成：成功 ${result.deletedCount} 条，失败 ${result.failedCount} 条`,
+            content: result.failures.map(item => `${item.analysisId || '(空 ID)'}：${item.reason}`).join('\n'),
+            positiveText: '确定'
+          })
+        }
+        const remainingTotal = Math.max(0, total.value - result.deletedCount)
+        page.value = Math.min(page.value, Math.max(1, Math.ceil(remainingTotal / size.value)))
+        await loadList()
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '批量删除失败')
+      } finally {
+        batchDeleting.value = false
+      }
+    }
+  })
+}
+
+function rowKey(row: FloorPlanListItem): string {
+  return row.analysisId
+}
+
 const columns: DataTableColumns<FloorPlanListItem> = [
+  {
+    type: 'selection'
+  },
   {
     title: '图纸',
     key: 'thumbnailUrl',
@@ -342,26 +393,43 @@ onMounted(() => {
     </n-alert>
 
     <div class="filter-bar">
-      <n-select
-        v-model:value="projectFilter"
-        :options="projectOptions"
-        clearable
-        placeholder="项目过滤"
-        style="width: 200px;"
-        @update:value="handleProjectChange"
-      />
-      <n-select
-        v-model:value="statusFilter"
-        :options="statusOptions"
-        clearable
-        placeholder="状态过滤"
-        style="width: 160px;"
-        @update:value="handleStatusChange"
-      />
+      <n-space align="center">
+        <n-button
+          v-if="selectedRowKeys.length > 0"
+          type="error"
+          :loading="batchDeleting"
+          @click="handleBatchDelete"
+        >
+          批量删除（{{ selectedRowKeys.length }}）
+        </n-button>
+        <span v-if="selectedRowKeys.length > 0" class="selection-summary">
+          已选择 {{ selectedRowKeys.length }} 条
+        </span>
+      </n-space>
+      <div class="filter-controls">
+        <n-select
+          v-model:value="projectFilter"
+          :options="projectOptions"
+          clearable
+          placeholder="项目过滤"
+          style="width: 200px;"
+          @update:value="handleProjectChange"
+        />
+        <n-select
+          v-model:value="statusFilter"
+          :options="statusOptions"
+          clearable
+          placeholder="状态过滤"
+          style="width: 160px;"
+          @update:value="handleStatusChange"
+        />
+      </div>
     </div>
 
     <n-spin :show="loading">
       <n-data-table
+        v-model:checked-row-keys="selectedRowKeys"
+        :row-key="rowKey"
         :columns="columns"
         :data="rows"
         :bordered="false"
@@ -382,9 +450,20 @@ onMounted(() => {
 <style scoped>
 .filter-bar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+.filter-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.selection-summary {
+  color: var(--rsdp-text-secondary);
+  font-size: 13px;
 }
 
 /* 「图纸」列无缩略图占位 */
