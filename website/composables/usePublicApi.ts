@@ -27,7 +27,7 @@ export function usePublicApi() {
   async function post<T>(path: string, body: unknown): Promise<T | null> {
     const result = await $fetch<ApiResult<T>>(`${requestBase}${path}`, {
       method: 'POST',
-      body
+      body: body as BodyInit | Record<string, any> | null | undefined
     }).catch((err: unknown) => {
       // 业务错误（如校验 400）抛出中文 message 供表单展示
       const message = (err as { data?: { message?: string } })?.data?.message

@@ -114,7 +114,9 @@ const activeNav = computed(() => {
         <div class="hd-links">
           <a>门店</a><i />
           <template v-if="designerLoggedIn">
-            <a href="/designer/lists">{{ designerNickname || '我的清单' }}</a><i /><a @click="logoutDesigner">退出</a>
+            <a href="/designer/floor-plans">我的户型</a><i />
+            <a href="/designer/lists">{{ designerNickname || '我的清单' }}</a><i />
+            <a @click="logoutDesigner">退出</a>
           </template>
           <a v-else href="/designer/login">设计师登录</a>
           <i /><a @click="openWishlist">心愿单<span v-if="wishlistCount">（{{ wishlistCount }}）</span></a><i /><a>购物车</a>

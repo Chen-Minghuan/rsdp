@@ -11,7 +11,10 @@ export function useDesignerApi() {
 
   async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
     try {
-      const result = await $fetch<ApiResult<T>>(`${requestBase}${path}`, { method, body })
+      const result = await $fetch<ApiResult<T>>(`${requestBase}${path}`, {
+        method,
+        body: body as BodyInit | Record<string, any> | null | undefined
+      })
       if (!result || result.code !== 200) {
         throw new Error(result?.message || '操作失败，请稍后重试')
       }

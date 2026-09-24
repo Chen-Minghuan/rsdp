@@ -44,6 +44,7 @@ export function useDesignerAuth() {
   async function login(username: string, password: string): Promise<void> {
     const { post } = usePublicApi()
     const data = await post<AuthUser>('/api/v1/auth/login', { username, password })
+    if (!data) throw new Error('登录失败，请稍后重试')
     const u: AuthUser = {
       userId: data.userId,
       username: data.username,

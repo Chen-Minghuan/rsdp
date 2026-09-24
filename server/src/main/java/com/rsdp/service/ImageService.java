@@ -1,11 +1,13 @@
 package com.rsdp.service;
 
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.FloorPlanAnalysis;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.DesignOrderItemMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
+import com.rsdp.mapper.FloorPlanAnalysisMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.security.SecurityOperatorContext;
@@ -32,6 +34,7 @@ public class ImageService {
     private static final String FLOOR_PLAN_CAD_PREVIEW_IMAGE_TYPE = "floor_plan_cad_preview";
 
     private final ImageAssetsMapper imageAssetsMapper;
+    private final FloorPlanAnalysisMapper floorPlanAnalysisMapper;
     private final StorageService storageService;
     private final DataScopeHelper dataScopeHelper;
     private final RskuSupplyMapper rskuSupplyMapper;
@@ -47,9 +50,9 @@ public class ImageService {
     /**
      * 根据图片 ID 加载图片文件资源与 MIME 类型。
      *
-     * <p>公开资源（CMS 运营图、户型原图、在售产品图，即 /api/v1/public/** 已公开引用的图片）
-     * 允许匿名访问；CAD 规范预览仅允许登录用户访问；其余图片要求当前用户对图片关联
-     * RSPU/RSKU 具有数据权限。</p>
+     * <p>公开资源（CMS 运营图、在售产品图，即 /api/v1/public/** 已公开引用的图片）
+     * 允许匿名访问；户型原图及 CAD 规范预览按分析记录归属访问；其余图片要求当前
+     * 用户对图片关联 RSPU/RSKU 具有数据权限。</p>
      *
      * @param imageId 图片 ID
      * @return 加载结果
@@ -68,16 +71,15 @@ public class ImageService {
     /**
      * 判断图片是否为公开可访问资源（官网匿名访问场景）。
      *
-     * <p>判定规则：CMS 运营图（image_type=cms，专为官网公开配置）；
-     * 户型原图（image_type=floor_plan，v3.0 §4.6 策略 B 明确要求——官网分析落库后
-     * 需匿名回显原图，图片 ID 为完整 UUID 不可枚举）；
-     * 或归属于在售（status=active）产品的产品图（官网商品主图已在公开接口暴露）。</p>
+     * <p>判定规则：CMS 运营图（image_type=cms，专为官网公开配置），或归属于
+     * 在售（status=active）产品的产品图（官网商品主图已在公开接口暴露）。
+     * 户型文件包含用户隐私，不属于公开资源。</p>
      *
      * @param imageAsset 图片实体
      * @return true 表示允许匿名访问
      */
     private boolean isPubliclyVisible(ImageAssets imageAsset) {
-        if ("cms".equals(imageAsset.getImageType()) || FLOOR_PLAN_IMAGE_TYPE.equals(imageAsset.getImageType())) {
+        if ("cms".equals(imageAsset.getImageType())) {
             return true;
         }
         String rspuId = imageAsset.getRspuId();
@@ -141,16 +143,16 @@ public class ImageService {
     /**
      * 断言当前登录用户可访问指定图片。
      *
-     * <p>户型原图及 CAD 规范预览（image_type=floor_plan / floor_plan_cad_preview，
-     * 均不关联 RSPU/RSKU）：登录用户即可访问（管理端户型分析页回显场景；图片 ID
-     * 为完整 UUID 不可枚举，分析数据本身的归属隔离由 FloorPlanService 负责）。</p>
+     * <p>户型原图及 CAD 规范预览（image_type=floor_plan / floor_plan_cad_preview）
+     * 由关联的 floor_plan_analysis 做归属校验：平台运营可访问全部，其他登录用户
+     * 只能访问本人创建的分析记录所关联文件。</p>
      */
     private void assertLoggedInUserCanAccess(ImageAssets imageAsset) {
         if (!SecurityOperatorContext.isAuthenticated()) {
             throw new ResourceNotFoundException("图片不存在: " + imageAsset.getImageId());
         }
-        if (FLOOR_PLAN_IMAGE_TYPE.equals(imageAsset.getImageType())
-            || FLOOR_PLAN_CAD_PREVIEW_IMAGE_TYPE.equals(imageAsset.getImageType())) {
+        if (isFloorPlanAsset(imageAsset)) {
+            assertCanAccessFloorPlanAsset(imageAsset);
             return;
         }
         String rspuId = imageAsset.getRspuId();
@@ -165,6 +167,40 @@ public class ImageService {
             }
         }
         throw new ResourceNotFoundException("图片不存在: " + imageAsset.getImageId());
+    }
+
+    /**
+     * 判断资源是否为户型原图或 CAD 规范预览。
+     *
+     * @param imageAsset 图片实体
+     * @return 是否为户型资源
+     */
+    private boolean isFloorPlanAsset(ImageAssets imageAsset) {
+        return FLOOR_PLAN_IMAGE_TYPE.equals(imageAsset.getImageType())
+            || FLOOR_PLAN_CAD_PREVIEW_IMAGE_TYPE.equals(imageAsset.getImageType());
+    }
+
+    /**
+     * 校验当前用户对户型资源的归属访问权限。
+     *
+     * @param imageAsset 户型原图或 CAD 规范预览
+     */
+    private void assertCanAccessFloorPlanAsset(ImageAssets imageAsset) {
+        if (SecurityOperatorContext.isPlatformStaff()) {
+            return;
+        }
+        Long count = floorPlanAnalysisMapper.selectCount(
+            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<FloorPlanAnalysis>()
+                .eq("created_by", SecurityOperatorContext.currentUsername())
+                .isNull("deleted_at")
+                .and(wrapper -> wrapper
+                    .eq("image_id", imageAsset.getImageId())
+                    .or()
+                    .eq("preview_image_id", imageAsset.getImageId()))
+        );
+        if (count == null || count == 0) {
+            throw new ResourceNotFoundException("图片不存在: " + imageAsset.getImageId());
+        }
     }
 
     /**

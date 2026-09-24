@@ -4,9 +4,16 @@ import { onMounted, ref } from 'vue'
 /**
  * 设计师登录页：账号 + 密码表单（style-a 直角细线风格）。
  * 调 POST /api/v1/auth/login（HttpOnly JWT Cookie），仅 DESIGNER 角色允许进入，
- * 成功后跳「我的清单」。
+ * 成功后跳安全的站内 redirect；未指定时进入「我的清单」。
  */
 const { login, isLoggedIn } = useDesignerAuth()
+const route = useRoute()
+
+const redirectPath = typeof route.query.redirect === 'string'
+  && route.query.redirect.startsWith('/')
+  && !route.query.redirect.startsWith('//')
+  ? route.query.redirect
+  : '/designer/lists'
 
 const username = ref('')
 const password = ref('')
@@ -14,7 +21,7 @@ const submitting = ref(false)
 const errorMessage = ref('')
 
 onMounted(() => {
-  if (isLoggedIn.value) navigateTo('/designer/lists')
+  if (isLoggedIn.value) navigateTo(redirectPath)
 })
 
 async function submit() {
@@ -26,7 +33,7 @@ async function submit() {
   errorMessage.value = ''
   try {
     await login(username.value.trim(), password.value)
-    await navigateTo('/designer/lists')
+    await navigateTo(redirectPath)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '登录失败，请稍后重试'
   } finally {

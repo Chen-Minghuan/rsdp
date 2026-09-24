@@ -4,6 +4,7 @@ import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.DesignOrderItemMapper;
+import com.rsdp.mapper.FloorPlanAnalysisMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -19,13 +20,12 @@ import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.core.io.Resource;
 
 import java.io.ByteArrayInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 /**
@@ -36,6 +36,9 @@ class ImageServiceTest {
 
     @Mock
     private ImageAssetsMapper imageAssetsMapper;
+
+    @Mock
+    private FloorPlanAnalysisMapper floorPlanAnalysisMapper;
 
     @Mock
     private StorageService storageService;
@@ -61,6 +64,7 @@ class ImageServiceTest {
     void authenticate() {
         securityContextMock = Mockito.mockStatic(SecurityOperatorContext.class);
         securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(true);
+        securityContextMock.when(SecurityOperatorContext::currentUsername).thenReturn("designer-a");
     }
 
     @AfterEach
@@ -177,7 +181,7 @@ class ImageServiceTest {
     }
 
     @Test
-    void loadImageResource_shouldAllowLoggedInFloorPlanImage() throws Exception {
+    void loadImageResource_shouldAllowOwnerFloorPlanImage() throws Exception {
         ImageAssets asset = new ImageAssets();
         asset.setImageId("IMG-FP01");
         asset.setImageType("floor_plan");
@@ -185,6 +189,7 @@ class ImageServiceTest {
         asset.setFormat("jpg");
 
         when(imageAssetsMapper.selectById("IMG-FP01")).thenReturn(asset);
+        when(floorPlanAnalysisMapper.selectCount(any())).thenReturn(1L);
         when(storageService.get("images/IMG-FP01.jpg"))
             .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
 
@@ -195,7 +200,7 @@ class ImageServiceTest {
     }
 
     @Test
-    void loadImageResource_shouldAllowLoggedInFloorPlanCadPreview() throws Exception {
+    void loadImageResource_shouldAllowOwnerFloorPlanCadPreview() throws Exception {
         ImageAssets asset = new ImageAssets();
         asset.setImageId("IMG-FP-PREVIEW01");
         asset.setImageType("floor_plan_cad_preview");
@@ -203,6 +208,7 @@ class ImageServiceTest {
         asset.setFormat("png");
 
         when(imageAssetsMapper.selectById("IMG-FP-PREVIEW01")).thenReturn(asset);
+        when(floorPlanAnalysisMapper.selectCount(any())).thenReturn(1L);
         when(storageService.get("images/cad-preview/IMG-FP-PREVIEW01.png"))
             .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
 
@@ -229,8 +235,7 @@ class ImageServiceTest {
     }
 
     @Test
-    void loadImageResource_shouldAllowAnonymousFloorPlanImage() throws Exception {
-        // v3.0 §4.6 策略 B：官网匿名分析落库后需匿名回显原图，floor_plan 公开可见
+    void loadImageResource_shouldDenyAnonymousFloorPlanImage() {
         securityContextMock.when(SecurityOperatorContext::isAuthenticated).thenReturn(false);
         ImageAssets asset = new ImageAssets();
         asset.setImageId("IMG-FP02");
@@ -239,12 +244,41 @@ class ImageServiceTest {
         asset.setFormat("jpg");
 
         when(imageAssetsMapper.selectById("IMG-FP02")).thenReturn(asset);
-        when(storageService.get("images/IMG-FP02.jpg"))
+        assertThatThrownBy(() -> imageService.loadImageResource("IMG-FP02"))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .hasMessageContaining("图片不存在");
+    }
+
+    @Test
+    void loadImageResource_shouldDenyNonOwnerFloorPlanImage() {
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-FP03");
+        asset.setImageType("floor_plan");
+        asset.setStoragePath("images/IMG-FP03.jpg");
+
+        when(imageAssetsMapper.selectById("IMG-FP03")).thenReturn(asset);
+        when(floorPlanAnalysisMapper.selectCount(any())).thenReturn(0L);
+
+        assertThatThrownBy(() -> imageService.loadImageResource("IMG-FP03"))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .hasMessageContaining("图片不存在");
+    }
+
+    @Test
+    void loadImageResource_shouldAllowPlatformStaffFloorPlanImage() throws Exception {
+        securityContextMock.when(SecurityOperatorContext::isPlatformStaff).thenReturn(true);
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-FP04");
+        asset.setImageType("floor_plan");
+        asset.setStoragePath("images/IMG-FP04.jpg");
+        asset.setFormat("jpg");
+
+        when(imageAssetsMapper.selectById("IMG-FP04")).thenReturn(asset);
+        when(storageService.get("images/IMG-FP04.jpg"))
             .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
 
-        ImageService.LoadedImage loaded = imageService.loadImageResource("IMG-FP02");
+        ImageService.LoadedImage loaded = imageService.loadImageResource("IMG-FP04");
 
-        assertThat(loaded).isNotNull();
         assertThat(loaded.contentType()).isEqualTo("image/jpeg");
     }
 

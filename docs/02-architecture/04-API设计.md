@@ -1657,7 +1657,7 @@ POST   /api/v1/public/ai-match/analyze
        # P1 起落库（v3.0 §4.6 策略 B）：写 image_assets（image_type=floor_plan）
        # + floor_plan_analysis（source=public、created_by=null、status=awaiting_confirm、
        # raw_result 留档）+ floor_plan_room；落库失败记 warn 降级为不落库（analysisId=null），
-       # 不阻断公开接口。配套：floor_plan 原图匿名可见（ImageService.isPubliclyVisible）
+       # 不阻断公开接口。户型原图不开放匿名直读；官网当前页使用本地 ObjectURL 回显。
        # Form: file*, hint?
        # Response: { analysisId, rooms: [{ roomType, roomName, widthMm, depthMm, areaM2,
        #            dimensionText, confidence, x, y, w, h }], scaleSuggestion }
@@ -1693,10 +1693,16 @@ POST   /api/v1/public/ai-match/scheme
        #            retailPrice, primaryImageUrl }] }
 ```
 
-### 户型图分析（管理端，/api/v1/floor-plan/**，V36）
+### 户型图分析（管理端 + 官网设计师，/api/v1/floor-plan/**，V36）
 
 > 户型图 → 空间尺寸 → 产品搭配 链路（方案 v3.0 §4.2）。异步识别 + 人工校正 + 搭配落 scheme。
 > 数据归属：平台运营（ADMIN/EDITOR）可见全部，其他用户仅本人创建（Service 层校验）。
+> 官网 DESIGNER 登录后直接复用本组接口及 HttpOnly JWT Cookie：支持仅图片、仅 CAD、
+> 图片 + CAD，轮询任务状态、保存空间校对、失败重试及本人历史记录。游客仍只使用
+> `/api/v1/public/ai-match/analyze` 的 JPG/PNG/PDF 同步链路，不开放匿名 CAD。
+> `image_type=floor_plan/floor_plan_cad_preview` 文件不公开：平台运营可读取全部，其他
+> 登录用户仅可读取本人 `floor_plan_analysis.created_by` 记录关联的 image_id/preview_image_id；
+> 匿名访问与跨用户访问统一返回 404，避免户型隐私文件仅凭 UUID 被读取。
 
 ```
 POST   /api/v1/floor-plan/analyze          [product:read]
