@@ -37,7 +37,7 @@ class SixDimSchemaServiceTest {
     @BeforeEach
     void setUp() {
         service = new SixDimSchemaService(sixDimSchemaMapper, dictService);
-        lenient().when(dictService.listByType("category")).thenReturn(List.of(categoryDict("SF", "沙发")));
+        lenient().when(dictService.listAllByType("category")).thenReturn(List.of(categoryDict("SF", "沙发")));
     }
 
     private static CategoryDict categoryDict(String code, String name) {
@@ -91,6 +91,23 @@ class SixDimSchemaServiceTest {
         assertThat(schema.dims()).hasSize(6);
         assertThat(schema.dims().get("A").label()).isEqualTo("轮廓形态");
         assertThat(schema.dims().get("E").description()).contains("皮革");
+    }
+
+    @Test
+    void getSchema_shouldResolveFeatureFlaggedCategoryFromCompleteMetadata() {
+        when(sixDimSchemaMapper.selectList(any())).thenReturn(List.of(
+            row("DK", "A", "整体布局", "书桌整体布局", 1)
+        ));
+        when(dictService.listAllByType("category")).thenReturn(List.of(
+            categoryDict("SF", "沙发"),
+            categoryDict("DK", "书桌/写字台")
+        ));
+
+        SixDimSchemaResponse schema = service.getSchema("DK");
+
+        assertThat(schema.categoryCode()).isEqualTo("DK");
+        assertThat(schema.categoryName()).isEqualTo("书桌/写字台");
+        verify(dictService).listAllByType("category");
     }
 
     @Test

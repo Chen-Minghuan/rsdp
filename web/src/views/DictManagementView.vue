@@ -19,8 +19,9 @@ import {
   type DataTableColumns, type FormInst, type FormRules
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
-import { createDict, listAllDicts, listDicts, listDictTypeSummary, listSixDimSchemas, updateDict, updateDictStatus, updateSixDimSchemaDim } from '@/api/dict'
+import { createDict, listAllDicts, listDictTypeSummary, listSixDimSchemas, updateDict, updateDictStatus, updateSixDimSchemaDim } from '@/api/dict'
 import { refreshSixDimSchema } from '@/utils/sixDimLabels'
+import { buildSixDimCategoryNameMap, buildSixDimCategoryOptions } from '@/utils/sixDimCategories'
 import { useUserStore } from '@/stores/user'
 import { DICT_TYPE_GROUPS, PERMISSIONS, type DictTypeGroup, type DictTypeMeta } from '@/utils/constants'
 import type { DictItem, DictTypeSummary, SixDimSchemaData } from '@/types/dict'
@@ -258,13 +259,14 @@ const schemaColumns = computed<DataTableColumns<SixDimSchemaRow>>(() => {
   return cols
 })
 
-/** 品类码 → 品类中文名映射（six_dim 所属品类列与新增表单使用） */
-const categoryNameMap = ref<Map<string, string>>(new Map())
+/** 完整品类字典（含 Feature Flag 关闭时不进入生产识别候选的扩展品类）。 */
+const allCategories = ref<DictItem[]>([])
 
-/** 所属品类下拉选项（新增 six_dim 条目时选择） */
-const categoryOptions = computed(() =>
-  [...categoryNameMap.value.entries()].map(([code, name]) => ({ label: `${name}（${code}）`, value: code }))
-)
+/** 品类码 → 品类中文名映射（完整品类字典为主，six_dim_schema 为兜底）。 */
+const categoryNameMap = computed(() => buildSixDimCategoryNameMap(allCategories.value, allSchemas.value))
+
+/** 所属品类下拉选项：只展示品类中文名，值仍为稳定品类码。 */
+const categoryOptions = computed(() => buildSixDimCategoryOptions(categoryNameMap.value))
 
 /** 六维条目品类筛选选项（含"全部品类"） */
 const sixDimCategoryOptions = computed(() => [
@@ -280,10 +282,10 @@ function categoryName(code?: string): string {
 
 async function loadCategoryNames() {
   try {
-    const list = await listDicts('category')
-    categoryNameMap.value = new Map(list.map((d) => [d.dictCode, d.dictName]))
+    // 管理页需要完整集合；不能使用受扩展品类 Feature Flag 过滤的生产下拉接口。
+    allCategories.value = await listAllDicts('category')
   } catch {
-    // 品类名称加载失败不阻塞主流程，列显示原码
+    // 完整品类加载失败不阻塞主流程，仍可由 six_dim_schema 的品类名兜底。
   }
 }
 

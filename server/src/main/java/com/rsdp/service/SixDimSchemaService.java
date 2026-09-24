@@ -145,7 +145,8 @@ public class SixDimSchemaService {
             return "通用";
         }
         try {
-            return dictService.listByType("category").stream()
+            // 六维管理与 Schema 展示需要完整品类元数据，不能受生产识别 Feature Flag 过滤。
+            return dictService.listAllByType("category").stream()
                 .filter(d -> categoryCode.equalsIgnoreCase(d.getDictCode()))
                 .map(CategoryDict::getDictName)
                 .findFirst()
