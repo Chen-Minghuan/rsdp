@@ -13,13 +13,13 @@ database/
 │   ├── 01_dict.sql              # 字典域：category_dict / dict_alias / dict_unresolved_value / six_dim_schema
 │   ├── 02_product.sql           # 产品域：rspu_master/rspu_style/rspu_scene/rspu_variant/rspu_relation/3 个 code_counter/rsku_supply/price_history/rspu_price_summary
 │   ├── 03_factory.sql           # 工厂域：factory_master/level_capability/warehouse/variant_capacity/rspu_factory_mapping/lead_time_rule/capacity_assessment/factory_product_capability
-│   ├── 04_image_ai.sql          # 图片与AI识别域：image_assets / ai_recognition / async_task
+│   ├── 04_image_ai.sql          # 图片与AI识别域：image_assets / ai_recognition / ai_category_shadow_result / async_task
 │   ├── 05_excel_import.sql      # 导入域：excel_import_batch/excel_import_row/document_import_batch（PDF 文档导入批次）
 │   ├── 06_floor_plan.sql        # 户型图域：floor_plan_analysis / floor_plan_room
 │   ├── 07_project_scheme.sql    # 项目与方案域：project/scheme/scheme_item/scheme_candidate/favorite_folder/user_favorite/template_tag/product_collection/product_collection_item
 │   ├── 08_order_pricing.sql     # 订单与定价域：design_order/design_order_item/order_no_counter/sys_config/pricing_rule/recommendation_score_config
 │   ├── 09_user_team.sql         # 用户与团队域：sys_user/sys_role/sys_permission/sys_user_role/sys_role_permission/sys_user_factory/company/member_group/invite_record/designer_profile/user_operator
-│   ├── 10_style_knowledge.sql   # 风格知识库域：style_case/style_element/style_matching_formula/product_style_match/matching_feedback
+│   ├── 10_style_knowledge.sql   # 知识层：product_type / product_attribute + 风格案例/元素/公式/匹配/反馈
 │   ├── 11_platform.sql          # 官网平台域：platform_banner/case/content/custom_dict/customized/lead
 │   ├── 12_system.sql            # 系统域：audit_log + 跨域自增序列对齐（setval）段
 │   ├── cross_domain_fk.sql      # 跨域/循环引用后置外键 ALTER（字母序排数字域文件之后执行）
@@ -71,4 +71,6 @@ database/
 
 开发期工作流：直接编辑 schema/ 域文件 → 对开发库执行变更语句（或整文件重跑，全部语句幂等）→ 同步 reset_db.sql → **新增 `server/src/main/resources/db/migration/Vn__xxx.sql` 增量脚本**（纯 SQL，不可修改已发布的 V 脚本）→ 跑 `make check-migration-sync`（schema/ 重放 vs Flyway 全量执行零差异）+ `node scripts/check_entity_db_fields.js` 对账。Flyway 仅管结构演进（标准 Boot 自动配置）；启动期数据修正任务（价格加密/投影重算/六维归一，均幂等）由 `DatabaseMigrationRunner` 按序调度，可重复触发的长任务（如向量重建）走 async_task 业务进度体系。失败恢复 playbook 见 `docs/02-architecture/03-数据库实现说明.md` 第七节。
 
-种子数据变化直接改 `schema/zz_seed.sql`（reset_db.sql 内嵌镜像需同步）。
+种子数据变化直接改 `schema/zz_seed.sql`（reset_db.sql 内嵌镜像需同步）。品类六维与扩展 taxonomy 由
+`scripts/generate_six_dim_dict_seed.js` 维护；旧九类元数据、补充 product_type 与属性定义由
+`scripts/generate_product_attribute_seed.js` 维护。两者都必须通过 `--check`，不要手工编辑其标记区间。
