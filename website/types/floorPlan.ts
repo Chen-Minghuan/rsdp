@@ -76,6 +76,10 @@ export interface DesignerFloorPlanAnalyzeResponse {
   taskId: string
 }
 
+export interface PublicCadFloorPlanAnalyzeResponse extends DesignerFloorPlanAnalyzeResponse {
+  accessToken: string
+}
+
 export interface DesignerFloorPlanConfirmRequest {
   rooms: Array<{
     roomId?: string | null

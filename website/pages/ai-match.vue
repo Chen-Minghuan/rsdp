@@ -10,8 +10,8 @@ import { FLOOR_PLAN_STATUS_TEXT } from '~/types/floorPlan'
 
 /**
  * AI 户型搭配流程页（/ai-match）：
- * 游客保持图片/PDF 同步识别；登录设计师复用 /floor-plan/** 异步链路，额外支持 DWG/DXF
- * 与图片+CAD 双文件模式，并可保存空间校对结果。
+ * 图片/PDF 保持游客同步识别；DWG/DXF 与图片+CAD 双文件模式同时支持游客临时凭证链路
+ * 和登录设计师 /floor-plan/** 持久化链路，设计师可继续保存空间校对结果与历史记录。
  */
 
 interface AnalyzeRoom {
@@ -50,6 +50,7 @@ interface AnalyzeResponse {
 const { post, imageUrl, requestBase } = usePublicApi()
 const { isLoggedIn: designerLoggedIn, refreshMe } = useDesignerAuth()
 const designerFloorPlanApi = useDesignerFloorPlanApi()
+const publicCadFloorPlanApi = usePublicCadFloorPlanApi()
 const route = useRoute()
 const router = useRouter()
 
@@ -71,6 +72,7 @@ const cadFile = ref<File | null>(null)
 const cadReferenceFile = ref<File | null>(null)
 const cadSourceName = ref('')
 const designerAnalysisId = ref('')
+const visitorCadAccessToken = ref('')
 const designerAnalysis = ref<DesignerFloorPlanAnalysis | null>(null)
 const selectedRoomId = ref<string | null>(null)
 const roomsConfirmed = ref(false)
@@ -180,7 +182,11 @@ async function submitCad() {
     errorMessage.value = '请先选择 DWG 或 DXF 文件'
     return
   }
-  await analyzeDesigner(cadReferenceFile.value, cadFile.value)
+  if (designerLoggedIn.value) {
+    await analyzeDesigner(cadReferenceFile.value, cadFile.value)
+  } else {
+    await analyzeVisitorCad(cadReferenceFile.value, cadFile.value)
+  }
 }
 
 async function analyzePublic(file: File) {
@@ -223,6 +229,23 @@ async function analyzeDesigner(image: File | null, cad: File | null) {
     analyzing.value = false
     step.value = 'upload'
     errorMessage.value = e instanceof Error ? e.message : '提交识别任务失败，请稍后重试'
+  }
+}
+
+async function analyzeVisitorCad(image: File | null, cad: File) {
+  analyzing.value = true
+  errorMessage.value = ''
+  noticeMessage.value = ''
+  step.value = 'processing'
+  try {
+    const created = await publicCadFloorPlanApi.analyze(image, cad, cadSourceName.value)
+    designerAnalysisId.value = created.analysisId
+    visitorCadAccessToken.value = created.accessToken
+    await pollVisitorCadAnalysis(created.analysisId, created.accessToken, true)
+  } catch (error) {
+    analyzing.value = false
+    step.value = 'upload'
+    errorMessage.value = error instanceof Error ? error.message : '提交 CAD 识别任务失败'
   }
 }
 
@@ -289,6 +312,47 @@ async function pollDesignerAnalysis(analysisId: string, scheduleNext: boolean) {
   }
 }
 
+async function pollVisitorCadAnalysis(
+  analysisId: string,
+  accessToken: string,
+  scheduleNext: boolean
+) {
+  if (pollTimer) clearTimeout(pollTimer)
+  try {
+    const detail = await publicCadFloorPlanApi.getAnalysis(analysisId, accessToken)
+    designerAnalysis.value = detail
+    if (detail.status === 'pending' || detail.status === 'analyzing') {
+      analyzing.value = true
+      step.value = 'processing'
+      if (scheduleNext) {
+        pollTimer = setTimeout(
+          () => void pollVisitorCadAnalysis(analysisId, accessToken, true),
+          2000
+        )
+      }
+      return
+    }
+    if (detail.status === 'failed') {
+      analyzing.value = false
+      step.value = 'processing'
+      errorMessage.value = detail.errorMessage || 'CAD 识别失败，请重新提交'
+      return
+    }
+    applyDesignerAnalysis(detail)
+  } catch (error) {
+    analyzing.value = false
+    errorMessage.value = error instanceof Error ? error.message : '读取识别状态失败'
+    if (scheduleNext && visitorCadAccessToken.value) {
+      analyzing.value = true
+      noticeMessage.value = '状态读取暂时失败，正在自动重连…'
+      pollTimer = setTimeout(
+        () => void pollVisitorCadAnalysis(analysisId, accessToken, true),
+        3000
+      )
+    }
+  }
+}
+
 async function retryDesignerAnalysis() {
   if (!designerAnalysisId.value) return
   errorMessage.value = ''
@@ -303,6 +367,19 @@ async function retryDesignerAnalysis() {
   }
 }
 
+async function retryCurrentAnalysis() {
+  if (isVisitorCadAnalysis.value) {
+    if (!cadFile.value) {
+      restart()
+      errorMessage.value = '原 CAD 文件已失效，请重新选择文件后识别'
+      return
+    }
+    await analyzeVisitorCad(cadReferenceFile.value, cadFile.value)
+    return
+  }
+  await retryDesignerAnalysis()
+}
+
 // ---------- 步骤 2：人工确认尺寸 ----------
 
 /** 目标空间（前期仅客厅：取第一个客厅，无客厅取第一条）。 */
@@ -310,10 +387,15 @@ const livingRoom = computed(() =>
   rooms.value.find(r => ['LIVING', 'LIVING_ROOM', 'living_room'].includes(r.roomType)) ?? rooms.value[0]
 )
 
-const isDesignerAnalysis = computed(() =>
-  !!designerAnalysisId.value && designerLoggedIn.value
+const isVisitorCadAnalysis = computed(() =>
+  !!designerAnalysisId.value && !!visitorCadAccessToken.value
 )
-const requiresRoomConfirmation = computed(() => isDesignerAnalysis.value)
+const isDesignerAnalysis = computed(() =>
+  !!designerAnalysisId.value && designerLoggedIn.value && !visitorCadAccessToken.value
+)
+const requiresRoomConfirmation = computed(() =>
+  isDesignerAnalysis.value || isVisitorCadAnalysis.value
+)
 const isCadResult = computed(() => designerAnalysis.value?.geometrySource === 'cad_geometry')
 const viewerImageUrl = computed(() => {
   const detail = designerAnalysis.value
@@ -371,6 +453,24 @@ function removeDesignerRoom(index: number) {
 
 function markRoomsDirty() {
   if (requiresRoomConfirmation.value) roomsConfirmed.value = false
+}
+
+function confirmVisitorRooms() {
+  if (!rooms.value.length) {
+    errorMessage.value = '至少保留一个空间'
+    return
+  }
+  roomsConfirmed.value = true
+  errorMessage.value = ''
+  noticeMessage.value = '空间数据已确认，可继续生成搭配方案'
+}
+
+async function saveCurrentRooms() {
+  if (isVisitorCadAnalysis.value) {
+    confirmVisitorRooms()
+    return
+  }
+  await saveDesignerRooms()
 }
 
 async function saveDesignerRooms() {
@@ -458,6 +558,7 @@ function restart() {
   cadReferenceFile.value = null
   cadSourceName.value = ''
   designerAnalysisId.value = ''
+  visitorCadAccessToken.value = ''
   designerAnalysis.value = null
   selectedRoomId.value = null
   roomsConfirmed.value = false
@@ -528,7 +629,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
       <div class="cat-head">
         <h1>AI 户型搭配</h1>
       </div>
-      <p class="page-desc">上传户型图识别空间与尺寸；登录设计师还可导入 DWG / DXF 精准提取 CAD 几何数据。</p>
+      <p class="page-desc">上传图片、PDF 或 DWG / DXF 户型图，识别空间并提取 CAD 精确几何尺寸。</p>
 
       <div v-if="errorMessage" class="error-bar">{{ errorMessage }}</div>
       <div v-if="noticeMessage" class="notice-bar">{{ noticeMessage }}</div>
@@ -537,7 +638,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
       <section v-if="step === 'upload'" class="panel upload-panel">
         <div class="upload-tabs" role="tablist" aria-label="户型图上传方式">
           <button type="button" :class="{ active: uploadMode === 'image' }" @click="uploadMode = 'image'">图片 / PDF</button>
-          <button v-if="designerLoggedIn" type="button" :class="{ active: uploadMode === 'cad' }" @click="uploadMode = 'cad'">精准 CAD</button>
+          <button type="button" :class="{ active: uploadMode === 'cad' }" @click="uploadMode = 'cad'">精准 CAD</button>
         </div>
 
         <template v-if="uploadMode === 'image'">
@@ -556,6 +657,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
             <div class="upload-kick">CAD FLOOR PLAN</div>
             <h2>导入原始 CAD 户型图</h2>
             <p>CAD 用于提取精确空间轮廓与长宽；可同时上传一张效果图，辅助识别空间名称和类型。</p>
+            <p v-if="!designerLoggedIn" class="visitor-cad-note">游客可直接使用，任务与预览由 24 小时临时凭证保护；登录设计师后可长期保存到“我的户型”。</p>
           </div>
           <div class="cad-upload-grid">
             <label class="file-pick" :class="{ chosen: cadFile }">
@@ -590,7 +692,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
         <p v-if="designerAnalysis?.status !== 'failed'">图纸会在后台完成解析、规范预览和空间识别，通常需要 10～30 秒。</p>
         <p v-if="designerAnalysis">当前状态：{{ FLOOR_PLAN_STATUS_TEXT[designerAnalysis.status] }}</p>
         <div class="btns processing-actions">
-          <button v-if="designerAnalysis?.status === 'failed'" type="button" class="btn-a" :disabled="analyzing" @click="retryDesignerAnalysis">
+          <button v-if="designerAnalysis?.status === 'failed'" type="button" class="btn-a" :disabled="analyzing" @click="retryCurrentAnalysis">
             {{ analyzing ? '正在重试…' : '重新识别' }}
           </button>
           <button type="button" class="btn-b" @click="restart">返回重新上传</button>
@@ -682,8 +784,8 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
             </div>
             <div v-if="!isCadResult && confirmArea" class="area-line">面积约 <b>{{ confirmArea }}</b> ㎡</div>
 
-            <button v-if="requiresRoomConfirmation" type="button" class="save-rooms" :disabled="confirmingRooms || roomsConfirmed" @click="saveDesignerRooms">
-              {{ confirmingRooms ? '正在保存…' : (roomsConfirmed ? '空间校对已保存' : '保存空间校对') }}
+            <button v-if="requiresRoomConfirmation" type="button" class="save-rooms" :disabled="confirmingRooms || roomsConfirmed" @click="saveCurrentRooms">
+              {{ confirmingRooms ? '正在保存…' : (roomsConfirmed ? (isVisitorCadAnalysis ? '空间数据已确认' : '空间校对已保存') : (isVisitorCadAnalysis ? '确认空间数据' : '保存空间校对')) }}
             </button>
 
             <div class="edit-row">
@@ -887,6 +989,13 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   color: var(--ink2);
   font-size: 13px;
   line-height: 1.8;
+}
+
+.cad-intro .visitor-cad-note {
+  margin-top: 14px;
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+  color: var(--accent-deep);
 }
 
 .cad-upload-grid {

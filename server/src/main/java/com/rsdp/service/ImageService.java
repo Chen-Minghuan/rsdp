@@ -110,6 +110,26 @@ public class ImageService {
         return doLoad(imageAsset);
     }
 
+    /**
+     * 使用已验证的游客 CAD 分析 ID 加载其户型原图或规范预览。
+     *
+     * @param imageId    图片 ID
+     * @param analysisId 游客访问凭证绑定的分析 ID
+     * @return 加载结果
+     */
+    public LoadedImage loadImageResourceForPublicFloorPlan(String imageId, String analysisId) {
+        ImageAssets imageAsset = imageAssetsMapper.selectById(imageId);
+        if (imageAsset == null || imageAsset.getDeletedAt() != null || !isFloorPlanAsset(imageAsset)) {
+            throw new ResourceNotFoundException("图片不存在: " + imageId);
+        }
+        FloorPlanAnalysis analysis = floorPlanAnalysisMapper.selectById(analysisId);
+        if (analysis == null || !"public".equals(analysis.getSource())
+            || (!imageId.equals(analysis.getImageId()) && !imageId.equals(analysis.getPreviewImageId()))) {
+            throw new ResourceNotFoundException("图片不存在: " + imageId);
+        }
+        return doLoad(imageAsset);
+    }
+
     private LoadedImage doLoad(ImageAssets imageAsset) {
         String objectKey = imageAsset.getStoragePath();
         if (objectKey == null || objectKey.isBlank()) {

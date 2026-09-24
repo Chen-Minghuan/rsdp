@@ -94,6 +94,14 @@ class PublicRateLimitFilterTest {
     }
 
     @Test
+    void shouldNotLimitPublicCadStatusPolling() throws Exception {
+        MockHttpServletResponse response = perform(
+            "/api/v1/public/ai-match/cad/FPA-PUBLIC-1", "GET", "1.2.3.4", 20);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
     void shouldPassThroughWhenDisabled() throws Exception {
         properties.setEnabled(false);
 

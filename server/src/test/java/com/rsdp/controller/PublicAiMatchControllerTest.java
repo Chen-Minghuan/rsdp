@@ -4,9 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.request.PublicAiMatchSchemeRequest;
 import com.rsdp.dto.response.PublicAiMatchAnalyzeResponse;
 import com.rsdp.dto.response.PublicAiMatchSchemeResponse;
+import com.rsdp.dto.response.FloorPlanAnalysisResponse;
+import com.rsdp.dto.response.PublicCadAnalyzeResponse;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.PublicAiMatchService;
+import com.rsdp.service.PublicFloorPlanCadService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -22,8 +25,10 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,6 +49,9 @@ class PublicAiMatchControllerTest {
 
     @MockBean
     private PublicAiMatchService publicAiMatchService;
+
+    @MockBean
+    private PublicFloorPlanCadService publicFloorPlanCadService;
 
     @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
@@ -72,6 +80,37 @@ class PublicAiMatchControllerTest {
             .andExpect(jsonPath("$.data.rooms[0].roomName").value("客厅"))
             .andExpect(jsonPath("$.data.rooms[0].widthMm").value(4200))
             .andExpect(jsonPath("$.data.rooms[0].confidence").value("high"));
+    }
+
+    @Test
+    void analyzeCad_shouldReturnTaskAndAccessToken() throws Exception {
+        when(publicFloorPlanCadService.analyze(isNull(), any(), eq("游客户型")))
+            .thenReturn(new PublicCadAnalyzeResponse("FPA-PUBLIC-1", "TASK-1", "token-1"));
+        MockMultipartFile cad = new MockMultipartFile(
+            "cad", "plan.dxf", "application/dxf", "fake-cad".getBytes());
+
+        mockMvc.perform(multipart("/api/v1/public/ai-match/cad/analyze")
+                .file(cad)
+                .param("sourceName", "游客户型"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.analysisId").value("FPA-PUBLIC-1"))
+            .andExpect(jsonPath("$.data.taskId").value("TASK-1"))
+            .andExpect(jsonPath("$.data.accessToken").value("token-1"));
+    }
+
+    @Test
+    void getCadAnalysis_shouldRequireAndPassAccessToken() throws Exception {
+        FloorPlanAnalysisResponse response = new FloorPlanAnalysisResponse();
+        response.setAnalysisId("FPA-PUBLIC-1");
+        response.setStatus("analyzing");
+        when(publicFloorPlanCadService.getAnalysis("FPA-PUBLIC-1", "token-1"))
+            .thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/public/ai-match/cad/FPA-PUBLIC-1")
+                .param("accessToken", "token-1"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.analysisId").value("FPA-PUBLIC-1"))
+            .andExpect(jsonPath("$.data.status").value("analyzing"));
     }
 
     @Test

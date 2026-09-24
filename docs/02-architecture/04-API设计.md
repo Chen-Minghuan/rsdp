@@ -1644,7 +1644,7 @@ POST   /api/v1/public/leads
        # Response: { leadId, status }
 
 POST   /api/v1/public/ai-match/analyze
-       # ⚠️ 限流：IP 维度 10 次/60s（ai-match 全端点，PublicRateLimitFilter，超限 429；
+       # ⚠️ 限流：IP 维度 10 次/60s（ai-match 写端点，PublicRateLimitFilter，超限 429；
        # 配置 rsdp.rate-limit.*：enabled/ai-match-permits/leads-permits/window-seconds，
        # 可用 RSDP_RATE_LIMIT_* 环境变量覆盖；单实例内存计数，多实例部署需换共享计数）
        # AI 户型图分析（multipart；file 为 jpg/png 图片或 PDF（P2）≤10MB，走
@@ -1678,6 +1678,23 @@ POST   /api/v1/public/ai-match/analyze
        # 可解析房间 ≥2 → candidates；否则 status=null。官网同步链路精修默认关闭
        # （rsdp.floor-plan.refine-public-enabled=false 保响应速度，评分实测时临时开）
 
+POST   /api/v1/public/ai-match/cad/analyze
+       # 官网游客 CAD 异步识别（multipart）：cad* 为 dwg/dxf ≤20MB，image? 为可选
+       # JPG/PNG 参考图 ≤10MB，sourceName? ≤128 字；复用既有 CAD 解析、规范预览、
+       # CAD + 视觉语义融合管线，analysis 写 source=public、created_by=null、project_id=null。
+       # Response: { analysisId, taskId, accessToken }
+       # accessToken 为绑定 analysisId 与固定 public-floor-plan 用途的签名凭证，默认 24 小时
+       # 有效（rsdp.floor-plan.public-token-hours，可配置），只用于本次匿名任务状态和关联图片读取。
+       # ⚠️ POST 计入 AI 限流；游客失败重试重新提交原 CAD，不开放匿名 retry 接口。
+
+GET    /api/v1/public/ai-match/cad/{analysisId}?accessToken=...
+       # 游客 CAD 状态轮询及结果读取；accessToken 必须与路径 analysisId 一致，且记录必须
+       # source=public，否则统一 404。响应沿用 FloorPlanAnalysisResponse，并为 imageUrl /
+       # referenceImageUrl / previewUrl 自动追加 floorPlanToken，浏览器据此读取本分析关联的
+       # image_id / preview_image_id；跨分析图片 ID、过期或伪造凭证统一 404。
+       # GET 不触发 AI、不计入公开 AI 写接口限流。游客不进入“我的户型”历史；名称/类型
+       # 校对仅在当前浏览器本地确认，不持久化，随后仍调用公开 /scheme 生成安全零售方案。
+
 POST   /api/v1/public/ai-match/scheme
        # AI 户型搭配方案（P0-B 起统一走 FloorPlanMatchingService 双端唯一出口：
        # widthMm/depthMm 提供时尺寸硬规则 R1~R5 生效——面积分档/沙发长度上限/
@@ -1698,11 +1715,12 @@ POST   /api/v1/public/ai-match/scheme
 > 户型图 → 空间尺寸 → 产品搭配 链路（方案 v3.0 §4.2）。异步识别 + 人工校正 + 搭配落 scheme。
 > 数据归属：平台运营（ADMIN/EDITOR）可见全部，其他用户仅本人创建（Service 层校验）。
 > 官网 DESIGNER 登录后直接复用本组接口及 HttpOnly JWT Cookie：支持仅图片、仅 CAD、
-> 图片 + CAD，轮询任务状态、保存空间校对、失败重试及本人历史记录。游客仍只使用
-> `/api/v1/public/ai-match/analyze` 的 JPG/PNG/PDF 同步链路，不开放匿名 CAD。
+> 图片 + CAD，轮询任务状态、保存空间校对、失败重试及本人历史记录。游客 CAD 使用上方
+> `/api/v1/public/ai-match/cad/**` 临时凭证链路，不具备本组受保护接口权限。
 > `image_type=floor_plan/floor_plan_cad_preview` 文件不公开：平台运营可读取全部，其他
 > 登录用户仅可读取本人 `floor_plan_analysis.created_by` 记录关联的 image_id/preview_image_id；
-> 匿名访问与跨用户访问统一返回 404，避免户型隐私文件仅凭 UUID 被读取。
+> 游客仅可凭绑定 public 分析记录的短期 floorPlanToken 读取该记录原图/预览；无凭证、
+> 跨用户或跨分析访问统一返回 404，避免户型隐私文件仅凭 UUID 被读取。
 
 ```
 POST   /api/v1/floor-plan/analyze          [product:read]

@@ -362,6 +362,31 @@ class FloorPlanServiceTest {
     }
 
     @Test
+    void analyzePublicCad_shouldMarkAnalysisAsPublicAndClearCreator() throws Exception {
+        when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
+            .thenReturn(ImageUploadValidator.UploadKind.CAD);
+        when(storageService.store(any(), anyString())).thenReturn("cad/public-plan.dwg");
+        when(analysisMapper.selectById(anyString())).thenAnswer(invocation -> {
+            FloorPlanAnalysis analysis = new FloorPlanAnalysis();
+            analysis.setAnalysisId(invocation.getArgument(0));
+            analysis.setSource("admin");
+            analysis.setCreatedBy("anonymous");
+            return analysis;
+        });
+
+        MockMultipartFile cad = new MockMultipartFile(
+            "cad", "游客户型.dwg", "application/octet-stream", "fake-dwg".getBytes());
+
+        Map<String, String> response = floorPlanService.analyzePublicCad(null, cad, "游客户型");
+
+        assertThat(response.get("analysisId")).startsWith("FPA-");
+        ArgumentCaptor<FloorPlanAnalysis> captor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
+        verify(analysisMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getSource()).isEqualTo("public");
+        assertThat(captor.getValue().getCreatedBy()).isNull();
+    }
+
+    @Test
     void analyze_noFile_shouldThrowBadRequest() {
         assertThatThrownBy(() -> floorPlanService.analyze(null, null, null))
             .isInstanceOf(BusinessException.class)
@@ -1647,6 +1672,30 @@ class FloorPlanServiceTest {
 
         assertThatThrownBy(() -> floorPlanService.getAnalysis("FPA-1"))
             .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void getPublicAnalysis_publicSource_shouldReturnAnalysisWithoutLogin() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-PUBLIC", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        analysis.setSource("public");
+        analysis.setCreatedBy(null);
+        when(analysisMapper.selectById("FPA-PUBLIC")).thenReturn(analysis);
+        when(roomMapper.selectList(any())).thenReturn(List.of());
+
+        FloorPlanAnalysisResponse response = floorPlanService.getPublicAnalysis("FPA-PUBLIC");
+
+        assertThat(response.getAnalysisId()).isEqualTo("FPA-PUBLIC");
+        assertThat(response.getStatus()).isEqualTo(FloorPlanService.STATUS_AWAITING_CONFIRM);
+    }
+
+    @Test
+    void getPublicAnalysis_nonPublicSource_shouldThrowNotFound() {
+        FloorPlanAnalysis analysis = buildAnalysis("FPA-ADMIN", FloorPlanService.STATUS_AWAITING_CONFIRM);
+        when(analysisMapper.selectById("FPA-ADMIN")).thenReturn(analysis);
+
+        assertThatThrownBy(() -> floorPlanService.getPublicAnalysis("FPA-ADMIN"))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(roomMapper, never()).selectList(any());
     }
 
     @Test

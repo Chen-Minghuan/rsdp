@@ -86,14 +86,15 @@ public class PublicRateLimitFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 匹配限流规则：AI 户型搭配全部端点 + 留资提交（仅 POST），其余公开读取接口不限。
+     * 匹配限流规则：AI 户型搭配写端点 + 留资提交（仅 POST），其余公开读取接口不限。
+     * 游客 CAD 状态轮询为 GET，不消耗 AI 额度且必须携带短期凭证，因此不计入限流。
      *
      * @param request 当前请求
      * @return 窗口内允许次数；不限流返回 null
      */
     private Integer resolveLimit(HttpServletRequest request) {
         String uri = request.getRequestURI();
-        if (uri.startsWith(AI_MATCH_PREFIX)) {
+        if (uri.startsWith(AI_MATCH_PREFIX) && !"GET".equalsIgnoreCase(request.getMethod())) {
             return properties.getAiMatchPermits();
         }
         if (LEADS_PATH.equals(uri) && "POST".equalsIgnoreCase(request.getMethod())) {

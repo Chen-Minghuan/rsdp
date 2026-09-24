@@ -445,6 +445,32 @@ public class FloorPlanService {
     }
 
     /**
+     * 官网游客 CAD 分析：复用受保护端的 CAD 异步管线，但将分析标记为公开来源且不绑定用户。
+     *
+     * <p>调用方必须通过独立的短期访问凭证保护后续状态查询和文件读取；本方法本身不生成
+     * 凭证。支持仅 CAD，以及 JPG/PNG 参考图 + CAD 双文件模式。</p>
+     *
+     * @param image      可选 JPG/PNG 参考图
+     * @param cad        DWG/DXF 图纸
+     * @param sourceName 户型名称，可空
+     * @return analysisId + taskId
+     */
+    @Transactional
+    public Map<String, String> analyzePublicCad(MultipartFile image, MultipartFile cad,
+                                                 String sourceName) {
+        Map<String, String> result = analyze(image, cad, null, null, sourceName);
+        FloorPlanAnalysis analysis = analysisMapper.selectById(result.get("analysisId"));
+        if (analysis == null) {
+            throw new BusinessException("游客户型分析创建失败");
+        }
+        analysis.setSource(SOURCE_PUBLIC);
+        analysis.setCreatedBy(null);
+        analysis.setUpdatedAt(LocalDateTime.now());
+        analysisMapper.updateById(analysis);
+        return result;
+    }
+
+    /**
      * 分析历史列表（P1）：分页 + 可选 status 过滤，按创建时间倒序。
      *
      * <p>归属隔离与 {@link #getAnalysis} 同口径：平台运营（ADMIN/EDITOR）可见全部
@@ -618,11 +644,29 @@ public class FloorPlanService {
      * @return 分析详情（含未软删空间列表，按 sort_order 升序）
      */
     public FloorPlanAnalysisResponse getAnalysis(String analysisId) {
+        return getAnalysisInternal(analysisId, true);
+    }
+
+    /**
+     * 查询官网游客 CAD 分析详情；调用方须在进入本方法前完成匿名访问凭证校验。
+     *
+     * @param analysisId 分析批次 ID
+     * @return 分析详情
+     */
+    public FloorPlanAnalysisResponse getPublicAnalysis(String analysisId) {
+        return getAnalysisInternal(analysisId, false);
+    }
+
+    private FloorPlanAnalysisResponse getAnalysisInternal(String analysisId, boolean enforceOwner) {
         FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
         if (analysis == null) {
             throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
         }
-        assertCanAccess(analysis);
+        if (enforceOwner) {
+            assertCanAccess(analysis);
+        } else if (!SOURCE_PUBLIC.equals(analysis.getSource())) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
         syncStatusFromTask(analysis);
 
         List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()

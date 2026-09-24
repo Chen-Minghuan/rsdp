@@ -1,6 +1,7 @@
 package com.rsdp.service;
 
 import com.rsdp.entity.ImageAssets;
+import com.rsdp.entity.FloorPlanAnalysis;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.exception.ResourceNotFoundException;
 import com.rsdp.mapper.DesignOrderItemMapper;
@@ -280,6 +281,48 @@ class ImageServiceTest {
         ImageService.LoadedImage loaded = imageService.loadImageResource("IMG-FP04");
 
         assertThat(loaded.contentType()).isEqualTo("image/jpeg");
+    }
+
+    @Test
+    void loadImageResourceForPublicFloorPlan_shouldAllowBoundPreview() throws Exception {
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-PUBLIC-PREVIEW");
+        asset.setImageType("floor_plan_cad_preview");
+        asset.setStoragePath("images/cad-preview/IMG-PUBLIC-PREVIEW.png");
+        asset.setFormat("png");
+        FloorPlanAnalysis analysis = new FloorPlanAnalysis();
+        analysis.setAnalysisId("FPA-PUBLIC-1");
+        analysis.setSource("public");
+        analysis.setPreviewImageId("IMG-PUBLIC-PREVIEW");
+
+        when(imageAssetsMapper.selectById("IMG-PUBLIC-PREVIEW")).thenReturn(asset);
+        when(floorPlanAnalysisMapper.selectById("FPA-PUBLIC-1")).thenReturn(analysis);
+        when(storageService.get("images/cad-preview/IMG-PUBLIC-PREVIEW.png"))
+            .thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
+
+        ImageService.LoadedImage loaded = imageService.loadImageResourceForPublicFloorPlan(
+            "IMG-PUBLIC-PREVIEW", "FPA-PUBLIC-1");
+
+        assertThat(loaded.contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void loadImageResourceForPublicFloorPlan_shouldRejectImageFromAnotherAnalysis() {
+        ImageAssets asset = new ImageAssets();
+        asset.setImageId("IMG-OTHER");
+        asset.setImageType("floor_plan");
+        FloorPlanAnalysis analysis = new FloorPlanAnalysis();
+        analysis.setAnalysisId("FPA-PUBLIC-1");
+        analysis.setSource("public");
+        analysis.setImageId("IMG-PUBLIC-1");
+
+        when(imageAssetsMapper.selectById("IMG-OTHER")).thenReturn(asset);
+        when(floorPlanAnalysisMapper.selectById("FPA-PUBLIC-1")).thenReturn(analysis);
+
+        assertThatThrownBy(() -> imageService.loadImageResourceForPublicFloorPlan(
+            "IMG-OTHER", "FPA-PUBLIC-1"))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .hasMessageContaining("图片不存在");
     }
 
     @Test
