@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.dto.CategoryShadowPrediction;
 import com.rsdp.dto.Dimensions;
 import com.rsdp.dto.DocumentProductRegion;
 import com.rsdp.dto.FloorPlanDetectResult;
@@ -13,6 +14,7 @@ import com.rsdp.dto.OpenAiChatRequest;
 import com.rsdp.dto.OpenAiChatResponse;
 import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.entity.CategoryDict;
+import com.rsdp.entity.KnowledgeProductType;
 import com.rsdp.exception.ExternalServiceException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,8 +38,10 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -655,6 +659,19 @@ public class VisionService {
         只输出 JSON，不要任何其他文字说明。
         """;
 
+    private static final String CATEGORY_SHADOW_USER_PROMPT = """
+        请对图中家具做旁路分类，不要受现有正式分类结果影响。
+        一级品类码只能从以下枚举中选择：
+        %s
+
+        二级产品类型只能从以下枚举中选择；无法可靠细分时 productType 输出 null：
+        %s
+
+        输出格式：
+        {"categoryCode":"DK","productType":"WRITING_DESK","confidence":"high|mid|low","reason":"一句话视觉依据"}
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
     /**
      * 轻量品类判定（best-effort）：从品类字典枚举中为图片选择一个品类码。
      *
@@ -697,6 +714,105 @@ public class VisionService {
             log.warn("品类判定失败，返回 null：{}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 使用全量字典执行扩展品类旁路判定。该方法只返回预测，不修改任何业务数据。
+     *
+     * @param imageStream         原始产品图片
+     * @param allowedCategoryCodes 本次 Shadow 允许的旧类与扩展类代码集合
+     * @param productTypes        启用的二级产品类型知识
+     * @return 校验后的旁路预测；无法判定或模型输出越界时返回 null
+     */
+    public CategoryShadowPrediction classifyCategoryShadow(
+        InputStream imageStream,
+        Set<String> allowedCategoryCodes,
+        List<KnowledgeProductType> productTypes
+    ) {
+        try (imageStream) {
+            byte[] imageBytes = imageStream.readAllBytes();
+            if (imageBytes.length == 0 || mockEnabled || allowedCategoryCodes == null || allowedCategoryCodes.isEmpty()) {
+                return null;
+            }
+
+            Set<String> allowed = allowedCategoryCodes.stream()
+                .filter(StringUtils::hasText)
+                .map(code -> code.trim().toUpperCase())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+            List<CategoryDict> categories = dictService.listAllByType("category").stream()
+                .filter(dict -> "active".equalsIgnoreCase(dict.getStatus()) || dict.getStatus() == null)
+                .filter(dict -> dict.getDictCode() != null && allowed.contains(dict.getDictCode().toUpperCase()))
+                .toList();
+            if (categories.isEmpty()) {
+                return null;
+            }
+
+            String categoryEnum = categories.stream()
+                .map(dict -> dict.getDictCode() + "(" + dict.getDictName() + ")")
+                .collect(Collectors.joining("、"));
+            List<KnowledgeProductType> allowedTypes = productTypes == null ? List.of() : productTypes.stream()
+                .filter(type -> allowed.contains(type.getBusinessCategoryCode()))
+                .toList();
+            String typeEnum = allowedTypes.stream()
+                .map(type -> type.getTypeCode() + "(" + type.getTypeName() + ",品类="
+                    + type.getBusinessCategoryCode() + ",别名=" + type.getAliases() + ")")
+                .collect(Collectors.joining("、"));
+            if (!StringUtils.hasText(typeEnum)) {
+                typeEnum = "无";
+            }
+
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", CATEGORY_CLASSIFY_SYSTEM_PROMPT),
+                    OpenAiChatMessage.vision("user", CATEGORY_SHADOW_USER_PROMPT.formatted(categoryEnum, typeEnum),
+                        Base64.getEncoder().encodeToString(imageBytes))
+                ))
+                .temperature(0.1)
+                .maxTokens(256)
+                .responseFormat(OpenAiChatRequest.ResponseFormat.builder().type("json_object").build())
+                .build();
+
+            Map<?, ?> result = objectMapper.readValue(executeChat(request, "扩展品类 Shadow 判定"), Map.class);
+            String categoryCode = normalizeText(result.get("categoryCode"));
+            if (categoryCode == null || !allowed.contains(categoryCode)) {
+                return null;
+            }
+            boolean knownCategory = categories.stream()
+                .anyMatch(dict -> categoryCode.equalsIgnoreCase(dict.getDictCode()));
+            if (!knownCategory) {
+                return null;
+            }
+
+            String productTypeCandidate = normalizeText(result.get("productType"));
+            String productType = productTypeCandidate;
+            if (productTypeCandidate != null) {
+                boolean validType = allowedTypes.stream().anyMatch(type ->
+                    productTypeCandidate.equalsIgnoreCase(type.getTypeCode())
+                        && categoryCode.equalsIgnoreCase(type.getBusinessCategoryCode()));
+                if (!validType) {
+                    log.warn("Shadow 模型输出非法或跨品类 product_type，已清空: category={}, type={}",
+                        categoryCode, productType);
+                    productType = null;
+                }
+            }
+            return new CategoryShadowPrediction(
+                categoryCode,
+                productType,
+                normalizeText(result.get("confidence")),
+                result.get("reason") instanceof String reason ? reason.trim() : null
+            );
+        } catch (Exception e) {
+            log.warn("扩展品类 Shadow 判定失败，忽略旁路结果: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String normalizeText(Object value) {
+        if (!(value instanceof String text) || !StringUtils.hasText(text)) {
+            return null;
+        }
+        return text.trim().toUpperCase();
     }
 
     /** 解析品类判定结果；码不在字典中时返回 null（防 AI 编造枚举外的码）。 */

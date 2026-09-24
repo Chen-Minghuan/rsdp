@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.config.CacheConfig;
+import com.rsdp.config.properties.ExtendedCategoryProperties;
 import com.rsdp.dto.response.DictTypeSummaryResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.BusinessException;
@@ -48,6 +49,7 @@ public class DictService {
     private final CategoryDictMapper categoryDictMapper;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    private final ExtendedCategoryProperties extendedCategoryProperties;
 
     /**
      * 按类型查询有效字典项（AI 枚举注入、前端下拉、字典归一匹配使用）。
@@ -57,7 +59,13 @@ public class DictService {
      */
     @Cacheable(value = CacheConfig.CACHE_NAME_DICTS, keyGenerator = "simpleKeyGenerator")
     public List<CategoryDict> listByType(String dictType) {
-        return categoryDictMapper.selectByType(dictType);
+        List<CategoryDict> dictionaries = categoryDictMapper.selectByType(dictType);
+        if (!"category".equalsIgnoreCase(dictType) || extendedCategoryProperties.isEnabled()) {
+            return dictionaries;
+        }
+        return dictionaries.stream()
+            .filter(dict -> !extendedCategoryProperties.isExtendedCode(dict.getDictCode()))
+            .collect(Collectors.toList());
     }
 
     /**

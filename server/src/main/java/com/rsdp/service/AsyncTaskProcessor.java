@@ -66,6 +66,7 @@ public class AsyncTaskProcessor {
     private final ImageAssetsMapper imageAssetsMapper;
     private final StorageService storageService;
     private final AiRecognitionPersistenceService persistenceService;
+    private final CategoryShadowService categoryShadowService;
     private final AuditLogService auditLogService;
     private final StyleMatchingService styleMatchingService;
     private final RspuVariantService rspuVariantService;
@@ -243,6 +244,16 @@ public class AsyncTaskProcessor {
             String productName = persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
                 labels, processingTime, operator);
             successSaved = true;
+
+            // 扩展品类旁路：异步独立执行，只写 Shadow 结果，不改变本次正式分类或任何业务字段。
+            try {
+                if (categoryShadowService.isEnabled()) {
+                    categoryShadowService.evaluateAndStore(
+                        recognitionId, rspuId, imageId, categoryCode, originalImageBytes);
+                }
+            } catch (Exception e) {
+                log.warn("提交扩展品类 Shadow 任务失败，忽略旁路，recognitionId={}", recognitionId, e);
+            }
 
             // 同款检测（写入向量前召回比对）：相似度超阈值时把新品标记"存疑-疑似同款"，
             // 由人工裁决保留或删除——不硬拦截（同款不同工厂是合法场景）

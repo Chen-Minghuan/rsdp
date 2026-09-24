@@ -67,6 +67,9 @@ class AsyncTaskProcessorTest {
     private AiRecognitionPersistenceService persistenceService;
 
     @Mock
+    private CategoryShadowService categoryShadowService;
+
+    @Mock
     private AuditLogService auditLogService;
 
     @Mock

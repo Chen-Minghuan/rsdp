@@ -3,8 +3,10 @@ package com.rsdp.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.rsdp.dto.AiLabels;
+import com.rsdp.dto.CategoryShadowPrediction;
 import com.rsdp.dto.ProductBoundingBox;
 import com.rsdp.entity.CategoryDict;
+import com.rsdp.entity.KnowledgeProductType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,6 +15,7 @@ import org.springframework.web.client.RestClient;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.List;
+import java.util.Set;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -199,6 +202,66 @@ class VisionServiceTest {
                 .withBody(buildChatCompletionResponseBody("{\"categoryCode\":null}"))));
 
         assertThat(visionService.classifyCategory(new ByteArrayInputStream("fake-image".getBytes()))).isNull();
+    }
+
+    @Test
+    void classifyCategoryShadow_shouldUseFullDictionaryAndProductTypes() throws Exception {
+        CategoryDict fs = category("FS", "座椅");
+        CategoryDict dk = category("DK", "书桌/写字台");
+        when(dictService.listAllByType("category")).thenReturn(List.of(fs, dk));
+        KnowledgeProductType writingDesk = productType("WRITING_DESK", "写字台", "DK");
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody("""
+                    {"categoryCode":"DK","productType":"WRITING_DESK","confidence":"high","reason":"可见写字台面"}
+                    """))));
+
+        CategoryShadowPrediction prediction = visionService.classifyCategoryShadow(
+            new ByteArrayInputStream("fake-image".getBytes()), Set.of("FS", "DK"), List.of(writingDesk));
+
+        assertThat(prediction.categoryCode()).isEqualTo("DK");
+        assertThat(prediction.productType()).isEqualTo("WRITING_DESK");
+        verify(postRequestedFor(urlEqualTo("/chat/completions"))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[1].text", containing("DK(书桌/写字台)")))
+            .withRequestBody(matchingJsonPath("$.messages[1].content[1].text", containing("WRITING_DESK"))));
+    }
+
+    @Test
+    void classifyCategoryShadow_shouldClearCrossCategoryProductType() throws Exception {
+        when(dictService.listAllByType("category")).thenReturn(List.of(category("DK", "书桌/写字台")));
+        KnowledgeProductType wrongType = productType("DINING_CHAIR", "餐椅", "FS");
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"categoryCode\":\"DK\",\"productType\":\"DINING_CHAIR\",\"confidence\":\"mid\"}"))));
+
+        CategoryShadowPrediction prediction = visionService.classifyCategoryShadow(
+            new ByteArrayInputStream("fake-image".getBytes()), Set.of("DK", "FS"), List.of(wrongType));
+
+        assertThat(prediction.categoryCode()).isEqualTo("DK");
+        assertThat(prediction.productType()).isNull();
+    }
+
+    private CategoryDict category(String code, String name) {
+        CategoryDict dict = new CategoryDict();
+        dict.setDictType("category");
+        dict.setDictCode(code);
+        dict.setDictName(name);
+        dict.setStatus("active");
+        return dict;
+    }
+
+    private KnowledgeProductType productType(String code, String name, String category) {
+        KnowledgeProductType type = new KnowledgeProductType();
+        type.setTypeCode(code);
+        type.setTypeName(name);
+        type.setBusinessCategoryCode(category);
+        type.setAliases("[]");
+        return type;
     }
 
     private void stubCategoryDict(String... codes) {

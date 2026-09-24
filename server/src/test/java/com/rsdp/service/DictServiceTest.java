@@ -3,6 +3,7 @@ package com.rsdp.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rsdp.config.properties.ExtendedCategoryProperties;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.CategoryDictMapper;
@@ -37,6 +38,9 @@ class DictServiceTest {
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
+    @Spy
+    private ExtendedCategoryProperties extendedCategoryProperties = new ExtendedCategoryProperties();
+
     @InjectMocks
     private DictService dictService;
 
@@ -53,6 +57,33 @@ class DictServiceTest {
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getDictCode()).isEqualTo("PE");
+    }
+
+    @Test
+    void listByType_categoryFlagDisabled_shouldHideExtendedCategories() {
+        CategoryDict legacy = new CategoryDict();
+        legacy.setDictCode("FS");
+        CategoryDict extended = new CategoryDict();
+        extended.setDictCode("DK");
+        when(categoryDictMapper.selectByType("category")).thenReturn(List.of(legacy, extended));
+
+        assertThat(dictService.listByType("category"))
+            .extracting(CategoryDict::getDictCode)
+            .containsExactly("FS");
+    }
+
+    @Test
+    void listByType_categoryFlagEnabled_shouldExposeExtendedCategories() {
+        extendedCategoryProperties.setEnabled(true);
+        CategoryDict legacy = new CategoryDict();
+        legacy.setDictCode("FS");
+        CategoryDict extended = new CategoryDict();
+        extended.setDictCode("DK");
+        when(categoryDictMapper.selectByType("category")).thenReturn(List.of(legacy, extended));
+
+        assertThat(dictService.listByType("category"))
+            .extracting(CategoryDict::getDictCode)
+            .containsExactly("FS", "DK");
     }
 
     @Test

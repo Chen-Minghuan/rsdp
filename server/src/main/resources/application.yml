@@ -82,6 +82,12 @@ rsdp:
     # Mock 模式：开启后 AI 识别返回固定模拟结果，仅用于本地无密钥联调
     mock:
       enabled: false
+    # 扩展品类分阶段发布：正式开关默认关闭；Shadow 只记录旁路结果，不回写 RSPU
+    category:
+      extended:
+        enabled: ${RSDP_AI_EXTENDED_CATEGORY_ENABLED:false}
+        shadow-enabled: ${RSDP_AI_EXTENDED_CATEGORY_SHADOW_ENABLED:false}
+        codes: ${RSDP_AI_EXTENDED_CATEGORY_CODES:DK,MT,MR,RG,PD,CW}
     # 主图智能裁剪：录入时 AI 识别产品主体并裁剪为主图，失败自动回退原图
     subject-crop:
       enabled: true
