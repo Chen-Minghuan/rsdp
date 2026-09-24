@@ -1,6 +1,6 @@
 -- ============================================================
 -- RSDP 基线 DDL · 04 图片与AI识别域（04_image_ai.sql）
--- 包含表：image_assets, product_image_embedding, ai_recognition, async_task
+-- 包含表：image_assets, product_image_embedding, ai_recognition, ai_category_shadow_result, async_task
 -- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
 -- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
 -- ============================================================
@@ -71,6 +71,25 @@ CREATE TABLE IF NOT EXISTS ai_recognition (
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
 
+-- 扩展品类旁路识别结果：只记录 Shadow 预测，不回写 RSPU、不参与业务编码与业务判断
+CREATE TABLE IF NOT EXISTS ai_category_shadow_result (
+    shadow_id BIGSERIAL PRIMARY KEY,
+    recognition_id VARCHAR(64) NOT NULL UNIQUE,
+    rspu_id VARCHAR(64),
+    image_id VARCHAR(64),
+    legacy_category VARCHAR(16),
+    extended_category VARCHAR(16),
+    product_type VARCHAR(64),
+    six_dim_result JSONB,
+    confidence VARCHAR(16),
+    difference_reason TEXT,
+    model_version VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (recognition_id) REFERENCES ai_recognition(recognition_id) ON DELETE CASCADE,
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    FOREIGN KEY (image_id) REFERENCES image_assets(image_id)
+);
+
 -- 异步任务表
 CREATE TABLE IF NOT EXISTS async_task (
     task_id VARCHAR(64) PRIMARY KEY,
@@ -97,5 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_image_content_hash ON image_assets(content_hash) 
 CREATE INDEX IF NOT EXISTS idx_ai_image ON ai_recognition(image_id, recognition_type);
 CREATE INDEX IF NOT EXISTS idx_ai_rspu ON ai_recognition(rspu_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_recognition_task ON ai_recognition(task_id);
+CREATE INDEX IF NOT EXISTS idx_ai_category_shadow_rspu ON ai_category_shadow_result(rspu_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_category_shadow_category ON ai_category_shadow_result(extended_category, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_task_status ON async_task(status, created_at);
