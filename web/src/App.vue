@@ -171,7 +171,7 @@ async function openConsult() {
   <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme-overrides="themeOverrides">
     <n-layout style="height: 100vh;">
       <n-layout-header v-if="!route.meta.hideHeader" bordered class="app-header">
-        <n-space align="center" justify="space-between" style="height: 100%;">
+        <n-space align="center" justify="space-between" style="min-height: 100%; row-gap: 8px;">
           <div class="brand" @click="navigate('/')">
             <span class="brand-name">RSDP</span>
             <span class="brand-divider" />
@@ -266,9 +266,12 @@ async function openConsult() {
 </style>
 
 <style scoped>
+/* 高度不锁死：导航项较多或窗口较窄时 NSpace 会换行，
+   头部随内容撑高，避免溢出覆盖下方页面内容 */
 .app-header {
-  height: var(--rsdp-header-height);
-  padding: 0 var(--rsdp-page-padding);
+  min-height: var(--rsdp-header-height);
+  height: auto;
+  padding: 6px var(--rsdp-page-padding);
   background: var(--rsdp-card-bg);
 }
 
