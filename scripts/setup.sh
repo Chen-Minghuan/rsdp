@@ -3,30 +3,18 @@ set -e
 
 echo "=== RSDP 开发环境一键搭建（PostgreSQL）==="
 
-# 启动基础设施
-# 注意：默认不启动 Ollama（与 make dev 一致）。deploy/docker-compose.yml 中 ollama 服务
-# 强制 NVIDIA GPU reservation，无 GPU 机器会启动失败；如需本地 AI 推理且具备 NVIDIA GPU，
-# 可设置 RSDP_WITH_OLLAMA=1 后重跑本脚本，或手动执行：
-#   docker compose -f deploy/docker-compose.yml up -d ollama
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# 复用 Makefile 的单一开发环境入口：全新数据卷由 PostgreSQL entrypoint
+# 自动执行 schema/，已有数据卷则由应用启动时的 Flyway 负责结构升级。
+make -C "$PROJECT_ROOT" dev
+
 if [ "${RSDP_WITH_OLLAMA:-0}" = "1" ]; then
-    echo "启动基础设施（PostgreSQL + Ollama + ChromaDB + Redis + MinIO）..."
-    docker compose -f deploy/docker-compose.yml up -d postgres ollama chromadb redis minio
+    echo "启动 Ollama（需要 NVIDIA GPU）..."
+    docker compose -f "$PROJECT_ROOT/deploy/docker-compose.yml" up -d ollama
 else
-    echo "启动基础设施（PostgreSQL + ChromaDB + Redis + MinIO，不含 Ollama）..."
-    docker compose -f deploy/docker-compose.yml up -d postgres chromadb redis minio
-    echo "提示：如需本地 AI 推理（Ollama，需 NVIDIA GPU），设置 RSDP_WITH_OLLAMA=1 后重跑，"
-    echo "      或手动执行 docker compose -f deploy/docker-compose.yml up -d ollama"
+    echo "提示：如需本地 AI 推理（Ollama，需 NVIDIA GPU），设置 RSDP_WITH_OLLAMA=1 后重跑。"
 fi
-
-echo "等待 PostgreSQL 就绪..."
-sleep 5
-
-# 初始化数据库（schema/ 基线 DDL + 字典种子，按字母序逐文件执行，zz_seed.sql 最后）
-echo "初始化 PostgreSQL 数据库（基线 DDL + 种子数据）..."
-for f in $(docker exec rsdp-postgres ls /docker-entrypoint-initdb.d/*.sql); do
-    echo "执行 $f"
-    docker exec -i rsdp-postgres psql -U "${POSTGRES_USER:-rsdp}" -d rsdp -v ON_ERROR_STOP=1 -f "$f"
-done
 
 echo "=== 环境搭建完成 ==="
 echo "请确认已设置 DASHSCOPE_API_KEY 环境变量（如使用 DashScope）。"
