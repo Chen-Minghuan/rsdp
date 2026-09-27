@@ -1,21 +1,3 @@
--- ============================================================
--- RSDP 基线 DDL · 09 用户与团队域（09_user_team.sql）
--- 包含表：sys_user, sys_role, sys_permission, sys_user_role, sys_role_permission, sys_user_factory, company, member_group, invite_record, designer_profile, user_operator
--- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
--- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
--- ============================================================
--- 操作员表
-CREATE TABLE IF NOT EXISTS user_operator (
-    user_id VARCHAR(64) PRIMARY KEY,
-    username VARCHAR(64) NOT NULL UNIQUE,
-    real_name VARCHAR(64),
-    role VARCHAR(32),
-    status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ
-);
-
--- 系统用户表
 CREATE TABLE IF NOT EXISTS sys_user (
     user_id VARCHAR(64) PRIMARY KEY,
     username VARCHAR(64) NOT NULL UNIQUE,
@@ -67,6 +49,10 @@ CREATE TABLE IF NOT EXISTS member_group (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_member_group_company ON member_group(company_id) WHERE deleted_at IS NULL;
+
+-- 组合候选键（V15）：支撑 sys_user 归属一致组合外键（用户企业必须与群组企业一致）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_member_group_company_group
+    ON member_group(company_id, group_id);
 
 -- 邀请记录表（V13 并入）
 CREATE TABLE IF NOT EXISTS invite_record (

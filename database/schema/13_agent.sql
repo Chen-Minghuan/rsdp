@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS agent_recommend_item (
 COMMENT ON COLUMN agent_recommend_item.snapshot IS '产品事实快照：名称/颜色/材质/retailPrice/尺寸等';
 COMMENT ON COLUMN agent_recommend_item.reason IS '推荐理由：highlights + evidenceRefs';
 COMMENT ON COLUMN agent_recommend_item.group_tag IS '配套分组标签（品类码 TB/FS/FC 等），主体选品为空';
-CREATE INDEX IF NOT EXISTS idx_agent_recommend_item_batch ON agent_recommend_item(batch_id);
+-- idx_agent_recommend_item_batch 已于 V15 删除：uk_agent_recommend_item_rank(batch_id, rank) 左前缀覆盖
 CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_recommend_item_rank ON agent_recommend_item(batch_id, rank);
 
 -- 反馈表
@@ -155,3 +155,62 @@ COMMENT ON COLUMN agent_quote.status IS 'generated（已生成）/exported（已
 COMMENT ON COLUMN agent_quote.idempotency_key IS '幂等键，防重复生成';
 CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_quote_idem ON agent_quote(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_agent_quote_session ON agent_quote(session_id);
+
+-- ============================================================
+-- Agent 域内部外键（V15）：稳定内部关系数据库级约束——消息/需求版本/推荐批次/
+-- 反馈/确认条目/运行/报价 → 会话，推荐条目 → 批次等；商品快照（recommend_item.rspu_id、
+-- confirmed_item.rspu_id、quote.items 内嵌）保留弱引用不加 FK；customer_user_id
+-- 为注册后回填的外部归属，不加 FK。物理删除默认 RESTRICT（先清子记录再删父记录）。
+-- ============================================================
+ALTER TABLE agent_message DROP CONSTRAINT IF EXISTS fk_agent_message_session;
+ALTER TABLE agent_message ADD CONSTRAINT fk_agent_message_session
+    FOREIGN KEY (session_id) REFERENCES agent_session(session_id);
+ALTER TABLE agent_message DROP CONSTRAINT IF EXISTS fk_agent_message_run;
+ALTER TABLE agent_message ADD CONSTRAINT fk_agent_message_run
+    FOREIGN KEY (run_id) REFERENCES agent_run(run_id);
+ALTER TABLE agent_requirement_version DROP CONSTRAINT IF EXISTS fk_agent_requirement_session;
+ALTER TABLE agent_requirement_version ADD CONSTRAINT fk_agent_requirement_session
+    FOREIGN KEY (session_id) REFERENCES agent_session(session_id);
+ALTER TABLE agent_recommend_batch DROP CONSTRAINT IF EXISTS fk_agent_recommend_batch_session;
+ALTER TABLE agent_recommend_batch ADD CONSTRAINT fk_agent_recommend_batch_session
+    FOREIGN KEY (session_id) REFERENCES agent_session(session_id);
+ALTER TABLE agent_recommend_batch DROP CONSTRAINT IF EXISTS fk_agent_recommend_batch_version;
+ALTER TABLE agent_recommend_batch ADD CONSTRAINT fk_agent_recommend_batch_version
+    FOREIGN KEY (session_id, version_no)
+    REFERENCES agent_requirement_version(session_id, version_no);
+ALTER TABLE agent_recommend_item DROP CONSTRAINT IF EXISTS fk_agent_recommend_item_batch;
+ALTER TABLE agent_recommend_item ADD CONSTRAINT fk_agent_recommend_item_batch
+    FOREIGN KEY (batch_id) REFERENCES agent_recommend_batch(batch_id);
+ALTER TABLE agent_feedback DROP CONSTRAINT IF EXISTS fk_agent_feedback_session;
+ALTER TABLE agent_feedback ADD CONSTRAINT fk_agent_feedback_session
+    FOREIGN KEY (session_id) REFERENCES agent_session(session_id);
+ALTER TABLE agent_feedback DROP CONSTRAINT IF EXISTS fk_agent_feedback_item;
+ALTER TABLE agent_feedback ADD CONSTRAINT fk_agent_feedback_item
+    FOREIGN KEY (item_id) REFERENCES agent_recommend_item(item_id);
+ALTER TABLE agent_feedback DROP CONSTRAINT IF EXISTS fk_agent_feedback_batch;
+ALTER TABLE agent_feedback ADD CONSTRAINT fk_agent_feedback_batch
+    FOREIGN KEY (batch_id) REFERENCES agent_recommend_batch(batch_id);
+ALTER TABLE agent_confirmed_item DROP CONSTRAINT IF EXISTS fk_agent_confirmed_session;
+ALTER TABLE agent_confirmed_item ADD CONSTRAINT fk_agent_confirmed_session
+    FOREIGN KEY (session_id) REFERENCES agent_session(session_id);
+ALTER TABLE agent_confirmed_item DROP CONSTRAINT IF EXISTS fk_agent_confirmed_recommend_item;
+ALTER TABLE agent_confirmed_item ADD CONSTRAINT fk_agent_confirmed_recommend_item
+    FOREIGN KEY (recommend_item_id) REFERENCES agent_recommend_item(item_id);
+ALTER TABLE agent_run DROP CONSTRAINT IF EXISTS fk_agent_run_session;
+ALTER TABLE agent_run ADD CONSTRAINT fk_agent_run_session
+    FOREIGN KEY (session_id) REFERENCES agent_session(session_id);
+ALTER TABLE agent_quote DROP CONSTRAINT IF EXISTS fk_agent_quote_session;
+ALTER TABLE agent_quote ADD CONSTRAINT fk_agent_quote_session
+    FOREIGN KEY (session_id) REFERENCES agent_session(session_id);
+ALTER TABLE agent_session DROP CONSTRAINT IF EXISTS fk_agent_session_active_run;
+ALTER TABLE agent_session ADD CONSTRAINT fk_agent_session_active_run
+    FOREIGN KEY (active_run_id) REFERENCES agent_run(run_id);
+ALTER TABLE agent_session DROP CONSTRAINT IF EXISTS fk_agent_session_created_by;
+ALTER TABLE agent_session ADD CONSTRAINT fk_agent_session_created_by
+    FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
+ALTER TABLE agent_confirmed_item DROP CONSTRAINT IF EXISTS fk_agent_confirmed_by;
+ALTER TABLE agent_confirmed_item ADD CONSTRAINT fk_agent_confirmed_by
+    FOREIGN KEY (confirmed_by) REFERENCES sys_user(user_id);
+ALTER TABLE agent_quote DROP CONSTRAINT IF EXISTS fk_agent_quote_created_by;
+ALTER TABLE agent_quote ADD CONSTRAINT fk_agent_quote_created_by
+    FOREIGN KEY (created_by) REFERENCES sys_user(user_id);

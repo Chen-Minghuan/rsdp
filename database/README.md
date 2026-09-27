@@ -14,7 +14,7 @@ database/
 │   ├── 02_product.sql           # 产品域：rspu_master/rspu_style/rspu_scene/rspu_variant/rspu_relation/3 个 code_counter/rsku_supply/price_history/rspu_price_summary
 │   ├── 03_factory.sql           # 工厂域：factory_master/level_capability/warehouse/variant_capacity/rspu_factory_mapping/lead_time_rule/capacity_assessment/factory_product_capability
 │   ├── 04_image_ai.sql          # 图片与AI识别域：image_assets / ai_recognition / ai_category_shadow_result / async_task
-│   ├── 05_excel_import.sql      # 导入域：excel_import_batch/excel_import_row/document_import_batch（PDF 文档导入批次）
+│   ├── 05_excel_import.sql      # 导入域：excel_import_batch/excel_import_row/document_import_batch（PDF 文档导入批次）/supplier_product_ref（供应商商品引用，v3.3 §6，Flyway V17）
 │   ├── 06_floor_plan.sql        # 户型图域：floor_plan_analysis / floor_plan_room
 │   ├── 07_project_scheme.sql    # 项目与方案域：project/scheme/scheme_item/scheme_candidate/favorite_folder/user_favorite/template_tag/product_collection/product_collection_item
 │   ├── 08_order_pricing.sql     # 订单与定价域：design_order/design_order_item/order_no_counter/sys_config/pricing_rule/recommendation_score_config
@@ -46,7 +46,7 @@ database/
   ```bash
   for f in database/schema/*.sql; do psql -U rsdp -d rsdp -v ON_ERROR_STOP=1 -f "$f"; done
   ```
-  （`make init-db` / `make dev` / `scripts/setup.sh` 即此流程的封装。）
+  （`make init-db` 是该手工流程的容器化封装；`make dev` / `scripts/setup.sh` 在全新数据卷上由 PostgreSQL entrypoint 自动执行同一目录。）
 
 ### 2. 数据库重置
 
@@ -74,3 +74,11 @@ database/
 种子数据变化直接改 `schema/zz_seed.sql`（reset_db.sql 内嵌镜像需同步）。品类六维与扩展 taxonomy 由
 `scripts/generate_six_dim_dict_seed.js` 维护；旧九类元数据、补充 product_type 与属性定义由
 `scripts/generate_product_attribute_seed.js` 维护。两者都必须通过 `--check`，不要手工编辑其标记区间。
+
+### 合并分支后迁移文件重编号
+
+新增但未发布的迁移如因分支合并重编号，启动前执行 `cd server && mvn clean test`，清除 `target/classes/db/migration` 中旧文件；普通增量构建不会删除旧资源。若开发库已执行旧编号，先备份并核对实际脚本和迁移历史，在副本验证重编号与补迁移方案，不能用通用 `repair` 将旧迁移误认成远程同编号的另一项迁移。本次本机记录已对齐至 V19，其他环境需按各自历史判断。
+
+### V17 发布前合并（2026-09-27）
+
+供应链与导入、数据正确性约束、可延迟归属外键统一保留在 `V17__supply_chain_import_v33.sql`，原未提交的 V18/V19 已并入。全新环境执行 V1–V17；schema 基线结构不变。已经执行过拆分版 V17–V19 的开发库，必须先备份并核对三个原始 checksum，在副本验证结构一致后才能收敛迁移历史；不要直接使用 repair 掩盖未执行的 SQL。迁移文件变化后需 clean 构建，避免旧 V18/V19 残留在 classpath。

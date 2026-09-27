@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS dict_alias (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uk_dict_alias UNIQUE (dict_type, alias_name)
 );
-CREATE INDEX IF NOT EXISTS idx_dict_alias_type ON dict_alias(dict_type);
+-- idx_dict_alias_type 已于 V15 删除：uk_dict_alias(dict_type, alias_name) 左前缀覆盖
 
 -- 未归一值采集表（V19 并入）：导入时字典解析未命中的工厂原文自动计数采集，
 -- 供运营在治理页面归并（写 dict_alias 自学习）或忽略

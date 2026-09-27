@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS product_collection_item (
     FOREIGN KEY (collection_id) REFERENCES product_collection(collection_id) ON DELETE CASCADE,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
-CREATE INDEX IF NOT EXISTS idx_collection_item_collection ON product_collection_item(collection_id);
+-- idx_collection_item_collection 已于 V15 删除：collection_id_rspu_id 组合唯一键左前缀覆盖
 CREATE INDEX IF NOT EXISTS idx_collection_item_rspu ON product_collection_item(rspu_id);
 
 -- AI 推荐候选清单
@@ -147,6 +147,10 @@ CREATE TABLE IF NOT EXISTS favorite_folder (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_favorite_folder_user ON favorite_folder(user_id) WHERE deleted_at IS NULL;
+
+-- 组合候选键（V15）：支撑 user_favorite 归属一致组合外键（收藏不得挂到他人文件夹）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_favorite_folder_user_folder
+    ON favorite_folder(user_id, folder_id);
 
 -- 模板标签（V14 并入）：受控字典，scheme.template_tags 存名称 JSON，以名称为业务键
 CREATE TABLE IF NOT EXISTS template_tag (

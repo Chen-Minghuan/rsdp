@@ -37,14 +37,22 @@ ALTER TABLE sys_user
 ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_group;
 ALTER TABLE sys_user
     ADD CONSTRAINT fk_sys_user_group FOREIGN KEY (group_id) REFERENCES member_group(group_id);
+-- V15 归属一致：用户所属企业必须与群组所属企业一致（组合 FK）
+ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_company_group;
+ALTER TABLE sys_user
+    ADD CONSTRAINT fk_sys_user_company_group FOREIGN KEY (company_id, group_id)
+    REFERENCES member_group(company_id, group_id);
 ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_invited_by;
 ALTER TABLE sys_user
     ADD CONSTRAINT fk_sys_user_invited_by FOREIGN KEY (invited_by) REFERENCES sys_user(user_id);
 
 -- 补齐 user_favorite 文件夹外键（favorite_folder 在 user_favorite 之后创建）
+-- V15 归属一致：升级为（用户 + 文件夹）组合 FK——收藏不得挂到他人文件夹
 ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_folder;
+ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_user_folder;
 ALTER TABLE user_favorite
-    ADD CONSTRAINT fk_user_favorite_folder FOREIGN KEY (folder_id) REFERENCES favorite_folder(folder_id);
+    ADD CONSTRAINT fk_user_favorite_user_folder FOREIGN KEY (user_id, folder_id)
+    REFERENCES favorite_folder(user_id, folder_id);
 
 -- scheme.project_id 外键（表创建顺序约束，单独补加）
 ALTER TABLE scheme DROP CONSTRAINT IF EXISTS fk_scheme_project;
@@ -69,9 +77,13 @@ ALTER TABLE rspu_master
 ALTER TABLE rsku_supply DROP CONSTRAINT IF EXISTS fk_rsku_supply_factory;
 ALTER TABLE rsku_supply
     ADD CONSTRAINT fk_rsku_supply_factory FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code);
+-- V15 归属一致：单列 FK 升级为（工厂 + 仓库）组合 FK——工厂 A 不得使用工厂 B 的仓库
 ALTER TABLE rsku_supply DROP CONSTRAINT IF EXISTS fk_rsku_supply_warehouse;
+ALTER TABLE rsku_supply DROP CONSTRAINT IF EXISTS fk_rsku_supply_factory_warehouse;
 ALTER TABLE rsku_supply
-    ADD CONSTRAINT fk_rsku_supply_warehouse FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id);
+    ADD CONSTRAINT fk_rsku_supply_factory_warehouse
+    FOREIGN KEY (factory_code, shipping_warehouse_id)
+    REFERENCES factory_warehouse(factory_code, warehouse_id);
 
 -- 07_project_scheme → 09_user_team：收藏/产品集/项目用户外键
 ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_user;

@@ -42,8 +42,11 @@ function parseDb() {
       for (let raw of m[2].split("\n")) {
         let line = raw.split("--")[0].trim().replace(/,$/, "");
         if (!line) continue;
-        if (/^(PRIMARY|FOREIGN|UNIQUE|CHECK|CONSTRAINT|INDEX)\b/i.test(line)) continue;
+        if (/^(PRIMARY|FOREIGN|UNIQUE|CHECK|CONSTRAINT|INDEX|REFERENCES|ON|AND|OR)\b/i.test(line) || line.startsWith(')')) continue; // REFERENCES/ON/AND/OR/) 为多行约束续行
         const col = line.split(/\s+/)[0];
+        // 列定义行 = 合法标识符 + 行内含类型关键字；约束续行（(status / 'failed' 等）不算列
+        if (!/^[a-zA-Z_]\w*$/.test(col)) continue;
+        if (!/\b(VARCHAR|TEXT|INT|INTEGER|BIGINT|BIGSERIAL|SMALLINT|SERIAL|NUMERIC|DECIMAL|BOOLEAN|BOOL|TIMESTAMPTZ|TIMESTAMP|DATE|JSONB|JSON|UUID|BYTEA|REAL|DOUBLE|VECTOR|CHAR)\b/i.test(line)) continue;
         add(table, col.toLowerCase());
       }
     }

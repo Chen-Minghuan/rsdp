@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS image_assets (
     deleted_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
+    -- 归属层级一致（V15）：variant_id 非空时 rspu_id 必须等于变体所属产品
+    --（组合 FK 引用 uk_rspu_variant_rspu_variant 候选键；任一列为 NULL 不约束）
+    CONSTRAINT fk_image_assets_rspu_variant
+        FOREIGN KEY (rspu_id, variant_id) REFERENCES rspu_variant(rspu_id, variant_id)
+        DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
 );
 
@@ -101,8 +106,15 @@ CREATE TABLE IF NOT EXISTS async_task (
     error_message TEXT,
     created_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMPTZ
+    completed_at TIMESTAMPTZ,
+    idempotency_key VARCHAR(128)                    -- 副作用幂等键（v3.3 §50.3，Flyway V14 追加）
 );
+
+-- §50.3：重复 enqueue 返回既有任务（excel_import 任务键 = excel-import-attempt:<attemptId>）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_async_task_type_idempotency
+ON async_task(task_type, idempotency_key)
+WHERE idempotency_key IS NOT NULL;
+COMMENT ON COLUMN async_task.idempotency_key IS '副作用幂等键（v3.3 §50.3）：Worker 崩溃重试/重复 enqueue 不重复建任务；excel_import 任务键为 excel-import-attempt:<attemptId>';
 
 -- 图片索引
 CREATE INDEX IF NOT EXISTS idx_image_rspu ON image_assets(rspu_id, image_type);

@@ -1,6 +1,6 @@
 -- ============================================================
 -- RSDP 基线 DDL · 10 风格知识库域（10_style_knowledge.sql）
--- 包含表：knowledge_product_type, knowledge_product_attribute, style_case, style_element, style_matching_formula, product_style_match, matching_feedback
+-- 包含表：knowledge_product_type, knowledge_product_attribute, style_case, style_element, style_matching_formula, product_style_match
 -- 执行顺序：schema/ 目录按文件名 01 → 12 → 99 依次执行（编号即执行顺序，基线由原 V1__init_db.sql 按域拆分而来）
 -- 同步约定：新增/修改本域表结构时须同步 ops/reset_db.sql，约定详见 database/README.md
 -- ============================================================
@@ -145,29 +145,12 @@ CREATE TABLE IF NOT EXISTS product_style_match (
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
--- 推荐反馈：用于后续优化公式
-CREATE TABLE IF NOT EXISTS matching_feedback (
-    feedback_id BIGSERIAL PRIMARY KEY,
-    rspu_id VARCHAR(64) NOT NULL,
-    recommended_rspu_id VARCHAR(64) NOT NULL,
-    formula_id VARCHAR(64),
-    score DECIMAL(5,4),
-    feedback VARCHAR(16),
-    reason TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (recommended_rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (formula_id) REFERENCES style_matching_formula(formula_id)
-);
-
 -- 风格数据库索引
 CREATE INDEX IF NOT EXISTS idx_style_case_style ON style_case(style_code, is_success);
 CREATE INDEX IF NOT EXISTS idx_style_case_room ON style_case(room_type, is_success);
 CREATE INDEX IF NOT EXISTS idx_style_element_case ON style_element(case_id);
 CREATE INDEX IF NOT EXISTS idx_style_element_type ON style_element(element_type, normalized_code);
 CREATE INDEX IF NOT EXISTS idx_formula_style_room ON style_matching_formula(style_code, room_type, status);
-CREATE INDEX IF NOT EXISTS idx_product_match_rspu ON product_style_match(rspu_id);
+-- idx_product_match_rspu 已于 V15 删除：rspu_id_style_code 组合唯一键左前缀覆盖
 CREATE INDEX IF NOT EXISTS idx_product_match_score ON product_style_match(overall_score DESC);
--- 推荐反馈清理索引（V43）：产品删除时按 rspu_id 清理 matching_feedback
-CREATE INDEX IF NOT EXISTS idx_matching_feedback_rspu ON matching_feedback(rspu_id);
 

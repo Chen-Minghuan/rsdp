@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     description TEXT,                                -- 长文本描述原文（Excel 导入材质解析/功能配置等，V18 并入）
     retail_price NUMERIC(14,2),                      -- 零售参考价（销售价/含税价，不加密，V18 并入）
     six_dim_tags JSONB,                            -- 六维标签 JSON：{"A":"A字架形","B":"编织镂空",...}
-    style_vector JSONB,                            -- 512维向量备份：由 SpringBoot 调用 Ollama /api/embeddings 生成
     color_primary_name VARCHAR(64),                -- AI识别主色名称
     color_primary_hsv JSONB,                       -- AI识别主色HSV值 [H,S,V]
     color_secondary VARCHAR(64),                   -- AI识别辅色名称
@@ -36,8 +35,12 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ,
-    created_by VARCHAR(64)                         -- 录入人（sys_user.user_id，V3 增量并入；历史未知行留 NULL）
+    created_by VARCHAR(64),                        -- 录入人（sys_user.user_id，V3 增量并入；历史未知行留 NULL）
+    manual_override_fields JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 字段级人工修正权威标记（v3.3 §34.1，Flyway V14）
+    CONSTRAINT ck_rspu_manual_override_fields_object
+        CHECK (jsonb_typeof(manual_override_fields) = 'object')
 );
+COMMENT ON COLUMN rspu_master.manual_override_fields IS '字段级人工修正权威标记（§34.1）：JSON Pointer → {active, correctedBy, correctedAt, source}；Excel/AI/重试不得覆盖 active 字段';
 
 -- RSPU 多风格关联表（一个款式可属于多个风格）
 CREATE TABLE IF NOT EXISTS rspu_style (
@@ -50,6 +53,9 @@ CREATE TABLE IF NOT EXISTS rspu_style (
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
 );
+
+-- 主风格唯一：每 RSPU 最多一条 is_primary = true（V15；「必须有一个」由业务事务保证）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_style_primary ON rspu_style(rspu_id) WHERE is_primary = true;
 
 -- RSPU 编码流水计数器（按品类+风格维度生成流水号）
 CREATE TABLE IF NOT EXISTS rspu_code_counter (
@@ -104,9 +110,16 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ,
     quantity INTEGER,                                -- 数量/件数（V8 增量并入；Excel 导入时携带，可选）
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
+    manual_override_fields JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 字段级人工修正权威标记（v3.3 §34.1，Flyway V14）
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    -- 组合候选键（v3.3 §15，Flyway V14）：支撑 rsku_supply 组合 FK，
+    -- 数据库直接阻止「RSPU-A + 属于 RSPU-B 的 Variant」写入 Fingerprint 表
+    CONSTRAINT uk_rspu_variant_rspu_variant UNIQUE (rspu_id, variant_id),
+    CONSTRAINT ck_variant_manual_override_fields_object
+        CHECK (jsonb_typeof(manual_override_fields) = 'object')
 );
 COMMENT ON COLUMN rspu_variant.quantity IS '数量/件数（Excel 导入时携带，可选）';
+COMMENT ON COLUMN rspu_variant.manual_override_fields IS '字段级人工修正权威标记（§34.1），同 rspu_master.manual_override_fields';
 
 -- 变体编码流水计数器（按 RSPU 维度生成变体顺序号）
 CREATE TABLE IF NOT EXISTS variant_code_counter (
@@ -118,11 +131,16 @@ CREATE TABLE IF NOT EXISTS variant_code_counter (
 );
 
 -- RSKU 供应单元子表（工厂对某变体的报价）
+-- v3.3 P0-D（Flyway V14）收口：
+--   Identity = (variant_id, factory_code, supplier_configuration_key)（§32.1，唯一性见
+--   uk_rsku_variant_factory_config_alive 部分索引）；rspu_id 保留查询用途、不再参与 Identity；
+--   variant_id NOT NULL（§33）；组合 FK 对齐 rspu_variant（§32.2）；
+--   supplier_configuration_key 无数据库 DEFAULT，新写入由 Java 侧显式赋值（§34）
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
     rsku_code VARCHAR(64),                             -- 业务编码，如 FS-MC-001-M-A004-PE-001（唯一性见 uk_rsku_code_alive 部分索引，V5）
     rspu_id VARCHAR(64) NOT NULL,
-    variant_id VARCHAR(64),                        -- 关联具体变体
+    variant_id VARCHAR(64) NOT NULL,                 -- 关联具体变体（§33：与 rspu_id 组成组合 FK）
     factory_code VARCHAR(16) NOT NULL,
     factory_sku VARCHAR(64),                       -- 工厂原始编码
     factory_price TEXT,                              -- 出厂价（AES 加密存储）
@@ -148,10 +166,55 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ,
+    -- 以下为 Flyway V14（v3.3 §34/§34.1）追加列；列序与 ALTER TABLE 追加顺序一致（结构同步校验要求）
+    status VARCHAR(16) NOT NULL DEFAULT 'active',  -- RSKU 状态机（§36，V22）
+    currency_code VARCHAR(8) NOT NULL DEFAULT 'CNY',  -- 报价币种（§34，V22）
+    tax_included BOOLEAN,                          -- 是否含税（§34，V22）
+    price_unit VARCHAR(32),                        -- 计价单位（§34，V22）
+    moq_unit VARCHAR(32),                          -- 起订量单位（§34，V22）
+    quote_date DATE,                               -- 报价日期（§34，V22）
+    effective_from DATE,                           -- 生效日期（§34，V22）
+    effective_to DATE,                             -- 失效日期（§34，V22）
+    supplier_material_grade_code VARCHAR(64),      -- 供应商原始等级码（§18.2，V22）
+    supplier_material_grade_text VARCHAR(128),     -- 供应商原始等级原文（§18.2，V22）
+    supplier_configuration_key VARCHAR(192) NOT NULL,  -- 供应配置身份（§18.2，V22）：CODE:/TEXT:/BASE
+    supplier_configuration_normalizer_version VARCHAR(64) NOT NULL,  -- 配置 Key 归一规则集版本（§18.2，V22）
+    source_batch_id VARCHAR(64),                   -- 来源导入批次（§34，V22）
+    source_row_id BIGINT,                          -- 来源行号（§34，V22）
+    quote_version INTEGER NOT NULL DEFAULT 1,      -- 报价乐观并发版本（§37，V22）
+    manual_override_fields JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 字段级人工修正权威标记（§34.1，V22）
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
+    -- 组合 FK（v3.3 §32.2，Flyway V14）：rsku.rspu_id 必须等于 variant 所属 rspu_id，
+    -- 取代仅依赖 variant_id 的旧孤立 FK
+    CONSTRAINT fk_rsku_rspu_variant
+        FOREIGN KEY (rspu_id, variant_id)
+        REFERENCES rspu_variant(rspu_id, variant_id)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
+    CONSTRAINT ck_rsku_moq_positive
+        CHECK (moq IS NULL OR moq > 0),
+    CONSTRAINT ck_rsku_effective_date
+        CHECK (
+            effective_from IS NULL
+            OR effective_to IS NULL
+            OR effective_to >= effective_from
+        ),
+    CONSTRAINT ck_rsku_quote_version_positive
+        CHECK (quote_version > 0),
+    -- 状态机五值枚举以§36 为准；显式拒绝 NULL 形态，不依赖 CHECK 的 UNKNOWN 语义
+    CONSTRAINT ck_rsku_status
+        CHECK (
+            status IS NOT NULL
+            AND status IN ('active', 'inactive', 'expired', 'suspended', 'discontinued')
+        ),
+    CONSTRAINT ck_rsku_manual_override_fields_object
+        CHECK (jsonb_typeof(manual_override_fields) = 'object')
     -- factory_code / shipping_warehouse_id 外键跨域（03_factory 在 02 之后执行），在 cross_domain_fk.sql 补加
 );
+COMMENT ON COLUMN rsku_supply.status IS 'RSKU 状态机（§36）：active/inactive/expired/suspended/discontinued';
+COMMENT ON COLUMN rsku_supply.supplier_configuration_key IS '工厂内稳定供应配置身份（§18.2）：CODE:<归一码> / TEXT:<归一原文> / BASE；RSKU Identity 三元组之一';
+COMMENT ON COLUMN rsku_supply.supplier_configuration_normalizer_version IS '生成 supplier_configuration_key 的归一规则集版本（§18.2/§18.3）；升级须先 Dry Run 治理';
+COMMENT ON COLUMN rsku_supply.quote_version IS '报价乐观并发版本（§37）：报价更新 quote_version+1，冲突返回 quote_version_conflict';
+COMMENT ON COLUMN rsku_supply.manual_override_fields IS '字段级人工修正权威标记（§34.1），同 rspu_master.manual_override_fields';
 
 -- 价格历史表
 CREATE TABLE IF NOT EXISTS price_history (
@@ -214,8 +277,8 @@ CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_created_by ON rspu_master(created_by);
--- 外部编码部分唯一索引（V17 并入）：防并发导入产生重复外部编码，仅约束未软删除且非空记录
-CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL AND external_code IS NOT NULL;
+-- uk_rspu_external_code（外部编码部分唯一索引）已于 V14 合并迁移删除（§9 Phase 5 Contract）：
+-- external_code 降为只读历史兼容投影，不再承担全局身份唯一性；列与非唯一索引保留
 -- 业务编码部分唯一索引（V5）：与软删兼容（回收站中的产品不占用编码），对齐 external_code 先例
 CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_code_alive ON rspu_master(rspu_code) WHERE deleted_at IS NULL AND rspu_code IS NOT NULL;
 
@@ -240,13 +303,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_variant_attrs
         COALESCE(material_code, material_text, '')
     )
     WHERE deleted_at IS NULL;
-
 -- RSKU 索引
 CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
 CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code) NULLS NOT DISTINCT WHERE deleted_at IS NULL;
+-- RSKU Identity（v3.3 §32.1/§32.3，Flyway V14）：Variant + Factory + Supplier Configuration
+-- = 当前唯一供应单元；旧 idx_rsku_unique(rspu_id, variant_id, factory_code) 已由 V14 合并迁移删除
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rsku_variant_factory_config_alive
+    ON rsku_supply(variant_id, factory_code, supplier_configuration_key)
+    WHERE deleted_at IS NULL;
+COMMENT ON INDEX uk_rsku_variant_factory_config_alive IS 'RSKU Identity（§32.1）：同一 Factory + 同一 Variant + 同一 Supplier Configuration 只有一个当前有效 RSKU；A/AA/S 等横向等级以不同 supplier_configuration_key 并存、互不覆盖';
 -- rsku_code 部分唯一索引（V5）：与软删兼容，对齐 uk_rspu_code_alive
 CREATE UNIQUE INDEX IF NOT EXISTS uk_rsku_code_alive ON rsku_supply(rsku_code) WHERE deleted_at IS NULL AND rsku_code IS NOT NULL;
 
@@ -257,7 +324,11 @@ CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(rsku_id, created_a
 CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
 -- 材质标签 GIN（V43）：ProductQueryService / PublicCatalogService 均用 material_tags @> {0}::jsonb
 CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
+-- 座位数筛选（公开端 seatCount 查询）用表达式索引；原 dimensions 全列 GIN 已于 V15 移除
+--（jsonb_path_ops 不服务 ->> 取值比较）
+CREATE INDEX IF NOT EXISTS idx_variant_seat_count
+    ON rspu_variant ((COALESCE(dimensions->>'seat_count', dimensions->>'seatCount')))
+    WHERE deleted_at IS NULL;
 
 -- RSPU 价格投影汇总表（V44 并入）：每 RSPU 一行，只存业务允许暴露的聚合指标
 -- （min/max 出厂价、有效 RSKU 数）。安全口径：产品列表对工厂管理员/平台人员本就展示

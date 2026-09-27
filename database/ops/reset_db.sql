@@ -23,6 +23,12 @@ DROP TABLE IF EXISTS image_assets CASCADE;
 DROP TABLE IF EXISTS price_history CASCADE;
 DROP TABLE IF EXISTS rspu_price_summary CASCADE;
 DROP TABLE IF EXISTS rsku_supply CASCADE;
+DROP TABLE IF EXISTS supplier_product_ref CASCADE;
+DROP TABLE IF EXISTS excel_import_sensitive_value CASCADE;
+DROP TABLE IF EXISTS excel_import_attempt_item CASCADE;
+DROP TABLE IF EXISTS excel_import_attempt CASCADE;
+DROP TABLE IF EXISTS excel_import_product_group CASCADE;
+DROP TABLE IF EXISTS excel_import_preview_revision CASCADE;
 DROP TABLE IF EXISTS excel_import_row CASCADE;
 DROP TABLE IF EXISTS factory_lead_time_rule CASCADE;
 DROP TABLE IF EXISTS rspu_factory_mapping CASCADE;
@@ -127,7 +133,6 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     description TEXT,                                -- 长文本描述原文（Excel 导入材质解析/功能配置等，V18 并入）
     retail_price NUMERIC(14,2),                      -- 零售参考价（销售价/含税价，不加密，V18 并入）
     six_dim_tags JSONB,
-    style_vector JSONB,
     color_primary_name VARCHAR(64),
     color_primary_hsv JSONB,
     color_secondary VARCHAR(64),
@@ -147,8 +152,12 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ,
-    created_by VARCHAR(64)                         -- 录入人（sys_user.user_id，V3 增量并入；历史未知行留 NULL）
+    created_by VARCHAR(64),                        -- 录入人（sys_user.user_id，V3 增量并入；历史未知行留 NULL）
+    manual_override_fields JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 字段级人工修正权威标记（v3.3 §34.1，Flyway V14）
+    CONSTRAINT ck_rspu_manual_override_fields_object
+        CHECK (jsonb_typeof(manual_override_fields) = 'object')
 );
+COMMENT ON COLUMN rspu_master.manual_override_fields IS '字段级人工修正权威标记（§34.1）：JSON Pointer → {active, correctedBy, correctedAt, source}；Excel/AI/重试不得覆盖 active 字段';
 
 -- RSPU 多风格关联表
 CREATE TABLE IF NOT EXISTS rspu_style (
@@ -161,6 +170,8 @@ CREATE TABLE IF NOT EXISTS rspu_style (
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
 );
+-- 主风格唯一：每 RSPU 最多一条 is_primary = true（V15）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_style_primary ON rspu_style(rspu_id) WHERE is_primary = true;
 
 -- RSPU 编码流水计数器
 CREATE TABLE IF NOT EXISTS rspu_code_counter (
@@ -215,9 +226,15 @@ CREATE TABLE IF NOT EXISTS rspu_variant (
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ,
     quantity INTEGER,
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
+    manual_override_fields JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 字段级人工修正权威标记（v3.3 §34.1，Flyway V14）
+    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
+    -- 组合候选键（v3.3 §15，Flyway V14）：支撑 rsku_supply 组合 FK
+    CONSTRAINT uk_rspu_variant_rspu_variant UNIQUE (rspu_id, variant_id),
+    CONSTRAINT ck_variant_manual_override_fields_object
+        CHECK (jsonb_typeof(manual_override_fields) = 'object')
 );
 COMMENT ON COLUMN rspu_variant.quantity IS '数量/件数（Excel 导入时携带，可选）';
+COMMENT ON COLUMN rspu_variant.manual_override_fields IS '字段级人工修正权威标记（§34.1），同 rspu_master.manual_override_fields';
 
 -- 变体编码流水计数器（按 RSPU 维度生成变体顺序号）
 CREATE TABLE IF NOT EXISTS variant_code_counter (
@@ -289,6 +306,9 @@ CREATE TABLE IF NOT EXISTS factory_level_capability (
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
     UNIQUE (factory_code, level_code)
 );
+-- 主等级唯一：每工厂最多一条 is_primary = true（V15）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_factory_level_capability_primary
+    ON factory_level_capability(factory_code) WHERE is_primary = true;
 -- idx_factory_level_capability_factory 已于 V41 删除：UNIQUE(factory_code, level_code) 左前缀，冗余
 
 -- 工厂仓库表
@@ -308,22 +328,12 @@ CREATE TABLE IF NOT EXISTS factory_warehouse (
     updated_at TIMESTAMPTZ,
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
-
--- 工厂-变体产能表
-CREATE TABLE IF NOT EXISTS factory_variant_capacity (
-    factory_code VARCHAR(16) NOT NULL,
-    variant_id VARCHAR(64) NOT NULL,
-    monthly_capacity INTEGER,
-    current_booked INTEGER DEFAULT 0,
-    max_batch_size INTEGER,
-    capacity_unit VARCHAR(16) DEFAULT '件',
-    lead_time_batch_days INTEGER,
-    notes TEXT,
-    updated_at TIMESTAMPTZ,
-    PRIMARY KEY (factory_code, variant_id),
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
-    FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id)
-);
+-- 组合候选键（V15）：支撑归属一致组合外键（工厂不得使用他厂仓库）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_factory_warehouse_factory_warehouse
+    ON factory_warehouse(factory_code, warehouse_id);
+-- 默认仓库唯一：每工厂最多一条 is_default = true（V15）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_factory_warehouse_default
+    ON factory_warehouse(factory_code) WHERE is_default = true;
 
 -- RSPU-工厂多对多关联表（V2 新增）
 CREATE TABLE IF NOT EXISTS rspu_factory_mapping (
@@ -341,7 +351,10 @@ CREATE TABLE IF NOT EXISTS rspu_factory_mapping (
     updated_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
-    FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id),
+    -- 归属一致（V15）：工厂不得使用他厂仓库
+    CONSTRAINT fk_rspu_factory_mapping_factory_warehouse
+        FOREIGN KEY (factory_code, shipping_warehouse_id)
+        REFERENCES factory_warehouse(factory_code, warehouse_id),
     UNIQUE (rspu_id, factory_code)
 );
 CREATE INDEX IF NOT EXISTS idx_rspu_factory_mapping_rspu ON rspu_factory_mapping(rspu_id, status);
@@ -375,38 +388,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_lead_time_rule_match_v2
     ON factory_lead_time_rule (factory_code, category_code, material_grade_code, process_type)
     NULLS NOT DISTINCT;
 
--- 工厂产能评估历史表（V2 新增）
-CREATE TABLE IF NOT EXISTS factory_capacity_assessment (
-    assessment_id BIGSERIAL PRIMARY KEY,
-    factory_code VARCHAR(16) NOT NULL,
-    assessment_period VARCHAR(16) NOT NULL,
-    score_capacity_scale INTEGER,
-    score_on_time_rate INTEGER,
-    score_quality INTEGER,
-    score_equipment INTEGER,
-    score_staffing INTEGER,
-    score_flexibility INTEGER,
-    tier_score DECIMAL(5,2) NOT NULL,
-    calculated_tier VARCHAR(8),
-    monthly_capacity_avg INTEGER,
-    on_time_rate DECIMAL(5,4),
-    quality_return_rate DECIMAL(5,4),
-    active_rspu_count INTEGER,
-    active_rsku_count INTEGER,
-    assessed_by VARCHAR(64),
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
-);
-CREATE INDEX IF NOT EXISTS idx_assessment_factory ON factory_capacity_assessment(factory_code, assessment_period);
-CREATE INDEX IF NOT EXISTS idx_assessment_period ON factory_capacity_assessment(assessment_period);
-
 -- RSKU 供应单元子表
+-- v3.3 P0-D（Flyway V14）：Identity = (variant_id, factory_code, supplier_configuration_key)；
+-- variant_id NOT NULL + 组合 FK（§32.2/§33）；supplier_configuration_key 无 DEFAULT，Java 侧显式写入（§34）
 CREATE TABLE IF NOT EXISTS rsku_supply (
     rsku_id VARCHAR(64) PRIMARY KEY,
     rsku_code VARCHAR(64),                             -- 业务编码，如 FS-MC-001-M-A004-PE-001（唯一性见 uk_rsku_code_alive 部分索引，V5）
     rspu_id VARCHAR(64) NOT NULL,
-    variant_id VARCHAR(64),
+    variant_id VARCHAR(64) NOT NULL,
     factory_code VARCHAR(16) NOT NULL,
     factory_sku VARCHAR(64),
     factory_price TEXT,
@@ -429,13 +418,52 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     quote_confidence VARCHAR(16),
     review_status VARCHAR(16) DEFAULT '待复核',
     price_updated DATE,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    currency_code VARCHAR(8) NOT NULL DEFAULT 'CNY',
+    tax_included BOOLEAN,
+    price_unit VARCHAR(32),
+    moq_unit VARCHAR(32),
+    quote_date DATE,
+    effective_from DATE,
+    effective_to DATE,
+    supplier_material_grade_code VARCHAR(64),
+    supplier_material_grade_text VARCHAR(128),
+    supplier_configuration_key VARCHAR(192) NOT NULL,
+    supplier_configuration_normalizer_version VARCHAR(64) NOT NULL,
+    source_batch_id VARCHAR(64),
+    source_row_id BIGINT,
+    quote_version INTEGER NOT NULL DEFAULT 1,
+    manual_override_fields JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
     deleted_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
+    CONSTRAINT fk_rsku_rspu_variant
+        FOREIGN KEY (rspu_id, variant_id)
+        REFERENCES rspu_variant(rspu_id, variant_id)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code),
-    FOREIGN KEY (shipping_warehouse_id) REFERENCES factory_warehouse(warehouse_id)
+    -- 归属一致（V15）：工厂不得使用他厂仓库
+    CONSTRAINT fk_rsku_supply_factory_warehouse
+        FOREIGN KEY (factory_code, shipping_warehouse_id)
+        REFERENCES factory_warehouse(factory_code, warehouse_id),
+    CONSTRAINT ck_rsku_moq_positive
+        CHECK (moq IS NULL OR moq > 0),
+    CONSTRAINT ck_rsku_effective_date
+        CHECK (
+            effective_from IS NULL
+            OR effective_to IS NULL
+            OR effective_to >= effective_from
+        ),
+    CONSTRAINT ck_rsku_quote_version_positive
+        CHECK (quote_version > 0),
+    CONSTRAINT ck_rsku_status
+        CHECK (
+            status IS NOT NULL
+            AND status IN ('active', 'inactive', 'expired', 'suspended', 'discontinued')
+        ),
+    CONSTRAINT ck_rsku_manual_override_fields_object
+        CHECK (jsonb_typeof(manual_override_fields) = 'object')
 );
 
 -- 价格历史表
@@ -472,6 +500,10 @@ CREATE TABLE IF NOT EXISTS image_assets (
     deleted_at TIMESTAMPTZ,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (variant_id) REFERENCES rspu_variant(variant_id),
+    -- 归属层级一致（V15）：variant_id 非空时 rspu_id 必须等于变体所属产品
+    CONSTRAINT fk_image_assets_rspu_variant
+        FOREIGN KEY (rspu_id, variant_id) REFERENCES rspu_variant(rspu_id, variant_id)
+        DEFERRABLE INITIALLY IMMEDIATE,
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id)
 );
 
@@ -606,8 +638,13 @@ CREATE TABLE IF NOT EXISTS async_task (
     error_message TEXT,
     created_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMPTZ
+    completed_at TIMESTAMPTZ,
+    idempotency_key VARCHAR(128)                    -- 副作用幂等键（v3.3 §50.3，Flyway V14 追加）
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uk_async_task_type_idempotency
+ON async_task(task_type, idempotency_key)
+WHERE idempotency_key IS NOT NULL;
+COMMENT ON COLUMN async_task.idempotency_key IS '副作用幂等键（v3.3 §50.3）：Worker 崩溃重试/重复 enqueue 不重复建任务；excel_import 任务键为 excel-import-attempt:<attemptId>';
 
 -- 户型图分析批次表（V36 并入：一次上传一条）
 CREATE TABLE IF NOT EXISTS floor_plan_analysis (
@@ -694,8 +731,19 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     processed_at TIMESTAMPTZ,
     created_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ
-    -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加
+    updated_at TIMESTAMPTZ,
+    -- P0-B1 Immutable Preview Snapshot / Revision（v3.3 §45，Flyway V14 追加，列顺序与 ALTER 一致）
+    preview_revision BIGINT,                            -- 当前最新 Preview Revision 指针
+    mapping_hash VARCHAR(64),                           -- 当前 mapping 哈希（§47.1.4）
+    normalizer_version VARCHAR(64),                     -- 当前 Normalizer 版本
+    confirmed_revision BIGINT,                          -- 已确认 Revision 指针（Confirm 语义 P0-B3 收口）
+    confirmed_by VARCHAR(64),
+    confirmed_at TIMESTAMPTZ,
+    import_policy JSONB,                                -- 导入 Policy UI 草稿（§45/§47.1.5）
+    retention_hold BOOLEAN NOT NULL DEFAULT FALSE,      -- 审计/争议保留标记（§44），GC 必须跳过
+    snapshot_archive_summary JSONB NOT NULL DEFAULT '{}'::jsonb  -- 过期归档非敏感摘要（§44/§45），仅受限 GC 函数写入
+    -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加；
+    -- preview_revision / confirmed_revision 的指针 FK 在 excel_import_preview_revision 建表后追加
 );
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
 CREATE INDEX IF NOT EXISTS idx_import_batch_stale ON excel_import_batch(updated_at) WHERE status = 'importing';
@@ -766,6 +814,400 @@ CREATE TABLE IF NOT EXISTS document_import_batch (
 CREATE INDEX IF NOT EXISTS idx_document_import_batch_status ON document_import_batch(status);
 CREATE INDEX IF NOT EXISTS idx_document_import_batch_created_by ON document_import_batch(created_by);
 
+-- 供应商商品引用表（v3.3 设计文档 §6，Flyway V14；external_code 迁移 Phase 1 Expand）
+CREATE TABLE IF NOT EXISTS supplier_product_ref (
+    ref_id BIGSERIAL PRIMARY KEY,
+
+    rspu_id VARCHAR(64) NOT NULL,
+    factory_code VARCHAR(16) NOT NULL,
+
+    source_namespace VARCHAR(64) NOT NULL DEFAULT 'default',
+    first_seen_source_system VARCHAR(64),
+    last_seen_source_system VARCHAR(64),
+
+    source_product_code VARCHAR(128) NOT NULL,
+    normalized_source_product_code VARCHAR(128) NOT NULL,
+    code_normalizer_version VARCHAR(64) NOT NULL,
+    source_product_name VARCHAR(256),
+
+    first_import_batch_id VARCHAR(64),
+    last_import_batch_id VARCHAR(64),
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_supplier_product_ref_rspu
+        FOREIGN KEY (rspu_id)
+        REFERENCES rspu_master(rspu_id)
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_supplier_product_ref_factory
+        FOREIGN KEY (factory_code)
+        REFERENCES factory_master(factory_code)
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_supplier_product_ref_first_batch
+        FOREIGN KEY (first_import_batch_id)
+        REFERENCES excel_import_batch(batch_id)
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_supplier_product_ref_last_batch
+        FOREIGN KEY (last_import_batch_id)
+        REFERENCES excel_import_batch(batch_id)
+        ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_supplier_product_ref
+ON supplier_product_ref (
+    factory_code,
+    source_namespace,
+    normalized_source_product_code
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_product_ref_rspu
+ON supplier_product_ref(rspu_id);
+
+COMMENT ON TABLE supplier_product_ref IS '供应商商品引用：工厂命名空间内商品编码到 RSPU 的历史可追溯身份映射（v3.3 §6）';
+COMMENT ON COLUMN supplier_product_ref.source_namespace IS '供应商编码命名空间，参与 Identity；本期默认 default，禁止用传输渠道（excel/manual/erp-api）充当 namespace';
+COMMENT ON COLUMN supplier_product_ref.first_seen_source_system IS '首次进入系统的来源系统（仅 provenance，不参与 Identity）';
+COMMENT ON COLUMN supplier_product_ref.last_seen_source_system IS '最近进入系统的来源系统（仅 provenance，不参与 Identity）';
+COMMENT ON COLUMN supplier_product_ref.normalized_source_product_code IS '归一化供应商商品编码，参与唯一键 (factory_code, source_namespace, normalized_source_product_code)';
+COMMENT ON COLUMN supplier_product_ref.code_normalizer_version IS '归一化算法版本（v3.3 §7；版本演进须受控迁移，原子更新 normalized_source_product_code + code_normalizer_version）';
+-- ============================================================
+-- P0-B1：Immutable Preview Snapshot / Revision / Optimistic Lock 底座（Flyway V14）
+-- ============================================================
+
+-- Excel 导入 Preview Snapshot Header（v3.3 §20.1）
+-- per-sheet（batch）边界的不可变 Revision 元数据；只允许 INSERT 新 Revision（§46）；
+-- 应用层 Repository 不暴露 UPDATE / DELETE（§20.1）；生产库 Runtime Role REVOKE + 受限 GC 函数属 §85.2 门禁运维项
+CREATE TABLE IF NOT EXISTS excel_import_preview_revision (
+    batch_id VARCHAR(64) NOT NULL,
+    preview_revision BIGINT NOT NULL,
+
+    source_sheet_index INTEGER NOT NULL,
+    source_sheet_name VARCHAR(256),
+
+    category_mode VARCHAR(16),
+    category_hint VARCHAR(16),
+    candidate_category_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+    mapping_hash VARCHAR(64) NOT NULL,
+    normalizer_version VARCHAR(64) NOT NULL,
+
+    hash_version SMALLINT NOT NULL DEFAULT 1,
+    snapshot_hash VARCHAR(64) NOT NULL,
+
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT pk_import_preview_revision
+        PRIMARY KEY(batch_id, preview_revision),
+
+    CONSTRAINT fk_import_preview_revision_batch
+        FOREIGN KEY(batch_id)
+        REFERENCES excel_import_batch(batch_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT ck_import_preview_category_mode
+        CHECK (category_mode IS NULL OR category_mode IN ('SINGLE', 'MIXED')),
+
+    CONSTRAINT ck_import_preview_category_candidates
+        CHECK (jsonb_typeof(candidate_category_codes) = 'array'),
+
+    CONSTRAINT ck_import_preview_hash_version
+        CHECK (hash_version > 0),
+
+    CONSTRAINT ck_import_preview_category_policy
+        CHECK (
+            category_mode IS NULL
+            OR (
+                category_mode = 'SINGLE'
+                AND category_hint IS NOT NULL
+                AND jsonb_array_length(candidate_category_codes) = 0
+            )
+            OR (
+                category_mode = 'MIXED'
+                AND category_hint IS NULL
+                AND jsonb_array_length(candidate_category_codes) >= 2
+            )
+        )
+);
+
+COMMENT ON TABLE excel_import_preview_revision IS 'Excel 导入 Preview Snapshot Header（v3.3 §20.1）：per-sheet（batch）边界的不可变 Revision 元数据，固化品类策略 / mapping_hash / normalizer_version / snapshot_hash；只允许 INSERT 新 Revision';
+COMMENT ON COLUMN excel_import_preview_revision.preview_revision IS 'Revision 号，batch 内单调递增（§46：任何 Preview 编辑 +1），与 batch_id 复合主键';
+COMMENT ON COLUMN excel_import_preview_revision.snapshot_hash IS '对 §47.1.3 SnapshotHashMaterial 的 SHA-256；Material 排除自身与 created_at/created_by，包含按 product_group_key 排序的全部 payload_hash';
+COMMENT ON COLUMN excel_import_preview_revision.hash_version IS 'Canonical Hash 协议版本（§47.1.6），协议变更必须升级版本，不得静默改变历史 Hash';
+
+-- Excel 导入 Preview 产品聚合输入（v3.3 §21）：immutable input
+-- 执行期状态 / 计数 / Checkpoint / 结果摘要归 §49.2 excel_import_attempt_item（P0-F），本表禁止 runtime 字段（§21.1）
+CREATE TABLE IF NOT EXISTS excel_import_product_group (
+    group_id VARCHAR(64) PRIMARY KEY,
+
+    batch_id VARCHAR(64) NOT NULL,
+    preview_revision BIGINT NOT NULL,
+
+    product_group_key VARCHAR(256) NOT NULL,
+
+    normalized_payload JSONB NOT NULL,
+
+    payload_hash_version SMALLINT NOT NULL DEFAULT 1,
+    payload_hash VARCHAR(64) NOT NULL,
+
+    normalizer_version VARCHAR(64) NOT NULL,
+    mapping_hash VARCHAR(64) NOT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_import_product_group_revision
+        FOREIGN KEY(batch_id, preview_revision)
+        REFERENCES excel_import_preview_revision(batch_id, preview_revision)
+        ON DELETE CASCADE,
+
+    CONSTRAINT uk_import_product_group_revision_key
+        UNIQUE(batch_id, preview_revision, product_group_key),
+
+    CONSTRAINT uk_import_product_group_revision_id
+        UNIQUE(batch_id, preview_revision, group_id),
+
+    CONSTRAINT ck_import_product_group_payload_hash_version
+        CHECK(payload_hash_version > 0)
+);
+
+COMMENT ON TABLE excel_import_product_group IS 'Excel 导入 Preview 产品聚合输入（v3.3 §21）：某 Revision 下「这个逻辑产品被确认成什么标准化数据」的不可变输入；执行期状态/计数/Checkpoint 归 excel_import_attempt_item（P0-F），本表禁止 runtime 字段';
+COMMENT ON COLUMN excel_import_product_group.normalized_payload IS '非敏感/普通级别的标准化数据；采购成本等敏感值只允许以 Sensitive Ref 出现（§24.2 excel_import_sensitive_value，B2/B3 落地）';
+COMMENT ON COLUMN excel_import_product_group.payload_hash IS '对 §47.1.2 PayloadHashMaterial 的 SHA-256：payload_hash_version + canonical(payload) + 按 value_path 排序的敏感值 HMAC 条目';
+
+-- excel_import_batch 指针列 COMMENT（§45）
+COMMENT ON COLUMN excel_import_batch.preview_revision IS '当前最新 Preview Revision 指针（§45）；真正的不可变策略/版本/哈希在 excel_import_preview_revision';
+COMMENT ON COLUMN excel_import_batch.confirmed_revision IS '已确认 Revision 指针（§45）；Confirm 语义在 P0-B3 收口';
+COMMENT ON COLUMN excel_import_batch.import_policy IS '导入 Policy 的 UI 草稿（§45/§47.1.5）；执行期不可变 policy_payload/policy_hash 归 excel_import_attempt（P0-F）';
+COMMENT ON COLUMN excel_import_batch.retention_hold IS '审计/争议保留标记（§44）：true 时 GC 必须跳过整个 batch，解除须记审计日志';
+COMMENT ON COLUMN excel_import_batch.snapshot_archive_summary IS '快照超保留期后的非敏感审计摘要（§44/§45），只能由受限 GC 函数写入；活跃指针为 NULL 且摘要存在时 Confirm/Import 返回 410 snapshot_expired';
+
+-- 指针完整性：有值时必须引用同一 Batch 下真实存在的 Snapshot Revision（§45）
+ALTER TABLE excel_import_batch
+    DROP CONSTRAINT IF EXISTS fk_excel_import_batch_current_revision;
+ALTER TABLE excel_import_batch
+    ADD CONSTRAINT fk_excel_import_batch_current_revision
+    FOREIGN KEY(batch_id, preview_revision)
+    REFERENCES excel_import_preview_revision(batch_id, preview_revision);
+
+ALTER TABLE excel_import_batch
+    DROP CONSTRAINT IF EXISTS fk_excel_import_batch_confirmed_revision;
+ALTER TABLE excel_import_batch
+    ADD CONSTRAINT fk_excel_import_batch_confirmed_revision
+    FOREIGN KEY(batch_id, confirmed_revision)
+    REFERENCES excel_import_preview_revision(batch_id, preview_revision);
+-- ============================================================
+-- P0-B2：敏感 Preview 值表（v3.3 §24.2，Flyway V14）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS excel_import_sensitive_value (
+    sensitive_value_id VARCHAR(64) PRIMARY KEY,
+
+    batch_id VARCHAR(64) NOT NULL,
+    preview_revision BIGINT NOT NULL,
+
+    group_id VARCHAR(64),
+
+    value_path VARCHAR(512) NOT NULL,
+
+    ciphertext TEXT NOT NULL,
+    encryption_key_version INTEGER NOT NULL,
+
+    value_hmac VARCHAR(64) NOT NULL,
+    hmac_key_version INTEGER NOT NULL,
+
+    data_classification VARCHAR(32) NOT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retention_until TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT fk_import_sensitive_revision
+        FOREIGN KEY(batch_id, preview_revision)
+        REFERENCES excel_import_preview_revision(batch_id, preview_revision)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_import_sensitive_group_revision
+        FOREIGN KEY(batch_id, preview_revision, group_id)
+        REFERENCES excel_import_product_group(batch_id, preview_revision, group_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT ck_import_sensitive_owner
+        CHECK (group_id IS NOT NULL),
+
+    CONSTRAINT ck_import_sensitive_key_version
+        CHECK (
+            encryption_key_version > 0
+            AND hmac_key_version > 0
+        )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_import_sensitive_group_path
+ON excel_import_sensitive_value(batch_id, preview_revision, group_id, value_path)
+WHERE group_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_import_sensitive_revision
+ON excel_import_sensitive_value(batch_id, preview_revision);
+
+COMMENT ON TABLE excel_import_sensitive_value IS '敏感 Preview 值（v3.3 §24.2）：采购成本等敏感值的密文 + HMAC 存储，normalized_payload 中只出现 Sensitive Ref';
+COMMENT ON COLUMN excel_import_sensitive_value.value_path IS '敏感值在 payload 中的路径（PayloadHashMaterial 敏感值条目的排序键，§47.1.2）';
+COMMENT ON COLUMN excel_import_sensitive_value.value_hmac IS 'HMAC-SHA-256(secret, canonicalSensitiveValue)（§47.1.7）：同一业务值重新加密不造成 Hash 漂移';
+COMMENT ON COLUMN excel_import_sensitive_value.retention_until IS '保留期截止（§44）；超期由受限 GC 函数随整个未 hold batch 的快照一并清理';
+-- ============================================================
+-- P0-F：Import Attempt 执行内核（v3.3 §48-§50，Flyway V14）
+-- ============================================================
+
+-- ============================================================
+-- 1. §49 excel_import_attempt
+-- ============================================================
+CREATE TABLE IF NOT EXISTS excel_import_attempt (
+    attempt_id VARCHAR(64) PRIMARY KEY,
+
+    batch_id VARCHAR(64) NOT NULL,
+    preview_revision BIGINT NOT NULL,
+
+    policy_schema_version SMALLINT NOT NULL DEFAULT 1,
+    policy_payload JSONB NOT NULL,
+    policy_hash_version SMALLINT NOT NULL DEFAULT 1,
+    policy_hash VARCHAR(64) NOT NULL,
+
+    status VARCHAR(16) NOT NULL,
+    outcome VARCHAR(32),
+    result_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    task_id VARCHAR(64),
+
+    retry_count INTEGER NOT NULL DEFAULT 0,
+
+    lease_owner VARCHAR(128),
+    last_heartbeat_at TIMESTAMPTZ,
+    lease_expires_at TIMESTAMPTZ,
+
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    error_code VARCHAR(64),
+    error_message TEXT,
+
+    CONSTRAINT fk_import_attempt_revision
+        FOREIGN KEY(batch_id, preview_revision)
+        REFERENCES excel_import_preview_revision(batch_id, preview_revision)
+        ON DELETE RESTRICT,
+
+    CONSTRAINT uk_import_attempt
+        UNIQUE(batch_id, preview_revision, policy_hash_version, policy_hash),
+
+    CONSTRAINT uk_import_attempt_revision_id
+        UNIQUE(attempt_id, batch_id, preview_revision),
+
+    CONSTRAINT ck_import_attempt_status
+        CHECK(status IN ('pending', 'running', 'done', 'failed')),
+
+    CONSTRAINT ck_import_attempt_retry_count
+        CHECK(retry_count >= 0),
+
+    CONSTRAINT ck_import_attempt_policy_schema_version
+        CHECK(policy_schema_version > 0),
+
+    CONSTRAINT ck_import_attempt_policy_payload
+        CHECK(jsonb_typeof(policy_payload) = 'object'),
+
+    CONSTRAINT ck_import_attempt_policy_hash_version
+        CHECK(policy_hash_version > 0),
+
+    CONSTRAINT ck_import_attempt_outcome
+        CHECK(
+            (status = 'done'
+                AND outcome IS NOT NULL
+                AND outcome IN ('success', 'partial_success', 'business_rejected'))
+            OR (status <> 'done' AND outcome IS NULL)
+        ),
+
+    CONSTRAINT ck_import_attempt_result_summary
+        CHECK(jsonb_typeof(result_summary) = 'object')
+);
+
+CREATE INDEX IF NOT EXISTS idx_import_attempt_running_lease
+ON excel_import_attempt(status, lease_expires_at)
+WHERE status = 'running';
+
+COMMENT ON TABLE excel_import_attempt IS 'Import Attempt（v3.3 §49）：对某一 immutable Preview Revision 使用某一 Import Policy 的一次逻辑执行；policy_payload/policy_hash INSERT 后不可更改，Worker/Recovery 只读本表的 Policy Snapshot（excel_import_batch.import_policy 只是 UI 草稿）';
+COMMENT ON COLUMN excel_import_attempt.policy_payload IS '默认值已完整物化的不可变 Policy 正文（§47.1.5 policy_schema_version=1 全字段契约）';
+COMMENT ON COLUMN excel_import_attempt.policy_hash IS 'policy_hash_version + policy_schema_version + canonical(policy_payload) 的 SHA-256（§47.1.5）';
+COMMENT ON COLUMN excel_import_attempt.outcome IS 'Attempt 业务终态（§49.2.3）：success / partial_success / business_rejected；仅 status=done 时非空（ck_import_attempt_outcome）';
+COMMENT ON COLUMN excel_import_attempt.result_summary IS 'done 时同事务物化的结果摘要（§49.2.3）：各终态 Group 计数、Variant/Quote 成功失败计数与结果定位信息，done Replay 原样返回';
+COMMENT ON COLUMN excel_import_attempt.lease_owner IS '当前执行 Worker 标识（§49.1）；running + lease_expires_at < now() 时 Recovery 可重新抢占';
+
+-- ============================================================
+-- 2. §49.2 excel_import_attempt_item（Runtime 结果与恢复 Checkpoint 唯一载体）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS excel_import_attempt_item (
+    attempt_id VARCHAR(64) NOT NULL,
+
+    batch_id VARCHAR(64) NOT NULL,
+    preview_revision BIGINT NOT NULL,
+    group_id VARCHAR(64) NOT NULL,
+
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    checkpoint VARCHAR(32),
+
+    variant_success_count INTEGER NOT NULL DEFAULT 0,
+    variant_failed_count INTEGER NOT NULL DEFAULT 0,
+    quote_success_count INTEGER NOT NULL DEFAULT 0,
+    quote_failed_count INTEGER NOT NULL DEFAULT 0,
+
+    result_summary JSONB,
+
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY(attempt_id, group_id),
+
+    CONSTRAINT fk_import_attempt_item_attempt
+        FOREIGN KEY(attempt_id, batch_id, preview_revision)
+        REFERENCES excel_import_attempt(attempt_id, batch_id, preview_revision)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_import_attempt_item_group
+        FOREIGN KEY(batch_id, preview_revision, group_id)
+        REFERENCES excel_import_product_group(batch_id, preview_revision, group_id)
+        ON DELETE RESTRICT,
+
+    CONSTRAINT ck_import_attempt_item_status
+        CHECK(
+            status IN (
+                'pending',
+                'running',
+                'imported',
+                'partial',
+                'rejected',
+                'failed',
+                'skipped'
+            )
+        ),
+
+    CONSTRAINT ck_import_attempt_item_counts
+        CHECK(
+            variant_success_count >= 0
+            AND variant_failed_count >= 0
+            AND quote_success_count >= 0
+            AND quote_failed_count >= 0
+        )
+);
+
+CREATE INDEX IF NOT EXISTS idx_import_attempt_item_status
+ON excel_import_attempt_item(attempt_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_import_attempt_item_group
+ON excel_import_attempt_item(batch_id, preview_revision, group_id);
+
+COMMENT ON TABLE excel_import_attempt_item IS 'Import AttemptItem（v3.3 §49.2）：一次 Attempt 内一个 ProductGroup 的 Runtime 结果与恢复 Checkpoint；终态 imported/partial/rejected/skipped 与领域写入同一事务落地（§31/§50.2），failed 为可重试技术失败';
+COMMENT ON COLUMN excel_import_attempt_item.checkpoint IS '当前 Group 的可恢复执行阶段（§49.2.2：validated/identity_resolved/persisting/committed）；「已完成」判定只依赖 status 终态';
+
 
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -778,17 +1220,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
     operator VARCHAR(64),
     ip_address VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-
--- 操作员表
-CREATE TABLE IF NOT EXISTS user_operator (
-    user_id VARCHAR(64) PRIMARY KEY,
-    username VARCHAR(64) NOT NULL UNIQUE,
-    real_name VARCHAR(64),
-    role VARCHAR(32),
-    status VARCHAR(16) DEFAULT 'active',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ
 );
 
 -- 二级产品类型知识层（与 RSPU/业务编码解耦）
@@ -957,21 +1388,6 @@ CREATE TABLE IF NOT EXISTS product_style_match (
     FOREIGN KEY (dict_type, style_code) REFERENCES category_dict(dict_type, dict_code)
 );
 
--- 推荐反馈：用于后续优化公式
-CREATE TABLE IF NOT EXISTS matching_feedback (
-    feedback_id BIGSERIAL PRIMARY KEY,
-    rspu_id VARCHAR(64) NOT NULL,
-    recommended_rspu_id VARCHAR(64) NOT NULL,
-    formula_id VARCHAR(64),
-    score DECIMAL(5,4),
-    feedback VARCHAR(16),
-    reason TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (recommended_rspu_id) REFERENCES rspu_master(rspu_id),
-    FOREIGN KEY (formula_id) REFERENCES style_matching_formula(formula_id)
-);
-
 -- =================== 4. 创建索引 ===================
 CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, status);
 CREATE INDEX IF NOT EXISTS idx_rspu_status_created ON rspu_master(status, created_at DESC) WHERE deleted_at IS NULL;
@@ -981,8 +1397,8 @@ CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_created_by ON rspu_master(created_by);
--- 外部编码部分唯一索引（V17 并入）：防并发导入产生重复外部编码，仅约束未软删除且非空记录
-CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL AND external_code IS NOT NULL;
+-- uk_rspu_external_code（外部编码部分唯一索引）已于 V16 删除（§9 Phase 5 Contract）：
+-- external_code 降为只读历史兼容投影，不再承担全局身份唯一性；列与非唯一索引保留
 -- 业务编码部分唯一索引（V5）：与软删兼容（回收站中的产品不占用编码），对齐 external_code 先例
 CREATE UNIQUE INDEX IF NOT EXISTS uk_rspu_code_alive ON rspu_master(rspu_code) WHERE deleted_at IS NULL AND rspu_code IS NOT NULL;
 
@@ -1006,16 +1422,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_variant_attrs
     WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_six_dim_gin ON rspu_master USING GIN (six_dim_tags jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS idx_rspu_material_tags_gin ON rspu_master USING GIN (material_tags jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS idx_variant_dimensions_gin ON rspu_variant USING GIN (dimensions jsonb_path_ops);
+-- 座位数筛选（公开端 seatCount 查询）用表达式索引；原 dimensions 全列 GIN 已于 V15 移除
+CREATE INDEX IF NOT EXISTS idx_variant_seat_count
+    ON rspu_variant ((COALESCE(dimensions->>'seat_count', dimensions->>'seatCount')))
+    WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_factory_warehouse_factory ON factory_warehouse(factory_code, status);
-CREATE INDEX IF NOT EXISTS idx_capacity_variant ON factory_variant_capacity(variant_id);
 
 CREATE INDEX IF NOT EXISTS idx_rsku_rspu ON rsku_supply(rspu_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_variant ON rsku_supply(variant_id);
 CREATE INDEX IF NOT EXISTS idx_rsku_factory ON rsku_supply(factory_code);
 CREATE INDEX IF NOT EXISTS idx_rsku_warehouse ON rsku_supply(shipping_warehouse_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rsku_unique ON rsku_supply(rspu_id, variant_id, factory_code) NULLS NOT DISTINCT WHERE deleted_at IS NULL;
+-- RSKU Identity（v3.3 §32.1/§32.3，Flyway V14）：旧 idx_rsku_unique(rspu_id, variant_id, factory_code) 已由 V14 合并迁移删除
+CREATE UNIQUE INDEX IF NOT EXISTS uk_rsku_variant_factory_config_alive
+    ON rsku_supply(variant_id, factory_code, supplier_configuration_key)
+    WHERE deleted_at IS NULL;
+COMMENT ON INDEX uk_rsku_variant_factory_config_alive IS 'RSKU Identity（§32.1）：同一 Factory + 同一 Variant + 同一 Supplier Configuration 只有一个当前有效 RSKU；A/AA/S 等横向等级以不同 supplier_configuration_key 并存、互不覆盖';
 -- rsku_code 部分唯一索引（V5）：与软删兼容，对齐 uk_rspu_code_alive
 CREATE UNIQUE INDEX IF NOT EXISTS uk_rsku_code_alive ON rsku_supply(rsku_code) WHERE deleted_at IS NULL AND rsku_code IS NOT NULL;
 
@@ -1066,9 +1488,8 @@ CREATE INDEX IF NOT EXISTS idx_style_case_room ON style_case(room_type, is_succe
 CREATE INDEX IF NOT EXISTS idx_style_element_case ON style_element(case_id);
 CREATE INDEX IF NOT EXISTS idx_style_element_type ON style_element(element_type, normalized_code);
 CREATE INDEX IF NOT EXISTS idx_formula_style_room ON style_matching_formula(style_code, room_type, status);
-CREATE INDEX IF NOT EXISTS idx_product_match_rspu ON product_style_match(rspu_id);
+-- idx_product_match_rspu 已于 V15 删除：rspu_id_style_code 组合唯一键左前缀覆盖
 CREATE INDEX IF NOT EXISTS idx_product_match_score ON product_style_match(overall_score DESC);
-CREATE INDEX IF NOT EXISTS idx_matching_feedback_rspu ON matching_feedback(rspu_id);
 
 -- 系统用户表
 CREATE TABLE IF NOT EXISTS sys_user (
@@ -1141,6 +1562,9 @@ CREATE TABLE IF NOT EXISTS member_group (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- 组合候选键（V15）：支撑 sys_user 归属一致组合外键
+CREATE UNIQUE INDEX IF NOT EXISTS uk_member_group_company_group
+    ON member_group(company_id, group_id);
 CREATE INDEX IF NOT EXISTS idx_member_group_company ON member_group(company_id) WHERE deleted_at IS NULL;
 
 -- 邀请记录表（V13 并入）
@@ -1161,6 +1585,11 @@ ALTER TABLE sys_user
 ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_group;
 ALTER TABLE sys_user
     ADD CONSTRAINT fk_sys_user_group FOREIGN KEY (group_id) REFERENCES member_group(group_id);
+-- V15 归属一致：用户所属企业必须与群组所属企业一致（组合 FK）
+ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_company_group;
+ALTER TABLE sys_user
+    ADD CONSTRAINT fk_sys_user_company_group FOREIGN KEY (company_id, group_id)
+    REFERENCES member_group(company_id, group_id);
 ALTER TABLE sys_user DROP CONSTRAINT IF EXISTS fk_sys_user_invited_by;
 ALTER TABLE sys_user
     ADD CONSTRAINT fk_sys_user_invited_by FOREIGN KEY (invited_by) REFERENCES sys_user(user_id);
@@ -1225,7 +1654,12 @@ CREATE TABLE IF NOT EXISTS factory_product_capability (
     material_code VARCHAR(8),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
-    UNIQUE (factory_code, category_code, style_code, material_code),
+    CONSTRAINT uk_factory_product_capability_match
+        UNIQUE NULLS NOT DISTINCT (factory_code, category_code, style_code, material_code),
+    CONSTRAINT ck_factory_capability_no_blank_code
+        CHECK ((category_code IS NULL OR category_code <> '')
+           AND (style_code IS NULL OR style_code <> '')
+           AND (material_code IS NULL OR material_code <> '')),
     FOREIGN KEY (factory_code) REFERENCES factory_master(factory_code)
 );
 CREATE INDEX IF NOT EXISTS idx_factory_capability_keys ON factory_product_capability(category_code, style_code, material_code);
@@ -1264,7 +1698,7 @@ CREATE TABLE IF NOT EXISTS product_collection_item (
     FOREIGN KEY (collection_id) REFERENCES product_collection(collection_id) ON DELETE CASCADE,
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id)
 );
-CREATE INDEX IF NOT EXISTS idx_collection_item_collection ON product_collection_item(collection_id);
+-- idx_collection_item_collection 已于 V15 删除：collection_id_rspu_id 组合唯一键左前缀覆盖
 CREATE INDEX IF NOT EXISTS idx_collection_item_rspu ON product_collection_item(rspu_id);
 
 -- 设计师画像
@@ -1350,12 +1784,18 @@ CREATE TABLE IF NOT EXISTS favorite_folder (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- 组合候选键（V15）：支撑 user_favorite 归属一致组合外键
+CREATE UNIQUE INDEX IF NOT EXISTS uk_favorite_folder_user_folder
+    ON favorite_folder(user_id, folder_id);
 CREATE INDEX IF NOT EXISTS idx_favorite_folder_user ON favorite_folder(user_id) WHERE deleted_at IS NULL;
 
 -- 补齐 user_favorite 文件夹外键（favorite_folder 在 user_favorite 之后创建）
 ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_folder;
+-- V15 归属一致：升级为（用户 + 文件夹）组合 FK——收藏不得挂到他人文件夹
+ALTER TABLE user_favorite DROP CONSTRAINT IF EXISTS fk_user_favorite_user_folder;
 ALTER TABLE user_favorite
-    ADD CONSTRAINT fk_user_favorite_folder FOREIGN KEY (folder_id) REFERENCES favorite_folder(folder_id);
+    ADD CONSTRAINT fk_user_favorite_user_folder FOREIGN KEY (user_id, folder_id)
+    REFERENCES favorite_folder(user_id, folder_id);
 
 -- 模板标签（V14 并入）：受控字典，scheme.template_tags 存名称 JSON，以名称为业务键
 CREATE TABLE IF NOT EXISTS template_tag (
@@ -1490,7 +1930,7 @@ CREATE TABLE IF NOT EXISTS dict_alias (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uk_dict_alias UNIQUE (dict_type, alias_name)
 );
-CREATE INDEX IF NOT EXISTS idx_dict_alias_type ON dict_alias(dict_type);
+-- idx_dict_alias_type 已于 V15 删除：uk_dict_alias(dict_type, alias_name) 左前缀覆盖
 
 -- 未归一值采集表（V19 并入）
 CREATE TABLE IF NOT EXISTS dict_unresolved_value (
@@ -3484,6 +3924,7 @@ SELECT setval('sys_user_factory_id_seq',              COALESCE((SELECT MAX(id) F
 SELECT setval('rspu_factory_mapping_mapping_id_seq',  COALESCE((SELECT MAX(mapping_id) FROM rspu_factory_mapping), 1),  (SELECT MAX(mapping_id) IS NOT NULL FROM rspu_factory_mapping));
 SELECT setval('factory_lead_time_rule_rule_id_seq',   COALESCE((SELECT MAX(rule_id) FROM factory_lead_time_rule), 1),   (SELECT MAX(rule_id) IS NOT NULL FROM factory_lead_time_rule));
 SELECT setval('excel_import_row_row_id_seq',          COALESCE((SELECT MAX(row_id) FROM excel_import_row), 1),          (SELECT MAX(row_id) IS NOT NULL FROM excel_import_row));
+SELECT setval('supplier_product_ref_ref_id_seq',      COALESCE((SELECT MAX(ref_id) FROM supplier_product_ref), 1),      (SELECT MAX(ref_id) IS NOT NULL FROM supplier_product_ref));
 SELECT setval('dict_alias_id_seq',                    COALESCE((SELECT MAX(id) FROM dict_alias), 1),                    (SELECT MAX(id) IS NOT NULL FROM dict_alias));
 SELECT setval('dict_unresolved_value_id_seq',         COALESCE((SELECT MAX(id) FROM dict_unresolved_value), 1),         (SELECT MAX(id) IS NOT NULL FROM dict_unresolved_value));
 
