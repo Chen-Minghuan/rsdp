@@ -2,7 +2,8 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios from 'axios'
 import type { UploadFileInfo } from 'naive-ui'
-import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides, cloneExcelAiRowImages, classifyExcelAiRowCategories } from '@/api/product'
+import { previewExcelAiImport, confirmExcelAiImport, getExcelAiImportStatus, getExcelAiPreviewData, uploadExcelAiPreviewImage, setExcelAiRowImageOverrides, cloneExcelAiRowImages, classifyExcelAiRowCategories, applyExcelAiCategoryRevision } from '@/api/product'
+import { ApiError } from '@/api/client'
 import { useTaskPolling } from '@/composables/useTaskPolling'
 import { useUserStore } from './user'
 import type { TaskItem } from '@/types/task'
@@ -43,6 +44,11 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const userEditedCategoryRows = ref<Set<number>>(new Set())
   /** 行级品类预分类进行中 */
   const classifyingCategories = ref(false)
+
+  /** 批次当前 Preview Revision（P0-B2）：预览生成首版（=1），每次品类编辑命令物化后推进 */
+  const currentRevision = ref<number | null>(null)
+  /** 品类策略/行级选择自上次物化后是否有变更（脏标记）：进 Step 3 / Step 4 前物化为新 Revision */
+  const categoryRevisionDirty = ref(false)
 
   const importResult = ref<ExcelAiImportResult | null>(null)
   const taskList = ref<TaskItem[]>([])
@@ -253,6 +259,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       categoryMode.value = null
       candidateCategoryCodes.value = []
       resetRowCategoryState()
+      // P0-B2：预览即生成首版 immutable Snapshot（revision=1）
+      currentRevision.value = result.previewRevision ?? null
+      categoryRevisionDirty.value = false
       // 加载全量预览数据并清空上次编辑
       await loadPreviewData(result.batchId)
       currentStep.value = 2
@@ -298,6 +307,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   function updatePreviewEdit(rowIndex: number, header: string, value: string | null) {
     const key = `${rowIndex}:${header}`
     previewEdits.value[key] = { rowIndex, header, value }
+    categoryRevisionDirty.value = true
   }
 
   /**
@@ -313,6 +323,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       next.add(rowIndex)
     }
     skippedRows.value = next
+    categoryRevisionDirty.value = true
   }
 
   /**
@@ -349,6 +360,110 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       delete tags[rowIndex]
     }
     rowCategorySourceTags.value = tags
+    categoryRevisionDirty.value = true
+  }
+
+  /**
+   * 组级品类设置（P0-1 根治）：消灭「只写代表行」特例——
+   * 对组内全部非跳过行一次性写入最终品类，随下一次编辑命令物化进 Snapshot。
+   *
+   * @param rowIndexes   组内全部变体行号
+   * @param categoryCode 品类字典码；null/空表示清除选择
+   */
+  function setGroupCategory(rowIndexes: number[], categoryCode: string | null) {
+    const targets = rowIndexes.filter(idx => !skippedRows.value.has(idx))
+    if (targets.length === 0) return
+    const next = { ...rowCategorySelections.value }
+    const edited = new Set(userEditedCategoryRows.value)
+    const tags = { ...rowCategorySourceTags.value }
+    for (const idx of targets) {
+      if (categoryCode) {
+        next[idx] = categoryCode
+        tags[idx] = 'manual'
+      } else {
+        delete next[idx]
+        delete tags[idx]
+      }
+      edited.add(idx)
+    }
+    rowCategorySelections.value = next
+    userEditedCategoryRows.value = edited
+    rowCategorySourceTags.value = tags
+    categoryRevisionDirty.value = true
+  }
+
+  /**
+   * 批量设置品类（P0-2/§13 回归）：勾选多个商品组后一次性设置，
+   * 展开为行级集合（组内全部非跳过行），随下一次编辑命令物化进 Snapshot。
+   */
+  function setGroupsCategory(groups: PreviewDataGroup[], categoryCode: string | null) {
+    const rowIndexes = groups.flatMap(g => g.variants.map(v => v.rowIndex))
+    setGroupCategory(rowIndexes, categoryCode)
+  }
+
+  /**
+   * 品类 Preview Edit 命令物化（P0-B2，v3.3 §46/§47）：
+   * 把当前导入方式/默认品类/候选品类/行级最终品类提交后端生成新 immutable Revision，
+   * 并以响应的逐行最终品类同步本地状态（后端按收敛兜底链计算，为权威值）。
+   *
+   * @return true 物化成功；false 失败（errorMessage 已设置，409 提示刷新）
+   */
+  async function materializeCategoryRevision(): Promise<boolean> {
+    const currentMapping = mappingResponse.value
+    if (!currentMapping?.batchId || !categoryMode.value) {
+      return true
+    }
+    const batchId = currentMapping.batchId
+    const mapping: Record<string, string> = {}
+    for (const header of currentMapping.headers) {
+      const value = confirmedMapping.value[header]
+      if (value) {
+        mapping[header] = value
+      }
+    }
+    const categoryMapping: Record<string, string> = {}
+    for (const [rawValue, dictCode] of Object.entries(confirmedCategoryMapping.value)) {
+      if (dictCode) {
+        categoryMapping[rawValue] = dictCode
+      }
+    }
+    const selections: Record<number, string> = {}
+    for (const [rowIndexKey, code] of Object.entries(rowCategorySelections.value)) {
+      if (code) {
+        selections[Number(rowIndexKey)] = code
+      }
+    }
+    try {
+      const response = await applyExcelAiCategoryRevision(batchId, {
+        expectedRevision: currentRevision.value,
+        categoryMode: categoryMode.value,
+        categoryHint: categoryMode.value === 'SINGLE' ? (categoryHint.value ?? undefined) : undefined,
+        candidateCategoryCodes: categoryMode.value === 'MIXED' ? [...candidateCategoryCodes.value] : undefined,
+        mapping,
+        categoryMapping: Object.keys(categoryMapping).length > 0 ? categoryMapping : undefined,
+        rowCategorySelections: selections,
+        previewEdits: Object.values(previewEdits.value),
+        skipRows: Array.from(skippedRows.value)
+      })
+      currentRevision.value = response.previewRevision
+      // 后端按 §26.1 收敛兜底链计算的最终品类为权威值：null 表示仍未确定
+      const next: Record<number, string> = {}
+      for (const row of response.rows) {
+        if (row.finalCategoryCode) {
+          next[row.rowIndex] = row.finalCategoryCode
+        }
+      }
+      rowCategorySelections.value = next
+      categoryRevisionDirty.value = false
+      return true
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 409) {
+        errorMessage.value = '数据清洗内容已被并发修改（Revision 冲突），请刷新页面后重新开始本次导入'
+      } else {
+        errorMessage.value = e instanceof Error ? `品类修改保存失败：${e.message}` : '品类修改保存失败'
+      }
+      return false
+    }
   }
 
   /**
@@ -422,6 +537,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       suggestedCategoryCodes.value = suggested
       rowCategorySourceTags.value = sources
       rowCategorySelections.value = selections
+      // AI/确定性预填改变了行级最终品类，需在下一次步骤切换时物化为新 Revision
+      categoryRevisionDirty.value = true
     } catch (e) {
       errorMessage.value = e instanceof Error
         ? `商品品类预分类失败：${e.message}，可在数据清洗页手工选择品类`
@@ -566,6 +683,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       errorMessage.value = '请先上传并预览 Excel'
       return
     }
+    if (categoryMode.value && categoryRevisionDirty.value) {
+      const saved = await materializeCategoryRevision()
+      if (!saved) return
+    }
 
     const mapping: Record<string, string> = {}
     for (const header of mappingResponse.value.headers) {
@@ -626,6 +747,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         updateIfExists: updateIfExists.value,
         categoryHint: categoryHint.value ?? undefined,
         categoryMode: categoryMode.value ?? undefined,
+        // P0-B2：确认导入基于当前 Snapshot Revision（乐观锁）；后端以快照固化的行级品类为准
+        expectedRevision: categoryMode.value ? (currentRevision.value ?? undefined) : undefined,
         candidateCategoryCodes: categoryMode.value === 'MIXED' ? [...candidateCategoryCodes.value] : undefined,
         rowCategorySelections: Object.keys(rowCategorySelectionsPayload).length > 0
           ? rowCategorySelectionsPayload
@@ -652,6 +775,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     } catch (e) {
       if (axios.isCancel(e)) {
         errorMessage.value = '导入已取消'
+      } else if (e instanceof ApiError && e.code === 409) {
+        // Revision 乐观锁冲突（P0-B2）：清洗内容在确认后被并发修改，不做批次状态恢复，提示刷新
+        errorMessage.value = '数据清洗内容已被并发修改（Revision 冲突），请刷新页面后重新开始本次导入'
       } else {
         // confirm 请求失败（网络异常等）：批次可能已受理在后台执行，尝试通过批次状态恢复（兜底路径）
         const recovered = await tryRecoverImportResult()
@@ -691,6 +817,12 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       errorMessage.value = '混合品类导入请至少选择两个商品品类'
       return
     }
+    // P0-B2：导入方式/默认品类/候选品类是一次 Revision 变更（09 §16 + v3.3 §4.1 规则 1），
+    // 进入清洗页前先物化（首次或变更后）；409 冲突时停留本页并提示刷新
+    if (currentRevision.value == null || categoryRevisionDirty.value) {
+      const ok = await materializeCategoryRevision()
+      if (!ok) return
+    }
     errorMessage.value = ''
     currentStep.value = 3
     await classifyRowCategories()
@@ -700,9 +832,16 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    * 从数据清洗页进入确认导入页（步骤 4）。
    * 仍有未确定品类的非跳过行时拦截（§20 前端拦截；后端 confirmAndImport 兜底再校验一次）。
    *
-   * @return false 表示被拦截，由视图展示未确定行（如开启「只看未确定商品」过滤）
+   * <p>P0-B2：rowCategorySelections 是带 expectedRevision 的 Preview Edit 命令（v3.3 §4.1 规则 3），
+   * 清洗页的人工修改（含组级/批量设置）先在此时物化为新 Revision，再进入确认页。</p>
+   *
+   * @return false 表示被拦截（未确定品类或物化失败），由视图展示未确定行（如开启「只看未确定商品」过滤）
    */
-  function handleGoToConfirmStep(): boolean {
+  async function handleGoToConfirmStep(): Promise<boolean> {
+    if (categoryMode.value && categoryRevisionDirty.value) {
+      const ok = await materializeCategoryRevision()
+      if (!ok) return false
+    }
     const undetermined = undeterminedCategoryRowIndexes.value
     if (undetermined.length > 0) {
       errorMessage.value = `仍有 ${undetermined.length} 行商品品类未确定，请完成数据清洗后再执行导入`
@@ -902,6 +1041,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     categoryMode.value = null
     candidateCategoryCodes.value = []
     resetRowCategoryState()
+    currentRevision.value = null
+    categoryRevisionDirty.value = false
     updateIfExists.value = false
     stopPolling()
     stopBatchPolling()
@@ -926,6 +1067,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     rowCategorySourceTags,
     systemFilteredRows,
     classifyingCategories,
+    currentRevision,
+    categoryRevisionDirty,
     undeterminedCategoryRowIndexes,
     updateIfExists,
     importResult,
@@ -962,6 +1105,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     toggleSkipRow,
     isSkippedRow,
     setRowCategory,
+    setGroupCategory,
+    setGroupsCategory,
+    materializeCategoryRevision,
     resetRowCategoryState,
     classifyRowCategories,
     fillDefaultValue,

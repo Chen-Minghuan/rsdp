@@ -25,7 +25,8 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   'update:previewEdit': [payload: { rowIndex: number; header: string; value: string | null }]
   'toggleSkipRow': [rowIndex: number]
-  'setRowCategory': [rowIndex: number, value: string | null]
+  // P0-1：品类按「商品组」设置——组内全部非跳过行一次写入，消灭只改代表行的死胡同
+  'setGroupCategory': [rowIndexes: number[], value: string | null]
   'previewImage': [src: string]
   'uploadRowImage': [rowIndex: number, file: File]
   'deleteRowImage': [rowIndex: number, tempImageKey: string]
@@ -158,22 +159,26 @@ async function loadRowThumbnails(rowIndex: number, batchId: string) {
   }
 }
 
-function getRowImages(rowIndex: number): PreviewRowImage[] {
+function getRowImages(rowIndex: number, productLevel = false): PreviewRowImage[] {
   if (props.group == null) return []
-  const metaImages = (rowIndex === props.group.representativeRowIndex)
+  const metaImages = productLevel
     ? (props.group.images ?? [])
-    : []
-  const loaded = loadedThumbnails.value.get(rowIndex)
+    : (props.group.variants.find(variant => variant.rowIndex === rowIndex)?.images ?? [])
+  const imageRowIndex = productLevel
+    ? (props.group.imageRowIndex || rowIndex)
+    : rowIndex
+  const loaded = loadedThumbnails.value.get(imageRowIndex)
   if (!loaded) {
     const batchId = props.mappingResponse?.batchId
     if (batchId && metaImages.length > 0) {
-      loadRowThumbnails(rowIndex, batchId)
+      loadRowThumbnails(imageRowIndex, batchId)
     }
     return metaImages
   }
-  return metaImages.map((meta, idx) => ({
+  return metaImages.map(meta => ({
     ...meta,
-    thumbnailBase64: loaded[idx]?.thumbnailBase64 ?? meta.thumbnailBase64
+    thumbnailBase64: loaded.find(image => image.imageKey === meta.imageKey)?.thumbnailBase64
+      ?? meta.thumbnailBase64
   }))
 }
 
@@ -181,8 +186,14 @@ function getOverrideKeys(rowIndex: number): string[] {
   return props.rowImageOverrides[rowIndex] ?? []
 }
 
-function hasRowImages(rowIndex: number): boolean {
-  return getOverrideKeys(rowIndex).length > 0 || getRowImages(rowIndex).length > 0
+function hasRowImages(rowIndex: number, productLevel = false): boolean {
+  return getOverrideKeys(rowIndex).length > 0 || getRowImages(rowIndex, productLevel).length > 0
+}
+
+function productImageSourceRow(group: PreviewDataGroup): number {
+  return getOverrideKeys(group.representativeRowIndex).length > 0
+    ? group.representativeRowIndex
+    : (group.imageRowIndex || group.representativeRowIndex)
 }
 
 function onBeforeUploadRowImage(rowIndex: number, data: { file: UploadFileInfo }) {
@@ -230,15 +241,20 @@ function isGroupSkipped(group: PreviewDataGroup): boolean {
       <div v-if="categoryMode" class="inspector-group">
         <div class="inspector-group-title">基础信息</div>
         <n-form-item label="商品品类">
-          <n-select
-            :value="rowCategorySelections[group!.representativeRowIndex] ?? null"
-            :options="categorySelectOptions"
-            placeholder="请选择品类"
-            clearable
-            filterable
-            style="width: 260px;"
-            @update:value="(value: string | null) => $emit('setRowCategory', group!.representativeRowIndex, value)"
-          />
+          <n-space align="center">
+            <n-select
+              :value="rowCategorySelections[group!.representativeRowIndex] ?? null"
+              :options="categorySelectOptions"
+              placeholder="请选择品类"
+              clearable
+              filterable
+              style="width: 260px;"
+              @update:value="(value: string | null) => $emit('setGroupCategory', group!.variants.map(v => v.rowIndex), value)"
+            />
+            <span v-if="group!.variants.length > 1" style="color: #999; font-size: 12px;">
+              将应用到本商品全部 {{ group!.variants.filter(v => !skippedRows.has(v.rowIndex)).length }} 个非跳过变体行
+            </span>
+          </n-space>
         </n-form-item>
       </div>
 
@@ -296,7 +312,7 @@ function isGroupSkipped(group: PreviewDataGroup): boolean {
               </n-button>
             </div>
           </template>
-          <template v-for="(img, idx) in getRowImages(group!.representativeRowIndex)" :key="`excel-${idx}`">
+          <template v-for="(img, idx) in getRowImages(group!.representativeRowIndex, true)" :key="`excel-${idx}`">
             <img
               v-if="img.thumbnailBase64"
               :src="img.thumbnailBase64"
@@ -311,13 +327,13 @@ function isGroupSkipped(group: PreviewDataGroup): boolean {
               加载中
             </div>
           </template>
-          <span v-if="!hasRowImages(group!.representativeRowIndex)" style="color: #999; font-size: 12px;">无图</span>
+          <span v-if="!hasRowImages(group!.representativeRowIndex, true)" style="color: #999; font-size: 12px;">无图</span>
         </n-space>
         <n-space size="small" style="margin-top: 8px;">
           <n-upload :show-file-list="false" :on-before-upload="(data) => onBeforeUploadRowImage(group!.representativeRowIndex, data)">
             <n-button size="tiny" type="primary">上传</n-button>
           </n-upload>
-          <n-button size="tiny" :disabled="!hasRowImages(group!.representativeRowIndex)" @click="$emit('copyRowImages', group!.representativeRowIndex)">复制</n-button>
+          <n-button size="tiny" :disabled="!hasRowImages(group!.representativeRowIndex, true)" @click="$emit('copyRowImages', productImageSourceRow(group!))">复制</n-button>
           <n-button size="tiny" :disabled="copiedImageRowIndex == null" @click="$emit('pasteRowImages', group!.representativeRowIndex)">粘贴</n-button>
         </n-space>
       </div>

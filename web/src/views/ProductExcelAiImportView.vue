@@ -2,7 +2,7 @@
 import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { NSelect, NTag, NInput, NUpload, NButton, NSpace, NProgress, useMessage, type DataTableColumns } from 'naive-ui'
+import { NSelect, NTag, NInput, NUpload, NButton, NSpace, NProgress, useMessage, useDialog, type DataTableColumns } from 'naive-ui'
 import { listDicts } from '@/api/dict'
 import { listFactories } from '@/api/factory'
 import { getExcelAiImportRows } from '@/api/product'
@@ -58,7 +58,7 @@ const {
   batchRecovering,
   batchProgress
 } = storeToRefs(store)
-const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, uploadRowImage, removeRowImage, cloneRowImages, setRowCategory, resetRowCategoryState } = store
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, uploadRowImage, removeRowImage, cloneRowImages, setGroupCategory, setGroupsCategory, resetRowCategoryState } = store
 
 // 兜底可映射字段清单：优先使用 preview 响应下发的 standardFields（后端 ExcelAiStandardFields）。
 // 同步义务：字段真实出处是后端 ExcelAiImportService 的 AI 映射提示词标准字段列表，
@@ -104,10 +104,49 @@ const categorySelectOptions = computed(() =>
   categoryOptions.value.map(d => ({ label: d.dictName, value: d.dictCode }))
 )
 
-// 变更导入方式后，上一方式下的行级品类预填/建议全部失效，回到未分类状态
-watch(categoryMode, () => {
-  resetRowCategoryState()
+const dialog = useDialog()
+
+// 变更导入方式后，上一方式下的行级品类预填/建议全部失效，回到未分类状态。
+// P1-4 + Revision 语义：已有人工品类修改时先弹确认「变更将丢弃 N 行修改」，取消则还原选择；
+// 确认变更（或首次选择）后标记品类配置脏，进入清洗页时物化为新 Revision（P0-B2）
+let revertingModeChange = false
+watch(categoryMode, (newMode, oldMode) => {
+  if (revertingModeChange) {
+    revertingModeChange = false
+    return
+  }
+  const editedCount = Object.keys(rowCategorySelections.value).length
+  if (!oldMode || editedCount === 0) {
+    resetRowCategoryState()
+    if (newMode) store.categoryRevisionDirty = true
+    return
+  }
+  dialog.warning({
+    title: '变更导入方式',
+    content: `变更导入方式将丢弃 ${editedCount} 行已设置的商品品类（该修改会生成新的快照版本），确定继续吗？`,
+    positiveText: '确定变更',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      resetRowCategoryState()
+      store.categoryRevisionDirty = true
+    },
+    onNegativeClick: () => {
+      revertingModeChange = true
+      categoryMode.value = oldMode
+    }
+  })
 })
+
+// 默认品类 / 候选品类 / 字段映射 / 品类归一确认值的变更同样是一次 Revision 变更（09 §16）
+watch([categoryHint, candidateCategoryCodes], () => {
+  if (categoryMode.value) store.categoryRevisionDirty = true
+}, { deep: true })
+watch(confirmedMapping, () => {
+  if (categoryMode.value) store.categoryRevisionDirty = true
+}, { deep: true })
+watch(confirmedCategoryMapping, () => {
+  if (categoryMode.value) store.categoryRevisionDirty = true
+}, { deep: true })
 
 /** 存在「出厂价」角色的价格列时，默认工厂编码必填（与后端 confirmAndImport 校验一致） */
 const factoryRequired = computed(() =>
@@ -489,10 +528,12 @@ function handleUpdatePreviewEdit(payload: { rowIndex: number; header: string; va
   updatePreviewEdit(payload.rowIndex, payload.header, payload.value)
 }
 
-/** 数据清洗 → 确认导入：被拦截（仍有未确定品类行）时自动切到「只看未确定商品」 */
-function goToConfirmStep() {
-  if (!handleGoToConfirmStep()) {
-    showOnlyUndetermined.value = true
+/** 数据清洗 → 确认导入：先物化品类编辑命令为新 Revision；被拦截（仍有未确定品类行）时自动切到「只看未确定商品」 */
+async function goToConfirmStep() {
+  if (!(await handleGoToConfirmStep())) {
+    if (undeterminedCategoryRowIndexes.value.length > 0) {
+      showOnlyUndetermined.value = true
+    }
   }
 }
 
@@ -777,7 +818,8 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             :copied-image-row-index="copiedImageRowIndex"
             @update:preview-edit="handleUpdatePreviewEdit"
             @toggle-skip-row="toggleSkipRow"
-            @set-row-category="setRowCategory"
+            @set-group-category="setGroupCategory"
+            @set-groups-category="setGroupsCategory"
             @preview-image="previewImage"
             @upload-row-image="handleUploadRowImage"
             @delete-row-image="handleDeleteRowImage"

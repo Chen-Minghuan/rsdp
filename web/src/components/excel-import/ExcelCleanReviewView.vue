@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { NButton, NCheckbox, NEmpty, NInput, NList, NListItem, NSpace, NTag } from 'naive-ui'
+import { NButton, NCheckbox, NEmpty, NInput, NList, NListItem, NSelect, NSpace, NTag } from 'naive-ui'
 import ExcelRowInspector from './ExcelRowInspector.vue'
 import { getExcelAiPreviewImageUrl } from '@/api/product'
 import type { PreviewDataGroup, PreviewDataRow, PreviewRowImage } from '@/types/product'
@@ -30,7 +30,10 @@ const emit = defineEmits<{
   'update:showOnlyUndetermined': [value: boolean]
   'update:previewEdit': [payload: { rowIndex: number; header: string; value: string | null }]
   'toggleSkipRow': [rowIndex: number]
-  'setRowCategory': [rowIndex: number, value: string | null]
+  // P0-1：组级品类设置（组内全部非跳过行）
+  'setGroupCategory': [rowIndexes: number[], value: string | null]
+  // P0-2/§13：勾选多组后批量设置品类
+  'setGroupsCategory': [groups: PreviewDataGroup[], value: string | null]
   'previewImage': [src: string]
   'uploadRowImage': [rowIndex: number, file: File]
   'deleteRowImage': [rowIndex: number, tempImageKey: string]
@@ -40,6 +43,45 @@ const emit = defineEmits<{
 
 const currentGroupExternalCode = ref<string | null>(null)
 const searchKeyword = ref('')
+
+/** 批量设置品类（§13）：勾选的商品组 key 集合与待应用的品类 */
+const checkedGroupKeys = ref<Set<string | number>>(new Set())
+const batchCategoryCode = ref<string | null>(null)
+
+function groupKey(group: PreviewDataGroup): string | number {
+  return group.externalCode || group.representativeRowIndex
+}
+
+function toggleGroupChecked(group: PreviewDataGroup, checked: boolean) {
+  const next = new Set(checkedGroupKeys.value)
+  if (checked) {
+    next.add(groupKey(group))
+  } else {
+    next.delete(groupKey(group))
+  }
+  checkedGroupKeys.value = next
+}
+
+const checkedGroups = computed(() =>
+  props.previewGroups.filter(g => checkedGroupKeys.value.has(groupKey(g)))
+)
+
+/** 勾选组的全部非跳过变体行数（批量设置按钮文案用） */
+const checkedRowCount = computed(() =>
+  checkedGroups.value.reduce(
+    (sum, g) => sum + g.variants.filter(v => !props.skippedRows.has(v.rowIndex)).length, 0)
+)
+
+function applyBatchCategory() {
+  if (!batchCategoryCode.value || checkedGroups.value.length === 0) return
+  emit('setGroupsCategory', checkedGroups.value, batchCategoryCode.value)
+  checkedGroupKeys.value = new Set()
+  batchCategoryCode.value = null
+}
+
+function clearCheckedGroups() {
+  checkedGroupKeys.value = new Set()
+}
 
 const filteredGroups = computed(() => {
   let groups = props.previewGroups
@@ -185,23 +227,25 @@ function groupThumbnail(group: PreviewDataGroup): string | null {
   if (metaImages.length === 0) {
     return null
   }
-  const loaded = loadedThumbnails.value.get(group.representativeRowIndex)
+  const imageRowIndex = group.imageRowIndex || group.representativeRowIndex
+  const loaded = loadedThumbnails.value.get(imageRowIndex)
   if (!loaded) {
     const batchId = props.mappingResponse?.batchId
     if (batchId) {
-      loadRowThumbnails(group.representativeRowIndex, batchId)
+      loadRowThumbnails(imageRowIndex, batchId)
     }
     return metaImages[0].thumbnailBase64 ?? null
   }
-  return loaded[0]?.thumbnailBase64 ?? metaImages[0].thumbnailBase64 ?? null
+  return loaded.find(image => image.imageKey === metaImages[0].imageKey)?.thumbnailBase64
+    ?? metaImages[0].thumbnailBase64 ?? null
 }
 
 function onPreviewEdit(payload: { rowIndex: number; header: string; value: string | null }) {
   emit('update:previewEdit', payload)
 }
 
-function onSetRowCategory(rowIndex: number, value: string | null) {
-  emit('setRowCategory', rowIndex, value)
+function onSetGroupCategory(rowIndexes: number[], value: string | null) {
+  emit('setGroupCategory', rowIndexes, value)
 }
 
 function onUploadRowImage(rowIndex: number, file: File) {
@@ -246,6 +290,34 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
       </n-space>
     </n-space>
 
+    <!-- 批量设置品类（P0-2/§13）：勾选商品组后一次性设置，展开为组内全部非跳过行 -->
+    <n-space v-if="categoryMode" align="center" wrap style="padding: 0 4px;">
+      <n-checkbox
+        :checked="checkedGroupKeys.size > 0 && checkedGroupKeys.size === displayedGroups.length"
+        :indeterminate="checkedGroupKeys.size > 0 && checkedGroupKeys.size < displayedGroups.length"
+        @update:checked="(checked: boolean) => {
+          checkedGroupKeys = checked ? new Set(displayedGroups.map(g => groupKey(g))) : new Set()
+        }"
+      >
+        全选当前列表
+      </n-checkbox>
+      <template v-if="checkedGroupKeys.size > 0">
+        <n-tag type="info" :bordered="false">已选择 {{ checkedGroupKeys.size }} 组（{{ checkedRowCount }} 行）</n-tag>
+        <n-select
+          v-model:value="batchCategoryCode"
+          :options="categorySelectOptions"
+          placeholder="批量设置商品品类"
+          filterable
+          size="small"
+          style="width: 200px;"
+        />
+        <n-button size="small" type="primary" :disabled="!batchCategoryCode" @click="applyBatchCategory">
+          应用到所选
+        </n-button>
+        <n-button size="small" @click="clearCheckedGroups">清除选择</n-button>
+      </template>
+    </n-space>
+
     <div class="review-layout">
       <!-- 左侧商品列表 -->
       <div class="review-list">
@@ -258,6 +330,12 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
             @click="selectGroup(group.externalCode)"
           >
             <n-space align="center" style="width: 100%;">
+              <n-checkbox
+                v-if="categoryMode"
+                :checked="checkedGroupKeys.has(groupKey(group))"
+                @click.stop
+                @update:checked="(checked: boolean) => toggleGroupChecked(group, checked)"
+              />
               <img
                 v-if="groupThumbnail(group)"
                 :src="groupThumbnail(group)!"
@@ -302,7 +380,7 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
           :copied-image-row-index="copiedImageRowIndex"
           @update:preview-edit="onPreviewEdit"
           @toggle-skip-row="$emit('toggleSkipRow', $event)"
-          @set-row-category="onSetRowCategory"
+          @set-group-category="onSetGroupCategory"
           @preview-image="$emit('previewImage', $event)"
           @upload-row-image="onUploadRowImage"
           @delete-row-image="onDeleteRowImage"

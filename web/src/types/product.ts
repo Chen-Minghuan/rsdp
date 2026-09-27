@@ -515,6 +515,39 @@ export interface ExcelAiMappingResponse {
   /** 后端下发的可映射标准字段清单（缺省时前端用本地硬编码兜底） */
   standardFields?: StandardFieldOption[]
   notes?: string
+  /** 预览生成的首版 Immutable Snapshot Revision 号（P0-B2，正常为 1） */
+  previewRevision?: number
+}
+
+/**
+ * Excel AI 导入：品类 Preview Edit 命令（P0-B2，09 方案 v2.3 + v3.3 §46/§47）。
+ * 导入方式 / 默认品类 / 候选品类 / 行级最终品类的修改物化为新的 immutable Revision。
+ */
+export interface ExcelAiCategoryRevisionRequest {
+  /** 期望的当前 Preview Revision（乐观锁）；null = 期望尚无快照 */
+  expectedRevision: number | null
+  /** 导入方式 */
+  categoryMode: ExcelCategoryMode
+  /** SINGLE 的默认品类 */
+  categoryHint?: string
+  /** MIXED 候选品类码列表（≥2 个） */
+  candidateCategoryCodes?: string[]
+  /** 用户确认后的字段映射（原始表头 → 系统字段） */
+  mapping: Record<string, string>
+  /** 用户确认的品类映射（rawValue → dictCode） */
+  categoryMapping?: Record<string, string>
+  /** 行级最终品类：Excel 物理行号（1-based）→ 品类字典码（组级/批量设置由前端展开为行级集合） */
+  rowCategorySelections: Record<number, string>
+  /** Cell corrections and skipped rows become part of this revision's sealed source input. */
+  previewEdits?: PreviewEdit[]
+  skipRows?: number[]
+}
+
+/** 品类 Preview Edit 命令的物化结果：新 Revision 号 + 后端按收敛兜底链计算的逐行最终品类。 */
+export interface ExcelAiCategoryRevisionResponse {
+  batchId: string
+  previewRevision: number
+  rows: { rowIndex: number; finalCategoryCode: string | null }[]
 }
 
 /** 可映射标准字段选项（后端 ExcelAiStandardFields 下发）。 */
@@ -541,6 +574,8 @@ export interface ExcelAiMappingRequest {
   candidateCategoryCodes?: string[]
   /** 数据清洗后的行级最终品类：Excel 物理行号（1-based）→ 品类字典码。新模式下后端只认本集合 */
   rowCategorySelections?: Record<number, string>
+  /** 确认导入所基于的 Preview Revision（P0-B2 乐观锁）；不一致返回 409 preview_revision_conflict */
+  expectedRevision?: number
   /** 用户确认后的品类归一映射（rawValue → dictCode） */
   categoryMapping?: Record<string, string>
   defaultFactoryCode?: string
@@ -663,6 +698,10 @@ export interface PreviewRowImage {
 export interface PreviewDataRow {
   /** Excel 物理行号（1-based），与导入失败明细中的 rowIndex 口径一致 */
   rowIndex: number
+  /** 源文件中的物理产品起始行 */
+  modelStart?: boolean
+  /** 分页重复标题、表头或说明行 */
+  systemExcluded?: boolean
   /** 原始表头 → 单元格值（按列顺序） */
   rawValues: Record<string, string>
   /** 原始表头 → 系统字段（用于 UI 展示映射关系；未映射列为 null） */
@@ -676,6 +715,8 @@ export interface PreviewDataRow {
 export interface PreviewDataVariant {
   /** Excel 物理行号（1-based） */
   rowIndex: number
+  /** 本行模块/变体示意图，不含产品图样列 */
+  images: PreviewRowImage[]
   /** 变体级原始表头 → 单元格值 */
   rawValues: Record<string, string>
   /** 变体级原始表头 → 系统字段 */
@@ -689,8 +730,10 @@ export interface PreviewDataGroup {
   productRawValues: Record<string, string>
   /** 商品级原始表头 → 系统字段 */
   productMappedFieldByHeader: Record<string, string | null>
-  /** 商品图片（取组内第一行） */
+  /** 商品图样列图片；可能锚定在组内后续行 */
   images: PreviewRowImage[]
+  /** 商品图片实际所在的 Excel 物理行号 */
+  imageRowIndex: number
   /** 用户在数据清洗页覆盖到该商品组的图片 asset ID 列表 */
   overrideImageAssetIds?: string[]
   /** 该商品下的全部变体行 */
@@ -717,6 +760,8 @@ export interface ExcelAiPreviewDataResponse {
   rows: PreviewDataRow[]
   /** 按商品聚合后的商品组列表 */
   groups: PreviewDataGroup[]
+  /** 批次当前 Preview Revision 指针（P0-B2；尚无快照的旧批次为 null） */
+  previewRevision?: number | null
 }
 
 /**

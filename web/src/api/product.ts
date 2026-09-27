@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, DocumentImportSubmitResult, DuplicateSuspectItem, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, MergePreviewResult, MergeResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, RspuMergeRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, DocumentImportSubmitResult, DuplicateSuspectItem, ExcelAiCategoryRevisionRequest, ExcelAiCategoryRevisionResponse, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, MergePreviewResult, MergeResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, RspuMergeRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -521,6 +521,24 @@ export async function classifyExcelAiRowCategories(
 ): Promise<ExcelAiClassifyCategoriesResponse> {
   const { data: result } = await apiClient.post<ApiResult<ExcelAiClassifyCategoriesResponse>>(
     `/v1/products/excel-ai-import/${batchId}/classify-categories`,
+    request
+  )
+  return result.data
+}
+
+/**
+ * 品类 Preview Edit 命令（P0-B2）：导入方式/默认品类/候选品类/行级最终品类的修改
+ * 物化为新的 immutable Revision；409 preview_revision_conflict 时调用方需提示刷新。
+ *
+ * @param batchId 预览批次号
+ * @param request 编辑命令（携带 expectedRevision 乐观锁）
+ */
+export async function applyExcelAiCategoryRevision(
+  batchId: string,
+  request: ExcelAiCategoryRevisionRequest
+): Promise<ExcelAiCategoryRevisionResponse> {
+  const { data: result } = await apiClient.post<ApiResult<ExcelAiCategoryRevisionResponse>>(
+    `/v1/products/excel-ai-import/${batchId}/category-revision`,
     request
   )
   return result.data

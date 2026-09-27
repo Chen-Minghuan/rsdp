@@ -101,7 +101,7 @@ const primaryColorCss = computed(() => {
       <n-descriptions bordered :column="3" label-placement="left" size="small">
         <n-descriptions-item label="RSPU ID">{{ rspu.rspuId }}</n-descriptions-item>
         <n-descriptions-item label="业务编码">{{ rspu.rspuCode || '-' }}</n-descriptions-item>
-        <n-descriptions-item label="外部编码">{{ rspu.externalCode || '-' }}</n-descriptions-item>
+        <n-descriptions-item label="历史外部编码">{{ rspu.externalCode || '-' }}</n-descriptions-item>
       </n-descriptions>
     </section>
 
