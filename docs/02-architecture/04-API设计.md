@@ -256,7 +256,7 @@ POST   /api/v1/products/merge
        #        takeSourceFields: 指定这些字段取副本值覆盖目标（白名单：productName/description/retailPrice/
        #          colorPrimaryName/materialTags/fabricTags/sixDimTags/referencePriceBand/productLevel/warrantyYears/keySpecs）；
        #          缺省 = 目标已有值不动、仅补空缺
-       #        rskuConflictResolutions: { 副本rskuId: "keepSource"|"keepTarget" }——目标已有同(变体,工厂)报价时必须逐条裁决，
+       #        rskuConflictResolutions: { 副本rskuId: "keepSource"|"keepTarget" }——目标已有同(变体,工厂,supplier_configuration_key)报价时必须逐条裁决；不同供应配置可并存，
        #          未裁决整体 400 拒绝（单事务回滚，不产生半合并状态）
        # Response: { sourceRspuId, targetRspuId, changedFields, movedVariantCount, migratedCount, migratedRskuIds,
        #             conflictKeepTargetDeleted, conflictKeepSourceReplaced, movedImageCount, reissuedRskuCodes, message }
@@ -472,8 +472,12 @@ POST   /api/v1/products/excel-ai-import/import
        #   - 当指定 defaultFactoryCode 时，会为每个 RSPU 创建 RSPU-工厂关联（rspu_factory_mapping），
        #     并标记为主供工厂；同时每个价格列生成的 RSKU 会写入工厂报价、发货地、MOQ、动态交期
        #   - 每行 Excel 数据会写入 excel_import_row，记录原始值、处理阶段、生成实体 ID 与失败原因
-       #   - previewEdits：导入前全量预览（数据清洗）阶段用户对原始单元格的编辑；
-       #     后端在 forwardFillKeyColumns 之后应用，按 rowIndex + header 覆盖对应单元格；
+       #   - SINGLE/MIXED + expectedRevision：category-revision 同时接收 previewEdits 与 skipRows，
+       #     在创建新 Revision 前应用单元格修正并剔除跳过行；源行加密存于敏感值表，
+       #     normalized_payload 只保存引用。confirm 校验 mapping_hash，异步执行从已确认
+       #     Revision 解密并校验 HMAC 后读取源行；confirm 请求里的 previewEdits/skipRows
+       #     不再改变该 Revision 的执行输入。无 Revision 的旧批次沿用原请求级处理。
+       #   - 旧路径 previewEdits：在 forwardFillKeyColumns 后按 rowIndex + header 覆盖；
        #     找不到的行/列仅记日志跳过，不阻断导入
        #   - 工厂身份（FACTORY_ADMIN，数据范围 FACTORY_LIST）导入的归属规则（阶段 1.3）：
        #     1) 新建 RSPU 行（本行事务刚 insert）：变体创建走录入旁路 createVariantForEntry、
@@ -490,6 +494,57 @@ POST   /api/v1/products/excel-ai-import/import
        #     3) confirm 前置校验：defaultFactoryCode 必须存在且 canAccessFactory 通过
        #        （工厂身份只能使用本厂编码），否则 400
 
+       # v3.3 目标契约（已定设计，尚未实施；上述“已实现”契约在 P0 切换前仍是现状真相）：
+       #   - Request 新增 expectedRevision + policySchemaVersion + 完整 policy；policy 包含
+       #     updateExisting / allowWarnings / conflictPolicy / quotePolicy / nullValuePolicy /
+       #     manualCorrectionPolicy / overrideReason，服务端物化默认值后将正文+哈希固化到 Attempt
+       #   - Response 新增 attemptId；Attempt done 时返回持久化 outcome
+       #     (success/partial_success/business_rejected) + resultSummary
+       #   - 请求处理为 Replay-first：鉴权/数据范围后先查找已有 Attempt；
+       #     done 直接返回历史结果，只有无 Attempt 的新执行检查 expected=current=confirmed
+       #   - Snapshot 为每个标准化 Variant/Quote 返回 variantKey/quoteKey；
+       #     品类门禁（未确定/同组多品类）在 confirm 时直接校验快照负载拒绝导入
+       #   - 执行单元从“逐行事务”切换为 ProductGroup 事务；领域写入与 AttemptItem
+       #     终态同事务，不同 Group 互相隔离
+       #   - 横向供应商等级报价生成 supplierConfigurationKey，RSKU 目标唯一性为
+       #     (variantId, factoryCode, supplierConfigurationKey)，不再把 A/AA/S 级价格覆盖到同一 RSKU
+       #   - supplierConfigurationKey 的 TEXT→CODE / Normalizer 升级必须先绑定原 RSKU；
+       #     收敛或歧义返回 blocker，不按新 Key 静默新建
+       #   - Snapshot Quote 按 targetRskuKey 预聚合；完全等价重复报价合并并保留全部来源，
+       #     DUPLICATE_QUOTE_TARGET 若返回仅为 info/non_blocking，不受 allowWarnings 影响
+       #   - 同一目标的非等价多报价（含相同 quoteKey 但价格不同）返回
+       #     MULTIPLE_CURRENT_QUOTES_FOR_RSKU，级别 blocker/quote_blocking，不依赖遍历顺序选值
+       #   - replace_if_newer 对 quoteDate NULL/同日同值有固定分支；人工修正保护读取
+       #     当前实体 manualOverrideFields，不依赖可到期 Lineage
+       #   - Request 另新增 per-sheet 品类策略与行级编辑字段（承接 09 方案）：
+       #     categoryMode: "SINGLE"|"MIXED"（SINGLE 必须 categoryHint 非空且 candidateCategoryCodes 为空，
+       #     MIXED 必须 categoryHint 为空且 candidateCategoryCodes ≥2）；
+       #     categoryHint: string；candidateCategoryCodes: string[]；
+       #     rowCategorySelections: { [rowIndex: string]: categoryCode }（键为 Excel 物理行号 1-based，
+       #     作为带 expectedRevision 的编辑命令物化进新 Snapshot）；
+       #     per-sheet 策略作为 Snapshot Header 持久化到 excel_import_preview_revision，
+       #     每次修改插入新 Revision
+       #   - 已实现 POST /api/v1/products/excel-ai-import/{batchId}/category-revision：
+       #     Request = expectedRevision、categoryMode、categoryHint、candidateCategoryCodes、
+       #     mapping、categoryMapping、rowCategorySelections、previewEdits、skipRows；
+       #     修改源单元格或跳过行后须提交此命令取得新 previewRevision，再 confirm。
+       #   - 详细语义见 v3.3 完整收口版 §18.3/§24/§32/§34.1/§38.1/§47.1.5/§49/§50/§72；
+       #     正式实施时本节必须将“现状”和“目标”合并为单一已实现契约
+
+       # v3.3 目标契约（新增端点，已定设计，尚未实施；与上文同属 Excel 导入目标契约）：
+       #   POST /api/v1/products/excel-ai-import/{batchId}/preview-edits
+       #        # Preview Edit：提交 mapping / categoryMode / categoryHint / candidateCategoryCodes /
+       #        # rowCategorySelections 等编辑命令 + expectedRevision；命中当前 Revision 则物化
+       #        # 新 Revision 并返回新 previewRevision；expectedRevision 过期返回
+       #        # 409 preview_revision_conflict
+       #   POST /api/v1/products/excel-ai-import/{batchId}/confirm
+       #        # Confirm：将 current Revision 固化为 confirmed；品类完整性门禁（09 §20）在此兜底校验
+       #   - （2026-09-24 评审后取消）Issue 查询/处置端点不实施：Issue 底表已摘除，
+       #     品类门禁改为 confirm 时直接校验 confirmed Snapshot 负载
+       #   - 错误码（目标契约新增）：409 preview_revision_conflict（expectedRevision 乐观锁冲突）；
+       #     410 snapshot_expired（Snapshot 已过保留期被 GC，归档摘要 snapshot_archive_summary
+       #     不含可解密敏感值、不具备重建能力）
+
 GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
        # Excel AI 导入前全量预览（数据清洗用，已实现）
        # Response: {
@@ -498,14 +553,27 @@ GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
        #   headers: string[],                          // 原始表头列表（按列顺序，不含内部字段）
        #   rows: [{
        #     rowIndex: number,                         // Excel 物理行号（1-based）
+       #     modelStart: boolean,                    // 源文件中型号有值的产品块起点
+       #     systemExcluded: boolean,                // 分页重复标题/表头/说明行，不进入商品组
        #     rawValues: { [header: string]: string },  // 原始表头 → 单元格值
        #     mappedFieldByHeader: { [header: string]: string|null }  // 原始表头 → 系统字段（未映射为 null）
+       #   }]
+       #   groups: [{
+       #     representativeRowIndex: number,          // 商品首行（编辑与覆盖图操作行）
+       #     imageRowIndex: number,                   // 商品图样实际锚定行；无主图候选时为 0
+       #     images: PreviewRowImage[]                // 仅产品图样列主图候选，不含模块示例图
+       #     variants: [{ images: PreviewRowImage[] }] // 各行模块/变体示意图，不含产品图样列
        #   }]
        # }
        # 说明：
        #   - 以原始表头为视角返回全量数据行，避免复合映射列（如「型号品名」同时映射到
        #     externalCode 与 productName）在编辑时产生歧义
        #   - 前端数据清洗页的编辑以 (rowIndex, header) 为键，通过 previewEdits 在 import 接口回传
+       #   - 横向合并表头覆盖但实际有数据的列以「未命名列+Excel 列字母」保留（如未命名列C）；
+       #     同一模块字段可由互斥的多列填入，空单元格不会覆盖另一列的非空值
+       #   - 「型号品名」复合列按型号+品名组织，同款跨页重复起始行会归到同一组；
+       #     其他模板沿用型号分组；型号与中文品名相连时拆分（如 MJ-S96欧拉沙发）。
+       #     确认导入前，同一型号对应不同品名会报错并给出源行号；旧归一版本批次需重新上传
 
 POST   /api/v1/products/excel-ai-import/{batchId}/rows/{sourceRowIndex}/clone-images-to/{targetRowIndex}
        # 数据清洗：将源行的全部图片克隆到目标行的覆盖图列表（已实现）
@@ -526,6 +594,7 @@ GET    /api/v1/products/excel-ai-import/{batchId}
        #   tasks: [{ taskId, rspuId }],      // 从 excel_import_row 聚合，供前端超时恢复后重建识别轮询
        #   failures: [{ rowIndex, reason }]  // rowIndex 为 Excel 物理行号；rowIndex=0 为批次级问题（如图片提取截断）
        # }
+```
 
 ### 图片访问
 
@@ -2019,3 +2088,9 @@ DELETE /api/v1/scheme-candidates/{candidateId}
 普通接口使用 `{ code, message, data }`。流式接口同步校验失败返回真实 HTTP 错误状态和统一错误响应（会话忙为 HTTP 409、`SESSION_BUSY`）；校验通过后返回 `text/event-stream`，事件包括 `meta/node/token/requirement/cards/done/error`，数据带 `runId/seq`，心跳采用 SSE 注释。异步运行失败通过 `error` 事件通知。
 
 数据库迁移为 `V10__marketing_agent.sql`；基线、重置脚本和 deploy 整理留待后续。实现边界见 [营销 Agent 架构设计](10-营销Agent架构设计-方案C落地与Argus借鉴.md)。
+
+---
+
+## 修订记录
+
+- 2026-09-22（增补目标契约，不改现状契约语义）：落实 A 类门禁 01 报告 G-1 关闭条件——Excel 导入 v3.3 目标契约补 `categoryMode / categoryHint / candidateCategoryCodes / rowCategorySelections` 字段、Preview Edit / Confirm / Issue 目标端点及 `409 preview_revision_conflict` / `410 snapshot_expired` 错误码（均标注为目标契约，尚未实施）。

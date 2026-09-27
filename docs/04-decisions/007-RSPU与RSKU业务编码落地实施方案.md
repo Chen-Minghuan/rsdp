@@ -5,6 +5,7 @@
 > 相关文档：
 > - `docs/06-reference/02-双层编码体系.md`
 > - `docs/04-decisions/004-为什么RSPU和RSKU使用UUID主键而非业务编码作为主键.md`
+> - `docs/04-decisions/008-供应商源商品身份与Excel导入演进边界.md`（供应商源编码与历史 `external_code` 边界）
 
 ---
 
@@ -40,6 +41,10 @@
 |------|------|----------|------|
 | `rspu_id` / `rsku_id` | 系统内部主键、外键关联 | 不可变 | `RSPU-550E-...` |
 | `rspu_code` / `rsku_code` | 业务展示编码、人工可读 | **生成后不可变** | `FS-MC-001-M` |
+
+### 2.1.1 与供应商源编码的边界（2026-09-21 补充）
+
+`rspu_code` 是平台生成的主展示/报表编码，不是供应商型号。供应商在工厂/源系统上下文中的编码归 `supplier_product_ref.source_product_code`。`rspu_master.external_code` 只作为历史兼容投影，在平台界面不得抢占 `rspu_code` 的主编码位置，也不得用于新导入的身份判定或幂等。详细迁移决策见 ADR 008。
 
 ### 2.2 业务编码生成时机
 

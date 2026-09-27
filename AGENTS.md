@@ -73,7 +73,7 @@
 │   │   ├── 04-API设计.md
 │   │   └── 05-RSDP-数据库完善方案-工厂与导入模块.md
 │   ├── 03-guides/                 # 开发指南（环境搭建/编码规范/测试/风格库导入格式）
-│   ├── 04-decisions/              # 决策记录（ADR 001-007）
+│   ├── 04-decisions/              # 决策记录（ADR 001-008）
 │   ├── 05-status/                 # 项目状态
 │   │   ├── 当前进度.md
 │   │   └── 待办事项.md
@@ -211,7 +211,7 @@ RSKU（供应单元）：[RSPU ID]-[工厂代码3位]-[材质版本2位]
 
 ### 5.4 数据库
 - 元数据表用 PostgreSQL，JSON 字段统一存 JSONB。
-- 向量主存 pgvector（`product_image_embedding` 表）；`rspu_master.style_vector` 为历史备份列，新数据不再写入。
+- 向量主存 pgvector（`product_image_embedding` 表）；`rspu_master.style_vector` 历史备份列已于 V15 删除。
 - 所有修改 RSPU/RSKU/工厂的操作必须记审计日志。
 
 ---

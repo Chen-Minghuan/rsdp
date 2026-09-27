@@ -1,6 +1,8 @@
 # RSDP Excel 单一 / 混合品类导入改造方案
 
-> 版本：v2.2 · 日期：2026-09-10 · 状态：方案定稿，待实施。
+> 版本：v2.3 · 日期：2026-09-21 · 状态：功能方案定稿，纳入供应链改造 P0-B 待实施。
+> v2.3：不改变 v2.2 交互结论；明确与供应链改造 v3.3 的边界、实施顺序以及
+> per-sheet 配置 / rowCategorySelections 进入 Immutable Snapshot / Revision 的方式。
 > v2.2：第三轮评审五条修订——导入方式移至 Step 2 顶部（per-sheet 时序）；AI 归一 fallback
 > 推迟到候选集确定后；清除 fixedCategoryCode 残留；提交只认 rowCategorySelections；
 > 逻辑产品边界复用现有 RSPU 分组规则，不另建 key。
@@ -263,7 +265,7 @@ Sheet：黑胡桃木高定系列
 
 后端校验 `categoryCode ∈ candidateCategoryCodes`（且候选集本身在第一步只能来自字典选项，天然合法），否则 `categoryCode = null`。**不能让 AI 自己创建 RSDP 不存在的品类。**
 
-## 16. 配置模型（请求级，不落新表字段）
+## 16. 配置模型（请求级，不落 batch 当前值新字段）
 
 ```java
 public class ExcelImportCategoryConfig {
@@ -279,6 +281,8 @@ public enum CategoryMode { SINGLE, MIXED }
 ```
 
 导入方式按 **per-sheet（批次）** 生效：多 Sheet 文件每个 Sheet 独立批次、独立选择导入方式，与现有批次模型一致。
+
+v3.3 实施后，该请求模型会作为快照元数据持久化到 `excel_import_preview_revision`，而不是在 `excel_import_batch` 上增加一组随后可覆盖的「当前配置」列。每次改配置都插入新 Revision。
 
 ## 17. 行级品类数据的载体
 
@@ -296,6 +300,11 @@ private Map<Integer, String> rowCategorySelections;
 
 - 后端只认 `rowCategorySelections`，不需要理解 suggested / final / confirmed / manual 一堆状态概念；与现有 `previewEdits` / `skipRows` 同模式；
 - **不为此提前给 `excel_import_row` 加字段**；导入时最终值写入行记录的 `mapped_fields` 快照即可。
+
+> **v3.3 承接说明**：上述「只携带一个行级集合」的接口约定保留，但实施时 `rowCategorySelections`
+> 是带 `expectedRevision` 的 Preview Edit 命令。后端接收后生成新的 immutable normalized
+> snapshot，并把每行 `finalCategoryCode` 固化其中；Confirm / Import 只读 confirmed
+> revision，不再从前端内存或原始 Excel 重算。这仍不需要提前创建 `excel_import_row`。
 
 ## 18. SINGLE 数据处理
 
@@ -322,12 +331,15 @@ AI 无法识别            → suggested = null, final = null，等待手工选�
 
 ## 20. 正式导入校验
 
-**只拦"品类前置校验"这一道，导入本身保持逐行容错**（现有失败清单机制不变）：
+**品类完整性仍是执行前批次级门禁；进入执行后按 ProductGroup / Issue Target 容错，不再承诺「单个源行是事务边界」**：
 
 - 前端在第 3 → 4 步拦截：仍有未确定品类的非跳过数据行时不允许进入执行导入，提示"仍有 5 行商品品类未确定，请完成数据清洗后再执行导入 [查看未确定商品]"；
 - 后端 `confirmAndImport` 兜底再校验一次（防绕过）：所有非跳过、非系统过滤行（说明行/重复表头行/组合汇总行，复用现有 `isNoteOrEmptyRow` 等判定）必须有 finalCategoryCode，否则整批拒绝并返回行号清单；
 - **同一逻辑产品的品类唯一性校验**：同一逻辑产品（边界判定复用现有 RSPU 分组规则，见 14）下的所有非跳过行必须共享同一个最终品类；若人工把同一逻辑产品的多行改成了不同品类，前置校验一并拦截并给出冲突行号清单——一个 RSPU 只能有一个品类；
-- 校验通过后的导入流程与现状一致：单行失败进失败清单，不影响其他行。
+- 校验通过后，先按既有 RSPU 分组规则生成 ProductGroup；不同 ProductGroup 互相隔离，某个 Group 被拒绝或技术失败不回滚已提交的其他 Group；
+- 同一 ProductGroup 内以 v3.3 的 `variantKey / quoteKey` 作为阻断目标：`variant_blocking` 只跳过该 Variant 及其 Quote，`quote_blocking` 只跳过该 Quote，`product_blocking` 拒绝整个 Group；
+- 同一 Group 的领域写入与 AttemptItem 终态处于同一数据库事务；事务性技术失败回滚整个 Group，不会出现「同一产品部分主表已写、Checkpoint 未写」；
+- 源行号仍用于失败展示和 Lineage，但一行可展开多 Variant / Quote，多行也可同属一个 ProductGroup，因此不能用「单行失败不影响其他行」作为事务契约。
 
 ## 21. 正式产品表不增加 AI 临时字段
 
@@ -344,6 +356,10 @@ AI 过程信息存在导入批次/预览阶段即可。
 导入命中已有 RSPU（externalCode 相同）时，**品类字段不更新**：若 finalCategoryCode 与已有 `rspu_master.category_code` 不一致，保留原品类，并在该行结果的 issues 里记一条用户可见提示「品类与已有商品不一致（已有：X，本次：Y），已保留原品类」。
 
 理由：已有商品的品类可能经过人工治理，导入链路的 AI/批量操作不应静默把 RSPU 改到其他品类；真正要改品类走产品管理。其余字段的更新语义不变。
+
+> 注记（v3.3 身份模型承接，不改变上述交互语义）：
+> - 「命中已有 RSPU」的判定在 v3.3 落地后按 `supplier_product_ref` 身份解析执行（`(factory_code, source_namespace, normalized_source_product_code)` 唯一键）；`externalCode` 相同仅是导入期的匹配提示，不再是身份查重依据。
+> - 命名映射：本文的 `updateIfExists` 对应 v3.3 目标 Policy 的 `updateExisting`；且默认语义从「false=跳过该行」演进为「false=不改写并生成冲突 Issue」。数据语义以 v3.3 §47.1.5 为准，实施 P0-B2/F 时不得沿用旧名旧义。
 
 ## 22. 前端校验规则
 
@@ -445,7 +461,7 @@ MIXED：用户先选多个候选品类，AI 在限定范围内逐行预填，用
 | 2 | 显式收敛兜底链 | 新链见 26.1；`categoryGuess` 在新模式下退出；SINGLE 语义统一为「默认品类」：行内类别列归一命中优先，默认品类只补空值行（2、18、25） |
 | 3 | 复用品类名归一 | `suggestCategoryMappings` / `normalizeCategoryCode` 为唯一归一入口；确定性匹配不受候选集限制，AI 归一与逐行推荐一样必须 ∈ 候选集（9、15） |
 | 4 | 清洗阶段无行记录 | suggested/final 走前端状态 + 请求提交（同 `previewEdits`），行表不加字段（17） |
-| 5 | 未确定品类整批拦截 | 只拦品类前置校验（前端 3→4 步 + 后端 confirmAndImport 兜底），导入保持逐行容错（20） |
+| 5 | 未确定品类整批拦截 | 品类完整性作为执行前批次级门禁（前端 3→4 步 + 后端 confirmAndImport 兜底）；进入执行后按 ProductGroup 事务隔离，Variant / Quote 按目标键精确跳过，不以源行作为事务边界（20） |
 | 6 | V1 文本 only | 图片不进入 AI 品类分类，列入不做清单（14、24） |
 | 7 | AI 去重 + per-sheet | 去重键按逻辑产品（forward-fill 后的品名 → 规格 → 编码）（14）；导入方式挂批次（16） |
 | 8 | Sheet 名不作直接品类来源 | Sheet 名只作为 AI 分类的上下文线索（prompt 注入），不再作为每行直接品类来源；旧路径（未选模式）维持现状不动（26.1） |
@@ -466,3 +482,24 @@ MIXED：用户先选多个候选品类，AI 在限定范围内逐行预填，用
 
 - **Sheet 名在新模式下不再是每行直接品类来源**——一份 Sheet 叫「黑胡桃木高定系列」不代表每行都是同一品类，Sheet 级结论直接定行级品类正是混合品类错标的来源。Sheet 名仅作为 MIXED 逐行 AI 分类的上下文线索注入 prompt。旧路径（未选导入方式）维持现状不动。
 - `categoryGuess`（previewMapping 的整文件猜测）：新模式下不再参与兜底；旧路径保留不动。
+
+## 27. 与供应链改造 v3.3 的关系与实施顺序
+
+本文是品类交互和功能验收规格；`docs/RSDP_供应链商品数据与Excel导入改造_开发设计文档_v3.3_完整收口版.md`
+负责 Snapshot / Revision / Issue / Attempt / Lineage 的持久化和一致性。两者共用同一条 Preview / 清洗链路，不允许并行实现两套状态模型。
+
+已确认的顺序：
+
+1. 先通过 v3.3 §85.1 的 A 类 Design Approval Gate；故障注入、存储恢复和性能验收属于实现后的§85.2 B 类上线门禁；
+2. 按 v3.3 P0-A 完成 Supplier Identity Expand，但不在该阶段删除 `external_code` 唯一索引；
+3. 完成 P0-B1：以当前 Sheet 的 batch 为边界建立 Snapshot / Revision / Optimistic Lock；
+4. 在该底座上实施本文 SINGLE / MIXED 交互，模式、默认/候选品类、AI 结果及人工最终品类均通过 Revision 演进；
+5. 完成 P0-B3 Issue / Confirm / Revalidate 后，再继续 P0-C 至 P0-F；P0-F 必须包含 ProductAggregate + AttemptItem 同事务，不得把产品聚合事务留到 P1。
+
+因此，本方案不先在旧 `preview_rows + 前端内存` 模型上独立施工；它是 v3.3 **P0-B 的必交付行为**。交互语义冲突以本文为准，持久化、并发、幂等和安全语义冲突以 v3.3 为准。
+
+---
+
+## 修订记录
+
+- 2026-09-22（增补注记，不改交互语义）：落实 A 类门禁 01 报告关闭条件——§21.1 补「命中判定按 supplier_product_ref 身份解析」注记（I-1）与 `updateIfExists ↔ updateExisting` 命名映射及默认语义演进注记（P-1）。
