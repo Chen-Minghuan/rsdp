@@ -14,6 +14,7 @@ import com.rsdp.dto.response.UnmappedColumnInfo;
 import com.rsdp.dto.response.RspuVariantResponse;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.AsyncTask;
+import com.rsdp.entity.ExcelImportAttempt;
 import com.rsdp.entity.ExcelImportBatch;
 import com.rsdp.entity.ExcelImportRow;
 import com.rsdp.entity.ImageAssets;
@@ -56,6 +57,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 
 import javax.imageio.ImageIO;
@@ -69,6 +71,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -160,6 +163,14 @@ class ExcelAiImportServiceTest {
     private PermissionService permissionService;
     @Mock
     private com.rsdp.security.datascope.DataScopeContext dataScopeContext;
+    @Mock
+    private SupplierIdentityResolutionService supplierIdentityResolutionService;
+    @Mock
+    private SupplierProductRefService supplierProductRefService;
+    @Mock
+    private ExcelImportPreviewSnapshotService previewSnapshotService;
+    @Mock
+    private ExcelImportAttemptService attemptService;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -176,6 +187,16 @@ class ExcelAiImportServiceTest {
             .thenReturn(java.util.Map.of());
         // 默认批次可抢占导入权（P1-6 并发防护）；个别测试可覆盖为 0 模拟冲突
         lenient().when(batchMapper.claimForImport(anyString())).thenReturn(1);
+        // P0-B3：confirm 成功写 confirmed_revision 指针（CAS 成功；模拟写库回写，
+        // executeImport 重选批次后 revalidate 可见 confirmed_revision）
+        lenient().when(batchMapper.confirmRevision(anyString(), anyLong(), any())).thenAnswer(inv -> {
+            ExcelImportBatch selected = batchMapper.selectById(inv.getArgument(0));
+            if (selected != null) {
+                selected.setConfirmedRevision(inv.getArgument(1));
+                selected.setConfirmedBy(inv.getArgument(2));
+            }
+            return 1;
+        });
         // previewMapping 的 saveBatch 使用编程式事务（P1-7），单测中事务管理器全部 mock
         lenient().when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
         lenient().when(dataScopeHelper.canAccessFactory(anyString())).thenReturn(true);
@@ -189,6 +210,91 @@ class ExcelAiImportServiceTest {
         // 默认工厂编码存在；个别测试可覆盖为 null 模拟填错编码
         lenient().when(factoryMasterMapper.selectById(anyString()))
             .thenReturn(new com.rsdp.entity.FactoryMaster());
+        // P0-B2：previewMapping 生成首版 immutable Snapshot（revision=1）；默认桩返回 revision=1 的 Header
+        lenient().when(previewSnapshotService.createNextRevision(any())).thenAnswer(inv -> {
+            com.rsdp.entity.ExcelImportPreviewRevision revision = new com.rsdp.entity.ExcelImportPreviewRevision();
+            revision.setBatchId(((ExcelImportPreviewSnapshotService.CreateRevisionCommand) inv.getArgument(0)).getBatchId());
+            revision.setPreviewRevision(1L);
+            return revision;
+        });
+        // P0-F：Attempt 执行内核桩——confirm 创建 pending Attempt（携带物化 Policy 正文+Hash），
+        // executeImport 校验/抢占/心跳/组执行全部放行（Attempt 语义由 ExcelImportAttemptServiceTest 覆盖）
+        java.util.Map<String, ExcelImportAttempt> attempts = new HashMap<>();
+        lenient().when(attemptService.createAttemptWithItems(anyString(), anyLong(), any(), any(), any(), any()))
+            .thenAnswer(inv -> {
+                com.rsdp.supplychain.policy.ImportPolicyMaterializer.MaterializedPolicy mp = inv.getArgument(2);
+                ExcelImportAttempt attempt = new ExcelImportAttempt();
+                attempt.setAttemptId("IATT-" + attempts.size());
+                attempt.setBatchId(inv.getArgument(0));
+                attempt.setPreviewRevision(inv.getArgument(1));
+                attempt.setStatus(ExcelImportAttempt.STATUS_PENDING);
+                attempt.setPolicyPayload(mp.policyPayload());
+                attempt.setPolicyHash(mp.policyHash());
+                attempt.setPolicyHashVersion(mp.policyHashVersion());
+                attempt.setPolicySchemaVersion(com.rsdp.supplychain.policy.ImportPolicy.SCHEMA_VERSION);
+                attempts.put(attempt.getAttemptId(), attempt);
+                return attempt;
+            });
+        lenient().when(attemptService.getAttempt(anyString()))
+            .thenAnswer(inv -> attempts.get(inv.getArgument(0)));
+        lenient().when(attemptService.claimForExecution(anyString(), anyString()))
+            .thenAnswer(inv -> {
+                ExcelImportAttempt attempt = attempts.get(inv.getArgument(0));
+                if (attempt == null) {
+                    return java.util.Optional.empty();
+                }
+                attempt.setStatus(ExcelImportAttempt.STATUS_RUNNING);
+                return java.util.Optional.of(attempt);
+            });
+        lenient().when(attemptService.heartbeat(anyString(), anyString())).thenReturn(true);
+        lenient().when(attemptService.finalizeAttemptIfComplete(anyString(), anyString()))
+            .thenAnswer(inv -> {
+                com.rsdp.entity.ExcelImportAttempt attempt = attempts.get(inv.getArgument(0));
+                if (attempt == null) {
+                    return java.util.Optional.empty();
+                }
+                // 执行完成：聚合口径由 AttemptItem 终态汇总（测试桩以 {} 回退行循环本地计数）
+                attempt.setStatus(com.rsdp.entity.ExcelImportAttempt.STATUS_DONE);
+                attempt.setOutcome(com.rsdp.entity.ExcelImportAttempt.OUTCOME_SUCCESS);
+                if (attempt.getResultSummary() == null) {
+                    attempt.setResultSummary("{}");
+                }
+                return java.util.Optional.of(attempt);
+            });
+        lenient().when(attemptService.beginGroup(anyString(), anyString(), anyString())).thenReturn(true);
+        lenient().when(attemptService.getItem(anyString(), anyString()))
+            .thenAnswer(inv -> {
+                com.rsdp.entity.ExcelImportAttemptItem item = new com.rsdp.entity.ExcelImportAttemptItem();
+                item.setAttemptId(inv.getArgument(0));
+                item.setGroupId(inv.getArgument(1));
+                item.setStatus(com.rsdp.entity.ExcelImportAttemptItem.STATUS_RUNNING);
+                item.setVariantSuccessCount(0);
+                item.setVariantFailedCount(0);
+                item.setQuoteSuccessCount(0);
+                item.setQuoteFailedCount(0);
+                item.setResultSummary("{}");
+                return item;
+            });
+    }
+
+    /**
+     * §9 Phase 3 测试辅助：身份解析切换到 {@link SupplierIdentityResolutionService} 后，
+     * 「按源商品编码命中既有 RSPU」的桩——同时覆盖批次预加载
+     * （resolveBatch + selectBatchIds）与行内 miss 单查（resolve + selectById）两条通路。
+     *
+     * @param code     行内源商品编码（与 Excel 行编码一致）
+     * @param existing 命中的既有 RSPU
+     */
+    private void stubIdentityResolutionHit(String code, RspuMaster existing) {
+        SupplierIdentityResolutionService.ResolvedIdentity identity =
+            new SupplierIdentityResolutionService.ResolvedIdentity(existing.getRspuId(),
+                SupplierIdentityResolutionService.ResolutionSource.LEGACY_EXTERNAL_CODE, null);
+        lenient().when(supplierIdentityResolutionService.resolveBatch(any(), any(), anyCollection()))
+            .thenReturn(Map.of(code, identity));
+        lenient().when(rspuMapper.selectBatchIds(anyCollection())).thenReturn(List.of(existing));
+        lenient().when(supplierIdentityResolutionService.resolve(any(), any(), eq(code)))
+            .thenReturn(java.util.Optional.of(identity));
+        lenient().when(rspuMapper.selectById(existing.getRspuId())).thenReturn(existing);
     }
 
     /**
@@ -1308,7 +1414,16 @@ class ExcelAiImportServiceTest {
         verify(rspuMapper, times(1)).insert(any(RspuMaster.class));
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper).insert(rspuCaptor.capture());
-        assertEquals("WG-101", rspuCaptor.getValue().getExternalCode());
+        // §9 Phase 4：external_code 默认不再新写；供应商源编码经 resolveOrCreate
+        // 写入 supplier_product_ref（含工厂上下文与批次 provenance）
+        assertNull(rspuCaptor.getValue().getExternalCode());
+        ArgumentCaptor<SupplierProductRefService.ResolveCommand> refCaptor =
+            ArgumentCaptor.forClass(SupplierProductRefService.ResolveCommand.class);
+        verify(supplierProductRefService).resolveOrCreate(refCaptor.capture());
+        assertEquals("F001", refCaptor.getValue().getFactoryCode());
+        assertEquals("WG-101", refCaptor.getValue().getSourceProductCode());
+        assertEquals("excel-ai-import", refCaptor.getValue().getSourceSystem());
+        assertEquals(preview.getBatchId(), refCaptor.getValue().getImportBatchId());
     }
 
     @Test
@@ -1356,9 +1471,11 @@ class ExcelAiImportServiceTest {
         when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
 
         List<RspuMaster> insertedRspus = new ArrayList<>();
+        // Phase 4 起实体 external_code 默认不再写入，ID 桩改用序号（原以 externalCode 拼 ID）
+        java.util.concurrent.atomic.AtomicInteger rspuSeq = new java.util.concurrent.atomic.AtomicInteger();
         when(rspuMapper.insert(any(RspuMaster.class))).thenAnswer(inv -> {
             RspuMaster rspu = inv.getArgument(0);
-            rspu.setRspuId("RSPU-" + rspu.getExternalCode());
+            rspu.setRspuId("RSPU-" + rspuSeq.incrementAndGet());
             insertedRspus.add(rspu);
             return 1;
         });
@@ -1388,11 +1505,11 @@ class ExcelAiImportServiceTest {
         assertEquals(3, insertedRspus.size());
         for (RspuMaster rspu : insertedRspus) {
             String description = rspu.getDescription();
-            assertNotNull(description, "RSPU " + rspu.getExternalCode() + " 应有描述");
+            assertNotNull(description, "RSPU " + rspu.getRspuId() + " 应有描述");
             assertTrue(description.contains(expectedPart1),
-                "RSPU " + rspu.getExternalCode() + " 应包含主椅行描述");
+                "RSPU " + rspu.getRspuId() + " 应包含主椅行描述");
             assertTrue(description.contains(expectedPart2),
-                "RSPU " + rspu.getExternalCode() + " 应包含汇总行补充描述");
+                "RSPU " + rspu.getRspuId() + " 应包含汇总行补充描述");
         }
     }
 
@@ -1684,11 +1801,23 @@ class ExcelAiImportServiceTest {
         verify(excelImportRowService, times(2)).markSkipped(any(), anyString());
 
         // 产品归组：行 2 型号继承行 1（合并单元格填充），同型号归入同一 RSPU，
-        // 只新建 2 个产品（MJ-S96、MJ-S97），模块行不再成为独立产品
+        // 只新建 2 个产品（MJ-S96、MJ-S97），模块行不再成为独立产品。
+        // §9 Phase 4：external_code 默认不再新写（断言 null），产品编码改经
+        // supplier_product_ref 身份写入断言（见下方 resolveOrCreate 捕获）
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper, times(2)).insert(rspuCaptor.capture());
-        assertEquals("MJ-S96", rspuCaptor.getAllValues().get(0).getExternalCode());
-        assertEquals("MJ-S97", rspuCaptor.getAllValues().get(1).getExternalCode());
+        assertNull(rspuCaptor.getAllValues().get(0).getExternalCode());
+        assertNull(rspuCaptor.getAllValues().get(1).getExternalCode());
+        // 两个产品编码分别建立 Supplier Ref（模块行与首行同码复用，不重复建）
+        ArgumentCaptor<SupplierProductRefService.ResolveCommand> refCaptor =
+            ArgumentCaptor.forClass(SupplierProductRefService.ResolveCommand.class);
+        verify(supplierProductRefService, times(3)).resolveOrCreate(refCaptor.capture());
+        assertEquals(List.of("MJ-S96", "MJ-S96", "MJ-S97"),
+            refCaptor.getAllValues().stream()
+                .map(SupplierProductRefService.ResolveCommand::getSourceProductCode).toList());
+        assertEquals("F001", refCaptor.getValue().getFactoryCode());
+        assertEquals("excel-ai-import", refCaptor.getValue().getSourceSystem());
+        assertEquals(preview.getBatchId(), refCaptor.getValue().getImportBatchId());
 
         // 变体按「行 × 价格列」去重创建：行1（A级布/AA级布 2 个）+ 行3（2 个）= 4 个；
         // 行2 与行1 同属 MJ-S96 且 A级布属性组合相同，复用行1 已建变体（与真实库中
@@ -2307,10 +2436,13 @@ class ExcelAiImportServiceTest {
         verify(rspuVariantService).createVariant(anyString(), variantCaptor.capture());
         assertEquals("模块A", variantCaptor.getValue().getDisplayName());
 
-        // 复合「型号品名」仍应正确拆出型号
+        // 复合「型号品名」仍应正确拆出型号。
+        // §9 Phase 4：external_code 默认不再新写（断言 null）；本请求无 defaultFactoryCode，
+        // 无工厂上下文 → 不建立 Supplier Ref（型号只作为行数据进入分组/变体流程）
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper).insert(rspuCaptor.capture());
-        assertEquals("MJ-S96", rspuCaptor.getValue().getExternalCode());
+        assertNull(rspuCaptor.getValue().getExternalCode());
+        verify(supplierProductRefService, never()).resolveOrCreate(any());
     }
 
     @Test
@@ -2519,7 +2651,7 @@ class ExcelAiImportServiceTest {
         RspuMaster existing = new RspuMaster();
         existing.setRspuId("RSPU-EXIST");
         existing.setExternalCode("ABC-001");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         ExcelAiMappingRequest request = new ExcelAiMappingRequest();
         request.setBatchId(preview.getBatchId());
@@ -2581,7 +2713,7 @@ class ExcelAiImportServiceTest {
         RspuMaster existing = new RspuMaster();
         existing.setRspuId("RSPU-EXIST");
         existing.setExternalCode("ABC-001");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         RspuVariantResponse variantResponse = new RspuVariantResponse();
         variantResponse.setVariantId("V-EXIST");
@@ -2603,6 +2735,68 @@ class ExcelAiImportServiceTest {
         verify(rspuVariantService, times(1)).createVariant(eq("RSPU-EXIST"), any());
         // 无图行不建 AI 识别任务
         verify(asyncTaskMapper, never()).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
+    }
+
+    @Test
+    void confirmAndImport_shouldPassFactoryContextToIdentityResolution() throws IOException {
+        // §9 Phase 3：身份解析统一经 SupplierIdentityResolutionService，
+        // 工厂上下文取请求级 defaultFactoryCode（无则 null，解析入口自行禁止裸 fallback）
+        byte[] excelBytes = createExcelWithCodeAndName();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号\":\"externalCode\",\"名称\":\"productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithCodeAndName()));
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(dictService.listByType("style")).thenReturn(List.of());
+        when(dictService.listByType("scene")).thenReturn(List.of());
+        when(dictService.listByType("material")).thenReturn(List.of());
+        when(dictService.listByType("size")).thenReturn(List.of());
+        when(dictService.listByType("color")).thenReturn(List.of());
+        when(dictService.listByType("factory_level")).thenReturn(List.of());
+
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-NEW");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+
+        ExcelAiImportResult result = confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        // 批次预加载以 defaultFactoryCode 作为身份解析工厂上下文
+        ArgumentCaptor<String> factoryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(supplierIdentityResolutionService, atLeastOnce())
+            .resolveBatch(factoryCaptor.capture(), isNull(), anyCollection());
+        assertEquals("F001", factoryCaptor.getValue());
     }
 
     @Test
@@ -2730,7 +2924,7 @@ class ExcelAiImportServiceTest {
         existing.setExternalCode("ABC-001");
         existing.setProductName("平台维护名称");
         existing.setCategoryCode("SF");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         // 已有变体（材质 WO、无尺寸/颜色），本行价格列回退行级材质 WO 后命中复用
         RspuVariant existingVariant = new RspuVariant();
@@ -2820,7 +3014,7 @@ class ExcelAiImportServiceTest {
         existing.setExternalCode("ABC-001");
         existing.setProductName("原有名称");
         existing.setCategoryCode("SF");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         RspuVariant existingVariant = new RspuVariant();
         existingVariant.setVariantId("V-1");
@@ -2894,7 +3088,7 @@ class ExcelAiImportServiceTest {
         existing.setExternalCode("ABC-001");
         existing.setProductName("原有名称");
         existing.setCategoryCode("SF");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         RspuVariant existingVariant = new RspuVariant();
         existingVariant.setVariantId("V-1");
@@ -3448,6 +3642,41 @@ class ExcelAiImportServiceTest {
             var anchor3 = helper.createClientAnchor();
             anchor3.setRow1(2); anchor3.setCol1(6); anchor3.setRow2(3); anchor3.setCol2(7);
             drawing.createPicture(anchor3, workbook.addPicture(pngLogo, org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private byte[] createExcelWithDelayedProductPicture() {
+        try (var out = new java.io.ByteArrayOutputStream();
+             var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("产品图样 PICTURE");
+            header.createCell(1).setCellValue("型号品名");
+            header.createCell(2).setCellValue("规格/模块");
+            header.createCell(3).setCellValue("模块示意图");
+            var first = sheet.createRow(1);
+            first.createCell(1).setCellValue("MJ-S96欧拉沙发");
+            first.createCell(2).setCellValue("模块组合A");
+            var second = sheet.createRow(2);
+            second.createCell(2).setCellValue("贵妃A位");
+            sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(1, 2, 1, 1));
+
+            var helper = workbook.getCreationHelper();
+            var drawing = sheet.createDrawingPatriarch();
+            var moduleAnchor = helper.createClientAnchor();
+            moduleAnchor.setRow1(1); moduleAnchor.setCol1(3);
+            moduleAnchor.setRow2(2); moduleAnchor.setCol2(4);
+            drawing.createPicture(moduleAnchor,
+                workbook.addPicture(createPng(0x00FF00), org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
+            var productAnchor = helper.createClientAnchor();
+            productAnchor.setRow1(2); productAnchor.setCol1(0);
+            productAnchor.setRow2(3); productAnchor.setCol2(1);
+            drawing.createPicture(productAnchor,
+                workbook.addPicture(createPng(0xFF0000), org.apache.poi.ss.usermodel.Workbook.PICTURE_TYPE_PNG));
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {
@@ -4179,6 +4408,123 @@ class ExcelAiImportServiceTest {
         assertEquals("categoryCode", row.getMappedFieldByHeader().get("品类"));
         assertEquals("productName", row.getMappedFieldByHeader().get("名称"));
         assertEquals("positioningLabel", row.getMappedFieldByHeader().get("风格"));
+    }
+
+    @Test
+    void getPreviewData_shouldGroupMergedModelRowsWithCompositeMapping() throws IOException {
+        byte[] excelBytes = createExcelWithMergedCellsAndRepeatedHeader();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"规格/模块\":\"variantDisplayName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString()))
+            .thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+
+        ExcelAiPreviewDataResponse response = excelAiImportService.getPreviewData(preview.getBatchId());
+
+        List<com.rsdp.dto.response.PreviewDataGroup> modelGroups = response.getGroups().stream()
+            .filter(group -> "MJ-S96".equals(group.getExternalCode()))
+            .toList();
+        assertEquals(1, modelGroups.size());
+        assertEquals(2, modelGroups.get(0).getVariants().size());
+        assertTrue(response.getProductHeaders().contains("型号品名 ITEM NO/DESCRIPTION"));
+    }
+
+    @Test
+    void previewMapping_shouldKeepUnlabeledModuleAndExcludeRepeatedPageTitle() throws IOException {
+        byte[] excelBytes = createExcelWithUnlabeledModuleAndPageTitle();
+        MockMultipartFile file = new MockMultipartFile("sofa.xlsx", "sofa.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"规格/模块\":\"variantDisplayName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString()))
+            .thenReturn("excel-imports/BATCH-TEST.xlsx");
+        ExcelImportBatch saved = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            saved.setBatchId(batch.getBatchId());
+            saved.setStoragePath(batch.getStoragePath());
+            saved.setPreviewRows(batch.getPreviewRows());
+            saved.setColumnMapping(batch.getColumnMapping());
+            return 1;
+        });
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(saved);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+        ExcelAiPreviewDataResponse data = excelAiImportService.getPreviewData(preview.getBatchId());
+
+        assertEquals("variantDisplayName", objectMapper.readTree(saved.getColumnMapping())
+            .path("未命名列C").asText());
+        assertEquals(2, data.getGroups().size(), data.getGroups().toString());
+        assertEquals("MJ-S96", data.getGroups().get(0).getExternalCode());
+        assertEquals(3, data.getGroups().get(0).getVariants().size());
+        assertEquals("模块组合A", data.getGroups().get(0).getVariants().get(0).getRawValues().get("未命名列C"));
+        assertEquals("贵妃A位", data.getGroups().get(0).getVariants().get(1).getRawValues().get("规格/模块"));
+    }
+
+    @Test
+    void getPreviewData_shouldUseLaterProductPictureInsteadOfFirstRowModulePicture() throws IOException {
+        byte[] excelBytes = createExcelWithDelayedProductPicture();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号品名\":\"externalCode,productName\",\"规格/模块\":\"variantDisplayName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString()))
+            .thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            return 1;
+        });
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+
+        ExcelAiPreviewDataResponse response = excelAiImportService.getPreviewData(preview.getBatchId());
+
+        assertEquals(1, response.getGroups().size());
+        var group = response.getGroups().get(0);
+        assertEquals(2, group.getRepresentativeRowIndex());
+        assertEquals(3, group.getImageRowIndex());
+        assertEquals(1, group.getImages().size());
+        assertTrue(group.getImages().get(0).isPrimaryCandidate());
+        assertEquals("0,2,0,0", group.getImages().get(0).getImageKey());
+        assertFalse(response.getRows().get(0).getImages().get(0).isPrimaryCandidate());
+        assertEquals(1, group.getVariants().get(0).getImages().size());
+        assertFalse(group.getVariants().get(0).getImages().get(0).isPrimaryCandidate());
+        assertTrue(group.getVariants().get(1).getImages().stream()
+            .noneMatch(PreviewDataRow.PreviewRowImage::isPrimaryCandidate));
     }
 
     @Test
@@ -5057,7 +5403,7 @@ class ExcelAiImportServiceTest {
         RspuMaster existing = new RspuMaster();
         existing.setRspuId("RSPU-EXIST");
         existing.setExternalCode("WG-TEST-001");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         ImageAssets existingImage = new ImageAssets();
         existingImage.setImageId("IMG-OLD");
@@ -5100,7 +5446,7 @@ class ExcelAiImportServiceTest {
         RspuMaster existing = new RspuMaster();
         existing.setRspuId("RSPU-EXIST");
         existing.setExternalCode("MJ-S96");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         RspuVariantResponse variantResponse = new RspuVariantResponse();
         variantResponse.setVariantId("V-A");
@@ -5439,10 +5785,12 @@ class ExcelAiImportServiceTest {
         ExcelAiImportResult result = confirmAndImport(request);
 
         assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
-        // 数据来自 sheet 1（型号 S-001），不是 sheet 0 的 T-001
+        // 数据来自 sheet 1（型号 S-001），不是 sheet 0 的 T-001。
+        // §9 Phase 4：external_code 默认不再新写，sheet 归属改由行结果/图片计数口径验证
+        // （下方 markSuccess 的 imageCount=1 即 sheet 1 内嵌图精确命中的证据）
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper).insert(rspuCaptor.capture());
-        assertEquals("S-001", rspuCaptor.getValue().getExternalCode(), "应导入 sheet 1 的数据");
+        assertNull(rspuCaptor.getValue().getExternalCode(), "Phase 4 起 external_code 不再新写");
         // sheet 1 的内嵌图片按 "1,物理行" key 精确命中
         verify(excelImportRowService).markSuccess(any(), any(), any(), any(), eq(1), any(), any());
     }
@@ -5501,6 +5849,138 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void confirmAndImport_sourceCodeReused_shouldFailRowWithoutAutoRebind() throws IOException {
+        // §9 Phase 4 / §6.2：同键已绑其他 RSPU（SourceCodeReusedException）时按现有行级失败
+        // 语义落失败明细并整行回滚，绝不自动改绑
+        byte[] excelBytes = createExcelWithDescriptionAndRetailPrice();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号\":\"externalCode\",\"名称\":\"productName\",\"功能配置\":\"description\",\"含税价\":\"retailPrice\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithDescriptionAndRetailPrice()));
+        stubCommonDicts();
+        when(rspuMapper.insert(any(RspuMaster.class))).thenReturn(1);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-1");
+        lenient().when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        // 同码已绑其他 RSPU：resolveOrCreate 抛 SOURCE_CODE_REUSED（§6.2）
+        com.rsdp.entity.SupplierProductRef existingRef = new com.rsdp.entity.SupplierProductRef();
+        existingRef.setFactoryCode("F001");
+        existingRef.setSourceProductCode("MK-8001");
+        existingRef.setRspuId("RSPU-OTHER");
+        when(supplierProductRefService.resolveOrCreate(any()))
+            .thenThrow(new com.rsdp.exception.SourceCodeReusedException(existingRef, "RSPU-NEW"));
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setDefaultFactoryCode("F001");
+
+        ExcelAiImportResult result = confirmAndImport(request);
+
+        assertEquals(0, result.getSuccessCount());
+        assertEquals(1, result.getFailedCount());
+        assertTrue(result.getFailures().get(0).getReason().contains("SOURCE_CODE_REUSED"),
+            "失败明细应携带 SOURCE_CODE_REUSED 语义: " + result.getFailures());
+        verify(excelImportRowService).markFailed(any(), eq("validate_or_create"),
+            org.mockito.ArgumentMatchers.contains("SOURCE_CODE_REUSED"));
+        // 行事务回滚：不产生部分落库
+        verify(transactionManager, atLeastOnce()).rollback(any());
+    }
+
+    @Test
+    void confirmAndImport_refHit_shouldRefreshProvenanceOnExistingRspu() throws IOException {
+        // §9 Phase 4：重导入命中既有 RSPU（身份解析命中）时，resolveOrCreate 以既有
+        // rspuId 复用 Supplier Ref 并刷新 provenance（source_system / import batch）
+        byte[] excelBytes = createExcelWithDescriptionAndRetailPrice();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(visionService.chatText(anyString(), anyString()))
+            .thenReturn("{\"mapping\":{\"型号\":\"externalCode\",\"名称\":\"productName\",\"功能配置\":\"description\",\"含税价\":\"retailPrice\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+
+        ExcelImportBatch savedBatch = new ExcelImportBatch();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            savedBatch.setBatchId(batch.getBatchId());
+            savedBatch.setStoragePath(batch.getStoragePath());
+            savedBatch.setStatus(batch.getStatus());
+            savedBatch.setPreviewRows(batch.getPreviewRows());
+            savedBatch.setColumnMapping(batch.getColumnMapping());
+            savedBatch.setPriceColumns(batch.getPriceColumns());
+            savedBatch.setTotalRows(batch.getTotalRows());
+            return 1;
+        });
+
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(savedBatch);
+        when(storageService.get(anyString()))
+            .thenAnswer(inv -> new ByteArrayInputStream(createExcelWithDescriptionAndRetailPrice()));
+        stubCommonDicts();
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-EXIST");
+        existing.setExternalCode("MK-8001");
+        existing.setCategoryCode("FS");
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
+        RspuVariantResponse variantResponse = new RspuVariantResponse();
+        variantResponse.setVariantId("V-EXIST");
+        when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId(preview.getBatchId());
+        request.setMapping(preview.getSuggestedMapping());
+        request.setCategoryHint("FS");
+        request.setUpdateIfExists(true);
+        request.setDefaultFactoryCode("F001");
+
+        ExcelAiImportResult result = confirmAndImport(request);
+
+        assertEquals(1, result.getSuccessCount(), "导入失败明细: " + result.getFailures());
+        verify(rspuMapper, never()).insert(any(RspuMaster.class));
+        ArgumentCaptor<SupplierProductRefService.ResolveCommand> refCaptor =
+            ArgumentCaptor.forClass(SupplierProductRefService.ResolveCommand.class);
+        verify(supplierProductRefService).resolveOrCreate(refCaptor.capture());
+        assertEquals("RSPU-EXIST", refCaptor.getValue().getRspuId(), "复用既有 RSPU 的 ref 刷新");
+        assertEquals("F001", refCaptor.getValue().getFactoryCode());
+        assertEquals("MK-8001", refCaptor.getValue().getSourceProductCode());
+        assertEquals("excel-ai-import", refCaptor.getValue().getSourceSystem());
+        assertEquals(preview.getBatchId(), refCaptor.getValue().getImportBatchId());
+    }
+
+    @Test
     void confirmAndImport_shouldBackfillDescriptionAndRetailPriceOnlyWhenBlank() throws IOException {
         // 更新模式：description/retailPrice 只补空缺，不覆盖人工已填
         byte[] excelBytes = createExcelWithDescriptionAndRetailPrice();
@@ -5539,7 +6019,7 @@ class ExcelAiImportServiceTest {
         existing.setRspuId("RSPU-EXIST");
         existing.setExternalCode("MK-8001");
         existing.setDescription("人工已填描述");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
         RspuVariantResponse variantResponse = new RspuVariantResponse();
         variantResponse.setVariantId("V-EXIST");
         when(rspuVariantService.createVariant(anyString(), any())).thenReturn(variantResponse);
@@ -5712,6 +6192,50 @@ class ExcelAiImportServiceTest {
         verify(batchMapper).claimForImport("BATCH-DONE");
         verify(excelImportRowService).deleteByBatch("BATCH-DONE");
         assertEquals("done", batch.getStatus(), "导入完成后批次应回到 done");
+    }
+
+    private byte[] createExcelWithUnlabeledModuleAndPageTitle() {
+        try (var out = new java.io.ByteArrayOutputStream();
+             var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet("沙发");
+            sheet.createRow(0).createCell(1).setCellValue("MUJU 家居报价单");
+            sheet.createRow(1).createCell(1).setCellValue("地址：佛山市顺德区");
+            var header = sheet.createRow(2);
+            header.createCell(0).setCellValue("产品图样");
+            header.createCell(1).setCellValue("型号品名");
+            header.createCell(3).setCellValue("规格/模块");
+            header.createCell(4).setCellValue("产品尺寸");
+            header.createCell(5).setCellValue("价格");
+            sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(2, 2, 1, 2));
+            sheet.createRow(3).createCell(5).setCellValue("A级布");
+            var first = sheet.createRow(4);
+            first.createCell(1).setCellValue("MJ-S96欧拉沙发");
+            first.createCell(2).setCellValue("模块组合A");
+            first.createCell(4).setCellValue("389*164*72H");
+            first.createCell(5).setCellValue("8720");
+            var second = sheet.createRow(5);
+            second.createCell(3).setCellValue("贵妃A位");
+            second.createCell(4).setCellValue("136*164*72H");
+            second.createCell(5).setCellValue("3330");
+            sheet.createRow(6).createCell(1).setCellValue("MUJU 家居报价单");
+            sheet.createRow(7).createCell(1).setCellValue("地址：佛山市顺德区");
+            var repeatedHeader = sheet.createRow(8);
+            repeatedHeader.createCell(1).setCellValue("型号品名");
+            repeatedHeader.createCell(3).setCellValue("规格/模块");
+            repeatedHeader.createCell(5).setCellValue("价格");
+            var continued = sheet.createRow(9);
+            continued.createCell(1).setCellValue("MJ-S96欧拉沙发");
+            continued.createCell(3).setCellValue("单扶手B位");
+            continued.createCell(5).setCellValue("2800");
+            var next = sheet.createRow(10);
+            next.createCell(1).setCellValue("MJ-S97菲奥沙发");
+            next.createCell(3).setCellValue("单扶手B位");
+            next.createCell(5).setCellValue("3100");
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private byte[] createExcelWithEnglishMirrorHeader() {

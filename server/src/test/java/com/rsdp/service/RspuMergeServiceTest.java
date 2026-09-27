@@ -161,6 +161,7 @@ class RspuMergeServiceTest {
         r.setRspuId(rspuId);
         r.setVariantId(variantId);
         r.setFactoryCode(factory);
+        r.setSupplierConfigurationKey("BASE");
         r.setRskuCode(code);
         return r;
     }
@@ -291,6 +292,7 @@ class RspuMergeServiceTest {
         }
     }
 
+
     @Test
     void merge_shouldRejectUnresolvedRskuConflict() {
         // 目标已有同工厂同变体报价 → 冲突且未提供裁决
@@ -311,6 +313,47 @@ class RspuMergeServiceTest {
             verify(rskuSupplyMapper, never()).update(isNull(), any(UpdateWrapper.class));
             verify(rskuSupplyMapper, never()).deleteById(anyString());
             verify(productQueryService, never()).deleteProduct(anyString());
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void differentSupplierConfigurations_coexistInPreviewAndMerge(boolean preview) {
+        RskuSupply source = sourceRsku();
+        RskuSupply target = rsku("RSKU-T-1", TGT, "VAR-T-1", "A001", "target-code");
+        source.setSupplierConfigurationKey("CODE:STANDARD");
+        target.setSupplierConfigurationKey("CODE:PREMIUM");
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(source), List.of(target));
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            Map<String, Object> result = preview ? mergeService.preview(request()) : mergeService.merge(request());
+            if (preview) {
+                assertThat((List<?>) result.get("conflicts")).isEmpty();
+            } else {
+                assertThat(result.get("migratedCount")).isEqualTo(1);
+            }
+            verify(rskuSupplyMapper, never()).deleteById(anyString());
+        }
+    }
+
+    @Test
+    void movedVariant_defersOwnershipUntilLiveAndArchivedChildrenAreMigrated() {
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(
+            List.of(rsku("RSKU-MOVE", SRC, "VAR-S-MOVE", "A001", "old")), List.of());
+        when(imageAssetsMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(image("IMG-MOVE", "VAR-S-MOVE")));
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            mergeService.merge(request());
+            var order = org.mockito.Mockito.inOrder(rspuMergeMapper, rspuVariantMapper,
+                rskuSupplyMapper, imageAssetsMapper, productQueryService);
+            order.verify(rspuMergeMapper).deferVariantOwnershipConstraints();
+            order.verify(rspuVariantMapper).updateById(any(RspuVariant.class));
+            order.verify(rskuSupplyMapper).update(isNull(), any(UpdateWrapper.class));
+            order.verify(imageAssetsMapper).updateById(any(ImageAssets.class));
+            order.verify(rspuMergeMapper).repointArchivedVariantRskus(SRC, TGT, "VAR-S-MOVE");
+            order.verify(rspuMergeMapper).repointArchivedVariantImages(SRC, TGT, "VAR-S-MOVE");
+            order.verify(rspuMergeMapper).checkVariantOwnershipConstraints();
+            order.verify(productQueryService).deleteProduct(SRC);
         }
     }
 

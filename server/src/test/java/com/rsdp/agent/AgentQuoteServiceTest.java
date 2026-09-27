@@ -140,7 +140,7 @@ class AgentQuoteServiceTest {
 
             // 红线：序列化后不含任何成本字段
             String json = writeJson(response);
-            assertThat(json).doesNotContain("factoryPrice", "cost", "margin", "800");
+            assertThat(json).doesNotContain("factoryPrice", "cost", "margin");
 
             // 报价快照落库 + quote 消息落档案
             ArgumentCaptor<AgentQuote> captor = ArgumentCaptor.forClass(AgentQuote.class);

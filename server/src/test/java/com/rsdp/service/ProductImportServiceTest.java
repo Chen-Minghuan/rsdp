@@ -50,6 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -112,6 +113,9 @@ class ProductImportServiceTest {
 
     @Mock
     private com.rsdp.service.RspuAssociationHelper associationHelper;
+
+    @Mock
+    private SupplierIdentityResolutionService supplierIdentityResolutionService;
 
     @InjectMocks
     private ProductImportService productImportService;
@@ -215,7 +219,8 @@ class ProductImportServiceTest {
         RspuMaster saved = insertedRspus.get(0);
         assertThat(saved.getCategoryCode()).isEqualTo("FS");
         assertThat(saved.getPositioningLabel()).isEqualTo("MC");
-        assertThat(saved.getExternalCode()).isEqualTo("EXT-001");
+        // §9 Phase 4：external_code 默认不再新写（兼容开关关闭）
+        assertThat(saved.getExternalCode()).isNull();
 
         verify(associationHelper).replaceStyles(anyString(), anyList(), any(), anyBoolean());
         assertThat(insertedStyles).hasSize(1);
@@ -289,7 +294,9 @@ class ProductImportServiceTest {
     }
 
     @Test
-    void importProducts_shouldUpdateByExternalCode() {
+    void importProducts_shouldUpdateWhenIdentityResolutionHits() {
+        // §9 Phase 3：externalCode 列的身份解析统一经 SupplierIdentityResolutionService；
+        // 解析命中时按命中的 RSPU 复用更新（本测试验证接线：resolve → selectById → update）
         ProductImportRow row = createValidRow();
         row.setRspuId(null);
         MockMultipartFile file = createExcelFile(List.of(row));
@@ -300,7 +307,10 @@ class ProductImportServiceTest {
         existing.setCategoryCode("FS");
         existing.setCategoryPath("[\"家具\"]");
         existing.setPositioningLabel("MC");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        when(supplierIdentityResolutionService.resolve(any(), any(), org.mockito.ArgumentMatchers.eq("EXT-001")))
+            .thenReturn(java.util.Optional.of(new SupplierIdentityResolutionService.ResolvedIdentity(
+                "RSPU-OLD001", SupplierIdentityResolutionService.ResolutionSource.LEGACY_EXTERNAL_CODE, null)));
+        when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
 
         ProductImportResult result = productImportService.importProducts(file, true);
 
@@ -310,11 +320,53 @@ class ProductImportServiceTest {
     }
 
     @Test
+    void importProducts_shouldNotResolveExternalCodeWithoutFactoryContext() {
+        // §9 Phase 3：传统 Excel 导入无工厂上下文，禁止按 external_code 全局裸查询——
+        // 解析入口以 factoryCode=null 调用（真实实现直接未命中），行按新建处理
+        ProductImportRow row = createValidRow();
+        row.setRspuId(null);
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        ProductImportResult result = productImportService.importProducts(file, false);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(insertedRspus).hasSize(1);
+        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+        // 身份解析入口以无工厂上下文调用（真实实现不会发起任何 external_code 查询）
+        verify(supplierIdentityResolutionService)
+            .resolve(org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq("EXT-001"));
+    }
+
+    @Test
+    void importProducts_updateMode_shouldNotOverwriteExternalCode() {
+        // §9 Phase 5（Contract）：legacy 兼容开关已移除，更新模式不再覆盖既有 external_code 历史值
+        ProductImportRow row = createValidRow();
+        row.setExternalCode("EXT-NEW01");
+        MockMultipartFile file = createExcelFile(List.of(row));
+
+        RspuMaster existing = new RspuMaster();
+        existing.setRspuId("RSPU-OLD001");
+        existing.setExternalCode("EXT-001");
+        existing.setCategoryCode("FS");
+        existing.setCategoryPath("[\"家具\"]");
+        existing.setPositioningLabel("MC");
+        when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
+
+        ProductImportResult result = productImportService.importProducts(file, true);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
+        verify(rspuMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getExternalCode()).isEqualTo("EXT-001");
+    }
+
+    @Test
     void importProducts_updateModeAuditSnapshot_shouldContainProductNameDescriptionRetailPriceFabricTags() {
         // P2-6：审计旧快照必须包含 buildRspuFromRow 更新模式会改的
         // productName / description / retailPrice / fabricTags 四个字段
         ProductImportRow row = createValidRow();
-        row.setRspuId(null);
+        row.setRspuId("RSPU-OLD001");
         row.setProductName("新品名");
         row.setDescription("新描述");
         row.setRetailPrice(new java.math.BigDecimal("2999.00"));
@@ -330,7 +382,7 @@ class ProductImportServiceTest {
         existing.setDescription("旧描述");
         existing.setRetailPrice(new java.math.BigDecimal("1999.00"));
         existing.setFabricTags("[\"LINEN\"]");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
 
         ProductImportResult result = productImportService.importProducts(file, true);
 
@@ -385,7 +437,8 @@ class ProductImportServiceTest {
     @Test
     void importProducts_shouldDetectDuplicateWhenSameProductReferencedByRspuIdAndExternalCode() {
         // 同一产品在 Excel 中分别用 rspuId（第 1 行）和 externalCode（第 2 行）引用；
-        // 更新模式下第 1 行成功落库并占查重位，第 2 行识别为重复行
+        // 更新模式下第 1 行成功落库并占查重位，第 2 行识别为重复行。
+        // §9 Phase 3：「编码 → RSPU」预加载映射改由 SupplierIdentityResolutionService 批量解析提供
         ProductImportRow row1 = createValidRow();
         row1.setExternalCode(null);
         ProductImportRow row2 = createValidRow();
@@ -398,7 +451,9 @@ class ProductImportServiceTest {
         existing.setCategoryCode("FS");
         existing.setCategoryPath("[\"家具\"]");
         existing.setPositioningLabel("MC");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        when(supplierIdentityResolutionService.resolveBatch(any(), any(), anyCollection()))
+            .thenReturn(java.util.Map.of("EXT-001", new SupplierIdentityResolutionService.ResolvedIdentity(
+                "RSPU-OLD001", SupplierIdentityResolutionService.ResolutionSource.LEGACY_EXTERNAL_CODE, null)));
         when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
 
         ProductImportResult result = productImportService.importProducts(file, true);
@@ -530,7 +585,7 @@ class ProductImportServiceTest {
         startImageServer();
 
         ProductImportRow row = createValidRow();
-        row.setRspuId(null);
+        row.setRspuId("RSPU-OLD001");
         row.setPrimaryImageUrl("http://127.0.0.1:" + imageServer.getAddress().getPort() + "/chair.jpg");
         MockMultipartFile file = createExcelFile(List.of(row));
 
@@ -540,7 +595,7 @@ class ProductImportServiceTest {
         existing.setCategoryCode("FS");
         existing.setCategoryPath("[\"家具\"]");
         existing.setPositioningLabel("MC");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
         // 库中已有同内容主图（hash 与本次下载字节一致）
         ImageAssets existingImage = new ImageAssets();
         existingImage.setImageId("IMG-OLD02");
@@ -687,6 +742,7 @@ class ProductImportServiceTest {
     void importProducts_updateModeWithBlankCells_shouldPreserveExistingFields() {
         // Given：已有产品各字段齐全，更新行仅显式提供品类码与外部编码，其余留空
         ProductImportRow row = new ProductImportRow();
+        row.setRspuId("RSPU-OLD001");
         row.setExternalCode("EXT-001");
         row.setCategoryCode("FS");
         MockMultipartFile file = createExcelFile(List.of(row));
@@ -707,7 +763,7 @@ class ProductImportServiceTest {
         existing.setKeySpecs("{\"frame\":\"oak\"}");
         existing.setProductName("旧品名");
         existing.setDescription("旧描述\n第二行");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(existing);
 
         // When
         ProductImportResult result = productImportService.importProducts(file, true);
@@ -831,7 +887,11 @@ class ProductImportServiceTest {
         RspuMaster byExternalCode = new RspuMaster();
         byExternalCode.setRspuId("RSPU-OLD001");
         byExternalCode.setExternalCode("EXT-001");
-        when(rspuMapper.selectList(any())).thenReturn(List.of(byExternalCode));
+        // §9 Phase 3：externalCode 列身份解析经 SupplierIdentityResolutionService
+        when(supplierIdentityResolutionService.resolve(any(), any(), org.mockito.ArgumentMatchers.eq("EXT-001")))
+            .thenReturn(java.util.Optional.of(new SupplierIdentityResolutionService.ResolvedIdentity(
+                "RSPU-OLD001", SupplierIdentityResolutionService.ResolutionSource.LEGACY_EXTERNAL_CODE, null)));
+        when(rspuMapper.selectById("RSPU-OLD001")).thenReturn(byExternalCode);
 
         // When
         ProductImportResult result = productImportService.importProducts(file, true);

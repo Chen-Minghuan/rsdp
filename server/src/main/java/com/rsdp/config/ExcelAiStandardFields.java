@@ -56,6 +56,10 @@ public final class ExcelAiStandardFields {
 
     /**
      * 可映射标准字段清单（含「不映射」空值项，顺序即前端下拉顺序）。
+     *
+     * <p>口径说明（设计文档 v3.3 §8）：{@code externalCode} 是供应商源商品编码
+     * （供应商命名空间内的型号），导入查重经 SupplierIdentityResolutionService
+     * 解析身份；平台主展示编码为 rspu_code，externalCode 不别名 productCode。</p>
      */
     public static final List<StandardFieldOption> MAPPABLE_FIELDS = List.of(
         new StandardFieldOption("（不映射）", ""),

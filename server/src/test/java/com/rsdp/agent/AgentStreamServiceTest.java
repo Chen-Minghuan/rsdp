@@ -75,13 +75,19 @@ class AgentStreamServiceTest {
     private final MarketingAgentProperties properties = new MarketingAgentProperties();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+    @Mock
+    private org.springframework.transaction.TransactionStatus transactionStatus;
+
     private AgentStreamService streamService;
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
         streamService = new AgentStreamService(sessionService, sessionMapper, messageStore,
             runRecorder, eventBus, checkpointStore, marketingAgentGraph, properties,
-            taskExecutor, objectMapper);
+            taskExecutor, objectMapper, transactionManager);
     }
 
     private AgentSession activeSession() {
@@ -135,6 +141,8 @@ class AgentStreamServiceTest {
                 .isInstanceOf(AgentSessionBusyException.class)
                 .hasMessageContaining("SESSION_BUSY");
             verify(messageStore, never()).persistUserMessage(any(), any(), any());
+            verify(transactionManager).rollback(transactionStatus);
+            verify(transactionManager, never()).commit(any());
         }
     }
 
@@ -178,6 +186,11 @@ class AgentStreamServiceTest {
             SseEmitter emitter = streamService.startStream("SES-1", request());
 
             assertThat(emitter).isNotNull();
+            var order = org.mockito.Mockito.inOrder(runRecorder, sessionMapper, transactionManager, taskExecutor);
+            order.verify(runRecorder).start(any());
+            order.verify(sessionMapper).update(isNull(), any(UpdateWrapper.class));
+            order.verify(transactionManager).commit(transactionStatus);
+            order.verify(taskExecutor).execute(any(Runnable.class));
             // 并发认领：条件 UPDATE 抢占 active_run_id
             verify(sessionMapper).update(isNull(), any(UpdateWrapper.class));
             // run 记录创建 + SSE 通道注册 + 异步派发
@@ -236,9 +249,30 @@ class AgentStreamServiceTest {
             SseEmitter emitter = streamService.startStream("SES-1", request());
 
             assertThat(emitter).isNotNull();
+            verify(runRecorder).markFailed(any(), eq("DUPLICATE_MESSAGE"));
             // 认领一次 + 释放一次
             verify(sessionMapper, times(2)).update(isNull(), any(UpdateWrapper.class));
             verify(eventBus).register(eq("RUN-8"), any(SseEmitter.class), eq(0));
         }
     }
+    @Test
+    void dispatchFailureShouldReleaseClaimAndCloseRun() {
+        when(sessionService.requireAccessibleSession("SES-1")).thenReturn(activeSession());
+        when(sessionMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(1);
+        when(messageStore.listBySession("SES-1")).thenReturn(List.of());
+        org.mockito.Mockito.doThrow(new java.util.concurrent.RejectedExecutionException("full"))
+            .when(taskExecutor).execute(any(Runnable.class));
+
+        assertThatThrownBy(() -> streamService.startStream("SES-1", request()))
+            .isInstanceOf(java.util.concurrent.RejectedExecutionException.class);
+        ArgumentCaptor<com.rsdp.agent.entity.AgentRun> run = ArgumentCaptor.forClass(com.rsdp.agent.entity.AgentRun.class);
+        verify(runRecorder).start(run.capture());
+        String runId = run.getValue().getRunId();
+        verify(runRecorder).markFailed(runId, "RUN_FAILED");
+        verify(sessionMapper, times(2)).update(isNull(), any(UpdateWrapper.class));
+        verify(eventBus).complete(runId);
+        assertThatThrownBy(() -> com.rsdp.agent.service.AgentRunContext.require(runId))
+            .isInstanceOf(IllegalStateException.class);
+    }
+
 }

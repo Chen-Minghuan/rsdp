@@ -39,6 +39,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -49,6 +50,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -139,6 +141,12 @@ class ExcelAiImportCategoryModeTest {
     private com.rsdp.mapper.FactoryMasterMapper factoryMasterMapper;
     @Mock
     private com.rsdp.security.datascope.DataScopeContext dataScopeContext;
+    @Mock
+    private SupplierIdentityResolutionService supplierIdentityResolutionService;
+    @Mock
+    private SupplierProductRefService supplierProductRefService;
+    @Mock
+    private ExcelImportAttemptService attemptService;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -158,6 +166,83 @@ class ExcelAiImportCategoryModeTest {
             .thenAnswer(inv -> rspuVariantService.createVariant(inv.getArgument(0), inv.getArgument(1)));
         lenient().when(factoryMasterMapper.selectById(anyString()))
             .thenReturn(new com.rsdp.entity.FactoryMaster());
+        // P0-F：Attempt 执行内核桩——confirm 创建 pending Attempt（携带物化 Policy 正文+Hash），
+        // executeImport 校验/抢占/心跳/组执行全部放行（Attempt 语义由 ExcelImportAttemptServiceTest 覆盖）
+        java.util.Map<String, com.rsdp.entity.ExcelImportAttempt> attempts = new HashMap<>();
+        lenient().when(attemptService.createAttemptWithItems(anyString(), anyLong(), any(), any(), any(), any()))
+            .thenAnswer(inv -> {
+                com.rsdp.supplychain.policy.ImportPolicyMaterializer.MaterializedPolicy mp = inv.getArgument(2);
+                com.rsdp.entity.ExcelImportAttempt attempt = new com.rsdp.entity.ExcelImportAttempt();
+                attempt.setAttemptId("IATT-" + attempts.size());
+                attempt.setBatchId(inv.getArgument(0));
+                attempt.setPreviewRevision(inv.getArgument(1));
+                attempt.setStatus(com.rsdp.entity.ExcelImportAttempt.STATUS_PENDING);
+                attempt.setPolicyPayload(mp.policyPayload());
+                attempt.setPolicyHash(mp.policyHash());
+                attempt.setPolicyHashVersion(mp.policyHashVersion());
+                attempt.setPolicySchemaVersion(com.rsdp.supplychain.policy.ImportPolicy.SCHEMA_VERSION);
+                attempts.put(attempt.getAttemptId(), attempt);
+                return attempt;
+            });
+        lenient().when(attemptService.getAttempt(anyString()))
+            .thenAnswer(inv -> attempts.get(inv.getArgument(0)));
+        lenient().when(attemptService.claimForExecution(anyString(), anyString()))
+            .thenAnswer(inv -> {
+                com.rsdp.entity.ExcelImportAttempt attempt = attempts.get(inv.getArgument(0));
+                if (attempt == null) {
+                    return java.util.Optional.empty();
+                }
+                attempt.setStatus(com.rsdp.entity.ExcelImportAttempt.STATUS_RUNNING);
+                return java.util.Optional.of(attempt);
+            });
+        lenient().when(attemptService.heartbeat(anyString(), anyString())).thenReturn(true);
+        lenient().when(attemptService.finalizeAttemptIfComplete(anyString(), anyString()))
+            .thenAnswer(inv -> {
+                com.rsdp.entity.ExcelImportAttempt attempt = attempts.get(inv.getArgument(0));
+                if (attempt == null) {
+                    return java.util.Optional.empty();
+                }
+                // 执行完成：聚合口径由 AttemptItem 终态汇总（测试桩以 {} 回退行循环本地计数）
+                attempt.setStatus(com.rsdp.entity.ExcelImportAttempt.STATUS_DONE);
+                attempt.setOutcome(com.rsdp.entity.ExcelImportAttempt.OUTCOME_SUCCESS);
+                if (attempt.getResultSummary() == null) {
+                    attempt.setResultSummary("{}");
+                }
+                return java.util.Optional.of(attempt);
+            });
+        lenient().when(attemptService.beginGroup(anyString(), anyString(), anyString())).thenReturn(true);
+        lenient().when(attemptService.getItem(anyString(), anyString()))
+            .thenAnswer(inv -> {
+                com.rsdp.entity.ExcelImportAttemptItem item = new com.rsdp.entity.ExcelImportAttemptItem();
+                item.setAttemptId(inv.getArgument(0));
+                item.setGroupId(inv.getArgument(1));
+                item.setStatus(com.rsdp.entity.ExcelImportAttemptItem.STATUS_RUNNING);
+                item.setVariantSuccessCount(0);
+                item.setVariantFailedCount(0);
+                item.setQuoteSuccessCount(0);
+                item.setQuoteFailedCount(0);
+                item.setResultSummary("{}");
+                return item;
+            });
+    }
+
+    /**
+     * §9 Phase 3 测试辅助：身份解析切换到 {@link SupplierIdentityResolutionService} 后，
+     * 「按源商品编码命中既有 RSPU」的桩——同时覆盖批次预加载
+     * （resolveBatch + selectBatchIds）与行内 miss 单查（resolve + selectById）两条通路。
+     */
+    private void stubIdentityResolutionHit(String code, RspuMaster existing) {
+        SupplierIdentityResolutionService.ResolvedIdentity identity =
+            new SupplierIdentityResolutionService.ResolvedIdentity(existing.getRspuId(),
+                SupplierIdentityResolutionService.ResolutionSource.LEGACY_EXTERNAL_CODE, null);
+        lenient().when(supplierIdentityResolutionService.resolveBatch(any(), any(),
+                org.mockito.ArgumentMatchers.<java.util.Collection<String>>any()))
+            .thenReturn(java.util.Map.of(code, identity));
+        lenient().when(rspuMapper.selectBatchIds(org.mockito.ArgumentMatchers.<java.util.Collection<String>>any()))
+            .thenReturn(List.of(existing));
+        lenient().when(supplierIdentityResolutionService.resolve(any(), any(), eq(code)))
+            .thenReturn(java.util.Optional.of(identity));
+        lenient().when(rspuMapper.selectById(existing.getRspuId())).thenReturn(existing);
     }
 
     /**
@@ -872,7 +957,7 @@ class ExcelAiImportCategoryModeTest {
         existing.setExternalCode("ABC-001");
         existing.setProductName("原有名称");
         existing.setCategoryCode(CZ);
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         ExcelAiMappingRequest request = new ExcelAiMappingRequest();
         request.setBatchId("B-U1");
@@ -907,7 +992,7 @@ class ExcelAiImportCategoryModeTest {
         existing.setRspuId("RSPU-EXIST");
         existing.setExternalCode("ABC-001");
         existing.setCategoryCode(CZ);
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         ExcelAiMappingRequest request = new ExcelAiMappingRequest();
         request.setBatchId("B-U2");
@@ -936,7 +1021,7 @@ class ExcelAiImportCategoryModeTest {
         existing.setRspuId("RSPU-EXIST");
         existing.setExternalCode("ABC-001");
         existing.setCategoryCode(null); // 已有品类为空 → 补填
-        when(rspuMapper.selectList(any())).thenReturn(List.of(existing));
+        stubIdentityResolutionHit(existing.getExternalCode(), existing);
 
         ExcelAiMappingRequest request = new ExcelAiMappingRequest();
         request.setBatchId("B-U3");

@@ -24,6 +24,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.util.ManualOverrideFields;
 import com.rsdp.util.VariantKeys;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -118,6 +119,19 @@ public class RspuMergeService {
         RspuMaster targetOldSnapshot = snapshotMergeableFields(target);
         List<String> changedFields = applyFieldMerge(source, target, takeSourceFields);
 
+        // ---- 2.1 v3.3 §34.1（P0-D）：Merge 必须合并 manual_override_fields；
+        //     同一字段两侧均活跃 → 活跃冲突进入人工治理（阻断合并，不得静默丢弃） ----
+        var marksMerge = ManualOverrideFields.merge(
+            target.getManualOverrideFields(), source.getManualOverrideFields());
+        if (marksMerge.hasConflicts()) {
+            throw new BusinessException("副本与目标存在同一字段的活跃人工修正标记冲突，需先人工治理: "
+                + marksMerge.conflicts());
+        }
+        if (!marksMerge.mergedJson().equals(
+            ManualOverrideFields.canonical(target.getManualOverrideFields()))) {
+            target.setManualOverrideFields(marksMerge.mergedJson());
+        }
+
         // ---- 3. 风格/场景并集重写（副本的关联随副本软删物理删除不可恢复，必须先并集） ----
         List<String> unionSceneCodes = mergeStyleAssociations(sourceId, target, operator);
         target.setSceneTags(toJsonQuietly(unionSceneCodes));
@@ -131,7 +145,13 @@ public class RspuMergeService {
         // ---- 4. 变体映射：uk_variant_attrs 同 key → 映射到目标变体；否则改挂到目标 ----
         Map<String, String> variantIdMap = new HashMap<>();
         List<RspuVariant> variantMoves = planVariantMapping(sourceId, targetId, variantIdMap);
+        // 只延迟两条归属组合外键；变体与所有子行迁完后立即恢复校验。
+        rspuMergeMapper.deferVariantOwnershipConstraints();
         int movedVariantCount = applyVariantMoves(variantMoves, targetId);
+
+        // ---- 4.1 §34.1：映射到目标既有变体的副本变体随副本软删，其 manual_override_fields
+        //     并入目标变体；同字段两侧活跃 → 人工治理（阻断合并） ----
+        mergeVariantOverrideMarks(variantIdMap);
 
         // ---- 5. RSKU 迁移（先全量校验冲突裁决齐不齐，再执行；冲突未裁决整体拒绝） ----
         Map<String, String> resolutions = request.getRskuConflictResolutions() == null
@@ -140,7 +160,7 @@ public class RspuMergeService {
         List<RskuConflict> conflicts = findUnresolvedConflicts(plans);
         if (!conflicts.isEmpty()) {
             throw new BusinessException("存在 " + conflicts.size()
-                + " 条 RSKU 报价冲突（同变体同工厂），请逐条裁决后重试: " + formatConflicts(conflicts));
+                + " 条 RSKU 报价冲突（同变体同工厂同供应配置），请逐条裁决后重试: " + formatConflicts(conflicts));
         }
         Map<String, Object> rskuStats = executeRskuPlans(plans, sourceId, targetId, operator);
 
@@ -149,6 +169,12 @@ public class RspuMergeService {
 
         // ---- 7. 图片改挂（主键 imageId 不变 → pgvector 向量行无需动，检索经 JOIN 自动跟随） ----
         int movedImageCount = migrateImages(sourceId, targetId, variantIdMap);
+        // 软删行仍受外键约束：跟随整体改挂的变体保留归属，避免提交时遗留旧 rspu_id。
+        for (RspuVariant variant : variantMoves) {
+            rspuMergeMapper.repointArchivedVariantRskus(sourceId, targetId, variant.getVariantId());
+            rspuMergeMapper.repointArchivedVariantImages(sourceId, targetId, variant.getVariantId());
+        }
+        rspuMergeMapper.checkVariantOwnershipConstraints();
 
         // ---- 8. 引用表改指（先改指再删副本，deleteProduct 级联才不会误伤已迁数据） ----
         repointReferences(sourceId, targetId);
@@ -331,6 +357,39 @@ public class RspuMergeService {
         return moves;
     }
 
+    /**
+     * 合并「映射到目标既有变体」的副本变体人工修正标记（v3.3 §34.1，P0-D）。
+     *
+     * <p>改挂变体（variant_id 不变）标记随行保留，无需处理；只有 source≠target 的
+     * 映射对（副本变体将随副本软删）需要把标记并入目标变体。同字段两侧均活跃 →
+     * 人工治理（抛错阻断合并，事务整体回滚，不得静默丢弃）。</p>
+     */
+    private void mergeVariantOverrideMarks(Map<String, String> variantIdMap) {
+        for (Map.Entry<String, String> e : variantIdMap.entrySet()) {
+            if (e.getKey().equals(e.getValue())) {
+                continue;
+            }
+            RspuVariant sourceVariant = rspuVariantMapper.selectById(e.getKey());
+            RspuVariant targetVariant = rspuVariantMapper.selectById(e.getValue());
+            if (sourceVariant == null || targetVariant == null) {
+                continue;
+            }
+            var marksMerge = ManualOverrideFields.merge(
+                targetVariant.getManualOverrideFields(), sourceVariant.getManualOverrideFields());
+            if (marksMerge.hasConflicts()) {
+                throw new BusinessException("变体合并存在同字段活跃人工修正标记冲突，需先人工治理: "
+                    + marksMerge.conflicts() + "，sourceVariantId=" + e.getKey());
+            }
+            if (!marksMerge.mergedJson().equals(
+                ManualOverrideFields.canonical(targetVariant.getManualOverrideFields()))) {
+                rspuVariantMapper.update(null, new UpdateWrapper<RspuVariant>()
+                    .eq("variant_id", e.getValue())
+                    .set("manual_override_fields", marksMerge.mergedJson())
+                    .set("updated_at", LocalDateTime.now()));
+            }
+        }
+    }
+
     /** 应用变体改挂（写），返回改挂数量。 */
     private int applyVariantMoves(List<RspuVariant> moves, String targetId) {
         for (RspuVariant v : moves) {
@@ -343,8 +402,8 @@ public class RspuMergeService {
 
     /**
      * RSKU 迁移规划（只读）：计算每条副本 RSKU 的新变体与目标侧冲突，
-     * 冲突判定 = 目标已有同 (variant_id, factory_code) 未删行（含 variant_id 为 NULL 的业务判重，
-     * idx_rsku_unique 的 PG NULL 语义不覆盖该情形）。裁决值合法性在此校验。
+     * 冲突判定 = 目标已有同 (variant_id, factory_code, supplier_configuration_key) 未删行。
+     * 裁决值合法性在此校验；不同供应配置可并存。
      */
     private List<RskuPlan> planRskuMigration(String sourceId, String targetId, Map<String, String> variantIdMap,
                                              Map<String, String> resolutions) {
@@ -352,15 +411,15 @@ public class RspuMergeService {
             new QueryWrapper<RskuSupply>().eq("rspu_id", sourceId));
         List<RskuSupply> targetRskus = rskuSupplyMapper.selectList(
             new QueryWrapper<RskuSupply>().eq("rspu_id", targetId));
-        Map<String, RskuSupply> targetByVariantFactory = new HashMap<>();
+        Map<RskuIdentity, RskuSupply> targetByIdentity = new HashMap<>();
         for (RskuSupply r : targetRskus) {
-            targetByVariantFactory.put(rskuConflictKey(r.getVariantId(), r.getFactoryCode()), r);
+            targetByIdentity.put(new RskuIdentity(r.getVariantId(), r.getFactoryCode(), r.getSupplierConfigurationKey()), r);
         }
         List<RskuPlan> plans = new ArrayList<>();
         for (RskuSupply r : sourceRskus) {
             String newVariantId = r.getVariantId() == null ? null
                 : variantIdMap.getOrDefault(r.getVariantId(), r.getVariantId());
-            RskuSupply conflict = targetByVariantFactory.get(rskuConflictKey(newVariantId, r.getFactoryCode()));
+            RskuSupply conflict = targetByIdentity.get(new RskuIdentity(newVariantId, r.getFactoryCode(), r.getSupplierConfigurationKey()));
             String resolution = conflict == null ? null : resolutions.get(r.getRskuId());
             if (resolution != null && !"keepSource".equals(resolution) && !"keepTarget".equals(resolution)) {
                 throw new BusinessException("无效的 RSKU 冲突裁决: " + resolution + "，仅支持 keepSource/keepTarget");
@@ -401,7 +460,22 @@ public class RspuMergeService {
         for (RskuPlan plan : plans) {
             RskuSupply r = plan.rsku();
             if (plan.conflict() != null && "keepTarget".equals(plan.resolution())) {
-                // 留目标报价：副本报价软删（价格历史随之封存）
+                // 留目标报价：副本报价软删（价格历史随之封存）；
+                // §34.1：被弃副本行的 manual_override_fields 并入存续目标行，
+                // 同字段两侧活跃 → 人工治理（阻断合并，事务回滚）
+                var marksMerge = ManualOverrideFields.merge(
+                    plan.conflict().getManualOverrideFields(), r.getManualOverrideFields());
+                if (marksMerge.hasConflicts()) {
+                    throw new BusinessException("RSKU 合并存在同字段活跃人工修正标记冲突（keepTarget），需先人工治理: "
+                        + marksMerge.conflicts() + "，rskuId=" + r.getRskuId());
+                }
+                if (!marksMerge.mergedJson().equals(
+                    ManualOverrideFields.canonical(plan.conflict().getManualOverrideFields()))) {
+                    rskuSupplyMapper.update(null, new UpdateWrapper<RskuSupply>()
+                        .eq("rsku_id", plan.conflict().getRskuId())
+                        .set("manual_override_fields", marksMerge.mergedJson())
+                        .set("updated_at", LocalDateTime.now()));
+                }
                 rskuSupplyMapper.deleteById(r.getRskuId());
                 keepTargetDeleted.add(r.getRskuId());
                 continue;
@@ -539,9 +613,8 @@ public class RspuMergeService {
         return VariantKeys.attrKey(v);
     }
 
-    private String rskuConflictKey(String variantId, String factoryCode) {
-        return (variantId == null ? "" : variantId) + "|" + factoryCode;
-    }
+    /** 与供应记录唯一身份一致，避免字符串拼接碰撞及不同供应配置被误判冲突。 */
+    private record RskuIdentity(String variantId, String factoryCode, String supplierConfigurationKey) { }
 
     /** 图片改挂目标（variant_id 随变体映射修正），返回改挂数量。 */
     private int migrateImages(String sourceId, String targetId, Map<String, String> variantIdMap) {
@@ -572,8 +645,6 @@ public class RspuMergeService {
         rspuMergeMapper.collapseDuplicatePrimaryMappings(targetId);
         // 识别历史/匹配反馈/风格匹配/方案候选归拢
         rspuMergeMapper.repointAiRecognitions(sourceId, targetId);
-        rspuMergeMapper.repointMatchingFeedback(sourceId, targetId);
-        rspuMergeMapper.repointMatchingFeedbackRecommended(sourceId, targetId);
         rspuMergeMapper.repointProductStyleMatch(sourceId, targetId);
         rspuMergeMapper.repointSchemeCandidates(sourceId, targetId);
         // 搭配关系双侧改指（实体走 @TableLogic，仅未删行）+ 自环/重复清理

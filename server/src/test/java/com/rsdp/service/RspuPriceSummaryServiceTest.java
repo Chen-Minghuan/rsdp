@@ -66,10 +66,9 @@ class RspuPriceSummaryServiceTest {
     }
 
     @Test
-    void recalculateQueryFiltersOnlyPricedActiveRskus() {
-        // 口径（f39976e 修正）：active_rsku_count 与 min/max 只统计
-        // 「factory_price 非空」的 RSKU 行——rsku_supply 无 status 列，
-        // 不得再按 status 过滤（否则 SQL 报错），NULL 价行在 DB 查询侧即被排除
+    void recalculateQueryFiltersOnlyAvailableQuotes() {
+        // 口径（2026-09-24 评审收口）：只统计「可用出厂报价」——active + CNY +
+        // 有效期内 + 价格非空；暂停/过期/非人民币报价在 DB 查询侧即被排除
         when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
 
         service.recalculate("RSPU-1");
@@ -78,8 +77,38 @@ class RspuPriceSummaryServiceTest {
         verify(rskuSupplyMapper).selectList(captor.capture());
         String sqlSegment = captor.getValue().getSqlSegment();
         assertThat(sqlSegment).contains("rspu_id");
-        assertThat(sqlSegment).doesNotContain("status");
         assertThat(sqlSegment).contains("factory_price IS NOT NULL");
+        assertThat(sqlSegment).contains("status");
+        assertThat(sqlSegment).contains("currency_code");
+        assertThat(sqlSegment).contains("effective_from");
+        assertThat(sqlSegment).contains("effective_to");
+    }
+
+    @Test
+    void refreshValidityCrossoversRecalculatesBoundaryRspus() {
+        // 有效期跨日：今天生效 / 昨天到期的报价所涉 RSPU 重算投影
+        when(rskuSupplyMapper.selectRspuIdsWithValidityBoundary(any(), any()))
+            .thenReturn(List.of("RSPU-1", "RSPU-2"));
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of());
+
+        service.refreshValidityCrossovers();
+
+        ArgumentCaptor<QueryWrapper> captor = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(rskuSupplyMapper, org.mockito.Mockito.times(2)).selectList(captor.capture());
+        // 参数化 SQL：getSqlSegment 触发参数生成后，从参数 Map 断言两次重算的目标 RSPU
+        captor.getAllValues().forEach(QueryWrapper::getSqlSegment);
+        assertThat(captor.getAllValues().get(0).getParamNameValuePairs()).containsValue("RSPU-1");
+        assertThat(captor.getAllValues().get(1).getParamNameValuePairs()).containsValue("RSPU-2");
+    }
+
+    @Test
+    void refreshValidityCrossoversNoBoundaryDoesNothing() {
+        when(rskuSupplyMapper.selectRspuIdsWithValidityBoundary(any(), any()))
+            .thenReturn(List.of());
+
+        service.refreshValidityCrossovers();
+
+        verify(rspuPriceSummaryMapper, org.mockito.Mockito.never()).upsert(any());
     }
 
     @Test

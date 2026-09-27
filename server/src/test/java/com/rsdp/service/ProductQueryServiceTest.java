@@ -159,6 +159,10 @@ class ProductQueryServiceTest {
     @InjectMocks
     private ProductQueryService productQueryService;
 
+    @Spy
+    private com.rsdp.supplychain.security.CostSummaryAccess costSummaryAccess =
+        new com.rsdp.supplychain.security.CostSummaryAccess();
+
     private List<com.rsdp.entity.CategoryDict> factoryLevelDicts() {
         com.rsdp.entity.CategoryDict s = new com.rsdp.entity.CategoryDict();
         s.setDictType("factory_level");
@@ -783,11 +787,9 @@ class ProductQueryServiceTest {
         verify(productPurgeMapper).nullifyImportRowRspuRefs("RSPU-DEL01");
         verify(productPurgeMapper).nullifyImportRowVariantRefs("RSPU-DEL01");
         verify(productPurgeMapper).deleteAiRecognitions("RSPU-DEL01");
-        verify(productPurgeMapper).deleteMatchingFeedback("RSPU-DEL01");
         verify(productPurgeMapper).deleteCollectionItems("RSPU-DEL01");
         verify(productPurgeMapper).deleteSchemeCandidates("RSPU-DEL01");
         verify(productPurgeMapper).deleteDuplicateSuspects("RSPU-DEL01");
-        verify(productPurgeMapper).deleteFactoryVariantCapacity("RSPU-DEL01");
         verify(productPurgeMapper).deletePriceHistory("RSPU-DEL01");
         verify(productPurgeMapper).deleteVariantCodeCounter("RSPU-DEL01");
         verify(imageAssetsMapper).physicalDeleteByRspuId("RSPU-DEL01");

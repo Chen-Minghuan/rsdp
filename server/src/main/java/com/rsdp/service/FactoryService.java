@@ -354,10 +354,18 @@ public class FactoryService {
             return;
         }
 
+        // 部分唯一索引即时检查：先清除旧主项，再提升新主项，不依赖查询顺序。
         for (FactoryLevelCapability capability : capabilities) {
-            boolean shouldBePrimary = capability.getLevelCode().equals(newPrimaryLevel);
-            if (Boolean.TRUE.equals(capability.getIsPrimary()) != shouldBePrimary) {
-                capability.setIsPrimary(shouldBePrimary);
+            if (Boolean.TRUE.equals(capability.getIsPrimary())
+                && !capability.getLevelCode().equals(newPrimaryLevel)) {
+                capability.setIsPrimary(false);
+                capabilityMapper.updateById(capability);
+            }
+        }
+        for (FactoryLevelCapability capability : capabilities) {
+            if (capability.getLevelCode().equals(newPrimaryLevel)
+                && !Boolean.TRUE.equals(capability.getIsPrimary())) {
+                capability.setIsPrimary(true);
                 capabilityMapper.updateById(capability);
             }
         }

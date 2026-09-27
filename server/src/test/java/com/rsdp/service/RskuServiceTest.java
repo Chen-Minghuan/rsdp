@@ -426,8 +426,11 @@ class RskuServiceTest {
         rsku.setRspuId("RSPU-TEST01");
         rsku.setFactoryCode("F001");
         rsku.setFactoryPrice(new BigDecimal("1200"));
+        rsku.setQuoteVersion(1);
 
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-TEST01")).thenReturn(rsku);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-TEST01"), eq(1), any())).thenReturn(1);
 
         rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", new BigDecimal("1500"), "原材料涨价");
 
@@ -534,8 +537,12 @@ class RskuServiceTest {
         existing.setVariantId("RSPU-TEST01-V001");
         existing.setFactoryCode("F001");
         existing.setFactoryPrice(new BigDecimal("2500"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(3);
 
-        when(rskuSupplyMapper.selectOne(any())).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-EXIST01"), eq(3), any())).thenReturn(1);
 
         String rskuId = rskuService.upsertRsku(request);
 
@@ -571,8 +578,12 @@ class RskuServiceTest {
         existing.setVariantId("RSPU-TEST01-V001");
         existing.setFactoryCode("F001");
         existing.setFactoryPrice(new BigDecimal("2500"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(1);
 
-        when(rskuSupplyMapper.selectOne(any())).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-EXIST01"), eq(1), any())).thenReturn(1);
 
         rskuService.upsertRsku(request);
 
@@ -598,7 +609,7 @@ class RskuServiceTest {
         variant.setRspuId("RSPU-TEST01");
         variant.setMaterialCode("PE");
 
-        when(rskuSupplyMapper.selectOne(any())).thenReturn(null);
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(null);
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
         when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
         when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
@@ -609,5 +620,418 @@ class RskuServiceTest {
 
         verify(rskuSupplyMapper).insert(any(RskuSupply.class));
         verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+    }
+
+    // ---------------- v3.3 P0-D：Supplier Configuration Identity / 人工修正标记 ----------------
+
+    @Test
+    void createRsku_shouldWriteExplicitBaseKeyWhenNoGrade() {
+        // §34：supplierConfigurationKey 无数据库 DEFAULT，写路径必须显式赋值；
+        // 无供应商等级证据 → BASE（§18.2）
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2500"));
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
+        rspu.setProductLevel("S");
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+        variant.setMaterialCode("PE");
+
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        rskuService.createRsku(request);
+
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getSupplierConfigurationKey()).isEqualTo("BASE");
+        assertThat(captor.getValue().getSupplierConfigurationNormalizerVersion()).isEqualTo("1");
+    }
+
+    @Test
+    void createRsku_shouldDeriveTextKeyFromSupplierGrade() {
+        // §18.2：只有原始等级原文 → TEXT:<归一原文>
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("9500"));
+        request.setSupplierMaterialGradeText("AA级布");
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
+        rspu.setProductLevel("S");
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+        variant.setMaterialCode("PE");
+
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        rskuService.createRsku(request);
+
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getSupplierConfigurationKey()).isEqualTo("TEXT:AA级布");
+        assertThat(captor.getValue().getSupplierMaterialGradeText()).isEqualTo("AA级布");
+    }
+
+    @Test
+    void createRsku_shouldRejectMalformedExplicitConfigKey() {
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2500"));
+        request.setSupplierConfigurationKey("WEIRD:foo");
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setProductLevel("S");
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+        variant.setMaterialCode("PE");
+
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        assertThatThrownBy(() -> rskuService.createRsku(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("supplierConfigurationKey 形态非法");
+    }
+
+    @Test
+    void upsertRsku_shouldNotOverwriteAcrossDifferentConfigKeys() {
+        // §56：横向 A/AA/S 级报价不覆盖——不同 supplierConfigurationKey 各自命中/创建独立 RSKU
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("9500"));
+        request.setSupplierMaterialGradeText("AA级布");
+
+        // 同 Variant+Factory 下已有 BASE 与 TEXT:A级布 行，但 TEXT:AA级布 未命中 → 新建
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "TEXT:AA级布"))
+            .thenReturn(null);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-TEST01");
+        rspu.setRspuCode("FS-MC-001-M");
+        rspu.setProductLevel("S");
+        RspuVariant variant = new RspuVariant();
+        variant.setVariantId("RSPU-TEST01-V001");
+        variant.setRspuId("RSPU-TEST01");
+        variant.setMaterialCode("PE");
+        when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
+        when(factoryMasterMapper.selectById("F001")).thenReturn(new FactoryMaster());
+        when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
+        when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+
+        rskuService.upsertRsku(request);
+
+        // 走的是新建而非更新既有 BASE/A级 行
+        ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
+        verify(rskuSupplyMapper).insert(captor.capture());
+        assertThat(captor.getValue().getSupplierConfigurationKey()).isEqualTo("TEXT:AA级布");
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+    }
+
+    @Test
+    void upsertRsku_shouldPreservePriceWhenManualOverrideActive() {
+        // §34.1/§47.1.5 manualCorrectionPolicy=preserve：活跃人工修正标记不被 Excel/AI 覆盖
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2600"));
+
+        RskuSupply existing = new RskuSupply();
+        existing.setRskuId("RSKU-EXIST01");
+        existing.setRspuId("RSPU-TEST01");
+        existing.setVariantId("RSPU-TEST01-V001");
+        existing.setFactoryCode("F001");
+        existing.setFactoryPrice(new BigDecimal("2500"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(2);
+        existing.setManualOverrideFields(com.rsdp.util.ManualOverrideFields.markActive(
+            null, "/factoryPrice", "admin", "product_ui"));
+
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-EXIST01"), eq(2), any())).thenReturn(1);
+
+        String rskuId = rskuService.upsertRsku(request);
+
+        assertThat(rskuId).isEqualTo("RSKU-EXIST01");
+        // 价格保留既有值，不写价格历史
+        assertThat(existing.getFactoryPrice()).isEqualByComparingTo("2500");
+        verify(priceHistoryMapper, never()).insert(any(PriceHistory.class));
+    }
+
+    @Test
+    void upsertRsku_shouldThrowOnQuoteVersionConflict() {
+        // §37：乐观版本校验失败 → quote_version_conflict
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal("2600"));
+
+        RskuSupply existing = new RskuSupply();
+        existing.setRskuId("RSKU-EXIST01");
+        existing.setRspuId("RSPU-TEST01");
+        existing.setVariantId("RSPU-TEST01-V001");
+        existing.setFactoryCode("F001");
+        existing.setFactoryPrice(new BigDecimal("2500"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(2);
+
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-EXIST01"), eq(2), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> rskuService.upsertRsku(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("quote_version_conflict");
+    }
+
+    @Test
+    void updateRskuPrice_shouldMarkFactoryPriceManualOverride() {
+        // §34.1：人工改价同事务写入 /factoryPrice 活跃标记
+        RskuSupply rsku = new RskuSupply();
+        rsku.setRskuId("RSKU-TEST01");
+        rsku.setRspuId("RSPU-TEST01");
+        rsku.setFactoryCode("F001");
+        rsku.setFactoryPrice(new BigDecimal("1200"));
+        rsku.setQuoteVersion(1);
+
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-TEST01")).thenReturn(rsku);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-TEST01"), eq(1), any())).thenReturn(1);
+
+        rskuService.updateRskuPrice("RSPU-TEST01", "RSKU-TEST01", new BigDecimal("1500"), "调价");
+
+        assertThat(com.rsdp.util.ManualOverrideFields.isActive(
+            rsku.getManualOverrideFields(), "/factoryPrice")).isTrue();
+        assertThat(com.rsdp.util.ManualOverrideFields.getMark(
+            rsku.getManualOverrideFields(), "/factoryPrice").source()).isEqualTo("product_ui");
+    }
+
+    // ------------------------------------------------------------ P0-F governed 路径（§47.1.5）
+
+    private RskuSupply governedExisting(java.time.LocalDate quoteDate, String price) {
+        RskuSupply existing = new RskuSupply();
+        existing.setRskuId("RSKU-EXIST01");
+        existing.setRspuId("RSPU-TEST01");
+        existing.setVariantId("RSPU-TEST01-V001");
+        existing.setFactoryCode("F001");
+        existing.setFactoryPrice(new BigDecimal(price));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(2);
+        existing.setQuoteDate(quoteDate);
+        return existing;
+    }
+
+    private RskuCreateRequest governedRequest(String quotePolicy, java.time.LocalDate quoteDate, String price) {
+        RskuCreateRequest request = new RskuCreateRequest();
+        request.setRspuId("RSPU-TEST01");
+        request.setFactoryCode("F001");
+        request.setVariantId("RSPU-TEST01-V001");
+        request.setFactoryPrice(new BigDecimal(price));
+        request.setQuotePolicy(quotePolicy);
+        request.setQuoteDate(quoteDate);
+        request.setQuotePolicyNotes(new java.util.ArrayList<>());
+        return request;
+    }
+
+    @Test
+    void upsertRsku_governed_staleQuote_ignoredWithoutWrite() {
+        // §47.1.5：incoming 日期严格早于 existing → STALE_QUOTE_IGNORED，不写库不涨版本
+        RskuCreateRequest request = governedRequest("replace_if_newer",
+            java.time.LocalDate.of(2026, 1, 1), "2600");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 2, 1), "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+
+        String rskuId = rskuService.upsertRsku(request);
+
+        assertThat(rskuId).isEqualTo("RSKU-EXIST01");
+        assertThat(existing.getFactoryPrice()).isEqualByComparingTo("2500");
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+        verify(rskuSupplyMapper, never()).bumpQuoteVersion(anyString(), any(), any());
+        verify(priceHistoryMapper, never()).insert(any(PriceHistory.class));
+        assertThat(request.getQuotePolicyNotes()).anyMatch(n -> n.contains("STALE_QUOTE_IGNORED"));
+    }
+
+    @Test
+    void upsertRsku_governed_sameDateSameValue_noOpNoBump() {
+        // §47.1.5 同值 no-op：不增长 quote_version / 不写 History / 不动 updated_at
+        RskuCreateRequest request = governedRequest("replace_if_newer",
+            java.time.LocalDate.of(2026, 1, 1), "2500");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 1, 1), "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+
+        String rskuId = rskuService.upsertRsku(request);
+
+        assertThat(rskuId).isEqualTo("RSKU-EXIST01");
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+        verify(rskuSupplyMapper, never()).bumpQuoteVersion(anyString(), any(), any());
+        verify(priceHistoryMapper, never()).insert(any(PriceHistory.class));
+    }
+
+    @Test
+    void upsertRsku_governed_sameDateDifferentValue_conflict() {
+        RskuCreateRequest request = governedRequest("replace_if_newer",
+            java.time.LocalDate.of(2026, 1, 1), "2600");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 1, 1), "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+
+        assertThatThrownBy(() -> rskuService.upsertRsku(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("QUOTE_SAME_DATE_CONFLICT");
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+    }
+
+    @Test
+    void upsertRsku_governed_bothUndatedDifferentValue_conflict() {
+        // NULL 日期语义显式枚举（§47.1.5 条件表末行）：双均无日期且值不同 → QUOTE_UNDATED_CONFLICT
+        RskuCreateRequest request = governedRequest("replace_if_newer", null, "2600");
+        RskuSupply existing = governedExisting(null, "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+
+        assertThatThrownBy(() -> rskuService.upsertRsku(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("QUOTE_UNDATED_CONFLICT");
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+    }
+
+    @Test
+    void upsertRsku_governed_keepExisting_skipsWrite() {
+        RskuCreateRequest request = governedRequest("keep_existing",
+            java.time.LocalDate.of(2026, 3, 1), "2600");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 1, 1), "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+
+        String rskuId = rskuService.upsertRsku(request);
+
+        assertThat(rskuId).isEqualTo("RSKU-EXIST01");
+        assertThat(existing.getFactoryPrice()).isEqualByComparingTo("2500");
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+        verify(rskuSupplyMapper, never()).bumpQuoteVersion(anyString(), any(), any());
+        assertThat(request.getQuotePolicyNotes()).anyMatch(n -> n.contains("keep_existing"));
+    }
+
+    @Test
+    void upsertRsku_governed_newerDateSameValue_validityOnlyNoFakePriceHistory() {
+        // §47.1.5：值未变但日期更新 → 只记 validity_update，不记伪价格变更
+        RskuCreateRequest request = governedRequest("replace_if_newer",
+            java.time.LocalDate.of(2026, 3, 1), "2500");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 1, 1), "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-EXIST01"), eq(2), any())).thenReturn(1);
+
+        rskuService.upsertRsku(request);
+
+        // 报价日期更新，价格不动，不写价格历史
+        assertThat(existing.getQuoteDate()).isEqualTo(java.time.LocalDate.of(2026, 3, 1));
+        verify(rskuSupplyMapper).updateById(any(RskuSupply.class));
+        verify(priceHistoryMapper, never()).insert(any(PriceHistory.class));
+    }
+
+    @Test
+    void upsertRsku_governed_manualOverridePreservesPriceEvenWhenNewer() {
+        // 优先级：manualCorrectionPolicy=preserve 先于 quotePolicy——
+        // 即使 incoming 日期更新，/factoryPrice 活跃人工修正标记仍保留人工值（§47.1.5/§34.1）
+        RskuCreateRequest request = governedRequest("replace_if_newer",
+            java.time.LocalDate.of(2026, 3, 1), "2600");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 1, 1), "2500");
+        existing.setManualOverrideFields(com.rsdp.util.ManualOverrideFields.markActive(
+            null, "/factoryPrice", "admin", "product_ui"));
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-EXIST01"), eq(2), any())).thenReturn(1);
+
+        rskuService.upsertRsku(request);
+
+        assertThat(existing.getFactoryPrice()).isEqualByComparingTo("2500");
+        verify(priceHistoryMapper, never()).insert(any(PriceHistory.class));
+        verify(auditLogService).logUpdate(eq("rsku_supply"), eq("RSKU-EXIST01"), any(),
+            argThat(v -> v instanceof java.util.Map
+                && "manualOverridePreserved".equals(((java.util.Map<?, ?>) v).get("action"))), any());
+    }
+
+    @Test
+    void upsertRsku_governed_forceReplace_requiresReason() {
+        RskuCreateRequest request = governedRequest("force_replace",
+            java.time.LocalDate.of(2026, 3, 1), "2600");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 1, 1), "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+
+        assertThatThrownBy(() -> rskuService.upsertRsku(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("overrideReason");
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+    }
+
+    @Test
+    void upsertRsku_governed_forceReplace_nonAdmin_forbidden() {
+        var user = User.withUsername("editor").password("").roles("EDITOR").build();
+        SecurityContextHolder.getContext().setAuthentication(
+            new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities()));
+        RskuCreateRequest request = governedRequest("force_replace",
+            java.time.LocalDate.of(2026, 3, 1), "2600");
+        request.setQuoteOverrideReason("客户确认覆盖");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 1, 1), "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+
+        assertThatThrownBy(() -> rskuService.upsertRsku(request))
+            .isInstanceOf(com.rsdp.exception.ForbiddenException.class);
+        verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
+    }
+
+    @Test
+    void upsertRsku_governed_forceReplace_admin_writesWithAudit() {
+        // 当前 SecurityContext 为 ADMIN（setSecurityContext）：force_replace + reason → 覆盖并记审计
+        RskuCreateRequest request = governedRequest("force_replace",
+            java.time.LocalDate.of(2026, 3, 1), "2600");
+        request.setQuoteOverrideReason("客户确认涨价覆盖");
+        RskuSupply existing = governedExisting(java.time.LocalDate.of(2026, 1, 1), "2500");
+        when(rskuSupplyMapper.selectAliveByConfig("RSPU-TEST01-V001", "F001", "BASE")).thenReturn(existing);
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-EXIST01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-EXIST01"), eq(2), any())).thenReturn(1);
+
+        rskuService.upsertRsku(request);
+
+        assertThat(existing.getFactoryPrice()).isEqualByComparingTo("2600");
+        verify(rskuSupplyMapper).updateById(any(RskuSupply.class));
+        verify(auditLogService).logUpdate(eq("rsku_supply"), eq("RSKU-EXIST01"), any(),
+            argThat(v -> v instanceof java.util.Map
+                && "forceReplace".equals(((java.util.Map<?, ?>) v).get("action"))), any());
     }
 }

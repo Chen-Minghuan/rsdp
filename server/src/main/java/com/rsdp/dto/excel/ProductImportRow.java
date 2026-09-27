@@ -16,6 +16,11 @@ public class ProductImportRow {
     @ExcelProperty("RSPU ID")
     private String rspuId;
 
+    /**
+     * 供应商源商品编码（型号；供应商命名空间内的编码，设计文档 v3.3 §8）。
+     * 导入查重经 SupplierIdentityResolutionService 解析身份；不是平台主展示编码
+     * （主展示为 rspu_code），也不别名 productCode。
+     */
     @ExcelProperty("外部编码")
     private String externalCode;
 

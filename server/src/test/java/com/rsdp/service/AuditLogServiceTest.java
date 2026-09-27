@@ -1,5 +1,8 @@
 package com.rsdp.service;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.entity.AuditLog;
 import com.rsdp.entity.DesignOrderItem;
@@ -13,6 +16,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 
 import javax.crypto.spec.SecretKeySpec;
 import java.lang.reflect.Field;
@@ -187,5 +191,49 @@ class AuditLogServiceTest {
             .isEqualByComparingTo(new BigDecimal("5000.00"));
         assertThat(AesEncryptionUtil.decrypt((String) newValue.get("finalTotalPrice")))
             .isEqualByComparingTo(new BigDecimal("4500.00"));
+    }
+
+    // ---- R-07：脱敏失败 fail-closed，快照写固定占位，告警日志不含原值 ----
+
+    /** 序列化必失败的测试对象：getter 抛异常以触发脱敏失败路径。 */
+    public static class SerializationExplodingValue {
+        public BigDecimal getFactoryPrice() {
+            return new BigDecimal("666.66");
+        }
+
+        public String getBroken() {
+            throw new IllegalStateException("序列化爆炸");
+        }
+    }
+
+    @Test
+    void logCreate_shouldRedactSnapshotWhenSanitizeFails() {
+        Logger logger = (Logger) LoggerFactory.getLogger(AuditLogService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            auditLogService.logCreate("design_order_item", "1", new SerializationExplodingValue(), "admin");
+
+            ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
+            verify(auditLogWriter, times(1)).write(captor.capture());
+
+            // fail-closed：快照为固定占位，明文成本不得落审计库
+            Map<String, Object> newValue = captor.getValue().getNewValue();
+            assertThat(newValue).containsEntry("redacted", "[REDACTED]");
+            assertThat(newValue.toString()).doesNotContain("666.66");
+            assertThat(auditLogService.getInsertFailureCount()).isEqualTo(1);
+
+            // 告警日志不含原值及其派生信息
+            List<String> messages = appender.list.stream()
+                .map(ILoggingEvent::getFormattedMessage).toList();
+            assertThat(messages).isNotEmpty();
+            for (String message : messages) {
+                assertThat(message).doesNotContain("666.66");
+            }
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 }

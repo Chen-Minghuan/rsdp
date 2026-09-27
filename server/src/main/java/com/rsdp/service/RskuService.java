@@ -13,6 +13,10 @@ import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ResourceNotFoundException;
+import com.rsdp.supplychain.rsku.QuotePolicyDecider;
+import com.rsdp.supplychain.rsku.SupplierConfigurationKeys;
+import com.rsdp.util.ManualOverrideFields;
+import com.rsdp.util.SupplierConfigurationNormalizer;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -160,6 +164,45 @@ public class RskuService {
             }
         }
 
+        RskuSupply rsku = buildNewRsku(request, productLevel, variant);
+
+        // 生成并写入 RSKU 业务编码（容错发号：所属 RSPU 未发号等原因导致发号失败时不阻断创建，
+        // 价格等供应数据先入库，业务编码待 RSPU 发号后由 RskuCodeService.backfillCodesByRspu 补发）
+        String rskuCode = rskuCodeService.tryAssignCode(rsku.getRskuId(), request.getRspuId(), request.getFactoryCode(),
+            rsku.getMaterialCode());
+        if (rskuCode == null) {
+            log.warn("RSKU 无码创建，rsku_code 留空待补发，rskuId={}，rspuId={}，factoryCode={}（所属 RSPU 无 rspu_code 或发号失败）",
+                rsku.getRskuId(), request.getRspuId(), request.getFactoryCode());
+        }
+        rsku.setRskuCode(rskuCode);
+
+        try {
+            rskuSupplyMapper.insert(rsku);
+        } catch (DataIntegrityViolationException e) {
+            // 细化约束冲突类型，给出可操作的错误信息
+            String detail = e.getMessage() != null ? e.getMessage() : "";
+            if (detail.contains("unique") || detail.contains("duplicate")) {
+                throw new BusinessException("该工厂对该变体的同一供应配置已有报价");
+            }
+            if (detail.contains("foreign key")) {
+                throw new BusinessException("关联数据不存在（产品/变体/工厂），请刷新后重试");
+            }
+            throw new BusinessException("数据约束冲突，请检查输入");
+        }
+
+        auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
+        rspuPriceSummaryService.recalculate(rsku.getRspuId());
+        return rsku.getRskuId();
+    }
+
+    /**
+     * 构造新 RSKU 实体（createRsku / upsertRsku 并发插入共用）。
+     *
+     * <p>v3.3 §34：supplierConfigurationKey / normalizerVersion 必须显式写入
+     * （无数据库 DEFAULT）；Key 优先级：请求显式携带（Snapshot 固化路径）→
+     * grade code/text 推导（§18.2）→ BASE。</p>
+     */
+    private RskuSupply buildNewRsku(RskuCreateRequest request, String productLevel, RspuVariant variant) {
         RskuSupply rsku = new RskuSupply();
         String rskuId = IdGenerator.rskuId();
         rsku.setRskuId(rskuId);
@@ -185,104 +228,313 @@ public class RskuService {
         rsku.setCreatedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
 
-        // 生成并写入 RSKU 业务编码（容错发号：所属 RSPU 未发号等原因导致发号失败时不阻断创建，
-        // 价格等供应数据先入库，业务编码待 RSPU 发号后由 RskuCodeService.backfillCodesByRspu 补发）
-        String rskuCode = rskuCodeService.tryAssignCode(rskuId, request.getRspuId(), request.getFactoryCode(), materialCode);
-        if (rskuCode == null) {
-            log.warn("RSKU 无码创建，rsku_code 留空待补发，rskuId={}，rspuId={}，factoryCode={}（所属 RSPU 无 rspu_code 或发号失败）",
-                rskuId, request.getRspuId(), request.getFactoryCode());
+        // v3.3 P0-D：Supplier Configuration Identity（§18.2/§32.1）显式赋值
+        rsku.setSupplierConfigurationKey(resolveConfigKey(request));
+        rsku.setSupplierConfigurationNormalizerVersion(
+            String.valueOf(SupplierConfigurationNormalizer.CURRENT_VERSION));
+        rsku.setSupplierMaterialGradeCode(request.getSupplierMaterialGradeCode());
+        rsku.setSupplierMaterialGradeText(request.getSupplierMaterialGradeText());
+        // Quote 基础口径 / 有效期（§34；请求未携带时由数据库默认/NULL 承担）
+        if (StringUtils.hasText(request.getCurrencyCode())) {
+            rsku.setCurrencyCode(request.getCurrencyCode().trim().toUpperCase());
         }
-        rsku.setRskuCode(rskuCode);
-
-        try {
-            rskuSupplyMapper.insert(rsku);
-        } catch (DataIntegrityViolationException e) {
-            // 细化约束冲突类型，给出可操作的错误信息
-            String detail = e.getMessage() != null ? e.getMessage() : "";
-            if (detail.contains("unique") || detail.contains("duplicate")) {
-                throw new BusinessException("该工厂对该变体已有报价");
-            }
-            if (detail.contains("foreign key")) {
-                throw new BusinessException("关联数据不存在（产品/变体/工厂），请刷新后重试");
-            }
-            throw new BusinessException("数据约束冲突，请检查输入");
-        }
-
-        auditLogService.logCreate("rsku_supply", rsku.getRskuId(), rsku, SecurityOperatorContext.currentUsername());
-        rspuPriceSummaryService.recalculate(rsku.getRspuId());
-        return rsku.getRskuId();
+        rsku.setTaxIncluded(request.getTaxIncluded());
+        rsku.setPriceUnit(request.getPriceUnit());
+        rsku.setMoqUnit(request.getMoqUnit());
+        rsku.setQuoteDate(request.getQuoteDate());
+        rsku.setEffectiveFrom(request.getEffectiveFrom());
+        rsku.setEffectiveTo(request.getEffectiveTo());
+        return rsku;
     }
 
     /**
-     * 按（产品 + 变体 + 工厂）维度 upsert 工厂报价。
+     * 解析请求落定的 Supplier Configuration Key：显式携带（须形态合法）→
+     * grade code/text 推导（§18.2 优先级）→ BASE。
+     */
+    private String resolveConfigKey(RskuCreateRequest request) {
+        if (StringUtils.hasText(request.getSupplierConfigurationKey())) {
+            String key = request.getSupplierConfigurationKey().trim();
+            if (!SupplierConfigurationKeys.isWellFormed(key)) {
+                throw new BusinessException("supplierConfigurationKey 形态非法（须为 BASE 或 CODE:/TEXT: 前缀）: " + key);
+            }
+            return key;
+        }
+        return SupplierConfigurationKeys.of(
+            request.getSupplierMaterialGradeCode(), request.getSupplierMaterialGradeText());
+    }
+
+    /**
+     * 按新 RSKU Identity（变体 + 工厂 + 供应配置，v3.3 §32.1）upsert 工厂报价。
      *
-     * <p>已存在未软删的报价时更新价格/交期/MOQ/材质等字段（价格变化写 price_history），
-     * 否则走 {@link #createRsku} 新建。用于 Excel AI 导入的重复导入（updateIfExists）
-     * 与同组模块行重复报价场景，避免撞 (rspu_id, variant_id, factory_code) 部分唯一索引
-     * 导致价格永远更新不进去。</p>
+     * <p>已存在未软删的同配置报价时更新价格/交期/MOQ/材质等字段（价格变化写
+     * price_history，报价更新 quote_version+1，§37），否则走 {@link #createRsku} 新建。
+     * 用于 Excel AI 导入的重复导入（updateIfExists）与同组模块行重复报价场景。
+     * 横向 A/AA/S 等级以不同 supplierConfigurationKey 生成各自 RSKU，互不覆盖（§56）。</p>
+     *
+     * <p>manualCorrectionPolicy=preserve（§47.1.5 默认）：{@code /factoryPrice} 存在活跃
+     * 人工修正标记时导入价格不覆盖既有值（§34.1，写入前 FOR UPDATE 锁定并同事务重读标记）。</p>
      *
      * @param request 报价请求
      * @return 已存在或新建的 RSKU ID
      */
     @Transactional(noRollbackFor = BusinessException.class)
     public String upsertRsku(RskuCreateRequest request) {
-        RskuSupply existing = rskuSupplyMapper.selectOne(new QueryWrapper<RskuSupply>()
-            .eq("rspu_id", request.getRspuId())
-            .eq("variant_id", request.getVariantId())
-            .eq("factory_code", request.getFactoryCode()));
+        // v3.3 §32.1：Identity = (variant_id, factory_code, supplier_configuration_key)；
+        // 横向 A/AA/S 等级以不同 Key 生成各自 RSKU，互不覆盖（§56）
+        String configKey = resolveConfigKey(request);
+        RskuSupply existing = rskuSupplyMapper.selectAliveByConfig(
+            request.getVariantId(), request.getFactoryCode(), configKey);
         if (existing == null) {
             return createRsku(request);
         }
 
-        RskuSupply oldSnapshot = snapshot(existing);
-        BigDecimal oldPrice = existing.getFactoryPrice();
-        // 与 RskuImportService.updateExistingRsku 同语义：仅更新请求中显式有值的字段
-        if (request.getFactoryPrice() != null) {
-            existing.setFactoryPrice(request.getFactoryPrice());
-            existing.setPriceBand(resolvePriceBand(request.getFactoryPrice()));
-            existing.setPriceUpdated(LocalDate.now());
+        // §34.1：写入前锁定目标实体并在同一事务重读 manual_override_fields，
+        // 不使用 Preview 时缓存的过期标记覆盖并发人工修正
+        RskuSupply locked = rskuSupplyMapper.selectAliveByIdForUpdate(existing.getRskuId());
+        if (locked == null) {
+            throw new BusinessException("该供应配置报价已被删除，请重试");
         }
-        if (StringUtils.hasText(request.getMaterialCode())) {
-            existing.setMaterialCode(request.getMaterialCode());
-        }
-        if (StringUtils.hasText(request.getMaterialDescription())) {
-            existing.setMaterialDescription(request.getMaterialDescription());
-        }
-        if (request.getLeadTimeDays() != null) {
-            existing.setLeadTimeDays(request.getLeadTimeDays());
-        }
-        if (request.getMoq() != null) {
-            existing.setMoq(request.getMoq());
-        }
-        if (StringUtils.hasText(request.getShippingFrom())) {
-            existing.setShippingFrom(request.getShippingFrom());
-        }
-        if (StringUtils.hasText(request.getShippingWarehouseId())) {
-            existing.setShippingWarehouseId(request.getShippingWarehouseId());
-        }
-        if (StringUtils.hasText(request.getProductLevel())) {
-            existing.setProductLevel(request.getProductLevel());
-        }
-        existing.setUpdatedAt(LocalDateTime.now());
-        rskuSupplyMapper.updateById(existing);
+        RskuSupply oldSnapshot = snapshot(locked);
+        BigDecimal oldPrice = locked.getFactoryPrice();
+        LocalDateTime now = LocalDateTime.now();
 
-        // 价格变化写价格历史（与批量导入更新同语义）
-        if (request.getFactoryPrice() != null
-            && (oldPrice == null || oldPrice.compareTo(request.getFactoryPrice()) != 0)) {
+        // P0-F（§47.1.5）：Attempt 治理链路携带 quotePolicy 时按日期/同值条件表决策；
+        // 执行优先级：权限/数据库完整性 → manualCorrectionPolicy → nullValuePolicy → quotePolicy。
+        // legacy 链路（quotePolicy == null）维持原覆盖语义不变
+        QuotePolicyDecider.Outcome quoteOutcome = null;
+        if (StringUtils.hasText(request.getQuotePolicy())) {
+            quoteOutcome = QuotePolicyDecider.decide(request.getQuotePolicy(),
+                request.getQuoteDate(), locked.getQuoteDate(),
+                quoteValueSame(request, locked), quoteBasisSame(request, locked));
+            switch (quoteOutcome.decision()) {
+                case KEEP_STALE_IGNORED -> {
+                    addQuotePolicyNote(request, "STALE_QUOTE_IGNORED: 导入报价日期早于既有报价，已保留既有值");
+                    return locked.getRskuId();
+                }
+                case KEEP_EXISTING_SKIPPED -> {
+                    addQuotePolicyNote(request, "quotePolicy=keep_existing: 命中已有报价，跳过不改写");
+                    return locked.getRskuId();
+                }
+                case CONFLICT_SAME_DATE, CONFLICT_DATE_MISSING, CONFLICT_UNDATED, CONFLICT_QUOTE_BASIS ->
+                    throw new BusinessException(quoteOutcome.issueCode()
+                        + ": 导入报价与既有报价冲突（quotePolicy=replace_if_newer 条件表，§47.1.5），"
+                        + "请经 Preview 处置或具备权限的 force_replace 处理");
+                case FORCE_REPLACE -> {
+                    // force_replace：仅具备报价覆盖权限的人工导入可用，reason 必填并记审计；
+                    // 不隐式绕过 manualCorrectionPolicy=preserve（§47.1.5）
+                    if (!StringUtils.hasText(request.getQuoteOverrideReason())) {
+                        throw new BusinessException("quotePolicy=force_replace 必须携带 overrideReason（§47.1.5）");
+                    }
+                    if (!SecurityOperatorContext.isCurrentUserAdmin()) {
+                        throw new com.rsdp.exception.ForbiddenException(
+                            "quotePolicy=force_replace 仅管理员可用（报价覆盖权限，§47.1.5）");
+                    }
+                }
+                default -> {
+                    // UPDATE / UPDATE_VALIDITY_ONLY / NO_OP 走下方流程
+                }
+            }
+        }
+
+        // 与 RskuImportService.updateExistingRsku 同语义：仅更新请求中显式有值的字段；
+        // manualCorrectionPolicy=preserve（§47.1.5 默认）：/factoryPrice 存在活跃人工修正标记时
+        // Excel/AI 导入不覆盖价格（§34.1：manual_override_fields 是唯一当前事实源）
+        boolean priceChanged = request.getFactoryPrice() != null
+            && (oldPrice == null || oldPrice.compareTo(request.getFactoryPrice()) != 0);
+        boolean pricePreservedByOverride = false;
+        // NO_OP / UPDATE_VALIDITY_ONLY：quote 事实不写（no-op 不增长 quote_version / History；
+        // validity_update 只更新日期/有效期，不记伪价格变更，§47.1.5 条件表）
+        boolean quoteFactFrozen = quoteOutcome != null
+            && (quoteOutcome.decision() == QuotePolicyDecider.Decision.NO_OP
+                || quoteOutcome.decision() == QuotePolicyDecider.Decision.UPDATE_VALIDITY_ONLY);
+        if (priceChanged
+            && ManualOverrideFields.isActive(locked.getManualOverrideFields(), "/factoryPrice")) {
+            pricePreservedByOverride = true;
+            log.warn("RSKU /factoryPrice 存在活跃人工修正标记，导入价格被保留策略跳过: rskuId={}", locked.getRskuId());
+        } else if (request.getFactoryPrice() != null && !quoteFactFrozen) {
+            locked.setFactoryPrice(request.getFactoryPrice());
+            locked.setPriceBand(resolvePriceBand(request.getFactoryPrice()));
+            locked.setPriceUpdated(LocalDate.now());
+        }
+        // 非 quote 事实字段（材质/交期/发货地/等级等）：变更置 dirty，用于 governed NO_OP
+        // 的真空转判定（无任何字段变化时不写库、不增长 quote_version，§47.1.5 同值 no-op）
+        boolean nonQuoteDirty = false;
+        if (StringUtils.hasText(request.getMaterialCode())
+            && !request.getMaterialCode().equals(locked.getMaterialCode())) {
+            locked.setMaterialCode(request.getMaterialCode());
+            nonQuoteDirty = true;
+        }
+        if (StringUtils.hasText(request.getMaterialDescription())
+            && !request.getMaterialDescription().equals(locked.getMaterialDescription())) {
+            locked.setMaterialDescription(request.getMaterialDescription());
+            nonQuoteDirty = true;
+        }
+        if (request.getLeadTimeDays() != null
+            && !request.getLeadTimeDays().equals(locked.getLeadTimeDays())) {
+            locked.setLeadTimeDays(request.getLeadTimeDays());
+            nonQuoteDirty = true;
+        }
+        // MOQ / MOQ 单位属 quoteValueSame 比较字段（quote 事实）：NO_OP 时不写
+        if (request.getMoq() != null && !quoteFactFrozen) {
+            locked.setMoq(request.getMoq());
+        }
+        if (StringUtils.hasText(request.getMoqUnit()) && !quoteFactFrozen) {
+            locked.setMoqUnit(request.getMoqUnit());
+        }
+        if (StringUtils.hasText(request.getShippingFrom())
+            && !request.getShippingFrom().equals(locked.getShippingFrom())) {
+            locked.setShippingFrom(request.getShippingFrom());
+            nonQuoteDirty = true;
+        }
+        if (StringUtils.hasText(request.getShippingWarehouseId())
+            && !request.getShippingWarehouseId().equals(locked.getShippingWarehouseId())) {
+            locked.setShippingWarehouseId(request.getShippingWarehouseId());
+            nonQuoteDirty = true;
+        }
+        if (StringUtils.hasText(request.getProductLevel())
+            && !request.getProductLevel().equals(locked.getProductLevel())) {
+            locked.setProductLevel(request.getProductLevel());
+            nonQuoteDirty = true;
+        }
+        // Quote 基础口径 / 有效期（§34；nullValuePolicy=preserve_existing：空单元格不清空已有值）；
+        // quoteFactFrozen（NO_OP）：quote 事实字段（口径/MOQ/日期/有效期）一律不写；
+        // UPDATE_VALIDITY_ONLY：只更新日期/有效期，不动价格与口径（§47.1.5 条件表）
+        boolean validityUpdateOnly = quoteOutcome != null
+            && quoteOutcome.decision() == QuotePolicyDecider.Decision.UPDATE_VALIDITY_ONLY;
+        if (!quoteFactFrozen) {
+            if (StringUtils.hasText(request.getCurrencyCode())) {
+                locked.setCurrencyCode(request.getCurrencyCode().trim().toUpperCase());
+            }
+            if (request.getTaxIncluded() != null) {
+                locked.setTaxIncluded(request.getTaxIncluded());
+            }
+            if (StringUtils.hasText(request.getPriceUnit())) {
+                locked.setPriceUnit(request.getPriceUnit());
+            }
+        }
+        if (!quoteFactFrozen || validityUpdateOnly) {
+            if (request.getQuoteDate() != null) {
+                locked.setQuoteDate(request.getQuoteDate());
+            }
+            if (request.getEffectiveFrom() != null) {
+                locked.setEffectiveFrom(request.getEffectiveFrom());
+            }
+            if (request.getEffectiveTo() != null) {
+                locked.setEffectiveTo(request.getEffectiveTo());
+            }
+        }
+        if (StringUtils.hasText(request.getSupplierMaterialGradeCode())) {
+            locked.setSupplierMaterialGradeCode(request.getSupplierMaterialGradeCode());
+        }
+        if (StringUtils.hasText(request.getSupplierMaterialGradeText())) {
+            locked.setSupplierMaterialGradeText(request.getSupplierMaterialGradeText());
+        }
+
+        boolean governedNoOp = quoteOutcome != null
+            && quoteOutcome.decision() == QuotePolicyDecider.Decision.NO_OP;
+        if (governedNoOp && !nonQuoteDirty) {
+            // §47.1.5 同值 no-op：不增长 quote_version / 不写 History / 不动 updated_at
+            return locked.getRskuId();
+        }
+        locked.setUpdatedAt(now);
+        rskuSupplyMapper.updateById(locked);
+
+        // §37 报价乐观并发版本：FOR UPDATE 行锁下读取的期望版本必然命中；影响 0 行即冲突
+        // governed NO_OP 且仅非 quote 字段变化：quote 事实未变，不增长 quote_version（§50.4）
+        if (!governedNoOp) {
+            int bumped = rskuSupplyMapper.bumpQuoteVersion(
+                locked.getRskuId(), oldSnapshot.getQuoteVersion(), now);
+            if (bumped == 0) {
+                throw new BusinessException("quote_version_conflict: 报价已被并发修改，请刷新后重试");
+            }
+        }
+
+        // 价格变化写价格历史（与批量导入更新同语义；人工修正保留跳过 / quote 事实冻结时
+        // 无价格变化，不写历史——UPDATE_VALIDITY_ONLY 只记 validity_update，不记伪价格变更）
+        if (priceChanged && !pricePreservedByOverride && !quoteFactFrozen) {
             PriceHistory history = new PriceHistory();
-            history.setRskuId(existing.getRskuId());
+            history.setRskuId(locked.getRskuId());
             history.setOldPrice(oldPrice);
             history.setNewPrice(request.getFactoryPrice());
             history.setChangedBy(SecurityOperatorContext.currentUsername());
-            history.setChangeReason("Excel 导入更新");
+            history.setChangeReason(validityUpdateOnly ? "Excel 导入有效期更新" : "Excel 导入更新");
             history.setCreatedAt(LocalDateTime.now());
             priceHistoryMapper.insert(history);
         }
 
-        auditLogService.logUpdate("rsku_supply", existing.getRskuId(), oldSnapshot, existing,
+        auditLogService.logUpdate("rsku_supply", locked.getRskuId(), oldSnapshot, locked,
             SecurityOperatorContext.currentUsername());
-        rspuPriceSummaryService.recalculate(existing.getRspuId());
-        return existing.getRskuId();
+        if (quoteOutcome != null
+            && quoteOutcome.decision() == QuotePolicyDecider.Decision.FORCE_REPLACE) {
+            // §47.1.5：force_replace 必须记审计（操作人 + reason）
+            auditLogService.logUpdate("rsku_supply", locked.getRskuId(),
+                Map.of("quotePolicy", "replace_if_newer"),
+                Map.of("action", "forceReplace",
+                    "reason", request.getQuoteOverrideReason(),
+                    "note", "具备报价覆盖权限的人工强制覆盖"),
+                SecurityOperatorContext.currentUsername());
+        }
+        if (pricePreservedByOverride) {
+            auditLogService.logUpdate("rsku_supply", locked.getRskuId(),
+                Map.of("factoryPrice", oldPrice == null ? "" : "***"),
+                Map.of("action", "manualOverridePreserved",
+                    "field", "/factoryPrice",
+                    "note", "活跃人工修正标记生效，导入价格未覆盖"),
+                SecurityOperatorContext.currentUsername());
+        }
+        rspuPriceSummaryService.recalculate(locked.getRspuId());
+        return locked.getRskuId();
+    }
+
+    /**
+     * quoteValueSame（§47.1.5）：比较标准化后的价格、MOQ 与有效期等业务字段，
+     * 排除 quote_date、来源坐标与 Runtime 字段。请求字段为 null 视为「未提供」
+     * （nullValuePolicy=preserve_existing），不参与差异判定。
+     */
+    private boolean quoteValueSame(RskuCreateRequest request, RskuSupply existing) {
+        if (request.getFactoryPrice() != null && (existing.getFactoryPrice() == null
+            || existing.getFactoryPrice().compareTo(request.getFactoryPrice()) != 0)) {
+            return false;
+        }
+        if (request.getMoq() != null && !request.getMoq().equals(existing.getMoq())) {
+            return false;
+        }
+        if (StringUtils.hasText(request.getMoqUnit())
+            && !request.getMoqUnit().equals(existing.getMoqUnit())) {
+            return false;
+        }
+        if (request.getEffectiveFrom() != null
+            && !request.getEffectiveFrom().equals(existing.getEffectiveFrom())) {
+            return false;
+        }
+        return request.getEffectiveTo() == null
+            || request.getEffectiveTo().equals(existing.getEffectiveTo());
+    }
+
+    /**
+     * Quote 基础口径一致性（§47.1.5：currency_code + price_unit + tax_included）。
+     * 请求字段为 null 视为「未提供」，以既有值为准（不产生口径差异）。
+     */
+    private boolean quoteBasisSame(RskuCreateRequest request, RskuSupply existing) {
+        if (StringUtils.hasText(request.getCurrencyCode())
+            && !request.getCurrencyCode().trim().toUpperCase()
+                .equals(existing.getCurrencyCode() == null ? "CNY" : existing.getCurrencyCode())) {
+            return false;
+        }
+        if (StringUtils.hasText(request.getPriceUnit())
+            && !request.getPriceUnit().equals(existing.getPriceUnit())) {
+            return false;
+        }
+        // null 与 false 是不同材料（§38.1 同口径）；请求未提供（null）时不构成差异
+        return request.getTaxIncluded() == null
+            || request.getTaxIncluded().equals(existing.getTaxIncluded());
+    }
+
+    /** 追加 Quote Policy 决策说明（导入行循环汇总为用户可见的行级问题）。 */
+    private void addQuotePolicyNote(RskuCreateRequest request, String note) {
+        if (request.getQuotePolicyNotes() != null) {
+            request.getQuotePolicyNotes().add(note);
+        }
     }
 
     /**
@@ -430,25 +682,41 @@ public class RskuService {
             throw new BusinessException("价格必须大于 0");
         }
 
-        RskuSupply oldSnapshot = snapshot(rsku);
-        BigDecimal oldPrice = rsku.getFactoryPrice();
+        // §34.1：人工改价必须在同一数据库事务设置 /factoryPrice 人工修正标记并写 Audit Log；
+        // FOR UPDATE 行锁 + §37 quote_version 乐观版本（锁内读取的期望版本必然命中）
+        RskuSupply locked = rskuSupplyMapper.selectAliveByIdForUpdate(rskuId);
+        if (locked == null) {
+            throw new ResourceNotFoundException("RSKU 不存在或已被删除: " + rskuId);
+        }
+        RskuSupply oldSnapshot = snapshot(locked);
+        BigDecimal oldPrice = locked.getFactoryPrice();
+        LocalDateTime now = LocalDateTime.now();
+        String operator = SecurityOperatorContext.currentUsername();
 
-        rsku.setFactoryPrice(newPrice);
-        rsku.setPriceBand(resolvePriceBand(newPrice));
-        rsku.setPriceUpdated(LocalDate.now());
-        rsku.setUpdatedAt(LocalDateTime.now());
-        rskuSupplyMapper.updateById(rsku);
+        locked.setFactoryPrice(newPrice);
+        locked.setPriceBand(resolvePriceBand(newPrice));
+        locked.setPriceUpdated(LocalDate.now());
+        locked.setUpdatedAt(now);
+        locked.setManualOverrideFields(ManualOverrideFields.markActive(
+            locked.getManualOverrideFields(), "/factoryPrice", operator,
+            ManualOverrideFields.SOURCE_PRODUCT_UI));
+        rskuSupplyMapper.updateById(locked);
+
+        int bumped = rskuSupplyMapper.bumpQuoteVersion(rskuId, oldSnapshot.getQuoteVersion(), now);
+        if (bumped == 0) {
+            throw new BusinessException("quote_version_conflict: 报价已被并发修改，请刷新后重试");
+        }
 
         PriceHistory history = new PriceHistory();
         history.setRskuId(rskuId);
         history.setOldPrice(oldPrice);
         history.setNewPrice(newPrice);
-        history.setChangedBy(SecurityOperatorContext.currentUsername());
+        history.setChangedBy(operator);
         history.setChangeReason(changeReason);
         history.setCreatedAt(LocalDateTime.now());
         priceHistoryMapper.insert(history);
 
-        auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, rsku, SecurityOperatorContext.currentUsername());
+        auditLogService.logUpdate("rsku_supply", rskuId, oldSnapshot, locked, operator);
         rspuPriceSummaryService.recalculate(rspuId);
     }
 
@@ -473,6 +741,20 @@ public class RskuService {
         copy.setQuoteConfidence(source.getQuoteConfidence());
         copy.setReviewStatus(source.getReviewStatus());
         copy.setPriceUpdated(source.getPriceUpdated());
+        copy.setStatus(source.getStatus());
+        copy.setCurrencyCode(source.getCurrencyCode());
+        copy.setTaxIncluded(source.getTaxIncluded());
+        copy.setPriceUnit(source.getPriceUnit());
+        copy.setMoqUnit(source.getMoqUnit());
+        copy.setQuoteDate(source.getQuoteDate());
+        copy.setEffectiveFrom(source.getEffectiveFrom());
+        copy.setEffectiveTo(source.getEffectiveTo());
+        copy.setSupplierMaterialGradeCode(source.getSupplierMaterialGradeCode());
+        copy.setSupplierMaterialGradeText(source.getSupplierMaterialGradeText());
+        copy.setSupplierConfigurationKey(source.getSupplierConfigurationKey());
+        copy.setSupplierConfigurationNormalizerVersion(source.getSupplierConfigurationNormalizerVersion());
+        copy.setQuoteVersion(source.getQuoteVersion());
+        copy.setManualOverrideFields(source.getManualOverrideFields());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
         return copy;

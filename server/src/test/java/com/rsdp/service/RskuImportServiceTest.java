@@ -247,6 +247,8 @@ class RskuImportServiceTest {
         existing.setFactoryCode("F001");
         existing.setVariantId("VAR-001");
         existing.setFactoryPrice(new BigDecimal("1000"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(1);
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(existing));
 
         byte[] excelBytes = buildExcelWithRows(List.of(
@@ -292,7 +294,11 @@ class RskuImportServiceTest {
         existing.setFactoryCode("F001");
         existing.setVariantId("VAR-001");
         existing.setFactoryPrice(new BigDecimal("1000"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(1);
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(existing));
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-OLD01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-OLD01"), eq(1), any())).thenReturn(1);
 
         byte[] excelBytes = buildExcelWithRows(List.of(
             header(),
@@ -412,7 +418,11 @@ class RskuImportServiceTest {
         existing.setFactoryCode("F001");
         existing.setVariantId("VAR-001");
         existing.setFactoryPrice(new BigDecimal("1000"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(1);
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(existing));
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-OLD01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-OLD01"), eq(1), any())).thenReturn(1);
 
         byte[] excelBytes = buildExcelWithRows(List.of(
             header(),
@@ -611,6 +621,8 @@ class RskuImportServiceTest {
         existing.setFactoryCode("F001");
         existing.setFactorySku("FS-OLD");
         existing.setFactoryPrice(new BigDecimal("1000"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(1);
         existing.setPriceBand("mid");
         existing.setLeadTimeDays(30);
         existing.setMoq(10);
@@ -622,6 +634,9 @@ class RskuImportServiceTest {
         row.setFactoryCode("F001");
         row.setFactoryPrice(null);
         row.setMaterialDescription("橡木");
+
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-OLD01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-OLD01"), eq(1), any())).thenReturn(1);
 
         // When
         rskuImportService.updateSingleRsku(existing, row, "S");
@@ -769,8 +784,12 @@ class RskuImportServiceTest {
         existing.setFactoryCode("F001");
         existing.setVariantId("VAR-001");
         existing.setFactoryPrice(new BigDecimal("1000"));
+        existing.setSupplierConfigurationKey("BASE");
+        existing.setQuoteVersion(1);
         existing.setPriceBand("low");
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(existing));
+        when(rskuSupplyMapper.selectAliveByIdForUpdate("RSKU-OLD01")).thenReturn(existing);
+        when(rskuSupplyMapper.bumpQuoteVersion(eq("RSKU-OLD01"), eq(1), any())).thenReturn(1);
 
         byte[] excelBytes = buildExcelWithRows(List.of(
             header(),

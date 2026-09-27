@@ -3,6 +3,7 @@ package com.rsdp.dto.response;
 import lombok.Data;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -28,4 +29,9 @@ public class PreviewDataVariant {
      * 变体级原始表头 → 系统字段。
      */
     private Map<String, String> mappedFieldByHeader = new LinkedHashMap<>();
+
+    /**
+     * 本行模块/变体示意图（排除产品图样列）。
+     */
+    private List<PreviewDataRow.PreviewRowImage> images = List.of();
 }

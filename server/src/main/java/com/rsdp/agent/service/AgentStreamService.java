@@ -21,6 +21,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDateTime;
@@ -37,8 +39,8 @@ import java.util.concurrent.TimeUnit;
  * Agent SSE 流编排：一轮用户消息 = 一次 Agent Run（run 边界即 HITL 边界）。
  *
  * <p>同步段（HTTP 线程）：会话校验（存在/权限/active）→ client_message_id 幂等检查
- * → active_run_id 并发认领（UPDATE ... WHERE active_run_id IS NULL，0 行 = 409）
- * → 用户消息落库 → run 记录创建 → 注册 SSE 通道。异步段（taskExecutor）：
+ * → 短事务内先创建 run 再认领 active_run_id（0 行 = 409，run 同事务回滚）
+ * → 用户消息落库 → 注册 SSE 通道。异步段（taskExecutor）：
  * meta 首帧 → 跑图（节点经 {@link AgentEventBus} 发事件）→ assistant 消息落库 → done。</p>
  *
  * <p>任何路径结束都要释放 active_run_id（finally 条件置 NULL，仅释放本 run 的锁）；
@@ -58,6 +60,7 @@ public class AgentStreamService {
     private final MarketingAgentProperties properties;
     private final ThreadPoolTaskExecutor taskExecutor;
     private final ObjectMapper objectMapper;
+    private final TransactionTemplate transactionTemplate;
     private final ScheduledExecutorService timeoutScheduler;
     private final Map<String, ScheduledFuture<?>> timeoutTasks = new ConcurrentHashMap<>();
 
@@ -66,7 +69,7 @@ public class AgentStreamService {
                               AgentEventBus eventBus, AgentCheckpointStore checkpointStore,
                               CompiledGraph marketingAgentGraph, MarketingAgentProperties properties,
                               @Qualifier("taskExecutor") ThreadPoolTaskExecutor taskExecutor,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper, PlatformTransactionManager transactionManager) {
         this.sessionService = sessionService;
         this.sessionMapper = sessionMapper;
         this.messageStore = messageStore;
@@ -77,6 +80,7 @@ public class AgentStreamService {
         this.properties = properties;
         this.taskExecutor = taskExecutor;
         this.objectMapper = objectMapper;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.timeoutScheduler = Executors.newScheduledThreadPool(1, runnable -> {
             Thread thread = new Thread(runnable, "agent-run-timeout");
             thread.setDaemon(true);
@@ -106,39 +110,50 @@ public class AgentStreamService {
             return replay(sessionId, existingUserMessage);
         }
 
-        // 并发认领：一会话最多一个 running run
+        // run 必须先存在才能写 active_run_id；认领失败连同新 run 一起回滚。
         String runId = IdGenerator.generate("RUN");
-        int claimed = sessionMapper.update(null, new UpdateWrapper<AgentSession>()
-            .eq("session_id", sessionId)
-            .isNull("active_run_id")
-            .set("active_run_id", runId)
-            .set("updated_at", LocalDateTime.now()));
-        if (claimed == 0) {
-            throw new AgentSessionBusyException("SESSION_BUSY");
-        }
+        transactionTemplate.executeWithoutResult(status -> {
+            AgentRun run = new AgentRun();
+            run.setRunId(runId);
+            run.setSessionId(sessionId);
+            runRecorder.start(run);
+            int claimed = sessionMapper.update(null, new UpdateWrapper<AgentSession>()
+                .eq("session_id", sessionId)
+                .eq("status", "active")
+                .isNull("active_run_id")
+                .set("active_run_id", runId)
+                .set("updated_at", LocalDateTime.now()));
+            if (claimed == 0) {
+                throw new AgentSessionBusyException("SESSION_BUSY");
+            }
+        });
 
         AgentRunContext ctx = null;
         try {
-            AgentMessage userMessage;
             try {
-                userMessage = messageStore.persistUserMessage(sessionId, request.getClientMessageId(), request.getContent());
+                messageStore.persistUserMessage(sessionId, request.getClientMessageId(), request.getContent());
             } catch (DuplicateKeyException e) {
                 // 并发下同 clientMessageId 已落库：释放认领，走重放
+                runRecorder.markFailed(runId, "DUPLICATE_MESSAGE");
                 releaseClaim(sessionId, runId);
                 AgentMessage duplicated = messageStore.findByClientMessageId(sessionId, request.getClientMessageId());
                 return duplicated != null ? replay(sessionId, duplicated) : emptyReplay(sessionId);
             }
 
-            AgentRun run = new AgentRun();
-            run.setRunId(runId);
-            run.setSessionId(sessionId);
-            runRecorder.start(run);
-
             ctx = new AgentRunContext(sessionId, runId, operatorUserId, request.getContent());
             loadRequirement(ctx, session);
             ctx.setFollowupCount(countConsecutiveFollowups(sessionId));
             AgentRunContext.register(ctx);
+            long emitterTimeoutMillis = (properties.getRunTimeoutSeconds() + 30L) * 1000L;
+            SseEmitter emitter = new SseEmitter(emitterTimeoutMillis);
+            eventBus.register(runId, emitter, properties.getSseHeartbeatSeconds());
+            scheduleRunTimeout(sessionId, runId);
+            AgentRunContext finalCtx = ctx;
+            taskExecutor.execute(() -> executeRun(finalCtx));
+            return emitter;
         } catch (RuntimeException e) {
+            cancelRunTimeout(runId);
+            eventBus.complete(runId);
             releaseClaim(sessionId, runId);
             if (ctx != null) {
                 AgentRunContext.remove(runId);
@@ -146,14 +161,6 @@ public class AgentStreamService {
             runRecorder.markFailed(runId, "RUN_FAILED");
             throw e;
         }
-
-        long emitterTimeoutMillis = (properties.getRunTimeoutSeconds() + 30L) * 1000L;
-        SseEmitter emitter = new SseEmitter(emitterTimeoutMillis);
-        eventBus.register(runId, emitter, properties.getSseHeartbeatSeconds());
-        scheduleRunTimeout(sessionId, runId);
-        AgentRunContext finalCtx = ctx;
-        taskExecutor.execute(() -> executeRun(finalCtx));
-        return emitter;
     }
 
     /**

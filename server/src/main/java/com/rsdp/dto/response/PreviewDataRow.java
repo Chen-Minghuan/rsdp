@@ -21,6 +21,12 @@ public class PreviewDataRow {
      */
     private int rowIndex;
 
+    /** 源文件中型号单元格有值，标记一个物理产品块的起点。 */
+    private boolean modelStart;
+
+    /** 分页重复标题、表头或说明行，不参与商品分组。 */
+    private boolean systemExcluded;
+
     /**
      * 原始表头 → 单元格值（按列顺序）。
      */

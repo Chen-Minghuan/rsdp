@@ -52,6 +52,8 @@ public class AuditLogService {
     private static final Set<String> PASSWORD_FIELDS = Set.of("passwordhash", "password");
     /** 密码字段脱敏占位值。 */
     private static final String MASKED_PASSWORD = "***";
+    /** 脱敏失败时的快照占位值（fail-closed，禁止原值落审计库）。 */
+    private static final String REDACTED_SNAPSHOT = "[REDACTED]";
     private static final int MAX_SNAPSHOT_LENGTH = 32768;
 
     private final AtomicLong insertFailureCount = new AtomicLong();
@@ -211,14 +213,12 @@ public class AuditLogService {
             return objectMapper.convertValue(tree, new TypeReference<Map<String, Object>>() {
             });
         } catch (Exception e) {
-            log.warn("审计日志快照敏感字段脱敏失败，将原值写入: {}", e.getMessage());
-            try {
-                return objectMapper.convertValue(value, new TypeReference<Map<String, Object>>() {
-                });
-            } catch (Exception ex) {
-                log.warn("审计日志快照序列化失败，快照置空: {}", ex.getMessage());
-                return null;
-            }
+            // fail-closed（R-07）：脱敏失败时禁止将原值（可能含明文成本）写入审计快照，
+            // 以固定占位替代；告警日志不含原值及其派生信息
+            insertFailureCount.incrementAndGet();
+            log.warn("审计日志快照敏感字段脱敏失败，快照已按占位处理（累计 {} 次）: {}",
+                insertFailureCount.get(), e.getMessage());
+            return Map.of("redacted", REDACTED_SNAPSHOT);
         }
     }
 

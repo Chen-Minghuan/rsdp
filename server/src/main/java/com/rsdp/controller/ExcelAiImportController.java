@@ -2,8 +2,10 @@ package com.rsdp.controller;
 
 import com.rsdp.common.Result;
 import com.rsdp.config.ExcelAiStandardFields;
+import com.rsdp.dto.request.ExcelAiCategoryRevisionRequest;
 import com.rsdp.dto.request.ExcelAiClassifyCategoriesRequest;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
+import com.rsdp.dto.response.ExcelAiCategoryRevisionResponse;
 import com.rsdp.dto.response.ExcelAiClassifyCategoriesResponse;
 import com.rsdp.dto.response.ExcelAiImportStatusResponse;
 import com.rsdp.dto.response.ExcelAiImportSubmitResult;
@@ -111,6 +113,22 @@ public class ExcelAiImportController {
         @RequestBody @Valid ExcelAiClassifyCategoriesRequest request) {
         excelAiImportService.getAccessibleBatch(batchId);
         return Result.ok(excelAiImportService.classifyRowCategories(batchId, request));
+    }
+
+    /**
+     * 品类 Preview Edit 命令（P0-B2，09 方案 v2.3 + v3.3 §46/§47）：
+     * 导入方式 / 默认品类 / 候选品类 / 行级最终品类的修改物化为新的 immutable Revision。
+     *
+     * <p>携带 {@code expectedRevision} 乐观锁；冲突返回 409 preview_revision_conflict，
+     * 客户端需重新读取最新 Snapshot 后重试。返回新 Revision 号与逐行最终品类。</p>
+     */
+    @PostMapping("/{batchId}/category-revision")
+    @PreAuthorize("hasAuthority('product:import')")
+    public Result<ExcelAiCategoryRevisionResponse> applyCategoryRevision(
+        @PathVariable @NotBlank String batchId,
+        @RequestBody @Valid ExcelAiCategoryRevisionRequest request) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        return Result.ok(excelAiImportService.applyCategoryRevision(batchId, request));
     }
 
     /**

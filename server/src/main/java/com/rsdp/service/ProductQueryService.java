@@ -111,6 +111,8 @@ public class ProductQueryService {
     private final StorageService storageService;
     private final ProductPurgeMapper productPurgeMapper;
     private final RspuPriceSummaryService rspuPriceSummaryService;
+    /** §42.3/§43 规则 12：聚合成本投影防反推统一裁决（输出与筛选/排序同一口径）。 */
+    private final com.rsdp.supplychain.security.CostSummaryAccess costSummaryAccess;
 
     /**
      * 分页查询产品列表。
@@ -159,14 +161,12 @@ public class ProductQueryService {
         Map<String, String> primaryImageUrlMap = batchPrimaryImageUrls(rspuIds);
         Map<String, List<String>> factoryCodeMap = batchFactoryCodes(rspuIds);
         // 当页最低价与报价数取自价格投影表（V44），不再批量查 RSKU 实体解密聚合。
-        // 最低出厂价仅平台运营人员可见（toSummary 响应层掩码），非平台员工不发起查询，
-        // 与出厂价泄露封堵口径一致；报价数全角色可见，故掩码只影响 minPriceMap。
+        // 成本投影访问统一经 CostSummaryAccess 裁决（§42.3/§43 规则 12）：
+        // 平台员工（cost_price_exact）可见真实值；其他主体不发起查询、输出 null，
+        // 报价数全角色可见，故掩码只影响成本投影输出。
         Map<String, RspuPriceSummary> priceSummaryMap = SecurityOperatorContext.isPlatformStaff()
             ? rspuPriceSummaryService.batchSummaries(rspuIds)
             : Map.of();
-        Map<String, BigDecimal> minPriceMap = priceSummaryMap.entrySet().stream()
-            .filter(e -> e.getValue().getMinFactoryPrice() != null)
-            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().getMinFactoryPrice()));
         Map<String, Long> rskuCountMap = priceSummaryMap.entrySet().stream()
             .collect(Collectors.toMap(
                 Map.Entry::getKey,
@@ -174,7 +174,7 @@ public class ProductQueryService {
                 (a, b) -> a));
 
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, minPriceMap, rskuCountMap))
+            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, priceSummaryMap, rskuCountMap))
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
@@ -353,13 +353,18 @@ public class ProductQueryService {
     }
 
     /**
-     * 价格列表达式（筛选与排序共用口径）：平台员工按价格投影表最低出厂价
-     * （标量子查询，与列表 minFactoryPrice 同源），其他角色按零售参考价列。
+     * 价格列表达式（筛选与排序共用口径）：平台员工（cost_price_exact）按价格投影表
+     * 最低出厂价（标量子查询，与列表 minFactoryPrice 同源），其他主体按零售参考价列。
+     *
+     * <p>§43 规则 12（筛选/排序预言机）：是否允许按真实成本值筛选/排序由
+     * {@code CostSummaryAccess} 统一裁决，与输出规则同一判定口径——summary-only
+     * 主体对降级 RSPU 的真实值筛选会构成二分区间预言机，故非 exact 主体一律
+     * 回退零售参考价列，不使用 rspu_price_summary 真实值。</p>
      *
      * @return SQL 价格表达式
      */
     private String priceColumnExpression() {
-        return SecurityOperatorContext.isPlatformStaff()
+        return costSummaryAccess.exactCostProjectionAllowed(SecurityOperatorContext.isPlatformStaff())
             ? "(SELECT ps.min_factory_price FROM rspu_price_summary ps WHERE ps.rspu_id = rspu_master.rspu_id)"
             : "retail_price";
     }
@@ -881,12 +886,10 @@ public class ProductQueryService {
         // ② AI 识别记录（解除对 image_assets 的引用）
         productPurgeMapper.deleteAiRecognitions(rspuId);
         // ③ 无实体的弱引用表
-        productPurgeMapper.deleteMatchingFeedback(rspuId);
         productPurgeMapper.deleteCollectionItems(rspuId);
         productPurgeMapper.deleteSchemeCandidates(rspuId);
         productPurgeMapper.deleteDuplicateSuspects(rspuId);
         // ④ 变体/RSKU 的子表
-        productPurgeMapper.deleteFactoryVariantCapacity(rspuId);
         productPurgeMapper.deletePriceHistory(rspuId);
         // ⑤ 图片（引用 RSKU/变体）→ RSKU（引用变体）→ 变体
         imageAssetsMapper.physicalDeleteByRspuId(rspuId);
@@ -1025,6 +1028,16 @@ public class ProductQueryService {
             rspu.setStatus(status);
         }
 
+        // v3.3 §34.1（P0-D）：人工编辑业务值时，同一事务为显式提交的字段写入
+        // manual_override_fields 活跃标记（JSON Pointer 键）；Excel/AI/重试不得覆盖这些字段
+        String operator = SecurityOperatorContext.currentUsername();
+        String overrideFields = rspu.getManualOverrideFields();
+        for (String pointer : collectManuallyEditedPointers(request)) {
+            overrideFields = com.rsdp.util.ManualOverrideFields.markActive(
+                overrideFields, pointer, operator, com.rsdp.util.ManualOverrideFields.SOURCE_PRODUCT_UI);
+        }
+        rspu.setManualOverrideFields(overrideFields);
+
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
 
@@ -1041,6 +1054,60 @@ public class ProductQueryService {
         }
 
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+    }
+
+    /**
+     * 收集本次人工编辑显式提交的字段指针（v3.3 §34.1；仅请求中非 null 的字段）。
+     */
+    private List<String> collectManuallyEditedPointers(ProductUpdateRequest request) {
+        List<String> pointers = new ArrayList<>();
+        if ((request.getStyleCodes() != null && !request.getStyleCodes().isEmpty())
+            || StringUtils.hasText(request.getPositioningLabel())) {
+            pointers.add("/positioningLabel");
+        }
+        if (request.getColorPrimaryName() != null) {
+            pointers.add("/colorPrimaryName");
+        }
+        if (request.getProductName() != null) {
+            pointers.add("/productName");
+        }
+        if (request.getDescription() != null) {
+            pointers.add("/description");
+        }
+        if (request.getColorPrimaryHsv() != null) {
+            pointers.add("/colorPrimaryHsv");
+        }
+        if (request.getMaterialTags() != null) {
+            pointers.add("/materialTags");
+        }
+        if (request.getFabricTags() != null) {
+            pointers.add("/fabricTags");
+        }
+        if (request.getSceneTags() != null) {
+            pointers.add("/sceneTags");
+        }
+        if (request.getSixDimTags() != null) {
+            pointers.add("/sixDimTags");
+        }
+        if (request.getReferencePriceBand() != null) {
+            pointers.add("/referencePriceBand");
+        }
+        if (request.getRetailPrice() != null) {
+            pointers.add("/retailPrice");
+        }
+        if (StringUtils.hasText(request.getProductLevel())) {
+            pointers.add("/productLevel");
+        }
+        if (request.getWarrantyYears() != null) {
+            pointers.add("/warrantyYears");
+        }
+        if (request.getKeySpecs() != null) {
+            pointers.add("/keySpecs");
+        }
+        if (StringUtils.hasText(request.getStatus())) {
+            pointers.add("/status");
+        }
+        return pointers;
     }
 
     /**
@@ -1281,7 +1348,7 @@ public class ProductQueryService {
     private ProductSummaryResponse toSummary(RspuMaster rspu,
                                              Map<String, String> primaryImageUrlMap,
                                              Map<String, List<String>> factoryCodeMap,
-                                             Map<String, BigDecimal> minPriceMap,
+                                             Map<String, RspuPriceSummary> priceSummaryMap,
                                              Map<String, Long> rskuCountMap) {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
@@ -1296,14 +1363,16 @@ public class ProductQueryService {
         summary.setReviewStatus(rspu.getReviewStatus());
         summary.setAestheticsConfidence(rspu.getAestheticsConfidence());
         summary.setProductLevel(rspu.getProductLevel());
-        // 最低出厂价仅平台运营人员可见。
-        // 注意：该值是跨厂聚合的最低价，无法归属单一工厂做 canViewFactoryPrice 逐厂判断，
-        // 且 FACTORY_ADMIN 看到的可能是友商价格，因此对工厂角色同样掩码；
+        // 最低出厂价经 CostSummaryAccess 统一裁决（§42.3 确定性输出规则）：
+        // 平台员工（cost_price_exact，§43.1 矩阵）输出真实值——含 active_rsku_count<2 /
+        // min=max 的降级场景（exact 主体允许等价精确值，不经降级）；
+        // 其他主体（summary-only / 无成本权限）不发起投影查询，min/max 恒 null，
         // 工厂查看本厂报价走 RSKU 详情（已有按厂掩码）。
-        summary.setMinFactoryPrice(
-            SecurityOperatorContext.isPlatformStaff()
-                ? minPriceMap.get(rspu.getRspuId())
-                : null);
+        com.rsdp.supplychain.security.CostSummaryAccess.SummaryView costView = costSummaryAccess.project(
+            priceSummaryMap.get(rspu.getRspuId()),
+            SecurityOperatorContext.isPlatformStaff(), false);
+        summary.setMinFactoryPrice(costView.minFactoryPrice());
+        summary.setHasFactoryQuote(costView.hasFactoryQuote());
         summary.setRetailPrice(rspu.getRetailPrice());
         summary.setCreatedAt(rspu.getCreatedAt());
         summary.setUpdatedAt(rspu.getUpdatedAt());

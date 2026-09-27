@@ -87,6 +87,7 @@ public class ProductImportService {
     private final DictUnresolvedService dictUnresolvedService;
     private final DataScopeHelper dataScopeHelper;
     private final RspuCodeService rspuCodeService;
+    private final SupplierIdentityResolutionService supplierIdentityResolutionService;
 
     private java.util.Set<String> allowedImageHosts = java.util.Set.of();
 
@@ -274,13 +275,19 @@ public class ProductImportService {
     }
 
     /**
-     * 预加载 Excel 中出现的「外部编码 → RSPU ID」映射。
+     * 预加载 Excel 中出现的「源商品编码 → RSPU ID」映射。
      *
      * <p>同一产品可能在不同行分别用 rspuId 和 externalCode 引用，提前解析映射
-     * 才能在行级重复检测中识别为同一产品。已软删除的产品由 @TableLogic 自动排除。</p>
+     * 才能在行级重复检测中识别为同一产品。</p>
+     *
+     * <p>§9 Phase 3（Switch Read）：身份解析统一经 {@link SupplierIdentityResolutionService}，
+     * supplier_product_ref 优先，legacy fallback 仅允许「factory context 能验证 +
+     * 该工厂下唯一无歧义」。传统 Excel 导入模板没有工厂上下文字段（禁止裸 fallback），
+     * 因此此处解析通常不命中，仅保留与新入口对接的通路；已软删除的产品由
+     * 解析入口与 @TableLogic 口径排除。</p>
      *
      * @param rows 导入行
-     * @return 外部编码 → RSPU ID 映射
+     * @return 源商品编码 → RSPU ID 映射
      */
     private Map<String, String> preloadExternalCodeMapping(List<ProductImportRow> rows) {
         List<String> codes = rows.stream()
@@ -292,15 +299,13 @@ public class ProductImportService {
         if (codes.isEmpty()) {
             return Map.of();
         }
-        return rspuMapper.selectList(
-                new QueryWrapper<RspuMaster>()
-                    .select("rspu_id", "external_code")
-                    .in("external_code", codes)
-            ).stream()
-            .filter(r -> StringUtils.hasText(r.getExternalCode()))
+        // 传统 Excel 导入无工厂上下文（factoryCode=null）：按 §9 Phase 3 不做全局
+        // external_code 裸查询，只有后续引入工厂上下文后本通路才会产生命中
+        return supplierIdentityResolutionService.resolveBatch(null, null, codes)
+            .entrySet().stream()
             .collect(Collectors.toMap(
-                r -> r.getExternalCode().trim(),
-                RspuMaster::getRspuId,
+                Map.Entry::getKey,
+                e -> e.getValue().getRspuId(),
                 (a, b) -> a
             ));
     }
@@ -507,6 +512,17 @@ public class ProductImportService {
         return rspu.getRspuId();
     }
 
+    /**
+     * 行级存在性预判：rspuId 直接定位；源商品编码（externalCode 列）经
+     * {@link SupplierIdentityResolutionService} 统一解析身份（§9 Phase 3：
+     * supplier_product_ref 优先，legacy fallback 需工厂上下文可验证且唯一无歧义）。
+     *
+     * <p>传统 Excel 导入没有工厂上下文，禁止按 external_code 全局裸查询，
+     * 因此编码列在无工厂上下文时不再解析身份。Phase 5 起 external_code 不再
+     * 新写（供应商身份只写 supplier_product_ref，而本链路无工厂上下文
+     * 无法建立 ref），仅凭编码列的「更新已有产品」不再生效，重复建档不再由
+     * uk_rspu_external_code 拦截——模板需引入工厂上下文列后才能恢复身份语义。</p>
+     */
     private RspuMaster resolveExistingRspu(String rspuId, String externalCode) {
         RspuMaster byRspuId = null;
         if (StringUtils.hasText(rspuId)) {
@@ -514,12 +530,10 @@ public class ProductImportService {
         }
         RspuMaster byExternalCode = null;
         if (StringUtils.hasText(externalCode)) {
-            List<RspuMaster> list = rspuMapper.selectList(
-                new QueryWrapper<RspuMaster>().eq("external_code", externalCode.trim())
-            );
-            if (!list.isEmpty()) {
-                byExternalCode = list.get(0);
-            }
+            byExternalCode = supplierIdentityResolutionService
+                .resolve(null, null, externalCode.trim())
+                .map(identity -> rspuMapper.selectById(identity.getRspuId()))
+                .orElse(null);
         }
         // 行内 rspuId 与 externalCode 分别指向不同产品时显式报错，避免静默选其一导致误更新
         if (byRspuId != null && byExternalCode != null
@@ -534,7 +548,9 @@ public class ProductImportService {
         String rspuId = IdGenerator.rspuId();
         RspuMaster rspu = buildRspuFromRow(new RspuMaster(), row, dictCache);
         rspu.setRspuId(rspuId);
-        rspu.setExternalCode(trim(row.getExternalCode()));
+        // §9 Phase 5（Contract）：external_code 不再新写（新建恒为 NULL，仅保留历史值投影）。
+        // 传统 Excel 导入模板无工厂上下文字段，无法建立 supplier_product_ref 身份
+        // （身份键含 factory_code，§6），本链路仅停写 external_code
         rspu.setStatus("active");
         rspu.setReviewStatus("待复核");
         rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
@@ -582,9 +598,7 @@ public class ProductImportService {
     private RspuMaster updateRspu(RspuMaster rspu, ProductImportRow row, Map<String, List<CategoryDict>> dictCache) {
         RspuMaster oldSnapshot = snapshot(rspu);
         buildRspuFromRow(rspu, row, dictCache, true);
-        if (StringUtils.hasText(row.getExternalCode())) {
-            rspu.setExternalCode(row.getExternalCode().trim());
-        }
+        // §9 Phase 5（Contract）：external_code 不再新写/覆盖，历史值原样保留（只读历史投影，§8）
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
         auditLogService.logUpdate("rspu_master", rspu.getRspuId(), oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
@@ -1155,7 +1169,6 @@ public class ProductImportService {
         copy.setDescription(source.getDescription());
         copy.setRetailPrice(source.getRetailPrice());
         copy.setSixDimTags(source.getSixDimTags());
-        copy.setStyleVector(source.getStyleVector());
         copy.setColorPrimaryName(source.getColorPrimaryName());
         copy.setColorPrimaryHsv(source.getColorPrimaryHsv());
         copy.setColorSecondary(source.getColorSecondary());

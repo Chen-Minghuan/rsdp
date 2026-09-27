@@ -209,7 +209,7 @@ public class AiRecognitionPersistenceService {
             rspu.setSceneTags(toJson(sceneCodes));
         }
         // 置信度是 AI 识别产物（无人工来源），始终更新；
-        // 图片向量不再写 style_vector（已由 pgvector 向量存储接管，见 ProductVectorStore）
+        // 图片向量由 pgvector 向量存储接管（ProductVectorStore）；style_vector 列已于 V15 退役删除
         rspu.setAestheticsConfidence(labels.getConfidence());
         rspu.setSourceAgentVersion(modelName);
         rspu.setStatus("active");

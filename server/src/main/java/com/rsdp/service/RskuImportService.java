@@ -21,7 +21,9 @@ import com.rsdp.mapper.PriceHistoryMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.supplychain.rsku.SupplierConfigurationKeys;
 import com.rsdp.util.PriceBands;
+import com.rsdp.util.SupplierConfigurationNormalizer;
 import com.rsdp.util.ExcelFileValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -118,7 +120,7 @@ public class RskuImportService {
             rowIndex++;
             // 先归一化（trim + 字典码归一），保证数据权限校验与预加载 map 查找使用 trim 后的编码
             normalizeRow(row, productLevels, quoteConfidenceLevels);
-            String key = row.getFactoryCode() + "|" + row.getVariantId();
+            String key = row.getFactoryCode() + "|" + row.getVariantId() + "|" + SupplierConfigurationKeys.BASE;
             RskuSupply existing = existingMap.get(key);
             // 更新模式且已存在报价时允许价格留空（留空表示不更新价格）
             boolean allowEmptyPrice = updateIfExists && existing != null;
@@ -210,13 +212,24 @@ public class RskuImportService {
      * @param productLevel 解析后的产品等级
      */
     protected void updateSingleRsku(RskuSupply existing, RskuImportRow row, String productLevel) {
-        RskuSupply oldSnapshot = snapshot(existing);
-        BigDecimal oldPrice = updateExistingRsku(existing, row, productLevel);
-        rskuSupplyMapper.updateById(existing);
-        if (shouldRecordPriceHistory(oldPrice, existing.getFactoryPrice())) {
-            priceHistoryMapper.insert(buildPriceHistory(existing, oldPrice));
+        // §34.1：同事务重读 manual_override_fields 并锁定目标行（FOR UPDATE）
+        RskuSupply locked = rskuSupplyMapper.selectAliveByIdForUpdate(existing.getRskuId());
+        if (locked == null) {
+            throw new BusinessException("该供应配置报价已被删除，请重试");
         }
-        auditLogService.logUpdate("rsku_supply", existing.getRskuId(), oldSnapshot, existing, SecurityOperatorContext.currentUsername());
+        RskuSupply oldSnapshot = snapshot(locked);
+        BigDecimal oldPrice = updateExistingRsku(locked, row, productLevel);
+        rskuSupplyMapper.updateById(locked);
+        // §37：报价更新 quote_version+1（行锁下期望版本必然命中，0 行即冲突）
+        int bumped = rskuSupplyMapper.bumpQuoteVersion(
+            locked.getRskuId(), oldSnapshot.getQuoteVersion(), LocalDateTime.now());
+        if (bumped == 0) {
+            throw new BusinessException("quote_version_conflict: 报价已被并发修改，请刷新后重试");
+        }
+        if (shouldRecordPriceHistory(oldPrice, locked.getFactoryPrice())) {
+            priceHistoryMapper.insert(buildPriceHistory(locked, oldPrice));
+        }
+        auditLogService.logUpdate("rsku_supply", locked.getRskuId(), oldSnapshot, locked, SecurityOperatorContext.currentUsername());
     }
 
     private void validateFile(MultipartFile file) {
@@ -307,13 +320,16 @@ public class RskuImportService {
         if (variantIds.isEmpty()) {
             return Map.of();
         }
+        // v3.3 §32.1：判重键改为 工厂|变体|供应配置 Key；本导入路径不携带供应商等级列，
+        // 行键恒为 BASE（§18.2「确认不存在配置拆分」），只命中既有 BASE 行，
+        // 不会把 AI 导入链产生的 TEXT:/CODE: 配置行误判为重复
         return rskuSupplyMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RskuSupply>()
                 .in("variant_id", variantIds)
                 .isNull("deleted_at")
         ).stream()
             .collect(Collectors.toMap(
-                r -> r.getFactoryCode() + "|" + r.getVariantId(),
+                r -> r.getFactoryCode() + "|" + r.getVariantId() + "|" + r.getSupplierConfigurationKey(),
                 r -> r,
                 (a, b) -> a
             ));
@@ -539,6 +555,10 @@ public class RskuImportService {
         rsku.setQuoteConfidence(trim(row.getQuoteConfidence()));
         rsku.setReviewStatus("待复核");
         rsku.setPriceUpdated(LocalDate.now());
+        // v3.3 §34：Supplier Configuration 显式赋值（无数据库 DEFAULT）；本路径无供应商等级列 → BASE
+        rsku.setSupplierConfigurationKey(SupplierConfigurationKeys.BASE);
+        rsku.setSupplierConfigurationNormalizerVersion(
+            String.valueOf(SupplierConfigurationNormalizer.CURRENT_VERSION));
         // ADR-007：普通 Excel 导入也是 RSKU 发号入口，插入前生成业务编码
         rsku.setRskuCode(assignRskuCode(rsku.getRskuId(), row, rspuCode, materials, variant));
         rsku.setCreatedAt(LocalDateTime.now());
@@ -596,7 +616,14 @@ public class RskuImportService {
         if (row.getFactorySku() != null) {
             existing.setFactorySku(trim(row.getFactorySku()));
         }
-        if (row.getFactoryPrice() != null) {
+        // manualCorrectionPolicy=preserve（§34.1/§47.1.5 默认）：/factoryPrice 存在活跃
+        // 人工修正标记时不覆盖既有价格（manual_override_fields 是唯一当前事实源）
+        boolean pricePreservedByOverride = row.getFactoryPrice() != null
+            && (oldPrice == null || oldPrice.compareTo(row.getFactoryPrice()) != 0)
+            && com.rsdp.util.ManualOverrideFields.isActive(existing.getManualOverrideFields(), "/factoryPrice");
+        if (pricePreservedByOverride) {
+            log.warn("RSKU /factoryPrice 存在活跃人工修正标记，导入价格被保留策略跳过: rskuId={}", existing.getRskuId());
+        } else if (row.getFactoryPrice() != null) {
             existing.setFactoryPrice(row.getFactoryPrice());
             existing.setPriceBand(resolvePriceBand(row.getFactoryPrice()));
             existing.setPriceUpdated(LocalDate.now());
@@ -679,6 +706,10 @@ public class RskuImportService {
         copy.setQuoteConfidence(source.getQuoteConfidence());
         copy.setReviewStatus(source.getReviewStatus());
         copy.setPriceUpdated(source.getPriceUpdated());
+        copy.setSupplierConfigurationKey(source.getSupplierConfigurationKey());
+        copy.setSupplierConfigurationNormalizerVersion(source.getSupplierConfigurationNormalizerVersion());
+        copy.setQuoteVersion(source.getQuoteVersion());
+        copy.setManualOverrideFields(source.getManualOverrideFields());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setUpdatedAt(source.getUpdatedAt());
         return copy;

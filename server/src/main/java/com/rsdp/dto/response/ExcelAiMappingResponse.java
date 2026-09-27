@@ -68,4 +68,10 @@ public class ExcelAiMappingResponse {
      * 字段真实出处为 ExcelAiImportService 的 AI 映射提示词，见 ExcelAiStandardFields 同步义务说明）。
      */
     private List<StandardFieldOption> standardFields = new ArrayList<>();
+
+    /**
+     * 预览生成的首版 Immutable Snapshot Revision 号（P0-B2，v3.3 §46：正常为 1；
+     * 后续 mode/categoryHint/candidates/rowCategorySelections 修改经编辑命令推进）。
+     */
+    private Long previewRevision;
 }

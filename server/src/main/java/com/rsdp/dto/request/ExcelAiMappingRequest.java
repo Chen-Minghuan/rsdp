@@ -56,8 +56,19 @@ public class ExcelAiMappingRequest {
      * 数据清洗后的行级最终品类：Excel 物理行号（1-based）→ 品类字典码。
      * 新模式（categoryMode 非空）下后端只认本集合（与 previewEdits / skipRows 同模式）；
      * AI/系统的 suggested 建议仅前端展示，不提交。
+     *
+     * <p>P0-B2 起：携带 expectedRevision 时本字段以对应 Snapshot 中固化的
+     * finalCategoryCode 为准（后端用快照值覆盖本字段），请求中的值仅作兼容兜底。</p>
      */
     private Map<Integer, String> rowCategorySelections;
+
+    /**
+     * 确认导入所基于的 Preview Revision（P0-B2，v3.3 §47 Optimistic Lock）。
+     * 新模式（categoryMode 非空）下携带时：与批次当前 preview_revision 不一致返回
+     * 409 preview_revision_conflict；品类完整性与唯一性校验直接读该 Snapshot 固化的
+     * finalCategoryCode。缺省（null）回退旧的请求级校验路径（兼容旧客户端/旧批次）。
+     */
+    private Long expectedRevision;
 
     /**
      * 默认工厂编码，用于为每个价格列创建 RSKU。
@@ -136,4 +147,24 @@ public class ExcelAiMappingRequest {
      * 这些行不会进入后续导入流程，也不计入总行数。
      */
     private List<Integer> skipRows = new ArrayList<>();
+
+    // ---------------- v3.3 P0-F：Import Policy（§47.1.5，稀疏输入，服务端补齐默认值后物化哈希） ----------------
+
+    /** 存在未 acknowledge/resolve 的 warning 时是否仍允许新执行（默认 false）。 */
+    private Boolean allowWarnings;
+
+    /** 目标冲突策略：fail_group（默认）/ skip_invalid_target。 */
+    private String conflictPolicy;
+
+    /** Quote 覆盖策略：replace_if_newer（默认）/ keep_existing / force_replace。 */
+    private String quotePolicy;
+
+    /** 空值策略：preserve_existing（默认）/ clear_explicit_only。 */
+    private String nullValuePolicy;
+
+    /** 人工修正策略：preserve（默认）/ replace_explicit。 */
+    private String manualCorrectionPolicy;
+
+    /** force_replace 覆盖理由（仅 quotePolicy=force_replace 时必须非空，其他策略必须为 null）。 */
+    private String overrideReason;
 }

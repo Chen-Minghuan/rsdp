@@ -19,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -66,6 +67,7 @@ class RspuVariantServiceTest {
     @Mock
     private com.rsdp.service.DictUnresolvedService dictUnresolvedService;
 
+    @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -245,6 +247,32 @@ class RspuVariantServiceTest {
         assertEquals("相同尺寸/颜色/材质的变体已存在", ex.getMessage());
         verify(variantMapper, org.mockito.Mockito.never()).insert(any(RspuVariant.class));
     }
+
+
+    @Test
+    void createVariant_shouldThrow_whenLegacyCoalesceDuplicate() {
+        // 旧 COALESCE(code,text) 口径判重（uk_variant_attrs 同语义）
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId(rspuId);
+        rspu.setStatus("active");
+        when(rspuMapper.selectById(rspuId)).thenReturn(rspu);
+        when(dictService.listByType("material")).thenReturn(materialDicts("LI"));
+        RspuVariant existing = new RspuVariant();
+        existing.setVariantId("V-EXIST");
+        existing.setRspuId(rspuId);
+        existing.setMaterialCode("LI");
+        when(variantMapper.selectList(any())).thenReturn(List.of(existing));
+
+        RspuVariantCreateRequest request = new RspuVariantCreateRequest();
+        request.setDisplayName("重复维度变体");
+        request.setMaterialCode("LI");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+            () -> variantService.createVariant(rspuId, request));
+        assertEquals("相同尺寸/颜色/材质的变体已存在", ex.getMessage());
+        verify(variantMapper, org.mockito.Mockito.never()).insert(any(RspuVariant.class));
+    }
+
 
     @Test
     void createVariant_shouldThrow_whenDimsUniqueIndexConflict() {

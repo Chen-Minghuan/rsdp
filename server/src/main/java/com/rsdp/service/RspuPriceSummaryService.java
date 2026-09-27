@@ -5,12 +5,14 @@ import com.rsdp.entity.RspuPriceSummary;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.mapper.RspuPriceSummaryMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
+import com.rsdp.util.RskuAvailability;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -48,10 +50,9 @@ public class RspuPriceSummaryService {
     /**
      * 重算单个 RSPU 的价格投影并 upsert。
      *
-     * <p>聚合口径：active_rsku_count 与 min/max_factory_price 均只统计
-     * 「factory_price 非空且未软删」的 RSKU 行（软删行由 {@code @TableLogic} 自动排除）。
-     * 当前 {@code rsku_supply} 表尚未引入 {@code status} 列，因此暂不按
-     * active/discontinued/paused 过滤；待后续增加该列并补齐写入路径后，再恢复状态过滤。</p>
+     * <p>聚合口径：active_rsku_count 与 min/max_factory_price 均只统计「可用出厂报价」
+     * （{@link com.rsdp.util.RskuAvailability}：active + CNY + 有效期内 + 价格非空，
+     * 软删行由 {@code @TableLogic} 自动排除），与实际选价共用同一定义。</p>
      *
      * <p>不加事务注解：单 upsert 语句，在调用方（RSKU 写路径）的事务内执行即随其提交；
      * 无有效 RSKU 时投影行保留（min/max 为 NULL、count 为 0），与"无报价"列表行为一致。</p>
@@ -88,6 +89,25 @@ public class RspuPriceSummaryService {
      * 延迟重算作用域句柄。close 幂等；异常路径同样会 flush 已提交的收集结果
      * （逐 RSPU 重算失败在 {@link #recalculateBatch} 内隔离，不影响调用方）。
      */
+    /**
+     * 有效期跨日投影刷新（2026-09-24 评审收口）：报价生效/失效由日期口径判定而非
+     * status 字段流转，因此不能只依赖报价修改事件触发重算——每日低峰把
+     * 「今天生效（effective_from = 今天）」与「昨天到期（effective_to = 昨天）」
+     * 的报价所涉 RSPU 重算一遍，投影随自然跨日保持正确。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(
+        cron = "${rsdp.price-summary.validity-refresh-cron:0 30 2 * * *}")
+    public void refreshValidityCrossovers() {
+        LocalDate today = LocalDate.now();
+        List<String> rspuIds = rskuSupplyMapper.selectRspuIdsWithValidityBoundary(
+            today, today.minusDays(1));
+        if (rspuIds.isEmpty()) {
+            return;
+        }
+        log.info("价格投影有效期跨日刷新: 涉及 {} 个 RSPU", rspuIds.size());
+        recalculateBatch(rspuIds);
+    }
+
     public final class DeferralScope implements AutoCloseable {
         private final Set<String> previous;
         private final Set<String> bag;
@@ -118,12 +138,13 @@ public class RspuPriceSummaryService {
             return;
         }
         // 只取 factory_price 列：避免整实体映射，解密也仅限价格列；
-        // 口径：factory_price 非空且未软删（@TableLogic 自动排除软删行）。
-        // 当前 rsku_supply 无 status 列，暂不按 active/discontinued/paused 过滤。
-        List<RskuSupply> rskus = rskuSupplyMapper.selectList(new QueryWrapper<RskuSupply>()
-            .select("factory_price")
-            .eq("rspu_id", rspuId)
-            .isNotNull("factory_price"));
+        // 口径：「可用出厂报价」（RskuAvailability——active + CNY + 有效期内 + 价格非空），
+        // 与实际选价（RskuSupplyMapper.xml selectCapableByRspuIds）共用同一定义；
+        // 暂停/过期/非人民币报价不进入最低/最高价
+        List<RskuSupply> rskus = rskuSupplyMapper.selectList(RskuAvailability
+            .applyAvailableFactoryQuote(new QueryWrapper<RskuSupply>()
+                .select("factory_price")
+                .eq("rspu_id", rspuId)));
 
         BigDecimal min = null;
         BigDecimal max = null;

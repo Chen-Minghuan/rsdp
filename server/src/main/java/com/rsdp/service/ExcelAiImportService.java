@@ -6,10 +6,14 @@ import com.alibaba.excel.read.listener.ReadListener;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.beans.BeanUtils;
 import com.rsdp.dto.excel.ProductImportRow;
 import com.rsdp.dto.request.CategoryMode;
+import com.rsdp.dto.request.ExcelAiCategoryRevisionRequest;
 import com.rsdp.dto.request.ExcelAiClassifyCategoriesRequest;
 import com.rsdp.dto.request.ExcelAiMappingRequest;
 import com.rsdp.dto.request.PreviewEdit;
@@ -28,13 +32,18 @@ import com.rsdp.dto.response.PreviewDataGroup;
 import com.rsdp.dto.response.PreviewDataRow;
 import com.rsdp.dto.response.PreviewDataVariant;
 import com.rsdp.dto.response.CategoryMappingItem;
+import com.rsdp.dto.response.ExcelAiCategoryRevisionResponse;
 import com.rsdp.dto.response.ExcelAiClassifyCategoriesResponse;
 import com.rsdp.dto.response.ExcelSheetInfo;
 import com.rsdp.dto.response.PriceColumnInfo;
 import com.rsdp.dto.response.UnmappedColumnInfo;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.CategoryDict;
+import com.rsdp.entity.ExcelImportAttempt;
+import com.rsdp.entity.ExcelImportAttemptItem;
 import com.rsdp.entity.ExcelImportBatch;
+import com.rsdp.entity.ExcelImportPreviewRevision;
+import com.rsdp.entity.ExcelImportProductGroup;
 import com.rsdp.entity.ExcelImportRow;
 import com.rsdp.entity.FactoryLeadTimeRule;
 import com.rsdp.entity.ImageAssets;
@@ -43,9 +52,11 @@ import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
 import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.SysUser;
+import com.rsdp.exception.AttemptLeaseLostException;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.exception.ExternalServiceException;
 import com.rsdp.exception.ForbiddenException;
+import com.rsdp.exception.PreviewRevisionConflictException;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.ExcelImportBatchMapper;
@@ -60,6 +71,14 @@ import com.rsdp.security.SecurityUser;
 import com.rsdp.security.datascope.DataScope;
 import com.rsdp.security.datascope.DataScopeHelper;
 import com.rsdp.service.storage.StorageService;
+import com.rsdp.supplychain.hash.SnapshotHasher;
+import com.rsdp.supplychain.hash.SnapshotTargetKeys;
+import com.rsdp.supplychain.hash.VariantFingerprints;
+import com.rsdp.supplychain.policy.ImportPolicy;
+import com.rsdp.supplychain.policy.ImportPolicyMaterializer;
+import com.rsdp.supplychain.rsku.QuoteTargetAggregator;
+import com.rsdp.supplychain.rsku.SupplierConfigurationKeys;
+import com.rsdp.util.ContentHashes;
 import com.rsdp.util.PriceBands;
 import com.rsdp.util.CategoryPaths;
 import com.rsdp.util.ConstraintViolations;
@@ -78,10 +97,12 @@ import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.ss.util.CellReference;
 import org.apache.poi.util.XMLHelper;
 import org.apache.poi.xssf.eventusermodel.XSSFReader;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -95,6 +116,7 @@ import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 import org.xml.sax.Attributes;
@@ -111,6 +133,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.awt.image.BufferedImage;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -120,6 +143,7 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.Comparator;
@@ -155,6 +179,13 @@ public class ExcelAiImportService {
     private static final int CATEGORY_CLASSIFY_CHUNK_SIZE = 20;
     /** 预览阶段懒加载缩略图的原图临时缓存目录前缀 */
     private static final String PREVIEW_IMAGE_CACHE_DIR = "rsdp-preview-images";
+    /**
+     * Excel 行归一规则集版本（P0-B2，v3.3 §47.1.6）：写入 Snapshot 的 normalizer_version，
+     * 归一/分组规则（forward-fill、逻辑产品边界等）变更时必须升级，不得静默改变历史 Hash。
+     */
+    public static final String EXCEL_NORMALIZER_VERSION = "excel-normalizer/2";
+    /** mapping_hash 协议版本（§47.1.4）：column mapping + 用户确认品类映射。 */
+    private static final int MAPPING_HASH_VERSION = 1;
     /** 数据清洗页用户上传的临时图片存储前缀（导入成功后应清理） */
     private static final String PREVIEW_UPLOAD_IMAGE_PREFIX = "preview-images";
     /** 标题行扫描上限：公司标题行一般不超过 10 行 */
@@ -167,6 +198,8 @@ public class ExcelAiImportService {
     private static final String PRICE_ROLE_SALES = "sales";
     /** 批次导入异步任务类型（async_task.task_type，阶段 3.2 confirm 异步化） */
     public static final String TASK_TYPE_EXCEL_IMPORT = "excel_import";
+    /** Supplier Ref provenance：本链路的 source_system 标记（§6，只作 provenance 不参与 Identity） */
+    private static final String SOURCE_SYSTEM_EXCEL_AI_IMPORT = "excel-ai-import";
 
     /**
      * 启动时清理超过 2 小时的预览图片临时缓存，避免磁盘堆积。
@@ -294,6 +327,12 @@ public class ExcelAiImportService {
     private final UserRoleService userRoleService;
     private final PermissionService permissionService;
     private final com.rsdp.security.datascope.DataScopeContext dataScopeContext;
+    private final SupplierIdentityResolutionService supplierIdentityResolutionService;
+    private final SupplierProductRefService supplierProductRefService;
+    private final ExcelImportPreviewSnapshotService previewSnapshotService;
+    /** P0-E 字段级血缘写入（§40/§41）：行事务内同事务追加，失败随行回滚。 */
+    /** P0-F Import Attempt 执行内核（§48-§50）：Replay-first / Lease / AttemptItem 终态 / outcome 汇总。 */
+    private final ExcelImportAttemptService attemptService;
 
     @Value("${rsdp.import.allowed-image-hosts:}")
     private Set<String> allowedImageHosts = Set.of();
@@ -351,7 +390,7 @@ public class ExcelAiImportService {
         // 同名表头自动加消歧后缀（如两个「价格」→「价格」「价格#2」），
         // 避免以表头为 key 时同名列互相覆盖、前一列数据静默丢失（P2-11）
         Map<Integer, String> mergedHeaders = ExcelHeaderNormalizer.disambiguateDuplicateHeaders(
-            ExcelHeaderNormalizer.mergeHeaderRows(headerRows));
+            completeUnlabeledHeaders(ExcelHeaderNormalizer.mergeHeaderRows(headerRows), dataRows));
         Map<Integer, String> cleanHeaders = new LinkedHashMap<>();
         for (Map.Entry<Integer, String> entry : mergedHeaders.entrySet()) {
             cleanHeaders.put(entry.getKey(), ExcelHeaderNormalizer.clean(entry.getValue()));
@@ -369,15 +408,23 @@ public class ExcelAiImportService {
         ProcessedMapping processed = postProcessMapping(mappingResult.mapping, cleanHeaders, mergedHeaders);
         mappingResult.mapping = processed.mapping();
         mappingResult.priceColumns = processed.priceColumns();
+        inferSplitModuleColumn(mappingResult.mapping, mergedHeaders, dataRows);
 
         // 原始文件对象键与批次主键统一：新批次用同一 batchId 命名（A10）；
         // 存量批次 storage_path 已记录不受影响，生命周期清理按 storage_path 删除，口径不变
         String batchId = IdGenerator.batchId();
         String storagePath = storeOriginalFile(fileBytes, file.getOriginalFilename(), batchId);
         ExcelImportBatch batch = saveBatch(batchId, file.getOriginalFilename(), storagePath, mappingResult,
-            mergedHeaders, dataRows, dataRowPhysicalIndexes, sheetIndex);
+            mergedHeaders, dataRows, dataRowPhysicalIndexes, sheetIndex,
+            repeatedPreambleValues(rawValues, headerLayout, mergedHeaders));
+
+        // P0-B2（v3.3 §4.1/§46）：预览即生成首版 immutable Snapshot（revision=1，尚无品类策略），
+        // 后续 mode/categoryHint/candidates/rowCategorySelections 的修改经编辑命令推进 Revision
+        ExcelImportPreviewRevision firstRevision = createInitialPreviewRevision(batch, mappingResult.mapping,
+            sheets.get(sheetIndex).getName());
 
         ExcelAiMappingResponse response = buildMappingResponse(batch, mergedHeaders, mappingResult);
+        response.setPreviewRevision(firstRevision != null ? firstRevision.getPreviewRevision() : null);
         response.setSheetIndex(sheetIndex);
         response.setSheets(sheets);
         // 品类中文名映射建议：字典/别名命中 + AI 批量归一（用户确认后写回别名库自学习）；
@@ -429,8 +476,43 @@ public class ExcelAiImportService {
             throw new BusinessException("无权使用该工厂: " + defaultFactoryCode);
         }
         // 新模式（SINGLE/MIXED）品类前置校验（§20）：品类完整性 + 同一逻辑产品品类唯一性；
-        // 在抢占导入权之前完成，校验失败不扰动批次状态；旧路径（未选导入方式）不校验，维持现状
-        validateCategoryConfigBeforeImport(batch, request, mapping);
+        // 在抢占导入权之前完成，校验失败不扰动批次状态；旧路径（未选导入方式）不校验，维持现状。
+        // P0-B2：携带 expectedRevision 时切换到 Snapshot 链路——乐观锁校验 +
+        // 完整性/唯一性直接读 Snapshot 固化的 finalCategoryCode 并以快照值覆盖请求的行级选择
+        boolean snapshotPath = request.getCategoryMode() != null && request.getExpectedRevision() != null;
+
+        // P0-F（§47.1.5/§50.0 Replay-first）：snapshot 路径先物化 Policy（补齐默认值 +
+        // 未知枚举拒绝），再按 batch + expectedRevision + policy_hash 查找既有 Attempt——
+        // done → 原样重放存储结果（不检查 Batch 当前 Revision / Confirm / 新 Issue）；
+        // pending/running/failed → 同一 Attempt 恢复/续跑；无既有 Attempt 才校验当前
+        // Revision 并 INSERT immutable Attempt + AttemptItems
+        ImportPolicyMaterializer.MaterializedPolicy materializedPolicy = null;
+        if (snapshotPath) {
+            try {
+                materializedPolicy = ImportPolicyMaterializer.materialize(ImportPolicy.materialize(
+                    request.isUpdateIfExists(), request.getAllowWarnings(),
+                    request.getConflictPolicy(), request.getQuotePolicy(),
+                    request.getNullValuePolicy(), request.getManualCorrectionPolicy(),
+                    request.getOverrideReason()));
+            } catch (IllegalArgumentException e) {
+                throw new BusinessException(400, "Import Policy 非法: " + e.getMessage());
+            }
+            ExcelImportAttempt existing = attemptService.findByPolicyKey(batch.getBatchId(),
+                request.getExpectedRevision(), materializedPolicy.policyHashVersion(),
+                materializedPolicy.policyHash()).orElse(null);
+            if (existing != null) {
+                return resumeExistingAttempt(batch, request, existing);
+            }
+        }
+
+        if (snapshotPath) {
+            applyConfirmedCategorySnapshot(batch, request);
+            // Import 前校验（§72 品类门禁）：confirmed Snapshot 不得有未确定品类行 /
+            // 同组多品类（原 import_data_issue 阻断检查，2026-09-24 评审后改为直接校验快照负载）
+            assertConfirmedSnapshotCategoryGate(batch.getBatchId(), request.getExpectedRevision());
+        } else {
+            validateCategoryConfigBeforeImport(batch, request, mapping);
+        }
         // 快照上一轮导入结果：抢占会清零计数字段，建任务/投递失败复位时恢复，
         // done 批次重导失败不丢历史结果（行级记录已删无法恢复，批次级结果与失败明细可恢复）
         BatchResultSnapshot previousResult = new BatchResultSnapshot(batch.getStatus(),
@@ -446,13 +528,48 @@ public class ExcelAiImportService {
         auditLogService.logUpdate("excel_import_batch", batch.getBatchId(),
             Map.of("status", previousResult.status()), Map.of("status", "importing"),
             SecurityOperatorContext.currentUsername());
+        // P0-B3 收口（§45/§72）：confirm 成功写 confirmed_revision 指针（CAS 防并发编辑，
+        // 失败说明 Revision 在 claim 间隙被改写，抛 409 整事务回滚、批次状态随复位）
+        if (snapshotPath
+            && batchMapper.confirmRevision(batch.getBatchId(), request.getExpectedRevision(),
+                SecurityOperatorContext.currentUserId()) != 1) {
+            throw new PreviewRevisionConflictException(batch.getBatchId(), request.getExpectedRevision(),
+                batch.getPreviewRevision());
+        }
         try {
             // 异步任务携带确认后的请求（映射已清洗），执行线程从 input_data 还原参数
             request.setMapping(mapping);
-            String taskId = createExcelImportTask(batch, request);
+            // P0-F（§50.0 末分支）：无既有 Attempt —— INSERT immutable Attempt + AttemptItems
+            // （与 confirm 指针 CAS / 任务创建同一事务，任一失败整事务回滚不留半截 Attempt）
+            ExcelImportAttempt newAttempt = null;
+            if (snapshotPath) {
+                ExcelImportPreviewSnapshotService.SnapshotView snapshot = previewSnapshotService
+                    .getSnapshot(batch.getBatchId(), request.getExpectedRevision())
+                    .orElseThrow(() -> new BusinessException(410,
+                        "snapshot_expired: 已确认的 Preview Snapshot 不存在"));
+                newAttempt = attemptService.createAttemptWithItems(batch.getBatchId(),
+                    request.getExpectedRevision(), materializedPolicy, snapshot.getGroups(),
+                    null, SecurityOperatorContext.currentUserId());
+                if (!ExcelImportAttempt.STATUS_PENDING.equals(newAttempt.getStatus())) {
+                    // 并发 confirm 撞 uk_import_attempt 收敛到既有非新建 Attempt：
+                    // 本事务已抢占批次，直接整事务回滚，由调用方重试走 Replay-first 查找分支
+                    throw new BusinessException(409, "检测到并发导入请求，请稍后重试（Attempt 已存在）");
+                }
+            }
+            String taskId = createExcelImportTask(batch, request,
+                newAttempt != null ? newAttempt.getAttemptId() : null);
+            if (newAttempt != null) {
+                attemptService.rebindTask(newAttempt.getAttemptId(), taskId);
+            }
             triggerExcelImport(taskId, batch, previousResult);
-            log.info("Excel 导入批次已受理，batchId={}，taskId={}", batch.getBatchId(), taskId);
-            return new ExcelAiImportSubmitResult(batch.getBatchId(), taskId, "importing");
+            log.info("Excel 导入批次已受理，batchId={}，taskId={}，attemptId={}", batch.getBatchId(), taskId,
+                newAttempt != null ? newAttempt.getAttemptId() : "-");
+            ExcelAiImportSubmitResult submitResult = new ExcelAiImportSubmitResult(
+                batch.getBatchId(), taskId, "importing");
+            if (newAttempt != null) {
+                submitResult.setAttemptId(newAttempt.getAttemptId());
+            }
+            return submitResult;
         } catch (RuntimeException | Error e) {
             // 抢占成功后任何异常都必须恢复批次状态，否则批次永久卡死 importing、
             // 用户无法重试（claimForImport 只认 pending/done/failed）；恢复本身容错，不掩盖原始异常。
@@ -462,6 +579,73 @@ public class ExcelAiImportService {
             }
             throw e;
         }
+    }
+
+    /**
+     * Replay-first 既有 Attempt 分支（§50.0）：done → 校验存储 Policy Hash 完整性后原样
+     * 返回 outcome + result_summary（不检查 Batch 当前 Revision / Confirm / 新 Issue）；
+     * running 且 lease 未过期 → 返回当前状态；pending / failed / running+lease 过期 →
+     * 同一 Attempt 恢复执行（不创建第二个逻辑 Attempt，failed 重试 retry_count+1 由
+     * 执行期 lease CAS 完成）。
+     *
+     * @param batch    导入批次
+     * @param request  确认请求（用于重建执行参数）
+     * @param existing 既有 Attempt
+     * @return 受理/重放结果
+     */
+    private ExcelAiImportSubmitResult resumeExistingAttempt(ExcelImportBatch batch,
+                                                            ExcelAiMappingRequest request,
+                                                            ExcelImportAttempt existing) {
+        attemptService.verifyAttemptPolicy(existing);
+        ExcelAiImportSubmitResult replay = new ExcelAiImportSubmitResult();
+        replay.setBatchId(batch.getBatchId());
+        replay.setAttemptId(existing.getAttemptId());
+        replay.setTaskId(existing.getTaskId());
+        if (ExcelImportAttempt.STATUS_DONE.equals(existing.getStatus())) {
+            // done Replay：原样返回存储的 outcome + result_summary（§50.0）
+            replay.setStatus("done");
+            replay.setReplayed(true);
+            replay.setOutcome(existing.getOutcome());
+            replay.setResultSummary(existing.getResultSummary());
+            log.info("Import Attempt done 重放: attemptId={}, outcome={}", existing.getAttemptId(),
+                existing.getOutcome());
+            return replay;
+        }
+        boolean leaseAlive = ExcelImportAttempt.STATUS_RUNNING.equals(existing.getStatus())
+            && existing.getLeaseExpiresAt() != null
+            && existing.getLeaseExpiresAt().isAfter(LocalDateTime.now());
+        if (leaseAlive) {
+            // running + lease 未过期：返回当前 Attempt 状态，不创建新执行（§50.1）
+            replay.setStatus("importing");
+            return replay;
+        }
+
+        // pending / failed / running+lease 过期：恢复同一 Attempt——重建异步任务并重新投递。
+        // 批次仍卡 importing（崩溃未收割）且 lease 已过期时先复位再抢占，claimForExecution
+        // 的 lease CAS 保证僵尸 Worker 不会与新执行并发写
+        if (batchMapper.claimForImport(batch.getBatchId()) == 0) {
+            if (ExcelImportAttempt.STATUS_RUNNING.equals(existing.getStatus())
+                && batchMapper.resetToPending(batch.getBatchId()) == 1
+                && batchMapper.claimForImport(batch.getBatchId()) == 1) {
+                log.warn("批次卡 importing 且 Attempt lease 已过期，复位后恢复: batchId={}, attemptId={}",
+                    batch.getBatchId(), existing.getAttemptId());
+            } else {
+                throw new BusinessException("批次正在导入中，请稍后重试: " + batch.getStatus());
+            }
+        }
+        String taskId = createExcelImportTask(batch, request, existing.getAttemptId());
+        attemptService.rebindTask(existing.getAttemptId(), taskId);
+        auditLogService.logUpdate("excel_import_batch", batch.getBatchId(),
+            Map.of("status", String.valueOf(batch.getStatus())), Map.of("status", "importing"),
+            SecurityOperatorContext.currentUsername());
+        BatchResultSnapshot previousResult = new BatchResultSnapshot(batch.getStatus(),
+            batch.getSuccessCount(), batch.getFailedCount(), batch.getFailures(), batch.getProcessedAt());
+        triggerExcelImport(taskId, batch, previousResult);
+        log.info("Import Attempt 恢复执行: attemptId={}, taskId={}, previousStatus={}",
+            existing.getAttemptId(), taskId, existing.getStatus());
+        replay.setTaskId(taskId);
+        replay.setStatus("importing");
+        return replay;
     }
 
     /**
@@ -481,15 +665,78 @@ public class ExcelAiImportService {
         if (batch == null) {
             throw new BusinessException("导入批次不存在: " + batchId);
         }
-        ExcelAiMappingRequest request = readImportRequest(taskId);
+        ImportTaskInput taskInput = readImportRequest(taskId);
+        ExcelAiMappingRequest request = taskInput.request();
         Map<String, String> mapping = sanitizeMapping(request.getMapping());
         Authentication previousAuthentication = installBatchOperatorContext(batch);
+        // P0-F（§49.1/§50.1）：Attempt 治理链路的执行入口——不可变 Policy 校验 +
+        // lease CAS 抢占（重复投递/僵尸任务直接短路，不重复执行）
+        ExcelImportAttempt attempt = null;
         try {
-            return doConfirmImport(batch, request, mapping);
+            if (taskInput.attemptId() != null) {
+                attempt = attemptService.getAttempt(taskInput.attemptId());
+                if (attempt == null || !batchId.equals(attempt.getBatchId())) {
+                    throw new BusinessException("Import Attempt 不存在或与批次不匹配: " + taskInput.attemptId());
+                }
+                // 不可变校验：存储 Policy Hash 完整性 + 请求重放一致性（防任务参数篡改，§49/§50.0）
+                attemptService.verifyAttemptPolicy(attempt);
+                ImportPolicyMaterializer.MaterializedPolicy replayed = materializePolicy(request);
+                if (!attempt.getPolicyHash().equals(replayed.policyHash())
+                    || attempt.getPolicyHashVersion() != replayed.policyHashVersion()) {
+                    throw new BusinessException(409,
+                        "导入请求 Policy 与 Attempt 物化 Policy 不一致（policy_hash 失配），禁止执行");
+                }
+                if (!request.getExpectedRevision().equals(attempt.getPreviewRevision())) {
+                    throw new BusinessException(409, "导入请求 Revision 与 Attempt 不一致，禁止执行");
+                }
+                java.util.Optional<ExcelImportAttempt> claimed =
+                    attemptService.claimForExecution(attempt.getAttemptId(), taskId);
+                if (claimed.isEmpty()) {
+                    // done → 原样重放；running 且 lease 未过期 → 另有活跃 Worker，本次投递短路
+                    attempt = attemptService.getAttempt(taskInput.attemptId());
+                    if (ExcelImportAttempt.STATUS_DONE.equals(attempt.getStatus())) {
+                        return replayDoneAttemptResult(attempt);
+                    }
+                    log.info("Attempt 已有活跃执行（lease 未过期），本次投递短路: attemptId={}",
+                        attempt.getAttemptId());
+                    ExcelAiImportResult inProgress = new ExcelAiImportResult();
+                    inProgress.setBatchId(batchId);
+                    return inProgress;
+                }
+                attempt = claimed.get();
+            }
+            // P0-B3 Revalidate（§22/§23/§72）：Import 只读 confirmed snapshot——指针一致性
+            // （409）+ 快照存在性（归档 410）+ 哈希 / 策略一致性 / 品类门禁 / 阻断 Issue 复检；
+            // 不重新解释 Normalize 结果，不读最新 mapping 推导品类
+            List<Map<String, String>> confirmedRows = null;
+            AttemptContext attemptCtx = null;
+            if (request.getCategoryMode() != null && request.getExpectedRevision() != null) {
+                revalidateConfirmedSnapshot(batch, request);
+                ExcelImportPreviewSnapshotService.SnapshotView confirmedSnapshot = previewSnapshotService
+                    .getSnapshot(batchId, request.getExpectedRevision())
+                    .orElseThrow(() -> new BusinessException(410, "snapshot_expired: 已确认的 Preview Snapshot 不存在"));
+                confirmedRows = previewSnapshotService.loadSourceRows(confirmedSnapshot);
+                if (attempt != null) {
+                    attemptCtx = buildAttemptContext(attempt, taskId, confirmedSnapshot);
+                }
+            }
+            return doConfirmImport(batch, request, mapping, confirmedRows, attemptCtx);
+        } catch (AttemptLeaseLostException e) {
+            // §49.1/§50.1：租约已易主——当前行事务已回滚，不改批次/Attempt 状态，
+            // 由新持有者继续执行与收尾；本次投递安静结束
+            log.info("{}", e.getMessage());
+            ExcelAiImportResult aborted = new ExcelAiImportResult();
+            aborted.setBatchId(batchId);
+            return aborted;
         } catch (RuntimeException | Error e) {
             // 异步执行致命失败终态（对齐 processDocumentImport 口径）：批次置 failed + 失败原因
-            // 写入批次失败明细；批次可重新 confirm 重试（claimForImport 放行 failed）
+            // 写入批次失败明细；批次可重新 confirm 重试（claimForImport 放行 failed）；
+            // Attempt 记技术失败终态 failed（可重试同一 Attempt，§49.2.3）
             markImportFailed(batch, e);
+            if (attempt != null) {
+                attemptService.markAttemptFailedQuietly(attempt.getAttemptId(), taskId,
+                    "import_execution_error", e.getMessage());
+            }
             throw e;
         } finally {
             clearBatchOperatorContext(previousAuthentication);
@@ -497,12 +744,76 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 从异步任务 input_data 还原 confirm 阶段确认后的映射请求。
+     * 物化请求对应的 Import Policy（§47.1.5：服务端补齐默认值后计算 Hash）。
+     */
+    private ImportPolicyMaterializer.MaterializedPolicy materializePolicy(ExcelAiMappingRequest request) {
+        try {
+            return ImportPolicyMaterializer.materialize(ImportPolicy.materialize(
+                request.isUpdateIfExists(), request.getAllowWarnings(),
+                request.getConflictPolicy(), request.getQuotePolicy(),
+                request.getNullValuePolicy(), request.getManualCorrectionPolicy(),
+                request.getOverrideReason()));
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(400, "Import Policy 非法: " + e.getMessage());
+        }
+    }
+
+    /**
+     * done Attempt 的执行期重放（§50.0/§50.1）：从物化的 result_summary 还原批次结果，
+     * 禁止重新执行。
+     */
+    private ExcelAiImportResult replayDoneAttemptResult(ExcelImportAttempt attempt) {
+        ExcelAiImportResult result = new ExcelAiImportResult();
+        result.setBatchId(attempt.getBatchId());
+        try {
+            JsonNode summary = objectMapper.readTree(attempt.getResultSummary());
+            result.setSuccessCount(summary.path("rowsSucceeded").asInt(0));
+            result.setFailedCount(summary.path("rowsFailed").asInt(0));
+            result.setSkippedCount(summary.path("rowsSkipped").asInt(0));
+        } catch (Exception e) {
+            log.warn("解析 done Attempt result_summary 失败: attemptId={}", attempt.getAttemptId(), e);
+        }
+        return result;
+    }
+
+    /**
+     * 构建 Attempt 治理上下文（snapshot 路径）：行 → Group 映射、Issue Target 过滤集
+     * 与物化 Policy。
+     */
+    private AttemptContext buildAttemptContext(ExcelImportAttempt attempt, String taskId,
+                                               ExcelImportPreviewSnapshotService.SnapshotView snapshot) {
+        Map<Integer, String> groupIdByRowIndex = new HashMap<>();
+        for (ExcelImportProductGroup group : snapshot.getGroups()) {
+            try {
+                JsonNode rows = objectMapper.readTree(group.getNormalizedPayload()).path("rows");
+                if (rows.isArray()) {
+                    for (JsonNode rowNode : rows) {
+                        JsonNode rowIndex = rowNode.get("sourceRowIndex");
+                        if (rowIndex != null && rowIndex.isInt()) {
+                            groupIdByRowIndex.put(rowIndex.asInt(), group.getGroupId());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                throw new BusinessException("Preview Snapshot 负载解析失败: groupId=" + group.getGroupId());
+            }
+        }
+        return new AttemptContext(attempt, taskId,
+            ImportPolicyMaterializer.parse(attempt.getPolicyPayload()),
+            groupIdByRowIndex);
+    }
+
+    /** 异步任务 input_data 还原结果：确认请求 + Attempt ID（P0-F，旧任务为 null）。 */
+    private record ImportTaskInput(ExcelAiMappingRequest request, String attemptId) {
+    }
+
+    /**
+     * 从异步任务 input_data 还原 confirm 阶段确认后的映射请求与 Attempt ID。
      *
      * @param taskId 异步任务 ID
-     * @return 映射确认请求
+     * @return 任务输入
      */
-    private ExcelAiMappingRequest readImportRequest(String taskId) {
+    private ImportTaskInput readImportRequest(String taskId) {
         AsyncTask task = asyncTaskMapper.selectById(taskId);
         if (task == null || !StringUtils.hasText(task.getInputData())) {
             throw new BusinessException("导入任务不存在或缺少输入参数: " + taskId);
@@ -513,7 +824,10 @@ public class ExcelAiImportService {
             if (requestNode == null || requestNode.isNull()) {
                 throw new BusinessException("导入任务缺少映射请求参数: " + taskId);
             }
-            return objectMapper.treeToValue(requestNode, ExcelAiMappingRequest.class);
+            com.fasterxml.jackson.databind.JsonNode attemptNode = root.get("attemptId");
+            return new ImportTaskInput(
+                objectMapper.treeToValue(requestNode, ExcelAiMappingRequest.class),
+                attemptNode != null && attemptNode.isTextual() ? attemptNode.asText() : null);
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -529,24 +843,53 @@ public class ExcelAiImportService {
      * @param request 已清洗映射的确认请求
      * @return 任务 ID
      */
-    private String createExcelImportTask(ExcelImportBatch batch, ExcelAiMappingRequest request) {
+    private String createExcelImportTask(ExcelImportBatch batch, ExcelAiMappingRequest request,
+                                         String attemptId) {
         String taskId = IdGenerator.taskId();
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);
         task.setTaskType(TASK_TYPE_EXCEL_IMPORT);
         task.setStatus("pending");
         task.setProgress(0);
+        // P0-F（§50.3 副作用幂等键）：Attempt 治理任务携带 excel-import-attempt:<attemptId>
+        // 幂等键；同一 Attempt 重试/恢复命中既有任务行时复位复用或返回既有任务，不重复建行
+        if (attemptId != null) {
+            task.setIdempotencyKey("excel-import-attempt:" + attemptId);
+        }
+        String inputData;
         try {
-            task.setInputData(objectMapper.writeValueAsString(Map.of(
-                "batchId", batch.getBatchId(),
-                "request", request
-            )));
+            Map<String, Object> input = new HashMap<>();
+            input.put("batchId", batch.getBatchId());
+            input.put("request", request);
+            if (attemptId != null) {
+                input.put("attemptId", attemptId);
+            }
+            inputData = objectMapper.writeValueAsString(input);
+            task.setInputData(inputData);
         } catch (Exception e) {
             throw new BusinessException("序列化导入任务参数失败: " + e.getMessage());
         }
         task.setCreatedBy(SecurityOperatorContext.currentUsername());
         task.setCreatedAt(LocalDateTime.now());
-        asyncTaskMapper.insert(task);
+        try {
+            asyncTaskMapper.insert(task);
+        } catch (DuplicateKeyException e) {
+            if (attemptId == null) {
+                throw e;
+            }
+            // §50.3：同一 Attempt 重复 enqueue → 返回/复位既有任务
+            AsyncTask existing = asyncTaskMapper.selectByIdempotencyKey(
+                TASK_TYPE_EXCEL_IMPORT, task.getIdempotencyKey());
+            if (existing == null) {
+                throw e;
+            }
+            if ("failed".equals(existing.getStatus())) {
+                asyncTaskMapper.resetFailedForRetry(existing.getTaskId(), inputData);
+            }
+            log.info("复用既有导入任务（幂等键命中）: attemptId={}, taskId={}, status={}",
+                attemptId, existing.getTaskId(), existing.getStatus());
+            return existing.getTaskId();
+        }
         return taskId;
     }
 
@@ -700,15 +1043,23 @@ public class ExcelAiImportService {
     /**
      * 确认导入主流程（批次已抢占为 importing）。
      *
-     * @param batch   导入批次
-     * @param request 映射确认请求
-     * @param mapping 已清洗的字段映射（表头 → 标准字段）
+     * @param batch      导入批次
+     * @param request    映射确认请求
+     * @param mapping    已清洗的字段映射（表头 → 标准字段）
+     * <p>主流程只消费一种模型：统一执行输入 {@link RowPreparation}（数据行 + 物理布局 +
+     * 行号解析器）与 Attempt 行级治理 {@link AttemptRunTracker}。snapshot 路径直用 confirmed
+     * Revision 固化的源行；旧批次（无 Revision）的文本预处理兼容集中在入口
+     * {@link #prepareLegacyRows}，tracker 以 NOOP 口径接入。</p>
+     *
+     * @param attemptCtx P0-F Attempt 治理上下文（snapshot 路径非空，旧路径为 null）
      * @return 导入结果
      */
     private ExcelAiImportResult doConfirmImport(ExcelImportBatch batch, ExcelAiMappingRequest request,
-                                                Map<String, String> mapping) {
-        List<Map<String, String>> rawDataRows = loadRawDataRows(batch);
-        if (rawDataRows.isEmpty()) {
+                                                Map<String, String> mapping,
+                                                List<Map<String, String>> confirmedRows,
+                                                AttemptContext attemptCtx) {
+        List<Map<String, String>> sourceRows = confirmedRows != null ? confirmedRows : loadRawDataRows(batch);
+        if (sourceRows.isEmpty()) {
             throw new BusinessException("Excel 数据为空，无法导入");
         }
 
@@ -730,42 +1081,14 @@ public class ExcelAiImportService {
         Map<String, List<ExcelImageExtractor.EmbeddedImage>> embeddedImages = embeddedImagesResult.images();
         PhysicalLayout physicalLayout = loadPhysicalLayout(batch);
 
-        // 型号/品名列向下填充（纵向合并单元格语义，模块行继承上行型号）；
-        // description/materialTags 仅在各自列的合并单元格范围内下填，无合并信息时不下填（防整列污染无关行）
-        forwardFillKeyColumns(rawDataRows, mapping, physicalLayout);
-
-        // 应用用户在「导入前全量预览」中的单元格编辑；编辑优先级高于 forward fill
-        applyPreviewEdits(rawDataRows, request.getPreviewEdits());
-
-        // 按图片列合并单元格分组，把组内分散的描述/材质解析聚合到每个成员行
-        propagateGroupFields(rawDataRows, mapping, physicalLayout);
-
-        // 应用用户在「导入前全量预览」中标记的跳过行（1-based 物理行号）。
-        // 在 propagateGroupFields 之后过滤，确保组内字段聚合不受跳过行影响。
-        if (request.getSkipRows() != null && !request.getSkipRows().isEmpty()) {
-            Set<Integer> skipRowSet = new HashSet<>(request.getSkipRows());
-            List<Map<String, String>> filteredRows = new ArrayList<>();
-            List<Integer> filteredPhysicalIndexes = new ArrayList<>();
-            for (int i = 0; i < rawDataRows.size(); i++) {
-                Map<String, String> row = rawDataRows.get(i);
-                String rowIndexStr = row.get("__rowIndex__");
-                int displayRowIndex = StringUtils.hasText(rowIndexStr) ? Integer.parseInt(rowIndexStr) : (i + 2);
-                if (!skipRowSet.contains(displayRowIndex)) {
-                    filteredRows.add(row);
-                    if (physicalLayout != null && i < physicalLayout.dataRowPhysicalIndexes().size()) {
-                        filteredPhysicalIndexes.add(physicalLayout.dataRowPhysicalIndexes().get(i));
-                    }
-                }
-            }
-            rawDataRows = filteredRows;
-            // 原始文件读取失败时 physicalLayout 为 null（后续逻辑均有 null 兜底），不得解引用重建
-            if (physicalLayout != null) {
-                physicalLayout = new PhysicalLayout(filteredPhysicalIndexes, physicalLayout.imageColumns(),
-                    physicalLayout.minDataColumn(), physicalLayout.maxDataColumn(),
-                    physicalLayout.imageMergedGroups(), physicalLayout.sheetName(),
-                    physicalLayout.orderedHeaders(), physicalLayout.mergedRangesByHeader());
-            }
-        }
+        // 统一行准备：snapshot 路径直用 Revision 固化源行；旧批次兼容预处理
+        // （下填/单元格修正/组字段聚合/跳过行过滤）集中在 prepareLegacyRows 入口
+        RowPreparation preparation = confirmedRows != null
+            ? new RowPreparation(sourceRows, physicalLayout,
+                (row, rowIndex, ordinal) -> resolveDisplayRowIndex(row, rowIndex) - 1)
+            : prepareLegacyRows(sourceRows, request, mapping, physicalLayout);
+        List<Map<String, String>> rawDataRows = preparation.rows();
+        physicalLayout = preparation.physicalLayout();
 
         List<PriceColumnInfo> priceColumns = loadPriceColumns(batch);
         List<PriceColumnInfo> selectedPriceColumns = resolveSelectedPriceColumns(priceColumns, request);
@@ -797,8 +1120,10 @@ public class ExcelAiImportService {
 
         // 批次级预加载（消除行循环 N+1）：AI 解析在映射/预览确认阶段已完成，
         // 导入循环内不再调用大模型，行内 externalCode 由映射列 + 复合列拆分确定性得出，
-        // 可在循环前一把 in 查询收集；未命中编码行内 miss 时仍实时单查回填
-        BatchImportCache importCache = preloadBatchCache(rawDataRows, mapping);
+        // 可在循环前收集；身份解析统一走 SupplierIdentityResolutionService
+        // （supplier_product_ref 优先 + 受限 legacy fallback，§9 Phase 3），
+        // 未命中编码行内 miss 时仍实时单查回填
+        BatchImportCache importCache = preloadBatchCache(rawDataRows, mapping, request);
         // 3.4 批次级预载续：字典别名（category/size/color/material/scene）与工厂交期规则
         // 各一把查询进内存，行内别名解析/交期匹配不再逐值/逐行查库
         importCache.aliasByType.putAll(safeAliases(dictAliasService.loadAliases(
@@ -808,6 +1133,13 @@ public class ExcelAiImportService {
         int rowIndex = 1; // 第 1 行为表头
         int dataRowOrdinal = 0;
         ProductGroup currentGroup = null;
+
+        // P0-F（§49.2/§50.2）：Attempt 行级治理状态（行 → AttemptItem 映射、组生命周期、
+        // 心跳、终态物化）封装进 tracker；旧批次（attemptCtx=null）为 NOOP 口径，
+        // 主流程不感知两套状态
+        AttemptRunTracker attemptTracker = new AttemptRunTracker(attemptCtx, rawDataRows);
+        int attemptLoopOrdinal = 0;
+
         // 3.4：价格投影延迟重算作用域——行内 RSKU upsert 触发的 recalculate 只登记 RSPU ID 去重，
         // 作用域关闭（行循环结束/异常逃逸）时按 RSPU 去重统一重算一次，投影最终结果与逐次重算一致
         try (RspuPriceSummaryService.DeferralScope ignored = rspuPriceSummaryService.openDeferralScope()) {
@@ -815,13 +1147,17 @@ public class ExcelAiImportService {
         for (Map<String, String> dataRow : rawDataRows) {
             rowIndex++;
             // 数据行物理行号：优先取重建结果（与 previewRows 顺序一一对应），缺失回退旧换算
-            Integer physicalRowIndex =
-                physicalLayout != null && dataRowOrdinal < physicalLayout.dataRowPhysicalIndexes().size()
-                    ? physicalLayout.dataRowPhysicalIndexes().get(dataRowOrdinal)
-                    : null;
+            Integer physicalRowIndex = preparation.resolvePhysicalRowIndex(dataRow, rowIndex, dataRowOrdinal);
             dataRowOrdinal++;
             // 失败明细使用 Excel 物理行号（0-based +1），缺失时回退旧的序号换算
             int displayRowIndex = physicalRowIndex != null ? physicalRowIndex + 1 : rowIndex;
+
+            // P0-F：AttemptItem 组生命周期——组切换时 beginGroup（SELECT FOR UPDATE；
+            // 终态组 = Recovery 重放，跳过不重复建数据，§50.2 Commit 后崩溃场景）+ 心跳续约；
+            // 旧批次 tracker 为 NOOP，attemptGroupId 恒为 null
+            String attemptGroupId = attemptTracker.enterRow(attemptLoopOrdinal);
+            boolean attemptLastRow = attemptTracker.isLastRowOfGroup(attemptLoopOrdinal);
+            attemptLoopOrdinal++;
             Long importRowId = null;
             try {
                 // 行级记录与失败明细统一使用 Excel 物理行号（+1 转 1-based 展示口径）；
@@ -855,59 +1191,85 @@ public class ExcelAiImportService {
                 if (preservedImages != null && !preservedImages.isEmpty()) {
                     excelImportRowService.updateImageOverrides(importRowId, preservedImages);
                 }
-                RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
-                    selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
-                    currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId(),
-                    importCache, rowCategorySelection, batch.getFileName());
-                if (rowResult.rspuId != null) {
-                    // 行内部分失败（如某价格列 RSKU 创建失败）不吞掉：记入批次失败明细，用户可见。
-                    // 必须先于 markSuccess 追加：markSuccess 抛异常时行落入 catch 记失败，
-                    // 这些真实行级问题（如 RSKU 创建失败原因）不应随之丢失（2026-09-12 冒烟实测暴露）
-                    for (String issue : rowResult.issues) {
-                        failures.add(new ExcelAiImportFailure(displayRowIndex, issue));
-                    }
-                    excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
-                        rowResult.rskuIds, rowResult.imageCount, rowResult.imageAssetIds, rowResult.taskId);
-                    // 成功计数（rspuIds）必须在 markSuccess 之后累加：
-                    // 否则 markSuccess 失败时同一行同时计入成功与失败（冒烟实测曾出现 success=2/failed=2）
-                    rspuIds.add(rowResult.rspuId);
-                    // 行提交成功后更新产品组状态（回滚行不影响组）
-                    // update 模式命中已有 RSPU 的行（createdNewRspu=false 但型号与当前组不同）
-                    // 同样开启新组，否则同一产品的后续模块行会对照上一组的 externalCode，
-                    // 分组失效 → 每个模块行重复建 AI 任务、重复 updateExistingRspu（0.2 修复）
-                    if (rowResult.createdNewRspu || currentGroup == null
-                            || !Objects.equals(rowResult.groupKey, currentGroup.externalCode)) {
-                        currentGroup = new ProductGroup();
-                        currentGroup.externalCode = rowResult.groupKey;
-                        currentGroup.rspuId = rowResult.rspuId;
-                        currentGroup.hasPrimaryImage = rowResult.primaryImageSaved;
-                        currentGroup.hasAiTask = rowResult.taskId != null;
-                        if (rowResult.imageHashes() != null) {
-                            currentGroup.storedImageHashes.addAll(rowResult.imageHashes());
-                        }
-                    } else {
-                        currentGroup.hasPrimaryImage |= rowResult.primaryImageSaved;
-                        currentGroup.hasAiTask |= rowResult.taskId != null;
-                        if (rowResult.imageHashes() != null) {
-                            currentGroup.storedImageHashes.addAll(rowResult.imageHashes());
-                        }
-                    }
-                } else if (rowResult.skipped) {
-                    skippedCount++;
-                    excelImportRowService.markSkipped(importRowId, rowResult.skipReason);
+                // P0-F（§50.2）：Recovery 重放——终态组的行直接跳过，不重复建数据
+                if (attemptTracker.isCurrentGroupTerminal() && attemptGroupId != null) {
+                    excelImportRowService.markSkipped(importRowId, "该组在上次执行已完成（Attempt 重放跳过）");
+                    continue;
                 }
-                if (rowResult.taskId != null) {
-                    taskIds.add(rowResult.taskId);
+                // P0-F（§50.2 重跑）：组重跑时上轮已提交的行不重做领域写入（避免重复建
+                // 变体/报价/图片/审计），仅恢复组上下文——后续模块行（如上轮失败的行）
+                // 经 sameProduct 挂靠回该产品继续补齐缺失的变体与报价
+                AttemptRunTracker.RecoveredRow recovered =
+                    attemptTracker.recoveredRow(attemptGroupId, displayRowIndex);
+                if (recovered != null) {
+                    excelImportRowService.markSkipped(importRowId, "上轮已提交（Attempt 恢复跳过）");
+                    currentGroup = new ProductGroup();
+                    currentGroup.externalCode = recovered.groupKey();
+                    currentGroup.rspuId = recovered.rspuId();
+                } else {
+                    AttemptRowContext attemptRow = attemptTracker.rowContext(attemptGroupId, attemptLastRow);
+                    RowResult rowResult = processRowInTransaction(dataRow, mapping, request.getCategoryHint(),
+                        selectedPriceColumns, request, embeddedImages, dictCache, rowIndex, importRowId, physicalRowIndex,
+                        currentGroup, physicalLayout, sheetIndex, sheetName, categoryGuess, batch.getBatchId(),
+                        importCache, rowCategorySelection, batch.getFileName(),
+                        computeMappingHash(mapping, request.getCategoryMapping()), attemptRow);
                     if (rowResult.rspuId != null) {
-                        tasks.add(new ExcelAiImportResult.TaskLink(rowResult.taskId, rowResult.rspuId));
+                        // 行内部分失败（如某价格列 RSKU 创建失败）不吞掉：记入批次失败明细，用户可见。
+                        // 必须先于 markSuccess 追加：markSuccess 抛异常时行落入 catch 记失败，
+                        // 这些真实行级问题（如 RSKU 创建失败原因）不应随之丢失（2026-09-12 冒烟实测暴露）
+                        for (String issue : rowResult.issues) {
+                            failures.add(new ExcelAiImportFailure(displayRowIndex, issue));
+                        }
+                        excelImportRowService.markSuccess(importRowId, rowResult.rspuId, rowResult.variantId,
+                            rowResult.rskuIds, rowResult.imageCount, rowResult.imageAssetIds, rowResult.taskId);
+                        // 成功计数（rspuIds）必须在 markSuccess 之后累加：
+                        // 否则 markSuccess 失败时同一行同时计入成功与失败（冒烟实测曾出现 success=2/failed=2）
+                        rspuIds.add(rowResult.rspuId);
+                        // 行提交成功后更新产品组状态（回滚行不影响组）
+                        // update 模式命中已有 RSPU 的行（createdNewRspu=false 但型号与当前组不同）
+                        // 同样开启新组，否则同一产品的后续模块行会对照上一组的 externalCode，
+                        // 分组失效 → 每个模块行重复建 AI 任务、重复 updateExistingRspu（0.2 修复）
+                        if (rowResult.createdNewRspu || currentGroup == null
+                                || !Objects.equals(rowResult.groupKey, currentGroup.externalCode)) {
+                            currentGroup = new ProductGroup();
+                            currentGroup.externalCode = rowResult.groupKey;
+                            currentGroup.rspuId = rowResult.rspuId;
+                            currentGroup.hasPrimaryImage = rowResult.primaryImageSaved;
+                            currentGroup.hasAiTask = rowResult.taskId != null;
+                            if (rowResult.imageHashes() != null) {
+                                currentGroup.storedImageHashes.addAll(rowResult.imageHashes());
+                            }
+                        } else {
+                            currentGroup.hasPrimaryImage |= rowResult.primaryImageSaved;
+                            currentGroup.hasAiTask |= rowResult.taskId != null;
+                            if (rowResult.imageHashes() != null) {
+                                currentGroup.storedImageHashes.addAll(rowResult.imageHashes());
+                            }
+                        }
+                    } else if (rowResult.skipped) {
+                        skippedCount++;
+                        excelImportRowService.markSkipped(importRowId, rowResult.skipReason);
+                    }
+                    if (rowResult.taskId != null) {
+                        taskIds.add(rowResult.taskId);
+                        if (rowResult.rspuId != null) {
+                            tasks.add(new ExcelAiImportResult.TaskLink(rowResult.taskId, rowResult.rspuId));
+                        }
                     }
                 }
+            } catch (AttemptLeaseLostException e) {
+                // 租约易主：不计入行失败，直接中止（executeImport 安静收尾）
+                throw e;
             } catch (BusinessException e) {
                 failedRowCount++;
                 failures.add(new ExcelAiImportFailure(displayRowIndex, e.getMessage()));
                 if (importRowId != null) {
                     excelImportRowService.markFailed(importRowId, "validate_or_create", e.getMessage());
                 }
+                // P0-F（§31）：确定性业务失败累计进 AttemptItem（独立事务——行事务已回滚）；
+                // 组末行同事务物化组终态 rejected/partial
+                attemptTracker.recordRowFailure(attemptGroupId, displayRowIndex, e.getMessage(),
+                    true, attemptLastRow);
             } catch (Exception e) {
                 failedRowCount++;
                 log.error("Excel AI 导入行处理异常，rowIndex={}", rowIndex, e);
@@ -915,7 +1277,11 @@ public class ExcelAiImportService {
                 if (importRowId != null) {
                     excelImportRowService.markFailed(importRowId, "system", e.getMessage());
                 }
+                // P0-F（§31/§49.2.1）：技术失败 —— AttemptItem 记 failed（可重试）
+                attemptTracker.recordRowFailure(attemptGroupId, displayRowIndex, safeErrorMessage(e),
+                    false, attemptLastRow);
             }
+            attemptTracker.completeGroup(attemptGroupId, attemptLastRow);
             // 批次心跳（3.2）：逐行刷新 updated_at（条件更新仅命中 importing，代价远低于行内图片处理），
             // 防止长导入在后台执行期间被 reapStaleImporting 误判僵死误收割；心跳失败不阻断导入
             try {
@@ -942,16 +1308,79 @@ public class ExcelAiImportService {
         result.setTasks(tasks);
         result.setFailures(failures);
 
-        updateBatchResult(batch, request, result);
-        // 别名自学习：用户确认的品类映射写回别名库，后续导入直接命中，不再调 AI
-        learnCategoryAliases(request, importCache);
-        // 导入完成：清理数据清洗阶段的全部临时文件（preview-images 前缀残留 + tmpdir 行图缓存；失败不影响导入结果）
-        try {
-            cleanBatchPreviewTempFiles(batch.getBatchId());
-        } catch (Exception e) {
-            log.warn("清理导入临时文件失败，batchId={}", batch.getBatchId(), e);
+        // P0-F（§49.2.3）：Attempt outcome 汇总与批次结果写回同一事务（tracker 封装）；
+        // Attempt 治理路径的批次计数/失败明细从 AttemptItem 终态聚合（权威口径，
+        // Recovery 续跑时含此前已提交组的计数，本次运行的行级计数只是增量）；
+        // 旧批次 tracker 为 NOOP，直写批次结果
+        boolean importFinalized = attemptTracker.finalizeOutcome(batch, request, result);
+        if (importFinalized) {
+            // 别名自学习：用户确认的品类映射写回别名库，后续导入直接命中，不再调 AI
+            learnCategoryAliases(request, importCache);
+            // 导入完成：清理数据清洗阶段的全部临时文件（preview-images 前缀残留 + tmpdir 行图缓存）
+            // Attempt 未完成/租约易主时不清理：接管方续跑仍需要清洗期临时文件
+            try {
+                cleanBatchPreviewTempFiles(batch.getBatchId());
+            } catch (Exception e) {
+                log.warn("清理导入临时文件失败，batchId={}", batch.getBatchId(), e);
+            }
         }
         return result;
+    }
+
+    /**
+     * 旧批次（无 confirmed Revision）行准备兼容入口：从批次 {@code preview_rows} 文本重做
+     * 预处理——型号/品名列下填（纵向合并单元格语义）、单元格修正、组字段聚合、跳过行过滤
+     * （含物理布局同步收缩），转换为与 snapshot 路径一致的统一执行输入。
+     * snapshot 路径的行已在 Revision 中固化上述全部修正，不经过本方法。
+     *
+     * @param sourceRows     批次 preview_rows 原始数据行
+     * @param request        映射确认请求（previewEdits / skipRows 来源）
+     * @param mapping        已清洗的字段映射
+     * @param physicalLayout 物理布局（原始文件读取失败时为 null，后续逻辑均有 null 兜底）
+     * @return 统一执行输入
+     */
+    private RowPreparation prepareLegacyRows(List<Map<String, String>> sourceRows,
+                                             ExcelAiMappingRequest request,
+                                             Map<String, String> mapping,
+                                             PhysicalLayout physicalLayout) {
+        // 型号/品名列向下填充（纵向合并单元格语义，模块行继承上行型号）；
+        // description/materialTags 仅在各自列的合并单元格范围内下填，无合并信息时不下填（防整列污染无关行）
+        forwardFillKeyColumns(sourceRows, mapping, physicalLayout);
+        // 旧批次兼容：只有未走 Revision 的请求仍在执行时应用单元格修正。
+        applyPreviewEdits(sourceRows, request.getPreviewEdits());
+        propagateGroupFields(sourceRows, mapping, physicalLayout);
+
+        // 应用用户在「导入前全量预览」中标记的跳过行（1-based 物理行号）。
+        // 在 propagateGroupFields 之后过滤，确保组内字段聚合不受跳过行影响。
+        if (request.getSkipRows() != null && !request.getSkipRows().isEmpty()) {
+            Set<Integer> skipRowSet = new HashSet<>(request.getSkipRows());
+            List<Map<String, String>> filteredRows = new ArrayList<>();
+            List<Integer> filteredPhysicalIndexes = new ArrayList<>();
+            for (int i = 0; i < sourceRows.size(); i++) {
+                Map<String, String> row = sourceRows.get(i);
+                String rowIndexStr = row.get("__rowIndex__");
+                int displayRowIndex = StringUtils.hasText(rowIndexStr) ? Integer.parseInt(rowIndexStr) : (i + 2);
+                if (!skipRowSet.contains(displayRowIndex)) {
+                    filteredRows.add(row);
+                    if (physicalLayout != null && i < physicalLayout.dataRowPhysicalIndexes().size()) {
+                        filteredPhysicalIndexes.add(physicalLayout.dataRowPhysicalIndexes().get(i));
+                    }
+                }
+            }
+            sourceRows = filteredRows;
+            // 原始文件读取失败时 physicalLayout 为 null，不得解引用重建
+            if (physicalLayout != null) {
+                physicalLayout = new PhysicalLayout(filteredPhysicalIndexes, physicalLayout.imageColumns(),
+                    physicalLayout.minDataColumn(), physicalLayout.maxDataColumn(),
+                    physicalLayout.imageMergedGroups(), physicalLayout.sheetName(),
+                    physicalLayout.orderedHeaders(), physicalLayout.mergedRangesByHeader());
+            }
+        }
+        List<Map<String, String>> rows = sourceRows;
+        PhysicalLayout rowLayout = physicalLayout;
+        return new RowPreparation(rows, rowLayout,
+            (row, rowIndex, ordinal) -> rowLayout != null && ordinal < rowLayout.dataRowPhysicalIndexes().size()
+                ? rowLayout.dataRowPhysicalIndexes().get(ordinal) : null);
     }
 
     /**
@@ -1021,6 +1450,8 @@ public class ExcelAiImportService {
         }
         ExcelAiPreviewDataResponse response = new ExcelAiPreviewDataResponse();
         response.setBatchId(batchId);
+        // 批次当前 Preview Revision 指针（P0-B2）：前端恢复清洗页上下文时作为编辑命令的 expectedRevision 基准
+        response.setPreviewRevision(batch.getPreviewRevision());
 
         List<Map<String, String>> rawDataRows = loadRawDataRows(batch);
         response.setTotalRows(rawDataRows.size());
@@ -1057,7 +1488,7 @@ public class ExcelAiImportService {
             headers.addAll(physicalLayout.orderedHeaders());
         } else {
             for (String key : rawDataRows.get(0).keySet()) {
-                if ("__rowIndex__".equals(key)) {
+                if (key.startsWith("__")) {
                     continue;
                 }
                 headers.add(key);
@@ -1075,6 +1506,10 @@ public class ExcelAiImportService {
             String rowIndexStr = rawRow.getOrDefault("__rowIndex__", "");
             int displayRowIndex = StringUtils.hasText(rowIndexStr) ? Integer.parseInt(rowIndexStr) : (i + 2);
             row.setRowIndex(displayRowIndex);
+            row.setModelStart("true".equals(rawRow.get("__modelStart__")));
+            row.setSystemExcluded(isNoteOrEmptyRow(rawRow, mapping)
+                || isRepeatedHeaderRow(rawRow) || isPriceGradeHeaderRow(rawRow)
+                || isComboSummaryRow(rawRow, mapping));
             Map<String, String> rawValues = new LinkedHashMap<>();
             Map<String, String> mappedFieldByHeader = new LinkedHashMap<>();
             for (String header : headers) {
@@ -1111,8 +1546,17 @@ public class ExcelAiImportService {
     private List<PreviewDataGroup> buildPreviewDataGroups(List<PreviewDataRow> rows, Map<String, String> mapping,
                                                           List<String> headers) {
         Map<String, List<PreviewDataRow>> grouped = new LinkedHashMap<>();
+        Map<String, String> groupKeyByModelAndName = new HashMap<>();
+        String lastCode = null;
+        String lastIdentity = null;
+        String lastGroupKey = null;
+        int sequence = 0;
         for (PreviewDataRow row : rows) {
+            if (row.isSystemExcluded()) {
+                continue;
+            }
             String externalCode = resolveRowExternalCode(row, mapping);
+            boolean hasCode = StringUtils.hasText(externalCode);
             if (!StringUtils.hasText(externalCode)) {
                 // 无外部编码的行：若是说明/空行/重复表头，直接跳过；否则按行号兜底保留
                 if (isNoteOrEmptyRow(row.getRawValues(), mapping) || isRepeatedHeaderRow(row.getRawValues())) {
@@ -1120,7 +1564,25 @@ public class ExcelAiImportService {
                 }
                 externalCode = "__ROW_" + row.getRowIndex() + "__";
             }
-            grouped.computeIfAbsent(externalCode, k -> new ArrayList<>()).add(row);
+            String identity = row.isModelStart() || !externalCode.equals(lastCode)
+                ? modelAndNameIdentity(externalCode, row.getRawValues(), mapping)
+                : lastIdentity;
+            boolean compositeStart = row.isModelStart() && !identity.equals(externalCode);
+            String currentKey = hasCode && externalCode.equals(lastCode)
+                && (!compositeStart || identity.equals(lastIdentity)) ? lastGroupKey : null;
+            if (currentKey == null && compositeStart) {
+                currentKey = groupKeyByModelAndName.get(identity);
+            }
+            if (currentKey == null) {
+                currentKey = "G" + sequence++;
+            }
+            if (compositeStart) {
+                groupKeyByModelAndName.putIfAbsent(identity, currentKey);
+            }
+            grouped.computeIfAbsent(currentKey, k -> new ArrayList<>()).add(row);
+            lastCode = hasCode ? externalCode : null;
+            lastIdentity = hasCode ? identity : null;
+            lastGroupKey = hasCode ? currentKey : null;
         }
 
         List<PreviewDataGroup> groups = new ArrayList<>();
@@ -1129,7 +1591,16 @@ public class ExcelAiImportService {
             PreviewDataGroup group = new PreviewDataGroup();
             group.setExternalCode(resolveRowExternalCode(representative, mapping));
             group.setRepresentativeRowIndex(representative.getRowIndex());
-            group.setImages(representative.getImages());
+            // Excel 浮动图片的锚点不一定在型号首行：合并的产品图样跨多行时，
+            // 首行可能只有模块示例图。商品卡片只选图片列的主图候选。
+            members.stream()
+                .filter(member -> member.getImages().stream().anyMatch(PreviewDataRow.PreviewRowImage::isPrimaryCandidate))
+                .findFirst()
+                .ifPresent(imageRow -> {
+                    group.setImageRowIndex(imageRow.getRowIndex());
+                    group.setImages(imageRow.getImages().stream()
+                        .filter(PreviewDataRow.PreviewRowImage::isPrimaryCandidate).toList());
+                });
             group.setOverrideImageAssetIds(representative.getOverrideImageAssetIds());
 
             Map<String, String> productRawValues = new LinkedHashMap<>();
@@ -1147,6 +1618,8 @@ public class ExcelAiImportService {
             for (PreviewDataRow member : members) {
                 PreviewDataVariant variant = new PreviewDataVariant();
                 variant.setRowIndex(member.getRowIndex());
+                variant.setImages(member.getImages().stream()
+                    .filter(image -> !image.isPrimaryCandidate()).toList());
                 Map<String, String> variantRawValues = new LinkedHashMap<>();
                 Map<String, String> variantMappedFieldByHeader = new LinkedHashMap<>();
                 for (String header : headers) {
@@ -1166,12 +1639,11 @@ public class ExcelAiImportService {
     }
 
     private String resolveRowExternalCode(PreviewDataRow row, Map<String, String> mapping) {
-        for (Map.Entry<String, String> entry : mapping.entrySet()) {
-            if ("externalCode".equals(entry.getValue())) {
-                return row.getRawValues().getOrDefault(entry.getKey(), "");
-            }
-        }
-        return "";
+        // 预览分组与 Snapshot / 正式导入共用复合映射及「型号品名」拆分语义。
+        // 仅匹配字段值恰为 externalCode 会漏掉 externalCode,productName，
+        // 使纵向合并的一个型号在清洗页按行号拆成多个商品。
+        String code = resolveRowExternalCode(row.getRawValues(), mapping);
+        return code != null ? code : "";
     }
 
     private boolean isProductLevelHeader(String header, Map<String, String> mapping) {
@@ -1179,7 +1651,9 @@ public class ExcelAiImportService {
         if (!StringUtils.hasText(field)) {
             return false;
         }
-        return ExcelAiStandardFields.PRODUCT_LEVEL_FIELDS.contains(field);
+        return List.of(field.split(",")).stream()
+            .map(String::trim)
+            .anyMatch(ExcelAiStandardFields.PRODUCT_LEVEL_FIELDS::contains);
     }
 
     private Map<Integer, List<String>> loadRowOverrideImages(String batchId) {
@@ -1953,6 +2427,64 @@ public class ExcelAiImportService {
     record IndexedRow(int physicalRowIndex, Map<Integer, String> values) {
     }
 
+    private Map<Integer, String> completeUnlabeledHeaders(Map<Integer, String> headers,
+                                                           List<Map<Integer, String>> dataRows) {
+        Map<Integer, String> completed = new LinkedHashMap<>();
+        headers.forEach((index, name) -> {
+            if (StringUtils.hasText(name)) {
+                completed.put(index, name);
+            }
+        });
+        for (Map<Integer, String> row : dataRows) {
+            for (Map.Entry<Integer, String> cell : row.entrySet()) {
+                if (!completed.containsKey(cell.getKey()) && StringUtils.hasText(cell.getValue())) {
+                    completed.put(cell.getKey(), "未命名列" + CellReference.convertNumToColString(cell.getKey()));
+                }
+            }
+        }
+        return completed.entrySet().stream().sorted(Map.Entry.comparingByKey())
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
+                (left, right) -> left, LinkedHashMap::new));
+    }
+
+    private void inferSplitModuleColumn(Map<String, String> mapping, Map<Integer, String> headers,
+                                        List<Map<Integer, String>> dataRows) {
+        for (Map.Entry<Integer, String> entry : headers.entrySet()) {
+            int column = entry.getKey();
+            if (!entry.getValue().startsWith("未命名列") || mapping.containsKey(entry.getValue())) {
+                continue;
+            }
+            String modelHeader = headers.get(column - 1);
+            String moduleHeader = headers.get(column + 1);
+            if (modelHeader == null || moduleHeader == null
+                || !String.valueOf(mapping.get(modelHeader)).contains("externalCode")
+                || !"variantDisplayName".equals(mapping.get(moduleHeader))) {
+                continue;
+            }
+            long populated = dataRows.stream().filter(row -> StringUtils.hasText(row.get(column))).count();
+            boolean disjoint = dataRows.stream().noneMatch(row ->
+                StringUtils.hasText(row.get(column)) && StringUtils.hasText(row.get(column + 1)));
+            if (populated > 0 && disjoint) {
+                mapping.put(entry.getValue(), "variantDisplayName");
+            }
+        }
+    }
+
+    private Set<String> repeatedPreambleValues(List<Map<Integer, String>> rawRows,
+                                                HeaderLayout layout, Map<Integer, String> headers) {
+        Integer modelColumn = headers.entrySet().stream()
+            .filter(entry -> entry.getValue().contains("型号") || entry.getValue().contains("品名"))
+            .map(Map.Entry::getKey).findFirst().orElse(null);
+        if (modelColumn == null) {
+            return Set.of();
+        }
+        return rawRows.subList(0, layout.headerStartIndex()).stream()
+            .map(row -> row.get(modelColumn))
+            .filter(StringUtils::hasText)
+            .map(String::trim)
+            .collect(Collectors.toSet());
+    }
+
     private String buildHeadersText(Map<Integer, String> headerMap) {
         return headerMap.entrySet().stream()
             .sorted(Map.Entry.comparingByKey())
@@ -2300,10 +2832,13 @@ public class ExcelAiImportService {
         if (dataRow == null || dataRow.isEmpty()) {
             return true;
         }
+        if ("repeated_preamble".equals(dataRow.get("__sourceRowType__"))) {
+            return true;
+        }
         boolean hasAnyValue = false;
         for (Map.Entry<String, String> entry : dataRow.entrySet()) {
             String value = entry.getValue();
-            if (!StringUtils.hasText(value) || "__rowIndex__".equals(entry.getKey())) {
+            if (!StringUtils.hasText(value) || entry.getKey().startsWith("__")) {
                 continue;
             }
             hasAnyValue = true;
@@ -2336,7 +2871,7 @@ public class ExcelAiImportService {
      */
     private boolean containsNoteWordInAnyCell(Map<String, String> row) {
         for (Map.Entry<String, String> entry : row.entrySet()) {
-            if ("__rowIndex__".equals(entry.getKey()) || !StringUtils.hasText(entry.getValue())) {
+            if (entry.getKey().startsWith("__") || !StringUtils.hasText(entry.getValue())) {
                 continue;
             }
             if (containsNoteWord(entry.getValue())) {
@@ -2381,6 +2916,9 @@ public class ExcelAiImportService {
         int nonBlank = 0;
         int selfRef = 0;
         for (Map.Entry<String, String> entry : dataRow.entrySet()) {
+            if (entry.getKey().startsWith("__")) {
+                continue;
+            }
             if (!StringUtils.hasText(entry.getValue())) {
                 continue;
             }
@@ -2395,6 +2933,20 @@ public class ExcelAiImportService {
             }
         }
         return nonBlank >= 2 && selfRef >= 2 && selfRef * 2 >= nonBlank;
+    }
+
+    private boolean isPriceGradeHeaderRow(Map<String, String> dataRow) {
+        if (dataRow.entrySet().stream().anyMatch(entry ->
+            (entry.getKey().contains("型号") || entry.getKey().contains("品名"))
+                && StringUtils.hasText(entry.getValue()))) {
+            return false;
+        }
+        List<String> values = dataRow.entrySet().stream()
+            .filter(entry -> !entry.getKey().startsWith("__"))
+            .map(Map.Entry::getValue).filter(StringUtils::hasText).map(String::trim).toList();
+        return !values.isEmpty() && values.stream().allMatch(value ->
+            value.matches("(?i)(?:[A-D]{1,2}级|[A-D]{1,2}类).*")
+                || value.matches("(?:半皮|全皮|真皮|超纤皮|进口布|国产布).*") );
     }
 
     /**
@@ -2531,7 +3083,9 @@ public class ExcelAiImportService {
         for (Map<String, String> row : dataRows) {
             // 重复表头行与备注词命中行不参与填充：备注行若被上一产品的型号/品名回填，
             // 会带着「有映射字段值」的假象逃脱 isNoteOrEmptyRow 的映射上下文校验（A13）
-            if (isRepeatedHeaderRow(row) || containsNoteWordInAnyCell(row)) {
+            if ("repeated_preamble".equals(row.get("__sourceRowType__"))
+                || isRepeatedHeaderRow(row) || isPriceGradeHeaderRow(row)
+                || containsNoteWordInAnyCell(row)) {
                 continue;
             }
             for (String header : fillHeaders) {
@@ -2828,7 +3382,8 @@ public class ExcelAiImportService {
 
     private ExcelImportBatch saveBatch(String batchId, String fileName, String storagePath, AiMappingResult mappingResult,
                                        Map<Integer, String> headerMap, List<Map<Integer, String>> dataRows,
-                                       List<Integer> dataRowPhysicalIndexes, int sheetIndex) {
+                                       List<Integer> dataRowPhysicalIndexes, int sheetIndex,
+                                       Set<String> preambleValues) {
         ExcelImportBatch batch = new ExcelImportBatch();
         batch.setBatchId(batchId);
         batch.setFileName(fileName);
@@ -2853,10 +3408,19 @@ public class ExcelAiImportService {
             batch.setColumnMapping(objectMapper.writeValueAsString(mappingResult.mapping));
             batch.setPriceColumns(objectMapper.writeValueAsString(mappingResult.priceColumns));
             List<Map<String, String>> keyedRows = new ArrayList<>();
+            Integer modelColumn = headerMap.entrySet().stream()
+                .filter(entry -> entry.getValue().contains("型号") || entry.getValue().contains("品名"))
+                .map(Map.Entry::getKey).findFirst().orElse(null);
             for (int i = 0; i < dataRows.size(); i++) {
                 Map<String, String> keyedRow = convertRowToKeyMap(dataRows.get(i), headerMap);
                 int physicalIndex = dataRowPhysicalIndexes.get(i);
                 keyedRow.put("__rowIndex__", String.valueOf(physicalIndex + 1));
+                String modelValue = modelColumn != null ? dataRows.get(i).get(modelColumn) : null;
+                if (StringUtils.hasText(modelValue) && preambleValues.contains(modelValue.trim())) {
+                    keyedRow.put("__sourceRowType__", "repeated_preamble");
+                } else if (StringUtils.hasText(modelValue)) {
+                    keyedRow.put("__modelStart__", "true");
+                }
                 keyedRows.add(keyedRow);
             }
             batch.setPreviewRows(objectMapper.writeValueAsString(keyedRows));
@@ -3160,8 +3724,9 @@ public class ExcelAiImportService {
                     : List.of(rawValues.get(headerLayout.headerStartIndex()));
                 // 与 previewMapping 同一表头管线（合并 + 同名消歧）：表头名与 previewRows 键一致，
                 // 顺序按物理列索引（供 preview-data 重建表头顺序，A7）
+                List<Map<Integer, String>> dataRows = rawValues.subList(headerLayout.dataStartIndex(), rawValues.size());
                 Map<Integer, String> headerMap = ExcelHeaderNormalizer.disambiguateDuplicateHeaders(
-                    ExcelHeaderNormalizer.mergeHeaderRows(headerRows));
+                    completeUnlabeledHeaders(ExcelHeaderNormalizer.mergeHeaderRows(headerRows), dataRows));
                 for (Map.Entry<Integer, String> entry : headerMap.entrySet().stream()
                         .sorted(Map.Entry.comparingByKey()).toList()) {
                     minCol = Math.min(minCol, entry.getKey());
@@ -3361,7 +3926,9 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 批次级预加载（消除行循环 N+1）：本批次出现过的全部 external_code 一把 in 查询
+     * 批次级预加载（消除行循环 N+1）：本批次出现过的全部源商品编码经
+     * {@link SupplierIdentityResolutionService#resolveBatch} 统一解析身份
+     * （supplier_product_ref 优先 + 受限 legacy fallback，设计文档 v3.3 §9 Phase 3），
      * 建立「编码 → RSPU」缓存，并对命中的 RSPU 各用一把 in 查询批量预载变体与图片快照。
      *
      * <p>AI 解析（字段映射/品类猜测）在预览确认阶段已完成，导入行循环不再调用大模型；
@@ -3371,10 +3938,12 @@ public class ExcelAiImportService {
      *
      * @param rawDataRows 数据行（已完成 forward fill / 预览编辑 / 跳过行过滤）
      * @param mapping     表头 → 标准字段映射
+     * @param request     导入请求（defaultFactoryCode 提供身份解析的工厂上下文）
      * @return 批次导入缓存
      */
     private BatchImportCache preloadBatchCache(List<Map<String, String>> rawDataRows,
-                                               Map<String, String> mapping) {
+                                               Map<String, String> mapping,
+                                               ExcelAiMappingRequest request) {
         BatchImportCache cache = new BatchImportCache();
         Set<String> codes = new LinkedHashSet<>();
         for (Map<String, String> dataRow : rawDataRows) {
@@ -3386,20 +3955,37 @@ public class ExcelAiImportService {
         if (codes.isEmpty()) {
             return cache;
         }
-        List<RspuMaster> existing = rspuMapper.selectList(
-            new QueryWrapper<RspuMaster>().in("external_code", codes));
-        List<String> hitRspuIds = new ArrayList<>();
-        for (RspuMaster rspu : existing) {
-            String key = trim(rspu.getExternalCode());
-            // 同编码重复行保留先返回者（V24 唯一索引下不会重复，此处仅为防御）
-            if (key != null && !cache.rspuByExternalCode.containsKey(key)) {
-                cache.rspuByExternalCode.put(key, rspu);
-                hitRspuIds.add(rspu.getRspuId());
-            }
-        }
-        if (hitRspuIds.isEmpty()) {
+        // 身份解析切换（§9 Phase 3）：supplier_product_ref 优先；legacy fallback 仅在
+        // 工厂上下文（defaultFactoryCode）可验证且该工厂下唯一无歧义时命中，
+        // 无工厂上下文时不再按 external_code 全局猜测（禁止裸 fallback）
+        String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
+            ? request.getDefaultFactoryCode().trim() : null;
+        Map<String, SupplierIdentityResolutionService.ResolvedIdentity> resolved =
+            supplierIdentityResolutionService.resolveBatch(factoryCode, null, codes);
+        if (resolved.isEmpty()) {
             return cache;
         }
+        List<String> resolvedRspuIds = resolved.values().stream()
+            .map(SupplierIdentityResolutionService.ResolvedIdentity::getRspuId)
+            .distinct()
+            .toList();
+        // @TableLogic 自动排除软删：ref 指向已软删 RSPU 时视为未命中（不缓存），
+        // 行内 miss 单查会走同一解析逻辑并 negative 缓存
+        Map<String, RspuMaster> rspuById = rspuMapper.selectBatchIds(resolvedRspuIds).stream()
+            .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
+        // 多个编码可能解析到同一 RSPU（ref 归一命中），变体/图片预载按 rspu_id 去重
+        Set<String> hitRspuIdSet = new LinkedHashSet<>();
+        for (Map.Entry<String, SupplierIdentityResolutionService.ResolvedIdentity> entry : resolved.entrySet()) {
+            RspuMaster rspu = rspuById.get(entry.getValue().getRspuId());
+            if (rspu != null && !cache.rspuByExternalCode.containsKey(entry.getKey())) {
+                cache.rspuByExternalCode.put(entry.getKey(), rspu);
+                hitRspuIdSet.add(rspu.getRspuId());
+            }
+        }
+        if (hitRspuIdSet.isEmpty()) {
+            return cache;
+        }
+        List<String> hitRspuIds = new ArrayList<>(hitRspuIdSet);
         // 无变体/图片的命中 RSPU 也初始化为空快照，避免行内首次触碰时再单查
         hitRspuIds.forEach(id -> {
             cache.variantsByRspuId.put(id, new ArrayList<>());
@@ -3430,10 +4016,10 @@ public class ExcelAiImportService {
             }
             if (standardField.contains(",")) {
                 for (String field : standardField.split(",")) {
-                    standardValues.put(field.trim(), entry.getValue());
+                    putMappedValue(standardValues, field.trim(), entry.getValue());
                 }
             } else {
-                standardValues.put(standardField, entry.getValue());
+                putMappedValue(standardValues, standardField, entry.getValue());
             }
         }
         String externalCode = getValue(standardValues, "externalCode");
@@ -3448,6 +4034,46 @@ public class ExcelAiImportService {
         return externalCode;
     }
 
+    private void putMappedValue(Map<String, String> values, String field, String value) {
+        if (StringUtils.hasText(value) || !values.containsKey(field)) {
+            values.put(field, value);
+        }
+    }
+
+    private String resolveRowProductName(Map<String, String> dataRow, Map<String, String> mapping) {
+        if (dataRow == null) {
+            return null;
+        }
+        Map<String, String> values = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : dataRow.entrySet()) {
+            String fields = mapping.get(entry.getKey());
+            if (StringUtils.hasText(fields)) {
+                for (String field : fields.split(",")) {
+                    putMappedValue(values, field.trim(), entry.getValue());
+                }
+            }
+        }
+        String name = getValue(values, "productName");
+        String code = getValue(values, "externalCode");
+        if (name != null && name.equals(code)) {
+            int index = findSplitIndex(name);
+            if (index > 0) {
+                return name.substring(nameStartIndex(name, index)).trim();
+            }
+        }
+        return name;
+    }
+
+    private String modelAndNameIdentity(String externalCode, Map<String, String> row,
+                                        Map<String, String> mapping) {
+        boolean combinedColumn = mapping.values().stream().anyMatch(fields -> fields != null
+            && Arrays.stream(fields.split(",")).map(String::trim).anyMatch("externalCode"::equals)
+            && Arrays.stream(fields.split(",")).map(String::trim).anyMatch("productName"::equals));
+        return combinedColumn
+            ? externalCode + "\u0000" + Objects.toString(resolveRowProductName(row, mapping), "")
+            : externalCode;
+    }
+
     private RowResult processRowInTransaction(Map<String, String> dataRow, Map<String, String> mapping,
                                               String categoryHint,
                                               List<PriceColumnInfo> priceColumns,
@@ -3458,7 +4084,8 @@ public class ExcelAiImportService {
                                               ProductGroup currentGroup, PhysicalLayout physicalLayout,
                                               int sheetIndex, String sheetName, String categoryGuess,
                                               String batchId, BatchImportCache importCache,
-                                              String rowCategorySelection, String originalFilename) {
+                                              String rowCategorySelection, String originalFilename,
+                                              String mappingVersion, AttemptRowContext attemptRow) {
         // 事务外预处理：行构建/校验、URL 图片下载、内嵌图提取。
         // 网络与文件 IO 耗时可达数十秒，绝不放入 DB 事务（长事务占用连接池会拖垮全系统）；
         // 同时 MinIO 不参与 DB 事务，先存文件、事务内只登记元数据。
@@ -3493,7 +4120,20 @@ public class ExcelAiImportService {
         try {
             RowResult result = persistRow(prep, storedProductImages, storedVariantImages,
                 dataRow, priceColumns, request, dictCache, rowIndex, importRowId, currentGroup, importCache,
-                originalFilename);
+                originalFilename, batchId, sheetIndex, physicalRowIndex,
+                mappingVersion, mapping, attemptRow);
+            // P0-F（§31/§50.2）：AttemptItem 计数/终态与该行领域写入同事务提交/回滚——
+            // 行级原子性：事务回滚则计数不留痕，Recovery 可安全重做
+            if (attemptRow != null) {
+                int displayRow = physicalRowIndex != null ? physicalRowIndex + 1 : rowIndex;
+                attemptService.applyRowOutcome(attemptRow.item(),
+                    result.variantCount(),
+                    result.rskuIds() != null ? result.rskuIds().size() : 0,
+                    result.quoteRejectedCount(),
+                    result.skipped(), result.skipReason(),
+                    displayRow, result.quotePolicyNotes(), attemptRow.lastRowOfGroup(),
+                    attemptRow.leaseOwner(), result.rspuId(), result.groupKey());
+            }
             transactionManager.commit(status);
             // 提交成功后才把本行新建的 RSPU 并入批次缓存（回滚行的幻影数据不得被后续行命中）
             importCache.commitRow();
@@ -3506,6 +4146,10 @@ public class ExcelAiImportService {
             }
             // 逐出本行触碰的缓存条目（脏实体/幻影变体与图片），后续行重查对齐原实时单查语义
             importCache.rollbackRow();
+            // 租约易主异常原样上抛（不包装为业务异常）：整批中止，由新持有者续跑
+            if (e instanceof AttemptLeaseLostException alle) {
+                throw alle;
+            }
             if (e instanceof BusinessException be) {
                 throw be;
             }
@@ -3538,7 +4182,7 @@ public class ExcelAiImportService {
             log.debug("第 {} 行为说明或空行，已跳过", rowIndex);
             return PreparedRow.skip(RowResult.skipped("说明或空行"));
         }
-        if (isRepeatedHeaderRow(dataRow)) {
+        if (isRepeatedHeaderRow(dataRow) || isPriceGradeHeaderRow(dataRow)) {
             log.debug("第 {} 行为重复表头行，已跳过", rowIndex);
             return PreparedRow.skip(RowResult.skipped("重复表头行"));
         }
@@ -3616,14 +4260,17 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 行持久化（事务内）：纯数据库写入，RSPU/工厂关联/变体/RSKU/图片元数据/异步任务。
+     * 行持久化（事务内）：纯数据库写入，RSPU/工厂关联/变体/RSKU/图片元数据/异步任务/
+     * 字段级血缘（P0-E，同事务追加）。
      */
     private RowResult persistRow(PreparedRow prep, List<StoredImage> storedProductImages,
                                  List<StoredImage> storedVariantImages,
                                  Map<String, String> dataRow, List<PriceColumnInfo> priceColumns,
                                  ExcelAiMappingRequest request, Map<String, List<CategoryDict>> dictCache,
                                  int rowIndex, Long importRowId, ProductGroup currentGroup,
-                                 BatchImportCache importCache, String originalFilename) {
+                                 BatchImportCache importCache, String originalFilename, String batchId,
+                                 int sheetIndex, Integer physicalRowIndex, String mappingVersion,
+                                 Map<String, String> mapping, AttemptRowContext attemptRow) {
         ProductImportRow row = prep.row();
         List<String> rowIssues = prep.rowIssues();
         String groupKey = prep.groupKey();
@@ -3647,8 +4294,8 @@ public class ExcelAiImportService {
             createdNewRspu = false;
             log.debug("第 {} 行与上一产品同型号（{}），归入已有 RSPU {}", rowIndex, groupKey, rspuId);
         } else {
-            // updateIfExists 开关：externalCode 已存在（未软删）时，true 复用并更新已有 RSPU，false 跳过该行
-            RspuMaster existing = findRspuByExternalCode(groupKey, importCache);
+            // updateIfExists 开关：源商品编码命中已有身份（未软删）时，true 复用并更新已有 RSPU，false 跳过该行
+            RspuMaster existing = findRspuByIdentity(groupKey, request, importCache);
             if (existing != null && !request.isUpdateIfExists()) {
                 log.debug("第 {} 行外部编码 {} 已存在，按配置跳过", rowIndex, groupKey);
                 return RowResult.skipped("已存在，跳过: " + groupKey);
@@ -3660,7 +4307,10 @@ public class ExcelAiImportService {
                 // 本厂已报价的共管产品仅补空缺（不覆盖已有值，categoryCode 不可改）；
                 // 非本厂已报价产品跳过共享信息更新，仅继续本行本厂 RSKU 报价登记
                 if (dataScopeHelper.currentDataScope() == DataScope.ALL) {
-                    updateExistingRspu(existing, row, dictCache, rowIssues);
+                    // §34.1（P0-F）：同事务重读 manual_override_fields（不用 Preview/缓存的
+                    // 过期标记覆盖并发人工修正），活跃标记字段不被 Excel/AI 覆盖
+                    String freshOverrideFields = loadManualOverrideFields(rspuId, existing);
+                    updateExistingRspu(existing, row, dictCache, rowIssues, freshOverrideFields);
                     saveStylesAndScenes(rspuId, row, dictCache, rowIssues, importCache);
                 } else if (dataScopeHelper.canAccessRspu(rspuId)) {
                     fillExistingRspuGaps(existing, row, dictCache);
@@ -3677,12 +4327,18 @@ public class ExcelAiImportService {
                 createdNewRspu = true;
             }
         }
+        // §9 Phase 4（Stop New Identity Write）：供应商源编码身份写入 supplier_product_ref
+        // （新建/复用/同组行统一登记；provenance 记录 source_system 与 import batch）。
+        // 同键已绑其他 RSPU 时 resolveOrCreate 抛 SourceCodeReusedException（§6.2），
+        // 沿现有行级失败语义整行回滚并落失败明细，绝不自动改绑
+        Long supplierRefId = registerSupplierProductRef(rspuId, row, request, batchId);
         // 创建 RSPU-工厂关联与变体（先建变体，模块行的规格示例图要挂到本行变体上）；
         // createdNewRspu 行（本次事务刚 insert 的 RSPU）走录入旁路入口，跳过对
         // "刚创建、尚无本厂 RSKU"的新 RSPU 必然误伤的 assertCanAccessRspu 校验
         VariantRskuOutcome variantRskuOutcome = createRspuFactoryMappingAndVariants(rspuId, dataRow, row,
             priceColumns, request, dictCache, importRowId, rowIssues, defaultProductLevel, defaultMaterialCode,
-            importCache, createdNewRspu);
+            importCache, createdNewRspu,
+            attemptRow != null ? attemptRow.policy() : null);
         String variantId = variantRskuOutcome.firstVariantId();
 
         // 登记图片元数据（文件已在事务外写入对象存储）
@@ -3723,8 +4379,59 @@ public class ExcelAiImportService {
         List<String> imageHashes = new ArrayList<>();
         imageHashes.addAll(storedProductImages.stream().map(StoredImage::contentHash).filter(StringUtils::hasText).toList());
         imageHashes.addAll(storedVariantImages.stream().map(StoredImage::contentHash).filter(StringUtils::hasText).toList());
+
         return RowResult.success(rspuId, variantId, variantRskuOutcome.rskuIds(), prep.imageCount(), imageAssetIds,
-            taskId, groupKey, createdNewRspu, primaryObjectKey != null, rowIssues, imageHashes);
+            taskId, groupKey, createdNewRspu, primaryObjectKey != null, rowIssues, imageHashes,
+            variantRskuOutcome.variantCount(), variantRskuOutcome.quoteRejectedCount(),
+            variantRskuOutcome.quotePolicyNotes());
+    }
+
+    /**
+     * §34.1（P0-F 消费侧强制）：同事务重读目标实体的 manual_override_fields，
+     * 不使用 Preview 时缓存的过期标记覆盖并发人工修正；读取失败/无记录回退缓存值。
+     */
+    private String loadManualOverrideFields(String rspuId, RspuMaster cached) {
+        try {
+            RspuMaster fresh = rspuMapper.selectById(rspuId);
+            if (fresh != null) {
+                return fresh.getManualOverrideFields();
+            }
+        } catch (Exception e) {
+            log.warn("重读 manual_override_fields 失败，回退缓存实体标记: rspuId={}", rspuId, e);
+        }
+        return cached.getManualOverrideFields();
+    }
+
+    /**
+     * §9 Phase 4（Stop New Identity Write）：把本行供应商源编码身份写入
+     * {@code supplier_product_ref}（经 {@link SupplierProductRefService#resolveOrCreate}）。
+     *
+     * <ul>
+     *   <li>工厂上下文取请求级 {@code defaultFactoryCode}（与读路径身份解析同一口径，
+     *       请求校验阶段已强制验真）；</li>
+     *   <li>provenance：{@code source_system} 固定为 {@value #SOURCE_SYSTEM_EXCEL_AI_IMPORT}，
+     *       {@code import_batch_id} 取本批次 ID；namespace 默认 default（§6.1）；</li>
+     *   <li>同键同 RSPU 复用（重导入/同组模块行只刷新 provenance，不产生重复 ref）；</li>
+     *   <li>同键已绑其他 RSPU：{@link com.rsdp.exception.SourceCodeReusedException}
+     *       向上传播 → 行事务回滚 → 行级失败（§6.2，绝不自动改绑）；</li>
+     *   <li>行无源编码或无工厂上下文时不建立身份（§6 身份键含 factory_code），
+     *       本行仅停写 external_code，不阻断导入。</li>
+     * </ul>
+     * @return 登记/复用的 supplier_product_ref 主键；行无源编码或无工厂上下文时为 null
+     */
+    private Long registerSupplierProductRef(String rspuId, ProductImportRow row,
+                                            ExcelAiMappingRequest request, String batchId) {
+        String sourceCode = trim(row.getExternalCode());
+        String factoryCode = request != null && StringUtils.hasText(request.getDefaultFactoryCode())
+            ? request.getDefaultFactoryCode().trim() : null;
+        if (!StringUtils.hasText(sourceCode) || factoryCode == null) {
+            log.debug("本行不建立 Supplier Ref（源编码或工厂上下文缺失），rspuId={}", rspuId);
+            return null;
+        }
+        var ref = supplierProductRefService.resolveOrCreate(new SupplierProductRefService.ResolveCommand(
+            rspuId, factoryCode, null, SOURCE_SYSTEM_EXCEL_AI_IMPORT, sourceCode,
+            trim(row.getProductName()), batchId));
+        return ref != null ? ref.getRefId() : null;
     }
 
     private ProductImportRow buildProductImportRow(Map<String, String> dataRow, Map<String, String> mapping,
@@ -3742,10 +4449,10 @@ public class ExcelAiImportService {
             // 支持复合映射：一个原始列映射到多个标准字段
             if (standardField.contains(",")) {
                 for (String field : standardField.split(",")) {
-                    standardValues.put(field.trim(), entry.getValue());
+                    putMappedValue(standardValues, field.trim(), entry.getValue());
                 }
             } else {
-                standardValues.put(standardField, entry.getValue());
+                putMappedValue(standardValues, standardField, entry.getValue());
             }
         }
 
@@ -3815,7 +4522,7 @@ public class ExcelAiImportService {
         int idx = findSplitIndex(combined);
         if (idx > 0) {
             row.setExternalCode(combined.substring(0, idx).trim());
-            String namePart = combined.substring(idx + 1).trim();
+            String namePart = combined.substring(nameStartIndex(combined, idx)).trim();
             row.setProductName(namePart);
             // 仅当变体名同样来自该复合值（无独立「规格/模块」列）时才回填变体名，
             // 避免覆盖 variantDisplayName 标准字段读到的模块名
@@ -3826,6 +4533,13 @@ public class ExcelAiImportService {
     }
 
     private int findSplitIndex(String text) {
+        // 厂家型号与中文品名直接相连（如 MJ-S96欧拉沙发）时，型号尾部数字后即为边界。
+        java.util.regex.Matcher modelAndName = java.util.regex.Pattern
+            .compile("^[A-Za-z]{1,5}-[A-Za-z]{1,5}\\d{1,5}(?=\\p{IsHan})")
+            .matcher(text);
+        if (modelAndName.find()) {
+            return modelAndName.end();
+        }
         for (char sep : new char[]{' ', '/', '\\', '|', '／', '、'}) {
             int idx = text.indexOf(sep);
             if (idx > 0 && idx < text.length() - 1) {
@@ -3833,6 +4547,12 @@ public class ExcelAiImportService {
             }
         }
         return -1;
+    }
+
+    private int nameStartIndex(String combined, int splitIndex) {
+        return splitIndex < combined.length()
+            && Character.UnicodeScript.of(combined.charAt(splitIndex)) == Character.UnicodeScript.HAN
+            ? splitIndex : splitIndex + 1;
     }
 
     private String getValue(Map<String, String> map, String key) {
@@ -4301,6 +5021,599 @@ public class ExcelAiImportService {
         return response;
     }
 
+    // ------------------------------------------------------------------
+    // P0-B2：品类策略 / 行级最终品类经 Immutable Snapshot 固化
+    // （09 方案 v2.3 §16/§17 + 设计文档 v3.3 §4.1/§46/§47）
+    // ------------------------------------------------------------------
+
+    /**
+     * 预览首版 Snapshot（revision=1，v3.3 §46）：尚无品类策略（categoryMode=null），
+     * 行级 finalCategoryCode 均未确定；分组复用 RSPU 归组规则（§14/结论 14）。
+     *
+     * @param batch     刚保存的预览批次
+     * @param mapping   AI 建议并经后处理的字段映射
+     * @param sheetName 当前工作表名（Snapshot 元数据）
+     * @return 创建的 Revision Header
+     */
+    private ExcelImportPreviewRevision createInitialPreviewRevision(ExcelImportBatch batch,
+                                                                    Map<String, String> mapping,
+                                                                    String sheetName) {
+        List<Map<String, String>> rows = loadRawDataRows(batch);
+        SnapshotGroupsBuild build = buildSnapshotGroups(rows, mapping, null, null, null, false);
+        return previewSnapshotService.createNextRevision(
+            new ExcelImportPreviewSnapshotService.CreateRevisionCommand(
+                batch.getBatchId(), null,
+                batch.getSheetIndex() != null ? batch.getSheetIndex() : 0, sheetName,
+                null, null, null,
+                computeMappingHash(mapping, null), EXCEL_NORMALIZER_VERSION,
+                build.groups(), SecurityOperatorContext.currentUserId()));
+    }
+
+    /**
+     * 品类 Preview Edit 命令：用户对导入方式 / 默认品类 / 候选品类 / 行级最终品类的修改
+     * 物化为新的 immutable Preview Revision（09 v2.3 §16/§17；v3.3 §46：任何编辑 +1）。
+     *
+     * <p>行级最终品类按 §26.1 收敛兜底链计算后固化：行级选择（人工最终裁定）→
+     * 行内类别列确定性归一（可超候选集）→ SINGLE 默认品类；MIXED 无更多兜底，
+     * 未确定行以 finalCategoryCode=null 固化，由确认导入时的快照校验整批拦截。</p>
+     *
+     * @param batchId 批次 ID
+     * @param request 编辑命令（携带 expectedRevision 乐观锁）
+     * @return 新 Revision 号与逐行最终品类（前端以响应为准同步本地状态）
+     * @throws BusinessException                批次不存在 / 非 pending / 策略或品类码不合法（400/410）
+     * @throws PreviewRevisionConflictException Revision 冲突（409）
+     */
+    @Transactional
+    public ExcelAiCategoryRevisionResponse applyCategoryRevision(String batchId,
+                                                                 ExcelAiCategoryRevisionRequest request) {
+        ExcelImportBatch batch = batchMapper.selectById(batchId);
+        if (batch == null) {
+            throw new BusinessException("导入批次不存在: " + batchId);
+        }
+        // 仅 pending 批次允许编辑（与清洗页其它写操作同口径，A8）
+        assertBatchEditable(batch);
+        CategoryMode mode = request.getCategoryMode();
+        if (mode == null) {
+            throw new BusinessException("导入方式不能为空");
+        }
+
+        List<CategoryDict> categories = safeList(dictService.listByType("category"));
+        // 策略校验与 confirmAndImport 兜底同口径（§22）：SINGLE 默认品类必填且合法；MIXED 候选集 ≥2 且合法
+        String categoryHint = normalizeCategoryPolicy(mode, request.getCategoryHint(),
+            request.getCandidateCategoryCodes(), categories);
+        List<String> candidates = mode == CategoryMode.MIXED
+            ? normalizeCandidates(request.getCandidateCategoryCodes()) : List.of();
+
+        // 行级选择值合法性（防绕过前端提交非法品类码，与 confirm 兜底同口径）
+        Map<Integer, String> selections = request.getRowCategorySelections() != null
+            ? request.getRowCategorySelections() : Map.of();
+        for (Map.Entry<Integer, String> entry : selections.entrySet()) {
+            if (!StringUtils.hasText(entry.getValue())
+                || !isValidDictCode(entry.getValue().trim().toUpperCase(), categories)) {
+                throw new BusinessException("行级品类选择包含非法品类码: " + entry.getValue()
+                    + "（行号 " + entry.getKey() + "）");
+            }
+        }
+
+        // 映射优先取请求中用户确认的字段映射，缺省回退批次预览时保存的映射（与 classify 同口径）
+        Map<String, String> mapping = request.getMapping() != null && !request.getMapping().isEmpty()
+            ? sanitizeMapping(request.getMapping())
+            : loadColumnMapping(batch);
+        List<Map<String, String>> rows = loadRawDataRows(batch);
+        PhysicalLayout revisionLayout = loadPhysicalLayout(batch);
+        forwardFillKeyColumns(rows, mapping, revisionLayout);
+        applyPreviewEdits(rows, request.getPreviewEdits());
+        propagateGroupFields(rows, mapping, revisionLayout);
+        if (request.getSkipRows() != null && !request.getSkipRows().isEmpty()) {
+            Set<Integer> skipped = new HashSet<>(request.getSkipRows());
+            rows.removeIf(row -> skipped.contains(resolveDisplayRowIndex(row, 0)));
+        }
+
+        SnapshotGroupsBuild build = buildSnapshotGroups(rows, mapping, selections,
+            request.getCategoryMapping(), mode == CategoryMode.SINGLE ? categoryHint : null, true);
+
+        ExcelImportPreviewRevision revision = previewSnapshotService.createNextRevision(
+            new ExcelImportPreviewSnapshotService.CreateRevisionCommand(
+                batchId, request.getExpectedRevision(),
+                batch.getSheetIndex() != null ? batch.getSheetIndex() : 0, null,
+                mode, categoryHint, candidates,
+                computeMappingHash(mapping, request.getCategoryMapping()), EXCEL_NORMALIZER_VERSION,
+                build.groups(), SecurityOperatorContext.currentUserId()));
+
+        // 品类门禁（§20）：品类未确定 / 同组多品类不再物化 Issue 表，改为 confirm 时
+        // 直接校验 confirmed Snapshot 负载（assertConfirmedSnapshotCategoryGate）
+        log.info("品类 Preview Revision 已固化: batchId={}, revision={}, mode={}, rows={}",
+            batchId, revision.getPreviewRevision(), mode, build.rows().size());
+        ExcelAiCategoryRevisionResponse response = new ExcelAiCategoryRevisionResponse();
+        response.setBatchId(batchId);
+        response.setPreviewRevision(revision.getPreviewRevision());
+        response.setRows(build.rows());
+        return response;
+    }
+
+    /**
+     * 确认导入的 Snapshot 接管（P0-B2）：请求携带 expectedRevision 时，
+     * 品类完整性 / 同一逻辑产品品类唯一性校验直接读 Snapshot 固化的 finalCategoryCode
+     * （不再从前端内存重算），并用快照值覆盖请求携带的 rowCategorySelections——
+     * 导入事实只读 Snapshot（v3.3 §4.1 规则 3/4）。
+     *
+     * @param batch   导入批次（confirmAndImport 已加载）
+     * @param request 确认导入请求（返回时 rowCategorySelections 已被快照值覆盖）
+     * @throws PreviewRevisionConflictException expectedRevision 与当前指针不一致（409）
+     * @throws BusinessException                Snapshot 缺失 / 哈希失配 / 策略不一致 / 品类校验失败
+     */
+    private void applyConfirmedCategorySnapshot(ExcelImportBatch batch, ExcelAiMappingRequest request) {
+        Long expectedRevision = request.getExpectedRevision();
+        // 归档先行判定（§44.2）：受限 GC 已清空指针并留下归档摘要 → 410 snapshot_expired
+        if (batch.getPreviewRevision() == null && hasArchiveSummary(batch)) {
+            throw new BusinessException(410, "snapshot_expired: Preview Snapshot 已过保留期被归档"
+                + "（batchId=" + batch.getBatchId() + "），请重新上传预览");
+        }
+        if (!Objects.equals(batch.getPreviewRevision(), expectedRevision)) {
+            throw new PreviewRevisionConflictException(batch.getBatchId(), expectedRevision,
+                batch.getPreviewRevision());
+        }
+        ExcelImportPreviewSnapshotService.SnapshotView snapshot = previewSnapshotService
+            .getSnapshot(batch.getBatchId(), expectedRevision)
+            .orElseThrow(() -> new BusinessException(410, "snapshot_expired: Preview Snapshot 不存在或已过期"
+                + "（batchId=" + batch.getBatchId() + ", revision=" + expectedRevision + "），请重新预览"));
+        // 品类策略一致性：请求携带的策略必须与 Snapshot 固化的策略一致（防旧页面/并发编辑提交）
+        ExcelImportPreviewRevision header = snapshot.getRevision();
+        if (StringUtils.hasText(header.getNormalizerVersion())
+            && !EXCEL_NORMALIZER_VERSION.equals(header.getNormalizerVersion())) {
+            throw new BusinessException(409, "该批次使用旧版 Excel 归一规则，请重新上传文件并预览后导入");
+        }
+        if (StringUtils.hasText(header.getMappingHash())
+            && !Objects.equals(header.getMappingHash(), computeMappingHash(
+                sanitizeMapping(request.getMapping()), request.getCategoryMapping()))) {
+            throw new BusinessException(409, "字段映射与当前 Preview Snapshot 不一致，请重新保存预览后确认导入");
+        }
+        List<String> snapshotCandidates = parseStringArray(header.getCandidateCategoryCodes());
+        boolean policyMatches = Objects.equals(header.getCategoryMode(), request.getCategoryMode().name())
+            && Objects.equals(header.getCategoryHint(),
+                StringUtils.hasText(request.getCategoryHint()) ? request.getCategoryHint().trim().toUpperCase() : null)
+            && (request.getCategoryMode() != CategoryMode.MIXED
+                || new HashSet<>(snapshotCandidates).equals(new HashSet<>(
+                    normalizeCandidates(request.getCandidateCategoryCodes()))));
+        if (!policyMatches) {
+            throw new BusinessException(409, "请求的品类策略与当前 Snapshot 不一致，请刷新页面后重试");
+        }
+        // confirmed snapshot hash 校验（§77.3）：任何字段被篡改都会失配
+        if (!previewSnapshotService.verifySnapshotHash(batch.getBatchId(), expectedRevision)) {
+            throw new BusinessException("Preview Snapshot 完整性校验失败（snapshot_hash 不匹配），请刷新页面后重试");
+        }
+        for (ExcelImportProductGroup group : snapshot.getGroups()) {
+            try {
+                JsonNode payload = objectMapper.readTree(group.getNormalizedPayload());
+                if (payload == null || !payload.path("sourceRowsRef").isTextual()) {
+                    throw new BusinessException(409, "当前 Preview Revision 未固化源行，请重新保存预览后确认导入");
+                }
+            } catch (BusinessException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new BusinessException("Preview Snapshot 负载解析失败");
+            }
+        }
+
+        Map<String, Map<String, List<Integer>>> modelNames = new LinkedHashMap<>();
+        for (ExcelImportProductGroup group : snapshot.getGroups()) {
+            try {
+                JsonNode payload = objectMapper.readTree(group.getNormalizedPayload());
+                String code = payload.path("externalCode").asText("").trim();
+                String name = payload.path("productName").asText("").trim();
+                if (StringUtils.hasText(code) && StringUtils.hasText(name)) {
+                    List<Integer> indexes = new ArrayList<>();
+                    for (JsonNode rowNode : readSnapshotRows(group)) {
+                        indexes.add(rowNode.path("sourceRowIndex").asInt());
+                    }
+                    modelNames.computeIfAbsent(code, ignored -> new LinkedHashMap<>())
+                        .computeIfAbsent(name, ignored -> new ArrayList<>()).addAll(indexes);
+                }
+            } catch (Exception e) {
+                throw new BusinessException("Preview Snapshot 型号校验失败");
+            }
+        }
+        for (Map.Entry<String, Map<String, List<Integer>>> entry : modelNames.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                List<Integer> indexes = entry.getValue().values().stream().flatMap(List::stream).sorted().toList();
+                throw new BusinessException("型号 " + entry.getKey() + " 对应多个商品名称（行号："
+                    + joinRowIndexes(indexes) + "），请在数据清洗页修正型号后重新保存预览");
+            }
+        }
+
+        Map<Integer, String> finalSelections = new LinkedHashMap<>();
+        List<Integer> missingRows = new ArrayList<>();
+        Map<String, Map<String, List<Integer>>> groupCategoryRows = new LinkedHashMap<>();
+        for (ExcelImportProductGroup group : snapshot.getGroups()) {
+            for (JsonNode rowNode : readSnapshotRows(group)) {
+                int rowIndex = rowNode.get("sourceRowIndex").asInt();
+                JsonNode codeNode = rowNode.get("finalCategoryCode");
+                String code = codeNode != null && codeNode.isTextual() && StringUtils.hasText(codeNode.asText())
+                    ? codeNode.asText().trim().toUpperCase() : null;
+                if (code == null) {
+                    missingRows.add(rowIndex);
+                    continue;
+                }
+                finalSelections.put(rowIndex, code);
+                groupCategoryRows.computeIfAbsent(group.getProductGroupKey(), k -> new LinkedHashMap<>())
+                    .computeIfAbsent(code, k -> new ArrayList<>())
+                    .add(rowIndex);
+            }
+        }
+        // 品类完整性门禁（§20）：非跳过、非系统过滤行必须有最终品类（与旧校验同一文案）
+        if (!missingRows.isEmpty()) {
+            throw new BusinessException("仍有 " + missingRows.size() + " 行商品品类未确定（行号："
+                + joinRowIndexes(missingRows) + "），请完成数据清洗后再执行导入");
+        }
+        // 同一逻辑产品只能有一个品类（§20）
+        List<Integer> conflictRows = new ArrayList<>();
+        for (Map<String, List<Integer>> byCategory : groupCategoryRows.values()) {
+            if (byCategory.size() > 1) {
+                byCategory.values().forEach(conflictRows::addAll);
+            }
+        }
+        if (!conflictRows.isEmpty()) {
+            conflictRows.sort(Integer::compareTo);
+            throw new BusinessException("同一逻辑产品存在多个品类（行号：" + joinRowIndexes(conflictRows)
+                + "），一个产品只能有一个品类，请在数据清洗页统一后再执行导入");
+        }
+        // 字典合法性兜底：字典可能在快照固化后被停用/删除
+        List<CategoryDict> categories = safeList(dictService.listByType("category"));
+        for (Map.Entry<Integer, String> entry : finalSelections.entrySet()) {
+            if (!isValidDictCode(entry.getValue(), categories)) {
+                throw new BusinessException("行级品类选择包含非法品类码: " + entry.getValue()
+                    + "（行号 " + entry.getKey() + "）");
+            }
+        }
+        // 快照值覆盖请求携带的行级选择：导入循环只认 Snapshot 固化的 finalCategoryCode
+        request.setRowCategorySelections(finalSelections);
+    }
+
+    /**
+     * Import 执行的 Revalidate（P0-B3，§22/§23/§72）：Import 只读 confirmed snapshot。
+     *
+     * <p>语义：批次已处 importing（confirm 时已写 confirmed_revision 指针），执行前复核——</p>
+     * <ul>
+     *   <li>指针一致性：confirmed_revision 必须等于请求 expectedRevision，否则 409
+     *       （confirm 之后 Snapshot 被新编辑取代，confirmed_revision 已被清空/改写）；</li>
+     *   <li>快照存在性：指针被受限 GC 归档清空（留有归档摘要）→ 410 snapshot_expired；</li>
+     *   <li>哈希 / 策略一致性 / 品类门禁 / 阻断 Issue 复检：复用
+     *       {@link #applyConfirmedCategorySnapshot}（LOAD immutable snapshot 只读校验，
+     *       不重新解释 Normalize 结果）。</li>
+     * </ul>
+     *
+     * @throws BusinessException 指针失效 / 归档过期 / 校验失败（410 / 409 / 400）
+     */
+    private void revalidateConfirmedSnapshot(ExcelImportBatch batch, ExcelAiMappingRequest request) {
+        Long expected = request.getExpectedRevision();
+        Long confirmed = batch.getConfirmedRevision();
+        if (confirmed == null) {
+            // confirm 后发生任何编辑都会清空 confirmed_revision；若指针整体被归档则 410
+            if (batch.getPreviewRevision() == null && hasArchiveSummary(batch)) {
+                throw new BusinessException(410, "snapshot_expired: Preview Snapshot 已过保留期被归档"
+                    + "（batchId=" + batch.getBatchId() + "），请重新上传预览");
+            }
+            throw new BusinessException(409, "Preview 确认状态已失效（confirmed_revision 为空，"
+                + "confirm 后 Snapshot 可能被修改），请重新确认导入");
+        }
+        if (!confirmed.equals(expected)) {
+            throw new BusinessException(409, "confirmed_revision 与导入请求不一致（confirmed=" + confirmed
+                + ", expected=" + expected + "），请重新确认导入");
+        }
+        // REVALIDATE：LOAD confirmed snapshot + 哈希 / 策略 / 品类门禁 + 阻断 Issue 复检
+        applyConfirmedCategorySnapshot(batch, request);
+        assertConfirmedSnapshotCategoryGate(batch.getBatchId(), expected);
+    }
+
+    /**
+     * 已确认快照的品类门禁（§20，替代原 import_data_issue 阻断检查——Issue 表已于
+     * 2026-09-24 评审后摘除，改为直接校验快照负载）：带品类策略的 Revision
+     * （categoryMode 非空）中，任一行 finalCategoryCode 未确定、或同一逻辑产品组
+     * 出现多个品类，拒绝导入；无品类策略的快照维持旧语义不拦截。
+     * 快照篡改由 verifySnapshotHash 覆盖，不在本门禁范围。
+     *
+     * @param batchId  批次 ID
+     * @param revision 已确认的 Revision 号
+     */
+    private void assertConfirmedSnapshotCategoryGate(String batchId, long revision) {
+        ExcelImportPreviewSnapshotService.SnapshotView snapshot = previewSnapshotService
+            .getSnapshot(batchId, revision)
+            .orElseThrow(() -> new BusinessException(410,
+                "snapshot_expired: 已确认的 Preview Snapshot 不存在"));
+        if (snapshot.getRevision().getCategoryMode() == null) {
+            return;
+        }
+        List<String> problems = new ArrayList<>();
+        for (ExcelImportProductGroup group : snapshot.getGroups()) {
+            final JsonNode payload;
+            try {
+                payload = objectMapper.readTree(group.getNormalizedPayload());
+            } catch (Exception e) {
+                throw new BusinessException("Preview Snapshot 负载解析失败: groupId=" + group.getGroupId());
+            }
+            Set<String> distinctCodes = new LinkedHashSet<>();
+            for (JsonNode rowNode : payload.path("rows")) {
+                JsonNode code = rowNode.get("finalCategoryCode");
+                if (code == null || !code.isTextual() || !StringUtils.hasText(code.asText())) {
+                    problems.add("行 " + rowNode.path("sourceRowIndex").asInt(-1) + " 商品品类未确定");
+                } else {
+                    distinctCodes.add(code.asText());
+                }
+            }
+            if (distinctCodes.size() > 1) {
+                problems.add("同一逻辑产品存在多个品类: " + String.join(" / ", distinctCodes)
+                    + "（一个产品只能有一个品类）");
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new BusinessException("已确认快照存在未解决的品类问题，禁止导入："
+                + String.join("；", problems));
+        }
+    }
+
+    /** 批次是否留有受限 GC 的归档摘要（指针已归档的判据，§44.2）。 */
+    private boolean hasArchiveSummary(ExcelImportBatch batch) {
+        String summary = batch.getSnapshotArchiveSummary();
+        return StringUtils.hasText(summary) && !"{}".equals(summary.trim());
+    }
+
+    /**
+     * 构建 Snapshot 的 Product Group 输入与逐行最终品类清单。
+     *
+     * <p>分组复用 {@link #computeLogicalGroupKeys}（与正式导入同一 RSPU 归组规则）；
+     * 系统过滤行（说明行/重复表头行/组合汇总价行）不进入任何组、不物化进 Snapshot。
+     * 行级最终品类按 §26.1 收敛兜底链计算；组内按行号升序。</p>
+     *
+     * @param rows                  原始数据行（方法内自行 forward-fill，不污染调用方）
+     * @param mapping               字段映射
+     * @param selections            行级最终品类选择（可为 null）
+     * @param categoryMapping       用户确认的品类映射（可为 null）
+     * @param singleDefaultCategory SINGLE 默认品类（非 SINGLE 传 null）
+     */
+    private SnapshotGroupsBuild buildSnapshotGroups(List<Map<String, String>> rows,
+                                                    Map<String, String> mapping,
+                                                    Map<Integer, String> selections,
+                                                    Map<String, String> categoryMapping,
+                                                    String singleDefaultCategory,
+                                                    boolean prepared) {
+        if (rows.isEmpty()) {
+            return new SnapshotGroupsBuild(List.of(), List.of());
+        }
+        // 与 classify / 正式导入同口径的型号/品名/类别列向下填充（纵向合并单元格语义）
+        if (!prepared) {
+            forwardFillKeyColumns(rows, mapping, null);
+        }
+        List<String> groupKeys = computeLogicalGroupKeys(rows, mapping);
+        // 仅在存在品类输入（行级选择或 SINGLE 默认品类）时才做归一解析；
+        // 首版 Snapshot（无策略）所有行 finalCategoryCode 均为 null
+        boolean resolveCategories = selections != null || singleDefaultCategory != null;
+        Map<String, List<CategoryDict>> dictCache = resolveCategories
+            ? Map.of("category", safeList(dictService.listByType("category"))) : Map.of();
+
+        // 逻辑产品组 → 成员行（保持行顺序）；系统过滤行不归组、不固化
+        Map<String, List<Integer>> groupMembers = new LinkedHashMap<>();
+        Map<String, String> groupExternalCode = new HashMap<>();
+        List<ExcelAiCategoryRevisionResponse.RowFinalCategory> finalRows = new ArrayList<>();
+        // P0-B3（§24.1）：逐行持久化 variantKey（v1 legacy 身份：尺寸/颜色/材质三段 COALESCE，
+        // 与变体判重 uk_variant_attrs 同口径），供 Issue Target Protocol 的 VAR: owner 校验
+        Map<Integer, RowVariantIdentity> rowVariants = new HashMap<>();
+        Map<Integer, Map<String, String>> sourceRowsByIndex = new HashMap<>();
+        for (int i = 0; i < rows.size(); i++) {
+            String groupKey = groupKeys.get(i);
+            if (groupKey == null) {
+                continue;
+            }
+            Map<String, String> row = rows.get(i);
+            int displayRowIndex = resolveDisplayRowIndex(row, i + 2);
+            sourceRowsByIndex.put(displayRowIndex, row);
+            groupMembers.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(displayRowIndex);
+            groupExternalCode.putIfAbsent(groupKey, trim(resolveRowExternalCode(row, mapping)));
+            String finalCode = resolveCategories
+                ? resolveFinalCategoryCode(row, mapping,
+                    selections != null ? selections.get(displayRowIndex) : null,
+                    categoryMapping, dictCache, singleDefaultCategory, null)
+                : null;
+            finalRows.add(new ExcelAiCategoryRevisionResponse.RowFinalCategory(displayRowIndex, finalCode));
+            RowVariantIdentity identity = resolveRowVariantIdentity(row, mapping);
+            if (identity != null) {
+                rowVariants.put(displayRowIndex, identity);
+            }
+        }
+        Map<Integer, String> finalCodeByRow = new HashMap<>();
+        for (ExcelAiCategoryRevisionResponse.RowFinalCategory r : finalRows) {
+            finalCodeByRow.put(r.getRowIndex(), r.getFinalCategoryCode());
+        }
+
+        List<ExcelImportPreviewSnapshotService.GroupInput> groups = new ArrayList<>();
+        for (Map.Entry<String, List<Integer>> entry : groupMembers.entrySet()) {
+            ObjectNode payload = objectMapper.createObjectNode();
+            String externalCode = groupExternalCode.get(entry.getKey());
+            if (StringUtils.hasText(externalCode)) {
+                payload.put("externalCode", externalCode);
+            }
+            String productName = resolveRowProductName(sourceRowsByIndex.get(entry.getValue().get(0)), mapping);
+            if (StringUtils.hasText(productName)) {
+                payload.put("productName", productName);
+            }
+            ArrayNode rowsNode = payload.putArray("rows");
+            ArrayNode sourceRowsNode = objectMapper.createArrayNode();
+            Map<String, ObjectNode> variantNodes = new LinkedHashMap<>();
+            Set<String> distinctFinalCodes = new LinkedHashSet<>();
+            int rowArrayIndex = 0;
+            for (Integer rowIndex : entry.getValue()) {
+                sourceRowsNode.add(objectMapper.valueToTree(sourceRowsByIndex.get(rowIndex)));
+                ObjectNode rowNode = rowsNode.addObject();
+                rowNode.put("sourceRowIndex", rowIndex);
+                String finalCode = finalCodeByRow.get(rowIndex);
+                if (StringUtils.hasText(finalCode)) {
+                    rowNode.put("finalCategoryCode", finalCode);
+                    distinctFinalCodes.add(finalCode);
+                } else {
+                    rowNode.putNull("finalCategoryCode");
+                }
+                RowVariantIdentity identity = rowVariants.get(rowIndex);
+                if (identity != null) {
+                    rowNode.put("variantKey", identity.key());
+                    ObjectNode variantNode = variantNodes.computeIfAbsent(identity.key(), key -> {
+                        ObjectNode node = objectMapper.createObjectNode();
+                        node.put("variantKey", key);
+                        ObjectNode identityNode = node.putObject("identity");
+                        identityNode.put("size", identity.size());
+                        identityNode.put("color", identity.color());
+                        identityNode.put("material", identity.material());
+                        node.putArray("sourceRowIndexes");
+                        return node;
+                    });
+                    ((ArrayNode) variantNode.get("sourceRowIndexes")).add(rowIndex);
+                }
+                rowArrayIndex++;
+            }
+            if (!variantNodes.isEmpty()) {
+                ArrayNode variantsArray = payload.putArray("variants");
+                variantNodes.values().forEach(variantsArray::add);
+            }
+            groups.add(new ExcelImportPreviewSnapshotService.GroupInput(entry.getKey(), payload,
+                List.of(), sourceRowsNode));
+        }
+        return new SnapshotGroupsBuild(groups, finalRows);
+    }
+
+    /**
+     * 解析行级 variantKey（P0-B3，§24.1）：v1 legacy 身份 = 尺寸/颜色/材质三段
+     * COALESCE(code, text)（{@link VariantFingerprints#coalesce} 同口径，不 trim/不大写——
+     * 单元格原始值先经 trim 去空白再进入身份，与导入行内口径一致）。
+     *
+     * <p>三段身份全空时不生成 variantKey（身份缺失属「必备 Identity 缺失」问题域，
+     * 由后续 Identity 校验链物化 Issue，不在此处凭空造键）。</p>
+     *
+     * @return 行身份（含稳定 variantKey）；无任何身份字段时返回 null
+     */
+    private RowVariantIdentity resolveRowVariantIdentity(Map<String, String> row, Map<String, String> mapping) {
+        String sizeCode = trimToNull(getMappedCellValue(row, mapping, "sizeCode"));
+        String sizeText = trimToNull(getMappedCellValue(row, mapping, "dimensions"));
+        String colorCode = trimToNull(getMappedCellValue(row, mapping, "colorCode"));
+        String colorText = trimToNull(getMappedCellValue(row, mapping, "colorPrimaryName"));
+        String materialCode = trimToNull(getMappedCellValue(row, mapping, "materialCode"));
+        String materialText = trimToNull(getMappedCellValue(row, mapping, "materialTags"));
+        String size = VariantFingerprints.coalesce(sizeCode, sizeText);
+        String color = VariantFingerprints.coalesce(colorCode, colorText);
+        String material = VariantFingerprints.coalesce(materialCode, materialText);
+        if (size == null && color == null && material == null) {
+            return null;
+        }
+        return new RowVariantIdentity(
+            SnapshotTargetKeys.variantKeyV1(sizeCode, sizeText, colorCode, colorText, materialCode, materialText),
+            size, color, material);
+    }
+
+    private String trimToNull(String value) {
+        String trimmed = trim(value);
+        return StringUtils.hasText(trimmed) ? trimmed : null;
+    }
+
+    /**
+     * mapping_hash（§47.1.4）：column mapping + 用户确认品类映射的版本化摘要。
+     * 品类策略不参与本哈希（其在 SnapshotHashMaterial 中独立固化）。
+     */
+    private String computeMappingHash(Map<String, String> mapping, Map<String, String> categoryMapping) {
+        ObjectNode material = objectMapper.createObjectNode();
+        material.put("mappingHashVersion", MAPPING_HASH_VERSION);
+        ObjectNode mappingNode = material.putObject("mapping");
+        if (mapping != null) {
+            mapping.forEach((k, v) -> mappingNode.put(k, v == null ? "" : v));
+        }
+        ObjectNode categoryMappingNode = material.putObject("categoryMapping");
+        if (categoryMapping != null) {
+            categoryMapping.forEach((k, v) -> categoryMappingNode.put(k, v == null ? "" : v));
+        }
+        return SnapshotHasher.hash(MAPPING_HASH_VERSION, material);
+    }
+
+    /**
+     * 品类策略配置归一与校验（§22 后端口径，applyCategoryRevision 与 confirm 兜底共用）：
+     * SINGLE 默认品类必填且为合法字典码；MIXED 候选集 ≥2 且全部合法。
+     *
+     * @return SINGLE 归一后的默认品类码（大写）；MIXED 返回 null
+     */
+    private String normalizeCategoryPolicy(CategoryMode mode, String categoryHint,
+                                           List<String> candidateCategoryCodes,
+                                           List<CategoryDict> categories) {
+        if (mode == CategoryMode.SINGLE) {
+            if (!StringUtils.hasText(categoryHint)) {
+                throw new BusinessException("请选择默认商品品类");
+            }
+            String hint = categoryHint.trim().toUpperCase();
+            if (!isValidDictCode(hint, categories)) {
+                throw new BusinessException("默认商品品类不是合法品类码: " + categoryHint);
+            }
+            return hint;
+        }
+        if (candidateCategoryCodes == null || candidateCategoryCodes.size() < 2) {
+            throw new BusinessException("混合品类导入请至少选择两个商品品类");
+        }
+        for (String code : candidateCategoryCodes) {
+            if (!StringUtils.hasText(code) || !isValidDictCode(code.trim().toUpperCase(), categories)) {
+                throw new BusinessException("候选品类包含非法品类码: " + code);
+            }
+        }
+        return null;
+    }
+
+    /** 候选品类码归一（trim + 大写 + 去重，保持顺序）。 */
+    private List<String> normalizeCandidates(List<String> candidateCategoryCodes) {
+        if (candidateCategoryCodes == null) {
+            return List.of();
+        }
+        Set<String> normalized = new LinkedHashSet<>();
+        for (String code : candidateCategoryCodes) {
+            if (StringUtils.hasText(code)) {
+                normalized.add(code.trim().toUpperCase());
+            }
+        }
+        return List.copyOf(normalized);
+    }
+
+    /** 读取 Snapshot 组的 rows 数组；负载缺失/畸形时返回空（hash 校验已先行拦截篡改）。 */
+    private List<JsonNode> readSnapshotRows(ExcelImportProductGroup group) {
+        try {
+            JsonNode payload = objectMapper.readTree(group.getNormalizedPayload());
+            JsonNode rowsNode = payload != null ? payload.get("rows") : null;
+            if (rowsNode == null || !rowsNode.isArray()) {
+                return List.of();
+            }
+            List<JsonNode> rows = new ArrayList<>();
+            rowsNode.forEach(rows::add);
+            return rows;
+        } catch (Exception e) {
+            throw new BusinessException("Preview Snapshot 负载解析失败: groupId=" + group.getGroupId());
+        }
+    }
+
+    /** candidate_category_codes JSONB 文本 → 字符串列表。 */
+    private List<String> parseStringArray(String json) {
+        if (!StringUtils.hasText(json)) {
+            return List.of();
+        }
+        try {
+            List<String> values = new ArrayList<>();
+            for (JsonNode node : objectMapper.readTree(json)) {
+                values.add(node.isNull() ? null : node.asText());
+            }
+            return values;
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /** Snapshot 分组构建结果：GroupInput 列表 + 逐行最终品类（响应用）。 */
+    private record SnapshotGroupsBuild(List<ExcelImportPreviewSnapshotService.GroupInput> groups,
+                                       List<ExcelAiCategoryRevisionResponse.RowFinalCategory> rows) {
+    }
+
+    /** 行级变体身份（P0-B3 §24.1）：稳定 variantKey + v1 三段 COALESCE 身份。 */
+    private record RowVariantIdentity(String key, String size, String color, String material) {
+    }
+
     /**
      * MIXED 候选集约束的 AI 逐行品类分类：按逻辑产品分批调用，
      * 输出必须 ∈ 候选集，超出或解析失败按未识别（null）处理；AI 整体失败不阻断（全部按未识别）。
@@ -4583,6 +5896,7 @@ public class ExcelAiImportService {
      * 逻辑产品分组（复用正式导入的 RSPU 归组规则，§14/§20 对齐结论 14）：
      * forward-fill 后连续相同 externalCode（含复合「型号品名」拆分语义，与
      * {@link #resolveRowExternalCode} 同口径）的行属同一逻辑产品；
+     * 仅复合「型号品名」列在物理型号起始行明确重现相同型号和品名时，跨页复用既有组；
      * externalCode 为空的行各自独立成组并打断前后连续性（与导入循环 sameProduct 判定一致：
      * 空编码永不归组）；系统过滤行（说明行/重复表头行/组合汇总价行）不参与分组、
      * 也不打断前后行的连续性（导入循环中此类行提前跳过、不触碰当前组状态）。
@@ -4596,11 +5910,14 @@ public class ExcelAiImportService {
      */
     private List<String> computeLogicalGroupKeys(List<Map<String, String>> rows, Map<String, String> mapping) {
         List<String> keys = new ArrayList<>(rows.size());
+        Map<String, String> groupKeyByModelAndName = new HashMap<>();
         String lastCode = null;
-        String currentGroupKey = null;
+        String lastIdentity = null;
+        String lastGroupKey = null;
         int seq = 0;
         for (Map<String, String> row : rows) {
-            if (isNoteOrEmptyRow(row, mapping) || isRepeatedHeaderRow(row) || isComboSummaryRow(row, mapping)) {
+            if (isNoteOrEmptyRow(row, mapping) || isRepeatedHeaderRow(row)
+                || isPriceGradeHeaderRow(row) || isComboSummaryRow(row, mapping)) {
                 keys.add(null);
                 continue;
             }
@@ -4608,14 +5925,29 @@ public class ExcelAiImportService {
             if (!StringUtils.hasText(code)) {
                 keys.add("EMPTY-" + (seq++));
                 lastCode = null;
-                currentGroupKey = keys.get(keys.size() - 1);
+                lastIdentity = null;
+                lastGroupKey = null;
                 continue;
             }
-            if (!code.equals(lastCode)) {
-                currentGroupKey = "G" + (seq++);
+            String identity = "true".equals(row.get("__modelStart__")) || !code.equals(lastCode)
+                ? modelAndNameIdentity(code, row, mapping)
+                : lastIdentity;
+            boolean compositeStart = "true".equals(row.get("__modelStart__")) && !identity.equals(code);
+            String currentGroupKey = code.equals(lastCode)
+                && (!compositeStart || identity.equals(lastIdentity)) ? lastGroupKey : null;
+            if (currentGroupKey == null && compositeStart) {
+                currentGroupKey = groupKeyByModelAndName.get(identity);
+            }
+            if (currentGroupKey == null) {
+                currentGroupKey = "G" + seq++;
+            }
+            if (compositeStart) {
+                groupKeyByModelAndName.putIfAbsent(identity, currentGroupKey);
             }
             keys.add(currentGroupKey);
             lastCode = code;
+            lastIdentity = identity;
+            lastGroupKey = currentGroupKey;
         }
         return keys;
     }
@@ -4957,7 +6289,8 @@ public class ExcelAiImportService {
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId(rspuId);
-        rspu.setExternalCode(trim(row.getExternalCode()));
+        // §9 Phase 5（Contract）：供应商源编码只写 supplier_product_ref
+        // （见 persistRow.registerSupplierProductRef），external_code 不再新写（恒为 NULL）
         // 品名落 RSPU 产品名称：productName 优先，缺失时回退变体显示名（复合「型号品名」列场景）
         String productName = StringUtils.hasText(row.getProductName())
             ? row.getProductName()
@@ -4997,9 +6330,12 @@ public class ExcelAiImportService {
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
         // 暂存行事务内新建的 RSPU，提交成功后并入批次缓存——同批次后序同编码行
         // 才能复用本行产品（对齐原实现"同事务后续行单查可见已提交插入"的语义）；
-        // 行回滚时 pending 随 rollbackRow 丢弃，不产生幻影缓存
-        if (StringUtils.hasText(rspu.getExternalCode())) {
-            importCache.pendingNewRspu.put(rspu.getExternalCode(), rspu);
+        // 行回滚时 pending 随 rollbackRow 丢弃，不产生幻影缓存。
+        // 缓存键取行内源编码（trim）：Phase 4 起实体 external_code 默认不再写入，
+        // 不能再以实体字段作键
+        String rowExternalCode = trim(row.getExternalCode());
+        if (StringUtils.hasText(rowExternalCode)) {
+            importCache.pendingNewRspu.put(rowExternalCode, rspu);
         }
 
         // 业务编码生成失败不阻断整行导入：风格/职级码无效时跳过发号（rspu_code 留空、记行级警告），
@@ -5209,7 +6545,8 @@ public class ExcelAiImportService {
                                                         String defaultProductLevel,
                                                         String defaultMaterialCode,
                                                         BatchImportCache importCache,
-                                                        boolean createdNewRspu) {
+                                                        boolean createdNewRspu,
+                                                        com.rsdp.supplychain.policy.ImportPolicy importPolicy) {
         String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
             ? request.getDefaultFactoryCode()
             : null;
@@ -5233,6 +6570,8 @@ public class ExcelAiImportService {
 
         String firstVariantId = null;
         List<String> rskuIds = new ArrayList<>();
+        // 本行涉及变体计数（P0-F AttemptItem 计数用）
+        int variantCount = 0;
         // 多尺寸文字展开：尺寸/备注文字明确写了 ≥2 个规格时，按"尺寸 × 材质价格列"展开变体；
         // 单规格同样消费解析结果（携带尺寸原文与结构化 dimensions）——
         // 此前单规格走 null 路径，解析出的尺寸被整体丢弃，变体 dimensions 为空；
@@ -5254,8 +6593,15 @@ public class ExcelAiImportService {
         // 只有 factory 角色价格列走变体 + RSKU 链路
         List<PriceColumnInfo> factoryPriceColumns = priceColumns == null ? List.of()
             : priceColumns.stream().filter(p -> !PRICE_ROLE_SALES.equals(roleOf(p))).toList();
+        // P0-F Attempt 计数（§47.1.5 / §38.1）：报价被拒绝数与 Policy/聚合决策说明
+        int quoteRejectedCount = 0;
+        List<String> quotePolicyNotes = new ArrayList<>();
         // 为每个选中的 factory 价格列创建变体 + RSKU
         if (!factoryPriceColumns.isEmpty()) {
+            // ---- 阶段一（§38.1）：逐价格列×规格收集 Quote 候选（确定性校验在此完成，
+            // 不立即落库——同一 targetRskuKey 的多份 Quote 必须先聚合收敛再 Persist） ----
+            List<PendingQuote> pendingQuotes = new ArrayList<>();
+            int quoteSeq = 0;
             for (PriceColumnInfo priceColumn : factoryPriceColumns) {
                 // 注意：previewRows 中价格列可能 key 存在但 value 为 null，必须先判空再 trim
                 String rawPrice = dataRow.get(priceColumn.getHeader());
@@ -5320,69 +6666,160 @@ public class ExcelAiImportService {
                     String specSizeText = spec != null ? spec.sizeText() : baseRow.getSizeText();
                     String specDimensionsJson = toDimensionsJson(spec);
 
-                    // 创建变体：同 RSPU 下"码或原文"组合相同的变体直接复用（如归组的连续模块行），
-                    // 避免变体属性组合唯一索引冲突导致整行回滚丢价格；
-                    // 价格列变体携带行级已解析的尺寸/颜色（三码容错解析已在 prepareRow 完成）
-                    String variantId = findExistingVariantId(rspuId, rowSizeCode, specSizeText,
-                        rowColorCode, baseRow.getColorText(), materialCode, materialText, importCache);
-                    if (variantId == null) {
-                        RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
-                        variantRequest.setDisplayName(buildVariantDisplayName(specSizeText, materialName));
-                        variantRequest.setSizeCode(rowSizeCode);
-                        variantRequest.setSizeText(specSizeText);
-                        variantRequest.setDimensions(specDimensionsJson);
-                        variantRequest.setColorCode(rowColorCode);
-                        variantRequest.setColorText(baseRow.getColorText());
-                        variantRequest.setMaterialCode(materialCode);
-                        variantRequest.setMaterialText(materialText);
-                        variantRequest.setReferencePriceBand(resolvePriceBand(price));
-                        variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
-                            ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
-                            : defaultProductLevel);
-                        variantRequest.setQuantity(baseRow.getQuantity());
-                        // 新建 RSPU 首次建档走录入旁路（跳过 assertCanAccessRspu）；
-                        // 更新已有 RSPU 的行不旁路，保留原数据权限校验
-                        var variantResponse = createdNewRspu
-                            ? rspuVariantService.createVariantForEntry(rspuId, variantRequest)
-                            : rspuVariantService.createVariant(rspuId, variantRequest);
-                        if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
-                            log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
-                            rowIssues.add("创建变体失败: " + priceColumn.getHeader());
-                            continue;
-                        }
-                        variantId = variantResponse.getVariantId();
-                        cacheCreatedVariant(importCache, rspuId, variantId, variantRequest);
-                    }
-                    if (firstVariantId == null) {
-                        firstVariantId = variantId;
-                    }
+                    // §24.1 目标键：与 findExistingVariantId 同一「码或原文」身份口径；
+                    // 未指定工厂时不建 RSKU，候选不参与 Quote 聚合（targetRskuKey=null 直落库）
+                    String variantKey = SnapshotTargetKeys.variantKeyV1(rowSizeCode, specSizeText,
+                        rowColorCode, baseRow.getColorText(), materialCode, materialText);
+                    String targetRskuKey = factoryCode != null
+                        ? SnapshotTargetKeys.targetRskuKey(variantKey, factoryCode, SupplierConfigurationKeys.BASE)
+                        : null;
+                    // 导入行内无币种/计价单位/报价日期列，quoteKey 用确定性的列×规格内部键
+                    // （仅用于本行聚合与 Issue 定位，不等于 §24.1 完整 quoteKey 语义）
+                    String quoteKey = "QUOTE:col=" + priceColumn.getHeader()
+                        + ";size=" + (specSizeText == null ? "" : specSizeText)
+                        + ";factory=" + factoryCode;
+                    // 敏感价格只携带哈希 Ref（§38.1）：同值 Quote 比较材料相等，异值产生冲突分组
+                    QuoteTargetAggregator.QuoteComparisonMaterial comparisonMaterial =
+                        new QuoteTargetAggregator.QuoteComparisonMaterial(
+                            ContentHashes.sha256Hex(price.stripTrailingZeros().toPlainString()
+                                .getBytes(StandardCharsets.UTF_8)),
+                            null, null, null, null, null, null, moq, null);
+                    String sourceRef = "importRow:" + importRowId + ":col:" + priceColumn.getHeader()
+                        + ":seq:" + (++quoteSeq);
+                    pendingQuotes.add(new PendingQuote(priceColumn, spec, price, materialName, materialCode,
+                        materialText, leadTimeDays, rowSizeCode, rowColorCode, specSizeText, specDimensionsJson,
+                        variantKey, targetRskuKey, quoteKey, comparisonMaterial, sourceRef));
+                }
+            }
 
-                    // 创建/更新 RSKU：按 (rspuId, variantId, factoryCode) upsert——
-                    // 重复导入（updateIfExists）或同组模块行重复报价时更新价格而非撞唯一索引（P1-2）
-                    if (factoryCode != null) {
-                        RskuCreateRequest rskuRequest = new RskuCreateRequest();
-                        rskuRequest.setRspuId(rspuId);
-                        rskuRequest.setVariantId(variantId);
-                        rskuRequest.setFactoryCode(factoryCode);
-                        rskuRequest.setFactoryPrice(price);
-                        rskuRequest.setMaterialCode(materialCode);
-                        rskuRequest.setMaterialDescription(materialName);
-                        rskuRequest.setLeadTimeDays(leadTimeDays);
-                        rskuRequest.setMoq(moq);
-                        rskuRequest.setShippingFrom(shippingFrom);
-                        rskuRequest.setShippingWarehouseId(shippingWarehouseId);
-                        rskuRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
-                            ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
-                            : defaultProductLevel);
-                        try {
-                            String rskuId = rskuService.upsertRsku(rskuRequest);
-                            if (StringUtils.hasText(rskuId)) {
-                                rskuIds.add(rskuId);
-                            }
-                        } catch (BusinessException e) {
-                            // upsertRsku 已配置 noRollbackFor = BusinessException，
-                            // 捕获业务异常后仅跳过当前价格列，不影响同一行其他价格列/变体提交
-                            rethrowIfTransactionPoisoned(e);
+            // ---- 阶段二（§38.1）：governed 路径按 targetRskuKey 聚合收敛——
+            // 同目标多份非等价 Quote 阻断（报价不落库并计数，变体身份照常创建）；
+            // 完全等价重复合并为一次写入（info 提示，即使 allowWarnings=false 也不阻断）。
+            // legacy 路径（importPolicy == null）维持原逐列直写语义不变。
+            List<PendingQuote> persistableQuotes = pendingQuotes;
+            if (importPolicy != null) {
+                Map<String, PendingQuote> bySourceRef = new HashMap<>();
+                List<QuoteTargetAggregator.QuoteInput> quoteInputs = new ArrayList<>();
+                for (PendingQuote pq : pendingQuotes) {
+                    if (pq.targetRskuKey() == null) {
+                        continue;
+                    }
+                    bySourceRef.put(pq.sourceRef(), pq);
+                    quoteInputs.add(new QuoteTargetAggregator.QuoteInput(pq.quoteKey(), pq.targetRskuKey(),
+                        pq.variantKey(), factoryCode, SupplierConfigurationKeys.BASE,
+                        pq.comparisonMaterial(), pq.sourceRef()));
+                }
+                QuoteTargetAggregator.AggregationResult aggregation =
+                    QuoteTargetAggregator.aggregate(quoteInputs);
+                persistableQuotes = new ArrayList<>();
+                for (PendingQuote pq : pendingQuotes) {
+                    if (pq.targetRskuKey() == null) {
+                        persistableQuotes.add(pq);
+                    }
+                }
+                for (QuoteTargetAggregator.AggregatedQuote aggregated : aggregation.persistableQuotes()) {
+                    PendingQuote representative = bySourceRef.get(aggregated.representative().sourceRef());
+                    if (representative != null) {
+                        persistableQuotes.add(representative);
+                    }
+                }
+                for (QuoteTargetAggregator.QuoteIssue issue : aggregation.issues()) {
+                    if (issue.isBlocker()) {
+                        quoteRejectedCount += issue.partitions().stream()
+                            .mapToInt(partition -> partition.sourceRefs().size()).sum();
+                        rowIssues.add(issue.code() + ": " + issue.message());
+                    } else {
+                        quotePolicyNotes.add(issue.code() + ": " + issue.message());
+                    }
+                }
+            }
+
+            // ---- 落库：变体 + RSKU（逐聚合后候选执行原逻辑） ----
+            for (PendingQuote pq : persistableQuotes) {
+                PriceColumnInfo priceColumn = pq.priceColumn();
+                BigDecimal price = pq.price();
+                String materialName = pq.materialName();
+                String materialCode = pq.materialCode();
+                String materialText = pq.materialText();
+                Integer leadTimeDays = pq.leadTimeDays();
+
+                // 创建变体：同 RSPU 下"码或原文"组合相同的变体直接复用（如归组的连续模块行），
+                // 避免变体属性组合唯一索引冲突导致整行回滚丢价格；
+                // 价格列变体携带行级已解析的尺寸/颜色（三码容错解析已在 prepareRow 完成）
+                String variantId = findExistingVariantId(rspuId, pq.rowSizeCode(), pq.specSizeText(),
+                    pq.rowColorCode(), baseRow.getColorText(), materialCode, materialText, importCache);
+                if (variantId == null) {
+                    RspuVariantCreateRequest variantRequest = new RspuVariantCreateRequest();
+                    variantRequest.setDisplayName(buildVariantDisplayName(pq.specSizeText(), materialName));
+                    variantRequest.setSizeCode(pq.rowSizeCode());
+                    variantRequest.setSizeText(pq.specSizeText());
+                    variantRequest.setDimensions(pq.specDimensionsJson());
+                    variantRequest.setColorCode(pq.rowColorCode());
+                    variantRequest.setColorText(baseRow.getColorText());
+                    variantRequest.setMaterialCode(materialCode);
+                    variantRequest.setMaterialText(materialText);
+                    variantRequest.setReferencePriceBand(resolvePriceBand(price));
+                    variantRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
+                        ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
+                        : defaultProductLevel);
+                    variantRequest.setQuantity(baseRow.getQuantity());
+                    // 新建 RSPU 首次建档走录入旁路（跳过 assertCanAccessRspu）；
+                    // 更新已有 RSPU 的行不旁路，保留原数据权限校验
+                    var variantResponse = createdNewRspu
+                        ? rspuVariantService.createVariantForEntry(rspuId, variantRequest)
+                        : rspuVariantService.createVariant(rspuId, variantRequest);
+                    if (variantResponse == null || !StringUtils.hasText(variantResponse.getVariantId())) {
+                        log.warn("为价格列创建变体失败，header={}", priceColumn.getHeader());
+                        rowIssues.add("创建变体失败: " + priceColumn.getHeader());
+                        continue;
+                    }
+                    variantId = variantResponse.getVariantId();
+                    cacheCreatedVariant(importCache, rspuId, variantId, variantRequest);
+                }
+                if (firstVariantId == null) {
+                    firstVariantId = variantId;
+                }
+                variantCount++;
+
+                // 创建/更新 RSKU：按 (rspuId, variantId, factoryCode) upsert——
+                // 重复导入（updateIfExists）或同组模块行重复报价时更新价格而非撞唯一索引（P1-2）
+                if (factoryCode != null) {
+                    RskuCreateRequest rskuRequest = new RskuCreateRequest();
+                    rskuRequest.setRspuId(rspuId);
+                    rskuRequest.setVariantId(variantId);
+                    rskuRequest.setFactoryCode(factoryCode);
+                    rskuRequest.setFactoryPrice(price);
+                    rskuRequest.setMaterialCode(materialCode);
+                    rskuRequest.setMaterialDescription(materialName);
+                    rskuRequest.setLeadTimeDays(leadTimeDays);
+                    rskuRequest.setMoq(moq);
+                    rskuRequest.setShippingFrom(shippingFrom);
+                    rskuRequest.setShippingWarehouseId(shippingWarehouseId);
+                    rskuRequest.setProductLevel(StringUtils.hasText(baseRow.getProductLevel())
+                        ? normalizeDictCode(baseRow.getProductLevel(), dictCache.get("factory_level"))
+                        : defaultProductLevel);
+                    if (importPolicy != null) {
+                        // governed 链路（§47.1.5）：报价写库按物化 Policy 的日期/同值条件表决策
+                        rskuRequest.setQuotePolicy(importPolicy.quotePolicy());
+                        rskuRequest.setQuoteOverrideReason(importPolicy.overrideReason());
+                        rskuRequest.setQuotePolicyNotes(quotePolicyNotes);
+                    }
+                    try {
+                        String rskuId = rskuService.upsertRsku(rskuRequest);
+                        if (StringUtils.hasText(rskuId)) {
+                            rskuIds.add(rskuId);
+                        }
+                    } catch (BusinessException e) {
+                        // upsertRsku 已配置 noRollbackFor = BusinessException，
+                        // 捕获业务异常后仅跳过当前价格列，不影响同一行其他价格列/变体提交
+                        rethrowIfTransactionPoisoned(e);
+                        if (importPolicy != null && e.getMessage() != null
+                            && e.getMessage().startsWith("QUOTE_")) {
+                            // §47.1.5 Quote Policy 冲突（条件表判定）：报价被拒，计 quoteRejectedCount，
+                            // 不升级为行失败——变体/RSKU 身份与其他字段写入照常提交
+                            quoteRejectedCount++;
+                            rowIssues.add("报价策略拒绝: " + priceColumn.getHeader() + " - " + safeErrorMessage(e));
+                        } else {
                             log.warn("为价格列创建/更新 RSKU 失败，header={}", priceColumn.getHeader(), e);
                             rowIssues.add("工厂报价失败: " + priceColumn.getHeader() + " - " + safeErrorMessage(e));
                         }
@@ -5398,10 +6835,14 @@ public class ExcelAiImportService {
                 if (firstVariantId == null) {
                     firstVariantId = variantId;
                 }
+                if (variantId != null) {
+                    variantCount++;
+                }
             }
         }
 
-        return new VariantRskuOutcome(firstVariantId, rskuIds);
+        return new VariantRskuOutcome(firstVariantId, rskuIds, variantCount,
+            quoteRejectedCount, List.copyOf(quotePolicyNotes));
     }
 
     /** 变体显示名：尺寸+材质组合（"1.8m-真皮"），缺一则用有的部分，均无则为"默认变体"。 */
@@ -5511,17 +6952,22 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 按外部编码查询未软删的 RSPU（@TableLogic 自动过滤已删除记录）。
+     * 按源商品编码解析已有 RSPU 身份（§9 Phase 3：统一经
+     * {@link SupplierIdentityResolutionService}，supplier_product_ref 优先，
+     * legacy fallback 仅在工厂上下文可验证且该工厂下唯一无歧义时命中；
+     * 无工厂上下文不猜测）。
      *
      * <p>批次缓存优先（含预加载命中与 negative cache）；miss 时保持原实现的实时单查并回填，
      * 不牺牲对并发导入新建数据的可见性。行内对缓存实体的修改（updateExistingRspu）若随
      * 事务回滚，由 {@link BatchImportCache#rollbackRow()} 逐出避免脏实体残留。</p>
      *
-     * @param externalCode 外部编码
+     * @param externalCode 源商品编码（供应商命名空间内）
+     * @param request      导入请求（defaultFactoryCode 提供身份解析的工厂上下文）
      * @param importCache  批次导入缓存
-     * @return 已有 RSPU，不存在或编码为空时为 null
+     * @return 已有 RSPU，未命中或编码为空时为 null
      */
-    private RspuMaster findRspuByExternalCode(String externalCode, BatchImportCache importCache) {
+    private RspuMaster findRspuByIdentity(String externalCode, ExcelAiMappingRequest request,
+                                          BatchImportCache importCache) {
         if (!StringUtils.hasText(externalCode)) {
             return null;
         }
@@ -5530,9 +6976,11 @@ public class ExcelAiImportService {
         if (importCache.rspuByExternalCode.containsKey(key)) {
             return importCache.rspuByExternalCode.get(key);
         }
-        List<RspuMaster> list = rspuMapper.selectList(
-            new QueryWrapper<RspuMaster>().eq("external_code", externalCode.trim()));
-        RspuMaster found = list.isEmpty() ? null : list.get(0);
+        String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
+            ? request.getDefaultFactoryCode().trim() : null;
+        RspuMaster found = supplierIdentityResolutionService.resolve(factoryCode, null, key)
+            .map(identity -> rspuMapper.selectById(identity.getRspuId()))
+            .orElse(null);
         importCache.rspuByExternalCode.put(key, found);
         return found;
     }
@@ -5550,19 +6998,50 @@ public class ExcelAiImportService {
      */
     private void updateExistingRspu(RspuMaster rspu, ProductImportRow row,
                                     Map<String, List<CategoryDict>> dictCache, List<String> rowIssues) {
+        updateExistingRspu(rspu, row, dictCache, rowIssues, rspu.getManualOverrideFields());
+    }
+
+    /**
+     * updateIfExists=true 时复用已有 RSPU：以本行数据更新可变字段并记审计日志。
+     *
+     * <p>仅显式有值的字段才覆盖已有数据，空单元格不清空已有内容，
+     * 与 {@link ProductImportService} 更新模式的「空单元格不覆盖」设计对齐。</p>
+     *
+     * <p>manualCorrectionPolicy=preserve（§47.1.5 默认 / §34.1 P0-F 消费侧强制）：
+     * {@code manualOverrideFields} 为同事务重读的权威标记，存在活跃人工修正标记的字段
+     * （/productName、/description、/retailPrice 等）不被 Excel/AI 覆盖，跳过并记行级提示。</p>
+     *
+     * @param rspu                 已有 RSPU 实体
+     * @param row                  本行数据
+     * @param dictCache            字典缓存
+     * @param rowIssues            行级问题收集器（跨品类保护/人工修正保留提示对用户可见）
+     * @param manualOverrideFields 同事务重读的 manual_override_fields 权威 JSON（可空）
+     */
+    private void updateExistingRspu(RspuMaster rspu, ProductImportRow row,
+                                    Map<String, List<CategoryDict>> dictCache, List<String> rowIssues,
+                                    String manualOverrideFields) {
         RspuMaster oldSnapshot = snapshotRspu(rspu);
+        // §34.1：活跃人工修正标记字段不被 Excel/AI 覆盖（manualCorrectionPolicy=preserve）
+        java.util.Set<String> preserved = new java.util.HashSet<>(
+            com.rsdp.util.ManualOverrideFields.activePointers(manualOverrideFields));
         // 品名取值与 createRspu 一致：productName 优先，缺失时回退变体显示名
         String productName = StringUtils.hasText(row.getProductName())
             ? row.getProductName()
             : row.getVariantDisplayName();
         if (StringUtils.hasText(productName)) {
-            rspu.setProductName(productName.trim());
+            if (preserved.contains("/productName")) {
+                rowIssues.add("品名存在活跃人工修正标记，已保留人工值（manualCorrectionPolicy=preserve）");
+            } else {
+                rspu.setProductName(productName.trim());
+            }
         }
         // description/retailPrice 只补空缺：人工已填的内容不被 Excel 导入覆盖
-        if (!StringUtils.hasText(rspu.getDescription()) && StringUtils.hasText(row.getDescription())) {
+        if (!StringUtils.hasText(rspu.getDescription()) && StringUtils.hasText(row.getDescription())
+            && !preserved.contains("/description")) {
             rspu.setDescription(row.getDescription().trim());
         }
-        if (rspu.getRetailPrice() == null && row.getRetailPrice() != null) {
+        if (rspu.getRetailPrice() == null && row.getRetailPrice() != null
+            && !preserved.contains("/retailPrice")) {
             rspu.setRetailPrice(row.getRetailPrice());
         }
         // 跨品类保护（§21.1）：更新模式命中已有 RSPU 时品类不更新——已有品类可能经过人工治理，
@@ -5577,31 +7056,31 @@ public class ExcelAiImportService {
                 + "，本次：" + rowCategoryCode + "），已保留原品类");
         }
         String primaryStyleName = splitCsv(row.getPositioningLabel()).stream().findFirst().orElse(null);
-        if (StringUtils.hasText(primaryStyleName)) {
+        if (StringUtils.hasText(primaryStyleName) && !preserved.contains("/positioningLabel")) {
             rspu.setPositioningLabel(normalizeDictCode(primaryStyleName, dictCache.get("style")));
         }
-        if (StringUtils.hasText(row.getColorPrimaryName())) {
+        if (StringUtils.hasText(row.getColorPrimaryName()) && !preserved.contains("/colorPrimaryName")) {
             rspu.setColorPrimaryName(trim(row.getColorPrimaryName()));
         }
-        if (StringUtils.hasText(row.getMaterialTags())) {
+        if (StringUtils.hasText(row.getMaterialTags()) && !preserved.contains("/materialTags")) {
             rspu.setMaterialTags(toJson(splitCsv(row.getMaterialTags())));
         }
-        if (StringUtils.hasText(row.getSceneTags())) {
+        if (StringUtils.hasText(row.getSceneTags()) && !preserved.contains("/sceneTags")) {
             rspu.setSceneTags(toJson(splitCsv(row.getSceneTags())));
         }
-        if (StringUtils.hasText(row.getSixDimTags())) {
+        if (StringUtils.hasText(row.getSixDimTags()) && !preserved.contains("/sixDimTags")) {
             rspu.setSixDimTags(trim(row.getSixDimTags()));
         }
-        if (StringUtils.hasText(row.getReferencePriceBand())) {
+        if (StringUtils.hasText(row.getReferencePriceBand()) && !preserved.contains("/referencePriceBand")) {
             rspu.setReferencePriceBand(row.getReferencePriceBand().trim().toLowerCase());
         }
-        if (StringUtils.hasText(row.getProductLevel())) {
+        if (StringUtils.hasText(row.getProductLevel()) && !preserved.contains("/productLevel")) {
             rspu.setProductLevel(normalizeDictCode(row.getProductLevel(), dictCache.get("factory_level")));
         }
-        if (row.getWarrantyYears() != null) {
+        if (row.getWarrantyYears() != null && !preserved.contains("/warrantyYears")) {
             rspu.setWarrantyYears(row.getWarrantyYears());
         }
-        if (StringUtils.hasText(row.getKeySpecs())) {
+        if (StringUtils.hasText(row.getKeySpecs()) && !preserved.contains("/keySpecs")) {
             rspu.setKeySpecs(trim(row.getKeySpecs()));
         }
         rspu.setUpdatedAt(LocalDateTime.now());
@@ -6121,6 +7600,34 @@ public class ExcelAiImportService {
         batch.setImportNote(request.getImportNote());
     }
 
+    /**
+     * P0-F（§49.2.3）：done Attempt 的物化结果回写批次结果——计数与失败明细以
+     * AttemptItem 终态聚合为准（含 Recovery 续跑前已提交组的计数）。
+     */
+    private void applyAttemptOutcomeToResult(ExcelImportAttempt doneAttempt, ExcelAiImportResult result) {
+        try {
+            JsonNode summary = objectMapper.readTree(doneAttempt.getResultSummary());
+            result.setSuccessCount(summary.path("rowsSucceeded").asInt(result.getSuccessCount()));
+            result.setFailedCount(summary.path("rowsFailed").asInt(result.getFailedCount()));
+            result.setSkippedCount(summary.path("rowsSkipped").asInt(result.getSkippedCount()));
+            // 失败明细：批次级问题（行号 0，如图片提取失败）保留 + AttemptItem 聚合的行级失败
+            List<ExcelAiImportFailure> aggregated = new ArrayList<>();
+            for (ExcelAiImportFailure failure : result.getFailures()) {
+                if (failure.getRowIndex() != null && failure.getRowIndex() == 0) {
+                    aggregated.add(failure);
+                }
+            }
+            aggregated.addAll(attemptService.aggregateItemFailures(doneAttempt.getAttemptId()));
+            result.setFailures(aggregated);
+            result.setFailedCount(Math.max(result.getFailedCount(),
+                (int) aggregated.stream()
+                    .filter(f -> f.getRowIndex() != null && f.getRowIndex() > 0).count()));
+        } catch (Exception e) {
+            log.warn("应用 Attempt outcome 汇总失败（保留行级计数）: attemptId={}",
+                doneAttempt.getAttemptId(), e);
+        }
+    }
+
     private void updateBatchResult(ExcelImportBatch batch, ExcelAiMappingRequest request, ExcelAiImportResult result) {
         applyBatchFactoryInfo(batch, request);
         batch.setStatus("done");
@@ -6209,25 +7716,284 @@ public class ExcelAiImportService {
                              Integer imageCount, List<String> imageAssetIds,
                               String taskId, boolean skipped, String skipReason,
                               String groupKey, boolean createdNewRspu, boolean primaryImageSaved,
-                              List<String> issues, List<String> imageHashes) {
+                              List<String> issues, List<String> imageHashes,
+                              int variantCount, int quoteRejectedCount, List<String> quotePolicyNotes) {
 
         static RowResult success(String rspuId, String variantId, List<String> rskuIds,
                                  Integer imageCount, List<String> imageAssetIds, String taskId,
                                  String groupKey, boolean createdNewRspu, boolean primaryImageSaved,
                                  List<String> issues, List<String> imageHashes) {
             return new RowResult(rspuId, variantId, rskuIds, imageCount, imageAssetIds, taskId, false, null,
-                groupKey, createdNewRspu, primaryImageSaved, issues, imageHashes);
+                groupKey, createdNewRspu, primaryImageSaved, issues, imageHashes, 0, 0, List.of());
+        }
+
+        static RowResult success(String rspuId, String variantId, List<String> rskuIds,
+                                 Integer imageCount, List<String> imageAssetIds, String taskId,
+                                 String groupKey, boolean createdNewRspu, boolean primaryImageSaved,
+                                 List<String> issues, List<String> imageHashes,
+                                 int variantCount, int quoteRejectedCount, List<String> quotePolicyNotes) {
+            return new RowResult(rspuId, variantId, rskuIds, imageCount, imageAssetIds, taskId, false, null,
+                groupKey, createdNewRspu, primaryImageSaved, issues, imageHashes,
+                variantCount, quoteRejectedCount, quotePolicyNotes);
         }
 
         static RowResult skipped(String reason) {
-            return new RowResult(null, null, null, 0, null, null, true, reason, null, false, false, null, List.of());
+            return new RowResult(null, null, null, 0, null, null, true, reason, null, false, false, null,
+                List.of(), 0, 0, List.of());
         }
     }
 
     /**
-     * 变体 + RSKU 创建结果：首个变体 ID + 实际创建成功的 RSKU ID 列表。
+     * 变体 + RSKU 创建结果：首个变体 ID + 实际创建成功的 RSKU ID 列表 +
+     * P0-F Attempt 计数（报价被拒绝数与 Policy 决策说明）。
      */
-    private record VariantRskuOutcome(String firstVariantId, List<String> rskuIds) {
+    private record VariantRskuOutcome(String firstVariantId, List<String> rskuIds,
+                                      int variantCount,
+                                      int quoteRejectedCount, List<String> quotePolicyNotes) {
+    }
+
+    /**
+     * §38.1 聚合前的待落库 Quote 候选：携带落库所需全部上下文（列/规格/价格/材质/交期/
+     * 变体身份）与聚合键材料（variantKey / targetRskuKey / quoteKey / 比较材料 / 源坐标）。
+     * targetRskuKey 为 null 表示本行未指定工厂、不建 RSKU，候选不参与 Quote 聚合。
+     */
+    private record PendingQuote(PriceColumnInfo priceColumn, SizeSpecParser.SizeSpec spec, BigDecimal price,
+                                String materialName, String materialCode, String materialText,
+                                Integer leadTimeDays, String rowSizeCode, String rowColorCode,
+                                String specSizeText, String specDimensionsJson,
+                                String variantKey, String targetRskuKey, String quoteKey,
+                                QuoteTargetAggregator.QuoteComparisonMaterial comparisonMaterial,
+                                String sourceRef) {
+    }
+
+    /**
+     * P0-F Attempt 治理上下文（§48-§50，snapshot 路径）：Attempt + 物化 Policy +
+     * 行 → Group 映射。
+     */
+    private record AttemptContext(ExcelImportAttempt attempt, String taskId,
+                                  com.rsdp.supplychain.policy.ImportPolicy policy,
+                                  Map<Integer, String> groupIdByRowIndex) {
+    }
+
+    /**
+     * P0-F 行级 Attempt 上下文：当前行所属 AttemptItem 与组末行标记
+     * （领域写入与 AttemptItem 终态同事务，§31/§50.2）。
+     */
+    private record AttemptRowContext(String attemptId, String groupId, ExcelImportAttemptItem item,
+                                     boolean lastRowOfGroup,
+                                     com.rsdp.supplychain.policy.ImportPolicy policy,
+                                     String leaseOwner) {
+    }
+
+    /**
+     * 统一执行输入（行准备结果）：最终参与导入的数据行、与行对齐的物理布局
+     * （旧批次跳过行过滤后同步收缩；原始文件读取失败时为 null）及行物理行号解析器。
+     * snapshot 路径与旧批次路径各自在 {@link #doConfirmImport} 入口构建，
+     * 主流程只消费本模型，不再感知两套行来源。
+     */
+    private record RowPreparation(List<Map<String, String>> rows, PhysicalLayout physicalLayout,
+                                  PhysicalRowIndexResolver rowIndexResolver) {
+
+        /**
+         * 解析数据行的 Excel 物理行号（0-based）。
+         *
+         * @param row           数据行
+         * @param rowIndex      行序号回退值（第 1 行为表头，首数据行为 2）
+         * @param dataRowOrdinal 数据行在 rows 中的 0-based 序号
+         * @return 物理行号；不可得时为 null
+         */
+        Integer resolvePhysicalRowIndex(Map<String, String> row, int rowIndex, int dataRowOrdinal) {
+            return rowIndexResolver.resolve(row, rowIndex, dataRowOrdinal);
+        }
+    }
+
+    /**
+     * 行物理行号解析器：snapshot 路径从 Revision 固化源行的 {@code __rowIndex__} 解析；
+     * 旧批次从（可能随跳过行过滤收缩的）物理布局按下标取。
+     */
+    @FunctionalInterface
+    private interface PhysicalRowIndexResolver {
+        Integer resolve(Map<String, String> row, int rowIndex, int dataRowOrdinal);
+    }
+
+    /**
+     * P0-F Attempt 行级治理 tracker（§49.2/§50.2）：封装行 → AttemptItem（Group）映射预计算、
+     * 组生命周期（beginGroup / 终态组判定 / 心跳）、Issue Target 过滤、行级终态记录与
+     * 批次末 outcome 汇总。旧批次（无 Attempt）以 {@code ctx == null} 构造，
+     * 全部方法退化为 NOOP（组 ID 恒 null），主流程不感知两套状态。
+     */
+    private final class AttemptRunTracker {
+
+        private final AttemptContext ctx;
+        /** 行（rawDataRows 下标）→ AttemptItem 组 ID；旧批次为空列表。 */
+        private final List<String> rowGroupIds;
+        /** 组末行标记：「领域写入与 AttemptItem 终态同事务」的终态物化时机。 */
+        private final List<Boolean> lastRowFlags;
+        private String currentGroupId;
+        private ExcelImportAttemptItem currentItem;
+        private boolean currentGroupTerminal;
+
+        AttemptRunTracker(AttemptContext ctx, List<Map<String, String>> rows) {
+            this.ctx = ctx;
+            if (ctx == null) {
+                this.rowGroupIds = List.of();
+                this.lastRowFlags = List.of();
+                return;
+            }
+            List<String> groupIds = new ArrayList<>(rows.size());
+            for (int i = 0; i < rows.size(); i++) {
+                int displayIdx = resolveDisplayRowIndex(rows.get(i), i + 2);
+                groupIds.add(ctx.groupIdByRowIndex().get(displayIdx));
+            }
+            this.rowGroupIds = groupIds;
+            List<Boolean> flags = new ArrayList<>(groupIds.size());
+            for (int i = 0; i < groupIds.size(); i++) {
+                String gid = groupIds.get(i);
+                boolean last = gid != null && (i == groupIds.size() - 1
+                    || !gid.equals(groupIds.get(i + 1)));
+                flags.add(last);
+            }
+            this.lastRowFlags = flags;
+        }
+
+        /**
+         * 行进入：组切换时 beginGroup（SELECT FOR UPDATE；终态组 = Recovery 重放，
+         * §50.2 Commit 后崩溃场景）并心跳续约（lease 易主时返回 false，不阻断当前行——
+         * 行内计数更新经 AttemptItem 状态条件兜底，见 applyRowOutcome 的 status='running' 守卫）。
+         *
+         * @param ordinal 数据行 0-based 序号
+         * @return 当前行所属组 ID；旧批次恒为 null
+         */
+        String enterRow(int ordinal) {
+            if (ctx == null) {
+                return null;
+            }
+            String gid = rowGroupIds.get(ordinal);
+            if (!Objects.equals(gid, currentGroupId)) {
+                currentGroupId = gid;
+                currentItem = null;
+                currentGroupTerminal = false;
+                if (gid != null) {
+                    if (attemptService.beginGroup(ctx.attempt().getAttemptId(), gid, ctx.taskId())) {
+                        currentItem = attemptService.getItem(ctx.attempt().getAttemptId(), gid);
+                    } else {
+                        currentGroupTerminal = true;
+                    }
+                }
+            }
+            // §49.1：心跳发现租约易主立即中止（返回 false = lease_owner 已非本 Worker）
+            if (!attemptService.heartbeat(ctx.attempt().getAttemptId(), ctx.taskId())) {
+                throw new AttemptLeaseLostException(ctx.attempt().getAttemptId(), ctx.taskId());
+            }
+            return gid;
+        }
+
+        /** 当前行是否组末行（旧批次恒 false）。 */
+        boolean isLastRowOfGroup(int ordinal) {
+            return ctx != null && lastRowFlags.get(ordinal);
+        }
+
+        /** 当前组是否已终态（Recovery 重放跳过）；旧批次恒 false。 */
+        boolean isCurrentGroupTerminal() {
+            return currentGroupTerminal;
+        }
+
+        /**
+         * 恢复行判定（§50.2 重跑）：组重跑时上轮已提交的行不重做领域写入，
+         * 仅返回其 rspuId/groupKey 供调用方恢复组上下文（模块行继续挂靠），
+         * 区分「导入前已存在」（不在清单，走原有已存在分支）与「本 Attempt 已创建」。
+         *
+         * @return 命中恢复清单返回行信息；否则 null
+         */
+        RecoveredRow recoveredRow(String groupId, int displayRowIndex) {
+            if (ctx == null || groupId == null || currentItem == null) {
+                return null;
+            }
+            try {
+                for (JsonNode r : objectMapper.readTree(currentItem.getResultSummary())
+                        .path("recoveredRows")) {
+                    if (r.path("row").asInt(-1) == displayRowIndex && r.path("rspuId").isTextual()) {
+                        return new RecoveredRow(r.path("rspuId").asText(),
+                            r.path("groupKey").asText(null));
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("解析 AttemptItem 恢复清单失败，按未恢复处理: groupId={}", groupId, e);
+            }
+            return null;
+        }
+
+        /** 恢复行信息：上轮已提交行产出的 RSPU 与组键。 */
+        record RecoveredRow(String rspuId, String groupKey) {
+        }
+
+        /** 构建行级 Attempt 上下文；旧批次、无组行或终态组返回 null。 */
+        AttemptRowContext rowContext(String groupId, boolean lastRow) {
+            if (ctx == null || groupId == null || currentItem == null) {
+                return null;
+            }
+            return new AttemptRowContext(ctx.attempt().getAttemptId(), groupId,
+                currentItem, lastRow, ctx.policy(), ctx.taskId());
+        }
+
+        /**
+         * 记录行失败（§31/§49.2.1：业务失败 rejected/partial，技术失败 failed 可重试）；
+         * 旧批次、无组行、终态组为 NOOP。
+         */
+        void recordRowFailure(String groupId, int displayRowIndex, String message,
+                              boolean businessFailure, boolean lastRow) {
+            if (ctx == null || groupId == null || currentGroupTerminal) {
+                return;
+            }
+            attemptService.recordRowFailure(ctx.attempt().getAttemptId(), groupId,
+                displayRowIndex, message, businessFailure, lastRow, ctx.taskId());
+        }
+
+        /** 所有非终态组的末行都经过此处，包括恢复跳过行。 */
+        void completeGroup(String groupId, boolean lastRow) {
+            if (ctx != null && groupId != null && !currentGroupTerminal && lastRow) {
+                attemptService.completeGroup(ctx.attempt().getAttemptId(), groupId, ctx.taskId());
+            }
+        }
+
+        /**
+         * 批次末 outcome 汇总与批次结果写回（§49.2.3）：Attempt 路径 finalize 与
+         * {@link #updateBatchResult} 同事务；旧批次直写批次结果。
+         *
+         * <p>只有 Attempt 确认完成（本 Worker finalize 成功，或并发接管方已完成、
+         * 重放其存储口径）才同步批次为 done；Attempt 未完成或租约已易主时批次保持
+         * importing，由接管方续跑收尾或收割器复位——不把未完成导入标记为完成。</p>
+         *
+         * @return true = 批次结果已写回（导入完成）；false = Attempt 未完成/租约易主
+         */
+        boolean finalizeOutcome(ExcelImportBatch batch, ExcelAiMappingRequest request,
+                                ExcelAiImportResult result) {
+            if (ctx == null) {
+                updateBatchResult(batch, request, result);
+                return true;
+            }
+            final boolean[] completed = {false};
+            new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                java.util.Optional<ExcelImportAttempt> done = attemptService.finalizeAttemptIfComplete(
+                    ctx.attempt().getAttemptId(), ctx.taskId());
+                if (done.isEmpty()) {
+                    ExcelImportAttempt current = attemptService.getAttempt(ctx.attempt().getAttemptId());
+                    if (current != null && ExcelImportAttempt.STATUS_DONE.equals(current.getStatus())) {
+                        // 并发接管方已完成：重放其存储口径同步批次
+                        done = java.util.Optional.of(current);
+                    }
+                }
+                if (done.isPresent()) {
+                    applyAttemptOutcomeToResult(done.get(), result);
+                    updateBatchResult(batch, request, result);
+                    completed[0] = true;
+                } else {
+                    log.warn("Attempt 未完成或租约已易主，批次保持 importing 等待续跑: attemptId={}",
+                        ctx.attempt().getAttemptId());
+                }
+            });
+            return completed[0];
+        }
     }
 
     /**

@@ -42,7 +42,13 @@ public class ExcelAiPreviewDataResponse {
     private List<PreviewDataRow> rows = new ArrayList<>();
 
     /**
-     * 按商品（externalCode）聚合后的商品组列表。
+     * 按商品（externalCode，供应商源商品编码/型号）聚合后的商品组列表。
      */
     private List<PreviewDataGroup> groups = new ArrayList<>();
+
+    /**
+     * 批次当前 Preview Revision 指针（P0-B2；尚无快照的旧批次为 null），
+     * 前端恢复清洗页上下文时作为后续编辑命令的 expectedRevision 基准。
+     */
+    private Long previewRevision;
 }

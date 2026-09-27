@@ -13,6 +13,27 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface RspuMergeMapper {
 
+    /** 仅在当前合并事务内延迟变体归属组合外键，允许父子行分步改挂。 */
+    @Update("SET CONSTRAINTS fk_rsku_rspu_variant, fk_image_assets_rspu_variant DEFERRED")
+    void deferVariantOwnershipConstraints();
+
+    /** 迁移完成即检查所有暂缓的归属引用，失败使合并事务整体回滚。 */
+    @Update("SET CONSTRAINTS fk_rsku_rspu_variant, fk_image_assets_rspu_variant IMMEDIATE")
+    void checkVariantOwnershipConstraints();
+
+    /** 软删供应记录也受归属外键约束，整体改挂变体时同步归属（保留封存业务编码）。 */
+    @Update("UPDATE rsku_supply SET rspu_id = #{target}, updated_at = now()"
+        + " WHERE rspu_id = #{source} AND variant_id = #{variantId} AND deleted_at IS NOT NULL")
+    int repointArchivedVariantRskus(@Param("source") String source, @Param("target") String target,
+                                    @Param("variantId") String variantId);
+
+    /** 软删变体图片随整体改挂变体同步归属，图片 ID 和存储对象不变。 */
+    @Update("UPDATE image_assets SET rspu_id = #{target}"
+        + " WHERE rspu_id = #{source} AND variant_id = #{variantId} AND deleted_at IS NOT NULL")
+    int repointArchivedVariantImages(@Param("source") String source, @Param("target") String target,
+                                     @Param("variantId") String variantId);
+
+
     /** scheme_item 改指目标（含软删行：否则副本永久删除时永远被业务凭证拦截；自定义 SQL 不受 @TableLogic 过滤） */
     @Update("UPDATE scheme_item SET rspu_id = #{target} WHERE rspu_id = #{source}")
     int repointSchemeItems(@Param("source") String source, @Param("target") String target);
@@ -21,13 +42,6 @@ public interface RspuMergeMapper {
     @Update("UPDATE ai_recognition SET rspu_id = #{target} WHERE rspu_id = #{source}")
     int repointAiRecognitions(@Param("source") String source, @Param("target") String target);
 
-    /** matching_feedback 双侧改指目标（无实体表） */
-    @Update("UPDATE matching_feedback SET rspu_id = #{target} WHERE rspu_id = #{source}")
-    int repointMatchingFeedback(@Param("source") String source, @Param("target") String target);
-
-    /** matching_feedback 推荐侧改指目标 */
-    @Update("UPDATE matching_feedback SET recommended_rspu_id = #{target} WHERE recommended_rspu_id = #{source}")
-    int repointMatchingFeedbackRecommended(@Param("source") String source, @Param("target") String target);
 
     /** product_style_match 改指目标 */
     @Update("UPDATE product_style_match SET rspu_id = #{target} WHERE rspu_id = #{source}")

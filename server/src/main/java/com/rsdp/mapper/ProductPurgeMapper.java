@@ -68,15 +68,6 @@ public interface ProductPurgeMapper {
     int deleteAiRecognitions(String rspuId);
 
     /**
-     * 物理删除搭配反馈（双向引用）。
-     *
-     * @param rspuId RSPU ID
-     * @return 影响行数
-     */
-    @Delete("DELETE FROM matching_feedback WHERE rspu_id = #{rspuId} OR recommended_rspu_id = #{rspuId}")
-    int deleteMatchingFeedback(String rspuId);
-
-    /**
      * 物理删除产品集明细引用。
      *
      * @param rspuId RSPU ID
@@ -102,15 +93,6 @@ public interface ProductPurgeMapper {
      */
     @Delete("DELETE FROM rspu_duplicate_suspect WHERE rspu_id = #{rspuId} OR matched_rspu_id = #{rspuId}")
     int deleteDuplicateSuspects(String rspuId);
-
-    /**
-     * 物理删除该 RSPU 全部变体的工厂产能记录。
-     *
-     * @param rspuId RSPU ID
-     * @return 影响行数
-     */
-    @Delete("DELETE FROM factory_variant_capacity WHERE variant_id IN (SELECT variant_id FROM rspu_variant WHERE rspu_id = #{rspuId})")
-    int deleteFactoryVariantCapacity(String rspuId);
 
     /**
      * 物理删除该 RSPU 全部 RSKU 的价格历史。

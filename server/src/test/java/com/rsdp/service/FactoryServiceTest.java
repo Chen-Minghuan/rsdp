@@ -201,6 +201,33 @@ class FactoryServiceTest {
     }
 
     @Test
+    void switchPrimaryLevel_clearsOldBeforePromotingNewRegardlessOfQueryOrder() {
+        FactoryMaster factory = new FactoryMaster();
+        factory.setFactoryCode("B007");
+        factory.setFactoryLevel("S");
+        FactoryLevelCapability oldPrimary = new FactoryLevelCapability();
+        oldPrimary.setFactoryCode("B007");
+        oldPrimary.setLevelCode("S");
+        oldPrimary.setIsPrimary(true);
+        FactoryLevelCapability next = new FactoryLevelCapability();
+        next.setFactoryCode("B007");
+        next.setLevelCode("A");
+        next.setIsPrimary(false);
+        when(factoryMasterMapper.selectById("B007")).thenReturn(factory);
+        when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
+        // 新主项在前：旧实现第一条 UPDATE 就会撞唯一索引。
+        when(capabilityMapper.selectList(any())).thenReturn(List.of(next, oldPrimary));
+        java.util.List<String> writes = new java.util.ArrayList<>();
+        org.mockito.Mockito.doAnswer(inv -> {
+            FactoryLevelCapability row = inv.getArgument(0);
+            writes.add(row.getLevelCode() + ":" + row.getIsPrimary());
+            return 1;
+        }).when(capabilityMapper).updateById(any(FactoryLevelCapability.class));
+        factoryService.updateFactoryLevel("B007", "A");
+        assertThat(writes).containsExactly("S:false", "A:true");
+    }
+
+    @Test
     void updateCapableLevels_shouldKeepPrimaryLevel() {
         FactoryMaster factory = new FactoryMaster();
         factory.setFactoryCode("F001");

@@ -10,7 +10,7 @@ import java.util.Map;
 /**
  * Excel AI 导入「导入前全量预览」中的商品组。
  *
- * <p>按 externalCode（型号）聚合同一商品的多个尺寸/价格变体行。
+ * <p>按 externalCode（供应商源商品编码/型号）聚合同一商品的多个尺寸/价格变体行。
  * 商品级字段（型号、品类、名称、描述、图片等）在组内共享；
  * 变体级字段（尺寸、价格等）放在 {@link PreviewDataVariant} 中。</p>
  */
@@ -18,7 +18,8 @@ import java.util.Map;
 public class PreviewDataGroup {
 
     /**
-     * 商品外部编码（型号），作为分组键。
+     * 供应商源商品编码（型号），作为预览分组键——导入行上下文中的供应商命名空间编码
+     * （设计文档 v3.3 §8），非平台主展示编码（主展示为 rspu_code），不别名 productCode。
      */
     private String externalCode;
 
@@ -34,9 +35,14 @@ public class PreviewDataGroup {
     private Map<String, String> productMappedFieldByHeader = new LinkedHashMap<>();
 
     /**
-     * 商品图片（取组内第一行）。
+     * 商品图片（取组内首个「产品图样」列主图候选，可能不在代表行）。
      */
     private List<PreviewDataRow.PreviewRowImage> images = new ArrayList<>();
+
+    /**
+     * 商品图片实际所在的 Excel 物理行号（1-based），供缩略图按行加载。
+     */
+    private int imageRowIndex;
 
     /**
      * 用户在数据清洗页覆盖到该商品组的图片 asset ID 列表。
