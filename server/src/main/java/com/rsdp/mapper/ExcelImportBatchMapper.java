@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.rsdp.entity.ExcelImportBatch;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDateTime;
@@ -82,4 +83,67 @@ public interface ExcelImportBatchMapper extends BaseMapper<ExcelImportBatch> {
     @Update("UPDATE excel_import_batch SET status = 'pending', updated_at = now()"
         + " WHERE status = 'importing' AND (updated_at IS NULL OR updated_at < #{threshold})")
     int reapStaleImporting(@Param("threshold") LocalDateTime threshold);
+
+    /**
+     * 行锁读取批次（P0-B1，v3.3 §47 Optimistic Lock 的串行化点）。
+     *
+     * <p>Preview Revision 创建在事务内先锁住 batch 行，再校验
+     * {@code preview_revision} 与编辑命令携带的 {@code expectedRevision}
+     * 是否一致，保证同一 batch（per-sheet 边界）的并发编辑串行 adjudication。</p>
+     *
+     * @param batchId 批次 ID
+     * @return 批次实体；不存在返回 null
+     */
+    @Select("SELECT * FROM excel_import_batch WHERE batch_id = #{batchId} FOR UPDATE")
+    ExcelImportBatch selectForUpdate(@Param("batchId") String batchId);
+
+    /**
+     * 原子推进 Preview Revision 指针（P0-B1，v3.3 §45 / §46 / §47）。
+     *
+     * <p>CAS 语义：仅当当前 {@code preview_revision} 与 {@code expectedRevision}
+     * 一致（{@code IS NOT DISTINCT FROM}，双方均可为 NULL 表示尚无快照）时才推进，
+     * 同时刷新当前 mapping_hash / normalizer_version。0 行表示期间已被其他编辑
+     * 推进，调用方必须抛 409 preview_revision_conflict 并回滚新 Revision 写入。</p>
+     *
+     * <p>P0-B3 收口（§27 Resolution 与 Revision 规则）：任何 Revision 推进都会改变
+     * Import 输入，因此同事务清空活跃 Confirm 指针（confirmed_revision / confirmed_by /
+     * confirmed_at）——已确认快照被编辑后必须重新 Confirm，不允许旧 Confirm 放行新输入。</p>
+     *
+     * @param batchId           批次 ID
+     * @param expectedRevision  期望的当前 Revision（NULL = 期望尚无快照）
+     * @param newRevision       新 Revision 号
+     * @param mappingHash       当前 mapping 哈希
+     * @param normalizerVersion 当前 Normalizer 版本
+     * @return 影响行数；1 成功，0 冲突
+     */
+    @Update("UPDATE excel_import_batch SET preview_revision = #{newRevision},"
+        + " mapping_hash = #{mappingHash}, normalizer_version = #{normalizerVersion},"
+        + " confirmed_revision = NULL, confirmed_by = NULL, confirmed_at = NULL, updated_at = now()"
+        + " WHERE batch_id = #{batchId}"
+        + " AND preview_revision IS NOT DISTINCT FROM #{expectedRevision,jdbcType=BIGINT}")
+    int advancePreviewRevision(@Param("batchId") String batchId,
+                               @Param("expectedRevision") Long expectedRevision,
+                               @Param("newRevision") long newRevision,
+                               @Param("mappingHash") String mappingHash,
+                               @Param("normalizerVersion") String normalizerVersion);
+
+    /**
+     * 写入 Confirm 指针（P0-B3，v3.3 §45 / §72：confirm 成功处写 confirmed_revision）。
+     *
+     * <p>CAS 语义：仅当当前 {@code preview_revision} 仍等于被确认的 Revision 时才写入
+     * （期间若有编辑推进了 Revision，确认对象已失效，0 行 → 调用方抛
+     * 409 preview_revision_conflict）。可重复确认同一 Revision（幂等刷新操作人/时间）。</p>
+     *
+     * @param batchId  批次 ID
+     * @param revision 被确认的 Revision 号
+     * @param operator 确认操作人（sys_user.user_id）
+     * @return 影响行数；1 成功，0 表示 Revision 已被推进（冲突）
+     */
+    @Update("UPDATE excel_import_batch SET confirmed_revision = #{revision},"
+        + " confirmed_by = #{operator}, confirmed_at = now(), updated_at = now()"
+        + " WHERE batch_id = #{batchId}"
+        + " AND preview_revision = #{revision}")
+    int confirmRevision(@Param("batchId") String batchId,
+                        @Param("revision") long revision,
+                        @Param("operator") String operator);
 }

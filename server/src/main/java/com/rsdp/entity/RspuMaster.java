@@ -15,6 +15,13 @@ import java.time.LocalDateTime;
 public class RspuMaster {
     @TableId
     private String rspuId;
+    /**
+     * 历史外部编码（历史兼容投影，设计文档 v3.3 §8）：只读展示为「历史外部编码」并支持
+     * 受限兼容搜索；不再是平台主展示编码（主展示为 {@link #rspuCode}），禁止作为
+     * supplier identity / global product identity / import idempotency identity。
+     * 供应商源商品身份见 {@code supplier_product_ref}；Phase 5 起新导入不再写本字段
+     * （全局唯一索引 uk_rspu_external_code 已由 V16 移除，本列仅保留历史值只读投影）。
+     */
     private String externalCode;
     private String rspuCode;
     private String categoryCode;
@@ -30,10 +37,6 @@ public class RspuMaster {
     @JsonRawValue
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String sixDimTags;
-
-    @JsonRawValue
-    @TableField(typeHandler = JsonbTypeHandler.class)
-    private String styleVector;
 
     private String colorPrimaryName;
 
@@ -80,4 +83,12 @@ public class RspuMaster {
 
     @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
+
+    /**
+     * 字段级人工修正权威标记（设计文档 v3.3 §34.1，Flyway V14）：
+     * JSON Pointer → {@code {active, correctedBy, correctedAt, source}}；
+     * Excel/AI/后台重试不得覆盖 active 字段，恢复自动管理是独立的授权人工操作。
+     */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String manualOverrideFields;
 }

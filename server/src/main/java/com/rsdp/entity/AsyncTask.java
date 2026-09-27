@@ -27,4 +27,7 @@ public class AsyncTask {
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
+
+    /** 副作用幂等键（v3.3 §50.3）：重复 enqueue 返回既有任务，Worker 崩溃重试不重复建任务 */
+    private String idempotencyKey;
 }

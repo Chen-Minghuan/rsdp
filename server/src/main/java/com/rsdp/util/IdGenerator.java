@@ -122,6 +122,15 @@ public final class IdGenerator {
     }
 
     /**
+     * 生成 Excel 导入 Preview 产品组主键（P0-B1，v3.3 §21 excel_import_product_group.group_id）。
+     *
+     * @return {@code PGROUP-<完整 UUID>}
+     */
+    public static String importGroupId() {
+        return generate("PGROUP");
+    }
+
+    /**
      * 生成 AI 识别记录主键。
      *
      * @return {@code REC-<完整 UUID>}

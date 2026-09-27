@@ -51,6 +51,27 @@ public class ExcelImportBatch {
     private Integer sheetIndex;
     private LocalDateTime processedAt;
 
+    // ---- P0-B1 Immutable Preview Snapshot / Revision（v3.3 §45，Flyway V14）----
+
+    /** 当前最新 Preview Revision 指针；不可变策略/哈希在 excel_import_preview_revision */
+    private Long previewRevision;
+    /** 当前 mapping 哈希（§47.1.4） */
+    private String mappingHash;
+    /** 当前 Normalizer 版本 */
+    private String normalizerVersion;
+    /** 已确认 Revision 指针（Confirm 语义 P0-B3 收口） */
+    private Long confirmedRevision;
+    private String confirmedBy;
+    private LocalDateTime confirmedAt;
+    /** 导入 Policy 的 UI 草稿（§45/§47.1.5） */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String importPolicy;
+    /** 审计/争议保留标记（§44）：true 时 GC 必须跳过整个 batch */
+    private Boolean retentionHold;
+    /** 过期归档非敏感摘要（§44/§45），仅受限 GC 函数写入 */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String snapshotArchiveSummary;
+
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

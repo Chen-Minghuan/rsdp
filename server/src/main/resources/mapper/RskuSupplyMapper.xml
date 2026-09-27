@@ -52,6 +52,101 @@
         </foreach>
     </insert>
 
+    <!-- v3.3 P0-D（§38）：并发安全插入。撞 uk_rsku_variant_factory_config_alive
+         （部分唯一索引，谓词 deleted_at IS NULL 必须原样出现在 ON CONFLICT 仲裁子句）
+         时 DO NOTHING 返回 0 行，由调用方转入更新路径，避免失败语句中断当前事务。
+         supplier_configuration_key 等 V22 字段由 Java 侧显式赋值（§34 禁止依赖数据库 DEFAULT）。 -->
+    <insert id="insertOnConfigConflictDoNothing">
+        INSERT INTO rsku_supply (
+            rsku_id,
+            rsku_code,
+            rspu_id,
+            variant_id,
+            factory_code,
+            factory_sku,
+            factory_price,
+            price_band,
+            product_level,
+            material_code,
+            material_description,
+            lead_time_days,
+            moq,
+            warranty_years,
+            shipping_from,
+            shipping_warehouse_id,
+            diff_notes,
+            quote_confidence,
+            review_status,
+            price_updated,
+            status,
+            currency_code,
+            tax_included,
+            price_unit,
+            moq_unit,
+            quote_date,
+            effective_from,
+            effective_to,
+            supplier_material_grade_code,
+            supplier_material_grade_text,
+            supplier_configuration_key,
+            supplier_configuration_normalizer_version,
+            source_batch_id,
+            source_row_id,
+            created_at,
+            updated_at
+        ) VALUES (
+            #{rsku.rskuId},
+            #{rsku.rskuCode},
+            #{rsku.rspuId},
+            #{rsku.variantId},
+            #{rsku.factoryCode},
+            #{rsku.factorySku},
+            #{rsku.factoryPrice, typeHandler=com.rsdp.config.typehandler.EncryptTypeHandler},
+            #{rsku.priceBand},
+            #{rsku.productLevel},
+            #{rsku.materialCode},
+            #{rsku.materialDescription},
+            #{rsku.leadTimeDays},
+            #{rsku.moq},
+            #{rsku.warrantyYears},
+            #{rsku.shippingFrom},
+            #{rsku.shippingWarehouseId},
+            #{rsku.diffNotes},
+            #{rsku.quoteConfidence},
+            #{rsku.reviewStatus},
+            #{rsku.priceUpdated},
+            #{rsku.status},
+            #{rsku.currencyCode},
+            #{rsku.taxIncluded},
+            #{rsku.priceUnit},
+            #{rsku.moqUnit},
+            #{rsku.quoteDate},
+            #{rsku.effectiveFrom},
+            #{rsku.effectiveTo},
+            #{rsku.supplierMaterialGradeCode},
+            #{rsku.supplierMaterialGradeText},
+            #{rsku.supplierConfigurationKey},
+            #{rsku.supplierConfigurationNormalizerVersion},
+            #{rsku.sourceBatchId},
+            #{rsku.sourceRowId},
+            #{rsku.createdAt},
+            #{rsku.updatedAt}
+        )
+        ON CONFLICT (variant_id, factory_code, supplier_configuration_key)
+        WHERE deleted_at IS NULL
+        DO NOTHING
+    </insert>
+
+    <!-- 「可用出厂报价」统一口径（与 com.rsdp.util.RskuAvailability 保持同步）：
+         active + CNY + 有效期内 + 价格非空；暂停/过期/非人民币报价不参与选价 -->
+    <sql id="availableFactoryQuote">
+          AND rs.factory_price IS NOT NULL
+          AND rs.status = 'active'
+          AND rs.currency_code = 'CNY'
+          AND (rs.effective_from IS NULL OR rs.effective_from &lt;= CURRENT_DATE)
+          AND (rs.effective_to IS NULL OR rs.effective_to &gt;= CURRENT_DATE)
+    </sql>
+
     <select id="selectCapableByRspuIds" resultType="com.rsdp.entity.RskuSupply">
         SELECT rs.*
         FROM rsku_supply rs
@@ -60,6 +155,7 @@
             #{rspuId}
         </foreach>
           AND rs.deleted_at IS NULL
+        <include refid="availableFactoryQuote"/>
           AND EXISTS (
               SELECT 1 FROM factory_master fm
               WHERE fm.factory_code = rs.factory_code

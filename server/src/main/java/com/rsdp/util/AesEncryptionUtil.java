@@ -55,6 +55,19 @@ public class AesEncryptionUtil {
         return encrypt(value.toPlainString().getBytes(StandardCharsets.UTF_8));
     }
 
+    /** Encrypt arbitrary sensitive preview text with the same authenticated cipher. */
+    public static String encryptText(String value) {
+        return value == null ? null : encrypt(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Decrypt sensitive preview text; malformed ciphertext fails closed. */
+    public static String decryptText(String encrypted) {
+        if (encrypted == null) {
+            return null;
+        }
+        return new String(decrypt(Base64.getDecoder().decode(encrypted)), StandardCharsets.UTF_8);
+    }
+
     /**
      * 解密为 BigDecimal 价格。
      *
@@ -81,28 +94,17 @@ public class AesEncryptionUtil {
     /**
      * 明文价格兜底：当密文解析失败时，若原始值为合法数字则按明文处理。
      *
-     * <p>日志中不输出原始价格明文，仅记录长度与 SHA-256 哈希，避免敏感信息泄露。</p>
+     * <p>安全要求（R-06）：价格为低熵敏感数据，日志中不得输出其明文及任何可枚举
+     * 派生信息（长度、公开哈希、前缀等），仅记录不含敏感语义的占位描述。</p>
      */
     private static BigDecimal fallbackPlainPrice(String raw, Exception cause) {
         try {
             BigDecimal price = new BigDecimal(raw.trim());
-            log.warn("价格字段疑似仍为明文，已兜底返回。长度={}，哈希={}",
-                raw.length(), hashRawValue(raw));
+            log.warn("价格字段疑似仍为明文，已按兜底逻辑处理");
             return price;
         } catch (NumberFormatException nfe) {
-            log.error("AES 解密失败且无法作为明文价格解析。长度={}，哈希={}",
-                raw.length(), hashRawValue(raw), cause);
+            log.error("AES 解密失败且无法作为明文价格解析", cause);
             throw new IllegalStateException("AES 解密失败: 密文格式错误", cause);
-        }
-    }
-
-    private static String hashRawValue(String raw) {
-        try {
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(raw.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(hash);
-        } catch (Exception e) {
-            return "HASH_ERROR";
         }
     }
 

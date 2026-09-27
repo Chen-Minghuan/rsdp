@@ -61,4 +61,12 @@ public class RspuVariant {
 
     @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
+
+    /**
+     * 字段级人工修正权威标记（设计文档 v3.3 §34.1，Flyway V14）：
+     * JSON Pointer → {@code {active, correctedBy, correctedAt, source}}；
+     * Excel/AI/后台重试不得覆盖 active 字段。
+     */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String manualOverrideFields;
 }
