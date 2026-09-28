@@ -183,6 +183,14 @@ rsdp:
     thread-name-prefix: rsdp-async-
     # 线程池队列满时的拒绝策略：abort（默认，抛异常）/ discard / discard-oldest / caller-runs
     rejected-policy: abort
+    # 图片 AI 识别专用线程池（与通用后台任务池隔离，批量识别不占其他任务执行位）
+    image-recognition:
+      # 识别并发数（核心=最大，固定并发上限）；可用环境变量 RSDP_VISION_POOL_SIZE 覆盖，调整后需重启生效。
+      # 2026-09-28 同批 91 图实测：4/6/8 并发均零失败零限流，8 并发总耗时约 2.1 分钟（详见 当前进度.md）
+      pool-size: ${RSDP_VISION_POOL_SIZE:6}
+      # 排队容量需覆盖单批最大导入行数（500）+ 手工录入余量；队列满时任务立即标记 failed 提示重试
+      queue-capacity: 1000
+      thread-name-prefix: rsdp-vision-
   jwt:
     # JWT 签名密钥，Base64 编码，长度至少 256 位（32 字节）
     # 必须通过环境变量 RSDP_JWT_SECRET 注入，切勿在配置中硬编码

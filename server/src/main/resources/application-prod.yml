@@ -38,6 +38,11 @@ rsdp:
     queue-capacity: 200
     thread-name-prefix: rsdp-async-
     rejected-policy: abort
+    # 图片 AI 识别专用线程池（与通用后台任务池隔离）；并发可用 RSDP_VISION_POOL_SIZE 覆盖
+    image-recognition:
+      pool-size: ${RSDP_VISION_POOL_SIZE:6}
+      queue-capacity: 1000
+      thread-name-prefix: rsdp-vision-
   jwt:
     secret: ${RSDP_JWT_SECRET}
     expiration-hours: 24

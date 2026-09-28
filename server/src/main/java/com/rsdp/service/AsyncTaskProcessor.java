@@ -41,6 +41,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -109,7 +110,7 @@ public class AsyncTaskProcessor {
      * @param imageId   图片 ID
      * @param objectKey 存储对象键
      */
-    @Async("taskExecutor")
+    @Async("imageRecognitionExecutor")
     public void processProductEntry(String taskId, String rspuId, String imageId, String objectKey) {
         log.info("开始异步处理产品录入任务，taskId={}", taskId);
         // 原子认领任务：仅 pending 状态可置为 processing，防止多执行器并发重复处理同一任务
@@ -126,9 +127,19 @@ public class AsyncTaskProcessor {
         String operator = resolveTaskOperator(task);
         com.fasterxml.jackson.databind.JsonNode inputRoot = parseInputDataRoot(task);
 
+        // 分段耗时埋点：排队（任务创建→认领）、视觉识别、向量生成、识别结果入库、向量写入。
+        // 用于判断批量识别瓶颈在模型请求还是图片处理/入库；-1 表示该阶段未执行或不可得
+        long taskStartMillis = System.currentTimeMillis();
+        long queueWaitMs = (task != null && task.getCreatedAt() != null)
+            ? Math.max(0L, Duration.between(task.getCreatedAt(), LocalDateTime.now()).toMillis())
+            : -1L;
+
         String recognitionId = IdGenerator.recognitionId();
         String modelName = aiModel;
         int processingTime = 0;
+        long embeddingMs = -1L;
+        long persistMs = -1L;
+        long vectorPersistMs = -1L;
 
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         String categoryCode = rspu != null ? rspu.getCategoryCode() : null;
@@ -238,11 +249,15 @@ public class AsyncTaskProcessor {
 
             updateTaskStatus(taskId, "processing", 60, null, null);
 
+            long embedStart = System.currentTimeMillis();
             ImageEmbedding imageEmbedding = embedImageSafely(rspuId, imageBytes);
+            embeddingMs = System.currentTimeMillis() - embedStart;
             float[] embedding = imageEmbedding != null ? imageEmbedding.vector() : null;
 
+            long persistStart = System.currentTimeMillis();
             String productName = persistenceService.saveSuccess(taskId, rspuId, imageId, recognitionId, modelName,
                 labels, processingTime, operator);
+            persistMs = System.currentTimeMillis() - persistStart;
             successSaved = true;
 
             // 扩展品类旁路：异步独立执行，只写 Shadow 结果，不改变本次正式分类或任何业务字段。
@@ -279,7 +294,9 @@ public class AsyncTaskProcessor {
             boolean vectorPersisted = false;
             if (imageEmbedding != null) {
                 // 失败时返回降级文案（区分"存储故障"与"图片已更新被丢弃"），成功返回 null
+                long vectorStart = System.currentTimeMillis();
                 String vectorError = persistVector(imageId, currentRevision, imageEmbedding);
+                vectorPersistMs = System.currentTimeMillis() - vectorStart;
                 vectorPersisted = vectorError == null;
                 if (vectorError != null) {
                     degradeError = vectorError;
@@ -294,6 +311,14 @@ public class AsyncTaskProcessor {
                 // resultData 供录入中心展示：AI 原始标签 + 最终生效的产品名称（OCR 品名或品类回退名）
                 com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.valueToTree(labels);
                 resultNode.put("productName", productName);
+                // 分段耗时随任务结果落库（免改表），供批量导入性能分析按 taskId 回查
+                com.fasterxml.jackson.databind.node.ObjectNode timingNode = resultNode.putObject("stageTiming");
+                timingNode.put("queueWaitMs", queueWaitMs);
+                timingNode.put("visionMs", processingTime);
+                timingNode.put("embeddingMs", embeddingMs);
+                timingNode.put("persistMs", persistMs);
+                timingNode.put("vectorPersistMs", vectorPersistMs);
+                timingNode.put("totalMs", System.currentTimeMillis() - taskStartMillis);
                 resultData = objectMapper.writeValueAsString(resultNode);
             } catch (Exception e) {
                 log.error("序列化任务结果失败，taskId={}", taskId, e);
@@ -302,8 +327,13 @@ public class AsyncTaskProcessor {
             }
             updateTaskStatus(taskId, finalStatus, 100, resultData, degradeError);
             log.info("产品录入异步任务完成，taskId={}，status={}", taskId, finalStatus);
+            log.info("识别分段耗时，taskId={}，queueWait={}ms，vision={}ms，embedding={}ms，persist={}ms，vectorPersist={}ms，total={}ms",
+                taskId, queueWaitMs, processingTime, embeddingMs, persistMs, vectorPersistMs,
+                System.currentTimeMillis() - taskStartMillis);
         } catch (Exception e) {
             log.error("AI 识别失败，taskId={}", taskId, e);
+            log.info("识别分段耗时（失败），taskId={}，queueWait={}ms，elapsed={}ms",
+                taskId, queueWaitMs, System.currentTimeMillis() - taskStartMillis);
             if (successSaved) {
                 // 识别结果已提交：仅降级任务状态，不重复写 failed 识别记录、不覆盖 RSPU 状态
                 safeUpdateTaskStatus(taskId, "partial_success", 100, null,

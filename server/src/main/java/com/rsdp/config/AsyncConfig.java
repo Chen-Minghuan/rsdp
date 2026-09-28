@@ -38,6 +38,17 @@ public class AsyncConfig {
     @Value("${rsdp.async.rejected-policy:abort}")
     private String rejectedPolicy;
 
+    /** 图片 AI 识别专用池并发数（核心=最大，固定并发上限，避免突发打满 AI 接口限流）。 */
+    @Value("${rsdp.async.image-recognition.pool-size:4}")
+    private int imageRecognitionPoolSize;
+
+    /** 图片 AI 识别专用池排队容量（需覆盖单批最大导入行数 500 + 手工录入余量）。 */
+    @Value("${rsdp.async.image-recognition.queue-capacity:1000}")
+    private int imageRecognitionQueueCapacity;
+
+    @Value("${rsdp.async.image-recognition.thread-name-prefix:rsdp-vision-}")
+    private String imageRecognitionThreadNamePrefix;
+
     /**
      * AI 识别等后台任务使用的线程池。
      *
@@ -65,6 +76,32 @@ public class AsyncConfig {
             case "discard-oldest" -> new ThreadPoolExecutor.DiscardOldestPolicy();
             default -> new ThreadPoolExecutor.AbortPolicy();
         };
+    }
+
+    /**
+     * 图片 AI 识别（产品录入/Excel 导入逐行识别）专用线程池。
+     *
+     * <p>与通用 {@code taskExecutor} 隔离：批量识别（单批可达数百张图）不再占满
+     * 户型分析、向量重建、文档/Excel 批次等其他后台任务的执行位置。</p>
+     *
+     * <p>核心线程数 = 最大线程数 = {@code pool-size}，即固定并发上限；
+     * 队列满时 abort 抛异常，由投递方（dispatchSafely）把任务标记为 failed 即时反馈。</p>
+     *
+     * @return 图片识别线程池执行器
+     */
+    @Bean(name = "imageRecognitionExecutor")
+    public ThreadPoolTaskExecutor imageRecognitionExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(imageRecognitionPoolSize);
+        executor.setMaxPoolSize(imageRecognitionPoolSize);
+        executor.setQueueCapacity(imageRecognitionQueueCapacity);
+        executor.setThreadNamePrefix(imageRecognitionThreadNamePrefix);
+        executor.setRejectedExecutionHandler(
+            new LoggingRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy()));
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
+        executor.initialize();
+        return executor;
     }
 
     /**

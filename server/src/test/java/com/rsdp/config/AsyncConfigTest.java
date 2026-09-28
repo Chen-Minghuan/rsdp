@@ -47,6 +47,23 @@ class AsyncConfigTest {
             .isInstanceOf(RejectedExecutionException.class);
     }
 
+    @Test
+    void imageRecognitionExecutor_shouldUseFixedPoolSizeAndAbortPolicy() throws Exception {
+        AsyncConfig config = new AsyncConfig();
+        setField(config, "imageRecognitionPoolSize", 2);
+        setField(config, "imageRecognitionQueueCapacity", 5);
+        setField(config, "imageRecognitionThreadNamePrefix", "test-vision-");
+
+        ThreadPoolTaskExecutor executor = config.imageRecognitionExecutor();
+
+        // 核心=最大：固定并发上限，批量识别不打满 AI 接口
+        assertThat(executor.getCorePoolSize()).isEqualTo(2);
+        assertThat(executor.getMaxPoolSize()).isEqualTo(2);
+        RejectedExecutionHandler handler = executor.getThreadPoolExecutor().getRejectedExecutionHandler();
+        assertThat(handler).isInstanceOf(LoggingRejectedExecutionHandler.class);
+        assertThat(((LoggingRejectedExecutionHandler) handler).getDelegateName()).isEqualTo("AbortPolicy");
+    }
+
     private AsyncConfig createConfigWithDefaults(String rejectedPolicy) throws Exception {
         AsyncConfig config = new AsyncConfig();
         setField(config, "corePoolSize", 1);

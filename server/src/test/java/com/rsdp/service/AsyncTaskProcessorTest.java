@@ -23,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -183,6 +184,41 @@ class AsyncTaskProcessorTest {
         assertThat(finalTask.getStatus()).isEqualTo("done");
         assertThat(finalTask.getProgress()).isEqualTo(100);
         assertThat(finalTask.getErrorMessage()).isNull();
+    }
+
+    @Test
+    void processProductEntry_shouldRecordStageTimingInResultData() throws Exception {
+        // Given：任务 2 秒前创建（排队耗时 = 任务创建 → 认领执行）
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(taskId);
+        task.setCreatedAt(LocalDateTime.now().minusSeconds(2));
+        when(asyncTaskMapper.selectById(anyString())).thenReturn(task);
+
+        InputStream imageStream = new ByteArrayInputStream("fake-image".getBytes());
+        when(storageService.get(objectKey)).thenReturn(imageStream);
+
+        AiLabels labels = new AiLabels();
+        labels.setStyle("中古风");
+        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
+        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f}, "hash-abc"));
+
+        // When
+        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
+
+        // Then：result_data 携带分段耗时（排队/视觉/向量生成/入库/向量写入/总计），供批量导入性能分析
+        ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
+        verify(asyncTaskMapper, times(2)).updateById(taskCaptor.capture());
+        AsyncTask finalTask = taskCaptor.getValue();
+        assertThat(finalTask.getStatus()).isEqualTo("done");
+        com.fasterxml.jackson.databind.JsonNode timing =
+            objectMapper.readTree(finalTask.getResultData()).get("stageTiming");
+        assertThat(timing).isNotNull();
+        assertThat(timing.get("queueWaitMs").asLong()).isGreaterThanOrEqualTo(2000L);
+        assertThat(timing.get("visionMs").asLong()).isGreaterThanOrEqualTo(0L);
+        assertThat(timing.get("embeddingMs").asLong()).isGreaterThanOrEqualTo(0L);
+        assertThat(timing.get("persistMs").asLong()).isGreaterThanOrEqualTo(0L);
+        assertThat(timing.get("vectorPersistMs").asLong()).isGreaterThanOrEqualTo(0L);
+        assertThat(timing.get("totalMs").asLong()).isGreaterThanOrEqualTo(timing.get("visionMs").asLong());
     }
 
     @Test

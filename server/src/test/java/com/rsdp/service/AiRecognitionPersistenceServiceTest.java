@@ -231,6 +231,10 @@ class AiRecognitionPersistenceServiceTest {
             "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getProductName()).isEqualTo("云朵沙发");
+        ArgumentCaptor<com.rsdp.entity.AiRecognition> recognitionCaptor =
+            ArgumentCaptor.forClass(com.rsdp.entity.AiRecognition.class);
+        verify(aiRecognitionMapper).insert(recognitionCaptor.capture());
+        assertThat(recognitionCaptor.getValue().getParsedOcr()).contains("云朵沙发");
     }
 
     @Test

@@ -525,6 +525,7 @@ public class AiRecognitionPersistenceService {
             rec.setParsedSixDim(toJson(labels.getSixDimTags()));
             rec.setParsedColorHsv(toJson(labels.getColorPrimaryHsv()));
             rec.setParsedSceneTags(toJson(labels.getSceneTags()));
+            rec.setParsedOcr(toJson(labels.getOcr()));
             rec.setConfidence(labels.getConfidence());
         }
 
