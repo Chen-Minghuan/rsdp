@@ -6,7 +6,6 @@ import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.ManualProductEntryRequest;
 import com.rsdp.dto.request.ProductBatchDeleteRequest;
 import com.rsdp.dto.request.ProductListRequest;
-import com.rsdp.dto.request.ProductReviewRequest;
 import com.rsdp.dto.request.RspuMergeRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.request.SixDimTagPatchRequest;
@@ -199,7 +198,7 @@ public class ProductController {
     }
 
     /**
-     * 重新触发产品 AI 识别（识别中/存疑产品的手动重试入口）。
+     * 重新触发产品 AI 识别（识别中产品的手动重试入口）。
      *
      * @param rspuId RSPU ID
      * @return 新建任务信息（taskId）
@@ -245,20 +244,6 @@ public class ProductController {
     @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
     public Result<Map<String, Object>> merge(@Valid @RequestBody RspuMergeRequest request) {
         return Result.ok(rspuMergeService.merge(request));
-    }
-
-    /**
-     * 复核确认产品。
-     *
-     * @param rspuId  RSPU ID
-     * @param request 复核请求
-     * @return 空结果
-     */
-    @PutMapping("/{rspuId}/review")
-    public Result<Void> review(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
-                               @Valid @RequestBody ProductReviewRequest request) {
-        productQueryService.reviewProduct(rspuId, request.getReviewStatus(), request.getReviewComment());
-        return Result.ok();
     }
 
     /**

@@ -73,6 +73,9 @@ class AsyncTaskProcessorTest {
     private AuditLogService auditLogService;
 
     @Mock
+    private com.rsdp.mapper.RspuDuplicateSuspectMapper duplicateSuspectMapper;
+
+    @Mock
     private StyleMatchingService styleMatchingService;
 
     @Mock
@@ -374,17 +377,6 @@ class AsyncTaskProcessorTest {
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
         when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f, 0.2f}, "hash-abc"));
 
-        RspuMaster current = new RspuMaster();
-        current.setRspuId(rspuId);
-        current.setCategoryCode("FS");
-        current.setReviewStatus("待复核");
-        RspuMaster dup = new RspuMaster();
-        dup.setRspuId("RSPU-DUP01");
-        dup.setRspuCode("FS-WJ-001-M");
-        dup.setProductName("扶摇沙发");
-        when(rspuMapper.selectById(rspuId)).thenReturn(current);
-        when(rspuMapper.selectById("RSPU-DUP01")).thenReturn(dup);
-
         java.lang.reflect.Field thresholdField = AsyncTaskProcessor.class.getDeclaredField("duplicateSimilarThreshold");
         thresholdField.setAccessible(true);
         thresholdField.set(asyncTaskProcessor, 0.95);
@@ -396,11 +388,15 @@ class AsyncTaskProcessorTest {
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
 
-        // Then：标记"存疑-疑似同款"，注明命中产品与相似度
-        ArgumentCaptor<RspuMaster> captor = ArgumentCaptor.forClass(RspuMaster.class);
-        verify(rspuMapper).updateById(captor.capture());
-        assertThat(captor.getValue().getReviewStatus()).isEqualTo("存疑");
-        assertThat(captor.getValue().getReviewComment()).contains("疑似").contains("FS-WJ-001-M").contains("97%");
+        // Then：落结构化同款配对（合并工具候选队列），不再翻转复核状态（机制已移除）
+        ArgumentCaptor<com.rsdp.entity.RspuDuplicateSuspect> captor =
+            ArgumentCaptor.forClass(com.rsdp.entity.RspuDuplicateSuspect.class);
+        verify(duplicateSuspectMapper).insert(captor.capture());
+        assertThat(captor.getValue().getRspuId()).isEqualTo(rspuId);
+        assertThat(captor.getValue().getMatchedRspuId()).isEqualTo("RSPU-DUP01");
+        assertThat(captor.getValue().getStatus()).isEqualTo("pending");
+        assertThat(captor.getValue().getSimilarity().doubleValue()).isCloseTo(0.97,
+            org.assertj.core.data.Offset.offset(0.001));
     }
 
     @Test
@@ -414,12 +410,6 @@ class AsyncTaskProcessorTest {
         when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
         when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f}, "hash-abc"));
 
-        RspuMaster current = new RspuMaster();
-        current.setRspuId(rspuId);
-        current.setCategoryCode("FS");
-        current.setReviewStatus("待复核");
-        when(rspuMapper.selectById(rspuId)).thenReturn(current);
-
         java.lang.reflect.Field thresholdField = AsyncTaskProcessor.class.getDeclaredField("duplicateSimilarThreshold");
         thresholdField.setAccessible(true);
         thresholdField.set(asyncTaskProcessor, 0.95);
@@ -430,8 +420,8 @@ class AsyncTaskProcessorTest {
         // When
         asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
 
-        // Then：不更新复核状态
-        verify(rspuMapper, org.mockito.Mockito.never()).updateById(any(RspuMaster.class));
+        // Then：不落同款配对
+        verify(duplicateSuspectMapper, org.mockito.Mockito.never()).insert(any(com.rsdp.entity.RspuDuplicateSuspect.class));
     }
 
     @Test
@@ -575,44 +565,6 @@ class AsyncTaskProcessorTest {
             oldCaptor.capture(), newCaptor.capture(), eq("editor01"));
         assertThat(((RspuMaster) oldCaptor.getValue()).getCategoryCode()).isEqualTo("FS");
         assertThat(((RspuMaster) newCaptor.getValue()).getCategoryCode()).isEqualTo("TB");
-    }
-
-    @Test
-    void processProductEntry_shouldAuditDuplicateSuspectWithTaskCreator() throws Exception {
-        // Given：P0-2 同款存疑标记与 markRspuAsDoubtful 口径对齐（logReview），操作人=任务创建人
-        AsyncTask task = new AsyncTask();
-        task.setTaskId(taskId);
-        task.setCreatedBy("editor01");
-        when(asyncTaskMapper.selectById(anyString())).thenReturn(task);
-        when(storageService.get(objectKey)).thenReturn(new ByteArrayInputStream("fake-image".getBytes()));
-
-        AiLabels labels = new AiLabels();
-        labels.setStyle("侘寂");
-        when(visionService.recognizeImage(any(), eq("FS"))).thenReturn(labels);
-        when(embeddingService.embedImageWithHash(any())).thenReturn(new ImageEmbedding(new float[]{0.1f}, "hash-abc"));
-
-        RspuMaster current = new RspuMaster();
-        current.setRspuId(rspuId);
-        current.setCategoryCode("FS");
-        current.setReviewStatus("待复核");
-        RspuMaster dup = new RspuMaster();
-        dup.setRspuId("RSPU-DUP01");
-        dup.setRspuCode("FS-WJ-001-M");
-        when(rspuMapper.selectById(rspuId)).thenReturn(current);
-        when(rspuMapper.selectById("RSPU-DUP01")).thenReturn(dup);
-
-        java.lang.reflect.Field thresholdField = AsyncTaskProcessor.class.getDeclaredField("duplicateSimilarThreshold");
-        thresholdField.setAccessible(true);
-        thresholdField.set(asyncTaskProcessor, 0.95);
-
-        when(productVectorStore.search(any(), org.mockito.ArgumentMatchers.anyInt(), any(), eq(false)))
-            .thenReturn(List.of(new VectorHit("IMG-OTHER", "RSPU-DUP01", 0.06)));
-
-        // When
-        asyncTaskProcessor.processProductEntry(taskId, rspuId, imageId, objectKey);
-
-        // Then：置存疑有 logReview 审计，操作人=任务创建人
-        verify(auditLogService).logReview(eq("rspu_master"), eq(rspuId), any(), any(), eq("editor01"));
     }
 
     // ==================== 文档导入批次任务（阶段 3.1） ====================

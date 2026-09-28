@@ -15,7 +15,6 @@ public final class Permissions {
     public static final String PRODUCT_CREATE = "product:create";
     public static final String PRODUCT_UPDATE = "product:update";
     public static final String PRODUCT_DELETE = "product:delete";
-    public static final String PRODUCT_REVIEW = "product:review";
     public static final String PRODUCT_IMPORT = "product:import";
 
     // 工厂

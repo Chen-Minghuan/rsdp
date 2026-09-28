@@ -88,21 +88,6 @@ public class AuditLogService {
     }
 
     /**
-     * 记录复核/状态变更操作。
-     *
-     * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>
-     *
-     * @param tableName 表名
-     * @param recordId  记录 ID
-     * @param oldValue  变更前对象
-     * @param newValue  变更后对象
-     * @param operator  操作人
-     */
-    public void logReview(String tableName, String recordId, Object oldValue, Object newValue, String operator) {
-        insert(tableName, recordId, "REVIEW", oldValue, newValue, operator);
-    }
-
-    /**
      * 记录删除操作。
      *
      * <p>写入经 {@link AuditLogWriter} 异步执行（见 {@link #insert} JavaDoc）。</p>

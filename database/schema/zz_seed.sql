@@ -1540,13 +1540,6 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('factory_level', 'C', 'C级备选厂', 4)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 复核状态
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('review_status', '待复核', '待复核', 1),
-('review_status', '已确认', '已确认', 2),
-('review_status', '存疑', '存疑', 3)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
 -- 报价置信度
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('quote_confidence', 'high', '高', 1),
@@ -1659,7 +1652,6 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('product:create', '新品录入'),
 ('product:update', '编辑产品元数据'),
 ('product:delete', '删除产品'),
-('product:review', '复核产品'),
 ('product:import', '批量导入产品'),
 ('factory:read', '查看工厂'),
 ('factory:create', '创建工厂'),

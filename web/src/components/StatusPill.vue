@@ -10,7 +10,7 @@ import { computed } from 'vue'
  * - bad  朱砂系：存疑 / 失败
  * - info 灰系  ：类目、置信度"高"、已取消、已下架等中性信息
  *
- * 用法：<StatusPill :value="row.reviewStatus" />
+ * 用法：<StatusPill :value="row.status" />
  * 显示文案与取值不一致时用 label 覆盖：<StatusPill :value="order.status" :label="statusText" />
  */
 const props = defineProps<{

@@ -87,7 +87,6 @@ CREATE TABLE IF NOT EXISTS style_case (
     image_url TEXT,
     ai_raw_output JSONB,
     negative_lesson TEXT,
-    review_status VARCHAR(16) DEFAULT '待复核',
     created_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,

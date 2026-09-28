@@ -211,7 +211,6 @@ class ProductQueryServiceTest {
         rspu.setCategoryPath("[\"家具\",\"座椅\"]");
         rspu.setPositioningLabel("MC");
         rspu.setStatus("active");
-        rspu.setReviewStatus("待复核");
 
         Page<RspuMaster> page = new Page<>(1, 10, 1);
         page.setRecords(List.of(rspu));
@@ -442,62 +441,6 @@ class ProductQueryServiceTest {
 
         assertThatThrownBy(() -> productQueryService.getProductDetail("RSPU-NOTEXIST"))
             .isInstanceOf(ResourceNotFoundException.class);
-    }
-
-    @Test
-    void reviewProduct_shouldUpdateReviewStatus() {
-        // active + 存疑（疑似同款场景）复核确认：只更新复核状态，status 保持 active 不变
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-TEST01");
-        rspu.setStatus("active");
-        rspu.setReviewStatus("存疑");
-
-        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
-
-        productQueryService.reviewProduct("RSPU-TEST01", "已确认", "人工复核通过");
-
-        assertThat(rspu.getReviewStatus()).isEqualTo("已确认");
-        assertThat(rspu.getStatus()).isEqualTo("active");
-    }
-
-    @Test
-    void reviewProduct_shouldFlipProcessingToActiveWhenApproved() {
-        // processing + 存疑（识别失败/收割超时）复核确认 = 人工认定识别完成：status 翻转为 active
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-TEST01");
-        rspu.setStatus("processing");
-        rspu.setReviewStatus("存疑");
-
-        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
-
-        productQueryService.reviewProduct("RSPU-TEST01", "已确认", "人工复核确认识别完成");
-
-        assertThat(rspu.getReviewStatus()).isEqualTo("已确认");
-        assertThat(rspu.getStatus()).isEqualTo("active");
-    }
-
-    @Test
-    void reviewProduct_shouldKeepProcessingWhenNotApproved() {
-        // 非「已确认」复核（如标记存疑）不翻转 status，processing 保持 processing
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-TEST01");
-        rspu.setStatus("processing");
-        rspu.setReviewStatus("待复核");
-
-        when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
-
-        productQueryService.reviewProduct("RSPU-TEST01", "存疑", "标签仍需确认");
-
-        assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
-        assertThat(rspu.getStatus()).isEqualTo("processing");
-    }
-
-    @Test
-    void reviewProduct_shouldRejectInvalidReviewStatus() {
-        assertThatThrownBy(() -> productQueryService.reviewProduct("RSPU-TEST01", "随便填", null))
-            .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("无效的复核状态");
-        verify(rspuMapper, org.mockito.Mockito.never()).selectById(any(String.class));
     }
 
     @Test
@@ -932,7 +875,6 @@ class ProductQueryServiceTest {
         rspu.setRspuId("RSPU-OWN01");
         rspu.setCategoryCode("FS");
         rspu.setPositioningLabel("MC");
-        rspu.setReviewStatus("已确认");
 
         Page<RspuMaster> page = new Page<>(1, 10, 1);
         page.setRecords(List.of(rspu));
@@ -964,7 +906,6 @@ class ProductQueryServiceTest {
         rspu.setRspuId("RSPU-UNCOVERED");
         rspu.setCategoryCode("FS");
         rspu.setPositioningLabel("BA");
-        rspu.setReviewStatus("已确认");
 
         Page<RspuMaster> page = new Page<>(1, 10, 1);
         page.setRecords(List.of(rspu));
@@ -1010,7 +951,6 @@ class ProductQueryServiceTest {
         rspu.setRspuId("RSPU-OWN01");
         rspu.setCategoryCode("FS");
         rspu.setPositioningLabel("MC");
-        rspu.setReviewStatus("待复核");
 
         Page<RspuMaster> page = new Page<>(1, 10, 1);
         page.setRecords(List.of(rspu));
@@ -1026,7 +966,7 @@ class ProductQueryServiceTest {
         ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
         verify(rspuMapper).selectPage(any(Page.class), captor.capture());
         String sqlSegment = captor.getValue().getSqlSegment();
-        // 回退 own：按本厂 RSKU 的 rspu_id 过滤，且不附加全库能力覆盖条件、不强制已确认复核状态
+        // 回退 own：按本厂 RSKU 的 rspu_id 过滤，且不附加全库能力覆盖条件
         verify(rskuSupplyMapper, times(1)).selectObjs(any());
         assertThat(sqlSegment).contains("rspu_id");
         assertThat(sqlSegment).doesNotContain("factory_product_capability");
@@ -1043,7 +983,6 @@ class ProductQueryServiceTest {
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setCategoryCode("FS");
-        rspu.setReviewStatus("已确认");
 
         Page<RspuMaster> page = new Page<>(1, 10, 1);
         page.setRecords(List.of(rspu));

@@ -72,8 +72,6 @@ public class RspuMaster {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String keySpecs;
     private String status;
-    private String reviewStatus;
-    private String reviewComment;
     private String aestheticsConfidence;
     private String sourceAgentVersion;
     /** 录入人（sys_user.user_id）；历史未知行留 NULL（V3） */

@@ -162,7 +162,6 @@ public class ProductService {
         rspu.setCategoryPath(CategoryPaths.resolve(effectiveCategoryCode));
         rspu.setPositioningLabel("待识别");
         rspu.setStatus("processing");
-        rspu.setReviewStatus("待复核");
         rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
@@ -368,7 +367,6 @@ public class ProductService {
         rspu.setWarrantyYears(warrantyYears);
         rspu.setKeySpecs(toJson(keySpecs));
         rspu.setStatus("active");
-        rspu.setReviewStatus("待复核");
         rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
@@ -661,7 +659,6 @@ public class ProductService {
         rspu.setCategoryPath(CategoryPaths.resolve(effectiveCategoryCode));
         rspu.setPositioningLabel("待识别");
         rspu.setStatus("processing");
-        rspu.setReviewStatus("待复核");
         rspu.setCreatedBy(createdByUserId != null ? createdByUserId : SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
@@ -830,11 +827,11 @@ public class ProductService {
     }
 
     /**
-     * 重新触发产品 AI 识别（识别中/存疑产品的手动重试入口）。
+     * 重新触发产品 AI 识别（识别中产品的手动重试入口）。
      *
-     * <p>识别任务失败或被收割器标记失败后，RSPU 停留在 processing（识别中）或
-     * active + 存疑，本方法按 {@link #createEntry(List, String)} 的范式重新发起识别：
-     * RSPU 置回 processing + 待复核（清掉存疑备注）、新建 product_entry 异步任务、
+     * <p>识别任务失败或被收割器标记失败后，RSPU 停留在 processing（识别中），
+     * 本方法按 {@link #createEntry(List, String)} 的范式重新发起识别：
+     * RSPU 置回 processing、新建 product_entry 异步任务、
      * 事务提交后投递执行。识别成功/失败后由异步链路正常翻转状态。</p>
      *
      * @param rspuId RSPU ID
@@ -868,15 +865,13 @@ public class ProductService {
             throw new BusinessException("该产品已有识别任务在执行中，请稍后再试");
         }
 
-        // RSPU 置回识别中：清掉存疑状态与备注，等异步识别结果翻转
+        // RSPU 置回识别中，等异步识别结果翻转
         RspuMaster oldSnapshot = new RspuMaster();
         org.springframework.beans.BeanUtils.copyProperties(rspu, oldSnapshot);
         rspu.setStatus("processing");
-        rspu.setReviewStatus("待复核");
-        rspu.setReviewComment(null);
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
-        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
+        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
 
         String taskId = IdGenerator.taskId();
         AsyncTask task = new AsyncTask();

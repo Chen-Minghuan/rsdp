@@ -552,7 +552,6 @@ public class ProductImportService {
         // 传统 Excel 导入模板无工厂上下文字段，无法建立 supplier_product_ref 身份
         // （身份键含 factory_code，§6），本链路仅停写 external_code
         rspu.setStatus("active");
-        rspu.setReviewStatus("待复核");
         rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
@@ -1181,8 +1180,6 @@ public class ProductImportService {
         copy.setWarrantyYears(source.getWarrantyYears());
         copy.setKeySpecs(source.getKeySpecs());
         copy.setStatus(source.getStatus());
-        copy.setReviewStatus(source.getReviewStatus());
-        copy.setReviewComment(source.getReviewComment());
         copy.setAestheticsConfidence(source.getAestheticsConfidence());
         copy.setSourceAgentVersion(source.getSourceAgentVersion());
         copy.setCreatedAt(source.getCreatedAt());

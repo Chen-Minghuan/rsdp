@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { h } from 'vue'
 import { NButton, NCard, NDataTable, NSpace, NTag, type DataTableColumns } from 'naive-ui'
-import StatusPill from '@/components/StatusPill.vue'
 import type { Rsku } from '@/types/rsku'
 import type { RspuVariant } from '@/types/variant'
 import { formatDimensions } from '@/utils/jsonDisplay'
@@ -162,14 +161,6 @@ const rskuColumns: DataTableColumns<Rsku> = [
     ellipsis: { tooltip: true },
     render(row: Rsku) {
       return row.diffNotes || '-'
-    }
-  },
-  {
-    title: '复核状态',
-    key: 'reviewStatus',
-    width: 100,
-    render(row: Rsku) {
-      return h(StatusPill, { value: row.reviewStatus })
     }
   },
   {

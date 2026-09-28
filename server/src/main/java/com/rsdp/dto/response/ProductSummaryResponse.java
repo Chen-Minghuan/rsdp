@@ -20,7 +20,6 @@ public class ProductSummaryResponse {
     private String productName;
     private String colorPrimaryName;
     private String status;
-    private String reviewStatus;
     private String aestheticsConfidence;
     private String productLevel;
     private BigDecimal minFactoryPrice;

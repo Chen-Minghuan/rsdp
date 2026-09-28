@@ -22,7 +22,6 @@ public class ProductListRequest {
     private String sceneCode;
     private String materialTag;
     private String status;
-    private String reviewStatus;
     private String productLevel;
     private String keyword;
     private String viewMode;

@@ -115,7 +115,6 @@ class RspuMergeServiceTest {
         RspuMaster r = new RspuMaster();
         r.setRspuId(SRC);
         r.setStatus("active");
-        r.setReviewStatus("存疑");
         r.setRspuCode("FS-MC-072-M");
         r.setProductName("副本名称");
         r.setDescription("副本描述");
@@ -127,7 +126,6 @@ class RspuMergeServiceTest {
         RspuMaster r = new RspuMaster();
         r.setRspuId(TGT);
         r.setStatus("active");
-        r.setReviewStatus("待复核");
         r.setRspuCode("FS-MC-001-M");
         r.setProductName("目标名称");
         return r;

@@ -54,9 +54,6 @@ class AsyncTaskReaperTest {
     @Mock
     private AiRecognitionMapper aiRecognitionMapper;
 
-    @Mock
-    private AuditLogService auditLogService;
-
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private AsyncTaskReaper reaper;
@@ -64,7 +61,7 @@ class AsyncTaskReaperTest {
     @BeforeEach
     void setUp() {
         reaper = new AsyncTaskReaper(asyncTaskMapper, excelImportBatchMapper, documentImportBatchMapper,
-            rspuMapper, aiRecognitionMapper, auditLogService, objectMapper);
+            rspuMapper, aiRecognitionMapper, objectMapper);
         ReflectionTestUtils.setField(reaper, "pendingTimeoutMs", 600000L);
         ReflectionTestUtils.setField(reaper, "processingTimeoutMs", 1800000L);
         ReflectionTestUtils.setField(reaper, "importBatchTimeoutMs", 7200000L);
@@ -98,30 +95,21 @@ class AsyncTaskReaperTest {
     }
 
     @Test
-    void reapStaleTasks_shouldMarkProductEntryRspuDoubtfulWhenReaped() {
-        // 超时 product_entry 任务被收割时，仍卡在 processing 的 RSPU 联动置存疑
-        // （status 保持 processing，不置 active，与识别失败兜底同语义），并补 ai_recognition 失败记录
+    void reapStaleTasks_shouldRecordRecognitionFailureWhenProductEntryReaped() {
+        // 超时 product_entry 任务被收割时，仍卡在 processing 的 RSPU 保持 processing，
+        // 补 ai_recognition 失败记录（复核机制已移除，不再置存疑）
         AsyncTask task = staleProductEntryTask("TASK-1", "RSPU-1", "IMG-1");
         when(asyncTaskMapper.selectList(any())).thenReturn(List.of(task));
 
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-1");
         rspu.setStatus("processing");
-        rspu.setReviewStatus("待复核");
         when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
-        when(rspuMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(1);
 
         reaper.reapStaleTasks();
 
-        // RSPU 条件置存疑（仅仍 processing 时生效）；status 不翻转，保持 processing
-        ArgumentCaptor<UpdateWrapper<RspuMaster>> wrapperCaptor = ArgumentCaptor.forClass(UpdateWrapper.class);
-        verify(rspuMapper).update(isNull(), wrapperCaptor.capture());
-        String sqlSet = wrapperCaptor.getValue().getSqlSet();
-        assertThat(sqlSet)
-            .contains("review_status")
-            .contains("review_comment");
-        assertThat(java.util.Arrays.stream(sqlSet.split(",")).map(String::trim))
-            .noneMatch(setClause -> setClause.startsWith("status="));
+        // 不再更新 RSPU（status 保持 processing，等待手动重新识别）
+        verify(rspuMapper, never()).update(isNull(), any(UpdateWrapper.class));
 
         // 补 ai_recognition 失败记录（对齐 saveFailure 写法）
         ArgumentCaptor<AiRecognition> recCaptor = ArgumentCaptor.forClass(AiRecognition.class);
@@ -132,9 +120,6 @@ class AsyncTaskReaperTest {
         assertThat(rec.getTaskId()).isEqualTo("TASK-1");
         assertThat(rec.getStatus()).isEqualTo("failed");
         assertThat(rec.getErrorMessage()).contains("超时");
-
-        // 审计日志：操作人取任务 createdBy
-        verify(auditLogService).logReview(eq("rspu_master"), eq("RSPU-1"), any(), any(), eq("user-1"));
     }
 
     @Test
@@ -152,25 +137,6 @@ class AsyncTaskReaperTest {
 
         verify(rspuMapper, never()).update(isNull(), any(UpdateWrapper.class));
         verify(aiRecognitionMapper, never()).insert(any(AiRecognition.class));
-        verify(auditLogService, never()).logReview(anyString(), anyString(), any(), any(), anyString());
-    }
-
-    @Test
-    void reapStaleTasks_shouldNotInsertRecognitionWhenConditionalUpdateMisses() {
-        // 条件更新未命中（并发下 RSPU 刚被识别线程翻转）时不补识别记录、不写审计
-        AsyncTask task = staleProductEntryTask("TASK-1", "RSPU-1", "IMG-1");
-        when(asyncTaskMapper.selectList(any())).thenReturn(List.of(task));
-
-        RspuMaster rspu = new RspuMaster();
-        rspu.setRspuId("RSPU-1");
-        rspu.setStatus("processing");
-        when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
-        when(rspuMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(0);
-
-        reaper.reapStaleTasks();
-
-        verify(aiRecognitionMapper, never()).insert(any(AiRecognition.class));
-        verify(auditLogService, never()).logReview(anyString(), anyString(), any(), any(), anyString());
     }
 
     @Test

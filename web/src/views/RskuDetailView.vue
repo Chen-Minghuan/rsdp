@@ -19,7 +19,6 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import { getRsku, listPriceHistory, updateRskuPrice, deleteRsku } from '@/api/rsku'
-import StatusPill from '@/components/StatusPill.vue'
 import { useUserStore } from '@/stores/user'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import { PERMISSIONS } from '@/utils/constants'
@@ -237,9 +236,6 @@ onBeforeRouteUpdate((to) => {
             </n-descriptions-item>
             <n-descriptions-item label="报价置信度">
               {{ rsku.quoteConfidence || '-' }}
-            </n-descriptions-item>
-            <n-descriptions-item label="复核状态">
-              <StatusPill :value="rsku.reviewStatus" />
             </n-descriptions-item>
             <n-descriptions-item label="价格更新日期">
               {{ rsku.priceUpdated || '-' }}

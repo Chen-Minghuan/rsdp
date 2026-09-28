@@ -28,8 +28,6 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     warranty_years INTEGER,                        -- 款式级典型质保年限
     key_specs JSONB,                               -- 关键规格：框架材质、海绵密度等
     status VARCHAR(16) DEFAULT 'active',           -- active/discontinued/draft
-    review_status VARCHAR(16) DEFAULT '待复核',     -- 待复核/已确认/存疑
-    review_comment TEXT,                           -- 复核备注/说明
     aesthetics_confidence VARCHAR(16),             -- high/mid/low
     source_agent_version VARCHAR(64),              -- Ollama 模型版本
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -161,7 +159,6 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     quality_return_rate DECIMAL(5, 4),             -- 退货率
     diff_notes TEXT,                               -- 差异备注：旋转底座、加宽 2cm 等
     quote_confidence VARCHAR(16),                  -- high/mid/low
-    review_status VARCHAR(16) DEFAULT '待复核',
     price_updated DATE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
@@ -248,7 +245,7 @@ CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu
 CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, relation_type, status);
 
 -- RSPU 疑似同款配对表（V4，决策点②共享主档模型配套：向量同款检测命中落结构化记录，
--- 供合并工具候选队列与闭环追踪；review_comment 文本仅作展示，不再是唯一记录）
+-- 供合并工具候选队列与闭环追踪）
 CREATE TABLE IF NOT EXISTS rspu_duplicate_suspect (
     suspect_id BIGSERIAL PRIMARY KEY,
     rspu_id VARCHAR(64) NOT NULL,                    -- 被标存疑的新品
@@ -273,7 +270,6 @@ CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, statu
 CREATE INDEX IF NOT EXISTS idx_rspu_status_created ON rspu_master(status, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_category_status_created ON rspu_master(category_code, status, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
-CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_created_by ON rspu_master(created_by);

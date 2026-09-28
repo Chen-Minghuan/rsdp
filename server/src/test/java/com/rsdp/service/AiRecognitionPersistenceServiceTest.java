@@ -87,20 +87,18 @@ class AiRecognitionPersistenceServiceTest {
     }
 
     @Test
-    void saveFailure_shouldKeepProcessingAndMarkDoubtful() {
-        // 识别失败兜底：status 保持 processing（不置 active，失败产品不进入在售/检索/官网），
-        // reviewStatus=存疑，直到重新识别成功或人工复核确认翻 active
+    void saveFailure_shouldKeepProcessing() {
+        // 识别失败兜底：status 保持 processing（不置 active，失败产品不进入在售/检索/官网）
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setStatus("processing");
-        rspu.setReviewStatus("待复核");
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
 
         persistenceService.saveFailure("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
             "qwen3-vl-plus", "AI 调用超时");
 
         assertThat(rspu.getStatus()).isEqualTo("processing");
-        assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
+        assertThat(rspu.getSourceAgentVersion()).isEqualTo("qwen3-vl-plus");
         verify(rspuMapper).updateById(rspu);
         verify(aiRecognitionMapper).insert(any(com.rsdp.entity.AiRecognition.class));
     }
@@ -442,7 +440,6 @@ class AiRecognitionPersistenceServiceTest {
 
         assertThat(rspu.getPositioningLabel()).isEqualTo("MC");
         assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-001-M");
-        assertThat(rspu.getReviewStatus()).isNotEqualTo("存疑");
         verify(rspuCodeService).assignCode(eq("RSPU-TEST01"), eq("FS"), eq("MC"), eq("M"), any());
         // RSPU 补码成功后联动补发该 RSPU 下无码 RSKU 的业务编码
         verify(rskuCodeService).backfillCodesByRspu(eq("RSPU-TEST01"), any());
@@ -450,7 +447,7 @@ class AiRecognitionPersistenceServiceTest {
 
     @Test
     void saveSuccess_shouldNotBlockRecognitionWhenAssignCodeFails() {
-        // 补发编码失败：标记存疑但不阻断识别主流程（识别记录照常落库、RSPU 照常更新）
+        // 补发编码失败：仅记日志不阻断识别主流程（识别记录照常落库、RSPU 照常更新）
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setCategoryCode("FS");
@@ -475,8 +472,6 @@ class AiRecognitionPersistenceServiceTest {
             "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getRspuCode()).isNull();
-        assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
-        assertThat(rspu.getReviewComment()).contains("生成业务编码失败");
         assertThat(rspu.getStatus()).isEqualTo("active");
         // 识别主流程不受影响：RSPU 更新与识别记录落库照常执行
         verify(rspuMapper).updateById(rspu);
@@ -516,13 +511,12 @@ class AiRecognitionPersistenceServiceTest {
             "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getRspuCode()).isEqualTo("FS-MC-001-M");
-        assertThat(rspu.getReviewStatus()).isNotEqualTo("存疑");
         verify(rspuCodeService).inferSizeCodeFromMm(810L);
     }
 
     @Test
-    void saveSuccess_shouldMarkDoubtfulWhenNoSizeFromOcrOrVariants() {
-        // OCR 与变体均无尺寸：保持「存疑」语义，不发号
+    void saveSuccess_shouldSkipCodeAssignWhenNoSizeFromOcrOrVariants() {
+        // OCR 与变体均无尺寸：不发号，仅记日志
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setCategoryCode("FS");
@@ -546,8 +540,6 @@ class AiRecognitionPersistenceServiceTest {
             "qwen3-vl-plus", labels, 100);
 
         assertThat(rspu.getRspuCode()).isNull();
-        assertThat(rspu.getReviewStatus()).isEqualTo("存疑");
-        assertThat(rspu.getReviewComment()).contains("无法推断尺寸码");
         verify(rspuCodeService, never()).assignCode(any(), any(), any(), any(), any());
     }
 
@@ -601,18 +593,17 @@ class AiRecognitionPersistenceServiceTest {
     }
 
     @Test
-    void saveFailure_shouldUseExplicitOperatorForReviewAudit() {
-        // P0-1：识别失败置存疑的 logReview 同样使用显式操作人
+    void saveFailure_shouldUseExplicitOperatorForAudit() {
+        // P0-1：识别失败联动更新的审计同样使用显式操作人
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
         rspu.setStatus("processing");
-        rspu.setReviewStatus("待复核");
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
 
         persistenceService.saveFailure("TASK-1", "RSPU-TEST01", "IMG-1", "REC-1",
             "qwen3-vl-plus", "AI 调用超时", "editor01");
 
-        verify(auditLogService).logReview(eq("rspu_master"), eq("RSPU-TEST01"), any(), any(), eq("editor01"));
+        verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-TEST01"), any(), any(), eq("editor01"));
     }
 
     @Test

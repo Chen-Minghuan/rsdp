@@ -553,7 +553,6 @@ public class RskuImportService {
         rsku.setShippingFrom(trim(row.getShippingFrom()));
         rsku.setDiffNotes(trim(row.getDiffNotes()));
         rsku.setQuoteConfidence(trim(row.getQuoteConfidence()));
-        rsku.setReviewStatus("待复核");
         rsku.setPriceUpdated(LocalDate.now());
         // v3.3 §34：Supplier Configuration 显式赋值（无数据库 DEFAULT）；本路径无供应商等级列 → BASE
         rsku.setSupplierConfigurationKey(SupplierConfigurationKeys.BASE);
@@ -704,7 +703,6 @@ public class RskuImportService {
         copy.setShippingFrom(source.getShippingFrom());
         copy.setDiffNotes(source.getDiffNotes());
         copy.setQuoteConfidence(source.getQuoteConfidence());
-        copy.setReviewStatus(source.getReviewStatus());
         copy.setPriceUpdated(source.getPriceUpdated());
         copy.setSupplierConfigurationKey(source.getSupplierConfigurationKey());
         copy.setSupplierConfigurationNormalizerVersion(source.getSupplierConfigurationNormalizerVersion());

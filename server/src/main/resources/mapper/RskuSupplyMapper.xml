@@ -21,7 +21,6 @@
             shipping_from,
             diff_notes,
             quote_confidence,
-            review_status,
             price_updated,
             created_at,
             updated_at
@@ -44,7 +43,6 @@
                 #{item.shippingFrom},
                 #{item.diffNotes},
                 #{item.quoteConfidence},
-                #{item.reviewStatus},
                 #{item.priceUpdated},
                 #{item.createdAt},
                 #{item.updatedAt}
@@ -76,7 +74,6 @@
             shipping_warehouse_id,
             diff_notes,
             quote_confidence,
-            review_status,
             price_updated,
             status,
             currency_code,
@@ -113,7 +110,6 @@
             #{rsku.shippingWarehouseId},
             #{rsku.diffNotes},
             #{rsku.quoteConfidence},
-            #{rsku.reviewStatus},
             #{rsku.priceUpdated},
             #{rsku.status},
             #{rsku.currencyCode},

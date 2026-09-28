@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NCard, NTag, NAlert } from 'naive-ui'
+import { NCard, NTag } from 'naive-ui'
 import ImageMagnifier from '@/components/ImageMagnifier.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import type { ProductDetail } from '@/types/product'
@@ -36,8 +36,7 @@ const styleTags = computed(() => {
 function statusText(status: string): string {
   if (status === 'active') return '上架中'
   if (status === 'inactive') return '已下架'
-  // processing + 存疑 = 识别失败待处理（可重新识别/复核确认）；其余 processing = 识别中
-  if (status === 'processing') return rspu.value.reviewStatus === '存疑' ? '识别失败' : '识别中'
+  if (status === 'processing') return '识别中'
   return status || '-'
 }
 
@@ -89,7 +88,6 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
       <div class="hero-info">
         <div class="hero-tags">
           <StatusPill :value="statusText(rspu.status)" />
-          <StatusPill :value="rspu.reviewStatus || '待复核'" />
           <StatusPill :value="rspu.aestheticsConfidence" :label="confidenceText(rspu.aestheticsConfidence)" />
           <n-tag v-if="rspu.productLevel" type="info" size="small">{{ rspu.productLevel }} 级</n-tag>
         </div>
@@ -138,10 +136,6 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
             <span class="hero-field-value">{{ rspu.warrantyYears != null ? `${rspu.warrantyYears} 年` : '-' }}</span>
           </div>
         </div>
-
-        <n-alert v-if="rspu.reviewComment" type="warning" :show-icon="true" class="hero-review-comment">
-          复核备注：{{ rspu.reviewComment }}
-        </n-alert>
       </div>
     </div>
   </n-card>
@@ -242,10 +236,6 @@ const primaryColorCss = computed(() => hsvToCss(rspu.value.colorPrimaryHsv))
   color: var(--rsdp-price);
   font-family: var(--rsdp-font-mono);
   font-weight: 700;
-}
-
-.hero-review-comment {
-  margin-top: 16px;
 }
 
 @media (max-width: 768px) {

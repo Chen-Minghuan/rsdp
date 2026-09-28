@@ -97,7 +97,7 @@ public class AsyncTaskProcessor {
     @Value("${rsdp.ai.max-image-size:20971520}")
     private long maxImageSize = 20 * 1024 * 1024;
 
-    /** 同款检测：向量相似度阈值（0~1），超过则标记"存疑-疑似同款" */
+    /** 同款检测：向量相似度阈值（0~1），超过则落疑似同款配对（合并工具候选队列） */
     @Value("${rsdp.dedup.similar-threshold:0.95}")
     private double duplicateSimilarThreshold;
 
@@ -255,8 +255,8 @@ public class AsyncTaskProcessor {
                 log.warn("提交扩展品类 Shadow 任务失败，忽略旁路，recognitionId={}", recognitionId, e);
             }
 
-            // 同款检测（写入向量前召回比对）：相似度超阈值时把新品标记"存疑-疑似同款"，
-            // 由人工裁决保留或删除——不硬拦截（同款不同工厂是合法场景）
+            // 同款检测（写入向量前召回比对）：相似度超阈值时落疑似同款配对，
+            // 由合并工具人工裁决保留或合并——不硬拦截（同款不同工厂是合法场景）
             if (embedding != null) {
                 try {
                     flagDuplicateSuspect(rspuId, embedding, operator);
@@ -749,11 +749,14 @@ public class AsyncTaskProcessor {
 
     /**
      * 同款检测：用本次 embedding 在向量存储召回，找到其他 RSPU 且相似度超阈值时，
-     * 把当前产品标记为"存疑-疑似同款"（仅当仍为"待复核"，不覆盖人工/其他流程的复核结论）。
+     * 落结构化同款配对（合并工具候选队列）——不硬拦截（同款不同工厂是合法场景）。
+     *
+     * <p>复核机制已于 2026-09-28 移除：不再翻转 review_status/写存疑备注，
+     * 疑似同款统一经 {@code rspu_duplicate_suspect} 由合并工具人工处置。</p>
      *
      * @param rspuId    当前 RSPU ID
      * @param embedding 本次主图向量
-     * @param operator  审计操作人（任务创建人）
+     * @param operator  审计操作人（任务创建人；当前未使用，保留签名便于后续审计扩展）
      */
     private void flagDuplicateSuspect(String rspuId, float[] embedding, String operator) {
         List<VectorHit> hits = productVectorStore.search(embedding, 5, null, false);
@@ -770,35 +773,11 @@ public class AsyncTaskProcessor {
             if (similarity < duplicateSimilarThreshold) {
                 return;
             }
-            RspuMaster current = rspuMapper.selectById(rspuId);
-            if (current == null || "已确认".equals(current.getReviewStatus())) {
-                return;
-            }
-            // 结构化落库（M2）：同款配对是合并工具的候选队列，review_comment 文本仅作展示；
+            // 结构化落库（M2）：同款配对是合并工具的候选队列；
             // UNIQUE(rspu_id, matched_rspu_id) 兜底幂等，重复识别/重复导入不产生重复行
             insertSuspectQuietly(rspuId, dupRspu.toString(), similarity);
-            if (!"待复核".equals(current.getReviewStatus())) {
-                return;
-            }
-            RspuMaster dup = rspuMapper.selectById(dupRspu.toString());
-            String dupLabel = dup != null && StringUtils.hasText(dup.getRspuCode())
-                ? dup.getRspuCode() : dupRspu.toString();
-            String dupName = dup != null && StringUtils.hasText(dup.getProductName())
-                ? "「" + dup.getProductName() + "」" : "";
-            long percent = Math.round(similarity * 100);
-            // 审计旧快照（P0-2）：与 AiRecognitionPersistenceService.markRspuAsDoubtful 的 logReview 口径对齐
-            RspuMaster oldSnapshot = new RspuMaster();
-            oldSnapshot.setRspuId(current.getRspuId());
-            oldSnapshot.setReviewStatus(current.getReviewStatus());
-            oldSnapshot.setReviewComment(current.getReviewComment());
-            current.setReviewStatus("存疑");
-            current.setReviewComment("疑似与 " + dupName + dupLabel + " 同款（向量相似度 "
-                + percent + "%），请确认是否重复录入");
-            current.setUpdatedAt(LocalDateTime.now());
-            rspuMapper.updateById(current);
-            auditLogService.logReview("rspu_master", rspuId, oldSnapshot, current, operator);
-            log.info("疑似同款标记：rspuId={}，命中 {}，相似度 {}%", rspuId, dupLabel, percent);
-            return;
+            log.info("疑似同款配对入库：rspuId={}，命中 {}，相似度 {}%", rspuId, dupRspu,
+                Math.round(similarity * 100));
         }
     }
 
@@ -821,7 +800,7 @@ public class AsyncTaskProcessor {
         } catch (DuplicateKeyException e) {
             log.debug("疑似同款配对已存在，跳过落库：rspuId={}，matched={}", rspuId, matchedRspuId);
         } catch (Exception e) {
-            // 结构化落库失败不影响主链路（文本标记与审计照常）
+            // 结构化落库失败不影响主链路
             log.warn("疑似同款配对落库失败：rspuId={}，matched={}", rspuId, matchedRspuId, e);
         }
     }

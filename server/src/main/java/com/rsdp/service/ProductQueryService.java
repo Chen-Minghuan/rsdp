@@ -4,12 +4,10 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.security.datascope.DataScopeHelper;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
-import com.rsdp.common.ReviewStatus;
 import com.rsdp.dto.request.ProductListRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.response.ProductBatchDeleteResponse;
@@ -21,7 +19,6 @@ import com.rsdp.dto.response.SchemeRefInfo;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.ImageAssets;
-import com.rsdp.entity.RspuDuplicateSuspect;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuRelation;
 import com.rsdp.entity.RspuScene;
@@ -41,7 +38,6 @@ import com.rsdp.mapper.ProductStyleMatchMapper;
 import com.rsdp.mapper.ProductPurgeMapper;
 import com.rsdp.mapper.RspuFactoryMappingMapper;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.mapper.RspuDuplicateSuspectMapper;
 import com.rsdp.mapper.RspuRelationMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
@@ -93,7 +89,6 @@ public class ProductQueryService {
     private final RspuSceneMapper rspuSceneMapper;
     private final RspuVariantMapper rspuVariantMapper;
     private final RspuRelationMapper rspuRelationMapper;
-    private final RspuDuplicateSuspectMapper duplicateSuspectMapper;
     private final ProductStyleMatchMapper productStyleMatchMapper;
     private final AuditLogService auditLogService;
     private final RspuAssociationHelper associationHelper;
@@ -214,16 +209,12 @@ public class ProductQueryService {
         applySixDimFilter(wrapper, "F", request.getDimF());
         if (StringUtils.hasText(request.getStatus())) {
             wrapper.eq("status", request.getStatus());
-        }
-        // 平台运营人员（ADMIN/EDITOR）和设计师可按请求参数筛选复核状态；
-        // 其他非运营人员在「全库视图」下只看已确认产品，
-        // 在「自己的产品」视图下不过滤复核状态，确保工厂管理员能看到自己录入的待复核产品
-        if (SecurityOperatorContext.isPlatformStaff() || SecurityOperatorContext.isCurrentUserDesigner()) {
-            if (StringUtils.hasText(request.getReviewStatus())) {
-                wrapper.eq("review_status", request.getReviewStatus());
-            }
-        } else if (!"own".equals(viewMode)) {
-            wrapper.eq("review_status", ReviewStatus.APPROVED.getDbValue());
+        } else if (!SecurityOperatorContext.isPlatformStaff()
+            && !SecurityOperatorContext.isCurrentUserDesigner()
+            && !"own".equals(viewMode)) {
+            // 复核机制移除后的等价口径：非平台员工/设计师在「全库视图」未显式指定状态时
+            // 只看 active 成品（原「强制已确认」语义；识别中的半成品不对外曝光）
+            wrapper.eq("status", "active");
         }
         if (StringUtils.hasText(request.getProductLevel())) {
             wrapper.eq("product_level", request.getProductLevel());
@@ -474,7 +465,8 @@ public class ProductQueryService {
         if (SecurityOperatorContext.isPlatformStaff() || SecurityOperatorContext.isCurrentUserDesigner()) {
             return true;
         }
-        if (ReviewStatus.APPROVED.getDbValue().equals(rspu.getReviewStatus())) {
+        // 复核机制已移除：active 即全体登录用户可见（原「已确认」口径）
+        if ("active".equals(rspu.getStatus())) {
             return true;
         }
         List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
@@ -666,50 +658,6 @@ public class ProductQueryService {
             return StringUtils.hasText(positioningLabel) ? List.of(positioningLabel) : List.of();
         }
         return styles.stream().map(RspuStyle::getStyleCode).toList();
-    }
-
-    /**
-     * 复核确认产品。
-     *
-     * <p>复核状态置「已确认」时，若产品仍为 processing（识别失败/收割超时留下的存疑产品），
-     * 同步翻转 status 为 active——复核确认 = 人工认定识别完成，产品进入在售/检索/官网可见范围。
-     * active 产品（含疑似同款 active+存疑）复核确认只更新复核状态，status 不变。</p>
-     *
-     * @param rspuId         RSPU ID
-     * @param reviewStatus   复核状态
-     * @param reviewComment  复核备注
-     */
-    @Transactional
-    public void reviewProduct(String rspuId, String reviewStatus, String reviewComment) {
-        if (ReviewStatus.fromDbValue(reviewStatus) == null) {
-            throw new BusinessException("无效的复核状态: " + reviewStatus + "，仅支持 待复核/已确认/存疑");
-        }
-        RspuMaster rspu = rspuMapper.selectById(rspuId);
-        if (rspu == null) {
-            throw new ResourceNotFoundException("产品不存在: " + rspuId);
-        }
-        dataScopeHelper.assertCanAccessRspu(rspuId);
-
-        RspuMaster oldSnapshot = snapshot(rspu);
-        rspu.setReviewStatus(reviewStatus);
-        rspu.setReviewComment(reviewComment);
-        if (ReviewStatus.APPROVED.getDbValue().equals(reviewStatus) && "processing".equals(rspu.getStatus())) {
-            rspu.setStatus("active");
-        }
-        rspu.setUpdatedAt(LocalDateTime.now());
-        rspuMapper.updateById(rspu);
-
-        // 复核「已确认」= 人工认定不重复（或接受现状），闭环该产品全部 pending 疑似同款配对（M2）
-        if (ReviewStatus.APPROVED.getDbValue().equals(reviewStatus)) {
-            duplicateSuspectMapper.update(null, new UpdateWrapper<RspuDuplicateSuspect>()
-                .eq("rspu_id", rspuId)
-                .eq("status", "pending")
-                .set("status", "dismissed")
-                .set("resolved_by", SecurityOperatorContext.currentUsername())
-                .set("resolved_at", LocalDateTime.now()));
-        }
-
-        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
     }
 
     /**
@@ -1303,8 +1251,6 @@ public class ProductQueryService {
         copy.setSceneTags(source.getSceneTags());
         copy.setSixDimTags(source.getSixDimTags());
         copy.setStatus(source.getStatus());
-        copy.setReviewStatus(source.getReviewStatus());
-        copy.setReviewComment(source.getReviewComment());
         copy.setAestheticsConfidence(source.getAestheticsConfidence());
         copy.setProductLevel(source.getProductLevel());
         copy.setSourceAgentVersion(source.getSourceAgentVersion());
@@ -1360,7 +1306,6 @@ public class ProductQueryService {
         summary.setProductName(rspu.getProductName());
         summary.setColorPrimaryName(rspu.getColorPrimaryName());
         summary.setStatus(rspu.getStatus());
-        summary.setReviewStatus(rspu.getReviewStatus());
         summary.setAestheticsConfidence(rspu.getAestheticsConfidence());
         summary.setProductLevel(rspu.getProductLevel());
         // 最低出厂价经 CostSummaryAccess 统一裁决（§42.3 确定性输出规则）：

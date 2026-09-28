@@ -30,7 +30,7 @@ import VariantRskuTab from '@/components/product/VariantRskuTab.vue'
 import ImageGalleryTab from '@/components/product/ImageGalleryTab.vue'
 import RelationTab from '@/components/product/RelationTab.vue'
 import AiInsightTab from '@/components/product/AiInsightTab.vue'
-import { getProductDetail, reviewProduct, updateProduct, patchProductSixDimTag, deleteProduct, reRecognizeProduct } from '@/api/product'
+import { getProductDetail, updateProduct, patchProductSixDimTag, deleteProduct, reRecognizeProduct } from '@/api/product'
 import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
 import { listRskuByRspu, createRsku, deleteRsku, batchCreateRskus } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
@@ -59,7 +59,6 @@ const userStore = useUserStore()
 const rspuId = ref(route.params.rspuId as string)
 
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
-const canReviewProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_REVIEW))
 const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_UPDATE))
 const canCreateRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_CREATE))
 const canDeleteRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_DELETE))
@@ -179,7 +178,6 @@ const selectableFactories = computed(() => {
 })
 
 const loading = ref(false)
-const reviewing = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const detail = ref<ProductDetail | null>(null)
@@ -514,37 +512,21 @@ async function loadDicts() {
   }
 }
 
-async function handleReview(status: '已确认' | '存疑') {
-  reviewing.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    await reviewProduct(rspuId.value, { reviewStatus: status })
-    successMessage.value = `已标记为「${status}」`
-    await loadDetail()
-  } catch (e) {
-    successMessage.value = ''
-    errorMessage.value = e instanceof Error ? e.message : '复核失败'
-  } finally {
-    reviewing.value = false
-  }
-}
-
-/** 产品是否处于可重新识别状态（识别中或存疑）。 */
+/** 产品是否处于可重新识别状态（识别中，或从未走过 AI 识别且有主图的产品）。 */
 const canReRecognize = computed(() => {
   const rspu = detail.value?.rspu
   if (!rspu) return false
-  if (rspu.status === 'processing' || rspu.reviewStatus === '存疑') return true
-  // 4.5：从未走过 AI 识别的产品（手工/工厂录入：active + 待复核 + 无识别来源版本）也可手动触发识别回填，
+  if (rspu.status === 'processing') return true
+  // 从未走过 AI 识别的产品（无识别来源版本）也可手动触发识别回填，
   // 消除与 AI 录入产品的能力差（识别只补空缺 + 写向量 + 同款检测，不覆盖人工已填字段）
-  const neverRecognized = rspu.status === 'active' && rspu.reviewStatus === '待复核' && !rspu.sourceAgentVersion
+  const neverRecognized = rspu.status === 'active' && !rspu.sourceAgentVersion
   const hasPrimaryImage = (detail.value?.images ?? []).some(img => img.primary)
   return neverRecognized && hasPrimaryImage
 })
 /** 按钮文案：从未识别的产品显示「AI 识别」，其余为「重新识别」。 */
 const reRecognizeLabel = computed(() => {
   const rspu = detail.value?.rspu
-  return rspu && rspu.status !== 'processing' && rspu.reviewStatus === '待复核' && !rspu.sourceAgentVersion
+  return rspu && rspu.status !== 'processing' && !rspu.sourceAgentVersion
     ? 'AI 识别'
     : '重新识别'
 })
@@ -1071,27 +1053,7 @@ onBeforeRouteUpdate((to, from) => {
             {{ reRecognizeLabel }}
           </n-button>
           <n-button
-            v-if="canReviewProduct && canManageProduct"
-            size="small"
-            type="success"
-            :loading="reviewing"
-            :disabled="detail.rspu.reviewStatus === '已确认'"
-            @click="handleReview('已确认')"
-          >
-            复核通过
-          </n-button>
-          <n-button
-            v-if="canReviewProduct && canManageProduct"
-            size="small"
-            type="warning"
-            :loading="reviewing"
-            :disabled="detail.rspu.reviewStatus === '存疑'"
-            @click="handleReview('存疑')"
-          >
-            标记存疑
-          </n-button>
-          <n-button
-            v-if="isPlatformStaff && detail.rspu.reviewStatus === '存疑'"
+            v-if="isPlatformStaff"
             size="small"
             type="primary"
             ghost
@@ -1804,7 +1766,7 @@ onBeforeRouteUpdate((to, from) => {
       </template>
     </n-modal>
 
-    <!-- 同款合并向导（M4，仅平台员工 + 存疑产品可见入口） -->
+    <!-- 同款合并向导（M4，仅平台员工可见入口） -->
     <MergeProductDialog
       v-model:show="showMergeDialog"
       :source-rspu-id="rspuId"

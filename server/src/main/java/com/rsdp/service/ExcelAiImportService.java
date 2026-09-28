@@ -4360,15 +4360,14 @@ public class ExcelAiImportService {
         }
 
         // 复用已有 RSPU 且本行未建识别任务时，若 RSPU 仍卡在 processing（历史无图导入/
-        // 任务丢失等），条件翻转为 active + 待复核，避免永久识别中；同组已有在途任务
-        // （sameProduct 且组内已建任务）时不翻转，等组内任务识别完成后正常翻转
+        // 任务丢失等），条件翻转 status 为 active，避免永久识别中；同组已有在途任务
+        // （sameProduct 且组内已建任务）时不翻转，等组内任务识别完成后正常翻转。
         boolean groupTaskInflight = prep.sameProduct() && currentGroup != null && currentGroup.hasAiTask;
         if (!createdNewRspu && taskId == null && !groupTaskInflight) {
             int flipped = rspuMapper.update(null, new UpdateWrapper<RspuMaster>()
                 .eq("rspu_id", rspuId)
                 .eq("status", "processing")
                 .set("status", "active")
-                .set("review_status", "待复核")
                 .set("updated_at", LocalDateTime.now()));
             if (flipped > 0) {
                 log.info("第 {} 行未建识别任务，将卡在识别中的已有 RSPU {} 翻转为 active", rowIndex, rspuId);
@@ -6279,8 +6278,8 @@ public class ExcelAiImportService {
      *
      * @param expectAiTask 本行是否会产生 AI 识别任务（persistRow 按主图登记口径预判）：
      *                     true 时 RSPU 置 processing 等异步识别翻转；false（无图行）
-     *                     时不会有识别任务，直接落 active + 待复核（与手工录入口径一致），
-     *                     避免永久卡在识别中
+     *                     时不会有识别任务，直接落 active，避免永久卡在识别中。
+     *                     复核机制已于 2026-09-28 移除：数据清洗环节即人工确认，执行导入直接入库
      */
     private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
                               List<String> rowIssues, String defaultProductLevel,
@@ -6320,9 +6319,8 @@ public class ExcelAiImportService {
         rspu.setWarrantyYears(row.getWarrantyYears());
         rspu.setKeySpecs(trim(row.getKeySpecs()));
         // 有图行保持 processing 等异步识别翻转；无图行不会产生识别任务，
-        // 直接落 active（与手工录入口径一致），避免永久卡在识别中
+        // 直接落 active，避免永久卡在识别中
         rspu.setStatus(expectAiTask ? "processing" : "active");
-        rspu.setReviewStatus("待复核");
         rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
