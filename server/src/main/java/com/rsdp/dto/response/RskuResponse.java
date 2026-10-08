@@ -32,7 +32,6 @@ public class RskuResponse {
     private String shippingFrom;
     private String diffNotes;
     private String quoteConfidence;
-    private String reviewStatus;
     private LocalDate priceUpdated;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

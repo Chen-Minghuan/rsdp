@@ -530,7 +530,6 @@ class ProductServiceTest {
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
         assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("active");
-        assertThat(rspuCaptor.getValue().getReviewStatus()).isEqualTo("待复核");
         assertThat(rspuCaptor.getValue().getCategoryCode()).isEqualTo("FS");
         assertThat(rspuCaptor.getValue().getPositioningLabel()).isEqualTo("MC");
         assertThat(rspuCaptor.getValue().getProductLevel()).isEqualTo("A");
@@ -1104,13 +1103,11 @@ class ProductServiceTest {
 
     @Test
     void reRecognize_shouldResetRspuAndCreateTask() {
-        // 存疑产品重新识别：RSPU 置回 processing + 待复核（清掉存疑备注）、新建 product_entry 任务并投递
+        // 重新识别：RSPU 置回 processing、新建 product_entry 任务并投递
         authenticateWithRoles("admin", "ADMIN");
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-1");
         rspu.setStatus("active");
-        rspu.setReviewStatus("存疑");
-        rspu.setReviewComment("识别任务超时未执行，可重新识别");
         when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
 
         ImageAssets primary = new ImageAssets();
@@ -1128,8 +1125,6 @@ class ProductServiceTest {
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper).updateById(rspuCaptor.capture());
         assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("processing");
-        assertThat(rspuCaptor.getValue().getReviewStatus()).isEqualTo("待复核");
-        assertThat(rspuCaptor.getValue().getReviewComment()).isNull();
 
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper).insert(taskCaptor.capture());
@@ -1140,7 +1135,7 @@ class ProductServiceTest {
             .contains("\"imageId\":\"IMG-1\"");
 
         verify(dataScopeHelper).assertCanAccessRspu("RSPU-1");
-        verify(auditLogService).logReview(eq("rspu_master"), eq("RSPU-1"), any(), any(), anyString());
+        verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-1"), any(), any(), anyString());
         verify(asyncTaskProcessor).processProductEntry(anyString(), eq("RSPU-1"), eq("IMG-1"), eq("images/IMG-1.jpg"));
     }
 

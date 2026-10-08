@@ -145,8 +145,6 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     warranty_years INTEGER,
     key_specs JSONB,
     status VARCHAR(16) DEFAULT 'active',
-    review_status VARCHAR(16) DEFAULT '待复核',
-    review_comment TEXT,                           -- 复核备注/说明
     aesthetics_confidence VARCHAR(16),
     source_agent_version VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -416,7 +414,6 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     quality_return_rate DECIMAL(5, 4),
     diff_notes TEXT,
     quote_confidence VARCHAR(16),
-    review_status VARCHAR(16) DEFAULT '待复核',
     price_updated DATE,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     currency_code VARCHAR(8) NOT NULL DEFAULT 'CNY',
@@ -527,7 +524,7 @@ CREATE INDEX IF NOT EXISTS idx_rspu_relation_anchor ON rspu_relation(anchor_rspu
 CREATE INDEX IF NOT EXISTS idx_rspu_relation_related ON rspu_relation(related_rspu_id, relation_type, status);
 
 -- RSPU 疑似同款配对表（V4，决策点②共享主档模型配套：向量同款检测命中落结构化记录，
--- 供合并工具候选队列与闭环追踪；review_comment 文本仅作展示，不再是唯一记录）
+-- 供合并工具候选队列与闭环追踪）
 CREATE TABLE IF NOT EXISTS rspu_duplicate_suspect (
     suspect_id BIGSERIAL PRIMARY KEY,
     rspu_id VARCHAR(64) NOT NULL,                    -- 被标存疑的新品
@@ -1330,7 +1327,6 @@ CREATE TABLE IF NOT EXISTS style_case (
     image_url TEXT,
     ai_raw_output JSONB,
     negative_lesson TEXT,
-    review_status VARCHAR(16) DEFAULT '待复核',
     created_by VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
@@ -1393,7 +1389,6 @@ CREATE INDEX IF NOT EXISTS idx_rspu_category ON rspu_master(category_code, statu
 CREATE INDEX IF NOT EXISTS idx_rspu_status_created ON rspu_master(status, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_category_status_created ON rspu_master(category_code, status, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_positioning ON rspu_master(positioning_label, category_code);
-CREATE INDEX IF NOT EXISTS idx_rspu_review ON rspu_master(review_status);
 CREATE INDEX IF NOT EXISTS idx_rspu_meta ON rspu_master(category_code, positioning_label, status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_external_code ON rspu_master(external_code) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rspu_created_by ON rspu_master(created_by);
@@ -3490,13 +3485,6 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('factory_level', 'C', 'C级备选厂', 4)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
--- 复核状态
-INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
-('review_status', '待复核', '待复核', 1),
-('review_status', '已确认', '已确认', 2),
-('review_status', '存疑', '存疑', 3)
-ON CONFLICT (dict_type, dict_code) DO NOTHING;
-
 -- 报价置信度
 INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('quote_confidence', 'high', '高', 1),
@@ -3667,7 +3655,6 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('product:create', '新品录入'),
 ('product:update', '编辑产品元数据'),
 ('product:delete', '删除产品'),
-('product:review', '复核产品'),
 ('product:import', '批量导入产品'),
 ('factory:read', '查看工厂'),
 ('factory:create', '创建工厂'),

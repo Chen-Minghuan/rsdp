@@ -7,7 +7,6 @@ import com.rsdp.dto.request.SimilarProductRequest;
 import com.rsdp.dto.response.SimilarProductResponse;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
-import com.rsdp.common.ReviewStatus;
 import com.rsdp.config.properties.RetrievalProperties;
 import com.rsdp.exception.ExternalServiceException;
 import com.rsdp.mapper.ImageAssetsMapper;
@@ -85,7 +84,6 @@ public class RetrievalService {
         }
 
         List<SimilarProductResponse> candidates = aggregateByRspu(hits, topK * 5);
-        candidates = filterByReviewStatus(candidates);
         candidates = rerank(candidates, request, queryLabels);
 
         return candidates.stream()
@@ -167,36 +165,6 @@ public class RetrievalService {
         return bestByRspu.values().stream()
             .sorted(Comparator.comparing(SimilarProductResponse::getVectorScore).reversed())
             .limit(limit)
-            .collect(Collectors.toList());
-    }
-
-    /**
-     * 按复核状态过滤候选产品。非平台运营人员只能看到已审核通过的产品。
-     *
-     * @param candidates 候选产品列表
-     * @return 过滤后的列表
-     */
-    private List<SimilarProductResponse> filterByReviewStatus(List<SimilarProductResponse> candidates) {
-        if (SecurityOperatorContext.isPlatformStaff() || candidates.isEmpty()) {
-            return candidates;
-        }
-        Set<String> rspuIds = candidates.stream()
-            .map(SimilarProductResponse::getRspuId)
-            .filter(Objects::nonNull)
-            .collect(Collectors.toSet());
-        if (rspuIds.isEmpty()) {
-            return candidates;
-        }
-        List<RspuMaster> approvedRspus = rspuMapper.selectList(
-            new QueryWrapper<RspuMaster>()
-                .in("rspu_id", rspuIds)
-                .eq("review_status", ReviewStatus.APPROVED.getDbValue())
-        );
-        Set<String> approvedIds = approvedRspus.stream()
-            .map(RspuMaster::getRspuId)
-            .collect(Collectors.toSet());
-        return candidates.stream()
-            .filter(c -> approvedIds.contains(c.getRspuId()))
             .collect(Collectors.toList());
     }
 

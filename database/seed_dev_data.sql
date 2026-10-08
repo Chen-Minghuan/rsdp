@@ -136,18 +136,18 @@ WHERE factory_code = 'TEST';
 -- =================== 演示 RSPU（按风格各一条） ===================
 INSERT INTO rspu_master (
     rspu_id, external_code, category_code, category_path, positioning_label,
-    status, review_status, created_at, updated_at
+    status, created_at, updated_at
 ) VALUES
-('DEMO-RSPU-MC', 'DEMO-MC-001', 'SF', '/SF', 'MC', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-WJ', 'DEMO-WJ-001', 'SF', '/SF', 'WJ', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-CR', 'DEMO-CR-001', 'SF', '/SF', 'CR', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-MD', 'DEMO-MD-001', 'SF', '/SF', 'MD', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-IO', 'DEMO-IO-001', 'SF', '/SF', 'IO', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-IL', 'DEMO-IL-001', 'SF', '/SF', 'IL', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-ZS', 'DEMO-ZS-001', 'SF', '/SF', 'ZS', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-FN', 'DEMO-FN-001', 'SF', '/SF', 'FN', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-HH', 'DEMO-HH-001', 'SF', '/SF', 'HH', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSPU-MB', 'DEMO-MB-001', 'SF', '/SF', 'MB', 'active', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+('DEMO-RSPU-MC', 'DEMO-MC-001', 'SF', '/SF', 'MC', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-WJ', 'DEMO-WJ-001', 'SF', '/SF', 'WJ', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-CR', 'DEMO-CR-001', 'SF', '/SF', 'CR', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-MD', 'DEMO-MD-001', 'SF', '/SF', 'MD', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-IO', 'DEMO-IO-001', 'SF', '/SF', 'IO', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-IL', 'DEMO-IL-001', 'SF', '/SF', 'IL', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-ZS', 'DEMO-ZS-001', 'SF', '/SF', 'ZS', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-FN', 'DEMO-FN-001', 'SF', '/SF', 'FN', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-HH', 'DEMO-HH-001', 'SF', '/SF', 'HH', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSPU-MB', 'DEMO-MB-001', 'SF', '/SF', 'MB', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (rspu_id) DO NOTHING;
 
 -- RSPU 主风格关联
@@ -203,18 +203,18 @@ INSERT INTO rsku_supply (
     rsku_id, rspu_id, variant_id, factory_code, factory_sku, factory_price,
     price_band, product_level, material_code, material_description,
     lead_time_days, moq, warranty_years, shipping_from,
-    review_status, created_at, updated_at
+    created_at, updated_at
 ) VALUES
-('DEMO-RSKU-MC', 'DEMO-RSPU-MC', 'DEMO-RSPU-MC-V001', 'TEST', 'TEST-MC-001', '3200.00', 'mid', 'A', 'LE', '头层牛皮+实木框架', 30, 10, 3, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-WJ', 'DEMO-RSPU-WJ', 'DEMO-RSPU-WJ-V001', 'TEST', 'TEST-WJ-001', '2900.00', 'mid', 'A', 'LI', '亚麻布艺+实木框架', 25, 10, 3, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-CR', 'DEMO-RSPU-CR', 'DEMO-RSPU-CR-V001', 'TEST', 'TEST-CR-001', '2500.00', 'mid', 'B', 'SF', '羊羔绒+松木框架', 28, 5, 2, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-MD', 'DEMO-RSPU-MD', 'DEMO-RSPU-MD-V001', 'TEST', 'TEST-MD-001', '1800.00', 'mid', 'B', 'PL', '塑料+金属支架', 20, 20, 2, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-IO', 'DEMO-RSPU-IO', 'DEMO-RSPU-IO-V001', 'TEST', 'TEST-IO-001', '1500.00', 'mid', 'B', 'MT', '金属+皮革座面', 22, 15, 2, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-IL', 'DEMO-RSPU-IL', 'DEMO-RSPU-IL-V001', 'TEST', 'TEST-IL-001', '6800.00', 'high', 'S', 'NP', '纳帕皮+实木框架', 35, 5, 5, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-ZS', 'DEMO-RSPU-ZS', 'DEMO-RSPU-ZS-V001', 'TEST', 'TEST-ZS-001', '3100.00', 'mid', 'A', 'WO', '实木榫卯结构', 32, 8, 3, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-FN', 'DEMO-RSPU-FN', 'DEMO-RSPU-FN-V001', 'TEST', 'TEST-FN-001', '3300.00', 'mid', 'A', 'VE', '绒布+实木框架', 30, 10, 3, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-HH', 'DEMO-RSPU-HH', 'DEMO-RSPU-HH-V001', 'TEST', 'TEST-HH-001', '2600.00', 'mid', 'B', 'LE', '皮革+布艺混搭', 28, 5, 2, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-MB', 'DEMO-RSPU-MB', 'DEMO-RSPU-MB-V001', 'TEST', 'TEST-MB-001', '3400.00', 'mid', 'A', 'LE', '头层牛皮+金属支架', 26, 10, 3, '广州', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+('DEMO-RSKU-MC', 'DEMO-RSPU-MC', 'DEMO-RSPU-MC-V001', 'TEST', 'TEST-MC-001', '3200.00', 'mid', 'A', 'LE', '头层牛皮+实木框架', 30, 10, 3, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-WJ', 'DEMO-RSPU-WJ', 'DEMO-RSPU-WJ-V001', 'TEST', 'TEST-WJ-001', '2900.00', 'mid', 'A', 'LI', '亚麻布艺+实木框架', 25, 10, 3, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-CR', 'DEMO-RSPU-CR', 'DEMO-RSPU-CR-V001', 'TEST', 'TEST-CR-001', '2500.00', 'mid', 'B', 'SF', '羊羔绒+松木框架', 28, 5, 2, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-MD', 'DEMO-RSPU-MD', 'DEMO-RSPU-MD-V001', 'TEST', 'TEST-MD-001', '1800.00', 'mid', 'B', 'PL', '塑料+金属支架', 20, 20, 2, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-IO', 'DEMO-RSPU-IO', 'DEMO-RSPU-IO-V001', 'TEST', 'TEST-IO-001', '1500.00', 'mid', 'B', 'MT', '金属+皮革座面', 22, 15, 2, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-IL', 'DEMO-RSPU-IL', 'DEMO-RSPU-IL-V001', 'TEST', 'TEST-IL-001', '6800.00', 'high', 'S', 'NP', '纳帕皮+实木框架', 35, 5, 5, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-ZS', 'DEMO-RSPU-ZS', 'DEMO-RSPU-ZS-V001', 'TEST', 'TEST-ZS-001', '3100.00', 'mid', 'A', 'WO', '实木榫卯结构', 32, 8, 3, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-FN', 'DEMO-RSPU-FN', 'DEMO-RSPU-FN-V001', 'TEST', 'TEST-FN-001', '3300.00', 'mid', 'A', 'VE', '绒布+实木框架', 30, 10, 3, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-HH', 'DEMO-RSPU-HH', 'DEMO-RSPU-HH-V001', 'TEST', 'TEST-HH-001', '2600.00', 'mid', 'B', 'LE', '皮革+布艺混搭', 28, 5, 2, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-MB', 'DEMO-RSPU-MB', 'DEMO-RSPU-MB-V001', 'TEST', 'TEST-MB-001', '3400.00', 'mid', 'A', 'LE', '头层牛皮+金属支架', 26, 10, 3, '广州', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (rsku_id) DO NOTHING;
 
 -- 为 F001/F002 补充部分报价
@@ -222,22 +222,22 @@ INSERT INTO rsku_supply (
     rsku_id, rspu_id, variant_id, factory_code, factory_sku, factory_price,
     price_band, product_level, material_code, material_description,
     lead_time_days, moq, warranty_years, shipping_from,
-    review_status, created_at, updated_at
+    created_at, updated_at
 ) VALUES
-('DEMO-RSKU-MC-F001', 'DEMO-RSPU-MC', 'DEMO-RSPU-MC-V001', 'F001', 'F001-MC-001', '7800.00', 'high', 'S', 'LE', '进口头层牛皮+橡木框架', 45, 5, 5, '东莞', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-('DEMO-RSKU-CR-F002', 'DEMO-RSPU-CR', 'DEMO-RSPU-CR-V001', 'F002', 'F002-CR-001', '1600.00', 'low', 'B', 'SF', '羊羔绒+松木框架', 18, 20, 2, '佛山', '已确认', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+('DEMO-RSKU-MC-F001', 'DEMO-RSPU-MC', 'DEMO-RSPU-MC-V001', 'F001', 'F001-MC-001', '7800.00', 'high', 'S', 'LE', '进口头层牛皮+橡木框架', 45, 5, 5, '东莞', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+('DEMO-RSKU-CR-F002', 'DEMO-RSPU-CR', 'DEMO-RSPU-CR-V001', 'F002', 'F002-CR-001', '1600.00', 'low', 'B', 'SF', '羊羔绒+松木框架', 18, 20, 2, '佛山', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (rsku_id) DO NOTHING;
 
--- 幂等更新：为已存在的演示 RSKU 补齐价格和复核状态（允许脚本重复执行）
-UPDATE rsku_supply SET factory_price = '3200.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-MC';
-UPDATE rsku_supply SET factory_price = '2900.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-WJ';
-UPDATE rsku_supply SET factory_price = '2500.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-CR';
-UPDATE rsku_supply SET factory_price = '1800.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-MD';
-UPDATE rsku_supply SET factory_price = '1500.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-IO';
-UPDATE rsku_supply SET factory_price = '6800.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-IL';
-UPDATE rsku_supply SET factory_price = '3100.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-ZS';
-UPDATE rsku_supply SET factory_price = '3300.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-FN';
-UPDATE rsku_supply SET factory_price = '2600.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-HH';
-UPDATE rsku_supply SET factory_price = '3400.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-MB';
-UPDATE rsku_supply SET factory_price = '7800.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-MC-F001';
-UPDATE rsku_supply SET factory_price = '1600.00', review_status = '已确认', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-CR-F002';
+-- 幂等更新：为已存在的演示 RSKU 补齐价格（允许脚本重复执行）
+UPDATE rsku_supply SET factory_price = '3200.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-MC';
+UPDATE rsku_supply SET factory_price = '2900.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-WJ';
+UPDATE rsku_supply SET factory_price = '2500.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-CR';
+UPDATE rsku_supply SET factory_price = '1800.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-MD';
+UPDATE rsku_supply SET factory_price = '1500.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-IO';
+UPDATE rsku_supply SET factory_price = '6800.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-IL';
+UPDATE rsku_supply SET factory_price = '3100.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-ZS';
+UPDATE rsku_supply SET factory_price = '3300.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-FN';
+UPDATE rsku_supply SET factory_price = '2600.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-HH';
+UPDATE rsku_supply SET factory_price = '3400.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-MB';
+UPDATE rsku_supply SET factory_price = '7800.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-MC-F001';
+UPDATE rsku_supply SET factory_price = '1600.00', updated_at = CURRENT_TIMESTAMP WHERE rsku_id = 'DEMO-RSKU-CR-F002';

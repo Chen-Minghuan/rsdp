@@ -32,7 +32,6 @@ public class StyleCase {
     private String aiRawOutput;
 
     private String negativeLesson;
-    private String reviewStatus;
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

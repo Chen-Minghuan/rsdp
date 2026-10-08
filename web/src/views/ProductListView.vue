@@ -42,7 +42,6 @@ import { useUserStore } from '@/stores/user'
 import { useSelectionStore, describeAddManyResult, MAX_SELECTION_ITEMS } from '@/stores/selection'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
-import StatusPill from '@/components/StatusPill.vue'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSort, ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
 import type { DictItem } from '@/types/dict'
@@ -72,7 +71,6 @@ const rspuCode = ref('')
 // 高级筛选（默认折叠）
 const categoryCode = ref<string | null>(null)
 const productLevel = ref<string | null>(null)
-const reviewStatus = ref<string | null>(null)
 const styleCode = ref<string | null>(null)
 const sceneCode = ref<string | null>(null)
 const materialTag = ref<string | null>(null)
@@ -130,7 +128,6 @@ watch(categoryCode, () => {
 
 const categoryOptions = ref<{ label: string; value: string }[]>([])
 const levelOptions = ref<{ label: string; value: string }[]>([])
-const reviewStatusOptions = ref<{ label: string; value: string }[]>([])
 const styleOptions = ref<{ label: string; value: string }[]>([])
 const sceneOptions = ref<{ label: string; value: string }[]>([])
 const materialOptions = ref<{ label: string; value: string }[]>([])
@@ -144,7 +141,6 @@ const activeAdvancedCount = computed(
     [
       categoryCode.value,
       productLevel.value,
-      reviewStatus.value,
       styleCode.value,
       sceneCode.value,
       materialTag.value,
@@ -312,7 +308,6 @@ function buildParams(includeTab: boolean): import('@/types/product').ProductList
     rspuCode: rspuCode.value.trim() || undefined,
     categoryCode: categoryCode.value || undefined,
     productLevel: productLevel.value || undefined,
-    reviewStatus: reviewStatus.value || undefined,
     positioningLabel: styleCode.value || undefined,
     sceneCode: sceneCode.value || undefined,
     materialTag: materialTag.value || undefined,
@@ -383,7 +378,6 @@ function handleReset() {
   rspuCode.value = ''
   categoryCode.value = null
   productLevel.value = null
-  reviewStatus.value = null
   styleCode.value = null
   sceneCode.value = null
   materialTag.value = null
@@ -460,10 +454,6 @@ function renderExpand(row: ProductSummary) {
       }
     },
     [
-      h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, [
-        h('span', { style: { fontWeight: 600, color: '#303133' } }, '复核状态:'),
-        h(StatusPill, { value: resolveDictName(reviewStatusOptions.value, row.reviewStatus) })
-      ]),
       item('风格', resolveDictName(styleOptions.value, row.positioningLabel), 'info'),
       item('产品等级', resolveDictName(levelOptions.value, row.productLevel)),
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, [
@@ -897,11 +887,10 @@ function handleBatchAddToBasket() {
 // ---------- 字典 ----------
 async function loadDicts() {
   try {
-    const [categoryDicts, levelDicts, reviewDicts, styleDicts, sceneDicts, materialDicts, dimADicts, dimBDicts, dimCDicts, dimDDicts, dimFDicts] =
+    const [categoryDicts, levelDicts, styleDicts, sceneDicts, materialDicts, dimADicts, dimBDicts, dimCDicts, dimDDicts, dimFDicts] =
       await Promise.all([
         listDicts('category', { signal }),
         listDicts('factory_level', { signal }),
-        listDicts('review_status', { signal }),
         listDicts('style', { signal }),
         listDicts('scene', { signal }),
         listDicts('material', { signal }),
@@ -913,7 +902,6 @@ async function loadDicts() {
       ])
     categoryOptions.value = categoryDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     levelOptions.value = levelDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
-    reviewStatusOptions.value = reviewDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     styleOptions.value = styleDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     sceneOptions.value = sceneDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
     materialOptions.value = materialDicts.map(d => ({ label: d.dictName, value: d.dictCode }))
@@ -1039,7 +1027,7 @@ onMounted(async () => {
 })
 
 // 下拉类筛选变化即刷新（文本输入与日期范围由「搜索」按钮触发）
-watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialTag, hasPrimaryImage, dimA, dimB, dimC, dimD, dimF, factoryCode, sort], () => {
+watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimaryImage, dimA, dimB, dimC, dimD, dimF, factoryCode, sort], () => {
   page.value = 1
   refreshAll()
 })
@@ -1081,9 +1069,6 @@ watch([categoryCode, productLevel, reviewStatus, styleCode, sceneCode, materialT
           </n-form-item-gi>
           <n-form-item-gi label="产品等级">
             <n-select v-model:value="productLevel" :options="levelOptions" placeholder="请选择" clearable />
-          </n-form-item-gi>
-          <n-form-item-gi label="复核状态">
-            <n-select v-model:value="reviewStatus" :options="reviewStatusOptions" placeholder="请选择" clearable />
           </n-form-item-gi>
           <n-form-item-gi label="风格">
             <n-select v-model:value="styleCode" :options="styleOptions" placeholder="请选择" clearable />

@@ -5473,8 +5473,8 @@ class ExcelAiImportServiceTest {
 
     @Test
     void confirmAndImport_shouldCreateRspuAsActiveWhenRowHasNoImage() throws IOException {
-        // 阶段 2.1 卡点 2 修复：无图行不会产生 AI 识别任务，RSPU 落库即 active + 待复核
-        // （与手工录入口径一致），不再永久卡在 processing（识别中）
+        // 阶段 2.1 卡点 2 修复：无图行不会产生 AI 识别任务，RSPU 落库即 active，
+        // 不再永久卡在 processing（识别中）
         byte[] excelBytes = createExcelWithCategoryAndNameOnly();
         ExcelImportBatch savedBatch = prepareCategoryBatch(excelBytes,
             "{\"mapping\":{\"品类\":\"categoryCode\",\"名称\":\"productName\"},\"categoryGuess\":\"FS\",\"notes\":\"ok\"}");
@@ -5498,7 +5498,6 @@ class ExcelAiImportServiceTest {
         ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
         verify(rspuMapper, times(1)).insert(rspuCaptor.capture());
         assertEquals("active", rspuCaptor.getValue().getStatus(), "无图行 RSPU 应落库即 active");
-        assertEquals("待复核", rspuCaptor.getValue().getReviewStatus());
         // 无图行不建 AI 识别任务
         verify(asyncTaskMapper, never()).insert(argThat((AsyncTask t) -> "product_entry".equals(t.getTaskType())));
         assertTrue(result.getTaskIds().isEmpty());

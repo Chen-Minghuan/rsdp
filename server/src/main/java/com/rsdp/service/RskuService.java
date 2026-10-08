@@ -223,7 +223,6 @@ public class RskuService {
         rsku.setShippingWarehouseId(request.getShippingWarehouseId());
         rsku.setDiffNotes(request.getDiffNotes());
         rsku.setQuoteConfidence(request.getQuoteConfidence());
-        rsku.setReviewStatus("待复核");
         rsku.setPriceUpdated(LocalDate.now());
         rsku.setCreatedAt(LocalDateTime.now());
         rsku.setUpdatedAt(LocalDateTime.now());
@@ -739,7 +738,6 @@ public class RskuService {
         copy.setShippingFrom(source.getShippingFrom());
         copy.setDiffNotes(source.getDiffNotes());
         copy.setQuoteConfidence(source.getQuoteConfidence());
-        copy.setReviewStatus(source.getReviewStatus());
         copy.setPriceUpdated(source.getPriceUpdated());
         copy.setStatus(source.getStatus());
         copy.setCurrencyCode(source.getCurrencyCode());
@@ -809,7 +807,6 @@ public class RskuService {
         response.setShippingFrom(rsku.getShippingFrom());
         response.setDiffNotes(rsku.getDiffNotes());
         response.setQuoteConfidence(rsku.getQuoteConfidence());
-        response.setReviewStatus(rsku.getReviewStatus());
         response.setPriceUpdated(rsku.getPriceUpdated());
         response.setCreatedAt(rsku.getCreatedAt());
         response.setUpdatedAt(rsku.getUpdatedAt());

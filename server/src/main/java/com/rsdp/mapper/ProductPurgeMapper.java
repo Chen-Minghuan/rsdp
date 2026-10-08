@@ -86,7 +86,7 @@ public interface ProductPurgeMapper {
     int deleteSchemeCandidates(String rspuId);
 
     /**
-     * 物理删除疑似同款配对记录（双向：被标存疑方与命中方都解除引用）。
+     * 物理删除疑似同款配对记录（双向：疑似方与命中方都解除引用）。
      *
      * @param rspuId RSPU ID
      * @return 影响行数

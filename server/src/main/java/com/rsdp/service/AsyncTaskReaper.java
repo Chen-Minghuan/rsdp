@@ -39,9 +39,9 @@ import java.util.List;
  *
  * <p>product_entry 任务被收割时联动处理其 RSPU：正常识别成功链路会把 RSPU 从
  * processing（识别中）翻转为 active，任务被收割则无人翻转，产品会永久卡在识别中。
- * 收割前将仍停留在 processing 的 RSPU 条件置为存疑（status 保持 processing，
- * 不置 active，与识别失败兜底同语义；官网/检索只消费 active），并补一条
- * ai_recognition 失败记录留档。后续通过重新识别成功或人工复核确认翻转为 active。</p>
+ * 收割前对仍停留在 processing 的 RSPU 补一条 ai_recognition 失败记录留档
+ * （status 保持 processing，不置 active，与识别失败兜底同语义；官网/检索只消费 active）。
+ * 后续通过产品详情的「重新识别」翻转为 active。</p>
  *
  * <p>同时收割 excel_import_batch 中超时 importing 的批次：批次被抢占为 importing 后
  * 若 JVM 崩溃/重启会永久卡死，用户无法重试；超时后复位为 pending。阈值默认 2 小时，
@@ -58,7 +58,6 @@ public class AsyncTaskReaper {
     private final DocumentImportBatchMapper documentImportBatchMapper;
     private final RspuMapper rspuMapper;
     private final AiRecognitionMapper aiRecognitionMapper;
-    private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
     /** pending 超时（毫秒）：超过该时长未被认领视为投递失败 */
@@ -102,7 +101,7 @@ public class AsyncTaskReaper {
             LocalDateTime pendingThreshold = now.minusSeconds(pendingTimeoutMs / 1000);
             LocalDateTime processingThreshold = now.minusSeconds(processingTimeoutMs / 1000);
 
-            // product_entry 任务收割前联动：仍卡在 processing 的 RSPU 置存疑（status 保持 processing）
+            // product_entry 任务收割前联动：仍卡在 processing 的 RSPU 补识别失败记录（status 保持 processing）
             linkReapedProductEntryRspu(pendingThreshold, processingThreshold);
 
             // document_import 任务收割前联动：仍卡在 pending/processing 的批次置 failed（批次不会永久卡死）
@@ -187,7 +186,7 @@ public class AsyncTaskReaper {
     }
 
     /**
-     * 找出将被本周期收割的 product_entry 任务，逐个联动其 RSPU 置存疑。
+     * 找出将被本周期收割的 product_entry 任务，逐个补识别失败记录。
      *
      * <p>与下方批量 UPDATE 相同的超时口径；单个任务联动失败不影响其余任务与批量收割。</p>
      *
@@ -205,20 +204,20 @@ public class AsyncTaskReaper {
         }
         for (AsyncTask task : staleEntryTasks) {
             try {
-                markRspuDoubtfulForReapedTask(task);
+                recordReapedTaskFailure(task);
             } catch (Exception e) {
-                log.error("收割任务联动 RSPU 置存疑失败，taskId={}: {}", task.getTaskId(), e.getMessage());
+                log.error("收割任务联动补识别失败记录失败，taskId={}: {}", task.getTaskId(), e.getMessage());
             }
         }
     }
 
     /**
-     * 单个被收割 product_entry 任务的 RSPU 联动：仅当 RSPU 仍是 processing 时
-     * 条件置存疑（status 保持 processing，不覆盖并发写入的后续状态），并补 ai_recognition 失败记录。
+     * 单个被收割 product_entry 任务的联动：RSPU 仍为 processing 时补 ai_recognition 失败记录
+     * （RSPU 保持 processing，可在产品详情手动重新识别；复核机制已于 2026-09-28 移除，不再置存疑）。
      *
      * @param task 被收割的任务（input_data 内含 rspuId/imageId）
      */
-    private void markRspuDoubtfulForReapedTask(AsyncTask task) {
+    private void recordReapedTaskFailure(AsyncTask task) {
         String rspuId = extractInputField(task.getInputData(), "rspuId");
         if (!StringUtils.hasText(rspuId)) {
             return;
@@ -228,16 +227,6 @@ public class AsyncTaskReaper {
             return;
         }
         LocalDateTime now = LocalDateTime.now();
-        // 条件更新：仅当 RSPU 仍为 processing 时置存疑（status 不翻转），避免覆盖识别线程刚写入的后续状态
-        int updated = rspuMapper.update(null, new UpdateWrapper<RspuMaster>()
-            .eq("rspu_id", rspuId)
-            .eq("status", "processing")
-            .set("review_status", "存疑")
-            .set("review_comment", "识别任务超时未执行，可重新识别")
-            .set("updated_at", now));
-        if (updated == 0) {
-            return;
-        }
 
         // 补 ai_recognition 失败记录（字段对齐 AiRecognitionPersistenceService.saveFailure 写法）
         AiRecognition rec = new AiRecognition();
@@ -252,16 +241,7 @@ public class AsyncTaskReaper {
         rec.setErrorMessage("识别任务超时未执行，被收割任务标记失败，可重新识别");
         rec.setCreatedAt(now);
         aiRecognitionMapper.insert(rec);
-
-        RspuMaster newSnapshot = new RspuMaster();
-        org.springframework.beans.BeanUtils.copyProperties(rspu, newSnapshot);
-        newSnapshot.setStatus("processing");
-        newSnapshot.setReviewStatus("存疑");
-        newSnapshot.setReviewComment("识别任务超时未执行，可重新识别");
-        newSnapshot.setUpdatedAt(now);
-        String operator = StringUtils.hasText(task.getCreatedBy()) ? task.getCreatedBy() : "system";
-        auditLogService.logReview("rspu_master", rspuId, rspu, newSnapshot, operator);
-        log.info("收割 product_entry 任务联动 RSPU 置存疑，taskId={}，rspuId={}", task.getTaskId(), rspuId);
+        log.info("收割 product_entry 任务补识别失败记录，taskId={}，rspuId={}", task.getTaskId(), rspuId);
     }
 
     /**

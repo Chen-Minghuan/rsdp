@@ -20,6 +20,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -149,7 +151,18 @@ public class AgentStreamService {
             eventBus.register(runId, emitter, properties.getSseHeartbeatSeconds());
             scheduleRunTimeout(sessionId, runId);
             AgentRunContext finalCtx = ctx;
-            taskExecutor.execute(() -> executeRun(finalCtx));
+            // 请求线程的 SecurityContext 不会自动传播到 taskExecutor 工作线程，
+            // 缺失时 SecurityOperatorContext 的身份判定会失真（历史上曾导致
+            // 产品可见性过滤误判）。此处显式传播，工作线程结束后清理。
+            SecurityContext securityContext = SecurityContextHolder.getContext();
+            taskExecutor.execute(() -> {
+                SecurityContextHolder.setContext(securityContext);
+                try {
+                    executeRun(finalCtx);
+                } finally {
+                    SecurityContextHolder.clearContext();
+                }
+            });
             return emitter;
         } catch (RuntimeException e) {
             cancelRunTimeout(runId);

@@ -1,4 +1,4 @@
-> 本文档描述 RSDP 的目标 API 契约。当前已实现认证、产品（录入/产品库/复核/变体/导出）、图片访问、供应/工厂、搭配推荐与空间校验、报价单、搭配方案、设计项目、设计订单、收藏夹、企业团队、官网 CMS 与公开接口（/api/v1/public/**）、户型图分析等模块接口。
+> 本文档描述 RSDP 的目标 API 契约。当前已实现认证、产品（录入/产品库/变体/导出）、图片访问、供应/工厂、搭配推荐与空间校验、报价单、搭配方案、设计项目、设计订单、收藏夹、企业团队、官网 CMS 与公开接口（/api/v1/public/**）、户型图分析等模块接口。
 
 ## 通用约定
 
@@ -68,7 +68,7 @@ POST   /api/v1/products/entry
        #      报错文案脱敏（2026-09-09）：非平台员工（DESIGNER/FACTORY_ADMIN 等）仅返回
        #      中性表述「该图片已录入过系统，如确属新品请使用仍然导入」，不暴露已有产品的
        #      品名/业务编码（跨数据归属防泄露）；平台员工（ADMIN/EDITOR）保留带定位信息的文案；
-       #      AI 识别后与库内产品向量相似度 ≥0.95 时新品标记"存疑-疑似同款"
+       #      AI 识别后与库内产品向量相似度 ≥0.95 时落疑似同款配对（合并工具候选队列）
 
 POST   /api/v1/products/entry/detect-regions
        # 一图多产品区域检测（已实现，product:create）
@@ -115,7 +115,7 @@ POST   /api/v1/products/manual-entry
        #           （rspuCode 为发放的 RSPU 业务编码；未传 sizeCode 等发号失败时为 null，录入照常成功）
        # 说明：
        #   - 需 `product:create` 权限（不限工厂管理员角色）
-       #   - RSPU 创建为 active + 待复核，自动分配 rspu_code 业务编码
+       #   - RSPU 创建为 active，自动分配 rspu_code 业务编码
        #   - 工厂报价（RSKU）后续在产品详情页或 RSKU 导入中补充
 
 GET    /api/v1/tasks/{taskId}
@@ -141,7 +141,7 @@ GET    /api/v1/tasks?ids=a,b,c
 GET    /api/v1/products
        # 产品列表（分页+多条件筛选，已实现）
        # Query: page, size, categoryCode, positioningLabel（风格码）, sceneCode,
-       #        materialTag（材质码）, status, reviewStatus,
+       #        materialTag（材质码）, status,
        #        keyword（搜 category_path 或 rspu_id）,
        #        viewMode: "own" | "full" (可选, 默认 own),
        #        factoryCode: string (可选, 工厂管理员可指定本厂编码),
@@ -216,31 +216,26 @@ DELETE /api/v1/products/{rspuId}/relations/{relationId}
        # 删除搭配关系（软删除，已实现）
        # Response: void
 
-PUT    /api/v1/products/{rspuId}/review
-       # 人工复核确认/存疑（已实现）
-       # Request: { reviewStatus: "已确认"|"存疑", reviewComment? }
-       # 说明：reviewStatus="已确认" 且产品仍为 processing（识别失败/收割超时留下的存疑产品）时，
-       #       同步翻转 status 为 active（复核确认 = 人工认定识别完成，2026-09-10 阶段 2.2）；
-       #       active 产品（含疑似同款 active+存疑）复核确认只更新复核状态，status 不变；
-       #       标记存疑不翻转 status。
-       # 状态机语义（阶段 2.2 统一）：识别成功→active+待复核；识别失败→processing+存疑；
-       #       收割超时→processing+存疑（可重新识别）；疑似同款→active+存疑；无图导入→active+待复核
+~~PUT /api/v1/products/{rspuId}/review~~（已下线，2026-09-28，V18）
+       # 二次复核机制已整体移除：数据清洗环节即人工审核确认，执行导入直接入库。
+       # 状态机语义：识别成功→active；识别失败/收割超时→processing（可重新识别）；
+       #       疑似同款→落 rspu_duplicate_suspect 配对（合并工具处置），不再翻转产品状态
 
 POST   /api/v1/products/{rspuId}/re-recognize
        # 重新触发产品 AI 识别（已实现，2026-09-10；需 product:update 权限，URL 规则 + @PreAuthorize 双保险）
        # Response: { taskId, message }
-       # 说明：识别中（processing）或存疑产品的手动重试入口（识别任务失败/被收割器标记失败后的重识别）。
+       # 说明：识别中（processing）产品的手动重试入口（识别任务失败/被收割器标记失败后的重识别）。
        #       校验 RSPU 存在 + 数据归属（工厂仅可重识别本厂已报价产品，平台员工均可）；
        #       无 is_primary 主图时报 400「产品没有主图，无法重新识别」；
        #       已有 pending/processing 识别任务在途时报 400 拒绝重复触发；
-       #       通过后 RSPU 置回 processing + 待复核（清掉存疑备注，记审计），
+       #       通过后 RSPU 置回 processing（记审计），
        #       新建 product_entry 异步任务（source=re_recognize）afterCommit 投递，识别成功/失败由异步链路正常翻转状态
 
 GET    /api/v1/products/{rspuId}/duplicate-suspects
        # 查询产品的 pending 疑似同款配对（已实现，2026-09-12 合并工具 M2；走 GET /products/** = product:read）
        # Response: [{ suspectId, matchedRspuId, matchedRspuCode, matchedProductName, similarity, createdAt }]
        # 说明：数据来自 rspu_duplicate_suspect 结构化配对表（向量同款检测命中落库，M2）；
-       #       配对状态机 pending → merged（合并）/ dismissed（复核「已确认」或副本合并删除时闭环）
+       #       配对状态机 pending → merged（合并）/ dismissed（副本合并删除时闭环）
 
 POST   /api/v1/products/merge/preview
        # 合并预览（只读，2026-09-12 M4；product:update + 服务内强制平台员工，守卫口径与正式合并一致）

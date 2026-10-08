@@ -120,7 +120,7 @@ public class AiRecognitionPersistenceService {
     }
 
     /**
-     * 在独立事务中保存 AI 识别失败结果，并将 RSPU 标记为存疑（status 保持 processing，不置 active）。
+     * 在独立事务中保存 AI 识别失败结果（RSPU status 保持 processing，不置 active）。
      *
      * @param taskId        任务 ID
      * @param rspuId        RSPU ID
@@ -214,7 +214,7 @@ public class AiRecognitionPersistenceService {
         rspu.setSourceAgentVersion(modelName);
         rspu.setStatus("active");
 
-        // AI 识别后尝试生成 RSPU 业务编码；无法推断尺寸或风格时标记为存疑
+        // AI 识别后尝试生成 RSPU 业务编码；无法推断尺寸或风格时留空不阻断
         assignRspuCodeIfPossible(rspu, labels, styleCode, operator);
 
         rspu.setUpdatedAt(LocalDateTime.now());
@@ -268,8 +268,8 @@ public class AiRecognitionPersistenceService {
      *
      * <p>品类用 rspu.category_code，风格用新补的风格码（无则用现有定位标签），
      * 尺寸码用 {@link RspuCodeService#inferSizeCode} 的 AI 尺寸推断 + 字典感知降级能力；
-     * 推断不出尺寸/风格按既有「存疑」语义留空不阻断。assignCode 本身幂等
-     * （已有 code 直接返回），发号失败（含非业务异常）捕获降级，不影响识别主流程。</p>
+     * 推断不出尺寸/风格留空不阻断。assignCode 本身幂等
+     * （已有 code 直接返回），发号失败（含非业务异常）捕获降级仅记日志，不影响识别主流程。</p>
      */
     private void assignRspuCodeIfPossible(RspuMaster rspu, AiLabels labels, String styleCode, String operator) {
         if (StringUtils.hasText(rspu.getRspuCode())) {
@@ -285,14 +285,12 @@ public class AiRecognitionPersistenceService {
             inferredSizeCode = inferSizeCodeFromVariants(rspu.getRspuId());
         }
         if (!StringUtils.hasText(inferredSizeCode)) {
-            rspu.setReviewStatus("存疑");
-            rspu.setReviewComment("无法推断尺寸码，需补充尺寸后生成业务编码");
+            log.info("无法推断尺寸码，暂不生成业务编码，rspuId={}", rspu.getRspuId());
             return;
         }
         String effectiveStyleCode = StringUtils.hasText(styleCode) ? styleCode : rspu.getPositioningLabel();
         if (!StringUtils.hasText(effectiveStyleCode) || "待识别".equals(effectiveStyleCode)) {
-            rspu.setReviewStatus("存疑");
-            rspu.setReviewComment("无法确定风格码，需补充风格后生成业务编码");
+            log.info("无法确定风格码，暂不生成业务编码，rspuId={}", rspu.getRspuId());
             return;
         }
         try {
@@ -307,14 +305,11 @@ public class AiRecognitionPersistenceService {
                 log.info("RSPU 补码后联动补发 RSKU 业务编码，rspuId={}，补发数量={}", rspu.getRspuId(), backfilled);
             }
         } catch (BusinessException e) {
+            // 发号失败不阻断识别主流程（复核机制已移除，仅记日志）
             log.warn("AI 识别后生成 RSPU 业务编码失败，rspuId={}，原因={}", rspu.getRspuId(), e.getMessage());
-            rspu.setReviewStatus("存疑");
-            rspu.setReviewComment("生成业务编码失败: " + e.getMessage());
         } catch (Exception e) {
-            // 非业务异常（基础设施故障等）同样降级：标记存疑但不中断识别结果落库
+            // 非业务异常（基础设施故障等）同样降级：不中断识别结果落库
             log.warn("AI 识别后补发 RSPU 业务编码异常，rspuId={}", rspu.getRspuId(), e);
-            rspu.setReviewStatus("存疑");
-            rspu.setReviewComment("生成业务编码失败: " + e.getMessage());
         }
     }
 
@@ -405,24 +400,24 @@ public class AiRecognitionPersistenceService {
     }
 
     /**
-     * 识别失败兜底：RSPU 标记存疑，status 保持 processing（不置 active）。
+     * 识别失败兜底：status 保持 processing（不置 active），记录来源模型版本。
      *
      * <p>识别失败 = 识别未完成，产品应留在 processing 避免进入在售列表/检索/官网
-     * （均只消费 active），直到重新识别成功（翻 active）或人工复核确认（翻 active）。</p>
+     * （均只消费 active），直到重新识别成功（翻 active）。
+     * 复核机制已于 2026-09-28 移除，不再置存疑。</p>
      */
     private void markRspuAsDoubtful(String rspuId, String modelName, String operator) {
         RspuMaster rspu = rspuMapper.selectById(rspuId);
         if (rspu == null) {
-            log.warn("标记 RSPU 存疑时记录不存在，rspuId={}", rspuId);
+            log.warn("识别失败联动更新 RSPU 时记录不存在，rspuId={}", rspuId);
             return;
         }
 
         RspuMaster oldSnapshot = snapshot(rspu);
-        rspu.setReviewStatus("存疑");
         rspu.setSourceAgentVersion(modelName);
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
-        auditLogService.logReview("rspu_master", rspuId, oldSnapshot, rspu, resolveOperator(operator));
+        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, resolveOperator(operator));
     }
 
     private void refreshStyleAssociations(String rspuId, String styleCode, List<String> secondaryStyleCodes, String operator) {
@@ -549,8 +544,6 @@ public class AiRecognitionPersistenceService {
         copy.setSceneTags(source.getSceneTags());
         copy.setSixDimTags(source.getSixDimTags());
         copy.setStatus(source.getStatus());
-        copy.setReviewStatus(source.getReviewStatus());
-        copy.setReviewComment(source.getReviewComment());
         copy.setAestheticsConfidence(source.getAestheticsConfidence());
         copy.setProductLevel(source.getProductLevel());
         copy.setSourceAgentVersion(source.getSourceAgentVersion());

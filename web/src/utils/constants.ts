@@ -17,7 +17,6 @@ export const PERMISSIONS = {
   PRODUCT_CREATE: 'product:create',
   PRODUCT_UPDATE: 'product:update',
   PRODUCT_DELETE: 'product:delete',
-  PRODUCT_REVIEW: 'product:review',
   PRODUCT_IMPORT: 'product:import',
 
   FACTORY_READ: 'factory:read',
@@ -174,7 +173,6 @@ export const DICT_TYPE_GROUPS: DictTypeGroup[] = [
       { dictType: 'import_row_type', label: '导入行类型', readonly: true, description: 'Excel 导入行业务类型（RSPU/RSKU 等）', usages: ['系统引用'] },
       { dictType: 'mapping_status', label: '映射状态', readonly: true, description: '外部数据映射状态', usages: ['系统引用'] },
       { dictType: 'quote_confidence', label: '报价置信度', readonly: true, description: '报价结果置信度分级（V11）', usages: ['系统引用'] },
-      { dictType: 'review_status', label: '复核状态', readonly: true, description: 'AI 识别结果人工复核状态', usages: ['系统引用'] },
       { dictType: 'grade', label: '职级', readonly: true, description: '办公家具职级（RSPU 编码第 2 段，EX/MG/ST/PU/CO）', usages: ['系统引用', '编码体系'] },
       { dictType: 'project_type', label: '项目类型', readonly: true, description: '项目分类取值', usages: ['系统引用'] },
       { dictType: 'room_type', label: '房间类型', readonly: true, description: '空间校验与方案中的房间类型', usages: ['系统引用'] }

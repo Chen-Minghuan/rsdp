@@ -23,7 +23,6 @@ import {
   type DataTableColumns
 } from 'naive-ui'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
-import StatusPill from '@/components/StatusPill.vue'
 import {
   getFactory,
   listRskuByFactory,
@@ -126,15 +125,7 @@ const rskuColumns: DataTableColumns<Rsku> = [
   { title: '价格带', key: 'priceBand', width: 100 },
   { title: '产品等级', key: 'productLevel', width: 100 },
   { title: '交期(天)', key: 'leadTimeDays', width: 100 },
-  { title: 'MOQ', key: 'moq', width: 100 },
-  {
-    title: '复核状态',
-    key: 'reviewStatus',
-    width: 100,
-    render(row: Rsku) {
-      return h(StatusPill, { value: row.reviewStatus })
-    }
-  }
+  { title: 'MOQ', key: 'moq', width: 100 }
 ]
 
 const capabilityColumns: DataTableColumns<FactoryProductCapability> = [

@@ -21,7 +21,6 @@ export interface Rsku {
   diffNotes?: string
   quoteConfidence?: string
   productLevel?: string
-  reviewStatus: string
   priceUpdated?: string
   createdAt: string
   updatedAt: string

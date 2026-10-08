@@ -58,7 +58,6 @@ export interface ProductListParams {
   sceneCode?: string
   materialTag?: string
   status?: string
-  reviewStatus?: string
   productLevel?: string
   keyword?: string
   viewMode?: 'own' | 'full'
@@ -121,7 +120,6 @@ export interface ProductSummary {
   productName?: string
   colorPrimaryName: string
   status: string
-  reviewStatus: string
   aestheticsConfidence: string
   productLevel?: string
   minFactoryPrice?: number
@@ -247,9 +245,6 @@ export interface ProductDetail {
     warrantyYears: number
     keySpecs: Record<string, string>
     status: string
-    reviewStatus: string
-    /** 复核备注 */
-    reviewComment?: string
     aestheticsConfidence: string
     /** 来源模型版本（AI 识别录入时写入） */
     sourceAgentVersion?: string
@@ -296,14 +291,6 @@ export interface RelatedProduct {
   targetMinPrice?: number
   createdAt: string
   updatedAt: string
-}
-
-/**
- * 复核请求。
- */
-export interface ProductReviewRequest {
-  reviewStatus: '已确认' | '存疑'
-  reviewComment?: string
 }
 
 /**

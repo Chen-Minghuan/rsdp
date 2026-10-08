@@ -24,11 +24,15 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -202,6 +206,49 @@ class AgentStreamServiceTest {
             verify(eventBus).register(eq(runCaptor.getValue().getRunId()), any(SseEmitter.class),
                 eq(properties.getSseHeartbeatSeconds()));
             verify(taskExecutor).execute(any(Runnable.class));
+        }
+    }
+
+    @Test
+    void dispatchedRunShouldPropagateSecurityContext() throws Exception {
+        when(sessionService.requireAccessibleSession("SES-1")).thenReturn(activeSession());
+        when(messageStore.findByClientMessageId("SES-1", "cm-1")).thenReturn(null);
+        when(sessionMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(1);
+        when(messageStore.persistUserMessage("SES-1", "cm-1", "帮我找沙发")).thenReturn(userMessage());
+        when(messageStore.listBySession("SES-1")).thenReturn(List.of());
+        // 图执行期间记录工作线程可见的 Authentication
+        AtomicReference<org.springframework.security.core.Authentication> seenInWorker = new AtomicReference<>();
+        org.mockito.Mockito.lenient().doAnswer(invocation -> {
+            seenInWorker.set(SecurityContextHolder.getContext().getAuthentication());
+            return null;
+        }).when(marketingAgentGraph).invoke(any(Map.class),
+            any(com.alibaba.cloud.ai.graph.RunnableConfig.class));
+
+        SecurityContextHolder.getContext().setAuthentication(
+            new UsernamePasswordAuthenticationToken("admin", null,
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))));
+        try {
+            streamService.startStream("SES-1", request());
+
+            ArgumentCaptor<Runnable> runnableCaptor = ArgumentCaptor.forClass(Runnable.class);
+            verify(taskExecutor).execute(runnableCaptor.capture());
+            // 在全新线程（无 SecurityContext）中执行派发的 Runnable，模拟 taskExecutor 工作线程
+            AtomicReference<Throwable> workerError = new AtomicReference<>();
+            Thread worker = new Thread(() -> {
+                try {
+                    runnableCaptor.getValue().run();
+                } catch (Throwable t) {
+                    workerError.set(t);
+                }
+            });
+            worker.start();
+            worker.join(10_000);
+
+            assertThat(workerError.get()).isNull();
+            assertThat(seenInWorker.get()).isNotNull();
+            assertThat(seenInWorker.get().getName()).isEqualTo("admin");
+        } finally {
+            SecurityContextHolder.clearContext();
         }
     }
 

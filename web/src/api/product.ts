@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, DocumentImportSubmitResult, DuplicateSuspectItem, ExcelAiCategoryRevisionRequest, ExcelAiCategoryRevisionResponse, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, MergePreviewResult, MergeResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductReviewRequest, ProductSummary, ProductUpdateRequest, RspuMergeRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, DocumentImportSubmitResult, DuplicateSuspectItem, ExcelAiCategoryRevisionRequest, ExcelAiCategoryRevisionResponse, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, MergePreviewResult, MergeResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductSummary, ProductUpdateRequest, RspuMergeRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -130,17 +130,7 @@ export async function getProductDetail(rspuId: string, options?: ApiOptions): Pr
 }
 
 /**
- * 复核产品。
- *
- * @param rspuId RSPU ID
- * @param request 复核请求
- */
-export async function reviewProduct(rspuId: string, request: ProductReviewRequest): Promise<void> {
-  await apiClient.put<ApiResult<void>>(`/v1/products/${rspuId}/review`, request)
-}
-
-/**
- * 重新触发产品 AI 识别（识别中/存疑产品的手动重试入口）。
+ * 重新触发产品 AI 识别（识别中产品的手动重试入口）。
  *
  * @param rspuId RSPU ID
  * @returns 新建识别任务信息（taskId）
