@@ -107,6 +107,9 @@ public class RecommendNode extends AbstractAgentNode {
             "criteria", ctx.getSearchCriteria() != null ? ctx.getSearchCriteria() : Map.of(),
             "vectorChannel", searchResult.isVectorChannelUsed())));
         batch.setBatchType("primary");
+        // W2：批次面向的房间（户型会话可追溯；无户型为 null）
+        batch.setRoomId(ctx.getFloorPlanContext() != null && ctx.getFloorPlanContext().activeRoom() != null
+            ? ctx.getFloorPlanContext().activeRoom().roomId() : null);
         batch.setCreatedAt(LocalDateTime.now());
         batchMapper.insert(batch);
 

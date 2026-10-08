@@ -46,6 +46,23 @@ async function loadPage(targetPage = page.value) {
   }
 }
 
+/**
+ * 智能选品直通（W3）：为已确认户型创建绑定会话并跳转 /agent。
+ * 后端校验户型 confirmed + 归属本人，因此仅 confirmed 卡片显示入口。
+ */
+async function enterAgentSelection(item: DesignerFloorPlanListItem) {
+  busyId.value = item.analysisId
+  errorMessage.value = ''
+  try {
+    const session = await agentApi.createSession({ floorPlanAnalysisId: item.analysisId })
+    await navigateTo(`/agent?sessionId=${encodeURIComponent(session.sessionId)}`)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '创建选品会话失败'
+  } finally {
+    busyId.value = ''
+  }
+}
+
 async function retry(item: DesignerFloorPlanListItem) {
   busyId.value = item.analysisId
   errorMessage.value = ''
@@ -74,6 +91,8 @@ async function remove(item: DesignerFloorPlanListItem) {
     busyId.value = ''
   }
 }
+
+const agentApi = useAgentApi()
 
 onMounted(async () => {
   const me = await refreshMe()
@@ -129,6 +148,7 @@ useHead({ title: '我的户型 — rooom.vip 家居全案' })
                 {{ item.status === 'pending' || item.status === 'analyzing' ? '查看进度' : '继续查看' }}
               </NuxtLink>
               <button v-if="item.status === 'failed'" type="button" :disabled="busyId === item.analysisId" @click="retry(item)">重试</button>
+              <button v-if="item.status === 'confirmed'" type="button" class="agent-entry" :disabled="busyId === item.analysisId" @click="enterAgentSelection(item)">智能选品</button>
               <button type="button" class="danger" :disabled="busyId === item.analysisId" @click="remove(item)">删除</button>
             </div>
           </div>
@@ -300,6 +320,8 @@ useHead({ title: '我的户型 — rooom.vip 家居全案' })
 
 .ops a:hover,
 .ops button:hover { color: var(--accent-deep); }
+.ops .agent-entry { color: var(--accent); font-weight: 600; }
+.ops .agent-entry:hover { color: var(--accent-deep); }
 .ops .danger:hover { color: var(--terra); }
 
 .pager {

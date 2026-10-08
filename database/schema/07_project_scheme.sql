@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS scheme_item (
     space_tag VARCHAR(32),                                  -- 空间覆盖标签（场景字典码，可空=跟随产品场景推导，V40 并入）
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMPTZ,
+    -- V19 新增列：ALTER ADD COLUMN 物理顺序追加在表尾（与迁移重放保持一致）
+    floor_plan_room_id VARCHAR(64),                         -- 方案条目归属的户型房间（V19，区分主卧/次卧等实际空间，可空）
     FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),
     FOREIGN KEY (rspu_id) REFERENCES rspu_master(rspu_id),
     FOREIGN KEY (rsku_id) REFERENCES rsku_supply(rsku_id),
@@ -65,6 +67,10 @@ CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme ON scheme_item(scheme_id);
 -- (scheme_id, sort_order) 无唯一约束、sort_order 可重复，加主键 scheme_item_id 第三列保证排序稳定
 CREATE INDEX IF NOT EXISTS idx_scheme_item_scheme_sort ON scheme_item(scheme_id, sort_order, scheme_item_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_scheme_item_rspu ON scheme_item(rspu_id);
+COMMENT ON COLUMN scheme_item.floor_plan_room_id IS '方案条目归属的户型房间（V19，区分主卧/次卧等实际空间，可空）';
+ALTER TABLE scheme_item DROP CONSTRAINT IF EXISTS fk_scheme_item_floor_plan_room;
+ALTER TABLE scheme_item ADD CONSTRAINT fk_scheme_item_floor_plan_room
+    FOREIGN KEY (floor_plan_room_id) REFERENCES floor_plan_room(room_id);
 
 -- 产品集（管理员维护的主流搭配集合）
 CREATE TABLE IF NOT EXISTS product_collection (

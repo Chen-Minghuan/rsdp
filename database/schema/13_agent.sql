@@ -15,12 +15,18 @@ CREATE TABLE IF NOT EXISTS agent_session (
     active_run_id VARCHAR(64),                       -- 并发控制：一会话最多一个 running run
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
-    deleted_at TIMESTAMPTZ                           -- 逻辑删除，null=未删
+    deleted_at TIMESTAMPTZ,                          -- 逻辑删除，null=未删
+    -- V19 新增列：ALTER ADD COLUMN 物理顺序追加在表尾（与迁移重放保持一致）
+    floor_plan_analysis_id VARCHAR(64),              -- 绑定的已确认户型分析 ID（V19，可空=纯口头描述会话）
+    active_room_id VARCHAR(64)                       -- 当前正在选品的房间（V19，可空=未绑定户型或未选择）
 );
 COMMENT ON COLUMN agent_session.created_by IS 'actor：操作者（导购/代录人）';
 COMMENT ON COLUMN agent_session.customer_user_id IS 'subject：需求归属客户，注册后回填';
 COMMENT ON COLUMN agent_session.customer_name IS '代录客户名';
 COMMENT ON COLUMN agent_session.active_run_id IS '并发控制：一会话最多一个 running run';
+COMMENT ON COLUMN agent_session.floor_plan_analysis_id IS '绑定的已确认户型分析 ID（V19，可空=纯口头描述会话）';
+COMMENT ON COLUMN agent_session.active_room_id IS '当前正在选品的房间（V19，可空=未绑定户型或未选择）';
+CREATE INDEX IF NOT EXISTS idx_agent_session_floor_plan ON agent_session(floor_plan_analysis_id);
 COMMENT ON COLUMN agent_session.deleted_at IS '逻辑删除，null=未删';
 
 -- 消息表
@@ -50,8 +56,12 @@ CREATE TABLE IF NOT EXISTS agent_requirement_version (
     constraints JSONB NOT NULL,
     patch JSONB,
     source VARCHAR(20) NOT NULL,                     -- extract/followup/manual/feedback
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    -- V19 新增列：ALTER ADD COLUMN 物理顺序追加在表尾（与迁移重放保持一致）
+    room_id VARCHAR(64)                              -- 需求作用域（V19）：NULL=全屋/全局需求，否则为该房间专属需求
 );
+COMMENT ON COLUMN agent_requirement_version.room_id IS '需求作用域（V19）：NULL=全屋/全局需求，否则为该房间专属需求';
+CREATE INDEX IF NOT EXISTS idx_agent_requirement_room ON agent_requirement_version(session_id, room_id);
 COMMENT ON COLUMN agent_requirement_version.constraints IS '本版需求约束全量快照';
 COMMENT ON COLUMN agent_requirement_version.patch IS '本版应用的 operations 留痕';
 COMMENT ON COLUMN agent_requirement_version.source IS 'extract/followup/manual/feedback';
@@ -67,8 +77,10 @@ CREATE TABLE IF NOT EXISTS agent_recommend_batch (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     skill_id VARCHAR(64),                            -- 执行推荐的 Skill ID（如 living-room-matching）
     skill_version VARCHAR(32),                       -- Skill 版本号
-    batch_type VARCHAR(20) DEFAULT 'primary'         -- primary（主体选品）/companion（配套推荐）
+    batch_type VARCHAR(20) DEFAULT 'primary',        -- primary（主体选品）/companion（配套推荐）
+    room_id VARCHAR(64)                              -- 本批推荐面向的房间（V19，可空=无户型会话）
 );
+COMMENT ON COLUMN agent_recommend_batch.room_id IS '本批推荐面向的房间（V19，可空=无户型会话）';
 COMMENT ON COLUMN agent_recommend_batch.query_criteria IS '实际下发的检索条件';
 COMMENT ON COLUMN agent_recommend_batch.skill_id IS '执行推荐的 Skill ID（如 living-room-matching），空=非 Skill 链路';
 COMMENT ON COLUMN agent_recommend_batch.skill_version IS 'Skill 版本号（如 1.0.0），推荐可追溯';
@@ -116,9 +128,12 @@ CREATE TABLE IF NOT EXISTS agent_confirmed_item (
     status VARCHAR(20) DEFAULT 'confirmed',          -- confirmed/cancelled
     idempotency_key VARCHAR(128) NOT NULL,
     confirmed_by VARCHAR(64),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    -- V19 新增列：ALTER ADD COLUMN 物理顺序追加在表尾（与迁移重放保持一致）
+    room_id VARCHAR(64)                              -- 确认产品归属的房间（V19，来自推荐批次，可空=无户型会话）
 );
 COMMENT ON COLUMN agent_confirmed_item.idempotency_key IS '幂等键，防重复确认';
+COMMENT ON COLUMN agent_confirmed_item.room_id IS '确认产品归属的房间（V19，来自推荐批次，可空=无户型会话）';
 CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_confirmed_item_idem ON agent_confirmed_item(idempotency_key);
 
 -- 运行记录表
@@ -214,3 +229,20 @@ ALTER TABLE agent_confirmed_item ADD CONSTRAINT fk_agent_confirmed_by
 ALTER TABLE agent_quote DROP CONSTRAINT IF EXISTS fk_agent_quote_created_by;
 ALTER TABLE agent_quote ADD CONSTRAINT fk_agent_quote_created_by
     FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
+
+-- 户型绑定外键（V19）：户型/房间均为软删表，物理删除默认 RESTRICT 不影响软删链路
+ALTER TABLE agent_session DROP CONSTRAINT IF EXISTS fk_agent_session_floor_plan;
+ALTER TABLE agent_session ADD CONSTRAINT fk_agent_session_floor_plan
+    FOREIGN KEY (floor_plan_analysis_id) REFERENCES floor_plan_analysis(analysis_id);
+ALTER TABLE agent_session DROP CONSTRAINT IF EXISTS fk_agent_session_active_room;
+ALTER TABLE agent_session ADD CONSTRAINT fk_agent_session_active_room
+    FOREIGN KEY (active_room_id) REFERENCES floor_plan_room(room_id);
+ALTER TABLE agent_requirement_version DROP CONSTRAINT IF EXISTS fk_agent_requirement_room;
+ALTER TABLE agent_requirement_version ADD CONSTRAINT fk_agent_requirement_room
+    FOREIGN KEY (room_id) REFERENCES floor_plan_room(room_id);
+ALTER TABLE agent_recommend_batch DROP CONSTRAINT IF EXISTS fk_agent_batch_room;
+ALTER TABLE agent_recommend_batch ADD CONSTRAINT fk_agent_batch_room
+    FOREIGN KEY (room_id) REFERENCES floor_plan_room(room_id);
+ALTER TABLE agent_confirmed_item DROP CONSTRAINT IF EXISTS fk_agent_confirmed_room;
+ALTER TABLE agent_confirmed_item ADD CONSTRAINT fk_agent_confirmed_room
+    FOREIGN KEY (room_id) REFERENCES floor_plan_room(room_id);

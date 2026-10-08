@@ -78,7 +78,7 @@ class AgentSessionControllerTest {
 
     @Test
     void createSessionShouldReturnNewSession() throws Exception {
-        when(sessionService.create("王女士")).thenReturn(sampleSession());
+        when(sessionService.create("王女士", null)).thenReturn(sampleSession());
 
         mockMvc.perform(post("/api/v1/agent/sessions")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -87,17 +87,17 @@ class AgentSessionControllerTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.sessionId").value("SES-1"))
             .andExpect(jsonPath("$.data.status").value("active"));
-        verify(sessionService).create("王女士");
+        verify(sessionService).create("王女士", null);
     }
 
     @Test
     void createSessionWithoutBodyShouldPassNullCustomerName() throws Exception {
-        when(sessionService.create(isNull())).thenReturn(sampleSession());
+        when(sessionService.create(isNull(), isNull())).thenReturn(sampleSession());
 
         mockMvc.perform(post("/api/v1/agent/sessions"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200));
-        verify(sessionService).create(isNull());
+        verify(sessionService).create(isNull(), isNull());
     }
 
     @Test

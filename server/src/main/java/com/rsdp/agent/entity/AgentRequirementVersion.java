@@ -39,5 +39,8 @@ public class AgentRequirementVersion {
     /** 来源：extract/followup/manual/feedback。 */
     private String source;
 
+    /** 需求作用域（V19）：NULL=全屋/全局需求，否则为该房间专属需求。 */
+    private String roomId;
+
     private LocalDateTime createdAt;
 }

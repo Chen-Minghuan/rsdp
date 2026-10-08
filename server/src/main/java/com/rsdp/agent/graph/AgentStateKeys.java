@@ -17,6 +17,9 @@ public final class AgentStateKeys {
     public static final String NODE_CONFIRM_HINT = "confirm_hint";
     public static final String NODE_COMPANION_MATCH = "companion_match";
     public static final String NODE_ACTION_HINT = "action_hint";
+    // W2 户型驱动
+    public static final String NODE_FLOOR_PLAN_CONTEXT = "floor_plan_context";
+    public static final String NODE_ROOM_SELECT = "room_select";
 
     // ==================== OverAllState 键（只放 ID 与小字符串） ====================
     public static final String STATE_SESSION_ID = "sessionId";
@@ -31,6 +34,7 @@ public final class AgentStateKeys {
     public static final String ROUTE_CONFIRM_HINT = "route_confirm_hint";
     public static final String ROUTE_COMPANION = "route_companion";
     public static final String ROUTE_ACTION_HINT = "route_action_hint";
+    public static final String ROUTE_ROOM_SELECT = "route_room_select";
 
     // ==================== 意图（LLM 输出） ====================
     public static final String INTENT_NEW_REQUIREMENT = "NEW_REQUIREMENT";
@@ -43,6 +47,8 @@ public final class AgentStateKeys {
     public static final String INTENT_MATCH_COMPANION = "MATCH_COMPANION";
     public static final String INTENT_REQUEST_QUOTE = "REQUEST_QUOTE";
     public static final String INTENT_EXPORT_SCHEME = "EXPORT_SCHEME";
+    // W2：切换当前房间（如"看看主卧""先配客厅"）
+    public static final String INTENT_SWITCH_ROOM = "SWITCH_ROOM";
 
     // ==================== 节点展示文案（SSE node 事件 label） ====================
     public static final String LABEL_REQUIREMENT_PATCH = "正在理解需求";
@@ -53,6 +59,8 @@ public final class AgentStateKeys {
     public static final String LABEL_CONFIRM_HINT = "正在回复";
     public static final String LABEL_COMPANION_MATCH = "正在生成配套推荐";
     public static final String LABEL_ACTION_HINT = "正在回复";
+    public static final String LABEL_FLOOR_PLAN_CONTEXT = "正在读取户型";
+    public static final String LABEL_ROOM_SELECT = "正在切换空间";
 
     /** 节点名 → 展示文案。 */
     public static String labelOf(String node) {
@@ -65,6 +73,8 @@ public final class AgentStateKeys {
             case NODE_CONFIRM_HINT -> LABEL_CONFIRM_HINT;
             case NODE_COMPANION_MATCH -> LABEL_COMPANION_MATCH;
             case NODE_ACTION_HINT -> LABEL_ACTION_HINT;
+            case NODE_FLOOR_PLAN_CONTEXT -> LABEL_FLOOR_PLAN_CONTEXT;
+            case NODE_ROOM_SELECT -> LABEL_ROOM_SELECT;
             default -> node;
         };
     }

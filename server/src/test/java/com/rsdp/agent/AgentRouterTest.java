@@ -2,6 +2,7 @@ package com.rsdp.agent;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.agent.config.MarketingAgentProperties;
+import com.rsdp.agent.domain.EffectiveConstraintComposer;
 import com.rsdp.agent.graph.AgentRouter;
 import com.rsdp.agent.graph.AgentStateKeys;
 import com.rsdp.agent.graph.ConstraintCompleteness;
@@ -32,7 +33,8 @@ class AgentRouterTest {
         properties = new MarketingAgentProperties();
         confirmedItemMapper = mock(AgentConfirmedItemMapper.class);
         // 默认 maxFollowupRounds = 3
-        router = new AgentRouter(new ConstraintCompleteness(), properties, confirmedItemMapper);
+        router = new AgentRouter(new ConstraintCompleteness(), new EffectiveConstraintComposer(),
+            properties, confirmedItemMapper);
     }
 
     private AgentRunContext ctx(RequirementConstraints constraints, int followupCount) {
@@ -139,5 +141,45 @@ class AgentRouterTest {
     void exportSchemeShouldRouteToActionHint() {
         assertThat(router.route(AgentStateKeys.INTENT_EXPORT_SCHEME, ctx(completeConstraints(), 0)))
             .isEqualTo(AgentStateKeys.ROUTE_ACTION_HINT);
+    }
+
+    @Test
+    void switchRoomIntentShouldRouteToRoomSelect() {
+        assertThat(router.route(AgentStateKeys.INTENT_SWITCH_ROOM, ctx(completeConstraints(), 0)))
+            .isEqualTo(AgentStateKeys.ROUTE_ROOM_SELECT);
+    }
+
+    @Test
+    void switchRoomIntentShouldRouteEvenWithoutFloorPlan() {
+        // 无户型会话也进 room_select（由 RoomSelectNode 给出友好提示）
+        AgentRunContext context = ctx(new RequirementConstraints(), 0);
+        context.setFloorPlanContext(null);
+        assertThat(router.route(AgentStateKeys.INTENT_SWITCH_ROOM, context))
+            .isEqualTo(AgentStateKeys.ROUTE_ROOM_SELECT);
+    }
+
+    @Test
+    void roomSizeFactShouldSatisfySizeAspectAndRouteToSearch() {
+        // 户型会话：品类+预算齐备，尺寸由房间开间提供 → 直接检索不追问
+        RequirementConstraints constraints = new RequirementConstraints();
+        constraints.setCategoryCode("沙发");
+        constraints.setBudgetMax(new BigDecimal("20000"));
+        AgentRunContext context = ctx(constraints, 0);
+        context.setFloorPlanContext(new com.rsdp.agent.domain.FloorPlanContext("FPA-1",
+            java.util.List.of(new com.rsdp.agent.domain.FloorPlanRoomFact(
+                "ROOM-1", "客厅", "LIVING_ROOM", 4300, 3800, null)),
+            new com.rsdp.agent.domain.FloorPlanRoomFact("ROOM-1", "客厅", "LIVING_ROOM", 4300, 3800, null)));
+        assertThat(router.route(AgentStateKeys.INTENT_REFINE, context))
+            .isEqualTo(AgentStateKeys.ROUTE_SEARCH);
+    }
+
+    @Test
+    void missingSizeAspectShouldStillFollowupWithoutRoom() {
+        // 无房间尺寸：品类+预算齐备但缺尺寸面 → 追问（与原行为一致，缺一项即放行？缺 1 项放行检索）
+        RequirementConstraints constraints = new RequirementConstraints();
+        constraints.setCategoryCode("沙发");
+        constraints.setBudgetMax(new BigDecimal("20000"));
+        assertThat(router.route(AgentStateKeys.INTENT_REFINE, ctx(constraints, 0)))
+            .isEqualTo(AgentStateKeys.ROUTE_SEARCH);
     }
 }

@@ -34,6 +34,15 @@ public class ProductSearchCriteria {
     /** 最小宽度（mm），尺寸硬过滤。 */
     private Integer minWidthMm;
 
+    /** 最大进深（mm），尺寸硬过滤（V19 户型空间硬约束）。 */
+    private Integer maxDepthMm;
+
+    /** 当前房间类型（LIVING_ROOM/BEDROOM/...，推荐上下文，不过滤）。 */
+    private String roomType;
+
+    /** 当前房间面积（推荐上下文，不过滤）。 */
+    private java.math.BigDecimal roomAreaM2;
+
     /** 关键词（product_name / positioning_label 模糊匹配）。 */
     private String keyword;
 

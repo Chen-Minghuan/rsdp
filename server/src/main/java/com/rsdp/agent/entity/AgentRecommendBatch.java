@@ -38,5 +38,8 @@ public class AgentRecommendBatch {
     /** 批次类型：primary（主体选品）/companion（配套推荐）（V11）。 */
     private String batchType;
 
+    /** 本批推荐面向的房间（V19，可空=无户型会话）。 */
+    private String roomId;
+
     private LocalDateTime createdAt;
 }

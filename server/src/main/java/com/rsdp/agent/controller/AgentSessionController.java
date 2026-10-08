@@ -62,7 +62,21 @@ public class AgentSessionController {
      */
     @PostMapping("/sessions")
     public Result<AgentSessionResponse> createSession(@RequestBody(required = false) CreateSessionRequest request) {
-        return Result.ok(sessionService.create(request != null ? request.getCustomerName() : null));
+        return Result.ok(sessionService.create(
+            request != null ? request.getCustomerName() : null,
+            request != null ? request.getFloorPlanAnalysisId() : null));
+    }
+
+    /**
+     * 切换当前选品房间（W2）：房间必须属于会话绑定的户型。
+     *
+     * @param sessionId 会话 ID
+     * @param roomId    目标房间 ID
+     * @return 更新后的会话
+     */
+    @PostMapping("/sessions/{sessionId}/rooms/{roomId}/activate")
+    public Result<AgentSessionResponse> activateRoom(@PathVariable String sessionId, @PathVariable String roomId) {
+        return Result.ok(sessionService.activateRoom(sessionId, roomId));
     }
 
     /**

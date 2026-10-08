@@ -24,6 +24,12 @@ public class AgentSessionResponse {
 
     private String summary;
 
+    /** 绑定的已确认户型分析 ID（W2，可空=纯口头描述会话）。 */
+    private String floorPlanAnalysisId;
+
+    /** 当前选品房间 ID（W2，可空）。 */
+    private String activeRoomId;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

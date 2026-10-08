@@ -18,4 +18,7 @@ public class AgentSessionDetailResponse {
     private RequirementProfileResponse requirement;
 
     private List<ConfirmedItemResponse> confirmedItems;
+
+    /** 绑定户型的房间列表（W2；无户型会话为空列表）。 */
+    private List<AgentRoomResponse> rooms;
 }

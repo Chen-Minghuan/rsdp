@@ -26,5 +26,8 @@ public class ConfirmedItemResponse {
     /** confirmed/cancelled。 */
     private String status;
 
+    /** 归属房间 ID（W2，来自推荐批次，可空=无户型会话）。 */
+    private String roomId;
+
     private LocalDateTime createdAt;
 }

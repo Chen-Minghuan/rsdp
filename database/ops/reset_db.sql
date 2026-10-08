@@ -613,6 +613,7 @@ CREATE TABLE IF NOT EXISTS scheme_item (
     quantity INTEGER DEFAULT 1,
     sort_order INTEGER DEFAULT 0,
     space_tag VARCHAR(32),
+    floor_plan_room_id VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMPTZ,
     FOREIGN KEY (scheme_id) REFERENCES scheme(scheme_id),

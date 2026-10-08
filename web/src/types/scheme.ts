@@ -4,6 +4,8 @@
 import type { PriceChange } from './quote'
 
 export interface SchemeItemRequest {
+  /** 关联的户型房间 ID（营销 Agent 户型绑定导出时透传，可空） */
+  floorPlanRoomId?: string | null
   rspuId: string
   rskuId: string
   quantity: number
@@ -53,6 +55,8 @@ export interface SchemeItem {
   spaceTagName?: string | null
   /** 是否人工覆盖的空间标签（false=跟随产品推导；用于「已调整」标记） */
   spaceTagOverridden?: boolean
+  /** 关联的户型房间 ID（营销 Agent 户型绑定导出时写入，可空；用于按户型房间溯源） */
+  floorPlanRoomId?: string | null
   sortOrder: number
 }
 

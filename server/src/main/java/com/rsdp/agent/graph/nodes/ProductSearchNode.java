@@ -1,6 +1,8 @@
 package com.rsdp.agent.graph.nodes;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
+import com.rsdp.agent.domain.EffectiveConstraintComposer;
+import com.rsdp.agent.domain.FloorPlanRoomFact;
 import com.rsdp.agent.domain.MarketingProductQueryService;
 import com.rsdp.agent.domain.ProductSearchCriteria;
 import com.rsdp.agent.domain.ProductSearchResult;
@@ -24,11 +26,14 @@ import java.util.Map;
 public class ProductSearchNode extends AbstractAgentNode {
 
     private final MarketingProductQueryService queryService;
+    private final EffectiveConstraintComposer constraintComposer;
 
     public ProductSearchNode(AgentEventBus eventBus, AgentRunRecorder runRecorder,
-                             MarketingProductQueryService queryService) {
+                             MarketingProductQueryService queryService,
+                             EffectiveConstraintComposer constraintComposer) {
         super(eventBus, runRecorder);
         this.queryService = queryService;
+        this.constraintComposer = constraintComposer;
     }
 
     @Override
@@ -38,7 +43,10 @@ public class ProductSearchNode extends AbstractAgentNode {
 
     @Override
     protected Map<String, Object> doApply(OverAllState state, AgentRunContext ctx) {
-        ProductSearchCriteria criteria = toCriteria(ctx.getConstraints());
+        // W2：有效需求约束 + 当前房间空间事实 → 最终检索条件（空间硬约束只收紧不放宽）
+        FloorPlanRoomFact activeRoom = ctx.getFloorPlanContext() != null
+            ? ctx.getFloorPlanContext().activeRoom() : null;
+        ProductSearchCriteria criteria = constraintComposer.compose(ctx.getConstraints(), activeRoom);
         ProductSearchResult result = queryService.search(criteria);
         ctx.setSearchCriteria(criteria);
         ctx.setSearchResult(result);
@@ -47,19 +55,4 @@ public class ProductSearchNode extends AbstractAgentNode {
         return Map.of();
     }
 
-    /** 需求约束 → 检索条件（sofaForm/areaM2/note 等不下推，留给推荐理由参考）。 */
-    private ProductSearchCriteria toCriteria(RequirementConstraints constraints) {
-        ProductSearchCriteria criteria = new ProductSearchCriteria();
-        if (constraints == null) {
-            return criteria;
-        }
-        criteria.setCategoryCode(constraints.getCategoryCode());
-        criteria.setStyle(constraints.getStyle());
-        criteria.setMaterial(constraints.getMaterial());
-        criteria.setColor(constraints.getColor());
-        criteria.setBudgetMax(constraints.getBudgetMax());
-        criteria.setMaxWidthMm(constraints.getMaxWidthMm());
-        criteria.setMinWidthMm(constraints.getMinWidthMm());
-        return criteria;
-    }
 }

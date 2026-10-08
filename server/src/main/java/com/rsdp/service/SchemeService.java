@@ -174,6 +174,8 @@ public class SchemeService {
             schemeItem.setSortOrder(itemRequest.getSortOrder() != null ? itemRequest.getSortOrder() : i);
             schemeItem.setSpaceTag(StringUtils.hasText(itemRequest.getSpaceTag())
                 ? itemRequest.getSpaceTag().trim() : null);
+            schemeItem.setFloorPlanRoomId(StringUtils.hasText(itemRequest.getFloorPlanRoomId())
+                ? itemRequest.getFloorPlanRoomId().trim() : null);
             schemeItem.setCreatedAt(LocalDateTime.now());
             schemeItems.add(schemeItem);
         }
@@ -295,6 +297,8 @@ public class SchemeService {
             schemeItem.setSortOrder(itemRequest.getSortOrder() != null ? itemRequest.getSortOrder() : i);
             schemeItem.setSpaceTag(StringUtils.hasText(itemRequest.getSpaceTag())
                 ? itemRequest.getSpaceTag().trim() : null);
+            schemeItem.setFloorPlanRoomId(StringUtils.hasText(itemRequest.getFloorPlanRoomId())
+                ? itemRequest.getFloorPlanRoomId().trim() : null);
             schemeItem.setCreatedAt(LocalDateTime.now());
             schemeItems.add(schemeItem);
         }
@@ -885,6 +889,7 @@ public class SchemeService {
             item.setSortOrder(sortOrder++);
             // 复制空间覆盖标签：模板价值 = 复用空间布局（B3）
             item.setSpaceTag(templateItem.getSpaceTag());
+            item.setFloorPlanRoomId(templateItem.getFloorPlanRoomId());
             item.setCreatedAt(LocalDateTime.now());
             newItems.add(item);
         }
@@ -1127,6 +1132,7 @@ public class SchemeService {
         response.setLeadTimeDays(item.getLeadTimeDays());
         response.setMoq(item.getMoq());
         response.setSortOrder(item.getSortOrder());
+        response.setFloorPlanRoomId(item.getFloorPlanRoomId());
         return response;
     }
 

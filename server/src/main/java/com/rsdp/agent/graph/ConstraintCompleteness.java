@@ -23,7 +23,18 @@ public class ConstraintCompleteness {
      * @return 是否齐备
      */
     public boolean isComplete(RequirementConstraints constraints) {
-        return missingAspects(constraints).size() <= 1;
+        return isComplete(constraints, false);
+    }
+
+    /**
+     * 关键约束是否齐备（允许缺一项时即放行检索）。
+     *
+     * @param constraints        需求约束
+     * @param roomProvidesSize   当前房间开间已知（尺寸约束由空间硬约束提供）
+     * @return true 表示可进入检索
+     */
+    public boolean isComplete(RequirementConstraints constraints, boolean roomProvidesSize) {
+        return missingAspects(constraints, roomProvidesSize).size() <= 1;
     }
 
     /**
@@ -33,11 +44,24 @@ public class ConstraintCompleteness {
      * @return 缺失组描述列表（空 = 全部齐备）
      */
     public List<String> missingAspects(RequirementConstraints constraints) {
+        return missingAspects(constraints, false);
+    }
+
+    /**
+     * 缺失的关键约束面（追问话术依据）。
+     *
+     * @param constraints        需求约束
+     * @param roomProvidesSize   当前房间开间已知（尺寸约束由空间硬约束提供）
+     * @return 缺失面列表
+     */
+    public List<String> missingAspects(RequirementConstraints constraints, boolean roomProvidesSize) {
         List<String> missing = new ArrayList<>();
         if (constraints == null) {
             missing.add("品类（如沙发/茶几/床）");
             missing.add("预算上限");
-            missing.add("沙发形态或尺寸限制");
+            if (!roomProvidesSize) {
+                missing.add("沙发形态或尺寸限制");
+            }
             return missing;
         }
         if (!StringUtils.hasText(constraints.getCategoryCode())) {
@@ -46,7 +70,8 @@ public class ConstraintCompleteness {
         if (constraints.getBudgetMax() == null) {
             missing.add("预算上限");
         }
-        if (!StringUtils.hasText(constraints.getSofaForm()) && constraints.getMaxWidthMm() == null) {
+        if (!roomProvidesSize
+            && !StringUtils.hasText(constraints.getSofaForm()) && constraints.getMaxWidthMm() == null) {
             missing.add("沙发形态或尺寸限制");
         }
         return missing;

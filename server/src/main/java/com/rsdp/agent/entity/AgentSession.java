@@ -41,6 +41,12 @@ public class AgentSession {
     /** 并发控制：一会话最多一个 running run。 */
     private String activeRunId;
 
+    /** 绑定的已确认户型分析 ID（V19，可空=纯口头描述会话）。 */
+    private String floorPlanAnalysisId;
+
+    /** 当前正在选品的房间（V19，可空=未绑定户型或未选择）。 */
+    private String activeRoomId;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

@@ -16,4 +16,7 @@ public class LlmRequirementExtraction {
 
     /** 需求变更操作（可为空）。 */
     private List<PatchOperation> operations;
+
+    /** 目标房间名（intent=SWITCH_ROOM 时由 LLM 输出，如"主卧"）。 */
+    private String targetRoom;
 }

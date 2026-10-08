@@ -66,5 +66,8 @@ public class AgentQuoteResponse {
 
         /** 是否可报价（false = 暂不可报价，该行不计入合计）。 */
         private Boolean quotable;
+
+        /** 归属房间 ID（W2，来自确认条目，可空=无户型会话）。 */
+        private String roomId;
     }
 }

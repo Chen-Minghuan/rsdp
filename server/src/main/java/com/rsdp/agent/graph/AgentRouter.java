@@ -2,6 +2,7 @@ package com.rsdp.agent.graph;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.rsdp.agent.config.MarketingAgentProperties;
+import com.rsdp.agent.domain.EffectiveConstraintComposer;
 import com.rsdp.agent.entity.AgentConfirmedItem;
 import com.rsdp.agent.mapper.AgentConfirmedItemMapper;
 import com.rsdp.agent.service.AgentRunContext;
@@ -26,6 +27,7 @@ import org.springframework.stereotype.Component;
 public class AgentRouter {
 
     private final ConstraintCompleteness completeness;
+    private final EffectiveConstraintComposer constraintComposer;
     private final MarketingAgentProperties properties;
     private final AgentConfirmedItemMapper confirmedItemMapper;
 
@@ -43,6 +45,10 @@ public class AgentRouter {
         if (AgentStateKeys.INTENT_CONFIRM_ITEM.equals(intent)) {
             return AgentStateKeys.ROUTE_CONFIRM_HINT;
         }
+        if (AgentStateKeys.INTENT_SWITCH_ROOM.equals(intent)) {
+            // 房间切换：无户型会话也由 RoomSelectNode 给出友好提示
+            return AgentStateKeys.ROUTE_ROOM_SELECT;
+        }
         if (AgentStateKeys.INTENT_MATCH_COMPANION.equals(intent)) {
             return hasConfirmedItems(ctx.getSessionId())
                 ? AgentStateKeys.ROUTE_COMPANION : AgentStateKeys.ROUTE_ACTION_HINT;
@@ -51,7 +57,10 @@ public class AgentRouter {
             || AgentStateKeys.INTENT_EXPORT_SCHEME.equals(intent)) {
             return AgentStateKeys.ROUTE_ACTION_HINT;
         }
-        boolean complete = completeness.isComplete(ctx.getConstraints());
+        // 户型会话中房间开间已知时，"沙发形态或尺寸限制"由空间硬约束自动满足
+        boolean roomProvidesSize = constraintComposer.roomProvidesSizeConstraint(
+            ctx.getFloorPlanContext() != null ? ctx.getFloorPlanContext().activeRoom() : null);
+        boolean complete = completeness.isComplete(ctx.getConstraints(), roomProvidesSize);
         if (complete) {
             return AgentStateKeys.ROUTE_SEARCH;
         }

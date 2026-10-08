@@ -1,10 +1,12 @@
 package com.rsdp.agent.service;
 
+import com.rsdp.agent.domain.FloorPlanContext;
 import com.rsdp.agent.domain.ProductSearchCriteria;
 import com.rsdp.agent.domain.ProductSearchResult;
 import com.rsdp.agent.patch.RequirementConstraints;
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.security.core.Authentication;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,6 +32,9 @@ public class AgentRunContext {
 
     private final String operatorUserId;
 
+    /** 发起请求时已认证的身份，供异步图节点恢复产品可见性权限。 */
+    private Authentication authentication;
+
     private final String userMessage;
 
     /** 当前需求约束（run 开始时加载，RequirementPatchNode 应用 patch 后更新）。 */
@@ -46,6 +51,12 @@ public class AgentRunContext {
 
     /** 本轮检索结果（ProductSearchNode 写入，RecommendNode 消费）。 */
     private ProductSearchResult searchResult;
+
+    /** 会话绑定的户型上下文（FloorPlanContextNode 写入，无户型为 null）。 */
+    private volatile FloorPlanContext floorPlanContext;
+
+    /** LLM 识别的目标房间名（SWITCH_ROOM 意图，RequirementPatchNode 写入）。 */
+    private volatile String targetRoomName;
 
     /** assistant 文本累计（各节点流式输出时 append，done 时落 agent_message）。 */
     private final StringBuilder assistantText = new StringBuilder();

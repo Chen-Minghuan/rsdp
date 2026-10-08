@@ -34,6 +34,9 @@ public class SchemeItem {
     private Integer sortOrder;
     /** 空间覆盖标签（场景字典码，可空=跟随产品 rspu_scene 首场景推导，V40） */
     private String spaceTag;
+
+    /** 方案条目归属的户型房间（V19，区分主卧/次卧等实际空间，可空）。 */
+    private String floorPlanRoomId;
     private LocalDateTime createdAt;
 
     @TableLogic(value = "null", delval = "now()")

@@ -92,7 +92,8 @@ public class MarketingProductQueryService {
         // 先经 category_dict 名称/别名归一；归一失败保留原文（等值不命中，等价空结果）
         String categoryCode = StringUtils.hasText(criteria.getCategoryCode())
             ? normalizeCategoryCode(criteria.getCategoryCode().trim()) : null;
-        boolean hasSizeFilter = criteria.getMaxWidthMm() != null || criteria.getMinWidthMm() != null;
+        boolean hasSizeFilter = criteria.getMaxWidthMm() != null || criteria.getMinWidthMm() != null
+            || criteria.getMaxDepthMm() != null;
 
         // 2. 向量通道（P2）：不可用 → 纯结构化（P1 行为）
         List<String> vectorRanked = properties.isVectorRecallEnabled()
@@ -438,6 +439,14 @@ public class MarketingProductQueryService {
             if (criteria.getMinWidthMm() != null && widthMm < criteria.getMinWidthMm()) {
                 continue;
             }
+            if (criteria.getMaxDepthMm() != null) {
+                // 进深硬过滤（V19 户型空间硬约束）：代表进深不可解析时按放行处理
+                // （深度缺失率高，硬排除会把大量宽度合规产品误杀；宽度仍是严格口径）
+                Integer depthMm = resolveRepresentativeDepthMm(variantMap.getOrDefault(rspu.getRspuId(), List.of()));
+                if (depthMm != null && depthMm > criteria.getMaxDepthMm()) {
+                    continue;
+                }
+            }
             filtered.add(rspu);
         }
         return filtered;
@@ -457,6 +466,30 @@ public class MarketingProductQueryService {
             .filter(w -> w != null && w > 0)
             .max(Comparator.naturalOrder())
             .orElse(null);
+    }
+
+    /**
+     * 解析 RSPU 代表进深（mm）：全部变体中最大进深（主规格假设）。
+     * 与代表宽度同口径；全部不可解析返回 null。
+     *
+     * @param variants RSPU 的变体列表
+     * @return 代表进深（mm），不可解析返回 null
+     */
+    private Integer resolveRepresentativeDepthMm(List<RspuVariant> variants) {
+        return variants.stream()
+            .map(this::resolveVariantDepthMm)
+            .filter(d -> d != null && d > 0)
+            .max(Comparator.naturalOrder())
+            .orElse(null);
+    }
+
+    /** 解析单个变体进深（mm）：dimensions JSON 优先，sizeText 兜底；缺失返回 null。 */
+    private Integer resolveVariantDepthMm(RspuVariant variant) {
+        int[] dims = parseDimensionsJson(variant.getDimensions());
+        if (dims == null) {
+            dims = parseSizeText(variant.getSizeText());
+        }
+        return dims != null && dims[1] > 0 ? dims[1] : null;
     }
 
     /** 解析单个变体宽度（mm）：dimensions JSON 优先，sizeText 兜底。 */

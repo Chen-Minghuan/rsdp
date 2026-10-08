@@ -143,6 +143,7 @@ public class AgentStreamService {
             }
 
             ctx = new AgentRunContext(sessionId, runId, operatorUserId, request.getContent());
+            ctx.setAuthentication(SecurityContextHolder.getContext().getAuthentication());
             loadRequirement(ctx, session);
             ctx.setFollowupCount(countConsecutiveFollowups(sessionId));
             AgentRunContext.register(ctx);
@@ -313,12 +314,12 @@ public class AgentStreamService {
 
     /** 加载当前需求版本到运行上下文（无版本时为空档案 v0）。 */
     private void loadRequirement(AgentRunContext ctx, AgentSession session) {
+        // W2：有效约束 = 全局 + 当前房间合并；versionNo 仍取会话内最新版本（批次 FK 锚点）
+        ctx.setConstraints(sessionService.effectiveConstraints(session.getSessionId(), session.getActiveRoomId()));
         AgentRequirementVersion latest = sessionService.latestRequirementVersion(session.getSessionId());
         if (latest != null) {
-            ctx.setConstraints(RequirementConstraints.fromJson(latest.getConstraints()));
             ctx.setVersionNo(latest.getVersionNo());
         } else {
-            ctx.setConstraints(new RequirementConstraints());
             ctx.setVersionNo(session.getCurrentVersionNo() != null ? session.getCurrentVersionNo() : 0);
         }
     }

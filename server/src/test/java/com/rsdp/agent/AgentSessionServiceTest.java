@@ -49,6 +49,9 @@ class AgentSessionServiceTest {
     @Mock
     private AgentMessageStore messageStore;
 
+    @Mock
+    private com.rsdp.agent.service.FloorPlanContextService floorPlanContextService;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -278,5 +281,140 @@ class AgentSessionServiceTest {
                 .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
             verify(sessionMapper, never()).deleteById(anyString());
         }
+    }
+
+    // ==================== W2 户型绑定 ====================
+
+    @Test
+    void createWithFloorPlanShouldValidateAndSetDefaultActiveRoom() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            // floor_plan_analysis.created_by 存 username，绑定校验必须传 username 而非 userId（回归守卫）
+            when(SecurityOperatorContext.currentUsername()).thenReturn("designer");
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+            com.rsdp.entity.FloorPlanAnalysis analysis = new com.rsdp.entity.FloorPlanAnalysis();
+            analysis.setAnalysisId("FPA-1");
+            when(floorPlanContextService.requireBindableAnalysis("FPA-1", "designer", false))
+                .thenReturn(analysis);
+            when(floorPlanContextService.listRooms("FPA-1")).thenReturn(java.util.List.of(
+                new com.rsdp.agent.domain.FloorPlanRoomFact("ROOM-1", "客厅", "LIVING_ROOM", 5200, 4300, null),
+                new com.rsdp.agent.domain.FloorPlanRoomFact("ROOM-2", "主卧", "MASTER_BEDROOM", 4200, 3800, null)));
+
+            sessionService.create("王女士", "FPA-1");
+
+            ArgumentCaptor<AgentSession> captor = ArgumentCaptor.forClass(AgentSession.class);
+            verify(sessionMapper).insert(captor.capture());
+            assertThat(captor.getValue().getFloorPlanAnalysisId()).isEqualTo("FPA-1");
+            assertThat(captor.getValue().getActiveRoomId()).isEqualTo("ROOM-1");
+            // 会话归属仍记 userId
+            assertThat(captor.getValue().getCreatedBy()).isEqualTo("user-1");
+            verify(floorPlanContextService).requireBindableAnalysis("FPA-1", "designer", false);
+        }
+    }
+
+    @Test
+    void createWithUnbindableFloorPlanShouldThrowAndNotInsert() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            when(SecurityOperatorContext.currentUsername()).thenReturn("designer");
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+            when(floorPlanContextService.requireBindableAnalysis("FPA-9", "designer", false))
+                .thenThrow(new BusinessException(400, "户型尚未确认，请先完成空间确认"));
+
+            assertThatThrownBy(() -> sessionService.create(null, "FPA-9"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("尚未确认");
+            verify(sessionMapper, never()).insert(any(AgentSession.class));
+        }
+    }
+
+    @Test
+    void activateRoomShouldUpdateWhenRoomBelongsToAnalysis() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            AgentSession session = session("SES-1", "user-1", null);
+            session.setFloorPlanAnalysisId("FPA-1");
+            when(sessionMapper.selectById("SES-1")).thenReturn(session);
+            when(floorPlanContextService.loadContext("FPA-1", null))
+                .thenReturn(new com.rsdp.agent.domain.FloorPlanContext("FPA-1", java.util.List.of(
+                    new com.rsdp.agent.domain.FloorPlanRoomFact("ROOM-1", "客厅", "LIVING_ROOM", 5200, 4300, null),
+                    new com.rsdp.agent.domain.FloorPlanRoomFact("ROOM-2", "主卧", "MASTER_BEDROOM", 4200, 3800, null)
+                ), null));
+
+            sessionService.activateRoom("SES-1", "ROOM-2");
+
+            ArgumentCaptor<AgentSession> captor = ArgumentCaptor.forClass(AgentSession.class);
+            verify(sessionMapper).updateById(captor.capture());
+            assertThat(captor.getValue().getActiveRoomId()).isEqualTo("ROOM-2");
+        }
+    }
+
+    @Test
+    void activateRoomShouldRejectRoomOutsideAnalysis() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            AgentSession session = session("SES-1", "user-1", null);
+            session.setFloorPlanAnalysisId("FPA-1");
+            when(sessionMapper.selectById("SES-1")).thenReturn(session);
+            when(floorPlanContextService.loadContext("FPA-1", null))
+                .thenReturn(new com.rsdp.agent.domain.FloorPlanContext("FPA-1", java.util.List.of(
+                    new com.rsdp.agent.domain.FloorPlanRoomFact("ROOM-1", "客厅", "LIVING_ROOM", 5200, 4300, null)
+                ), null));
+
+            assertThatThrownBy(() -> sessionService.activateRoom("SES-1", "ROOM-9"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不属于当前户型");
+            verify(sessionMapper, never()).updateById(any(AgentSession.class));
+        }
+    }
+
+    @Test
+    void activateRoomShouldRejectSessionWithoutFloorPlan() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            AgentSession session = session("SES-1", "user-1", null);
+            when(sessionMapper.selectById("SES-1")).thenReturn(session);
+
+            assertThatThrownBy(() -> sessionService.activateRoom("SES-1", "ROOM-1"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("未绑定户型");
+        }
+    }
+
+    @Test
+    void effectiveConstraintsShouldMergeGlobalAndRoomScopes() {
+        com.rsdp.agent.entity.AgentRequirementVersion global =
+            new com.rsdp.agent.entity.AgentRequirementVersion();
+        global.setVersionNo(1);
+        global.setConstraints("{\"style\":\"现代意式\",\"budgetMax\":100000,\"color\":\"米白\"}");
+        com.rsdp.agent.entity.AgentRequirementVersion room =
+            new com.rsdp.agent.entity.AgentRequirementVersion();
+        room.setVersionNo(2);
+        room.setConstraints("{\"categoryCode\":\"床\",\"color\":\"暖棕\"}");
+        when(requirementVersionMapper.selectOne(any(QueryWrapper.class)))
+            .thenReturn(global)
+            .thenReturn(room);
+
+        com.rsdp.agent.patch.RequirementConstraints effective =
+            sessionService.effectiveConstraints("SES-1", "ROOM-2");
+
+        assertThat(effective.getStyle()).isEqualTo("现代意式");
+        assertThat(effective.getCategoryCode()).isEqualTo("床");
+        assertThat(effective.getColor()).isEqualTo("暖棕");
+    }
+
+    @Test
+    void effectiveConstraintsWithoutActiveRoomShouldReturnGlobalOnly() {
+        com.rsdp.agent.entity.AgentRequirementVersion global =
+            new com.rsdp.agent.entity.AgentRequirementVersion();
+        global.setVersionNo(1);
+        global.setConstraints("{\"style\":\"MC\",\"categoryCode\":\"沙发\"}");
+        when(requirementVersionMapper.selectOne(any(QueryWrapper.class))).thenReturn(global);
+
+        com.rsdp.agent.patch.RequirementConstraints effective =
+            sessionService.effectiveConstraints("SES-1", null);
+
+        assertThat(effective.getStyle()).isEqualTo("MC");
+        assertThat(effective.getCategoryCode()).isEqualTo("沙发");
     }
 }

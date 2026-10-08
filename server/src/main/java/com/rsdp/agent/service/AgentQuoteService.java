@@ -102,6 +102,7 @@ public class AgentQuoteService {
             AgentQuoteResponse.QuoteLine line = new AgentQuoteResponse.QuoteLine();
             line.setConfirmedItemId(item.getItemId());
             line.setRspuId(item.getRspuId());
+            line.setRoomId(item.getRoomId());
             line.setQuantity(item.getQuantity() != null && item.getQuantity() > 0 ? item.getQuantity() : 1);
             Map<String, Object> spec = parseSpec(item.getSpec());
             line.setProductName(specText(spec, "productName"));

@@ -51,6 +51,7 @@ const { post, imageUrl, requestBase } = usePublicApi()
 const { isLoggedIn: designerLoggedIn, refreshMe } = useDesignerAuth()
 const designerFloorPlanApi = useDesignerFloorPlanApi()
 const publicCadFloorPlanApi = usePublicCadFloorPlanApi()
+const agentApi = useAgentApi()
 const route = useRoute()
 const router = useRouter()
 
@@ -77,6 +78,8 @@ const designerAnalysis = ref<DesignerFloorPlanAnalysis | null>(null)
 const selectedRoomId = ref<string | null>(null)
 const roomsConfirmed = ref(false)
 const confirmingRooms = ref(false)
+/** 正在创建绑定户型的选品会话（W3 直通按钮 loading） */
+const enteringAgent = ref(false)
 const cadViewMode = ref<'canonical' | 'reference'>('canonical')
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -465,6 +468,24 @@ function confirmVisitorRooms() {
   noticeMessage.value = '空间数据已确认，可继续生成搭配方案'
 }
 
+/**
+ * 进入智能选品（W3 ai-match → Agent 直通）：为已确认户型创建绑定会话并跳转 /agent。
+ * 仅设计师链路（isDesignerAnalysis）显示入口；游客 CAD 为匿名凭证，游客模式待 W4。
+ */
+async function enterAgentSelection() {
+  if (enteringAgent.value || !designerAnalysisId.value) return
+  enteringAgent.value = true
+  errorMessage.value = ''
+  try {
+    const session = await agentApi.createSession({ floorPlanAnalysisId: designerAnalysisId.value })
+    await navigateTo(`/agent?sessionId=${encodeURIComponent(session.sessionId)}`)
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '创建选品会话失败，请稍后重试'
+  } finally {
+    enteringAgent.value = false
+  }
+}
+
 async function saveCurrentRooms() {
   if (isVisitorCadAnalysis.value) {
     confirmVisitorRooms()
@@ -803,7 +824,18 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
               <button class="btn-a" :disabled="generating || (requiresRoomConfirmation && !roomsConfirmed)" @click="generate">
                 {{ generating ? '正在生成搭配方案…' : '生成客厅搭配方案' }}
               </button>
+              <button
+                v-if="isDesignerAnalysis && roomsConfirmed"
+                class="btn-agent"
+                :disabled="enteringAgent"
+                @click="enterAgentSelection"
+              >
+                {{ enteringAgent ? '正在创建选品会话…' : '进入智能选品（按房间选）' }}
+              </button>
               <button class="btn-b" @click="restart">重新上传</button>
+            </div>
+            <div v-if="isDesignerAnalysis && roomsConfirmed" class="agent-hint">
+              智能选品将绑定本户型的全部空间，AI 按房间逐个帮你挑家具
             </div>
           </div>
         </div>
@@ -1364,6 +1396,35 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   margin-top: 24px;
   display: flex;
   gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* W3 智能选品直通：强调色实心，介于主按钮与描边按钮之间 */
+.btn-agent {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 14px 36px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  cursor: pointer;
+  letter-spacing: 2px;
+}
+
+.btn-agent:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+.btn-agent:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ink2);
+  line-height: 1.6;
 }
 
 /* 方案结果 */

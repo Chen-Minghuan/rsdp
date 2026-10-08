@@ -2071,18 +2071,21 @@ DELETE /api/v1/scheme-candidates/{candidateId}
 
 | 方法 | 路径（相对统一前缀） | 请求 | 响应 data / 行为 |
 |:---|:---|:---|:---|
-| POST | `/sessions` | 可选 `{ customerName }` | 新会话 |
+| POST | `/sessions` | 可选 `{ customerName, floorPlanAnalysisId }` | 新会话 |
 | GET | `/sessions` | 无 | 可访问的会话列表 |
-| GET | `/sessions/{sessionId}` | 无 | 会话、消息、需求档案、已确认清单 |
+| GET | `/sessions/{sessionId}` | 无 | 会话、消息、需求档案、已确认清单（绑定户型时含 `rooms` 房间事实列表） |
 | POST | `/sessions/{sessionId}/messages/stream` | `{ clientMessageId, content }` | SSE 对话流 |
 | POST | `/sessions/{sessionId}/confirm` | `{ recommendItemId, quantity, idempotencyKey }` | 已确认条目，重复幂等键返回已有记录 |
+| POST | `/sessions/{sessionId}/rooms/{roomId}/activate` | 无 | 切换当前选品房间后的会话 |
 | POST | `/sessions/{sessionId}/close` | 无 | 结束后的会话；运行中拒绝关闭 |
 
 `clientMessageId` 必填且最长 64 字符，`content` 必填且最长 4000 字符；确认数量至少为 1，`idempotencyKey` 必填且最长 128 字符。
 
+户型绑定（W2，V18）：`floorPlanAnalysisId` 可空，传入时校验该户型分析为已确认（confirmed）且归属当前用户，会话默认选中首个房间；会话响应含 `floorPlanAnalysisId` / `activeRoomId`，详情 `rooms` 为只读空间事实（roomId/label/roomType/displayName/widthMm/depthMm/areaM2/active，空间事实不可经 Agent 修改）。需求按作用域拆分：风格/预算/备注为会话级全局，品类/材质/颜色/尺寸等按房间独立版本；`requirement` 事件与需求档案为合并后的有效视图并带 `roomId`/`roomName`，有效约束 = 空间硬约束（开间/进深预留 600mm 过道，只收紧不放宽）> 用户更严约束 > 偏好。推荐批次、已确认条目（`roomId`）、报价行（`roomId`）均可追溯房间；导出方案条目带 `floorPlanRoomId`。未绑定户型的会话行为与口头描述完全一致（场景 A 降级铁律）。
+
 普通接口使用 `{ code, message, data }`。流式接口同步校验失败返回真实 HTTP 错误状态和统一错误响应（会话忙为 HTTP 409、`SESSION_BUSY`）；校验通过后返回 `text/event-stream`，事件包括 `meta/node/token/requirement/cards/done/error`，数据带 `runId/seq`，心跳采用 SSE 注释。异步运行失败通过 `error` 事件通知。
 
-数据库迁移为 `V10__marketing_agent.sql`；基线、重置脚本和 deploy 整理留待后续。实现边界见 [营销 Agent 架构设计](10-营销Agent架构设计-方案C落地与Argus借鉴.md)。
+数据库迁移为 `V10__marketing_agent.sql`（MVP）+ `V18__agent_floor_plan_binding.sql`（W2 户型绑定）；基线、重置脚本和 deploy 整理留待后续。实现边界见 [营销 Agent 架构设计](10-营销Agent架构设计-方案C落地与Argus借鉴.md)。
 
 ---
 

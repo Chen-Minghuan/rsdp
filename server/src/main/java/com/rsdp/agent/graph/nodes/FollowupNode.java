@@ -1,6 +1,7 @@
 package com.rsdp.agent.graph.nodes;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
+import com.rsdp.agent.domain.EffectiveConstraintComposer;
 import com.rsdp.agent.graph.AgentStateKeys;
 import com.rsdp.agent.graph.ConstraintCompleteness;
 import com.rsdp.agent.service.AgentChatService;
@@ -35,12 +36,15 @@ public class FollowupNode extends AbstractAgentNode {
 
     private final AgentChatService chatService;
     private final ConstraintCompleteness completeness;
+    private final EffectiveConstraintComposer constraintComposer;
 
     public FollowupNode(AgentEventBus eventBus, AgentRunRecorder runRecorder,
-                        AgentChatService chatService, ConstraintCompleteness completeness) {
+                        AgentChatService chatService, ConstraintCompleteness completeness,
+                        EffectiveConstraintComposer constraintComposer) {
         super(eventBus, runRecorder);
         this.chatService = chatService;
         this.completeness = completeness;
+        this.constraintComposer = constraintComposer;
     }
 
     @Override
@@ -70,7 +74,10 @@ public class FollowupNode extends AbstractAgentNode {
     }
 
     private String buildUserPrompt(AgentRunContext ctx) {
-        List<String> missing = completeness.missingAspects(ctx.getConstraints());
+        // 户型会话中房间开间已知时，尺寸面由空间硬约束满足，不再追问（与路由同一判定口径）
+        boolean roomProvidesSize = constraintComposer.roomProvidesSizeConstraint(
+            ctx.getFloorPlanContext() != null ? ctx.getFloorPlanContext().activeRoom() : null);
+        List<String> missing = completeness.missingAspects(ctx.getConstraints(), roomProvidesSize);
         return "已收集的需求约束："
             + (ctx.getConstraints() != null ? ctx.getConstraints().toJson() : "{}")
             + "\n缺失的关键信息：" + String.join("、", missing)

@@ -78,6 +78,8 @@ public class AgentConfirmService {
         item.setSpec(recommendItem.getSnapshot());
         item.setQuantity(request.getQuantity());
         item.setStatus("confirmed");
+        // W2：归属房间来自推荐批次（确认时批次已记 room_id）
+        item.setRoomId(batch.getRoomId());
         item.setIdempotencyKey(request.getIdempotencyKey());
         item.setConfirmedBy(SecurityOperatorContext.currentUserId());
         item.setCreatedAt(LocalDateTime.now());

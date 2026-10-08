@@ -43,5 +43,8 @@ public class AgentConfirmedItem {
 
     private String confirmedBy;
 
+    /** 确认产品归属的房间（V19，来自推荐批次，可空=无户型会话）。 */
+    private String roomId;
+
     private LocalDateTime createdAt;
 }

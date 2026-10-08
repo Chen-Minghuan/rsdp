@@ -136,6 +136,8 @@ public class AgentSchemeExportService {
             item.setRskuId(line.getRskuId());
             item.setQuantity(line.getQuantity() != null && line.getQuantity() > 0 ? line.getQuantity() : 1);
             item.setSortOrder(++sortOrder);
+            // W2：报价快照行已带房间归属，导出时透传
+            item.setFloorPlanRoomId(line.getRoomId());
             items.add(item);
         }
         return items;
@@ -167,6 +169,8 @@ public class AgentSchemeExportService {
             item.setQuantity(confirmedItem.getQuantity() != null && confirmedItem.getQuantity() > 0
                 ? confirmedItem.getQuantity() : 1);
             item.setSortOrder(++sortOrder);
+            // W2：方案条目精确到房间（区分主卧/次卧等实际空间）
+            item.setFloorPlanRoomId(confirmedItem.getRoomId());
             items.add(item);
         }
         return items;

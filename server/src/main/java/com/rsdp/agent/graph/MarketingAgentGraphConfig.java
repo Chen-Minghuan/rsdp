@@ -12,10 +12,12 @@ import com.rsdp.agent.graph.nodes.ChitchatNode;
 import com.rsdp.agent.graph.nodes.CompanionMatchNode;
 import com.rsdp.agent.graph.nodes.ActionHintNode;
 import com.rsdp.agent.graph.nodes.ConfirmHintNode;
+import com.rsdp.agent.graph.nodes.FloorPlanContextNode;
 import com.rsdp.agent.graph.nodes.FollowupNode;
 import com.rsdp.agent.graph.nodes.ProductSearchNode;
 import com.rsdp.agent.graph.nodes.RecommendNode;
 import com.rsdp.agent.graph.nodes.RequirementPatchNode;
+import com.rsdp.agent.graph.nodes.RoomSelectNode;
 import com.rsdp.agent.service.AgentCheckpointStore;
 import com.rsdp.agent.service.AgentRunContext;
 import org.springframework.context.annotation.Bean;
@@ -26,8 +28,9 @@ import java.util.Map;
 /**
  * 营销 Agent 图装配（SAA StateGraph）。
  *
- * <p>拓扑：START → requirement_patch →（条件边）→ followup / product_search → recommend /
- * chitchat / confirm_hint / companion_match / action_hint → END。每轮用户消息跑一次完整图
+ * <p>拓扑：START → floor_plan_context（W2 户型事实注入，不调 LLM）→ requirement_patch
+ * →（条件边）→ followup / product_search → recommend /
+ * chitchat / confirm_hint / companion_match / action_hint / room_select → END。每轮用户消息跑一次完整图
  * （run 边界即 HITL 边界），不做图内中断恢复；checkpoint 以 threadId=runId 经
  * {@link AgentCheckpointStore} 留痕。</p>
  *
@@ -38,7 +41,9 @@ import java.util.Map;
 public class MarketingAgentGraphConfig {
 
     @Bean
-    public CompiledGraph marketingAgentGraph(RequirementPatchNode requirementPatchNode,
+    public CompiledGraph marketingAgentGraph(FloorPlanContextNode floorPlanContextNode,
+                                             RoomSelectNode roomSelectNode,
+                                             RequirementPatchNode requirementPatchNode,
                                              FollowupNode followupNode,
                                              ProductSearchNode productSearchNode,
                                              RecommendNode recommendNode,
@@ -49,6 +54,8 @@ public class MarketingAgentGraphConfig {
                                              AgentRouter router,
                                              AgentCheckpointStore checkpointStore) throws GraphStateException {
         StateGraph graph = new StateGraph("marketing-agent", this::keyStrategies)
+            .addNode(AgentStateKeys.NODE_FLOOR_PLAN_CONTEXT, AsyncNodeAction.node_async(floorPlanContextNode))
+            .addNode(AgentStateKeys.NODE_ROOM_SELECT, AsyncNodeAction.node_async(roomSelectNode))
             .addNode(AgentStateKeys.NODE_REQUIREMENT_PATCH, AsyncNodeAction.node_async(requirementPatchNode))
             .addNode(AgentStateKeys.NODE_FOLLOWUP, AsyncNodeAction.node_async(followupNode))
             .addNode(AgentStateKeys.NODE_PRODUCT_SEARCH, AsyncNodeAction.node_async(productSearchNode))
@@ -57,7 +64,8 @@ public class MarketingAgentGraphConfig {
             .addNode(AgentStateKeys.NODE_CONFIRM_HINT, AsyncNodeAction.node_async(confirmHintNode))
             .addNode(AgentStateKeys.NODE_COMPANION_MATCH, AsyncNodeAction.node_async(companionMatchNode))
             .addNode(AgentStateKeys.NODE_ACTION_HINT, AsyncNodeAction.node_async(actionHintNode))
-            .addEdge(StateGraph.START, AgentStateKeys.NODE_REQUIREMENT_PATCH)
+            .addEdge(StateGraph.START, AgentStateKeys.NODE_FLOOR_PLAN_CONTEXT)
+            .addEdge(AgentStateKeys.NODE_FLOOR_PLAN_CONTEXT, AgentStateKeys.NODE_REQUIREMENT_PATCH)
             .addConditionalEdges(AgentStateKeys.NODE_REQUIREMENT_PATCH,
                 AsyncEdgeAction.edge_async(state -> {
                     String runId = state.value(AgentStateKeys.STATE_RUN_ID, "");
@@ -70,10 +78,12 @@ public class MarketingAgentGraphConfig {
                     AgentStateKeys.ROUTE_CHITCHAT, AgentStateKeys.NODE_CHITCHAT,
                     AgentStateKeys.ROUTE_CONFIRM_HINT, AgentStateKeys.NODE_CONFIRM_HINT,
                     AgentStateKeys.ROUTE_COMPANION, AgentStateKeys.NODE_COMPANION_MATCH,
-                    AgentStateKeys.ROUTE_ACTION_HINT, AgentStateKeys.NODE_ACTION_HINT))
+                    AgentStateKeys.ROUTE_ACTION_HINT, AgentStateKeys.NODE_ACTION_HINT,
+                    AgentStateKeys.ROUTE_ROOM_SELECT, AgentStateKeys.NODE_ROOM_SELECT))
             .addEdge(AgentStateKeys.NODE_FOLLOWUP, StateGraph.END)
             .addEdge(AgentStateKeys.NODE_PRODUCT_SEARCH, AgentStateKeys.NODE_RECOMMEND)
             .addEdge(AgentStateKeys.NODE_RECOMMEND, StateGraph.END)
+            .addEdge(AgentStateKeys.NODE_ROOM_SELECT, StateGraph.END)
             .addEdge(AgentStateKeys.NODE_CHITCHAT, StateGraph.END)
             .addEdge(AgentStateKeys.NODE_CONFIRM_HINT, StateGraph.END)
             .addEdge(AgentStateKeys.NODE_COMPANION_MATCH, StateGraph.END)

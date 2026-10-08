@@ -10,6 +10,10 @@ export interface AgentSession {
   status: 'active' | 'closed'
   currentVersionNo: number
   summary: string | null
+  /** 绑定的已确认户型分析 ID（W2，可空=纯口头描述会话） */
+  floorPlanAnalysisId?: string | null
+  /** 当前选品房间 ID（W2，可空） */
+  activeRoomId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -44,6 +48,22 @@ export interface RequirementProfile {
   versionNo: number
   constraints: RequirementConstraints
   source: string
+  /** 当前房间 ID（W2，无户型/未选择为 null） */
+  roomId?: string | null
+  /** 当前房间展示名（W2，无户型/未选择为 null） */
+  roomName?: string | null
+}
+
+/** 会话绑定户型的房间事实（W2，只读展示）。 */
+export interface AgentRoom {
+  roomId: string
+  label: string | null
+  roomType: string
+  displayName: string
+  widthMm: number | null
+  depthMm: number | null
+  areaM2: number | null
+  active: boolean
 }
 
 /** 需求约束字段（均可选，随对话逐步补全）。 */
@@ -98,6 +118,8 @@ export interface ConfirmedItem {
   spec: Record<string, unknown> | null
   quantity: number
   status: string
+  /** 归属房间 ID（W2，来自推荐批次，可空=无户型会话） */
+  roomId?: string | null
   createdAt: string
 }
 
@@ -107,11 +129,15 @@ export interface AgentSessionDetail {
   messages: AgentMessage[]
   requirement: RequirementProfile | null
   confirmedItems: ConfirmedItem[]
+  /** 绑定户型的房间列表（W2；无户型会话为空列表） */
+  rooms?: AgentRoom[]
 }
 
 /** 创建会话请求（设计师代录时填客户名）。 */
 export interface CreateAgentSessionRequest {
   customerName?: string
+  /** 绑定的已确认户型分析 ID（W2，可空=纯口头描述会话） */
+  floorPlanAnalysisId?: string
 }
 
 /** 发送消息请求（SSE 流式）。 */

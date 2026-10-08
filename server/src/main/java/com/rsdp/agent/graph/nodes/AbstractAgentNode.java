@@ -6,6 +6,8 @@ import com.rsdp.agent.graph.AgentStateKeys;
 import com.rsdp.agent.service.AgentEventBus;
 import com.rsdp.agent.service.AgentRunContext;
 import com.rsdp.agent.service.AgentRunRecorder;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.Map;
 
@@ -29,10 +31,18 @@ public abstract class AbstractAgentNode implements NodeAction {
     public Map<String, Object> apply(OverAllState state) throws Exception {
         String runId = state.value(AgentStateKeys.STATE_RUN_ID, "");
         AgentRunContext ctx = AgentRunContext.require(runId);
-        String label = AgentStateKeys.labelOf(nodeName());
-        eventBus.emitNode(runId, nodeName(), label);
-        runRecorder.updateCurrentNode(runId, nodeName());
-        return doApply(state, ctx);
+        SecurityContext previous = SecurityContextHolder.getContext();
+        SecurityContext runSecurityContext = SecurityContextHolder.createEmptyContext();
+        runSecurityContext.setAuthentication(ctx.getAuthentication());
+        SecurityContextHolder.setContext(runSecurityContext);
+        try {
+            String label = AgentStateKeys.labelOf(nodeName());
+            eventBus.emitNode(runId, nodeName(), label);
+            runRecorder.updateCurrentNode(runId, nodeName());
+            return doApply(state, ctx);
+        } finally {
+            SecurityContextHolder.setContext(previous);
+        }
     }
 
     /** 节点主逻辑。 */
