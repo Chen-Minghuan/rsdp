@@ -1,0 +1,491 @@
+{
+  "Result": {
+    "ParseStatus": "NEEDS_REVIEW",
+    "ParserVersion": "1.3.0-p1",
+    "Capabilities": {
+      "rooms": "NEEDS_REVIEW",
+      "walls": "PARTIAL",
+      "doors": "NOT_IMPLEMENTED",
+      "windows": "NOT_IMPLEMENTED",
+      "furniture": "PARTIAL",
+      "dimensions": "PARTIAL"
+    },
+    "UnitResolution": {
+      "RawUnit": "UNITLESS",
+      "DeclaredUnit": null,
+      "CanonicalUnit": "mm",
+      "ScaleToMm": 1,
+      "ScaleSource": "ASSUMED",
+      "ScaleAssumed": true,
+      "Confirmed": false,
+      "Confidence": "low"
+    },
+    "Rooms": [
+      {
+        "RoomId": "ROOM-003",
+        "Label": "主卧",
+        "RoomType": "BEDROOM",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            1640312.3,
+            -151795.2
+          ],
+          [
+            1642253.6,
+            -151795.2
+          ],
+          [
+            1642253.6,
+            -155370.2
+          ],
+          [
+            1639453.6,
+            -155370.2
+          ],
+          [
+            1639453.6,
+            -155295.2
+          ],
+          [
+            1638753.6,
+            -155295.2
+          ],
+          [
+            1638753.6,
+            -152932
+          ],
+          [
+            1639262.3,
+            -152832
+          ],
+          [
+            1639512.3,
+            -152582
+          ],
+          [
+            1639662.3,
+            -152232
+          ],
+          [
+            1640112.3,
+            -152032
+          ],
+          [
+            1640312.3,
+            -151795.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 1638753.6,
+          "MinY": -155370.2,
+          "MaxX": 1642253.6,
+          "MaxY": -151795.2
+        },
+        "WidthMm": 3575,
+        "DepthMm": 3500,
+        "AreaM2": 11.41,
+        "LabelPoint": {
+          "X": 1640503.6,
+          "Y": -154113.6
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "low"
+      },
+      {
+        "RoomId": "ROOM-002",
+        "Label": "次卧",
+        "RoomType": "BEDROOM",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            1638753.6,
+            -151795.2
+          ],
+          [
+            1638212.3,
+            -151795.2
+          ],
+          [
+            1638612.3,
+            -151595.2
+          ],
+          [
+            1636562.3,
+            -151595.2
+          ],
+          [
+            1636162.3,
+            -150595.2
+          ],
+          [
+            1635523.6,
+            -150595.2
+          ],
+          [
+            1635523.6,
+            -148495.2
+          ],
+          [
+            1638612.3,
+            -148495.2
+          ],
+          [
+            1638783.6,
+            -148532
+          ],
+          [
+            1638783.6,
+            -150065.2
+          ],
+          [
+            1639088.7,
+            -150065.2
+          ],
+          [
+            1639088.8,
+            -151895.2
+          ],
+          [
+            1638753.6,
+            -151895.2
+          ],
+          [
+            1638753.6,
+            -151795.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 1635523.6,
+          "MinY": -151895.2,
+          "MaxX": 1639088.8,
+          "MaxY": -148495.2
+        },
+        "WidthMm": 3565,
+        "DepthMm": 3400,
+        "AreaM2": 9.9,
+        "LabelPoint": {
+          "X": 1637306.2,
+          "Y": -150330.2
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "low"
+      },
+      {
+        "RoomId": "ROOM-005",
+        "Label": "衣帽间",
+        "RoomType": "OTHER",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            1639088.7,
+            -150065.2
+          ],
+          [
+            1642253.6,
+            -150065.2
+          ],
+          [
+            1642253.6,
+            -151695.2
+          ],
+          [
+            1640753.6,
+            -151695.2
+          ],
+          [
+            1640753.6,
+            -151795.2
+          ],
+          [
+            1640312.3,
+            -151795.2
+          ],
+          [
+            1640112.3,
+            -152032
+          ],
+          [
+            1639712.3,
+            -152182
+          ],
+          [
+            1639712.3,
+            -151882
+          ],
+          [
+            1639088.8,
+            -151916.6
+          ],
+          [
+            1639088.7,
+            -150065.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 1639088.7,
+          "MinY": -152182,
+          "MaxX": 1642253.6,
+          "MaxY": -150065.2
+        },
+        "WidthMm": 3165,
+        "DepthMm": 2117,
+        "AreaM2": 5.54,
+        "LabelPoint": {
+          "X": 1640671.2,
+          "Y": -150880.2
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "low"
+      },
+      {
+        "RoomId": "ROOM-004",
+        "Label": "主卫",
+        "RoomType": "BATHROOM",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            1641963.6,
+            -148525.2
+          ],
+          [
+            1641963.6,
+            -149075.2
+          ],
+          [
+            1642223.6,
+            -149075.2
+          ],
+          [
+            1642223.6,
+            -150065.2
+          ],
+          [
+            1639763.6,
+            -150065.2
+          ],
+          [
+            1639763.6,
+            -149925.2
+          ],
+          [
+            1638783.6,
+            -149925.2
+          ],
+          [
+            1638783.6,
+            -148525.2
+          ],
+          [
+            1641963.6,
+            -148525.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 1638783.6,
+          "MinY": -150065.2,
+          "MaxX": 1642223.6,
+          "MaxY": -148525.2
+        },
+        "WidthMm": 3440,
+        "DepthMm": 1540,
+        "AreaM2": 5.02,
+        "LabelPoint": {
+          "X": 1640503.6,
+          "Y": -149500.2
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "low"
+      },
+      {
+        "RoomId": "ROOM-001",
+        "Label": "公卫",
+        "RoomType": "BATHROOM",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            1633883.6,
+            -149525.2
+          ],
+          [
+            1633883.6,
+            -150365.2
+          ],
+          [
+            1635523.6,
+            -150365.2
+          ],
+          [
+            1635523.6,
+            -148525.2
+          ],
+          [
+            1634123.6,
+            -148525.2
+          ],
+          [
+            1634123.6,
+            -149525.2
+          ],
+          [
+            1633883.6,
+            -149525.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 1633883.6,
+          "MinY": -150365.2,
+          "MaxX": 1635523.6,
+          "MaxY": -148525.2
+        },
+        "WidthMm": 1840,
+        "DepthMm": 1640,
+        "AreaM2": 2.78,
+        "LabelPoint": {
+          "X": 1634823.6,
+          "Y": -149025.2
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "low"
+      }
+    ],
+    "UnnamedRegions": [],
+    "QualityIssues": [
+      {
+        "Level": "warn",
+        "Code": "UNIT_ASSUMED",
+        "Message": "文件无单位标记（INSUNITS=Unitless），按毫米处理，单位待确认"
+      },
+      {
+        "Level": "warn",
+        "Code": "NON_PLANAR_GEOMETRY",
+        "Message": "模型空间 Z 范围 -2720~1200mm 超过容差 10mm，存在多高程/三维信息，已按 XY 投影处理"
+      },
+      {
+        "Level": "warn",
+        "Code": "ROOMS_FROM_RASTER_REBUILD",
+        "Message": "墙体断线过多，已用栅格形态学估计空间；轮廓与面积需逐房间复核"
+      },
+      {
+        "Level": "warn",
+        "Code": "ROOMS_FROM_LABEL_PARTITION",
+        "Message": "部分连通区域依据可见房间名位置临时分区；分界线为估计线，需按参考图逐房间校正"
+      },
+      {
+        "Level": "warn",
+        "Code": "WALL_SNAP_REVERTED",
+        "Message": "1 个空间吸附到墙体内侧面后校验未过（面积突变/压墙），已回退原轮廓：公卫"
+      },
+      {
+        "Level": "warn",
+        "Code": "WALL_FACE_NOT_FOUND",
+        "Message": "4 个空间存在未找到墙体内侧面的边（开放区/无墙侧），已保持原轮廓：主卧(8/14边吸附)、次卧(13/22边吸附)、衣帽间(8/14边吸附)、主卫(7/9边吸附)"
+      },
+      {
+        "Level": "warn",
+        "Code": "ROOM_LABELS_WITHOUT_GEOMETRY",
+        "Message": "可见房间名尚有 8 个无对应空间：书房、储物间、厨房、客厅、景观阳台、玄关、过道、餐厅；需在校对页补画或调整边界"
+      },
+      {
+        "Level": "warn",
+        "Code": "UNSUPPORTED_ENTITIES",
+        "Message": "存在不支持/降级的实体类型（已保留包围盒，未静默丢弃）：Point×4"
+      }
+    ],
+    "TargetScene": {
+      "TargetId": "SCENE-86d374db",
+      "SourceSpace": "MODEL_SPACE",
+      "Bounds": {
+        "MinX": 1623362.3,
+        "MinY": -162492.5,
+        "MaxX": 1647292.5,
+        "MaxY": -143082
+      },
+      "SelectionSource": "AUTO",
+      "SelectionConfidence": "mid",
+      "Reasons": [
+        "ROOM_LABEL_DENSITY"
+      ]
+    },
+    "TargetSceneCandidates": [
+      {
+        "TargetId": "SCENE-86d374db",
+        "SourceSpace": "MODEL_SPACE",
+        "Bounds": {
+          "MinX": 1623362.3,
+          "MinY": -162492.5,
+          "MaxX": 1647292.5,
+          "MaxY": -143082
+        },
+        "Score": 1,
+        "Reasons": [
+          "ROOM_LABEL_DENSITY"
+        ],
+        "Recommended": true
+      }
+    ],
+    "UnsupportedEntitySummary": {
+      "Point": 4
+    }
+  },
+  "Diagnostics": [
+    "DWG/DXF 版本=AC1032，INSUNITS=Unitless，毫米系数=1",
+    "INSERT 实例：148 个顶层节点，展开图元 4451 个",
+    "模型空间实体：直接 274 个（另块展开 4451 个供家具/预览）",
+    "子图 #0：实体 274，跨度 18.4m×13.8m，房间标签命中 1",
+    "面积标注（去重后）：0 处 → []",
+    "户型副本 1 个（按标签聚类），目标副本：标签 13 种、面积标注 0 处，区域 (1623.4,-162.5)~(1647.3,-143.1)",
+    "目标区域内实体：274 个",
+    "目标子图内无 HATCH 墙体，转入墙线图层兜底（线网多边形化）",
+    "目标区域文字 8、DIMENSION 26",
+    "线网多边形化：墙线 146 + 门线 3 + 门洞闭合线 109（吸附 5mm）→ cells 32 个",
+    "语义归并：0 个凹位/楔子并入邻居",
+    "门槛石减除：0 处（标注引导）",
+    "墙体内侧面：完成面线 5 实体 → 31 段；实心墙身边界 0 环 → 0 段；墙线 225 段（配对 45 对）",
+    "内侧面吸附：32 空间 → 贴合 12，门洞拉直 5 处，回退 20，部分边无内侧面 3",
+    "块展开建筑几何：345 图元（排除家具角色节点 65 个、噪声图层 2298 图元）",
+    "目标子图内无 HATCH 墙体，转入墙线图层兜底（线网多边形化）",
+    "【块展开回退】目标区域文字 36、DIMENSION 26",
+    "线网多边形化：墙线 331 + 门线 139 + 门洞闭合线 339（吸附 5mm）→ cells 76 个",
+    "语义归并：11 个凹位/楔子并入邻居",
+    "门槛石减除：0 处（标注引导）",
+    "墙体内侧面：完成面线 5 实体 → 31 段；实心墙身边界 0 环 → 0 段；墙线 845 段（配对 54 对）",
+    "【块展开回退】内侧面吸附：65 空间 → 贴合 32，门洞拉直 33 处，回退 33，部分边无内侧面 18",
+    "块展开回退仍无空间产出",
+    "块展开建筑几何（栅格宽集）：2249 图元（排除家具角色节点 65 个、噪声图层 394 图元）",
+    "目标子图内无 HATCH 墙体，转入墙线图层兜底（线网多边形化）",
+    "WALL-SOURCE D门: entities=67 segments=206 blocks=*U21:12,*U22:12,*U58:12,$DorLib2D$00000225:10,*U46:6,*U215:6",
+    "WALL-SOURCE WINDOW: entities=42 segments=51 blocks=$WINLIB2D$00000001:18,$DorLib2D$00000131:14,*U11:7,DIRECT:3",
+    "WALL-SOURCE A原建筑墙体: entities=107 segments=117 blocks=DIRECT:107",
+    "WALL-SOURCE W新建墙体: entities=127 segments=216 blocks=*U53:76,DIRECT:18,*U213:12,*U9:7,*U10:7,*U12:7",
+    "WALL-SOURCE W装饰完成面: entities=5 segments=31 blocks=DIRECT:5",
+    "WALL-SOURCE 梁: entities=9 segments=55 blocks=*U205:9",
+    "WALL-SOURCE D门套: entities=72 segments=72 blocks=*U132:36,*U44:18,*U47:18",
+    "栅格空间重建（P1-E）：519×429px（50mm/px），膨胀 450mm，分量 3、标签补种 3 → 产出 2（面积过滤 4，贴边丢弃 0）",
+    "栅格重建选择封口半径 600mm：原始空间 4，标签分区 1 处 → 5 个，独立标签 5、覆盖标签 5/13",
+    "墙体内侧面：完成面线 5 实体 → 31 段；实心墙身边界 0 环 → 0 段；墙线 466 段（配对 57 对）",
+    "【栅格重建】内侧面吸附：5 空间 → 贴合 4，门洞拉直 8 处，回退 1，部分边无内侧面 4",
+    "闭合完成面恢复 2 个房间（替换估计边界）",
+    "输出：命名房间 5，未命名空间 0",
+    "非家具块排除 56 个 INSERT 实例（门/窗/洁具/灯具/标注/设备等）",
+    "方案级容器块剔除 3 个 INSERT 实例（跨度超 8m，下钻子块找真家具，不作为单件家具）",
+    "家具候选 89 个（UNKNOWN 26 个）",
+    "drawingBounds（几何外包络+200mm）：(1633684,-155570)~(1642454,-148295)",
+    "规范预览：1400×1388px，建筑与家具图元 4652/4725",
+    "parseStatus=NEEDS_REVIEW，capabilities=rooms:NEEDS_REVIEW,walls:PARTIAL,doors:NOT_IMPLEMENTED,windows:NOT_IMPLEMENTED,furniture:PARTIAL,dimensions:PARTIAL"
+  ],
+  "FurnitureSummary": {
+    "count": 89,
+    "unknown": 26
+  }
+}

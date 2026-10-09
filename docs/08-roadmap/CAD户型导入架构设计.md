@@ -1,5 +1,8 @@
 # RSDP CAD 户型导入架构设计（DWG/DXF 精确解析）
 
+> ⚠️ 2026-10-05 起，Parser 目标架构升级为 CAD Scene Engine，见
+> `docs/08-roadmap/CAD_Scene_Engine_目标架构.md`（本文保留为 P1~P3 时代历史设计参考）。
+
 > **版本：** v1.1
 > **日期：** 2026-09-17
 > **状态：** 设计稿（v1.1：与营销 Agent 解耦，CAD 导入作为独立能力先行交付）

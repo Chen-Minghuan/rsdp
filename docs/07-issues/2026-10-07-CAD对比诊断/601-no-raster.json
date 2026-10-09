@@ -1,0 +1,209 @@
+{
+  "Result": {
+    "ParseStatus": "PARTIAL",
+    "ParserVersion": "1.3.0-p1",
+    "Capabilities": {
+      "rooms": "PARTIAL",
+      "walls": "NEEDS_REVIEW",
+      "doors": "NOT_IMPLEMENTED",
+      "windows": "NOT_IMPLEMENTED",
+      "furniture": "PARTIAL",
+      "dimensions": "PARTIAL"
+    },
+    "UnitResolution": {
+      "RawUnit": "UNITLESS",
+      "DeclaredUnit": null,
+      "CanonicalUnit": "mm",
+      "ScaleToMm": 1,
+      "ScaleSource": "ASSUMED",
+      "ScaleAssumed": true,
+      "Confirmed": false,
+      "Confidence": "low"
+    },
+    "Rooms": [],
+    "UnnamedRegions": [
+      {
+        "RoomId": "ROOM-001",
+        "Polygon": [
+          [
+            1642453.6,
+            -157271.8
+          ],
+          [
+            1642319.7,
+            -157595.2
+          ],
+          [
+            1642160.7,
+            -157802.3
+          ],
+          [
+            1641953.6,
+            -157961.3
+          ],
+          [
+            1641630.2,
+            -158095.2
+          ],
+          [
+            1641453.6,
+            -158095.2
+          ],
+          [
+            1641453.6,
+            -157895.2
+          ],
+          [
+            1641594.9,
+            -157895.2
+          ],
+          [
+            1641853.6,
+            -157788.1
+          ],
+          [
+            1642019.3,
+            -157660.9
+          ],
+          [
+            1642146.4,
+            -157495.2
+          ],
+          [
+            1642253.6,
+            -157236.5
+          ],
+          [
+            1642253.6,
+            -150195
+          ],
+          [
+            1642453.6,
+            -149395
+          ],
+          [
+            1642453.6,
+            -157271.8
+          ]
+        ],
+        "BBox": {
+          "MinX": 1641453.6,
+          "MinY": -158095.2,
+          "MaxX": 1642453.6,
+          "MaxY": -149395
+        },
+        "WidthMm": 8700,
+        "DepthMm": 1000,
+        "AreaM2": 1.74,
+        "LabelPoint": {
+          "X": 1642353.6,
+          "Y": -153715.7
+        },
+        "Hint": "相邻标签：储物间（距离 12639mm）"
+      }
+    ],
+    "QualityIssues": [
+      {
+        "Level": "warn",
+        "Code": "UNIT_ASSUMED",
+        "Message": "文件无单位标记（INSUNITS=Unitless），按毫米处理，单位待确认"
+      },
+      {
+        "Level": "warn",
+        "Code": "NON_PLANAR_GEOMETRY",
+        "Message": "模型空间 Z 范围 -2720~1200mm 超过容差 10mm，存在多高程/三维信息，已按 XY 投影处理"
+      },
+      {
+        "Level": "warn",
+        "Code": "WALL_SNAP_REVERTED",
+        "Message": "20 个空间吸附到墙体内侧面后校验未过（面积突变/压墙），已回退原轮廓：未命名(1.3㎡)、未命名(0.7㎡)、未命名(0.5㎡)、未命名(0.5㎡)、未命名(0.5㎡)、未命名(0.4㎡)、未命名(0.4㎡)、未命名(0.3㎡)"
+      },
+      {
+        "Level": "warn",
+        "Code": "WALL_FACE_NOT_FOUND",
+        "Message": "3 个空间存在未找到墙体内侧面的边（开放区/无墙侧），已保持原轮廓：未命名(0.6㎡)(2/4边吸附)、未命名(0.4㎡)(2/4边吸附)、未命名(0.3㎡)(2/4边吸附)"
+      },
+      {
+        "Level": "warn",
+        "Code": "ROOM_LABELS_WITHOUT_GEOMETRY",
+        "Message": "可见房间名尚有 13 个无对应空间：主卧、主卫、书房、储物间、公卫、厨房、客厅、景观阳台、次卧、玄关、衣帽间、过道、餐厅；需在校对页补画或调整边界"
+      },
+      {
+        "Level": "warn",
+        "Code": "UNSUPPORTED_ENTITIES",
+        "Message": "存在不支持/降级的实体类型（已保留包围盒，未静默丢弃）：Point×4"
+      }
+    ],
+    "TargetScene": {
+      "TargetId": "SCENE-86d374db",
+      "SourceSpace": "MODEL_SPACE",
+      "Bounds": {
+        "MinX": 1623362.3,
+        "MinY": -162492.5,
+        "MaxX": 1647292.5,
+        "MaxY": -143082
+      },
+      "SelectionSource": "AUTO",
+      "SelectionConfidence": "mid",
+      "Reasons": [
+        "ROOM_LABEL_DENSITY"
+      ]
+    },
+    "TargetSceneCandidates": [
+      {
+        "TargetId": "SCENE-86d374db",
+        "SourceSpace": "MODEL_SPACE",
+        "Bounds": {
+          "MinX": 1623362.3,
+          "MinY": -162492.5,
+          "MaxX": 1647292.5,
+          "MaxY": -143082
+        },
+        "Score": 1,
+        "Reasons": [
+          "ROOM_LABEL_DENSITY"
+        ],
+        "Recommended": true
+      }
+    ],
+    "UnsupportedEntitySummary": {
+      "Point": 4
+    }
+  },
+  "Diagnostics": [
+    "DWG/DXF 版本=AC1032，INSUNITS=Unitless，毫米系数=1",
+    "INSERT 实例：148 个顶层节点，展开图元 4451 个",
+    "模型空间实体：直接 274 个（另块展开 4451 个供家具/预览）",
+    "子图 #0：实体 274，跨度 18.4m×13.8m，房间标签命中 1",
+    "面积标注（去重后）：0 处 → []",
+    "户型副本 1 个（按标签聚类），目标副本：标签 13 种、面积标注 0 处，区域 (1623.4,-162.5)~(1647.3,-143.1)",
+    "目标区域内实体：274 个",
+    "目标子图内无 HATCH 墙体，转入墙线图层兜底（线网多边形化）",
+    "目标区域文字 8、DIMENSION 26",
+    "线网多边形化：墙线 146 + 门线 3 + 门洞闭合线 109（吸附 5mm）→ cells 32 个",
+    "语义归并：0 个凹位/楔子并入邻居",
+    "门槛石减除：0 处（标注引导）",
+    "墙体内侧面：完成面线 5 实体 → 31 段；实心墙身边界 0 环 → 0 段；墙线 225 段（配对 45 对）",
+    "内侧面吸附：32 空间 → 贴合 12，门洞拉直 5 处，回退 20，部分边无内侧面 3",
+    "块展开建筑几何：345 图元（排除家具角色节点 65 个、噪声图层 2298 图元）",
+    "目标子图内无 HATCH 墙体，转入墙线图层兜底（线网多边形化）",
+    "【块展开回退】目标区域文字 36、DIMENSION 26",
+    "线网多边形化：墙线 331 + 门线 139 + 门洞闭合线 339（吸附 5mm）→ cells 76 个",
+    "语义归并：11 个凹位/楔子并入邻居",
+    "门槛石减除：0 处（标注引导）",
+    "墙体内侧面：完成面线 5 实体 → 31 段；实心墙身边界 0 环 → 0 段；墙线 845 段（配对 54 对）",
+    "【块展开回退】内侧面吸附：65 空间 → 贴合 32，门洞拉直 33 处，回退 33，部分边无内侧面 18",
+    "块展开回退仍无空间产出",
+    "输出：命名房间 0，未命名空间 1",
+    "非家具块排除 56 个 INSERT 实例（门/窗/洁具/灯具/标注/设备等）",
+    "方案级容器块剔除 3 个 INSERT 实例（跨度超 8m，下钻子块找真家具，不作为单件家具）",
+    "家具候选 89 个（UNKNOWN 26 个）",
+    "drawingBounds（几何外包络+200mm）：(1641254,-158295)~(1642654,-149195)",
+    "规范预览：467×1400px，建筑与家具图元 4652/4725",
+    "parseStatus=PARTIAL，capabilities=rooms:PARTIAL,walls:NEEDS_REVIEW,doors:NOT_IMPLEMENTED,windows:NOT_IMPLEMENTED,furniture:PARTIAL,dimensions:PARTIAL"
+  ],
+  "FurnitureSummary": {
+    "count": 89,
+    "unknown": 26
+  }
+}

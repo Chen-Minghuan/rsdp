@@ -1,0 +1,951 @@
+{
+  "Result": {
+    "ParseStatus": "PARTIAL",
+    "ParserVersion": "1.3.0-p1",
+    "Capabilities": {
+      "rooms": "PARTIAL",
+      "walls": "PARTIAL",
+      "doors": "NOT_IMPLEMENTED",
+      "windows": "NOT_IMPLEMENTED",
+      "furniture": "SUCCESS",
+      "dimensions": "PARTIAL"
+    },
+    "UnitResolution": {
+      "RawUnit": "MILLIMETER",
+      "DeclaredUnit": "MILLIMETER",
+      "CanonicalUnit": "mm",
+      "ScaleToMm": 1,
+      "ScaleSource": "HEADER",
+      "ScaleAssumed": false,
+      "Confirmed": true,
+      "Confidence": "high"
+    },
+    "Rooms": [
+      {
+        "RoomId": "ROOM-002",
+        "Label": "客厅",
+        "RoomType": "LIVING_ROOM",
+        "MemberLabels": [
+          "餐厅",
+          "厨房"
+        ],
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            142403.8,
+            -52647.2
+          ],
+          [
+            142403.8,
+            -56905
+          ],
+          [
+            133633.8,
+            -56905
+          ],
+          [
+            133633.8,
+            -53057.2
+          ],
+          [
+            134083.8,
+            -53057.2
+          ],
+          [
+            134083.8,
+            -52647.2
+          ],
+          [
+            142403.8,
+            -52647.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 133633.8,
+          "MinY": -56905,
+          "MaxX": 142403.8,
+          "MaxY": -52647.2
+        },
+        "WidthMm": 8770,
+        "DepthMm": 4258,
+        "AreaM2": 37.16,
+        "LabelPoint": {
+          "X": 138018.8,
+          "Y": -54981.1
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-003",
+        "Label": "休闲阳台",
+        "RoomType": "BALCONY",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            142403.8,
+            -57771.4
+          ],
+          [
+            142403.8,
+            -58327.5
+          ],
+          [
+            142169.5,
+            -58632.9
+          ],
+          [
+            142003.8,
+            -58760
+          ],
+          [
+            141745.1,
+            -58867.2
+          ],
+          [
+            135643.8,
+            -58867.2
+          ],
+          [
+            135643.8,
+            -57145
+          ],
+          [
+            141297.2,
+            -57203.9
+          ],
+          [
+            142347.3,
+            -57342.2
+          ],
+          [
+            142403.8,
+            -57771.4
+          ]
+        ],
+        "BBox": {
+          "MinX": 135643.8,
+          "MinY": -58867.2,
+          "MaxX": 142403.8,
+          "MaxY": -57145
+        },
+        "WidthMm": 6760,
+        "DepthMm": 1722,
+        "AreaM2": 11.18,
+        "LabelPoint": {
+          "X": 139023.8,
+          "Y": -58049.4
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-008",
+        "Label": "小孩房",
+        "RoomType": "BEDROOM",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            142643.8,
+            -45247.2
+          ],
+          [
+            145434.2,
+            -45247.2
+          ],
+          [
+            145653,
+            -45384.5
+          ],
+          [
+            145723.8,
+            -45586.8
+          ],
+          [
+            145723.8,
+            -48607.2
+          ],
+          [
+            142643.8,
+            -48607.2
+          ],
+          [
+            142643.8,
+            -45247.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 142643.8,
+          "MinY": -48607.2,
+          "MaxX": 145723.8,
+          "MaxY": -45247.2
+        },
+        "WidthMm": 3360,
+        "DepthMm": 3080,
+        "AreaM2": 10.32,
+        "LabelPoint": {
+          "X": 144183.8,
+          "Y": -47097
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-004",
+        "Label": "次卧",
+        "RoomType": "BEDROOM",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            137773.8,
+            -45247.2
+          ],
+          [
+            140703.8,
+            -45247.2
+          ],
+          [
+            140703.8,
+            -48607.2
+          ],
+          [
+            137773.8,
+            -48607.2
+          ],
+          [
+            137773.8,
+            -45247.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 137773.8,
+          "MinY": -48607.2,
+          "MaxX": 140703.8,
+          "MaxY": -45247.2
+        },
+        "WidthMm": 3360,
+        "DepthMm": 2930,
+        "AreaM2": 9.84,
+        "LabelPoint": {
+          "X": 139238.8,
+          "Y": -46927.2
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-007",
+        "Label": "主卧",
+        "RoomType": "BEDROOM",
+        "MemberLabels": [
+          "衣帽间"
+        ],
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            142645,
+            -52407.2
+          ],
+          [
+            140743.8,
+            -52407.2
+          ],
+          [
+            140743.8,
+            -50037.2
+          ],
+          [
+            144293.8,
+            -50037.2
+          ],
+          [
+            144293.6,
+            -51607.2
+          ],
+          [
+            143743.6,
+            -51607.2
+          ],
+          [
+            143743.5,
+            -52716.1
+          ],
+          [
+            142645,
+            -52407.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 140743.8,
+          "MinY": -52716.1,
+          "MaxX": 144293.8,
+          "MaxY": -50037.2
+        },
+        "WidthMm": 3550,
+        "DepthMm": 2679,
+        "AreaM2": 8.14,
+        "LabelPoint": {
+          "X": 142518.8,
+          "Y": -50822.2
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-010",
+        "Label": "书房",
+        "RoomType": "STUDY",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            146823.8,
+            -48847.2
+          ],
+          [
+            146823.8,
+            -51607.2
+          ],
+          [
+            144413.6,
+            -51607.2
+          ],
+          [
+            144413.8,
+            -49917.2
+          ],
+          [
+            143743.8,
+            -49917.2
+          ],
+          [
+            143743.8,
+            -48847.2
+          ],
+          [
+            146823.8,
+            -48847.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 143743.8,
+          "MinY": -51607.2,
+          "MaxX": 146823.8,
+          "MaxY": -48847.2
+        },
+        "WidthMm": 3080,
+        "DepthMm": 2760,
+        "AreaM2": 7.37,
+        "LabelPoint": {
+          "X": 145618.8,
+          "Y": -50762.2
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-005",
+        "Label": "玄关",
+        "RoomType": "HALLWAY",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            138843.8,
+            -48847.2
+          ],
+          [
+            140690.3,
+            -48847.2
+          ],
+          [
+            140623.8,
+            -49915
+          ],
+          [
+            140623.8,
+            -52645
+          ],
+          [
+            138843.8,
+            -52645
+          ],
+          [
+            138843.8,
+            -48847.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 138843.8,
+          "MinY": -52645,
+          "MaxX": 140690.3,
+          "MaxY": -48847.2
+        },
+        "WidthMm": 3798,
+        "DepthMm": 1847,
+        "AreaM2": 6.8,
+        "LabelPoint": {
+          "X": 139733.8,
+          "Y": -51280
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-009",
+        "Label": "主卫",
+        "RoomType": "BATHROOM",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            143893.5,
+            -52750
+          ],
+          [
+            143893.8,
+            -51877.2
+          ],
+          [
+            146823.8,
+            -51877.2
+          ],
+          [
+            146823.8,
+            -53217.2
+          ],
+          [
+            145793.8,
+            -53217.2
+          ],
+          [
+            145793.8,
+            -53597.2
+          ],
+          [
+            143895,
+            -53597.2
+          ],
+          [
+            143863.2,
+            -53530
+          ],
+          [
+            143863.5,
+            -52750
+          ],
+          [
+            143893.5,
+            -52750
+          ]
+        ],
+        "BBox": {
+          "MinX": 143863.2,
+          "MinY": -53597.2,
+          "MaxX": 146823.8,
+          "MaxY": -51877.2
+        },
+        "WidthMm": 2961,
+        "DepthMm": 1720,
+        "AreaM2": 4.67,
+        "LabelPoint": {
+          "X": 145358.7,
+          "Y": -52313.6
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-001",
+        "Label": "生活阳台",
+        "RoomType": "BALCONY",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            133633.8,
+            -58867.2
+          ],
+          [
+            133633.8,
+            -58342.4
+          ],
+          [
+            133890.7,
+            -57530.8
+          ],
+          [
+            134244,
+            -57530.8
+          ],
+          [
+            134244,
+            -57147.2
+          ],
+          [
+            135403.8,
+            -57147.2
+          ],
+          [
+            135403.8,
+            -58867.2
+          ],
+          [
+            133633.8,
+            -58867.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 133633.8,
+          "MinY": -58867.2,
+          "MaxX": 135403.8,
+          "MaxY": -57147.2
+        },
+        "WidthMm": 1770,
+        "DepthMm": 1720,
+        "AreaM2": 2.71,
+        "LabelPoint": {
+          "X": 134583,
+          "Y": -57936.6
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      },
+      {
+        "RoomId": "ROOM-006",
+        "Label": "公卫",
+        "RoomType": "BATHROOM",
+        "MemberLabels": null,
+        "SpaceGroup": null,
+        "Polygon": [
+          [
+            140853.8,
+            -46835
+          ],
+          [
+            140853.8,
+            -45247.2
+          ],
+          [
+            141913.8,
+            -45247.2
+          ],
+          [
+            141913.8,
+            -45537.2
+          ],
+          [
+            142403.8,
+            -45537.2
+          ],
+          [
+            142403.8,
+            -46927.2
+          ],
+          [
+            141685,
+            -46927.2
+          ],
+          [
+            141685,
+            -46867.2
+          ],
+          [
+            140905,
+            -46867.2
+          ],
+          [
+            140905,
+            -46835
+          ],
+          [
+            140853.8,
+            -46835
+          ]
+        ],
+        "BBox": {
+          "MinX": 140853.8,
+          "MinY": -46927.2,
+          "MaxX": 142403.8,
+          "MaxY": -45247.2
+        },
+        "WidthMm": 1680,
+        "DepthMm": 1550,
+        "AreaM2": 2.41,
+        "LabelPoint": {
+          "X": 141628.8,
+          "Y": -46186.1
+        },
+        "DimensionSource": "cad_geometry",
+        "DimensionCheck": null,
+        "Confidence": "mid"
+      }
+    ],
+    "UnnamedRegions": [
+      {
+        "RoomId": "ROOM-014",
+        "Polygon": [
+          [
+            146225,
+            -53745
+          ],
+          [
+            146225,
+            -57065
+          ],
+          [
+            146225,
+            -57105
+          ],
+          [
+            146210,
+            -57210
+          ],
+          [
+            146170,
+            -57305
+          ],
+          [
+            146105,
+            -57390
+          ],
+          [
+            146025,
+            -57455
+          ],
+          [
+            145925,
+            -57495
+          ],
+          [
+            145825,
+            -57505
+          ],
+          [
+            142845,
+            -57505
+          ],
+          [
+            142845,
+            -56905
+          ],
+          [
+            142645,
+            -56905
+          ],
+          [
+            142645,
+            -55705
+          ],
+          [
+            142645,
+            -53345
+          ],
+          [
+            142645,
+            -52405
+          ],
+          [
+            143745,
+            -52716.1
+          ],
+          [
+            143745,
+            -52750
+          ],
+          [
+            143865,
+            -52750
+          ],
+          [
+            143865,
+            -53530
+          ],
+          [
+            143745,
+            -53530
+          ],
+          [
+            143745,
+            -53745
+          ],
+          [
+            146225,
+            -53745
+          ]
+        ],
+        "BBox": {
+          "MinX": 142645,
+          "MinY": -57505,
+          "MaxX": 146225,
+          "MaxY": -52405
+        },
+        "WidthMm": 5100,
+        "DepthMm": 3580,
+        "AreaM2": 14.7,
+        "LabelPoint": {
+          "X": 144435,
+          "Y": -54725
+        },
+        "Hint": "相邻标签：主卫（距离 2291mm）"
+      },
+      {
+        "RoomId": "ROOM-013",
+        "Polygon": [
+          [
+            140853.8,
+            -48845
+          ],
+          [
+            140853.8,
+            -48417.2
+          ],
+          [
+            141743.3,
+            -48417.2
+          ],
+          [
+            141743.3,
+            -48847.2
+          ],
+          [
+            141903.8,
+            -48847.2
+          ],
+          [
+            141903.8,
+            -48547.2
+          ],
+          [
+            142403.8,
+            -48547.2
+          ],
+          [
+            142403.8,
+            -48607.2
+          ],
+          [
+            143743.8,
+            -48607.2
+          ],
+          [
+            143743.8,
+            -49917.2
+          ],
+          [
+            140751.7,
+            -49917.2
+          ],
+          [
+            140811.6,
+            -48845
+          ],
+          [
+            140853.8,
+            -48845
+          ]
+        ],
+        "BBox": {
+          "MinX": 140751.7,
+          "MinY": -49917.2,
+          "MaxX": 143743.8,
+          "MaxY": -48417.2
+        },
+        "WidthMm": 2992,
+        "DepthMm": 1500,
+        "AreaM2": 4.02,
+        "LabelPoint": {
+          "X": 142262.7,
+          "Y": -49382.2
+        },
+        "Hint": "相邻标签：小孩房（距离 1224mm）"
+      },
+      {
+        "RoomId": "ROOM-012",
+        "Polygon": [
+          [
+            140885,
+            -48417.2
+          ],
+          [
+            140853.8,
+            -48575
+          ],
+          [
+            140853.8,
+            -46867.2
+          ],
+          [
+            141683.8,
+            -46867.2
+          ],
+          [
+            141683.8,
+            -46927.2
+          ],
+          [
+            142373.8,
+            -46927.2
+          ],
+          [
+            142373.8,
+            -48417.2
+          ],
+          [
+            140885,
+            -48417.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 140853.8,
+          "MinY": -48575,
+          "MaxX": 142373.8,
+          "MaxY": -46867.2
+        },
+        "WidthMm": 1708,
+        "DepthMm": 1520,
+        "AreaM2": 2.32,
+        "LabelPoint": {
+          "X": 141613.8,
+          "Y": -47672.2
+        },
+        "Hint": "相邻标签：公卫（距离 1289mm）"
+      },
+      {
+        "RoomId": "ROOM-011",
+        "Polygon": [
+          [
+            135973.8,
+            -50337.2
+          ],
+          [
+            135973.8,
+            -52407.2
+          ],
+          [
+            133593.8,
+            -52407.2
+          ],
+          [
+            133593.8,
+            -50337.2
+          ],
+          [
+            135973.8,
+            -50337.2
+          ]
+        ],
+        "BBox": {
+          "MinX": 133593.8,
+          "MinY": -52407.2,
+          "MaxX": 135973.8,
+          "MaxY": -50337.2
+        },
+        "WidthMm": 2380,
+        "DepthMm": 2070,
+        "AreaM2": 1.56,
+        "LabelPoint": {
+          "X": 133694.4,
+          "Y": -51095
+        },
+        "Hint": "相邻标签：厨房（距离 3148mm）"
+      }
+    ],
+    "QualityIssues": [
+      {
+        "Level": "warn",
+        "Code": "NON_PLANAR_GEOMETRY",
+        "Message": "模型空间 Z 范围 -1~390mm 超过容差 10mm，存在多高程/三维信息，已按 XY 投影处理"
+      },
+      {
+        "Level": "warn",
+        "Code": "WALL_SNAP_REVERTED",
+        "Message": "30 个空间吸附到墙体内侧面后校验未过（面积突变/压墙），已回退原轮廓：未命名(14.7㎡)、未命名(0.8㎡)、未命名(0.8㎡)、未命名(0.4㎡)、未命名(0.4㎡)、未命名(0.3㎡)、未命名(0.2㎡)、未命名(0.2㎡)"
+      },
+      {
+        "Level": "warn",
+        "Code": "WALL_FACE_NOT_FOUND",
+        "Message": "38 个空间存在未找到墙体内侧面的边（开放区/无墙侧），已保持原轮廓：客厅(5/6边吸附)、休闲阳台(8/9边吸附)、主卧(6/7边吸附)、主卫(7/10边吸附)、未命名(3.5㎡)(10/12边吸附)、公卫(7/10边吸附)、未命名(1.1㎡)(6/10边吸附)、未命名(0.8㎡)(2/4边吸附)"
+      },
+      {
+        "Level": "warn",
+        "Code": "UNSUPPORTED_ENTITIES",
+        "Message": "存在不支持/降级的实体类型（已保留包围盒，未静默丢弃）：Leader×1"
+      }
+    ],
+    "TargetScene": {
+      "TargetId": "SCENE-bea12b98",
+      "SourceSpace": "MODEL_SPACE",
+      "Bounds": {
+        "MinX": 128352.9,
+        "MinY": -63773.1,
+        "MaxX": 149989.4,
+        "MaxY": -40491.8
+      },
+      "SelectionSource": "AUTO",
+      "SelectionConfidence": "mid",
+      "Reasons": [
+        "ROOM_LABEL_DENSITY"
+      ]
+    },
+    "TargetSceneCandidates": [
+      {
+        "TargetId": "SCENE-bea12b98",
+        "SourceSpace": "MODEL_SPACE",
+        "Bounds": {
+          "MinX": 128352.9,
+          "MinY": -63773.1,
+          "MaxX": 149989.4,
+          "MaxY": -40491.8
+        },
+        "Score": 1,
+        "Reasons": [
+          "ROOM_LABEL_DENSITY"
+        ],
+        "Recommended": true
+      }
+    ],
+    "UnsupportedEntitySummary": {
+      "Leader": 1
+    }
+  },
+  "Diagnostics": [
+    "DWG/DXF 版本=AC1032，INSUNITS=Millimeters，毫米系数=1",
+    "INSERT 实例：31 个顶层节点，展开图元 8218 个",
+    "模型空间实体：直接 774 个（另块展开 8218 个供家具/预览）",
+    "子图 #0：实体 774，跨度 17.0m×16.7m，房间标签命中 13",
+    "面积标注（去重后）：0 处 → []",
+    "户型副本 1 个（按标签聚类），目标副本：标签 13 种、面积标注 0 处，区域 (128.4,-63.8)~(150.0,-40.5)",
+    "目标区域内实体：774 个",
+    "墙体 HATCH：1 个命中 → 7 个有效多边形；跳过非墙填充 13 个",
+    "目标区域文字 30、DIMENSION 46",
+    "线网多边形化：墙线 275 + 门线 22 + 门洞闭合线 224（吸附 5mm）→ cells 126 个",
+    "语义归并：11 个凹位/楔子并入邻居",
+    "门槛石减除：0 处（标注引导）",
+    "墙体内侧面：完成面线 0 实体 → 0 段；实心墙身边界 7 环 → 46 段；墙线 536 段（配对 54 对）",
+    "内侧面吸附：115 空间 → 贴合 84，门洞拉直 46 处，回退 30，部分边无内侧面 38",
+    "输出：命名房间 10，未命名空间 4",
+    "非家具块排除 16 个 INSERT 实例（门/窗/洁具/灯具/标注/设备等）",
+    "方案级容器块剔除 1 个 INSERT 实例（跨度超 8m，下钻子块找真家具，不作为单件家具）",
+    "家具候选 14 个（UNKNOWN 0 个）",
+    "drawingBounds（几何外包络+200mm）：(133394,-59067)~(147024,-45047)",
+    "规范预览：1363×1400px，建筑与家具图元 8887/8992",
+    "parseStatus=PARTIAL，capabilities=rooms:PARTIAL,walls:PARTIAL,doors:NOT_IMPLEMENTED,windows:NOT_IMPLEMENTED,furniture:SUCCESS,dimensions:PARTIAL"
+  ],
+  "FurnitureSummary": {
+    "count": 14,
+    "unknown": 0
+  }
+}

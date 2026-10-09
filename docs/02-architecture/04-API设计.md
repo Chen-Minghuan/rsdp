@@ -1751,6 +1751,14 @@ POST   /api/v1/public/ai-match/cad/analyze
        # 有效（rsdp.floor-plan.public-token-hours，可配置），只用于本次匿名任务状态和关联图片读取。
        # ⚠️ POST 计入 AI 限流；游客失败重试重新提交原 CAD，不开放匿名 retry 接口。
 
+POST   /api/v1/public/ai-match/cad/{analysisId}/furniture/enrich?accessToken=
+       # 按需触发家具视觉语义回填（官网游客"AI 识别家具名称"按钮，幂等，仅 UNKNOWN/OTHER+AUTO 候选）；
+       # 当前仅处理归属客厅/餐厅/厨房的 VALID 非重复家具；未归属与其他房间跳过，同视觉组不跨范围回填。
+       # isolation 视图在 CAD 解析时已持久化对象存储（floor-plan-isolation/{analysisId}/{vg}.png），
+       # 本端点从存储读图逐组调 qwen3-vl-plus 回填；
+       # 官网游客分析默认不自动回填（rsdp.floor-plan.furniture-vision-auto-public=false，API 成本），
+       # 管理端恒自动回填。Response: { candidateGroups, processedGroups, adopted, skippedNoImage }
+
 GET    /api/v1/public/ai-match/cad/{analysisId}?accessToken=...
        # 游客 CAD 状态轮询及结果读取；accessToken 必须与路径 analysisId 一致，且记录必须
        # source=public，否则统一 404。响应沿用 FloorPlanAnalysisResponse，并为 imageUrl /
@@ -1777,6 +1785,17 @@ POST   /api/v1/public/ai-match/scheme
 ### 户型图分析（管理端 + 官网设计师，/api/v1/floor-plan/**，V36）
 
 > 户型图 → 空间尺寸 → 产品搭配 链路（方案 v3.0 §4.2）。异步识别 + 人工校正 + 搭配落 scheme。
+> V20（CAD Scene Parser 升级 P0-B）起叠加 Scene Revision 模型：一次分析可有多个 Scene
+> Revision，业务正式读取只认 active_analysis_revision（仅 Scene Activation 单事务切换）。
+> 响应约定（V20 起统一）：业务冲突（REVISION_NOT_EDITABLE / VERSION_CONFLICT /
+> ACTIVATION_VALIDATION_FAILED / WORKING_REVISION_EXISTS / REVISION_NOT_ACTIVATABLE /
+> ANALYSIS_TASK_RUNNING）一律 HTTP 200 包裹、body.code=409，message 以「错误码: 中文消息」
+> 前缀透传展示；仅 PUT target-scene 使用真实 HTTP 202（异步重解析受理）。
+> POST activate 成功响应为完整分析详情（结构同 GET /{analysisId}）。
+> readiness 迁移说明（O-N1）：编辑 READY_TO_ACTIVATE 的 Revision 后即时复评 readiness
+> （通过则保持 READY_TO_ACTIVATE，未通过回落 EDITING），而非先无条件回落再晋升——
+> 与 §8.4.6 字面顺序不同但安全性等价：激活事务内必然重跑 Scene Activation Validator，
+> 不会仅凭历史状态放行。
 > 数据归属：平台运营（ADMIN/EDITOR）可见全部，其他用户仅本人创建（Service 层校验）。
 > 官网 DESIGNER 登录后直接复用本组接口及 HttpOnly JWT Cookie：支持仅图片、仅 CAD、
 > 图片 + CAD，轮询任务状态、保存空间校对、失败重试及本人历史记录。游客 CAD 使用上方
@@ -1810,6 +1829,9 @@ POST   /api/v1/floor-plan/analyze          [product:read]
        # 路由到 CadFloorPlanParser（rsdp-cad-parser 微服务 POST {rsdp.cad-parser.base-url}/parse，
        # dev 默认 http://localhost:8090，超时 120s），跳过视觉识别/精修/自动标定；
        # 解析失败（success=false/服务不可达）落 failed + 中文可读错误提示。
+       # 注：/parse 响应自 Parser P1.5 起新增可选顶层字段 parsedScene（Stage ⑦ Scene Assembly
+       # 统一装配视图：metadata/unitResolution/targetScene/rooms/walls/furniture/dimensions/
+       # relations/qualityIssues/capabilities；纯新增不改旧字段语义），Java 侧暂忽略该字段。
        # 落图（image_type=floor_plan）
        # → 建 analysis（source=admin，status=pending）→ 建 async_task
        # （task_type=floor_plan_analysis）→ 事务提交后触发解析：
@@ -1851,25 +1873,71 @@ GET    /api/v1/floor-plan                  [登录 + 归属过滤]
 GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        # 查询分析状态与空间列表（前端轮询入口；以 task 状态同步校正 analysis 状态：
        # task=failed → analysis=failed + errorMessage 透传）
+       # Query: analysisRevision?（V20，指定 Scene Revision；缺省 = working ?? active ?? latest；
+       #        指定时校验属于本分析，否则 404）
        # Response: { analysisId, imageId, imageUrl, referenceImageUrl,
        #            previewImageId, previewUrl, status, taskId, scaleRatio,
        #            source, projectId, projectName, sourceName,
        #            errorMessage, createdBy, createdAt, updatedAt,
        #            rooms: [{ roomId, roomType, label, polygon, labelPoint, bbox, widthMm, depthMm,
-       #            areaM2, dimensionSource, dimensionConfidence, dimensionText, sortOrder }],
-       #            geometrySource, qualityIssues, scaleSuggestion, drawingBounds, previewBounds }
+       #            areaM2, dimensionSource, dimensionConfidence, dimensionText, sortOrder,
+       #            confirmationStatus }],
+       #            geometrySource, qualityIssues, scaleSuggestion, drawingBounds, previewBounds,
+       #            analysisRevision, revisionStatus,
+       #            activeAnalysisRevision, workingAnalysisRevision, latestAnalysisRevision,
+       #            roomRevision, furnitureRevision, parseStatus,
+       #            capabilities, unitResolution, targetScene, targetSceneCandidates,
+       #            furniture: [{ furnitureId, sourceKind, category, semanticLabel, roomId,
+       #            blockName, sourceHandles, insertPath, position, rotationDeg,
+       #            footprintPolygon, geometryWidthMm, geometryDepthMm, annotatedWidthMm,
+       #            annotatedDepthMm, effectiveWidthMm, effectiveDepthMm, heightMm,
+       #            dimensionSource, semanticSource, evidence, qualityFlags,
+       #            detectionConfidence, categoryConfidence, confirmationStatus,
+       #            matchedFromObjectId, derivedFromIds, sortOrder }],
+       #            activationReadiness: { ready, issues[] } }
+       # V20 Revision 装配（Invariant 1/2）：rooms/furniture 只来自同一 analysisRevision
+       #   （SQL 带 analysis_id + analysis_revision 双条件）；
+       #   previewUrl 取本 Revision 的 preview_image_id；qualityIssues/drawingBounds/
+       #   previewBounds 优先 Revision 列、回退 Revision 快照、再回退分析级旧列；
+       #   capabilities/unitResolution/targetScene/targetSceneCandidates 自 Revision 快照提取；
+       #   activationReadiness 由 Scene Activation Validator 实时计算（ready + 阻断项 issues）
        # geometrySource（CAD 户型导入 P3，前端契约字段名不可改）：
        #   cad_geometry（CAD 解析，编辑器隐藏标定入口）/ ai_vision（视觉识别）；
        #   判定：落库明细 geometry_source 优先，无明细按原图格式（dwg/dxf→cad_geometry）
        # qualityIssues（P3，前端契约）：CAD 质量门报告 [{level, code, message}]，
-       #   自 raw_result 提取；视觉通道/无问题恒为空数组（非 null）
+       #   视觉通道/无问题恒为空数组（非 null）；
+       #   P1（Scene-aware Block Fallback）新增 code：
+       #     ROOMS_FROM_BLOCK_FALLBACK（直接实体围合不出空间，已回退用块展开建筑几何分析），
+       #     ROOMS_FROM_RASTER_REBUILD（P1-E：断线墙体矢量围合失败，已用栅格形态学重建，
+       #       房间 confidence=low，轮廓与面积需逐房间复核），
+       #     LABELS_STACKED（房间名标签在同一点位堆叠无法定位，降级为未命名空间候选名）
+       #     ROOMS_FROM_LABEL_PARTITION（栅格连通区按可见标签位置拆成临时分区，边界不是墙线），
+       #     ROOM_LABEL_SNAPPED（封口墙带附近的标签就近指派，名称仍需核对），
+       #     ROOM_LABELS_WITHOUT_GEOMETRY（列出仍无对应空间的可见标签，需人工补画）
+       #   质量状态口径：ROOMS_FROM_RASTER_REBUILD 出现时 parseStatus 与
+       #   capabilities.rooms 均为 NEEDS_REVIEW（成功返回可人工校对，但不可宣称整户完整）；
+       #   非栅格路径仍有未命名空间、LABELS_STACKED 或 ROOM_LABELS_WITHOUT_GEOMETRY 时 capabilities.rooms=PARTIAL。
+       # 解析器契约增补（P1）：unnamedRegions[] 增加 roomId（续命名房间 ROOM-### 序列），
+       #   buildCadRooms 将其纳入 Parser roomId → DB room_id 映射，未命名空间内家具可落 room_id
+       # 家具语义线（P1-A/B/C，V22）：
+       #   Parser furniture[] 增 candidateStatus(VALID/REJECTED 仅标记不删除)、geometryFingerprint、
+       #   duplicateGroupId/duplicateStatus(PRIMARY/DUPLICATE)/duplicateCount/sourceInstances（去重成组不删除）、
+       #   visionGroupId（同块+同尺寸+同指纹共享一次视觉识别）；请求 withIsolation=true 时
+       #   响应带 isolationImages（visionGroupId → 块局部坐标白底线稿 PNG）。
+       #   后端 CAD 解析落库后（AsyncTaskProcessor，独立事务）按 visionGroupId 分组调
+       #   qwen3-vl-plus（isolation+context 双图，强约束类别枚举 + 自由 semanticLabel + confidence），
+       #   ≥0.60 采纳回填 category/semanticLabel/semantic_source=vision_qwen3vl（≥0.85 记 high），
+       #   <0.60 仅记 vision_confidence 保留原类别；confirmation_status 仍为 AUTO，
+       #   人工确认走既有 PUT /furniture（预测→人工 Diff 沉淀 cad_analysis_feedback）。
+       #   开关 rsdp.floor-plan.furniture-vision-enabled（默认 true）/
+       #   furniture-vision-max-groups（默认 30，按占地面积降序取）/furniture-vision-context-margin-mm（600）
        # rooms[].label（P3）：空间标签原文（未命名空间为"未命名空间 N"），可空；
        #   单 CAD 保留解析器识别出的名称/类型；双文件还会用阅览图视觉语义补全未命名区域，
        #   未匹配部分不猜测，继续保留“未命名空间 N”
        # rooms[].polygon（P3）：毫米坐标 [[x,y],...]（CAD 通道），可空
        # rooms[].labelPoint：保证位于 polygon 内部的毫米坐标标签锚点（CAD 通道），可空
        # drawingBounds（CAD 户型导入增强，前端契约字段名不可改）：CAD 图纸毫米坐标系
-       #   范围 {minX, minY, maxX, maxY}，自 raw_result 提取
+       #   范围 {minX, minY, maxX, maxY}
        # previewUrl/previewBounds：解析器规范 PNG 及其毫米坐标范围；前端只在该图上叠加
        #   polygon，原始 referenceImageUrl 独立页签只读参考，不参与配准；视觉通道恒为 null
        # scaleSuggestion（二期自动标定建议）：结构与规则同官网 analyze 响应
@@ -1880,12 +1948,81 @@ PUT    /api/v1/floor-plan/{analysisId}/rooms   [登录 + 归属校验]
        # 人工校正（整体替换语义：带 roomId 就地更新 / 不带新增 / 未提交的软删），
        # 仅 awaiting_confirm 或 confirmed 状态可提交；视觉空间按提交尺寸重算并标记 manual/high；
        # CAD 已识别空间仅更新 label/roomType/sortOrder，polygon/labelPoint/bbox/宽深/精确面积/
-       # dimensionSource/confidence 均保持不变；状态 → confirmed
+       # dimensionSource/confidence 均保持不变
+       # V20 Revision 化（设计文档 V1.2.3 §18.7）：
+       #   携带 analysisRevision + baseRoomRevision（必须成对）→ Revision-aware 编辑：
+       #     锁 analysis → 锁 revision → 校验目标 == working_analysis_revision 且状态 ∈
+       #     READY/EDITING/READY_TO_ACTIVATE（否则 409 REVISION_NOT_EDITABLE）→
+       #     幂等重放（baseRoomRevision==room_submit_base 且请求哈希一致 → 返回当前状态）→
+       #     baseRoomRevision==room_revision（否则 409 VERSION_CONFLICT）→
+       #     整体替换该 Revision 房间 → room_revision+1 → EDITING → readiness 重算
+       #     （通过 → READY_TO_ACTIVATE）→ 记录 Room Diff（cad_analysis_feedback）。
+       #     不改 active 指针、不置 analysis.status=confirmed（Invariant 5/6/9）
+       #   不携带 → legacy 兼容路径：仅 latest_analysis_revision=1 允许（否则
+       #     400 REVISION_REQUIRED），内部绑定 Revision 1，保持旧可观察语义（整体替换 +
+       #     status=confirmed + confirmed_rooms 快照 + 审计），同事务隐式激活 Revision 1
+       #     （revision_status=ACTIVE、active=1、working=NULL）
        # projectId（V14，可选）：传了则校验项目可见性（同 analyze）后覆盖写入
        # analysis.project_id（补挂/改挂），并记审计日志（action=LINK_PROJECT）；不传不动
        # Request: { rooms: [{ roomId?, roomType*, label?, widthMm?, depthMm?, bbox? }],
-       #            scaleRatio?, projectId? }
-       # Response: 同 GET（校正后的分析详情）
+       #            scaleRatio?, projectId?, analysisRevision?, baseRoomRevision? }
+       # Response: 同 GET（校正后的分析详情，含新 roomRevision/revisionStatus）
+
+PUT    /api/v1/floor-plan/{analysisId}/furniture   [登录 + 归属校验，V20]
+       # 家具人工校正（P0-B，整体替换该 Analysis Revision 家具列表）：
+       # 已有 furnitureId → 仅可更新人工字段（category/semanticLabel/roomId/position/
+       #   rotationDeg/footprintPolygon/effective 尺寸/heightMm/sortOrder；自动快照字段
+       #   sourceHandles/insertPath/blockName/evidence/geometry/annotated 不可变），
+       #   无实质变更 → CONFIRMED、有变更 → MANUAL_EDITED；
+       # 缺席 ID → 软删（记 DELETE Diff）；无 ID → 新增（source_kind=MANUAL、服务端发号、
+       #   MANUAL_ADDED；derivedFromIds[] 记录拆分/合并来源 → 记 SPLIT/MERGE Diff）
+       # 写保护/版本/幂等同 rooms（furniture_submit_base/hash）：
+       #   目标必须是 working 且 READY/EDITING/READY_TO_ACTIVATE（409 REVISION_NOT_EDITABLE）；
+       #   baseFurnitureRevision==furniture_revision（409 VERSION_CONFLICT）；
+       #   同 base + 同内容哈希 → 幂等重放返回当前状态
+       # 提交项校验（400）：类别枚举（SOFA/BED/TABLE/CHAIR/CABINET/OTHER/UNKNOWN）、
+       #   坐标有限值、footprintPolygon 闭合、尺寸非负
+       # 不改 active 指针、不置 confirmed（Invariant 5/6/9）
+       # Request: { analysisRevision*, baseFurnitureRevision*, furniture: [{ furnitureId?,
+       #            category?, semanticLabel?, roomId?, position?{x,y}, rotationDeg?,
+       #            footprintPolygon?, effectiveWidthMm?, effectiveDepthMm?, heightMm?,
+       #            sortOrder?, derivedFromIds?[] }] }
+       # Response: { analysisRevision, furnitureRevision, furniture: [同 GET furniture 元素] }
+
+POST   /api/v1/floor-plan/{analysisId}/revisions/{analysisRevision}/activate   [登录 + 归属校验，V20]
+       # Scene 原子激活（§8.5，单事务整版切换）：锁 analysis → 锁目标 revision →
+       #   校验 baseActiveAnalysisRevision==active_analysis_revision（409 VERSION_CONFLICT）→
+       #   目标 == working 且 READY_TO_ACTIVATE（409 REVISION_NOT_ACTIVATABLE）且无运行中
+       #   解析任务（409 ANALYSIS_TASK_RUNNING）→ expectedRoom/FurnitureRevision 一致
+       #   （409 VERSION_CONFLICT）→ Scene Activation Validator（失败
+       #   409 ACTIVATION_VALIDATION_FAILED + issues）→ 旧 ACTIVE → SUPERSEDED →
+       #   目标 → ACTIVE（activated_at/by）→ active=目标、working=NULL →
+       #   analysis.status=confirmed + confirmed_rooms 快照（自目标 Revision 房间生成）+
+       #   preview/quality 投影同步 → 审计（action=ACTIVATE_SCENE_REVISION）。
+       #   任何一步失败整体回滚（Invariant 7）
+       # Request: { baseActiveAnalysisRevision（可空，此前无激活版本须显式 null）,
+       #            expectedRoomRevision*, expectedFurnitureRevision* }
+       # Response: 完整分析详情（结构同 GET /{analysisId}，revisionStatus=ACTIVE）
+
+POST   /api/v1/floor-plan/{analysisId}/working-revision   [登录 + 归属校验，V20]
+       # 派生工作 Revision（§8.4.6）：从 active（无 active 则 latest）复制未软删
+       # Room/Furniture 对象（新行 + 新对象 ID，家具以 matched_from_object_id 记录来源）
+       # + 复制自动快照/预览/质量问题引用（trigger=MANUAL_EDIT、parent=源 revision、
+       # room_revision=2 视同人工确认起点）；readiness 通过则直接 READY_TO_ACTIVATE，
+       # 否则 EDITING。已有工作 Revision 时 409 WORKING_REVISION_EXISTS
+       # Response: { analysisId, analysisRevision, revisionStatus }
+
+PUT    /api/v1/floor-plan/{analysisId}/target-scene   [登录 + 归属校验，V20，HTTP 202]
+       # Target Scene 切换（§8.2）：不重新上传 DWG，从 analysis.cad_object_key 读原文件
+       # 重跑 Parser（multipart 附带 targetId），产生新 Analysis Revision
+       # （latest+1，PROCESSING，trigger=TARGET_SCENE_SWITCH，parent=base，
+       # target_scene_id=targetId）；旧 Revision 不删不改
+       # 校验：baseAnalysisRevision==latest（409 VERSION_CONFLICT）；targetId 属于 base
+       #   Revision 候选列表（400 TARGET_SCENE_INVALID）；cad_object_key 非空
+       #   （视觉通道 400 TARGET_SCENE_UNSUPPORTED）
+       # Request: { baseAnalysisRevision*, targetId* }
+       # Response: 202 { analysisId, analysisRevision, taskId, status: "PROCESSING" }
+       # 完成后经 GET /{analysisId}?analysisRevision=n 轮询 READY/FAILED（§8.6）
 
 POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
        # 基于 confirmed 空间生成搭配方案（P0-B）：FloorPlanMatchingService 编排
@@ -1911,9 +2048,11 @@ POST   /api/v1/floor-plan/{analysisId}/scheme  [scheme:create]
 POST   /api/v1/floor-plan/{analysisId}/retry   [登录 + 归属校验]
        # 失败重试（P1）：仅 failed 状态可重试（其他状态 400 中文提示；状态判定前先以
        # task 状态同步校正，JVM 崩溃卡在 analyzing 的场景也可重试）。重置 analysis 状态为
-       # pending + 清 errorMessage + 软删上一轮残留空间明细 + 新建异步任务（沿用原图与原
+       # pending + 清 errorMessage + 新建异步任务（沿用原图与原
        # hint；双文件通道沿用任务 input_data 中的 cadObjectKey + codeNameMode）重新触发
        # processFloorPlanAnalysis
+       # V20：重试创建新 Scene Revision（latest+1，trigger=REPARSE），
+       # 旧 Revision 含残留明细不删不改（Invariant 11）
        # Response: { taskId }
 
 DELETE /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
@@ -2081,11 +2220,11 @@ DELETE /api/v1/scheme-candidates/{candidateId}
 
 `clientMessageId` 必填且最长 64 字符，`content` 必填且最长 4000 字符；确认数量至少为 1，`idempotencyKey` 必填且最长 128 字符。
 
-户型绑定（W2，V18）：`floorPlanAnalysisId` 可空，传入时校验该户型分析为已确认（confirmed）且归属当前用户，会话默认选中首个房间；会话响应含 `floorPlanAnalysisId` / `activeRoomId`，详情 `rooms` 为只读空间事实（roomId/label/roomType/displayName/widthMm/depthMm/areaM2/active，空间事实不可经 Agent 修改）。需求按作用域拆分：风格/预算/备注为会话级全局，品类/材质/颜色/尺寸等按房间独立版本；`requirement` 事件与需求档案为合并后的有效视图并带 `roomId`/`roomName`，有效约束 = 空间硬约束（开间/进深预留 600mm 过道，只收紧不放宽）> 用户更严约束 > 偏好。推荐批次、已确认条目（`roomId`）、报价行（`roomId`）均可追溯房间；导出方案条目带 `floorPlanRoomId`。未绑定户型的会话行为与口头描述完全一致（场景 A 降级铁律）。
+户型绑定（W2，V19）：`floorPlanAnalysisId` 可空，传入时校验该户型分析为已确认（confirmed）且归属当前用户，会话默认选中首个房间；会话响应含 `floorPlanAnalysisId` / `activeRoomId`，详情 `rooms` 为只读空间事实（roomId/label/roomType/displayName/widthMm/depthMm/areaM2/active，空间事实不可经 Agent 修改）。需求按作用域拆分：风格/预算/备注为会话级全局，品类/材质/颜色/尺寸等按房间独立版本；`requirement` 事件与需求档案为合并后的有效视图并带 `roomId`/`roomName`，有效约束 = 空间硬约束（开间/进深预留 600mm 过道，只收紧不放宽）> 用户更严约束 > 偏好。推荐批次、已确认条目（`roomId`）、报价行（`roomId`）均可追溯房间；导出方案条目带 `floorPlanRoomId`。未绑定户型的会话行为与口头描述完全一致（场景 A 降级铁律）。
 
 普通接口使用 `{ code, message, data }`。流式接口同步校验失败返回真实 HTTP 错误状态和统一错误响应（会话忙为 HTTP 409、`SESSION_BUSY`）；校验通过后返回 `text/event-stream`，事件包括 `meta/node/token/requirement/cards/done/error`，数据带 `runId/seq`，心跳采用 SSE 注释。异步运行失败通过 `error` 事件通知。
 
-数据库迁移为 `V10__marketing_agent.sql`（MVP）+ `V18__agent_floor_plan_binding.sql`（W2 户型绑定）；基线、重置脚本和 deploy 整理留待后续。实现边界见 [营销 Agent 架构设计](10-营销Agent架构设计-方案C落地与Argus借鉴.md)。
+数据库迁移为 `V10__marketing_agent.sql`（MVP）+ `V19__agent_floor_plan_binding.sql`（W2 户型绑定）；基线、重置脚本和 deploy 整理留待后续。实现边界见 [营销 Agent 架构设计](10-营销Agent架构设计-方案C落地与Argus借鉴.md)。
 
 ---
 
