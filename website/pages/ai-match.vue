@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   DesignerFloorPlanAnalysis,
+  DesignerFloorPlanFurniture,
   DesignerFloorPlanRoom,
   FloorPlanBBox,
   FloorPlanPolygon
@@ -396,6 +397,14 @@ const isVisitorCadAnalysis = computed(() =>
 const isDesignerAnalysis = computed(() =>
   !!designerAnalysisId.value && designerLoggedIn.value && !visitorCadAccessToken.value
 )
+const spaceReviewOpen = ref(true)
+const furnitureReviewOpen = ref(true)
+async function selectRoomFromDrawing(id: string) {
+  spaceReviewOpen.value = true
+  selectedRoomId.value = id
+  await nextTick()
+  document.getElementById(`room-review-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
 const requiresRoomConfirmation = computed(() =>
   isDesignerAnalysis.value || isVisitorCadAnalysis.value
 )
@@ -525,6 +534,148 @@ async function saveDesignerRooms() {
   }
 }
 
+// ---------- 家具提取（P1：几何事实 + 按需 AI 命名） ----------
+
+const showSuppressedFurniture = ref(false)
+const furnitureEnriching = ref(false)
+
+/** 全部家具候选（CAD 通道；无家具为空数组）。 */
+const furnitureRoomIds = computed(() => new Set(rooms.value
+  .filter(r => ['LIVING', 'LIVING_ROOM', 'DINING', 'DINING_ROOM', 'KITCHEN'].includes(r.roomType.toUpperCase()))
+  .map(r => r.roomId)))
+const furnitureNameEdits = ref<Record<string, string>>({})
+const furnitureImageFailures = ref<Record<string, boolean>>({})
+function furnitureCropStyle(item: DesignerFloorPlanFurniture): Record<string, string> | null {
+  const bounds = viewerBounds.value
+  const points = item.footprintPolygon
+  if (!bounds || !points?.length) return null
+  const spanX = bounds.maxX - bounds.minX, spanY = bounds.maxY - bounds.minY
+  if (spanX <= 0 || spanY <= 0) return null
+  const minX = Math.min(...points.map(p => p[0])), maxX = Math.max(...points.map(p => p[0]))
+  const minY = Math.min(...points.map(p => p[1])), maxY = Math.max(...points.map(p => p[1]))
+  const size = Math.max(maxX - minX, maxY - minY, 1) * 1.15
+  const x = (minX + maxX - size) / 2, y = (minY + maxY + size) / 2
+  return {
+    width: `${spanX / size * 100}%`, height: `${spanY / size * 100}%`,
+    left: `${-(x - bounds.minX) / size * 100}%`, top: `${-(bounds.maxY - y) / size * 100}%`
+  }
+}
+const furnitureCropUrl = computed(() => designerAnalysis.value?.previewUrl || '')
+function furnitureDisplayName(item: DesignerFloorPlanFurniture): string {
+  return furnitureNameEdits.value[item.furnitureId]?.trim() || item.semanticLabel || ''
+}
+watch(designerAnalysisId, id => {
+  furnitureNameEdits.value = {}
+  furnitureImageFailures.value = {}
+  if (import.meta.client && id) {
+    try { furnitureNameEdits.value = JSON.parse(localStorage.getItem(`furniture-names:${id}`) || '{}') }
+    catch { furnitureNameEdits.value = {} }
+  }
+}, { immediate: true })
+watch(furnitureNameEdits, names => {
+  if (import.meta.client && designerAnalysisId.value) {
+    try { localStorage.setItem(`furniture-names:${designerAnalysisId.value}`, JSON.stringify(names)) } catch { /* 浏览器存储禁用时保留当前页编辑。 */ }
+  }
+}, { deep: true })
+const furnitureAll = computed<DesignerFloorPlanFurniture[]>(
+  () => (designerAnalysis.value?.furniture ?? []).filter(f => f.roomId && furnitureRoomIds.value.has(f.roomId))
+)
+const selectedFurnitureIds = ref<string[]>([])
+watch(furnitureAll, items => {
+  const ids = new Set(items.map(item => item.furnitureId))
+  selectedFurnitureIds.value = selectedFurnitureIds.value.filter(id => ids.has(id))
+})
+watch(designerAnalysisId, () => { selectedFurnitureIds.value = [] })
+function toggleFurniture(id: string) {
+  furnitureReviewOpen.value = true
+  selectedFurnitureIds.value = selectedFurnitureIds.value.includes(id)
+    ? selectedFurnitureIds.value.filter(value => value !== id)
+    : [...selectedFurnitureIds.value, id]
+}
+
+/** 默认展示：VALID 且非重复副本；REJECTED/DUPLICATE 收进"已抑制"。 */
+const furnitureValid = computed(() =>
+  furnitureAll.value.filter(f =>
+    (f.candidateStatus ?? 'VALID') === 'VALID' && f.duplicateStatus !== 'DUPLICATE')
+)
+const furnitureSuppressed = computed(() =>
+  furnitureAll.value.filter(f => !furnitureValid.value.includes(f))
+)
+/** 已有任一视觉识别结果（决定按钮显隐与"识别中"态）。 */
+const hasVisionResults = computed(() => furnitureAll.value.some(f => f.visionConfidence != null))
+const furnitureNamedCount = computed(() =>
+  furnitureValid.value.filter(f => furnitureDisplayName(f) || (f.category !== 'UNKNOWN' && f.category !== 'OTHER')).length)
+const furnitureReviewCount = computed(() =>
+  furnitureValid.value.filter(f =>
+    f.category === 'OTHER'
+    || (f.visionConfidence != null && f.visionConfidence >= 0.6 && f.visionConfidence < 0.85)).length)
+const furnitureUnknownCount = computed(() =>
+  furnitureValid.value.filter(f => f.category === 'UNKNOWN').length)
+
+const FURNITURE_CATEGORY_TEXT: Record<string, string> = {
+  SOFA: '沙发', BED: '床', TABLE: '桌几', CHAIR: '椅凳', CABINET: '柜类',
+  DESK: '书桌', TV_CABINET: '电视柜', NIGHTSTAND: '床头柜', BENCH: '长凳',
+  OTHER: '其他', UNKNOWN: '待识别'
+}
+
+function furnitureCategoryText(category: string): string {
+  return FURNITURE_CATEGORY_TEXT[category] ?? category
+}
+
+function furnitureDimsText(item: DesignerFloorPlanFurniture): string {
+  const w = item.geometryWidthMm, d = item.geometryDepthMm
+  if (!w || !d) return '暂无尺寸'
+  const area = (w * d / 1e6).toFixed(2)
+  return `${w}×${d}mm · ${area}㎡`
+}
+
+function furnitureRoomLabel(roomId?: string | null): string {
+  if (!roomId) return '未归属'
+  return rooms.value.find(r => r.roomId === roomId)?.roomName ?? '未归属'
+}
+
+function visionBadgeClass(item: DesignerFloorPlanFurniture): string {
+  const c = item.visionConfidence
+  if (c == null) return ''
+  return c >= 0.85 ? 'vis-high' : c >= 0.6 ? 'vis-mid' : 'vis-low'
+}
+
+/** 家具占地轮廓缩略图 viewBox（毫米坐标 + 10% 边距）。 */
+function furnitureThumbViewBox(item: DesignerFloorPlanFurniture): string {
+  const poly = item.footprintPolygon
+  if (!poly || poly.length === 0) return '0 0 100 100'
+  const xs = poly.map(p => p[0])
+  const ys = poly.map(p => p[1])
+  const minX = Math.min(...xs), maxX = Math.max(...xs)
+  const minY = Math.min(...ys), maxY = Math.max(...ys)
+  const margin = Math.max(maxX - minX, maxY - minY, 1) * 0.1
+  return `${minX - margin} ${minY - margin} ${(maxX - minX) + margin * 2} ${(maxY - minY) + margin * 2}`
+}
+
+function furnitureThumbPoints(item: DesignerFloorPlanFurniture): string {
+  return (item.footprintPolygon ?? []).map(p => `${p[0]},${p[1]}`).join(' ')
+}
+
+/** 按需触发"AI 识别家具名称"（游客 CAD 通道；幂等）。 */
+async function enrichFurnitureNow() {
+  if (!designerAnalysisId.value || !visitorCadAccessToken.value) return
+  furnitureEnriching.value = true
+  errorMessage.value = ''
+  try {
+    const summary = await publicCadFloorPlanApi.enrichFurniture(designerAnalysisId.value, visitorCadAccessToken.value)
+    designerAnalysis.value = await publicCadFloorPlanApi.getAnalysis(
+      designerAnalysisId.value, visitorCadAccessToken.value)
+    noticeMessage.value = summary.processedGroups > 0
+      ? '家具名称识别完成，请复核识别结果'
+      : '暂无可识别家具，请先检查客厅、餐厅、厨房的房间归属与家具轮廓'
+
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '家具名称识别失败，请稍后重试'
+  } finally {
+    furnitureEnriching.value = false
+  }
+}
+
 // ---------- 步骤 3：生成方案 ----------
 
 const stylePreference = ref('')
@@ -645,7 +796,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   <div>
     <SiteHeader />
 
-    <div class="wrap">
+    <div class="wrap" :class="{ 'review-wrap': step === 'confirm' }">
       <div class="crumb"><a href="/">首页</a> ／ AI 户型搭配</div>
       <div class="cat-head">
         <h1>AI 户型搭配</h1>
@@ -746,24 +897,34 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
             :rooms="viewerRooms"
             :bounds="cadViewMode === 'canonical' ? viewerBounds : null"
             :selected-room-id="selectedRoomId"
-            @select-room="selectedRoomId = $event"
+            :furniture="furnitureValid"
+            :selected-furniture-ids="selectedFurnitureIds"
+            @select-furniture="toggleFurniture"
+            @select-room="selectRoomFromDrawing"
           />
           <img v-else-if="previewUrl" class="confirm-img" :src="previewUrl" alt="户型图">
           <div v-else-if="isPdf" class="confirm-img pdf-card confirm-pdf-card">
             <span class="pdf-card-kick">PDF</span>
             <span class="pdf-card-name">PDF 户型图 · {{ fileName }}</span>
           </div>
-          <div>
+          <div class="confirm-data">
+            <div class="review-columns" :class="{ 'has-furniture': isCadResult }">
+            <section class="space-review">
+            <button type="button" class="review-toggle" :aria-expanded="spaceReviewOpen" aria-controls="space-review-content" @click="spaceReviewOpen = !spaceReviewOpen">
+              <span>空间确认（{{ rooms.length }} 个空间）</span><span aria-hidden="true">{{ spaceReviewOpen ? '▴' : '▾' }}</span>
+            </button>
+            <div id="space-review-content" v-show="spaceReviewOpen">
             <div v-if="requiresRoomConfirmation" class="designer-room-list">
               <article
                 v-for="(room, i) in rooms"
                 :key="room.roomId || i"
+                :id="`room-review-${room.roomId}`"
                 class="designer-room-card"
                 :class="{ selected: room.roomId === selectedRoomId }"
                 @click="selectedRoomId = room.roomId || null"
               >
                 <div class="room-card-head">
-                  <span>空间 {{ String(i + 1).padStart(2, '0') }}</span>
+                  <button type="button" class="room-select" :aria-pressed="room.roomId === selectedRoomId" @click.stop="selectedRoomId = room.roomId || null">空间 {{ String(i + 1).padStart(2, '0') }}</button>
                   <button type="button" @click.stop="removeDesignerRoom(i)">删除</button>
                 </div>
                 <div class="room-form-grid">
@@ -781,7 +942,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
                 <div class="room-metrics">
                   <span>{{ room.widthMm && room.depthMm ? `${room.widthMm} × ${room.depthMm} mm` : (room.dimensionText || '暂无长宽数据') }}</span>
                   <span v-if="room.areaM2">{{ Number(room.areaM2).toFixed(2) }} ㎡</span>
-                  <span v-if="room.confidence === 'low'" class="room-warn">需人工确认</span>
+                  <span class="room-status" :class="{ 'room-warn': room.confidence === 'low' }">{{ room.confidence === 'low' ? '需人工确认' : (roomsConfirmed ? '已确认' : '待确认') }}</span>
                 </div>
               </article>
             </div>
@@ -809,6 +970,87 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
               {{ confirmingRooms ? '正在保存…' : (roomsConfirmed ? (isVisitorCadAnalysis ? '空间数据已确认' : '空间校对已保存') : (isVisitorCadAnalysis ? '确认空间数据' : '保存空间校对')) }}
             </button>
 
+            </div>
+            </section>
+            <!-- 家具提取（P1：尺寸事实默认可用，AI 命名按需触发） -->
+            <div v-if="isCadResult" class="furniture-block">
+              <button type="button" class="review-toggle" :aria-expanded="furnitureReviewOpen" aria-controls="furniture-review-content" @click="furnitureReviewOpen = !furnitureReviewOpen">
+                <span>家具确认（{{ furnitureValid.length }} 件 · 已选 {{ selectedFurnitureIds.length }}）</span><span aria-hidden="true">{{ furnitureReviewOpen ? '▴' : '▾' }}</span>
+              </button>
+              <div id="furniture-review-content" v-show="furnitureReviewOpen">
+              <div class="fb-head">
+                <span class="fb-title">客厅 / 餐厅 / 厨房家具（{{ furnitureValid.length }} 件）</span>
+                <button
+                  v-if="isVisitorCadAnalysis"
+                  type="button"
+                  class="fb-enrich"
+                  :disabled="furnitureEnriching"
+                  @click="enrichFurnitureNow"
+                >
+                  {{ furnitureEnriching ? 'AI 识别中，约需 1 分钟…' : 'AI 识别 / 重试家具名称' }}
+                </button>
+                <span v-else-if="!hasVisionResults" class="fb-note">AI 命名在后台进行中，稍后自动刷新…</span>
+              </div>
+              <p class="fb-note">名称可直接修改，自动保存在当前浏览器；图片为对应位置的 CAD 线稿裁剪。</p>
+              <div class="fb-stats">
+                点击图中家具或复选框可同步选择 · 已选 {{ selectedFurnitureIds.length }} 件<br>
+                已命名 {{ furnitureNamedCount }} · 待确认 {{ furnitureReviewCount }} · 未识别 {{ furnitureUnknownCount }}
+              </div>
+              <p v-if="!furnitureValid.length" class="fb-note">客厅、餐厅、厨房暂无家具候选，请先校对空间类型与归属。</p>
+              <p v-if="cadViewMode === 'reference'" class="fb-note">切换到 CAD 规范图可点击家具轮廓。</p>
+              <div class="fb-list">
+                <div
+                  v-for="item in furnitureValid"
+                  :key="item.furnitureId"
+                  class="fb-item"
+                  :class="{ unknown: item.category === 'UNKNOWN', selected: selectedFurnitureIds.includes(item.furnitureId) }"
+                >
+                  <input v-model="selectedFurnitureIds" type="checkbox" :value="item.furnitureId" :aria-label="`选择${furnitureRoomLabel(item.roomId)}的${item.semanticLabel || furnitureCategoryText(item.category)}`">
+                  <div v-if="furnitureCropUrl && furnitureCropStyle(item) && !furnitureImageFailures[item.furnitureId]" class="fb-crop">
+                    <img :src="furnitureCropUrl" :style="furnitureCropStyle(item)!" :alt="`${furnitureDisplayName(item) || furnitureCategoryText(item.category)}的 CAD 线稿`" @error="furnitureImageFailures[item.furnitureId] = true">
+                  </div>
+                  <svg v-else class="fb-thumb" :viewBox="furnitureThumbViewBox(item)" role="img" aria-label="家具占地轮廓">
+                    <polygon :points="furnitureThumbPoints(item)" />
+                  </svg>
+                  <div class="fb-info">
+                    <div class="fb-line1">
+                      <span class="fb-cat">{{ furnitureCategoryText(item.category) }}</span>
+                      <label class="fb-name-edit">
+                        <span class="fb-name-label">名称</span>
+                        <input :value="furnitureNameEdits[item.furnitureId] ?? item.semanticLabel ?? ''" maxlength="128" placeholder="填写家具名称" :aria-label="`修改${furnitureRoomLabel(item.roomId)}家具名称`" @input="furnitureNameEdits[item.furnitureId] = ($event.target as HTMLInputElement).value">
+                      </label>
+                      <span v-if="item.visionConfidence != null" class="fb-vis" :class="visionBadgeClass(item)">
+                        视觉 {{ Math.round(item.visionConfidence * 100) }}%
+                      </span>
+                      <span v-if="(item.duplicateCount ?? 0) > 1 && item.duplicateStatus === 'PRIMARY'" class="fb-dup">×{{ item.duplicateCount }}</span>
+                    </div>
+                    <div class="fb-line2">{{ furnitureDimsText(item) }} · {{ furnitureRoomLabel(item.roomId) }}</div>
+                  </div>
+                </div>
+              </div>
+              <div v-if="furnitureSuppressed.length > 0" class="fb-sup">
+                <button type="button" class="fb-sup-toggle" @click="showSuppressedFurniture = !showSuppressedFurniture">
+                  已抑制 {{ furnitureSuppressed.length }} 件（重复副本/碎件）{{ showSuppressedFurniture ? '▲ 收起' : '▼ 展开' }}
+                </button>
+                <template v-if="showSuppressedFurniture">
+                  <div v-for="item in furnitureSuppressed" :key="item.furnitureId" class="fb-item dimmed">
+                    <svg class="fb-thumb" :viewBox="furnitureThumbViewBox(item)" role="img" aria-label="家具占地轮廓">
+                      <polygon :points="furnitureThumbPoints(item)" />
+                    </svg>
+                    <div class="fb-info">
+                      <div class="fb-line1">
+                        <span class="fb-cat">{{ item.duplicateStatus === 'DUPLICATE' ? '重复副本' : '已拒绝' }}</span>
+                        <span class="fb-label">{{ furnitureCategoryText(item.category) }}</span>
+                      </div>
+                      <div class="fb-line2">{{ furnitureDimsText(item) }}</div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+            </div>
+
+            </div>
             <div class="edit-row">
               <label>风格偏好</label>
               <select v-model="stylePreference">
@@ -1017,7 +1259,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 
 .cad-intro p,
 .processing-panel p {
-  margin-top: 10px;
+  margin-top: 0;
   color: var(--ink2);
   font-size: 13px;
   line-height: 1.8;
@@ -1204,8 +1446,9 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 
 .confirm-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 32px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
 }
 
 .quality-box {
@@ -1229,6 +1472,8 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 
 .confirm-img {
   width: 100%;
+  height: clamp(600px, 72vh, 780px);
+  object-fit: contain;
   border-radius: var(--radius);
   background: var(--suppl);
 }
@@ -1239,15 +1484,17 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 
 .designer-room-list {
   display: grid;
-  max-height: 480px;
-  gap: 12px;
-  overflow-y: auto;
-  padding-right: 4px;
+  gap: 8px;
 }
 
 .designer-room-card {
   border: 1px solid var(--line);
-  padding: 14px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 110px minmax(240px, 1fr) minmax(300px, 1fr);
+  align-items: center;
+  gap: 16px;
+  scroll-margin-block: 24px;
   cursor: pointer;
 }
 
@@ -1265,7 +1512,7 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 }
 
 .room-card-head {
-  margin-bottom: 12px;
+  margin-bottom: 0;
   color: var(--ink2);
   font-size: 10px;
   letter-spacing: 2px;
@@ -1305,11 +1552,15 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
 
 .room-metrics {
   justify-content: flex-start;
-  margin-top: 10px;
+  margin-top: 0;
   color: var(--ink2);
   font-size: 11px;
 }
 
+.review-title { margin: 0 0 16px; font-size: 18px; }
+.room-card-head .room-select { color: var(--ink); font-size: 12px; white-space: nowrap; }
+.room-form-grid input:focus-visible, .room-form-grid select:focus-visible { outline: 2px solid var(--terra); outline-offset: 2px; }
+@media (max-width: 1023px) { .designer-room-card { grid-template-columns: 100px minmax(0, 1fr); } .room-metrics { grid-column: 2; flex-wrap: wrap; } }
 .save-rooms {
   width: 100%;
   margin-top: 16px;
@@ -1318,6 +1569,145 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   padding: 11px 16px;
   color: #fff;
   cursor: pointer;
+}
+
+.furniture-block {
+  margin-top: 18px;
+  border-top: 1px solid #e5ded2;
+  padding-top: 14px;
+}
+.fb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fb-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.fb-item.selected { background: var(--terra-light, #f9eee6); outline: 1px solid var(--terra); }
+.fb-item input[type="checkbox"] { accent-color: var(--terra); width: 18px; height: 18px; flex-shrink: 0; }
+.fb-enrich {
+  border: 1px solid #1a1712;
+  background: #1a1712;
+  color: #f6f1e7;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.fb-enrich:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.fb-note {
+  font-size: 12px;
+  color: #8a7f6a;
+}
+.fb-stats {
+  margin: 6px 0 10px;
+  font-size: 12px;
+  color: #8a7f6a;
+  letter-spacing: 0.04em;
+}
+.fb-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fb-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e9e2d4;
+  background: #fffdf9;
+  padding: 8px 10px;
+}
+.fb-item.unknown {
+  border-color: #e3c39a;
+  background: #fdf8ef;
+}
+.fb-item.dimmed {
+  opacity: 0.55;
+}
+.fb-thumb {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  background: #fff;
+  border: 1px solid #eee6d8;
+}
+.fb-thumb polygon {
+  fill: rgba(120, 96, 60, 0.12);
+  stroke: #6b5b3e;
+  stroke-width: 40;
+}
+.fb-info {
+  min-width: 0;
+  flex: 1;
+}
+.fb-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.fb-cat {
+  font-size: 12px;
+  font-weight: 600;
+  background: #efe7d8;
+  padding: 1px 8px;
+}
+.fb-label {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fb-vis {
+  font-size: 11px;
+  padding: 1px 6px;
+}
+.fb-vis.vis-high {
+  background: #dcebd8;
+  color: #2e6b2e;
+}
+.fb-vis.vis-mid {
+  background: #f5e6c4;
+  color: #8a6414;
+}
+.fb-vis.vis-low {
+  background: #f0d9d2;
+  color: #9a3b2a;
+}
+.fb-dup {
+  font-size: 11px;
+  background: #e3e9f2;
+  color: #34517a;
+  padding: 1px 6px;
+}
+.fb-line2 {
+  margin-top: 3px;
+  font-size: 12px;
+  color: #8a7f6a;
+}
+.fb-sup {
+  margin-top: 10px;
+}
+.fb-sup-toggle {
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: #8a7f6a;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: underline;
+}
+.fb-sup .fb-item {
+  margin-top: 6px;
 }
 
 .save-rooms:disabled {
@@ -1511,7 +1901,35 @@ useHead({ title: 'AI 户型搭配 — rooom.vip 家居全案' })
   gap: 8px;
 }
 
+.fb-crop { position: relative; overflow: hidden; width: 56px; height: 56px; flex: 0 0 56px; background: white; border: 1px solid var(--line); }
+.fb-crop img { position: absolute; max-width: none; object-fit: fill; }
+.fb-name-edit { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fb-name-label { font-size: 11px; color: var(--ink2); }
+.fb-name-edit input { width: 160px; max-width: 100%; min-width: 0; padding: 5px 7px; border: 1px solid var(--line); color: var(--ink); background: white; }
+.fb-name-edit input:focus-visible { outline: 2px solid var(--terra); }
+.review-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; margin-bottom: 12px; border: none; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; font-size: 17px; font-weight: 600; text-align: left; cursor: pointer; }
+.review-toggle:focus-visible { outline: 2px solid var(--terra); outline-offset: 3px; }
+.review-wrap { max-width: none; }
+.confirm-data { min-width: 0; }
+.confirm-grid :deep(.fp-viewer), .confirm-grid > .confirm-img { position: sticky; top: 24px; }
+.review-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+.review-columns.has-furniture { grid-template-columns: minmax(0, 1fr); }
+.space-review, .review-columns .furniture-block { min-width: 0; }
+.review-columns .furniture-block { margin-top: 0; padding-top: 0; border-top: none; }
+.review-columns .designer-room-card { grid-template-columns: 90px minmax(0, 1fr); gap: 10px; }
+.review-columns .room-metrics { grid-column: 2; flex-wrap: wrap; }
+.review-columns .room-form-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 @media (max-width: 767px) {
+  .review-columns.has-furniture { grid-template-columns: minmax(0, 1fr); }
+  .review-columns .designer-room-card { grid-template-columns: minmax(0, 1fr); }
+  .review-columns .room-metrics { grid-column: auto; }
+}
+
+@media (max-width: 767px) {
+  .designer-room-card { grid-template-columns: 1fr; gap: 10px; }
+  .room-metrics { grid-column: auto; }
+  .confirm-img { height: 55vh; min-height: 300px; }
+  .confirm-grid :deep(.fp-viewer), .confirm-grid > .confirm-img { position: relative; top: auto; }
   .confirm-grid {
     grid-template-columns: 1fr;
   }

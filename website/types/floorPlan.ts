@@ -53,6 +53,43 @@ export interface DesignerFloorPlanRoom {
   sortOrder?: number | null
 }
 
+/** 官网户型家具对象（P1，对应 FloorPlanFurnitureResponse）。 */
+export interface DesignerFloorPlanFurniture {
+  furnitureId: string
+  sourceKind?: string | null
+  category: string
+  semanticLabel?: string | null
+  roomId?: string | null
+  blockName?: string | null
+  position?: FloorPlanPoint | null
+  rotationDeg?: number | null
+  footprintPolygon?: number[][] | null
+  geometryWidthMm?: number | null
+  geometryDepthMm?: number | null
+  effectiveWidthMm?: number | null
+  effectiveDepthMm?: number | null
+  detectionConfidence?: string | null
+  categoryConfidence?: string | null
+  confirmationStatus?: string | null
+  qualityFlags?: string[] | null
+  /** P1-A 候选清洗状态：VALID / REJECTED */
+  candidateStatus?: 'VALID' | 'REJECTED' | null
+  duplicateGroupId?: string | null
+  duplicateStatus?: 'PRIMARY' | 'DUPLICATE' | null
+  duplicateCount?: number | null
+  visionGroupId?: string | null
+  /** P1-C 视觉语义识别置信度（0~1，null = 未做视觉识别） */
+  visionConfidence?: number | null
+}
+
+/** 家具视觉语义按需回填摘要（POST /public/ai-match/cad/{id}/furniture/enrich）。 */
+export interface FurnitureEnrichSummary {
+  candidateGroups: number
+  processedGroups: number
+  adopted: number
+  skippedNoImage: number
+}
+
 export interface DesignerFloorPlanAnalysis {
   analysisId: string
   status: FloorPlanAnalysisStatus
@@ -67,6 +104,7 @@ export interface DesignerFloorPlanAnalysis {
   previewBounds?: FloorPlanDrawingBounds | null
   qualityIssues?: FloorPlanQualityIssue[] | null
   rooms: DesignerFloorPlanRoom[]
+  furniture?: DesignerFloorPlanFurniture[] | null
   createdAt?: string | null
   updatedAt?: string | null
 }

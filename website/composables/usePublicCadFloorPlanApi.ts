@@ -1,5 +1,6 @@
 import type {
   DesignerFloorPlanAnalysis,
+  FurnitureEnrichSummary,
   PublicCadFloorPlanAnalyzeResponse
 } from '~/types/floorPlan'
 import type { ApiResult } from '~/types/api'
@@ -42,5 +43,13 @@ export function usePublicCadFloorPlanApi() {
     ))
   }
 
-  return { analyze, getAnalysis }
+  /** 按需触发家具视觉语义回填（"AI 识别家具名称"按钮，幂等）。 */
+  function enrichFurniture(analysisId: string, accessToken: string): Promise<FurnitureEnrichSummary> {
+    return unwrap($fetch<ApiResult<FurnitureEnrichSummary>>(
+      `${requestBase}/api/v1/public/ai-match/cad/${encodeURIComponent(analysisId)}/furniture/enrich`,
+      { method: 'POST', query: { accessToken } }
+    ))
+  }
+
+  return { analyze, getAnalysis, enrichFurniture }
 }
