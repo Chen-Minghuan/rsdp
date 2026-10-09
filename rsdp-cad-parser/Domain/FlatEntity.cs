@@ -37,6 +37,23 @@ public class FlatEntity
 
     /// <summary>Dimension 实体的测量值（毫米）。</summary>
     public double? Measure { get; set; }
+
+    // ---- P0 溯源字段（Canonical IR，可选；块展开图元携带，模型空间直接实体为 null）----
+
+    /// <summary>来源 CAD 实体句柄（hex）。</summary>
+    public string? SourceHandle { get; set; }
+
+    /// <summary>从顶层 INSERT 到当前实体的 INSERT 句柄路径（hex）；非块内图元为 null。</summary>
+    public List<string>? InsertPath { get; set; }
+
+    /// <summary>所属块定义名（块内图元）；非块内图元为 null。</summary>
+    public string? BlockDefinitionName { get; set; }
+
+    /// <summary>块内图元的有效图层（ByBlock/0 层解析为 INSERT 所在图层）；null 时等同 Layer。</summary>
+    public string? EffectiveLayer { get; set; }
+
+    /// <summary>已应用的块局部→世界仿射变换 [a,b,c,d,tx,ty]（x'=ax+by+tx, y'=cx+dy+ty）。</summary>
+    public double[]? TransformApplied { get; set; }
 }
 
 /// <summary>图纸上的"面积: X㎡"文字标注（金样本校验基准来源）。</summary>

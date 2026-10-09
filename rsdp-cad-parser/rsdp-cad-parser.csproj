@@ -17,4 +17,8 @@
     <PackageReference Include="NetTopologySuite" Version="2.6.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Parser/preview_wall_profiles.json" />
+  </ItemGroup>
+
 </Project>

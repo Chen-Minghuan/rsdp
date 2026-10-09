@@ -5,7 +5,7 @@ var defaultGolden = Environment.GetEnvironmentVariable("CAD_GOLDEN_DWG")
     ?? Path.Combine("..", "data", "uploads", "户型图.dwg");
 
 // 诊断模式（开发调参用）：
-//   --probe [file] [closeGapMm]        全链路诊断 + 标注匹配明细
+//   --probe [file] [closeGapMm] [rasterWallDilateMm]  全链路诊断 + 标注匹配明细
 //   --probe-deep [file]                聚类桥接/各簇 HATCH 明细
 //   --probe-raw [file]                 HATCH 原始边界 + 标签坐标 + 图层构成
 //   --probe-region [file]              标注区域内实体构成
@@ -15,6 +15,8 @@ var defaultGolden = Environment.GetEnvironmentVariable("CAD_GOLDEN_DWG")
 //   --probe-render [file] [out.png] [layerRe] [minX minY maxX maxY(米)]  区域渲染
 //   --probe-preview [file] [out.png]    正式解析流水线生成的同坐标系规范预览
 //   --probe-texts [file]               铺贴/标注图层文字 dump
+//   --probe-loops [file]               闭合面积环统计（闭合多段线/HATCH 边界环 × 图层 × 面积文字）
+//   --probe-rooms [file] [on|off]      房间产出对比（面积/顶点/质量门；off=关闭墙体内侧面吸附做前后对比）
 string Mode(string name) => args.Length > 0 && args[0] == name ? name : "";
 string Arg(int i, string def) => args.Length > i ? args[i] : def;
 double Num(int i, double def) => args.Length > i && double.TryParse(args[i], out var v) ? v : def;
@@ -23,7 +25,7 @@ double? NumOrNull(int i) => args.Length > i && double.TryParse(args[i], out var 
 switch (Mode("--probe") is "" ? null : "--probe")
 {
     case "--probe":
-        RsdpCadParser.Probe.Run(Arg(1, defaultGolden), Num(2, 0));
+        RsdpCadParser.Probe.Run(Arg(1, defaultGolden), NumOrNull(2), NumOrNull(3));
         return;
 }
 if (Mode("--probe-deep") != "") { RsdpCadParser.ProbeDeep.Run(Arg(1, defaultGolden)); return; }
@@ -49,6 +51,10 @@ if (Mode("--probe-preview") != "")
     return;
 }
 if (Mode("--probe-texts") != "") { RsdpCadParser.ProbeTexts.Run(Arg(1, defaultGolden)); return; }
+if (Mode("--probe-loops") != "") { RsdpCadParser.ProbeLoops.Run(Arg(1, defaultGolden)); return; }
+if (Mode("--probe-rooms") != "") { RsdpCadParser.ProbeRooms.Run(Arg(1, defaultGolden), Arg(2, "on") != "off"); return; }
+if (Mode("--probe-blocks") != "") { RsdpCadParser.ProbeBlocks.Run(Arg(1, defaultGolden)); return; }
+if (Mode("--probe-furniture") != "") { RsdpCadParser.ProbeFurniture.Run(Arg(1, defaultGolden)); return; }
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 64L * 1024 * 1024);

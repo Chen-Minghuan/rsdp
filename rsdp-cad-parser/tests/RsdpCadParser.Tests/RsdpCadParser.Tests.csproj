@@ -18,4 +18,8 @@
     <ProjectReference Include="..\..\rsdp-cad-parser.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Fixtures\**\*.dxf" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

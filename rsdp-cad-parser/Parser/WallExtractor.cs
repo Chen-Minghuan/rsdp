@@ -32,6 +32,8 @@ public static class WallExtractor
         public List<List<Coordinate>> DoorLines { get; } = new();
         /// <summary>门槛石/挡水条实心（铺贴/地面图层 HATCH 多边形）。</summary>
         public List<Geometry> SillSolids { get; } = new();
+        /// <summary>墙体实心多边形（并集前原始列表，含 WIPEOUT/SOLID 等价物；栅格重建填充用）。</summary>
+        public List<Polygon> WallSolids { get; } = new();
     }
 
     public static WallExtractionResult Extract(List<FlatEntity> targetEntities, ParserOptions opt, List<string>? diagnostics = null)
@@ -64,6 +66,7 @@ public static class WallExtractor
                 if (polys.Count == 0) { result.SkippedHatchCount++; continue; }
                 result.HatchCount++;
                 wallPolygons.AddRange(polys);
+                result.WallSolids.AddRange(polys);
             }
             else if ((e.Kind == FlatKind.Line || e.Kind == FlatKind.Polyline)
                      && e.Points is { Count: >= 2 })

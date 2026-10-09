@@ -11,6 +11,7 @@ public static class MTextCleaner
     private static readonly Regex InlineCode = new(@"\\[A-Za-z][^;\\{}]*;", RegexOptions.Compiled);
     private static readonly Regex EscapedChar = new(@"\\([\\{}])", RegexOptions.Compiled);
     private static readonly Regex Group = new(@"\{[^{}]*\}", RegexOptions.Compiled);
+    private static readonly Regex SpacedChinese = new(@"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", RegexOptions.Compiled);
 
     public static string Clean(string? raw)
     {
@@ -28,11 +29,13 @@ public static class MTextCleaner
             if (t == s) break;
             s = t;
         }
-        s = s.Replace("\\P", " ").Replace("\\p", " ");
+        // 段落分隔符先占位，避免被“汉字间字距空格”规则误删。
+        s = s.Replace("\\P", "\uE000").Replace("\\p", "\uE000");
         s = InlineCode.Replace(s, "");
         s = EscapedChar.Replace(s, "$1");
         s = s.Replace("{", "").Replace("}", "");
         s = s.Replace("%%c", "φ").Replace("%%d", "°").Replace("%%p", "±");
-        return s.Trim();
+        // CAD 字距排版常把“主 卧”“客 厅”写成带空格的 MTEXT；语义匹配需视为同一个词。
+        return SpacedChinese.Replace(s, "").Replace('\uE000', ' ').Trim();
     }
 }

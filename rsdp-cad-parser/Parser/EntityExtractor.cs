@@ -6,33 +6,69 @@ using RsdpCadParser.Domain;
 
 namespace RsdpCadParser.Parser;
 
+/// <summary>Dictionary 计数辅助。</summary>
+internal static class DictionaryCounter
+{
+    public static void Increment<T>(this Dictionary<T, int> dict, T key) where T : notnull
+        => dict[key] = dict.GetValueOrDefault(key) + 1;
+
+    public static void Increment(this Dictionary<string, int> dict, Entity e)
+        => dict.Increment(e.GetType().Name);
+}
+
 /// <summary>
 /// 实体抽取：模型空间实体 → 扁平几何（坐标 × 单位系数 → 毫米）。
-/// P1 不展开 INSERT 块引用（金样本的墙体/标签均为模型空间直接实体），块展开列入 P2。
+/// P0 起 INSERT 由 <see cref="BlockResolver"/> 递归展开（保留实例树与溯源），此处不再兜底为 Other 空壳。
+/// 不支持/降级的实体类型计入 UnsupportedEntitySummary，不再静默跳过。
 /// </summary>
 public static class EntityExtractor
 {
-    public static List<FlatEntity> Extract(CadDocument doc, double scale, List<string>? diagnostics = null)
+    public class ExtractionResult
     {
-        var result = new List<FlatEntity>();
-        int skipped = 0;
-        foreach (var e in doc.ModelSpace.Entities)
+        public List<FlatEntity> Entities { get; } = new();
+        public Dictionary<string, int> Unsupported { get; } = new();
+        public int Failed { get; set; }
+        public double MinZ { get; set; } = double.MaxValue;
+        public double MaxZ { get; set; } = double.MinValue;
+    }
+
+    public static List<FlatEntity> Extract(CadDocument doc, double scale, List<string>? diagnostics = null)
+        => ExtractDetailed(doc.ModelSpace.Entities, scale, CancellationToken.None, diagnostics).Entities;
+
+    public static ExtractionResult ExtractDetailed(IEnumerable<Entity> source, double scale, CancellationToken ct, List<string>? diagnostics = null)
+    {
+        var result = new ExtractionResult();
+        int i = 0;
+        foreach (var e in source)
         {
+            if ((++i & 0xFF) == 0) ct.ThrowIfCancellationRequested();
+            if (e.IsInvisible) continue;
             try
             {
-                var flat = Convert(e, scale);
-                if (flat != null) result.Add(flat);
+                SampleZ(e, scale, result);
+                var flat = Convert(e, scale, null, result.Unsupported);
+                if (flat != null)
+                {
+                    flat.SourceHandle = e.Handle.ToString("X");
+                    result.Entities.Add(flat);
+                }
             }
+            catch (OperationCanceledException) { throw; }
             catch
             {
-                skipped++;
+                result.Failed++;
+                var tn = e.GetType().Name;
+                result.Unsupported[tn] = result.Unsupported.GetValueOrDefault(tn) + 1;
             }
         }
-        if (skipped > 0) diagnostics?.Add($"实体抽取跳过 {skipped} 个无法处理的实体");
+        if (result.Failed > 0) diagnostics?.Add($"实体抽取跳过 {result.Failed} 个无法处理的实体");
         return result;
     }
 
-    private static FlatEntity? Convert(Entity e, double scale)
+    public static FlatEntity? Convert(Entity e, double scale, Affine2D? transform = null, Dictionary<string, int>? unsupported = null)
+        => e.IsInvisible ? null : Build(e, scale, unsupported) is { } f ? Tx(f, transform) : null;
+
+    private static FlatEntity? Build(Entity e, double scale, Dictionary<string, int>? unsupported)
     {
         var layer = e.Layer?.Name ?? "";
         switch (e)
@@ -125,12 +161,101 @@ public static class EntityExtractor
                     BBox = new Envelope(pos)
                 };
             }
+            case Spline sp:
+            {
+                // SPLINE 降级为拟合点/控制点采样（支持矩阵：PARTIAL）
+                var src = sp.FitPoints is { Count: > 1 } ? sp.FitPoints : sp.ControlPoints;
+                if (src is not { Count: > 1 })
+                {
+                    unsupported?.Increment(e);
+                    var bb0 = SafeBBox(e, scale);
+                    return bb0 == null ? null : new FlatEntity { Kind = FlatKind.Other, Layer = layer, BBox = bb0 };
+                }
+                var pts = src.Select(p => Pt(p, scale)).ToList();
+                return new FlatEntity { Kind = FlatKind.Polyline, Layer = layer, Points = pts, BBox = BBoxOf(pts) };
+            }
+            case Insert:
+                // INSERT 由 BlockResolver 递归展开，保留实例树与溯源，不在此兜底。
+                return null;
+            // WIPEOUT/SOLID（P1-E）：深化图常用 WIPEOUT 填充墙身（遮盖底色），边界即墙体实心轮廓；
+            // 按实心 HATCH 等价物输出，交给既有墙体判定/栅格填充管线
+            case ACadSharp.Entities.Wipeout wo:
+            {
+                var verts = wo.ClipBoundaryVertices?.ToList();
+                if (verts == null || verts.Count < 3)
+                {
+                    unsupported?.Increment(e);
+                    var bb0 = SafeBBox(e, scale);
+                    return bb0 == null ? null : new FlatEntity { Kind = FlatKind.Other, Layer = layer, BBox = bb0 };
+                }
+                var ring = verts.Select(v => new Coordinate(v.X * scale, v.Y * scale)).ToList();
+                if (ring[0].Distance(ring[^1]) > 1e-6) ring.Add(ring[0]); // 闭合
+                var wbb = BBoxOf(ring);
+                return new FlatEntity
+                {
+                    Kind = FlatKind.Hatch, Layer = layer, Rings = new List<List<Coordinate>> { ring },
+                    HatchIsSolid = true, HatchPattern = "WIPEOUT", BBox = wbb
+                };
+            }
+            case ACadSharp.Entities.Solid so:
+            {
+                var ring = new List<Coordinate>
+                {
+                    new(so.FirstCorner.X * scale, so.FirstCorner.Y * scale),
+                    new(so.SecondCorner.X * scale, so.SecondCorner.Y * scale),
+                    // SOLID 角点顺序为 Z 形（1-2-4-3），补齐闭合
+                    new(so.FourthCorner.X * scale, so.FourthCorner.Y * scale),
+                    new(so.ThirdCorner.X * scale, so.ThirdCorner.Y * scale),
+                    new(so.FirstCorner.X * scale, so.FirstCorner.Y * scale)
+                };
+                var sbb = BBoxOf(ring);
+                return new FlatEntity
+                {
+                    Kind = FlatKind.Hatch, Layer = layer, Rings = new List<List<Coordinate>> { ring },
+                    HatchIsSolid = true, HatchPattern = "SOLID", BBox = sbb
+                };
+            }
             default:
             {
+                unsupported?.Increment(e);
                 var bbox = SafeBBox(e, scale);
                 return bbox == null ? null : new FlatEntity { Kind = FlatKind.Other, Layer = layer, BBox = bbox };
             }
         }
+    }
+
+    /// <summary>对转换结果应用块局部→世界变换（块展开图元用）。</summary>
+    private static FlatEntity Tx(FlatEntity f, Affine2D? transform)
+    {
+        if (transform is not { } tx) return f;
+        if (f.Points != null) f.Points = f.Points.Select(tx.Apply).ToList();
+        if (f.Rings != null) f.Rings = f.Rings.Select(r => r.Select(tx.Apply).ToList()).ToList();
+        if (f.TextPos != null) f.TextPos = tx.Apply(f.TextPos);
+        var bb = new Envelope();
+        if (f.Points != null) foreach (var c in f.Points) bb.ExpandToInclude(c);
+        if (f.Rings != null) foreach (var r in f.Rings) foreach (var c in r) bb.ExpandToInclude(c);
+        if (f.TextPos != null) bb.ExpandToInclude(f.TextPos);
+        if (!bb.IsNull) f.BBox = bb;
+        return f;
+    }
+
+    /// <summary>Z 范围采样（平面性检查用；尽力而为，失败忽略）。</summary>
+    public static void SampleZ(Entity e, double scale, ExtractionResult acc)
+    {
+        try
+        {
+            var b = e.GetBoundingBox();
+            Feed(b.Min.Z * scale, acc);
+            Feed(b.Max.Z * scale, acc);
+        }
+        catch { /* 无可靠 Z 信息时跳过 */ }
+    }
+
+    private static void Feed(double z, ExtractionResult acc)
+    {
+        if (double.IsNaN(z) || double.IsInfinity(z)) return;
+        if (z < acc.MinZ) acc.MinZ = z;
+        if (z > acc.MaxZ) acc.MaxZ = z;
     }
 
     private static Envelope? SafeBBox(Entity e, double scale)

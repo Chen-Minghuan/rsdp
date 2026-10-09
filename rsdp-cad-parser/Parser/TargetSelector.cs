@@ -23,55 +23,91 @@ public static class TargetSelector
         public int LabelCount { get; set; }
         public int AnnotationCount { get; set; }
         public bool FromLabels { get; set; }
+        /// <summary>候选得分（0~1，最高分为 1）。</summary>
+        public double Score { get; set; }
+        /// <summary>推荐证据：ROOM_LABEL_DENSITY / AREA_ANNOTATION_DENSITY / ENTITY_CLUSTER_FALLBACK。</summary>
+        public List<string> Reasons { get; set; } = new();
+    }
+
+    public class Selection
+    {
+        public TargetRegion Best { get; set; } = new();
+        /// <summary>全部候选（按得分降序，Best 为第一个）。</summary>
+        public List<TargetRegion> Candidates { get; set; } = new();
     }
 
     public static TargetRegion Select(List<FlatEntity> entities, List<AreaAnnotation> annotations, ParserOptions opt, List<string>? diagnostics = null)
+        => SelectDetailed(entities, annotations, opt, diagnostics).Best;
+
+    /// <summary>标签聚类 + 标注密度打分，返回全部目标场景候选（按得分降序）。</summary>
+    public static Selection SelectDetailed(List<FlatEntity> entities, List<AreaAnnotation> annotations, ParserOptions opt, List<string>? diagnostics = null)
     {
         var labelRe = new Regex(opt.RoomLabelPattern);
         var labels = entities
             .Where(e => e.Kind == FlatKind.Text && e.Text != null && e.TextPos != null && labelRe.IsMatch(e.Text))
             .ToList();
 
+        List<TargetRegion> candidates;
         if (labels.Count == 0)
         {
             diagnostics?.Add("全图无房间名标签，兜底取最大实体簇");
             var clusters = SubDrawingClusterer.Split(entities, opt);
-            var biggest = clusters.OrderByDescending(c => c.Entities.Count).First();
-            return new TargetRegion { Region = biggest.BBox.Copy(), FromLabels = false };
+            candidates = clusters.Select(c => new TargetRegion
+            {
+                Region = c.BBox.Copy(),
+                FromLabels = false,
+                Reasons = new List<string> { "ENTITY_CLUSTER_FALLBACK" }
+            }).ToList();
+        }
+        else
+        {
+            // 标签点聚类（并查集，间距 > ClusterGapMm 断开）
+            int n = labels.Count;
+            var parent = Enumerable.Range(0, n).ToArray();
+            int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+            for (int i = 0; i < n; i++)
+                for (int j = i + 1; j < n; j++)
+                    if (labels[i].TextPos!.Distance(labels[j].TextPos!) <= opt.ClusterGapMm)
+                    { int a = Find(i), b = Find(j); if (a != b) parent[a] = b; }
+
+            var groups = labels.Select((e, i) => (e, root: Find(i)))
+                .GroupBy(x => x.root)
+                .Select(g => g.Select(x => x.e).ToList())
+                .ToList();
+
+            double margin = opt.TargetRegionMarginMm;
+            candidates = groups.Select(g =>
+            {
+                var bb = new Envelope();
+                foreach (var e in g) bb.ExpandToInclude(e.TextPos!);
+                var region = bb.Copy();
+                region.ExpandBy(margin);
+                int annCount = annotations.Count(a => region.Contains(a.Pos));
+                int distinctLabels = g.Select(e => e.Text!).Distinct().Count();
+                var reasons = new List<string> { "ROOM_LABEL_DENSITY" };
+                if (annCount > 0) reasons.Add("AREA_ANNOTATION_DENSITY");
+                return new TargetRegion { Region = region, LabelCount = distinctLabels, AnnotationCount = annCount, FromLabels = true, Reasons = reasons };
+            }).ToList();
         }
 
-        // 标签点聚类（并查集，间距 > ClusterGapMm 断开）
-        int n = labels.Count;
-        var parent = Enumerable.Range(0, n).ToArray();
-        int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
-        for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-                if (labels[i].TextPos!.Distance(labels[j].TextPos!) <= opt.ClusterGapMm)
-                { int a = Find(i), b = Find(j); if (a != b) parent[a] = b; }
-
-        var groups = labels.Select((e, i) => (e, root: Find(i)))
-            .GroupBy(x => x.root)
-            .Select(g => g.Select(x => x.e).ToList())
-            .ToList();
-
-        double margin = opt.TargetRegionMarginMm;
-        var candidates = groups.Select(g =>
-        {
-            var bb = new Envelope();
-            foreach (var e in g) bb.ExpandToInclude(e.TextPos!);
-            var region = bb.Copy();
-            region.ExpandBy(margin);
-            int annCount = annotations.Count(a => region.Contains(a.Pos));
-            int distinctLabels = g.Select(e => e.Text!).Distinct().Count();
-            return new TargetRegion { Region = region, LabelCount = distinctLabels, AnnotationCount = annCount, FromLabels = true };
-        }).ToList();
-
-        var best = candidates
+        // 打分排序：标注密度优先，标签种类次之；归一化到最高分 = 1
+        var ranked = candidates
             .OrderByDescending(c => c.AnnotationCount)
             .ThenByDescending(c => c.LabelCount)
-            .First();
-        diagnostics?.Add($"户型副本 {candidates.Count} 个（按标签聚类），目标副本：标签 {best.LabelCount} 种、面积标注 {best.AnnotationCount} 处，"
+            .ToList();
+        if (ranked.Count == 0)
+        {
+            // 极端兜底：无可用实体时构造空候选，避免上游崩溃（交给质量门判 FAILED/PARTIAL）
+            var empty = new Envelope(0, 0, 0, 0);
+            ranked.Add(new TargetRegion { Region = empty, FromLabels = false, Reasons = new List<string> { "ENTITY_CLUSTER_FALLBACK" } });
+        }
+        double maxRaw = ranked.Select(c => c.AnnotationCount * 2.0 + c.LabelCount).DefaultIfEmpty(1).Max();
+        foreach (var c in ranked)
+            c.Score = maxRaw > 0 ? Math.Round((c.AnnotationCount * 2.0 + c.LabelCount) / maxRaw, 3) : 0;
+
+        var best = ranked.First();
+        diagnostics?.Add($"户型副本 {ranked.Count} 个（按标签聚类），目标副本：标签 {best.LabelCount} 种、面积标注 {best.AnnotationCount} 处，"
                          + $"区域 ({best.Region.MinX / 1000:F1},{best.Region.MinY / 1000:F1})~({best.Region.MaxX / 1000:F1},{best.Region.MaxY / 1000:F1})");
-        return best;
+        return new Selection { Best = best, Candidates = ranked };
     }
 }

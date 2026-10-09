@@ -5,7 +5,7 @@ namespace RsdpCadParser;
 /// <summary>诊断 CLI：打印解析流水线全链路中间量，用于调参。</summary>
 public static class Probe
 {
-    public static void Run(string path, double closeGapMm = 0)
+    public static void Run(string path, double? closeGapMm = null, double? rasterWallDilateMm = null)
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         if (!File.Exists(path))
@@ -14,7 +14,15 @@ public static class Probe
             return;
         }
         var bytes = File.ReadAllBytes(path);
-        var opt = new ParserOptions { WallCloseGapMm = closeGapMm, LineCloseGapMm = closeGapMm };
+        // 未指定调参值时必须与 /parse 使用同一组默认配置，避免诊断结果与线上结果不一致。
+        var opt = new ParserOptions();
+        if (closeGapMm.HasValue)
+        {
+            opt.WallCloseGapMm = closeGapMm.Value;
+            opt.LineCloseGapMm = closeGapMm.Value;
+        }
+        if (rasterWallDilateMm.HasValue)
+            opt.RasterWallDilateMm = rasterWallDilateMm.Value;
         var detailed = CadParsePipeline.ParseDetailed(bytes, Path.GetFileName(path), opt);
 
         Console.WriteLine("===== 诊断 =====");
