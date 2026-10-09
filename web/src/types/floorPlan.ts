@@ -2,7 +2,19 @@
  * 户型图搭配链路类型定义（管理端 /api/v1/floor-plan/**）。
  *
  * 契约来源：docs/05-status/户型图空间搭配链路完整方案v3.0.md §4.2
+ * CAD Scene Revision 字段见 ./floorPlanScene（V1.2.3 冻结契约 v1.0）。
  */
+
+import type {
+  RoomConfirmationStatus,
+  SceneActivationReadiness,
+  SceneFurniture,
+  SceneParseStatus,
+  SceneRevisionStatus,
+  SceneTargetCandidate,
+  SceneTargetRef,
+  SceneUnitResolution
+} from './floorPlanScene'
 
 /** 户型图分析状态机。 */
 export type FloorPlanAnalysisStatus =
@@ -54,6 +66,8 @@ export interface FloorPlanRoom {
   polygon?: Array<[number, number]> | Array<{ x: number; y: number }> | number[] | null
   /** CAD 标签内部锚点（毫米坐标），由几何引擎保证位于空间内 */
   labelPoint?: { x: number; y: number } | null
+  /** 空间确认状态（CAD Scene 通道；AUTO=自动候选 / CONFIRMED=已确认，视觉通道缺失） */
+  confirmationStatus?: RoomConfirmationStatus | null
   sortOrder?: number
 }
 
@@ -87,6 +101,8 @@ export interface EditableRoom {
   dimensionSource: string | null
   dimensionConfidence: DimensionConfidence | null
   dimensionText: string | null
+  /** 空间确认状态（CAD Scene 通道；AUTO=自动候选 / CONFIRMED=已确认） */
+  confirmationStatus?: RoomConfirmationStatus | null
 }
 
 /** 比例建议候选基准（用某个房间的图上标注尺寸反推的 mm/px）。 */
@@ -169,6 +185,25 @@ export interface FloorPlanAnalysisResponse {
   /** 规范预览对应范围；旧数据缺失时回退 drawingBounds */
   previewBounds?: FloorPlanDrawingBounds | null
   rooms: FloorPlanRoom[]
+  // ---------- CAD Scene Revision 字段（V1.2.3 冻结契约；视觉通道全部缺失，前端按 legacy 处理） ----------
+  /** 本载荷描述的 Revision（缺省为 working ?? active ?? latest） */
+  analysisRevision?: number | null
+  revisionStatus?: SceneRevisionStatus | null
+  activeAnalysisRevision?: number | null
+  workingAnalysisRevision?: number | null
+  latestAnalysisRevision?: number | null
+  /** 当前 Revision 的空间乐观锁版本（PUT /rooms 携带 baseRoomRevision） */
+  roomRevision?: number | null
+  /** 当前 Revision 的家具乐观锁版本（PUT /furniture 携带 baseFurnitureRevision） */
+  furnitureRevision?: number | null
+  parseStatus?: SceneParseStatus | null
+  capabilities?: Record<string, string> | null
+  unitResolution?: SceneUnitResolution | null
+  targetScene?: SceneTargetRef | null
+  targetSceneCandidates?: SceneTargetCandidate[] | null
+  activationReadiness?: SceneActivationReadiness | null
+  /** 当前 Revision 的家具列表（CAD Scene 通道；视觉通道缺失） */
+  furniture?: SceneFurniture[] | null
 }
 
 /** 上传户型图触发分析的响应（POST /floor-plan/analyze）。 */

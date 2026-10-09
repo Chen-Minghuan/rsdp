@@ -4,6 +4,14 @@ import { NButton, NInputNumber, NModal, NPopover, useMessage } from 'naive-ui'
 import { useFloorPlanCanvas } from '@/composables/useFloorPlanCanvas'
 import { meanMmPerPx } from '@/types/floorPlan'
 import type { CalibSegment, EditableRoom, FloorPlanDrawingBounds, RoomBBox } from '@/types/floorPlan'
+import type { EditableFurniture, SceneTargetCandidate } from '@/types/floorPlanScene'
+import {
+  furnitureAnchorMm,
+  furnitureKey,
+  isFurnitureOutOfScene,
+  mmPointToNormalized,
+  normalizedPointToMm
+} from '@/utils/floorPlanScene'
 
 /**
  * 户型图可视化编辑器（步骤 2 左侧图纸区）：
@@ -41,6 +49,16 @@ interface Props {
   drawingBounds?: FloorPlanDrawingBounds | null
   /** 只读查看模式：隐藏框编辑/标定/手绘工具与缩放手柄，仅保留缩放、平移、点选与全屏 */
   readonly?: boolean
+  /** CAD Scene 家具叠加（毫米坐标，与 drawingBounds 同坐标系；视觉通道为空数组） */
+  furniture?: EditableFurniture[]
+  /** 当前选中家具 key（furnitureId ?? localId），宿主持有：列表与画布双向联动 */
+  selectedFurnitureKey?: string | null
+  /** 画布点选新增家具模式：点击图纸按毫米坐标 emit add-furniture（不进入平移） */
+  addFurnitureMode?: boolean
+  /** 目标场景候选叠加框（非空时渲染虚线范围框，点击 emit scene-candidate-click） */
+  sceneCandidates?: SceneTargetCandidate[]
+  /** 画布居中请求（seq 递增触发；坐标为相对图纸归一化），列表选中家具时由宿主下发 */
+  focusNormalized?: { x: number; y: number; seq: number } | null
 }
 
 const props = defineProps<Props>()
@@ -56,6 +74,14 @@ const emit = defineEmits<{
   'room-mutated': [localId: string, snapshot: EditableRoom]
   /** 用户点击工具栏「自动标定」，由宿主弹出基准选择窗 */
   'open-auto-calib': []
+  /** 家具点选（key 为 furnitureId ?? localId，null 表示取消选中） */
+  'update:selectedFurnitureKey': [key: string | null]
+  /** 画布点选新增家具：携带毫米坐标（已按 drawingBounds 逆换算 + y 翻转还原） */
+  'add-furniture': [position: { x: number; y: number }]
+  /** ESC 退出画布点选新增模式 */
+  'exit-add-furniture': []
+  /** 目标场景候选框点击：宿主打开候选选择窗并预选该项 */
+  'scene-candidate-click': [targetId: string]
 }>()
 
 const message = useMessage()
@@ -159,11 +185,7 @@ function parsePolygonPoints(polygon: EditableRoom['polygon']): Array<{ x: number
 
 /** 毫米坐标 → 归一化（drawingBounds 为基准）。CAD 坐标系 y 轴向上、图片像素 y 轴向下，必须翻转 y。 */
 function normalizePolygonPoint(p: { x: number; y: number }): { x: number; y: number } {
-  const b = props.drawingBounds as FloorPlanDrawingBounds
-  return {
-    x: (p.x - b.minX) / (b.maxX - b.minX || 1),
-    y: 1 - (p.y - b.minY) / (b.maxY - b.minY || 1)
-  }
+  return mmPointToNormalized(p, props.drawingBounds as FloorPlanDrawingBounds)
 }
 
 /** SVG points 属性（viewBox 0 0 100 100 百分比坐标）。 */
@@ -196,6 +218,82 @@ function polygonAreaText(room: EditableRoom): string {
   const a = room.areaM2 ?? (room.widthMm && room.depthMm ? (room.widthMm * room.depthMm) / 1_000_000 : null)
   return a ? `${a.toFixed(2)}㎡` : ''
 }
+
+// ---------- 家具叠加层（CAD Scene 通道；与多边形共用 drawingBounds 换算与 y 翻转） ----------
+
+/** 可绘制家具（有占地轮廓或锚点且未超界）；list-only 项（无几何）与超界误检项不上画布。 */
+const drawableFurniture = computed(() =>
+  (props.furniture ?? []).filter(f =>
+    ((f.footprintPolygon && f.footprintPolygon.length >= 3) || f.position) &&
+    !isFurnitureOutOfScene(f, props.drawingBounds)
+  )
+)
+
+/** 家具占地轮廓 SVG points 属性（嵌套点对，毫米 → 归一化百分比）。 */
+function furniturePointsAttr(item: EditableFurniture): string {
+  return (item.footprintPolygon ?? [])
+    .filter(p => Array.isArray(p) && typeof p[0] === 'number' && typeof p[1] === 'number')
+    .map(p => {
+      const n = normalizePolygonPoint({ x: p[0], y: p[1] })
+      return `${n.x * 100},${n.y * 100}`
+    })
+    .join(' ')
+}
+
+/** 家具锚点（轮廓质心 ?? position）的归一化定位（标签/无轮廓标记用）。 */
+function furnitureAnchorStyle(item: EditableFurniture) {
+  const anchor = furnitureAnchorMm(item)
+  if (!anchor) return {}
+  const n = normalizePolygonPoint(anchor)
+  return { left: `${n.x * 100}%`, top: `${n.y * 100}%` }
+}
+
+/** 家具点选：阻断视口平移，切换选中联动列表。 */
+function handleFurnitureMouseDown(e: MouseEvent, item: EditableFurniture) {
+  e.stopPropagation()
+  emit('update:selectedFurnitureKey', furnitureKey(item))
+}
+
+// ---------- 目标场景候选叠加框 ----------
+
+/** 候选范围框（毫米 bounds → 归一化百分比矩形；y 翻转）。 */
+function candidateBoundsStyle(candidate: SceneTargetCandidate) {
+  const b = props.drawingBounds as FloorPlanDrawingBounds
+  const spanX = b.maxX - b.minX || 1
+  const spanY = b.maxY - b.minY || 1
+  return {
+    left: `${((candidate.bounds.minX - b.minX) / spanX) * 100}%`,
+    top: `${(1 - (candidate.bounds.maxY - b.minY) / spanY) * 100}%`,
+    width: `${((candidate.bounds.maxX - candidate.bounds.minX) / spanX) * 100}%`,
+    height: `${((candidate.bounds.maxY - candidate.bounds.minY) / spanY) * 100}%`
+  }
+}
+
+/** 候选框点击：阻断平移，交宿主打开候选选择窗。 */
+function handleCandidateMouseDown(e: MouseEvent, candidate: SceneTargetCandidate) {
+  e.stopPropagation()
+  emit('scene-candidate-click', candidate.targetId)
+}
+
+// ---------- 画布居中（列表选中家具 → 高亮居中） ----------
+
+/** 将归一化图纸点平移到画布中心（保持当前缩放；zoom=1 时图片铺满容器宽度）。 */
+function centerOnNormalized(nx: number, ny: number) {
+  const canvas = canvasRef.value
+  if (!canvas || !naturalWidth.value || !naturalHeight.value) return
+  const rect = canvas.getBoundingClientRect()
+  if (rect.width === 0) return
+  const layerW = rect.width
+  const layerH = (rect.width * naturalHeight.value) / naturalWidth.value
+  panX.value = rect.width / 2 - nx * layerW * zoom.value
+  panY.value = rect.height / 2 - ny * layerH * zoom.value
+}
+
+watch(() => props.focusNormalized?.seq, () => {
+  const focus = props.focusNormalized
+  if (!focus) return
+  centerOnNormalized(focus.x, focus.y)
+})
 
 /** 当前选中的带框空间（"以框宽/深标定"入口的显示条件）。 */
 const selectedBoxedRoom = computed(() =>
@@ -366,10 +464,18 @@ function removeDragListeners() {
   drag = null
 }
 
-/** 叠加层空白处按下：手绘 / 画标定线 / 平移（按当前模式分派）。 */
+/** 叠加层空白处按下：新增家具点选 / 手绘 / 画标定线 / 平移（按当前模式分派）。 */
 function handleOverlayMouseDown(e: MouseEvent) {
   if (e.button !== 0) return
   e.preventDefault()
+  // 画布点选新增家具：按 drawingBounds 逆换算毫米坐标（y 翻转还原），不进入平移
+  if (props.addFurnitureMode && props.drawingBounds) {
+    const p = normalizedPoint(e)
+    if (p) {
+      emit('add-furniture', normalizedPointToMm(p, props.drawingBounds))
+    }
+    return
+  }
   // 多边形叠加模式使用同坐标系规范底图，仅允许平移整个视口；只读模式同样仅平移。
   if (isPolygonMode.value || props.readonly) {
     startDrag({ kind: 'pan', startX: e.clientX, startY: e.clientY, origPanX: panX.value, origPanY: panY.value })
@@ -753,11 +859,13 @@ function applyCalibInput() {
   }
 }
 
-/** ESC：取消标定输入 → 退出画线态 → 退出手绘态 → 取消选中（逐级）。 */
+/** ESC：取消标定输入 → 退出画布新增家具 → 退出画线态 → 退出手绘态 → 取消选中（逐级）。 */
 function handleKeydown(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
   if (calibInput.value) {
     cancelCalib()
+  } else if (props.addFurnitureMode) {
+    emit('exit-add-furniture')
   } else if (calibMode.value) {
     calibMode.value = null
   } else if (props.drawMode) {
@@ -942,7 +1050,7 @@ onUnmounted(() => {
         >
         <div
           class="fp-overlay"
-          :class="{ drawing: drawMode, calibrating: calibMode === 'line' }"
+          :class="{ drawing: drawMode, calibrating: calibMode === 'line', 'adding-furniture': addFurnitureMode }"
           @mousedown="handleOverlayMouseDown"
         >
           <!-- CAD 多边形叠加层：与规范底图共用 previewBounds，无额外人工变换。 -->
@@ -972,6 +1080,50 @@ onUnmounted(() => {
               <span v-if="polygonAreaText(room)" class="fp-polygon-area rsdp-mono">{{ polygonAreaText(room) }}</span>
             </div>
           </div>
+          <!-- 家具叠加层（CAD Scene 通道）：footprint 轮廓点选高亮；无轮廓项以锚点标记呈现 -->
+          <template v-if="drawingBounds && drawableFurniture.length > 0">
+            <svg class="fp-polygon-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polygon
+                v-for="item in drawableFurniture.filter(f => f.footprintPolygon && f.footprintPolygon.length >= 3)"
+                :key="`furniture-${item.localId}`"
+                :points="furniturePointsAttr(item)"
+                class="fp-furniture"
+                :class="{
+                  active: furnitureKey(item) === selectedFurnitureKey,
+                  unknown: item.category === 'UNKNOWN'
+                }"
+                vector-effect="non-scaling-stroke"
+                @mousedown="handleFurnitureMouseDown($event, item)"
+              />
+            </svg>
+            <template v-for="item in drawableFurniture" :key="`furniture-label-${item.localId}`">
+              <div
+                v-if="!item.footprintPolygon || item.footprintPolygon.length < 3 || furnitureKey(item) === selectedFurnitureKey"
+                class="fp-furniture-label"
+                :class="{
+                  active: furnitureKey(item) === selectedFurnitureKey,
+                  marker: !item.footprintPolygon || item.footprintPolygon.length < 3
+                }"
+                :style="furnitureAnchorStyle(item)"
+                @mousedown="handleFurnitureMouseDown($event, item)"
+              >
+                <span class="fp-furniture-name">{{ item.semanticLabel || '未命名家具' }}</span>
+              </div>
+            </template>
+          </template>
+          <!-- 目标场景候选叠加框（候选选择态渲染，点击预选） -->
+          <template v-if="drawingBounds">
+            <div
+              v-for="candidate in sceneCandidates ?? []"
+              :key="candidate.targetId"
+              class="fp-candidate"
+              :class="{ recommended: candidate.recommended }"
+              :style="candidateBoundsStyle(candidate)"
+              @mousedown="handleCandidateMouseDown($event, candidate)"
+            >
+              <span class="fp-candidate-label">{{ candidate.recommended ? '★ 推荐 ' : '' }}{{ candidate.targetId }}</span>
+            </div>
+          </template>
           <template v-if="!isPolygonMode">
             <div
               v-for="(row, index) in boxedRooms"
@@ -1278,6 +1430,94 @@ onUnmounted(() => {
 
 .fp-polygon-label.active {
   border-color: var(--rsdp-primary);
+}
+
+/* 家具占地轮廓（绿色系与空间多边形区分；UNKNOWN 用红色虚线醒目提示） */
+.fp-furniture {
+  fill: rgba(32, 128, 96, 0.14);
+  stroke: var(--rsdp-success);
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+
+.fp-furniture.unknown {
+  fill: rgba(208, 48, 80, 0.10);
+  stroke: var(--rsdp-error);
+  stroke-dasharray: 4 3;
+}
+
+.fp-furniture.active {
+  fill: rgba(26, 26, 26, 0.16);
+  stroke: var(--rsdp-primary);
+  stroke-width: 2;
+}
+
+/* 家具名称标签（默认仅选中项与无轮廓标记项显示，避免满图标签遮挡图纸） */
+.fp-furniture-label {
+  position: absolute;
+  padding: 1px 6px;
+  background: var(--rsdp-card-bg);
+  border: 1px solid var(--rsdp-success);
+  border-radius: 3px;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.fp-furniture-label.active {
+  border-color: var(--rsdp-primary);
+}
+
+/* 无轮廓家具（仅锚点）：圆点 + 名称标记 */
+.fp-furniture-label.marker {
+  border-style: dashed;
+  border-color: var(--rsdp-warning);
+}
+
+.fp-furniture-name {
+  font-size: 11px;
+  color: var(--rsdp-text);
+}
+
+/* 目标场景候选范围框（虚线；推荐项高亮） */
+.fp-candidate {
+  position: absolute;
+  border: 1.5px dashed var(--rsdp-text-secondary);
+  background: rgba(0, 0, 0, 0.03);
+  cursor: pointer;
+}
+
+.fp-candidate.recommended {
+  border-color: var(--rsdp-primary);
+  background: var(--rsdp-primary-suppl);
+}
+
+.fp-candidate-label {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 1.6;
+  background: var(--rsdp-card-bg);
+  border-radius: 3px;
+  color: var(--rsdp-text);
+  white-space: nowrap;
+}
+
+/* 画布点选新增家具模式：十字光标；手绘/标定/新增态下家具暂不可点，避免与拖拽冲突 */
+.fp-overlay.adding-furniture {
+  cursor: crosshair;
+}
+
+.fp-overlay.drawing .fp-furniture,
+.fp-overlay.calibrating .fp-furniture,
+.fp-overlay.adding-furniture .fp-furniture,
+.fp-overlay.drawing .fp-furniture-label,
+.fp-overlay.calibrating .fp-furniture-label,
+.fp-overlay.adding-furniture .fp-furniture-label {
+  pointer-events: none;
 }
 
 .fp-polygon-code {

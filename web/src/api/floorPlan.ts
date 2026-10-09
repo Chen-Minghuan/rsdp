@@ -9,6 +9,16 @@ import type {
   FloorPlanSchemeRequest,
   FloorPlanSchemeResponse
 } from '@/types/floorPlan'
+import type {
+  FloorPlanActivateRequest,
+  FloorPlanActivateResponse,
+  FloorPlanFurnitureUpdateRequest,
+  FloorPlanFurnitureUpdateResponse,
+  FloorPlanRevisionRoomsRequest,
+  FloorPlanTargetSceneSwitchRequest,
+  FloorPlanTargetSceneSwitchResponse,
+  FloorPlanWorkingRevisionResponse
+} from '@/types/floorPlanScene'
 import type { PageResult } from '@/types/product'
 import type { ApiOptions } from './product'
 
@@ -66,18 +76,23 @@ export async function analyzeFloorPlan(
 
 /**
  * 查询户型图分析状态与空间列表（前端轮询入口）。
+ * CAD Scene 通道可带 analysisRevision 查看指定 Revision（历史版本只读追溯）；
+ * 不传时后端返回默认 Revision（working ?? active ?? latest）。
  *
  * @param analysisId 分析批次 ID
- * @param options 可选请求选项（AbortSignal）
+ * @param options 可选请求选项（AbortSignal / analysisRevision）
  * @returns 分析状态与识别出的空间列表
  */
 export async function getFloorPlanAnalysis(
   analysisId: string,
-  options?: ApiOptions
+  options?: ApiOptions & { analysisRevision?: number }
 ): Promise<FloorPlanAnalysisResponse> {
   const { data: result } = await apiClient.get<ApiResult<FloorPlanAnalysisResponse>>(
     `/v1/floor-plan/${analysisId}`,
-    { signal: options?.signal }
+    {
+      signal: options?.signal,
+      params: options?.analysisRevision != null ? { analysisRevision: options.analysisRevision } : undefined
+    }
   )
   return result.data
 }
@@ -199,6 +214,120 @@ export async function retryFloorPlanAnalysis(
   const { data: result } = await apiClient.post<ApiResult<FloorPlanRetryResponse>>(
     `/v1/floor-plan/${analysisId}/retry`,
     null,
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
+// ---------- CAD Scene Revision 链路（冻结契约 v1.0；仅 CAD Scene 通道使用，视觉通道保持上方 legacy 接口） ----------
+
+/**
+ * Revision 化保存空间（CAD Scene 通道）：仅写入指定 analysisRevision 的空间对象并推进 roomRevision，
+ * 不改变 activeAnalysisRevision、不把整个分析标记 confirmed。409 → 版本冲突，需刷新工作版。
+ * 响应为完整分析详情（含保存后的 revisionStatus/activationReadiness，服务端 readiness 自动迁移）。
+ *
+ * @param analysisId 分析批次 ID
+ * @param request analysisRevision + baseRoomRevision + 完整空间列表（可选补挂项目）
+ * @param options 可选请求选项（AbortSignal）
+ * @returns 保存后的完整分析详情（rooms 与请求同序，新空间含服务端稳定 roomId）
+ */
+export async function updateFloorPlanRoomsRevision(
+  analysisId: string,
+  request: FloorPlanRevisionRoomsRequest,
+  options?: ApiOptions
+): Promise<FloorPlanAnalysisResponse> {
+  const { data: result } = await apiClient.put<ApiResult<FloorPlanAnalysisResponse>>(
+    `/v1/floor-plan/${analysisId}/rooms`,
+    request,
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
+/**
+ * 保存家具（CAD Scene 通道）：提交该 analysisRevision 下的完整最终家具列表
+ * （已有 ID 更新、缺席 ID 软删、无 ID 新增；拆分=删 1 增 N、合并=删 N 增 1，derivedFromIds 记录来源）。
+ * 409 → analysisRevision / baseFurnitureRevision 冲突，需刷新工作版。
+ *
+ * @param analysisId 分析批次 ID
+ * @param request analysisRevision + baseFurnitureRevision + 完整家具列表
+ * @param options 可选请求选项（AbortSignal）
+ * @returns 最新 furnitureRevision 与服务端权威家具列表
+ */
+export async function updateFloorPlanFurniture(
+  analysisId: string,
+  request: FloorPlanFurnitureUpdateRequest,
+  options?: ApiOptions
+): Promise<FloorPlanFurnitureUpdateResponse> {
+  const { data: result } = await apiClient.put<ApiResult<FloorPlanFurnitureUpdateResponse>>(
+    `/v1/floor-plan/${analysisId}/furniture`,
+    request,
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
+/**
+ * Scene 原子激活：整版切换 activeAnalysisRevision（唯一能把 analysis 置为 confirmed 的入口）。
+ * 409 → baseActiveAnalysisRevision / expected*Revision 校验失败或激活校验未通过，需刷新后按 issues 处理。
+ *
+ * @param analysisId 分析批次 ID
+ * @param analysisRevision 待激活的目标 Revision
+ * @param request 生效版基线与各对象期望版本
+ * @param options 可选请求选项（AbortSignal）
+ * @returns 新的生效版与分析状态
+ */
+export async function activateFloorPlanRevision(
+  analysisId: string,
+  analysisRevision: number,
+  request: FloorPlanActivateRequest,
+  options?: ApiOptions
+): Promise<FloorPlanActivateResponse> {
+  const { data: result } = await apiClient.post<ApiResult<FloorPlanActivateResponse>>(
+    `/v1/floor-plan/${analysisId}/revisions/${analysisRevision}/activate`,
+    request,
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
+/**
+ * 从当前生效版派生新工作版（trigger=MANUAL_EDIT）：复制已确认对象作为编辑起点。
+ * 已 ACTIVE 的分析再次编辑前必须先调用本接口。
+ *
+ * @param analysisId 分析批次 ID
+ * @param options 可选请求选项（AbortSignal）
+ * @returns 新工作版 Revision 与状态
+ */
+export async function createFloorPlanWorkingRevision(
+  analysisId: string,
+  options?: ApiOptions
+): Promise<FloorPlanWorkingRevisionResponse> {
+  const { data: result } = await apiClient.post<ApiResult<FloorPlanWorkingRevisionResponse>>(
+    `/v1/floor-plan/${analysisId}/working-revision`,
+    null,
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
+/**
+ * 切换目标场景（HTTP 202 异步）：创建新 analysisRevision 并重新解析，旧 Revision 保留可追溯。
+ * 成功后前端轮询 GET ?analysisRevision=新值 直到 revisionStatus 脱离 PROCESSING。
+ *
+ * @param analysisId 分析批次 ID
+ * @param request baseAnalysisRevision + 目标候选 targetId（必须来自当前 Revision 返回的候选列表）
+ * @param options 可选请求选项（AbortSignal）
+ * @returns 新 analysisRevision 与异步任务 ID
+ */
+export async function switchFloorPlanTargetScene(
+  analysisId: string,
+  request: FloorPlanTargetSceneSwitchRequest,
+  options?: ApiOptions
+): Promise<FloorPlanTargetSceneSwitchResponse> {
+  const { data: result } = await apiClient.put<ApiResult<FloorPlanTargetSceneSwitchResponse>>(
+    `/v1/floor-plan/${analysisId}/target-scene`,
+    request,
     { signal: options?.signal }
   )
   return result.data

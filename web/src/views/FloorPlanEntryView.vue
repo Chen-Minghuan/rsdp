@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import {
@@ -17,13 +17,17 @@ import {
   NSpin,
   NStep,
   NSteps,
+  NTag,
   NUpload,
+  useDialog,
   useMessage,
   type UploadFileInfo
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import FloorPlanEditor from '@/components/floorplan/FloorPlanEditor.vue'
+import SceneRevisionBar from '@/components/floorplan/SceneRevisionBar.vue'
+import FurniturePanel from '@/components/floorplan/FurniturePanel.vue'
 import {
   analyzeFloorPlan,
   confirmFloorPlanRooms,
@@ -36,6 +40,7 @@ import { getSchemeDetail } from '@/api/scheme'
 import { getProductDetail } from '@/api/product'
 import { listVariantsByRspu } from '@/api/variant'
 import { useRequestAbort } from '@/composables/useRequestAbort'
+import { useFloorPlanScene } from '@/composables/useFloorPlanScene'
 import { useSelectionStore, describeAddManyResult } from '@/stores/selection'
 import { meanMmPerPx } from '@/types/floorPlan'
 import type {
@@ -43,6 +48,7 @@ import type {
   DimensionConfidence,
   EditableRoom,
   FloorPlanAnalysisResponse,
+  FloorPlanAnalysisStatus,
   FloorPlanDrawingBounds,
   FloorPlanQualityIssue,
   FloorPlanRoom,
@@ -51,12 +57,21 @@ import type {
   RoomBBox,
   SofaWallDirection
 } from '@/types/floorPlan'
+import { SCENE_CAPABILITY_STATUS_TEXT } from '@/types/floorPlanScene'
+import {
+  furnitureAnchorMm,
+  furnitureKey,
+  isFurnitureOutOfScene,
+  mmPointToNormalized,
+  sceneCandidateReasonText
+} from '@/utils/floorPlanScene'
 import type { DictItem } from '@/types/dict'
 
 const router = useRouter()
 const route = useRoute()
 const signal = useRequestAbort()
 const message = useMessage()
+const dialog = useDialog()
 const selectionStore = useSelectionStore()
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
@@ -140,6 +155,228 @@ const editorMaximized = ref(false)
 const scaleSuggestion = ref<FloorPlanScaleSuggestion | null>(null)
 /** "选择标定基准"弹窗（status=candidates 时进入步骤 2 自动弹出，工具栏「自动标定」可复开）。 */
 const autoCalibModalVisible = ref(false)
+
+// ---------- CAD Scene Revision 链路（冻结契约 v1.0；视觉通道 isSceneChannel=false，全部走 legacy） ----------
+const {
+  isSceneChannel, analysisRevision, revisionStatus, activeAnalysisRevision, workingAnalysisRevision,
+  latestAnalysisRevision, roomRevision, parseStatus, capabilities, unitResolution, targetScene,
+  targetSceneCandidates, activationReadiness, unitPending, sceneEditable, sceneProcessing,
+  furniture, selectedFurnitureKey, furnitureDirty, unconfirmedFurnitureCount,
+  switchingScene, savingRooms: savingSceneRooms, savingFurniture, activating, deriving, conflictMessage,
+  applySceneResult, resetScene, disposeScene, clearConflict, saveRoomsRevision, touchFurniture,
+  addFurniture, removeFurniture, splitFurniture, mergeFurniture, confirmFurnitureItem,
+  unconfirmFurnitureItem, confirmAllFurniture, saveFurniture, activateRevision, deriveWorkingRevision,
+  switchTargetScene
+} = useFloorPlanScene({
+  analysisId,
+  signal,
+  reload: reloadAnalysis,
+  onActivated: advanceAfterActivation
+})
+
+/** 当前分析批次状态（applyAnalysisResult 记录；CAD Scene 通道激活后为 confirmed）。 */
+const analysisStatus = ref<FloorPlanAnalysisStatus | ''>('')
+/** 画布点选新增家具模式（宿主持有：内嵌与全屏两个编辑器实例共享）。 */
+const addFurnitureMode = ref(false)
+/** 画布居中请求（列表选中家具时下发，seq 递增触发编辑器平移居中）。 */
+const furnitureFocus = ref<{ x: number; y: number; seq: number } | null>(null)
+let furnitureFocusSeq = 0
+/** 目标场景候选选择弹窗。 */
+const sceneModalVisible = ref(false)
+const sceneModalTargetId = ref<string | null>(null)
+
+/** 能力名称机器码 → 中文（capabilities 异常横幅用）。 */
+const CAPABILITY_NAME_TEXT: Record<string, string> = {
+  rooms: '空间',
+  walls: '墙体',
+  doors: '门',
+  windows: '窗',
+  furniture: '家具',
+  dimensions: '尺寸标注'
+}
+
+/** 编辑器只读：只读查看模式，或 CAD Scene 通道当前 Revision 不可编辑（ACTIVE/历史/解析中）。 */
+const editorReadonly = computed(() => readonlyMode.value || (isSceneChannel.value && !sceneEditable.value))
+
+/** 家具归属房间下拉（当前 Revision 的空间列表，roomId 为 CAD 通道稳定 ID）。 */
+const furnitureRoomOptions = computed(() =>
+  rooms.value
+    .filter(r => r.roomId)
+    .map(r => ({ roomId: r.roomId as string, label: r.label.trim() || roomTypeName(r.roomType) }))
+)
+
+/** 画布点选新增家具可用（需可编辑 + 规范底图 + 坐标范围）。 */
+const canAddFurnitureOnCanvas = computed(() => sceneEditable.value && !!editorImageUrl.value && !!drawingBounds.value)
+
+/** 原始阅览图模式（cadViewMode=reference，仅供参考）：禁用家具点选/编辑。 */
+const referenceViewActive = computed(
+  () => isCadGeometry.value && cadViewMode.value === 'reference' && !!imagePreviewUrl.value
+)
+
+/** 家具面板只读：版本不可编辑，或原始阅览图模式（仅供参考）。 */
+const furniturePanelReadonly = computed(() => editorReadonly.value || referenceViewActive.value)
+
+/** 目标场景候选叠加框仅在候选选择弹窗打开时渲染（避免常态遮挡图纸）。 */
+const editorSceneCandidates = computed(() => (sceneModalVisible.value ? targetSceneCandidates.value : []))
+
+/** 场景通道可进入搭配生成：已激活（analysis.status=confirmed）。 */
+const canEnterScheme = computed(() => isSceneChannel.value && analysisStatus.value === 'confirmed')
+
+/** capabilities 中"已实现但有解析问题"的能力项（PARTIAL/NEEDS_REVIEW 横幅；NOT_IMPLEMENTED=未实现能力，按 §8.5.1 不算阻塞不进横幅）。 */
+const capabilityIssuesText = computed(() => {
+  const caps = capabilities.value
+  if (!caps) return ''
+  return Object.entries(caps)
+    .filter(([, v]) => v && v !== 'SUCCESS' && v !== 'NOT_IMPLEMENTED')
+    .map(([k, v]) => `${CAPABILITY_NAME_TEXT[k] ?? k}（${SCENE_CAPABILITY_STATUS_TEXT[v] ?? v}）`)
+    .join('、')
+})
+
+/** 全量刷新分析详情（Scene 动作后刷新工作版；可指定查看历史 Revision）。 */
+async function reloadAnalysis(rev?: number): Promise<FloorPlanAnalysisResponse> {
+  const result = await getFloorPlanAnalysis(
+    analysisId.value,
+    rev != null ? { signal, analysisRevision: rev } : { signal }
+  )
+  applyAnalysisResult(result)
+  return result
+}
+
+/** 激活成功：默认选中第一个客厅（否则第一个空间）并进入搭配生成。 */
+function advanceAfterActivation() {
+  const living = rooms.value.find(r => r.roomType === 'LIVING' && r.roomId) ?? rooms.value.find(r => r.roomId)
+  targetRoomIds.value = living?.roomId ? [living.roomId] : []
+  currentStep.value = 3
+}
+
+/** 保存空间：视觉通道走 legacy 确认流（整体替换 + 分析置 confirmed）；CAD Scene 通道走 Revision 化保存。 */
+async function handleSaveRooms() {
+  if (!isSceneChannel.value) {
+    await handleConfirmRooms()
+    return
+  }
+  if (rooms.value.length === 0) {
+    errorMessage.value = '至少保留一个空间；若识别全部不准，请点击「添加空间」手工录入'
+    return
+  }
+  if (rooms.value.some(r => !r.roomType)) {
+    errorMessage.value = '存在未选择空间类型的行，请补全后再保存'
+    return
+  }
+  if (analysisRevision.value == null || roomRevision.value == null) {
+    errorMessage.value = '版本信息不完整，请刷新后重试'
+    return
+  }
+  errorMessage.value = ''
+  const res = await saveRoomsRevision({
+    analysisRevision: analysisRevision.value,
+    baseRoomRevision: roomRevision.value,
+    rooms: rooms.value.map(r => ({
+      roomId: r.roomId,
+      roomType: r.roomType,
+      // 联调点：后端确认接口若暂未接收 label 字段，前端照常传（CAD 通道必须，AI 通道无害）
+      label: r.label,
+      widthMm: r.widthMm,
+      depthMm: r.depthMm,
+      bbox: r.bbox
+    })),
+    // 归属项目：未归属记录保存时补挂；已归属记录沿用原项目
+    projectId: confirmProjectId.value || undefined
+  })
+  if (res?.rooms && res.rooms.length === rooms.value.length) {
+    // 按提交顺序回填服务端稳定 roomId（新空间获得 ID，供家具归属与再次保存使用）
+    res.rooms.forEach((serverRoom, i) => {
+      const local = rooms.value[i]
+      if (local && serverRoom.roomId) {
+        local.roomId = serverRoom.roomId
+      }
+    })
+  }
+}
+
+/** 激活当前版本：确认框说明影响后提交（重要但可逆：可重新激活旧版本回退）。 */
+function handleActivate() {
+  dialog.warning({
+    title: '激活当前版本',
+    content:
+      `激活后版本 ${analysisRevision.value ?? '?'} 将成为当前业务事实` +
+      (activeAnalysisRevision.value != null ? `，原生效版 ${activeAnalysisRevision.value} 转为历史版本（仍可追溯）` : '') +
+      '；激活后再次修改会创建新工作版本。该操作重要但可逆：之后可通过重新激活旧版本回退。',
+    positiveText: '确认激活',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      void activateRevision()
+    }
+  })
+}
+
+/** 409 冲突「刷新」：重新拉取当前工作版本。 */
+async function handleConflictRefresh() {
+  clearConflict()
+  try {
+    await reloadAnalysis()
+  } catch (e) {
+    if (axios.isCancel(e)) return
+    errorMessage.value = e instanceof Error ? e.message : '刷新失败，请重试'
+  }
+}
+
+/** 查看指定 Revision（历史版本只读追溯）。 */
+async function handleViewRevision(rev: number | null) {
+  try {
+    await reloadAnalysis(rev ?? undefined)
+  } catch (e) {
+    if (axios.isCancel(e)) return
+    errorMessage.value = e instanceof Error ? e.message : '加载版本失败'
+  }
+}
+
+/** 列表选中家具：同步选中键并请求画布高亮居中（超界误检项不上画布，禁用定位并提示原因）。 */
+function handleSelectFurnitureFromList(key: string | null) {
+  selectedFurnitureKey.value = key
+  if (!key || !drawingBounds.value) return
+  const item = furniture.value.find(f => furnitureKey(f) === key)
+  if (!item) return
+  if (isFurnitureOutOfScene(item, drawingBounds.value)) {
+    message.warning('该家具超出目标场景范围，无法在图上定位；请在列表中核对后指定归属或删除')
+    return
+  }
+  const anchor = furnitureAnchorMm(item)
+  if (!anchor) return
+  furnitureFocusSeq += 1
+  furnitureFocus.value = { ...mmPointToNormalized(anchor, drawingBounds.value), seq: furnitureFocusSeq }
+}
+
+/** 画布点选新增家具：保持新增模式，可连续落点（ESC / 再点按钮退出）。 */
+function handleAddFurnitureAt(position: { x: number; y: number }) {
+  addFurniture(position)
+}
+
+function toggleAddFurnitureMode() {
+  addFurnitureMode.value = !addFurnitureMode.value
+  if (addFurnitureMode.value && drawMode.value) {
+    drawMode.value = false
+  }
+}
+
+/** 打开候选选择窗（候选框点击时预选对应项）。 */
+function openSceneModal(preselect?: string) {
+  sceneModalTargetId.value = preselect ?? targetScene.value?.targetId ?? null
+  sceneModalVisible.value = true
+}
+
+/** 确认切换：PUT target-scene（202）→ 刷新到新 Revision，PROCESSING 轮询由 scene 状态自动接管。 */
+async function confirmSwitchScene() {
+  const targetId = sceneModalTargetId.value
+  if (!targetId || targetId === targetScene.value?.targetId) {
+    sceneModalVisible.value = false
+    return
+  }
+  const ok = await switchTargetScene(targetId)
+  if (ok) {
+    sceneModalVisible.value = false
+  }
+}
 
 /** 比例建议候选列表（status=candidates 时非空）。 */
 const scaleCandidates = computed<FloorPlanScaleCandidate[]>(() =>
@@ -253,6 +490,9 @@ const styleDicts = ref<DictItem[]>([])
 const selectedFile = computed<File | null>(() => fileList.value[0]?.file ?? null)
 const selectedCadFile = computed<File | null>(() => cadFileList.value[0]?.file ?? null)
 
+/** 仅传 CAD 的上传（解析等待文案分通道：CAD 走图纸解析，图片走 AI 视觉）。 */
+const cadOnlyUpload = computed(() => !!selectedCadFile.value && !selectedFile.value)
+
 const roomTypeOptions = computed(() =>
   roomTypeDicts.value.map(d => ({ label: d.dictName, value: d.dictCode }))
 )
@@ -323,7 +563,8 @@ function toEditableRoom(room: FloorPlanRoom): EditableRoom {
     bbox: room.bbox ?? null,
     dimensionSource: room.dimensionSource ?? null,
     dimensionConfidence: room.dimensionConfidence ?? null,
-    dimensionText: room.dimensionText ?? null
+    dimensionText: room.dimensionText ?? null,
+    confirmationStatus: room.confirmationStatus ?? null
   }
 }
 
@@ -435,12 +676,14 @@ async function pollAnalysis(id: string) {
 }
 
 function applyAnalysisResult(result: FloorPlanAnalysisResponse) {
+  analysisStatus.value = result.status
   // 联调点（后端并行开发中）：详情接口返回 scaleSuggestion 后此处自动生效；
   // 自测三种 status 分支可临时在此注入假数据（如 { status:'auto', mmPerPx:3.42, basisLabel:'客厅' }）
   scaleSuggestion.value = result.scaleSuggestion ?? null
   // CAD 通道：geometrySource/qualityIssues/drawingBounds（字段缺失按 ai_vision / 无提示 / 无叠加处理）
   geometrySource.value = result.geometrySource ?? 'ai_vision'
   qualityIssues.value = result.qualityIssues ?? []
+  // 叠加换算锚定 previewBounds ?? drawingBounds（多候选场景 preview 范围会大于 drawingBounds）
   drawingBounds.value = result.previewBounds ?? result.drawingBounds ?? null
   cadPreviewUrl.value = result.previewUrl ?? ''
   if (!imagePreviewUrl.value && result.referenceImageUrl) {
@@ -461,16 +704,19 @@ function applyAnalysisResult(result: FloorPlanAnalysisResponse) {
   analysisProjectId.value = result.projectId ?? null
   analysisProjectName.value = result.projectName ?? null
   confirmProjectId.value = result.projectId ?? null
+  // CAD Scene Revision 字段（视觉通道各字段缺失，scene 内部按 legacy 处理）
+  applySceneResult(result)
 }
 
 /**
  * 加载已有分析批次（带 analysisId 进入时）：
  * awaiting_confirm / confirmed 直接进步骤 2；pending / analyzing 继续轮询；failed 提示失败原因。
+ * 可指定 analysisRevision（深链 ?analysisRevision= 恢复指定版本）。
  * 原图无本地 Object URL，步骤 2 左侧走 n-empty 兜底。
  */
-async function loadExistingAnalysis(id: string) {
+async function loadExistingAnalysis(id: string, rev?: number) {
   try {
-    const result = await getFloorPlanAnalysis(id, { signal })
+    const result = await getFloorPlanAnalysis(id, rev != null ? { signal, analysisRevision: rev } : { signal })
     analysisId.value = id
     pdfSource.value = false
     applyAnalysisResult(result)
@@ -832,6 +1078,12 @@ function resetAll() {
   analysisProjectId.value = null
   analysisProjectName.value = null
   confirmProjectId.value = null
+  analysisStatus.value = ''
+  addFurnitureMode.value = false
+  furnitureFocus.value = null
+  sceneModalVisible.value = false
+  sceneModalTargetId.value = null
+  resetScene()
 }
 
 function updateRoomDimension(row: EditableRoom, field: 'widthMm' | 'depthMm', value: number | null) {
@@ -876,8 +1128,27 @@ onMounted(() => {
   // 带 analysisId 进入（分析记录「去校正 / 查看图纸」）：跳过步骤 1 直接拉取已有分析结果
   const existingId = route.query.analysisId
   if (typeof existingId === 'string' && existingId) {
-    loadExistingAnalysis(existingId)
+    // 深链 ?analysisRevision=n：恢复指定版本（刷新/分享链接回到同一版本）
+    const revParam = route.query.analysisRevision
+    const revNum = typeof revParam === 'string' && revParam ? Number(revParam) : NaN
+    loadExistingAnalysis(existingId, Number.isFinite(revNum) && revNum >= 1 ? revNum : undefined)
   }
+})
+
+/** 当前查看版本变化时同步 URL（replaceState，不新增历史记录），分享链接可回到同一版本。 */
+watch(analysisRevision, rev => {
+  if (!analysisId.value) return
+  const current = route.query.analysisRevision
+  const currentStr = typeof current === 'string' && current ? current : undefined
+  const nextStr = rev != null ? String(rev) : undefined
+  if (currentStr === nextStr) return
+  const query = { ...route.query }
+  if (nextStr) {
+    query.analysisRevision = nextStr
+  } else {
+    delete query.analysisRevision
+  }
+  router.replace({ query })
 })
 
 onUnmounted(() => {
@@ -885,6 +1156,7 @@ onUnmounted(() => {
     clearTimeout(pollTimer)
     pollTimer = null
   }
+  disposeScene()
   revokePreviewUrl()
 })
 </script>
@@ -968,7 +1240,7 @@ onUnmounted(() => {
               >
                 开始识别
               </n-button>
-              <span v-if="analyzing" class="hint-text">AI 正在识别空间与尺寸，请稍候…</span>
+              <span v-if="analyzing" class="hint-text">{{ cadOnlyUpload ? 'CAD 解析中，正在识别空间与家具…' : 'AI 正在识别空间与尺寸，请稍候…' }}</span>
             </n-space>
           </n-space>
         </n-spin>
@@ -977,7 +1249,10 @@ onUnmounted(() => {
       <!-- 步骤 2：空间识别（人工校正） -->
       <n-card v-if="currentStep === 2" title="确认空间识别结果">
         <n-space vertical :size="16">
-          <p v-if="isCadGeometry" class="hint-text">
+          <p v-if="isCadGeometry && unitPending" class="hint-text">
+            CAD 解析结果（单位待确认）：尺寸和面积按假定比例换算，尚未确认为真实物理尺寸，请核对后再作为尺寸依据。默认规范图与空间轮廓共用同一坐标系；原始阅览图仅用于核对文字和制图细节。
+          </p>
+          <p v-else-if="isCadGeometry" class="hint-text">
             CAD 精确解析结果，尺寸和面积来自图纸几何、无需标定。默认规范图与空间轮廓共用同一坐标系；原始阅览图仅用于核对文字和制图细节。请确认空间名称与类型后提交。
           </p>
           <p v-else class="hint-text">
@@ -986,6 +1261,79 @@ onUnmounted(() => {
           <!-- 只读查看模式提示（历史页「查看图纸」?readonly=1 进入） -->
           <n-alert v-if="readonlyMode" type="info" :show-icon="true">
             当前为只读查看模式，仅展示识别结果，不可编辑。
+          </n-alert>
+          <!-- CAD Scene Revision 状态条（仅 CAD Scene 通道渲染） -->
+          <SceneRevisionBar
+            v-if="isSceneChannel"
+            :analysis-revision="analysisRevision"
+            :revision-status="revisionStatus"
+            :active-analysis-revision="activeAnalysisRevision"
+            :working-analysis-revision="workingAnalysisRevision"
+            :latest-analysis-revision="latestAnalysisRevision"
+            :parse-status="parseStatus"
+            :unit-resolution="unitResolution"
+            :target-scene="targetScene"
+            :candidate-count="targetSceneCandidates.length"
+            :activation-readiness="activationReadiness"
+            :processing="sceneProcessing"
+            :activating="activating"
+            :deriving="deriving"
+            :readonly="readonlyMode"
+            @view-revision="handleViewRevision"
+            @activate="handleActivate"
+            @switch-scene="openSceneModal()"
+            @derive-working="deriveWorkingRevision"
+          />
+          <!-- 409 冲突：提供「刷新」动作重新拉取工作版 -->
+          <n-alert v-if="conflictMessage" type="error" closable @close="clearConflict">
+            <n-space align="center" :size="8">
+              <span>{{ conflictMessage }}</span>
+              <n-button size="tiny" @click="handleConflictRefresh">刷新为最新</n-button>
+            </n-space>
+          </n-alert>
+          <!-- 场景解析中（目标场景切换后重新解析，期间禁用编辑） -->
+          <n-alert v-if="isSceneChannel && sceneProcessing" type="info" :show-icon="true">
+            正在重新解析目标场景，完成后自动刷新；解析期间暂不可编辑…
+          </n-alert>
+          <!-- 当前 Revision 解析失败 -->
+          <n-alert v-else-if="isSceneChannel && revisionStatus === 'FAILED'" type="error" :show-icon="true">
+            当前版本解析失败，可在状态条切换查看其他版本，或切换目标场景重新解析。
+          </n-alert>
+          <!-- parseStatus 异常（部分解析/待复核）：列出异常能力项 -->
+          <n-alert
+            v-else-if="isSceneChannel && (parseStatus === 'PARTIAL' || parseStatus === 'NEEDS_REVIEW')"
+            type="warning"
+            :show-icon="true"
+          >
+            {{ parseStatus === 'PARTIAL' ? 'CAD 部分解析成功' : '解析结果待人工复核' }}{{ capabilityIssuesText ? `：${capabilityIssuesText}` : '' }}，请仔细核对识别结果。
+          </n-alert>
+          <!-- 单位待确认：尺寸仅为按假定比例归一化的数值 -->
+          <n-alert v-if="isSceneChannel && unitPending" type="warning" :show-icon="true">
+            图纸单位待确认：页面中所有尺寸为按假定比例换算的数值，请核对后再作为真实尺寸使用。
+          </n-alert>
+          <!-- 工作版 vs 生效版：编辑不立即生效 -->
+          <n-alert
+            v-if="isSceneChannel && analysisRevision != null && analysisRevision === workingAnalysisRevision && activeAnalysisRevision != null && workingAnalysisRevision !== activeAnalysisRevision"
+            type="info"
+            :show-icon="true"
+          >
+            正在编辑工作版 Revision {{ workingAnalysisRevision }}；当前业务事实仍是生效版 Revision {{ activeAnalysisRevision }}，激活后才会切换。
+          </n-alert>
+          <!-- 已生效版本的编辑引导 -->
+          <n-alert
+            v-if="isSceneChannel && revisionStatus === 'ACTIVE' && !readonlyMode"
+            type="info"
+            :show-icon="true"
+          >
+            当前为已生效版本，编辑将创建新工作版本：点击上方「编辑（创建新工作版）」开始修改，原生效版保持可追溯。
+          </n-alert>
+          <!-- 已被替代的历史版本（只读，区别于 ACTIVE 的"已生效"引导） -->
+          <n-alert
+            v-if="isSceneChannel && revisionStatus === 'SUPERSEDED'"
+            type="warning"
+            :show-icon="true"
+          >
+            这是历史版本，已被第 {{ activeAnalysisRevision ?? latestAnalysisRevision ?? '?' }} 版替代，不可编辑；如需回退，可在状态条切回该版本后重新激活。
           </n-alert>
           <!-- 归属项目：已归属只读展示；未归属且可编辑时允许确认时一并补挂 -->
           <n-space align="center" :size="8">
@@ -1036,7 +1384,7 @@ onUnmounted(() => {
                 v-else-if="editorImageUrl"
                 class="room-editor-inline"
                 :image-url="editorImageUrl"
-                :readonly="readonlyMode"
+                :readonly="editorReadonly"
                 v-model:selected-local-id="selectedLocalId"
                 v-model:draw-mode="drawMode"
                 :mm-per-px="mmPerPx"
@@ -1044,12 +1392,20 @@ onUnmounted(() => {
                 :drawing-bounds="drawingBounds"
                 :rooms="rooms"
                 :auto-calib-available="hasScaleCandidates"
+                :furniture="furniture"
+                v-model:selected-furniture-key="selectedFurnitureKey"
+                :add-furniture-mode="addFurnitureMode"
+                :scene-candidates="editorSceneCandidates"
+                :focus-normalized="furnitureFocus"
                 @update:calib-segments="handleUpdateCalibSegments"
                 @add-box="handleAddBox"
                 @exit-draw="drawMode = false"
                 @toggle-maximize="editorMaximized = true"
                 @room-mutated="handleRoomMutated"
                 @open-auto-calib="autoCalibModalVisible = true"
+                @add-furniture="handleAddFurnitureAt"
+                @exit-add-furniture="addFurnitureMode = false"
+                @scene-candidate-click="openSceneModal"
               />
               <div v-else-if="isCadGeometry" class="pdf-placeholder">
                 <p class="pdf-placeholder-title">CAD 解析结果（毫米精度）</p>
@@ -1071,7 +1427,8 @@ onUnmounted(() => {
                   <strong>空间校对</strong>
                   <span>共 {{ rooms.length }} 个空间</span>
                 </div>
-                <span>点击卡片可联动左侧图纸</span>
+                <span v-if="isSceneChannel && unitPending">所有尺寸按假定比例换算，待确认单位</span>
+                <span v-else>点击卡片可联动左侧图纸</span>
               </div>
               <div class="room-card-list">
                 <article
@@ -1089,7 +1446,7 @@ onUnmounted(() => {
                         v-model:value="room.label"
                         size="small"
                         placeholder="请输入空间名称"
-                        :disabled="readonlyMode"
+                        :disabled="editorReadonly"
                       />
                     </label>
                     <label class="room-card-control room-type-control">
@@ -1099,11 +1456,11 @@ onUnmounted(() => {
                         :options="roomTypeOptions"
                         size="small"
                         placeholder="请选择空间类型"
-                        :disabled="readonlyMode"
+                        :disabled="editorReadonly"
                       />
                     </label>
                     <n-button
-                      v-if="!readonlyMode"
+                      v-if="!editorReadonly"
                       text
                       type="error"
                       size="small"
@@ -1122,7 +1479,7 @@ onUnmounted(() => {
                         :max="100000"
                         :precision="0"
                         :show-button="false"
-                        :disabled="readonlyMode || (isCadGeometry && !!room.roomId)"
+                        :disabled="editorReadonly || (isCadGeometry && !!room.roomId)"
                         size="small"
                         placeholder="开间"
                         @update:value="value => updateRoomDimension(room, 'widthMm', value)"
@@ -1136,7 +1493,7 @@ onUnmounted(() => {
                         :max="100000"
                         :precision="0"
                         :show-button="false"
-                        :disabled="readonlyMode || (isCadGeometry && !!room.roomId)"
+                        :disabled="editorReadonly || (isCadGeometry && !!room.roomId)"
                         size="small"
                         placeholder="进深"
                         @update:value="value => updateRoomDimension(room, 'depthMm', value)"
@@ -1160,7 +1517,7 @@ onUnmounted(() => {
                   </div>
                 </article>
               </div>
-              <n-space v-if="!readonlyMode" align="center" :size="12">
+              <n-space v-if="!editorReadonly" align="center" :size="12">
                 <n-button size="small" @click="addRoom">添加空间</n-button>
                 <n-button
                   v-if="imagePreviewUrl && !isCadGeometry"
@@ -1174,13 +1531,60 @@ onUnmounted(() => {
                   在左侧图上拖拽框选新空间，松手自动新增一行；按 ESC 或再次点击按钮退出手绘。
                 </span>
               </n-space>
+              <!-- 原始阅览图模式：家具编辑锁定提示（仅供参考） -->
+              <n-alert v-if="isSceneChannel && referenceViewActive" type="info" :show-icon="true">
+                当前为原始阅览图（仅供参考）：家具点选与编辑暂不可用，切回「CAD 规范图（可点选）」后恢复。
+              </n-alert>
+              <!-- 家具校正面板（仅 CAD Scene 通道；与画布双向联动，本地编辑后统一保存） -->
+              <FurniturePanel
+                v-if="isSceneChannel"
+                :furniture="furniture"
+                :rooms="furnitureRoomOptions"
+                :drawing-bounds="drawingBounds"
+                :selected-furniture-key="selectedFurnitureKey"
+                :unit-pending="unitPending"
+                :processing="sceneProcessing"
+                :readonly="furniturePanelReadonly"
+                :dirty="furnitureDirty"
+                :saving="savingFurniture"
+                :add-canvas-mode="addFurnitureMode"
+                :can-add-on-canvas="canAddFurnitureOnCanvas"
+                :unconfirmed-count="unconfirmedFurnitureCount"
+                @update:selected-furniture-key="handleSelectFurnitureFromList"
+                @mutated="touchFurniture"
+                @remove="removeFurniture"
+                @split="splitFurniture"
+                @merge="mergeFurniture"
+                @confirm="confirmFurnitureItem"
+                @unconfirm="unconfirmFurnitureItem"
+                @confirm-all="confirmAllFurniture"
+                @add-manual="addFurniture(null)"
+                @toggle-add-canvas="toggleAddFurnitureMode"
+                @save="saveFurniture"
+              />
             </div>
           </div>
-          <n-space v-if="!readonlyMode">
-            <n-button type="primary" :loading="confirming" @click="handleConfirmRooms">
+          <n-space v-if="!readonlyMode" align="center">
+            <!-- CAD Scene 通道：保存仅写入工作版（保存≠生效），激活是独立按钮；视觉通道：legacy 确认流 -->
+            <n-button
+              v-if="isSceneChannel"
+              type="primary"
+              :loading="savingSceneRooms"
+              :disabled="!sceneEditable"
+              @click="handleSaveRooms"
+            >
+              保存修改
+            </n-button>
+            <n-button v-else type="primary" :loading="confirming" @click="handleSaveRooms">
               确认识别结果
             </n-button>
+            <n-button v-if="canEnterScheme" type="primary" secondary @click="advanceAfterActivation">
+              进入搭配生成
+            </n-button>
             <n-button quaternary @click="resetAll">重新上传</n-button>
+            <span v-if="isSceneChannel && revisionStatus !== 'ACTIVE'" class="hint-text">
+              保存仅写入当前工作版本；在上方状态条完成激活后成为业务事实。
+            </span>
           </n-space>
         </n-space>
       </n-card>
@@ -1308,7 +1712,7 @@ onUnmounted(() => {
         v-if="editorImageUrl"
         class="room-editor-modal"
         :image-url="editorImageUrl"
-        :readonly="readonlyMode"
+        :readonly="editorReadonly"
         v-model:selected-local-id="selectedLocalId"
         v-model:draw-mode="drawMode"
         :mm-per-px="mmPerPx"
@@ -1318,12 +1722,20 @@ onUnmounted(() => {
         :draw-button="true"
         :maximized="true"
         :auto-calib-available="hasScaleCandidates"
+        :furniture="furniture"
+        v-model:selected-furniture-key="selectedFurnitureKey"
+        :add-furniture-mode="addFurnitureMode"
+        :scene-candidates="editorSceneCandidates"
+        :focus-normalized="furnitureFocus"
         @update:calib-segments="handleUpdateCalibSegments"
         @add-box="handleAddBox"
         @exit-draw="drawMode = false"
         @toggle-maximize="editorMaximized = false"
         @room-mutated="handleRoomMutated"
         @open-auto-calib="autoCalibModalVisible = true"
+        @add-furniture="handleAddFurnitureAt"
+        @exit-add-furniture="addFurnitureMode = false"
+        @scene-candidate-click="openSceneModal"
       />
     </n-modal>
 
@@ -1353,6 +1765,55 @@ onUnmounted(() => {
         <n-button size="small" style="align-self: flex-start;" @click="autoCalibModalVisible = false">
           手动画线标定
         </n-button>
+      </n-space>
+    </n-modal>
+
+    <!-- 切换目标场景（多候选 CAD：列表选择 + 画布虚线框联动高亮；切换生成新版本并重新解析） -->
+    <n-modal
+      v-model:show="sceneModalVisible"
+      preset="card"
+      title="切换目标场景"
+      style="width: 640px; max-width: 92vw;"
+      :bordered="false"
+    >
+      <n-space vertical :size="12">
+        <p class="hint-text">
+          本 CAD 发现 {{ targetSceneCandidates.length }} 个可选场景（图纸上的虚线框即各候选范围）。切换后将以所选场景生成新版本并重新解析；旧版本与其确认结果保留可追溯，新版本需重新确认空间与家具。
+        </p>
+        <div
+          v-for="candidate in targetSceneCandidates"
+          :key="candidate.targetId"
+          class="scene-candidate"
+          :class="{ active: sceneModalTargetId === candidate.targetId }"
+          @click="sceneModalTargetId = candidate.targetId"
+        >
+          <div class="scene-candidate-head">
+            <span class="rsdp-mono">{{ candidate.targetId }}</span>
+            <n-tag v-if="candidate.recommended" size="tiny" type="success" :bordered="false">★ 推荐</n-tag>
+            <n-tag v-if="targetScene?.targetId === candidate.targetId" size="tiny" type="info" :bordered="false">
+              当前
+            </n-tag>
+            <span class="hint-text">{{ candidate.sourceSpace }}</span>
+            <span v-if="candidate.score != null" class="hint-text">评分 {{ (candidate.score * 100).toFixed(0) }}%</span>
+          </div>
+          <div v-if="candidate.reasons.length > 0" class="hint-text">
+            依据：{{ candidate.reasons.map(sceneCandidateReasonText).join('、') }}
+          </div>
+          <div class="hint-text rsdp-mono">
+            范围：{{ Math.round(candidate.bounds.maxX - candidate.bounds.minX) }}×{{ Math.round(candidate.bounds.maxY - candidate.bounds.minY) }}mm
+          </div>
+        </div>
+        <n-space>
+          <n-button
+            type="primary"
+            :loading="switchingScene"
+            :disabled="!sceneModalTargetId || sceneModalTargetId === targetScene?.targetId"
+            @click="confirmSwitchScene"
+          >
+            切换并重新解析
+          </n-button>
+          <n-button quaternary @click="sceneModalVisible = false">取消</n-button>
+        </n-space>
       </n-space>
     </n-modal>
   </PageContainer>
@@ -1611,6 +2072,33 @@ onUnmounted(() => {
   border: 1px solid var(--rsdp-border);
   border-radius: var(--rsdp-radius);
   cursor: pointer;
+}
+
+/* 切换目标场景弹窗的候选条目 */
+.scene-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  cursor: pointer;
+}
+
+.scene-candidate:hover {
+  border-color: var(--rsdp-primary);
+}
+
+.scene-candidate.active {
+  border-color: var(--rsdp-primary);
+  background: var(--rsdp-primary-suppl);
+}
+
+.scene-candidate-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .scale-candidate:hover {
