@@ -26,7 +26,10 @@ public class CadParseResult {
     /** 与房间多边形使用同一 CAD 坐标范围渲染的规范预览。 */
     private Preview preview;
 
-    /** 识别出的房间列表。 */
+    /** P1-C isolation 视图（visionGroupId → 白底线稿 PNG base64），请求 withIsolation=true 时返回。 */
+    private java.util.Map<String, String> isolationImages;
+
+/** 识别出的房间列表。 */
     private List<Room> rooms = new ArrayList<>();
 
     /** 无标签空间列表（落库为 roomType=OTHER + 未命名空间 N）。 */
@@ -37,6 +40,35 @@ public class CadParseResult {
 
     private String errorCode;
     private String errorMessage;
+
+    // ===== CAD Scene Parser 升级（V1.2.3 §18.6 兼容契约，新增可选字段必须显式接收）=====
+
+    /** Scene JSON 契约版本（如 "1.0"）。 */
+    private String sceneVersion;
+
+    /** Parser 发布版本。 */
+    private String parserVersion;
+
+    /** 解析状态：SUCCESS / PARTIAL / NEEDS_REVIEW / FAILED；success=false ⟺ FAILED。 */
+    private String parseStatus;
+
+    /** 能力声明（墙/门/窗/家具/尺寸是否输出）。 */
+    private Capabilities capabilities;
+
+    /** 单位解析结果。 */
+    private UnitResolution unitResolution;
+
+    /** 自动选定的目标 Scene。 */
+    private TargetScene targetScene;
+
+    /** 目标 Scene 候选列表（前端可读取后切换）。 */
+    private List<TargetSceneCandidate> targetSceneCandidates = new ArrayList<>();
+
+    /** 家具候选列表（P0-B 以 INSERT 家具为主）。 */
+    private List<Furniture> furniture = new ArrayList<>();
+
+    /** 未支持实体汇总（可读质量问题而非伪造完整清单）。 */
+    private Object unsupportedEntitySummary;
 
     /** 范围框（毫米）。 */
     @Data
@@ -71,6 +103,9 @@ public class CadParseResult {
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Room {
+
+        /** Parser 侧房间稳定 ID（同一 analysisRevision 内稳定；缺失时后端自行稳定生成）。 */
+        private String roomId;
 
         /** 主标签（房间名原文，如"主卧"）。 */
         private String label;
@@ -114,6 +149,9 @@ public class CadParseResult {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class UnnamedRegion {
 
+        /** 稳定空间 ID（ROOM-###，续命名房间序列）：P1 起未命名空间也参与家具归属映射，可空（旧解析结果）。 */
+        private String roomId;
+
         /** 外环顶点，毫米坐标 [[x,y],...]。 */
         private List<List<Double>> polygon = new ArrayList<>();
 
@@ -138,5 +176,129 @@ public class CadParseResult {
 
         private String code;
         private String message;
+    }
+
+    /** 能力声明（P0 未实现的能力不得阻断激活，按 capability contract 区分；值为状态字符串）。 */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Capabilities {
+        /** SUCCESS / PARTIAL / NOT_IMPLEMENTED 等。 */
+        private String rooms;
+        private String walls;
+        private String doors;
+        private String windows;
+        private String furniture;
+        private String dimensions;
+    }
+
+    /** 单位解析结果（§7.1 UnitResolver）。 */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class UnitResolution {
+        private String rawUnit;
+        private String declaredUnit;
+        private String canonicalUnit;
+        private Double scaleToMm;
+        private String scaleSource;
+        private Boolean scaleAssumed;
+        private Boolean confirmed;
+        private String confidence;
+    }
+
+    /** 目标 Scene（§8）。 */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class TargetScene {
+        private String targetId;
+        private String sourceSpace;
+        private Bounds bounds;
+        private String selectionSource;
+        private String selectionConfidence;
+        private List<String> reasons = new ArrayList<>();
+    }
+
+    /** 目标 Scene 候选（§8.1 读取契约）。 */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class TargetSceneCandidate {
+        private String targetId;
+        private String sourceSpace;
+        private Bounds bounds;
+
+        /** 候选预览元数据（pngBase64 在解析器适配层剥离，不落 raw_result）。 */
+        private Preview preview;
+
+        private Double score;
+        private List<String> reasons = new ArrayList<>();
+        private Boolean recommended;
+    }
+
+    /** 家具候选（P0-B，INSERT 家具为主；§10/§11/§18.6）。 */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Furniture {
+
+        /** 对象 ID（同一 analysisRevision 内稳定，非空）。 */
+        private String furnitureId;
+
+        /** 来源：INSERT / EXPLODED。 */
+        private String sourceKind;
+
+        private List<String> sourceHandles = new ArrayList<>();
+        private List<String> insertPath = new ArrayList<>();
+
+        /** SOFA / BED / TABLE / CHAIR / CABINET / OTHER / UNKNOWN。 */
+        private String category;
+
+        private String semanticLabel;
+
+        /** 归属房间（Parser 侧 roomId 或后端 room_id，可空）。 */
+        private String roomId;
+
+        private String blockName;
+
+        private Point position;
+        private Double rotationDeg;
+
+        /** 占地轮廓 [[x,y],...] 闭合多边形，毫米。 */
+        private List<List<Double>> footprintPolygon = new ArrayList<>();
+
+        private Double geometryWidthMm;
+        private Double geometryDepthMm;
+        private Double annotatedWidthMm;
+        private Double annotatedDepthMm;
+        private Double effectiveWidthMm;
+        private Double effectiveDepthMm;
+        private Double heightMm;
+
+        private String dimensionSource;
+        private String semanticSource;
+
+        private List<String> evidence = new ArrayList<>();
+        private List<String> qualityFlags = new ArrayList<>();
+
+        private String detectionConfidence;
+        private String categoryConfidence;
+
+        /** P1-A 候选清洗状态：VALID / REJECTED（仅标记不删除）。 */
+        private String candidateStatus;
+
+        /** P1 块定义几何指纹（局部坐标量化哈希）。 */
+        private String geometryFingerprint;
+
+        /** P1-B 去重组 ID（同块+同几何+同旋转+同位置网格），可空。 */
+        private String duplicateGroupId;
+
+        /** P1-B 组内角色：PRIMARY / DUPLICATE。 */
+        private String duplicateStatus;
+
+        /** P1-B 组内实例总数。 */
+        private Integer duplicateCount;
+
+        /** P1-B 组内全部实例的 Parser furnitureId。 */
+        private List<String> sourceInstances;
+
+        /** P1-C 视觉语义分组 ID（同组共享一次视觉识别）。 */
+        private String visionGroupId;
     }
 }

@@ -3,6 +3,7 @@ package com.rsdp.floorplan.parser;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.floorplan.parser.dto.CadParseResult;
+import com.rsdp.floorplan.parser.dto.CadParseResultValidator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ByteArrayResource;
@@ -33,6 +34,10 @@ public class CadFloorPlanParser implements FloorPlanParser {
     private final RestClient cadParserRestClient;
     private final ObjectMapper objectMapper;
 
+    /** P1-C 家具视觉语义回填开关（开启时向解析器请求 isolation 视图）。 */
+    @org.springframework.beans.factory.annotation.Value("${rsdp.floor-plan.furniture-vision-enabled:true}")
+    private boolean furnitureVisionEnabled;
+
     public CadFloorPlanParser(@Qualifier("cadParserRestClient") RestClient cadParserRestClient,
                               ObjectMapper objectMapper) {
         this.cadParserRestClient = cadParserRestClient;
@@ -55,6 +60,14 @@ public class CadFloorPlanParser implements FloorPlanParser {
         };
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
         body.add("file", fileResource);
+        // CAD Scene Parser 升级（V1.2.3 §8.2）：target-scene 切换重解析时 multipart 附带 targetId
+        if (StringUtils.hasText(request.targetId())) {
+            body.add("targetId", request.targetId());
+        }
+        // P1-C：请求家具视觉语义分组的 isolation 视图（visionGroupId → 白底线稿 PNG）
+        if (furnitureVisionEnabled) {
+            body.add("withIsolation", "true");
+        }
 
         CadParseResult result;
         try {
@@ -87,6 +100,8 @@ public class CadFloorPlanParser implements FloorPlanParser {
                 fileName, result.getErrorCode(), result.getErrorMessage());
             throw new BusinessException("CAD 图纸解析失败: " + message);
         }
+        // Scene 契约校验（V1.2.3 §18.6）：对象 ID/坐标/轮廓闭合/尺寸/枚举，违例即解析失败
+        CadParseResultValidator.validate(result);
         byte[] previewBytes = null;
         if (result.getPreview() != null && StringUtils.hasText(result.getPreview().getPngBase64())) {
             try {
@@ -96,6 +111,14 @@ public class CadFloorPlanParser implements FloorPlanParser {
             }
             // 大体积二进制仅用于存储，不写入 floor_plan_analysis.raw_result。
             result.getPreview().setPngBase64(null);
+        }
+        // 候选预览 pngBase64 同样剥离（Invariant 12：raw_result 不存二进制）
+        if (result.getTargetSceneCandidates() != null) {
+            for (CadParseResult.TargetSceneCandidate candidate : result.getTargetSceneCandidates()) {
+                if (candidate.getPreview() != null) {
+                    candidate.getPreview().setPngBase64(null);
+                }
+            }
         }
         return FloorPlanParseResult.cad(result, previewBytes);
     }

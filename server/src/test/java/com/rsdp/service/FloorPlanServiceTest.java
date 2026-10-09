@@ -109,6 +109,15 @@ class FloorPlanServiceTest {
     @Mock
     private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
+    @Mock
+    private FloorPlanSceneRevisionService sceneRevisionService;
+
+    @Mock
+    private com.rsdp.mapper.FloorPlanSceneRevisionMapper sceneRevisionMapper;
+
+    @Mock
+    private com.rsdp.mapper.FloorPlanFurnitureMapper furnitureMapper;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -123,6 +132,16 @@ class FloorPlanServiceTest {
         // 上传校验器默认判定为图片（PDF/CAD 用例单独 stub）
         lenient().when(imageUploadValidator.validateImageOrPdfOrCad(any(), anyLong(), anyLong()))
             .thenReturn(ImageUploadValidator.UploadKind.IMAGE);
+        // V19：Revision 创建默认返回 Revision 1（编辑/激活语义用例单独 stub）
+        lenient().when(sceneRevisionService.createProcessingRevision(any(), any(), any(), any(), any()))
+            .thenAnswer(invocation -> {
+                com.rsdp.entity.FloorPlanSceneRevision revision = new com.rsdp.entity.FloorPlanSceneRevision();
+                revision.setAnalysisRevision(1);
+                return revision;
+            });
+        // V19：激活就绪度默认未就绪（不影响旧可观察语义断言）
+        lenient().when(sceneRevisionService.evaluateReadiness(any()))
+            .thenReturn(new com.rsdp.dto.response.FloorPlanActivationReadiness(false, java.util.List.of()));
     }
 
     @AfterEach
@@ -381,7 +400,8 @@ class FloorPlanServiceTest {
 
         assertThat(response.get("analysisId")).startsWith("FPA-");
         ArgumentCaptor<FloorPlanAnalysis> captor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
-        verify(analysisMapper).updateById(captor.capture());
+        // V19：analyze() 内创建 Revision 1 后回写一次 latest 指针，analyzePublicCad 再回写公开标记
+        verify(analysisMapper, times(2)).updateById(captor.capture());
         assertThat(captor.getValue().getSource()).isEqualTo("public");
         assertThat(captor.getValue().getCreatedBy()).isNull();
     }
@@ -699,7 +719,7 @@ class FloorPlanServiceTest {
     @Test
     void confirmRooms_withProjectId_shouldLinkProjectAndAudit() {
         FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
-        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(analysisMapper.selectByIdForUpdate("FPA-1")).thenReturn(analysis);
         when(roomMapper.selectList(any())).thenReturn(List.of(buildRoom("FPR-1", "LIVING_ROOM")));
         Project project = new Project();
         project.setProjectId("PRJ-1");
@@ -717,7 +737,7 @@ class FloorPlanServiceTest {
         FloorPlanAnalysisResponse response = floorPlanService.confirmRooms("FPA-1", request);
 
         ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
-        verify(analysisMapper).updateById(analysisCaptor.capture());
+        verify(analysisMapper).update(analysisCaptor.capture(), any());
         assertThat(analysisCaptor.getValue().getProjectId()).isEqualTo("PRJ-1");
         // 挂靠项目记审计日志（LINK_PROJECT）
         verify(auditLogService).logAction(org.mockito.ArgumentMatchers.eq("floor_plan_analysis"),
@@ -732,7 +752,7 @@ class FloorPlanServiceTest {
     void confirmRooms_withoutProjectId_shouldKeepProjectUntouched() {
         FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
         analysis.setProjectId("PRJ-OLD");
-        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(analysisMapper.selectByIdForUpdate("FPA-1")).thenReturn(analysis);
         when(roomMapper.selectList(any())).thenReturn(List.of(buildRoom("FPR-1", "LIVING_ROOM")));
 
         FloorPlanConfirmRequest request = new FloorPlanConfirmRequest();
@@ -744,7 +764,7 @@ class FloorPlanServiceTest {
         floorPlanService.confirmRooms("FPA-1", request);
 
         ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
-        verify(analysisMapper).updateById(analysisCaptor.capture());
+        verify(analysisMapper).update(analysisCaptor.capture(), any());
         // 不传 projectId 则不动项目归属，也不做项目可见性校验
         assertThat(analysisCaptor.getValue().getProjectId()).isEqualTo("PRJ-OLD");
         verify(projectService, never()).getAccessibleProject(anyString());
@@ -1117,7 +1137,7 @@ class FloorPlanServiceTest {
     @Test
     void confirmRooms_shouldUpdateInsertSoftDeleteAndConfirm() {
         FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
-        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(analysisMapper.selectByIdForUpdate("FPA-1")).thenReturn(analysis);
 
         FloorPlanRoom existingKept = buildRoom("FPR-1", "LIVING_ROOM");
         FloorPlanRoom existingRemoved = buildRoom("FPR-2", "BEDROOM");
@@ -1139,9 +1159,10 @@ class FloorPlanServiceTest {
         FloorPlanAnalysisResponse response = floorPlanService.confirmRooms("FPA-1", request);
 
         // 已有空间就地更新：人工确认 → manual/high，面积自动换算；
-        // 未提交的已识别空间就地软删（@TableLogic 语义：updateById 置 deleted_at）
+        // 未提交的已识别空间逻辑删除（BUG-1：MP deleteById 才落 deleted_at）
         ArgumentCaptor<FloorPlanRoom> updateCaptor = ArgumentCaptor.forClass(FloorPlanRoom.class);
         verify(roomMapper, org.mockito.Mockito.atLeastOnce()).updateById(updateCaptor.capture());
+        verify(roomMapper).deleteById("FPR-2");
         FloorPlanRoom updated = updateCaptor.getAllValues().stream()
             .filter(r -> "FPR-1".equals(r.getRoomId())).findFirst().orElseThrow();
         assertThat(updated.getWidthMm()).isEqualTo(4200);
@@ -1151,9 +1172,9 @@ class FloorPlanServiceTest {
         assertThat(updated.getDimensionConfidence()).isEqualTo("high");
         assertThat(updated.getBbox()).contains("\"x\":0.1");
 
-        FloorPlanRoom softDeleted = updateCaptor.getAllValues().stream()
-            .filter(r -> "FPR-2".equals(r.getRoomId())).findFirst().orElseThrow();
-        assertThat(softDeleted.getDeletedAt()).isNotNull();
+        // 软删走 deleteById（不再经 updateById 置 deleted_at）
+        assertThat(updateCaptor.getAllValues().stream()
+            .filter(r -> "FPR-2".equals(r.getRoomId())).findFirst()).isEmpty();
 
         // 新增空间插入
         ArgumentCaptor<FloorPlanRoom> insertCaptor = ArgumentCaptor.forClass(FloorPlanRoom.class);
@@ -1163,7 +1184,7 @@ class FloorPlanServiceTest {
 
         // 状态流转 confirmed
         ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
-        verify(analysisMapper).updateById(analysisCaptor.capture());
+        verify(analysisMapper).update(analysisCaptor.capture(), any());
         assertThat(analysisCaptor.getValue().getStatus()).isEqualTo(FloorPlanService.STATUS_CONFIRMED);
         assertThat(analysisCaptor.getValue().getConfirmedRooms()).contains("LIVING_ROOM");
         assertThat(response.getStatus()).isEqualTo(FloorPlanService.STATUS_CONFIRMED);
@@ -1172,7 +1193,7 @@ class FloorPlanServiceTest {
     @Test
     void confirmRooms_cadRoom_shouldPreserveExactGeometryAndArea() {
         FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
-        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(analysisMapper.selectByIdForUpdate("FPA-1")).thenReturn(analysis);
 
         FloorPlanRoom cadRoom = buildRoom("FPR-CAD-1", "OTHER");
         cadRoom.setLabel("原始空间");
@@ -1218,7 +1239,7 @@ class FloorPlanServiceTest {
     @Test
     void confirmRooms_unknownRoomId_shouldThrow() {
         FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_AWAITING_CONFIRM);
-        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(analysisMapper.selectByIdForUpdate("FPA-1")).thenReturn(analysis);
         when(roomMapper.selectList(any())).thenReturn(List.of(buildRoom("FPR-1", "LIVING_ROOM")));
 
         FloorPlanConfirmRequest request = new FloorPlanConfirmRequest();
@@ -1235,7 +1256,7 @@ class FloorPlanServiceTest {
     @Test
     void confirmRooms_wrongStatus_shouldThrow() {
         FloorPlanAnalysis analysis = buildAnalysis("FPA-1", FloorPlanService.STATUS_PENDING);
-        when(analysisMapper.selectById("FPA-1")).thenReturn(analysis);
+        when(analysisMapper.selectByIdForUpdate("FPA-1")).thenReturn(analysis);
 
         FloorPlanConfirmRequest request = new FloorPlanConfirmRequest();
         FloorPlanConfirmRequest.RoomItem item = new FloorPlanConfirmRequest.RoomItem();
@@ -1346,14 +1367,14 @@ class FloorPlanServiceTest {
 
         // 状态复位 pending + 清 errorMessage + 换挂新任务
         ArgumentCaptor<FloorPlanAnalysis> analysisCaptor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
-        verify(analysisMapper).updateById(analysisCaptor.capture());
+        verify(analysisMapper).update(analysisCaptor.capture(), any());
         FloorPlanAnalysis updated = analysisCaptor.getValue();
         assertThat(updated.getStatus()).isEqualTo(FloorPlanService.STATUS_PENDING);
         assertThat(updated.getErrorMessage()).isNull();
         assertThat(updated.getTaskId()).isEqualTo(newTaskId);
 
-        // 上一轮残留空间明细软删，避免重试后重复
-        verify(roomMapper).delete(any());
+        // V19：旧 Revision（含上一轮残留明细）不删不改（Invariant 11），新解析写入新 Revision
+        verify(roomMapper, never()).delete(any());
 
         // 新建异步任务并沿用原 hint
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
@@ -1482,8 +1503,15 @@ class FloorPlanServiceTest {
         assertThat(analysis.getSource()).isEqualTo("public");
         assertThat(analysis.getCreatedBy()).isNull();
         assertThat(analysis.getStatus()).isEqualTo(FloorPlanService.STATUS_AWAITING_CONFIRM);
-        assertThat(analysis.getRawResult()).contains("living_room");
+        // V19：分析级 raw_result 不再写入，快照落 Revision 1（Invariant 12）
+        assertThat(analysis.getRawResult()).isNull();
         assertThat(analysis.getConfirmedRooms()).isNull();
+        ArgumentCaptor<com.rsdp.entity.FloorPlanSceneRevision> revisionCaptor =
+            ArgumentCaptor.forClass(com.rsdp.entity.FloorPlanSceneRevision.class);
+        verify(sceneRevisionMapper).insert(revisionCaptor.capture());
+        assertThat(revisionCaptor.getValue().getRawResult()).contains("living_room");
+        assertThat(revisionCaptor.getValue().getRevisionStatus()).isEqualTo("READY");
+        assertThat(revisionCaptor.getValue().getParserVersion()).isEqualTo("vision");
 
         // 空间明细：有尺寸标注 → ocr_text/high；无标注 → source 留空、low（官网同步链路不做 AI 估算）
         ArgumentCaptor<FloorPlanRoom> roomCaptor = ArgumentCaptor.forClass(FloorPlanRoom.class);

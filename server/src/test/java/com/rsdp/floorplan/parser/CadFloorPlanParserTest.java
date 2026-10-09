@@ -171,4 +171,149 @@ class CadFloorPlanParserTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("CAD 解析服务连接失败");
     }
+
+    // ---------- CAD Scene Parser 升级（V1.2.3 §18.6 Scene 契约） ----------
+
+    /**
+     * Scene 契约全字段接收（fixture floorplan/cad_parse_scene_v1.json）：
+     * sceneVersion/parserVersion/parseStatus/capabilities/unitResolution/targetScene/
+     * candidates/furniture 显式接收，候选预览 pngBase64 剥离，房间 roomId 保留。
+     */
+    @Test
+    void parse_sceneContract_shouldReceiveNewFields() throws Exception {
+        String fixture = new String(
+            java.util.Objects.requireNonNull(getClass().getResourceAsStream(
+                "/floorplan/cad_parse_scene_v1.json")).readAllBytes(),
+            java.nio.charset.StandardCharsets.UTF_8);
+        stubFor(post(urlEqualTo("/parse"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(fixture)));
+
+        FloorPlanParseResult result = parser.parse(
+            new FloorPlanParseRequest("fake-dwg".getBytes(), "户型图.dwg", null));
+
+        CadParseResult cad = result.cadResult();
+        assertThat(cad.getSceneVersion()).isEqualTo("1.0");
+        assertThat(cad.getParserVersion()).isEqualTo("1.2.3-p0");
+        assertThat(cad.getParseStatus()).isEqualTo("PARTIAL");
+        assertThat(cad.getCapabilities().getRooms()).isEqualTo("SUCCESS");
+        assertThat(cad.getCapabilities().getWalls()).isEqualTo("NOT_IMPLEMENTED");
+        assertThat(cad.getUnitResolution().getCanonicalUnit()).isEqualTo("mm");
+        assertThat(cad.getUnitResolution().getScaleSource()).isEqualTo("ASSUMED");
+        assertThat(cad.getUnitResolution().getScaleToMm()).isEqualTo(1.0);
+        assertThat(cad.getTargetScene().getTargetId()).isEqualTo("SCENE-0001");
+        assertThat(cad.getTargetSceneCandidates()).hasSize(2);
+        assertThat(cad.getTargetSceneCandidates().get(0).getPreview().getPngBase64()).isNull();
+        assertThat(cad.getTargetSceneCandidates().get(1).getPreview()).isNull();
+        assertThat(cad.getRooms().get(0).getRoomId()).isEqualTo("ROOM-1");
+
+        assertThat(cad.getFurniture()).hasSize(5);
+        CadParseResult.Furniture chair = cad.getFurniture().get(0);
+        assertThat(chair.getFurnitureId()).isEqualTo("F-aaaa0001");
+        assertThat(chair.getCategory()).isEqualTo("CHAIR");
+        assertThat(chair.getRoomId()).isEqualTo("ROOM-1");
+        assertThat(chair.getBlockName()).isEqualTo("CHAIR_A");
+        assertThat(chair.getPosition().getX()).isEqualTo(1200.0);
+        assertThat(chair.getFootprintPolygon()).hasSize(5);
+        assertThat(chair.getGeometryWidthMm()).isEqualTo(450.0);
+        assertThat(chair.getEvidence()).containsExactly("block_name", "geometry");
+        CadParseResult.Furniture unknown = cad.getFurniture().get(4);
+        assertThat(unknown.getCategory()).isEqualTo("UNKNOWN");
+        assertThat(unknown.getRoomId()).isNull();
+        assertThat(unknown.getQualityFlags()).containsExactly("UNKNOWN_CATEGORY");
+    }
+
+    /** target-scene 切换重解析：multipart 附带 targetId 字段。 */
+    @Test
+    void parse_withTargetId_shouldAttachTargetIdPart() {
+        stubFor(post(urlEqualTo("/parse"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"success\":true,\"units\":\"mm\",\"rooms\":[],"
+                    + "\"parseStatus\":\"SUCCESS\"}")));
+
+        parser.parse(new FloorPlanParseRequest("fake-dwg".getBytes(), "户型图.dwg", null, "SCENE-0002"));
+
+        String requestBody = wireMockServer.getAllServeEvents().get(0).getRequest().getBodyAsString();
+        assertThat(requestBody).contains("name=\"targetId\"").contains("SCENE-0002");
+    }
+
+    /** 契约违例：家具对象 ID 为空 → 解析失败。 */
+    @Test
+    void parse_blankFurnitureId_shouldThrow() {
+        stubFor(post(urlEqualTo("/parse"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"success\":true,\"units\":\"mm\",\"rooms\":[],"
+                    + "\"furniture\":[{\"furnitureId\":\"\",\"category\":\"SOFA\"}]}")));
+
+        assertThatThrownBy(() -> parser.parse(new FloorPlanParseRequest("x".getBytes(), "a.dwg", null)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("furnitureId");
+    }
+
+    /** 契约违例：footprintPolygon 未闭合 → 解析失败。 */
+    @Test
+    void parse_unclosedFootprint_shouldThrow() {
+        stubFor(post(urlEqualTo("/parse"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"success\":true,\"units\":\"mm\",\"rooms\":[],"
+                    + "\"furniture\":[{\"furnitureId\":\"F-1\",\"category\":\"SOFA\","
+                    + "\"footprintPolygon\":[[0.0,0.0],[100.0,0.0],[100.0,100.0]]}]}")));
+
+        assertThatThrownBy(() -> parser.parse(new FloorPlanParseRequest("x".getBytes(), "a.dwg", null)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("闭合");
+    }
+
+    /** 契约违例：尺寸为负 / 类别枚举非法 → 解析失败。 */
+    @Test
+    void parse_negativeDimensionAndBadCategory_shouldThrow() {
+        stubFor(post(urlEqualTo("/parse"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"success\":true,\"units\":\"mm\",\"rooms\":[],"
+                    + "\"furniture\":[{\"furnitureId\":\"F-1\",\"category\":\"SOFA\","
+                    + "\"geometryWidthMm\":-1.0}]}")));
+
+        assertThatThrownBy(() -> parser.parse(new FloorPlanParseRequest("x".getBytes(), "a.dwg", null)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不能为负数");
+    }
+
+    @Test
+    void parse_badCategoryEnum_shouldThrow() {
+        stubFor(post(urlEqualTo("/parse"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"success\":true,\"units\":\"mm\",\"rooms\":[],"
+                    + "\"furniture\":[{\"furnitureId\":\"F-1\",\"category\":\"ROCKET\"}]}")));
+
+        assertThatThrownBy(() -> parser.parse(new FloorPlanParseRequest("x".getBytes(), "a.dwg", null)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("category 非法");
+    }
+
+    /** success=false ⟺ FAILED：parseStatus=FAILED 即使 success=true 也按失败处理。 */
+    @Test
+    void parse_parseStatusFailed_shouldThrowEvenIfSuccessTrue() {
+        stubFor(post(urlEqualTo("/parse"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"success\":true,\"parseStatus\":\"FAILED\","
+                    + "\"errorMessage\":\"内部解析异常\"}")));
+
+        assertThatThrownBy(() -> parser.parse(new FloorPlanParseRequest("x".getBytes(), "a.dwg", null)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("内部解析异常");
+    }
 }

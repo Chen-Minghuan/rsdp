@@ -1,0 +1,18 @@
+{
+  "success": false,
+  "errorCode": "PARSE_FAILED",
+  "errorMessage": "CAD 图纸解析失败：文件已损坏或无法读取，未能恢复任何可用几何数据，请检查图纸后重新上传",
+  "parseStatus": "FAILED",
+  "sceneVersion": "1.0",
+  "parserVersion": "1.2.3-p0",
+  "units": null,
+  "drawingBounds": null,
+  "preview": null,
+  "rooms": null,
+  "furniture": null,
+  "qualityIssues": null,
+  "capabilities": null,
+  "unitResolution": null,
+  "targetScene": null,
+  "targetSceneCandidates": null
+}

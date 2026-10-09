@@ -61,6 +61,12 @@ public class FloorPlanRoom {
     /** 几何来源（V11）：ai_vision（视觉识别）/ cad_geometry（CAD 解析）。 */
     private String geometrySource;
 
+    /** 所属 Scene Revision（V20；逻辑键 analysis_id + analysis_revision + room_id）。 */
+    private Integer analysisRevision;
+
+    /** 确认状态（V20）：AUTO（自动识别未确认）/ CONFIRMED（已人工确认）。 */
+    private String confirmationStatus;
+
     /** 人工删除误识别空间（软删，@TableLogic 模式）。 */
     @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;

@@ -104,6 +104,24 @@ public final class IdGenerator {
     }
 
     /**
+     * 生成户型 Scene 家具对象主键（V20）。
+     *
+     * @return {@code FPF-<完整 UUID>}
+     */
+    public static String floorPlanFurnitureId() {
+        return generate("FPF");
+    }
+
+    /**
+     * 生成 CAD 分析反馈主键（V20）。
+     *
+     * @return {@code CAF-<完整 UUID>}
+     */
+    public static String cadAnalysisFeedbackId() {
+        return generate("CAF");
+    }
+
+    /**
      * 生成通用批次主键。
      *
      * @return {@code BATCH-<完整 UUID>}

@@ -8,17 +8,25 @@ import com.rsdp.common.PageResult;
 import com.rsdp.dto.FloorPlanBBox;
 import com.rsdp.dto.FloorPlanDetectResult;
 import com.rsdp.dto.request.FloorPlanConfirmRequest;
+import com.rsdp.dto.request.FloorPlanActivateRequest;
+import com.rsdp.dto.request.FloorPlanFurnitureConfirmRequest;
+import com.rsdp.dto.request.FloorPlanTargetSceneRequest;
+import com.rsdp.dto.response.FloorPlanActivationReadiness;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
 import com.rsdp.dto.response.FloorPlanDrawingBounds;
+import com.rsdp.dto.response.FloorPlanFurnitureEditResponse;
+import com.rsdp.dto.response.FloorPlanFurnitureResponse;
 import com.rsdp.dto.response.FloorPlanQualityIssue;
 import com.rsdp.dto.response.FloorPlanRoomResponse;
 import com.rsdp.dto.response.FloorPlanPoint;
 import com.rsdp.dto.response.ScaleSuggestionResponse;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.FloorPlanAnalysis;
+import com.rsdp.entity.FloorPlanFurniture;
 import com.rsdp.entity.FloorPlanRoom;
+import com.rsdp.entity.FloorPlanSceneRevision;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.Project;
 import com.rsdp.exception.BusinessException;
@@ -28,7 +36,9 @@ import com.rsdp.floorplan.parser.FloorPlanParserRegistry;
 import com.rsdp.floorplan.parser.dto.CadParseResult;
 import com.rsdp.mapper.AsyncTaskMapper;
 import com.rsdp.mapper.FloorPlanAnalysisMapper;
+import com.rsdp.mapper.FloorPlanFurnitureMapper;
 import com.rsdp.mapper.FloorPlanRoomMapper;
+import com.rsdp.mapper.FloorPlanSceneRevisionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.ProjectMapper;
 import com.rsdp.security.SecurityOperatorContext;
@@ -141,6 +151,10 @@ public class FloorPlanService {
     private final ProjectMapper projectMapper;
     private final ObjectMapper objectMapper;
     private final PlatformTransactionManager transactionManager;
+    /** Scene Revision 服务（V20）：Revision 生命周期/激活校验/工作 Revision 派生/Diff 反馈。 */
+    private final FloorPlanSceneRevisionService sceneRevisionService;
+    private final FloorPlanSceneRevisionMapper sceneRevisionMapper;
+    private final FloorPlanFurnitureMapper furnitureMapper;
 
     @Value("${rsdp.floor-plan.max-file-size-mb:10}")
     private long maxFileSizeMb;
@@ -251,7 +265,7 @@ public class FloorPlanService {
         imageAssetsMapper.insert(imageAsset);
         auditLogService.logCreate("image_assets", imageId, imageAsset, operator);
 
-        // 2. 建分析批次记录
+        // 2. 建分析批次记录（V20：CAD 通道记录原文件对象键，供 target-scene 切换重解析读取）
         FloorPlanAnalysis analysis = new FloorPlanAnalysis();
         analysis.setAnalysisId(analysisId);
         analysis.setImageId(imageId);
@@ -260,11 +274,18 @@ public class FloorPlanService {
         analysis.setSource(SOURCE_ADMIN);
         analysis.setProjectId(accessibleProjectId);
         analysis.setSourceName(normalizedSourceName);
+        if (uploadKind == ImageUploadValidator.UploadKind.CAD) {
+            analysis.setCadObjectKey(storagePath);
+        }
         analysis.setCreatedBy(operator);
         analysis.setCreatedAt(now);
         analysis.setUpdatedAt(now);
         analysisMapper.insert(analysis);
         auditLogService.logCreate("floor_plan_analysis", analysisId, analysis, operator);
+        // V20：同步创建 Revision 1（PROCESSING/INITIAL_PARSE），解析完成转 READY，失败转 FAILED
+        FloorPlanSceneRevision initialRevision = sceneRevisionService.createProcessingRevision(
+            analysis, FloorPlanSceneRevision.TRIGGER_INITIAL_PARSE, null, null, operator);
+        analysisMapper.updateById(analysis);
 
         // 3. 建异步任务（input_data 携带分析上下文，供 processFloorPlanAnalysis 使用）
         AsyncTask task = new AsyncTask();
@@ -276,6 +297,7 @@ public class FloorPlanService {
         inputData.put("analysisId", analysisId);
         inputData.put("imageId", imageId);
         inputData.put("objectKey", storagePath);
+        inputData.put("analysisRevision", initialRevision.getAnalysisRevision());
         if (StringUtils.hasText(hint)) {
             inputData.put("hint", hint.trim());
         }
@@ -402,7 +424,8 @@ public class FloorPlanService {
         }
         registerStorageRollbackCleanup(cadPath);
 
-        // 3. 建分析批次记录（imageId 指向底图，imageUrl 即预览图地址）
+        // 3. 建分析批次记录（imageId 指向底图，imageUrl 即预览图地址；
+        //    V20：cadObjectKey 记录 CAD 原文件对象键，供 target-scene 切换重解析读取）
         FloorPlanAnalysis analysis = new FloorPlanAnalysis();
         analysis.setAnalysisId(analysisId);
         analysis.setImageId(imageId);
@@ -411,11 +434,16 @@ public class FloorPlanService {
         analysis.setSource(SOURCE_ADMIN);
         analysis.setProjectId(accessibleProjectId);
         analysis.setSourceName(normalizedSourceName);
+        analysis.setCadObjectKey(cadPath);
         analysis.setCreatedBy(operator);
         analysis.setCreatedAt(now);
         analysis.setUpdatedAt(now);
         analysisMapper.insert(analysis);
         auditLogService.logCreate("floor_plan_analysis", analysisId, analysis, operator);
+        // V20：同步创建 Revision 1（PROCESSING/INITIAL_PARSE），解析完成转 READY，失败转 FAILED
+        FloorPlanSceneRevision initialRevision = sceneRevisionService.createProcessingRevision(
+            analysis, FloorPlanSceneRevision.TRIGGER_INITIAL_PARSE, null, null, operator);
+        analysisMapper.updateById(analysis);
 
         // 4. 建异步任务：input_data 额外携带 cadObjectKey + codeNameMode（失败重试沿用）
         AsyncTask task = new AsyncTask();
@@ -429,6 +457,7 @@ public class FloorPlanService {
         inputData.put("objectKey", imagePath);
         inputData.put("cadObjectKey", cadPath);
         inputData.put("codeNameMode", true);
+        inputData.put("analysisRevision", initialRevision.getAnalysisRevision());
         if (StringUtils.hasText(hint)) {
             inputData.put("hint", hint.trim());
         }
@@ -562,8 +591,7 @@ public class FloorPlanService {
     private List<FloorPlanAnalysisListItemResponse> toListItems(List<FloorPlanAnalysis> records) {
         Map<String, Long> roomCountMap = new HashMap<>();
         Map<String, String> geometrySourceMap = new HashMap<>();
-        batchRoomStats(records.stream().map(FloorPlanAnalysis::getAnalysisId).toList(),
-            roomCountMap, geometrySourceMap);
+        batchRoomStats(records, roomCountMap, geometrySourceMap);
         Map<String, String> projectNameMap = batchProjectNames(records.stream()
             .map(FloorPlanAnalysis::getProjectId).filter(StringUtils::hasText).distinct().toList());
 
@@ -644,7 +672,20 @@ public class FloorPlanService {
      * @return 分析详情（含未软删空间列表，按 sort_order 升序）
      */
     public FloorPlanAnalysisResponse getAnalysis(String analysisId) {
-        return getAnalysisInternal(analysisId, true);
+        return getAnalysis(analysisId, null);
+    }
+
+    /**
+     * 接口 2（V20 Revision 化）：默认装配 revision = working ?? active ?? latest；
+     * 指定 analysisRevision 时校验其属于本分析（否则 404）。
+     * 房间/家具只来自同一 Revision（Invariant 1/2：禁止跨 Revision 拼装）。
+     *
+     * @param analysisId       分析批次 ID
+     * @param analysisRevision 指定 Revision 序号，可空
+     * @return 分析详情
+     */
+    public FloorPlanAnalysisResponse getAnalysis(String analysisId, Integer analysisRevision) {
+        return getAnalysisInternal(analysisId, analysisRevision, true);
     }
 
     /**
@@ -654,10 +695,22 @@ public class FloorPlanService {
      * @return 分析详情
      */
     public FloorPlanAnalysisResponse getPublicAnalysis(String analysisId) {
-        return getAnalysisInternal(analysisId, false);
+        return getAnalysisInternal(analysisId, null, false);
     }
 
-    private FloorPlanAnalysisResponse getAnalysisInternal(String analysisId, boolean enforceOwner) {
+    /**
+     * 查询官网游客 CAD 分析详情（V20，可指定 Revision；与受保护端走同一装配逻辑，保持回归）。
+     *
+     * @param analysisId       分析批次 ID
+     * @param analysisRevision 指定 Revision 序号，可空
+     * @return 分析详情
+     */
+    public FloorPlanAnalysisResponse getPublicAnalysis(String analysisId, Integer analysisRevision) {
+        return getAnalysisInternal(analysisId, analysisRevision, false);
+    }
+
+    private FloorPlanAnalysisResponse getAnalysisInternal(String analysisId, Integer analysisRevision,
+                                                          boolean enforceOwner) {
         FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
         if (analysis == null) {
             throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
@@ -669,15 +722,54 @@ public class FloorPlanService {
         }
         syncStatusFromTask(analysis);
 
-        List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
-            .eq("analysis_id", analysisId)
-            .orderByAsc("sort_order"));
-        FloorPlanAnalysisResponse response = toResponse(analysis, rooms);
+        FloorPlanSceneRevision revision = resolveDisplayRevision(analysis, analysisRevision);
+        if (revision == null) {
+            // 兜底：无 Revision 行的历史数据（V20 回填后不应出现）按旧装配读取
+            List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
+                .eq("analysis_id", analysisId)
+                .orderByAsc("sort_order"));
+            FloorPlanAnalysisResponse legacy = toResponse(analysis, rooms);
+            if (!GEOMETRY_SOURCE_CAD.equals(legacy.getGeometrySource())) {
+                legacy.setScaleSuggestion(buildScaleSuggestion(analysis, rooms));
+            }
+            return legacy;
+        }
+
+        List<FloorPlanRoom> rooms = sceneRevisionService.listRooms(analysisId, revision.getAnalysisRevision());
+        List<FloorPlanFurniture> furniture = sceneRevisionService.listFurniture(analysisId,
+            revision.getAnalysisRevision());
+        FloorPlanAnalysisResponse response = toResponse(analysis, revision, rooms, furniture);
         // CAD 通道尺寸来自真实几何，跳过自动标定建议（CAD 户型导入 P3）
         if (!GEOMETRY_SOURCE_CAD.equals(response.getGeometrySource())) {
             response.setScaleSuggestion(buildScaleSuggestion(analysis, rooms));
         }
         return response;
+    }
+
+    /**
+     * 解析展示 Revision（V20）：指定参数时校验属于本分析；默认 working ?? active ?? latest。
+     *
+     * @param analysis         分析记录
+     * @param analysisRevision 指定 Revision，可空
+     * @return 展示 Revision；无 Revision 行返回 null（调用方走旧装配兜底）
+     */
+    private FloorPlanSceneRevision resolveDisplayRevision(FloorPlanAnalysis analysis, Integer analysisRevision) {
+        if (analysisRevision != null) {
+            FloorPlanSceneRevision revision = sceneRevisionService.getRevision(
+                analysis.getAnalysisId(), analysisRevision);
+            if (revision == null) {
+                throw new ResourceNotFoundException(
+                    "Scene Revision 不存在或不属于该分析: " + analysisRevision);
+            }
+            return revision;
+        }
+        Integer displayNo = analysis.getWorkingAnalysisRevision() != null
+            ? analysis.getWorkingAnalysisRevision()
+            : analysis.getActiveAnalysisRevision() != null
+                ? analysis.getActiveAnalysisRevision()
+                : analysis.getLatestAnalysisRevision();
+        return displayNo != null
+            ? sceneRevisionService.getRevision(analysis.getAnalysisId(), displayNo) : null;
     }
 
     /**
@@ -727,19 +819,121 @@ public class FloorPlanService {
     }
 
     /**
-     * 接口 3：人工校正，整体替换语义——提交的列表为最终生效数据
-     * （带 roomId 就地更新、不带 roomId 新增、未提交的已识别空间软删），状态 → confirmed。
+     * 接口 3（V20 Revision 化）：人工校正整体提交。
      *
-     * <p>视觉识别空间仍按人工提交的矩形尺寸重算并标记为 manual/high；CAD 空间只允许
-     * 校正名称、类型和顺序，精确多边形、面积、包围盒及 CAD 尺寸元数据保持不变。</p>
+     * <p>请求携带 analysisRevision + baseRoomRevision 时走 Revision-aware 编辑语义
+     * （{@link #editRevisionRooms}）：只修改目标工作 Revision 的 Room 对象，
+     * <b>不</b>改 active 指针、<b>不</b>置 analysis.status=confirmed（Invariant 6/9）。</p>
+     *
+     * <p>不携带时为 legacy 兼容包装（{@link #legacyConfirmRooms}）：仅
+     * latest_analysis_revision=1 的分析允许（否则 400 REVISION_REQUIRED），内部绑定
+     * Revision 1，保持旧可观察语义（整体替换 + status=confirmed + confirmed_rooms 快照 +
+     * 审计），同事务隐式激活 Revision 1。</p>
      *
      * @param analysisId 分析批次 ID
-     * @param request    校正后的空间列表 + 可选比例尺
+     * @param request    校正后的空间列表 + 可选比例尺/Revision 版本
      * @return 校正后的分析详情
      */
     @Transactional
     public FloorPlanAnalysisResponse confirmRooms(String analysisId, FloorPlanConfirmRequest request) {
-        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (request.getAnalysisRevision() != null || request.getBaseRoomRevision() != null) {
+            return editRevisionRooms(analysisId, request);
+        }
+        return legacyConfirmRooms(analysisId, request);
+    }
+
+    /**
+     * Revision-aware Room 编辑（V20，设计文档 V1.2.3 §18.7）。
+     *
+     * <p>流程（§8.4.6 锁顺序 + 乐观版本 + 幂等重放）：锁 analysis → 锁目标 revision →
+     * 校验 revision 属于本分析且 == working_analysis_revision、状态 ∈ READY/EDITING/
+     * READY_TO_ACTIVATE（否则 409 REVISION_NOT_EDITABLE）→ 幂等重放判定
+     * （baseRoomRevision==room_submit_base 且请求哈希一致 → 返回当前状态）→
+     * baseRoomRevision==room_revision（否则 409 VERSION_CONFLICT）→ 整体替换该 Revision
+     * 房间（已有 ID 更新、缺席软删、无 ID 新增；CAD 几何房仍只允许改 label/roomType/
+     * sortOrder）→ room_revision+1 → revision_status=EDITING → readiness 重算
+     * （通过 → READY_TO_ACTIVATE）→ 记录 Room Diff（cad_analysis_feedback）。</p>
+     *
+     * @param analysisId 分析批次 ID
+     * @param request    空间列表 + analysisRevision + baseRoomRevision
+     * @return 校正后的分析详情（含新 roomRevision）
+     */
+    @Transactional
+    public FloorPlanAnalysisResponse editRevisionRooms(String analysisId, FloorPlanConfirmRequest request) {
+        if (request.getAnalysisRevision() == null || request.getBaseRoomRevision() == null) {
+            throw new BusinessException("analysisRevision 与 baseRoomRevision 必须成对携带");
+        }
+        // ① 锁 analysis
+        FloorPlanAnalysis analysis = analysisMapper.selectByIdForUpdate(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+        if (!STATUS_AWAITING_CONFIRM.equals(analysis.getStatus())
+            && !STATUS_CONFIRMED.equals(analysis.getStatus())) {
+            throw new BusinessException("当前状态不允许人工校正（仅识别完成待确认后可提交），当前状态: " + analysis.getStatus());
+        }
+        // ② 锁目标 revision 并校验工作指针与可编辑状态（Invariant 10）
+        Integer revisionNo = request.getAnalysisRevision();
+        FloorPlanSceneRevision revision = sceneRevisionService.lockRevision(analysisId, revisionNo);
+        if (revision == null) {
+            throw new ResourceNotFoundException("Scene Revision 不存在或不属于该分析: " + revisionNo);
+        }
+        if (!FloorPlanSceneRevisionService.revisionEquals(analysis.getWorkingAnalysisRevision(), revisionNo)) {
+            throw FloorPlanSceneRevisionService.revisionNotEditable(
+                "目标 Revision 不是当前工作 Revision（working=" + analysis.getWorkingAnalysisRevision() + "）");
+        }
+        if (!FloorPlanSceneRevisionService.EDITABLE_STATUSES.contains(revision.getRevisionStatus())) {
+            throw FloorPlanSceneRevisionService.revisionNotEditable(
+                "Revision 状态 " + revision.getRevisionStatus() + " 不允许编辑");
+        }
+
+        String operator = SecurityOperatorContext.currentUsername();
+        String submitHash = sceneRevisionService.submitHash(request.getRooms());
+        // ③ 幂等重放：同 base + 同内容 → 返回当前状态，不产生重复写
+        if (FloorPlanSceneRevisionService.revisionEquals(revision.getRoomSubmitBase(),
+            request.getBaseRoomRevision())
+            && submitHash != null && submitHash.equals(revision.getRoomSubmitHash())) {
+            log.info("rooms 提交幂等重放，analysisId={}，revision={}，base={}",
+                analysisId, revisionNo, request.getBaseRoomRevision());
+            return assembleRevisionResponse(analysis, revision);
+        }
+        // ④ 乐观版本校验（Invariant 4：roomRevision 与 analysisRevision 是两个维度）
+        if (!FloorPlanSceneRevisionService.revisionEquals(revision.getRoomRevision(),
+            request.getBaseRoomRevision())) {
+            throw FloorPlanSceneRevisionService.versionConflict(
+                "baseRoomRevision=" + request.getBaseRoomRevision()
+                    + " 与当前 roomRevision=" + revision.getRoomRevision() + " 不一致，请刷新后重试");
+        }
+
+        // ⑤ 整体替换该 Revision 房间 + Diff
+        replaceRevisionRooms(analysis, revision, request.getRooms(), operator, true);
+
+        // ⑥ 版本推进 + 状态迁移 + 幂等键
+        revision.setRoomRevision(revision.getRoomRevision() + 1);
+        revision.setRevisionStatus(FloorPlanSceneRevision.STATUS_EDITING);
+        revision.setRoomSubmitBase(request.getBaseRoomRevision());
+        revision.setRoomSubmitHash(submitHash);
+        sceneRevisionMapper.updateByRevision(revision);
+        sceneRevisionService.applyReadinessTransition(revision);
+
+        analysis.setUpdatedAt(LocalDateTime.now());
+        analysisMapper.updateById(analysis);
+        return assembleRevisionResponse(analysis, sceneRevisionService.getRevision(analysisId, revisionNo));
+    }
+
+    /**
+     * legacy 兼容包装（V20 §18.7 选项 2）：旧前端/官网/视觉通道不带 Revision 参数时，
+     * 仅 latest=1 的分析允许（否则 400 REVISION_REQUIRED），内部绑定 Revision 1，
+     * 保持旧可观察语义（整体替换 + status=confirmed + confirmed_rooms 快照 + 审计），
+     * 同事务内把 Revision 1 置 ACTIVE（隐式激活：active=1、working=NULL）。
+     *
+     * @param analysisId 分析批次 ID
+     * @param request    校正后的空间列表 + 可选比例尺/项目
+     * @return 校正后的分析详情
+     */
+    private FloorPlanAnalysisResponse legacyConfirmRooms(String analysisId, FloorPlanConfirmRequest request) {
+        FloorPlanAnalysis analysis = analysisMapper.selectByIdForUpdate(analysisId);
         if (analysis == null) {
             throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
         }
@@ -749,79 +943,36 @@ public class FloorPlanService {
             && !STATUS_CONFIRMED.equals(analysis.getStatus())) {
             throw new BusinessException("当前状态不允许人工校正（仅识别完成待确认后可提交），当前状态: " + analysis.getStatus());
         }
+        if (analysis.getLatestAnalysisRevision() != null && analysis.getLatestAnalysisRevision() != 1) {
+            throw new BusinessException(400,
+                "REVISION_REQUIRED: 该分析已存在多个 Scene Revision，请显式携带 analysisRevision + baseRoomRevision 提交");
+        }
 
-        List<FloorPlanRoom> existingRooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
-            .eq("analysis_id", analysisId));
-        Map<String, FloorPlanRoom> existingMap = existingRooms.stream()
-            .collect(Collectors.toMap(FloorPlanRoom::getRoomId, Function.identity()));
+        String operator = SecurityOperatorContext.currentUsername();
+        FloorPlanSceneRevision revision = sceneRevisionService.lockRevision(analysisId, 1);
+        if (revision == null) {
+            // 防御：V20 回填前创建且未完成解析的记录，补建 Revision 1
+            revision = new FloorPlanSceneRevision();
+            revision.setAnalysisId(analysisId);
+            revision.setAnalysisRevision(1);
+            revision.setRevisionTrigger(FloorPlanSceneRevision.TRIGGER_LEGACY_IMPORT);
+            revision.setRevisionStatus(FloorPlanSceneRevision.STATUS_READY);
+            revision.setRoomRevision(1);
+            revision.setFurnitureRevision(1);
+            revision.setCreatedAt(LocalDateTime.now());
+            sceneRevisionMapper.insert(revision);
+        }
+        if (!FloorPlanSceneRevisionService.EDITABLE_STATUSES.contains(revision.getRevisionStatus())
+            && !FloorPlanSceneRevision.STATUS_ACTIVE.equals(revision.getRevisionStatus())) {
+            throw FloorPlanSceneRevisionService.revisionNotEditable(
+                "Revision 状态 " + revision.getRevisionStatus() + " 不允许编辑");
+        }
 
         List<FloorPlanConfirmRequest.RoomItem> items = request.getRooms() != null
             ? request.getRooms() : List.of();
-        Set<String> submittedIds = new HashSet<>();
-        for (FloorPlanConfirmRequest.RoomItem item : items) {
-            if (StringUtils.hasText(item.getRoomId())) {
-                if (!existingMap.containsKey(item.getRoomId())) {
-                    throw new BusinessException("空间不存在或不属于该分析: " + item.getRoomId());
-                }
-                submittedIds.add(item.getRoomId());
-            }
-        }
+        replaceRevisionRooms(analysis, revision, items, operator, true);
 
-        LocalDateTime now = LocalDateTime.now();
-        // 未提交的已识别空间视为误识别，软删（@TableLogic 语义：就地置 deleted_at）
-        for (FloorPlanRoom room : existingRooms) {
-            if (!submittedIds.contains(room.getRoomId())) {
-                room.setDeletedAt(now);
-                roomMapper.updateById(room);
-            }
-        }
-
-        int sort = 0;
-        for (FloorPlanConfirmRequest.RoomItem item : items) {
-            String roomType = normalizeRoomType(item.getRoomType());
-            BigDecimal areaM2 = computeAreaM2(item.getWidthMm(), item.getDepthMm());
-            String bboxJson = toJson(item.getBbox());
-            if (StringUtils.hasText(item.getRoomId())) {
-                FloorPlanRoom room = existingMap.get(item.getRoomId());
-                room.setRoomType(roomType);
-                if (StringUtils.hasText(item.getLabel())) {
-                    room.setLabel(item.getLabel().trim());
-                }
-                if (!GEOMETRY_SOURCE_CAD.equals(room.getGeometrySource())) {
-                    room.setWidthMm(item.getWidthMm());
-                    room.setDepthMm(item.getDepthMm());
-                    room.setAreaM2(areaM2);
-                    room.setBbox(bboxJson);
-                    room.setDimensionSource(DIM_SOURCE_MANUAL);
-                    room.setDimensionConfidence(CONFIDENCE_HIGH);
-                }
-                room.setSortOrder(sort);
-                room.setUpdatedAt(now);
-                roomMapper.updateById(room);
-            } else {
-                FloorPlanRoom room = new FloorPlanRoom();
-                room.setRoomId(IdGenerator.floorPlanRoomId());
-                room.setAnalysisId(analysisId);
-                room.setRoomType(roomType);
-                if (StringUtils.hasText(item.getLabel())) {
-                    room.setLabel(item.getLabel().trim());
-                }
-                room.setWidthMm(item.getWidthMm());
-                room.setDepthMm(item.getDepthMm());
-                room.setAreaM2(areaM2);
-                room.setBbox(bboxJson);
-                room.setDimensionSource(DIM_SOURCE_MANUAL);
-                room.setDimensionConfidence(CONFIDENCE_HIGH);
-                room.setSortOrder(sort);
-                room.setCreatedAt(now);
-                room.setUpdatedAt(now);
-                roomMapper.insert(room);
-            }
-            sort++;
-        }
-
-        // V14：传了 projectId 则校验项目可见性后覆盖写入项目归属（补挂/改挂），并记审计日志；
-        // 不传则不动 project_id
+        // V14：传了 projectId 则校验项目可见性后覆盖写入项目归属（补挂/改挂），并记审计日志
         if (StringUtils.hasText(request.getProjectId())) {
             String newProjectId = resolveAccessibleProjectId(request.getProjectId());
             if (!newProjectId.equals(analysis.getProjectId())) {
@@ -836,24 +987,946 @@ public class FloorPlanService {
             }
         }
 
+        // 旧可观察语义：status=confirmed + confirmed_rooms 快照 + 审计；同事务隐式激活 Revision 1
+        LocalDateTime now = LocalDateTime.now();
+        revision.setRoomRevision(2);
+        revision.setRevisionStatus(FloorPlanSceneRevision.STATUS_ACTIVE);
+        revision.setConfirmedAt(now);
+        revision.setActivatedAt(now);
+        revision.setActivatedBy(operator);
+        sceneRevisionMapper.updateByRevision(revision);
+
         analysis.setStatus(STATUS_CONFIRMED);
         analysis.setConfirmedRooms(toJson(items));
         if (request.getScaleRatio() != null) {
             analysis.setScaleRatio(request.getScaleRatio());
         }
+        analysis.setActiveAnalysisRevision(1);
+        analysis.setWorkingAnalysisRevision(null);
+        analysis.setLatestAnalysisRevision(1);
         analysis.setUpdatedAt(now);
-        analysisMapper.updateById(analysis);
+        updateAnalysis(analysis);
         auditLogService.logUpdate("floor_plan_analysis", analysisId, null, analysis,
             SecurityOperatorContext.currentUsername());
 
-        List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
-            .eq("analysis_id", analysisId)
-            .orderByAsc("sort_order"));
-        return toResponse(analysis, rooms);
+        return assembleRevisionResponse(analysis, revision);
     }
 
     /**
-     * 接口 5：软删分析批次（@TableLogic 模式），级联软删其下空间明细。
+     * 分析记录更新（BUG-2 修复）：MyBatis-Plus updateById 与 update(entity, wrapper)
+     * 的实体 SET 都跳过 null 字段——working 指针需要清空时必须经 Wrapper 显式
+     * {@code set(..., null)} 才会落库；其余字段仍走实体（含 JSONB TypeHandler）。
+     *
+     * @param analysis 已就地完成字段修改的分析实体
+     */
+    private void updateAnalysis(FloorPlanAnalysis analysis) {
+        com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<FloorPlanAnalysis> wrapper =
+            new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<FloorPlanAnalysis>()
+                .eq("analysis_id", analysis.getAnalysisId());
+        if (analysis.getWorkingAnalysisRevision() == null) {
+            wrapper.set("working_analysis_revision", null);
+        }
+        analysisMapper.update(analysis, wrapper);
+    }
+
+    /**
+     * 整体替换某 Revision 的房间集合（V20，§8.4.1：所有读写带 analysis_id + analysis_revision
+     * 双条件）：带 roomId 就地更新、不带 roomId 新增、未提交的已识别空间软删。
+     * 视觉识别空间按人工提交的矩形尺寸重算并标记 manual/high；CAD 空间只允许校正名称、
+     * 类型和顺序，精确多边形、面积、包围盒及 CAD 尺寸元数据保持不变。
+     * 提交即视为人工确认：在列房间 confirmation_status=CONFIRMED，并记录 ADD/DELETE/UPDATE Diff。
+     *
+     * @param analysis      分析记录
+     * @param revision      目标 Revision（已锁）
+     * @param items         提交的空间列表
+     * @param operator      操作人
+     * @param recordDiff    是否记录 Diff 反馈
+     */
+    private void replaceRevisionRooms(FloorPlanAnalysis analysis, FloorPlanSceneRevision revision,
+                                      List<FloorPlanConfirmRequest.RoomItem> items,
+                                      String operator, boolean recordDiff) {
+        String analysisId = analysis.getAnalysisId();
+        Integer revisionNo = revision.getAnalysisRevision();
+        List<FloorPlanRoom> existingRooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
+            .eq("analysis_id", analysisId)
+            .eq("analysis_revision", revisionNo));
+        Map<String, FloorPlanRoom> existingMap = existingRooms.stream()
+            .collect(Collectors.toMap(FloorPlanRoom::getRoomId, Function.identity()));
+
+        Set<String> submittedIds = new HashSet<>();
+        for (FloorPlanConfirmRequest.RoomItem item : items) {
+            if (StringUtils.hasText(item.getRoomId())) {
+                if (!existingMap.containsKey(item.getRoomId())) {
+                    throw new BusinessException("空间不存在或不属于该分析 Revision: " + item.getRoomId());
+                }
+                submittedIds.add(item.getRoomId());
+            }
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        // 未提交的已识别空间视为误识别，软删（MP 逻辑删除：deleteById 生成
+        // SET deleted_at=now() WHERE deleted_at IS NULL；setDeletedAt+updateById 不落库）
+        for (FloorPlanRoom room : existingRooms) {
+            if (!submittedIds.contains(room.getRoomId())) {
+                room.setDeletedAt(now);
+                roomMapper.deleteById(room.getRoomId());
+                if (recordDiff) {
+                    sceneRevisionService.recordFeedback(analysisId, revisionNo, revision.getParserVersion(),
+                        com.rsdp.entity.CadAnalysisFeedback.OBJECT_TYPE_ROOM, room.getRoomId(),
+                        com.rsdp.entity.CadAnalysisFeedback.TYPE_DELETE,
+                        Map.of("label", room.getLabel() != null ? room.getLabel() : "",
+                            "roomType", room.getRoomType()), operator);
+                }
+            }
+        }
+
+        int sort = 0;
+        for (FloorPlanConfirmRequest.RoomItem item : items) {
+            String roomType = normalizeRoomType(item.getRoomType());
+            BigDecimal areaM2 = computeAreaM2(item.getWidthMm(), item.getDepthMm());
+            String bboxJson = toJson(item.getBbox());
+            if (StringUtils.hasText(item.getRoomId())) {
+                FloorPlanRoom room = existingMap.get(item.getRoomId());
+                boolean changed = false;
+                if (!roomType.equals(room.getRoomType())) {
+                    changed = true;
+                }
+                if (StringUtils.hasText(item.getLabel()) && !item.getLabel().trim().equals(room.getLabel())) {
+                    changed = true;
+                }
+                room.setRoomType(roomType);
+                if (StringUtils.hasText(item.getLabel())) {
+                    room.setLabel(item.getLabel().trim());
+                }
+                if (!GEOMETRY_SOURCE_CAD.equals(room.getGeometrySource())) {
+                    if (!java.util.Objects.equals(room.getWidthMm(), item.getWidthMm())
+                        || !java.util.Objects.equals(room.getDepthMm(), item.getDepthMm())) {
+                        changed = true;
+                    }
+                    room.setWidthMm(item.getWidthMm());
+                    room.setDepthMm(item.getDepthMm());
+                    room.setAreaM2(areaM2);
+                    room.setBbox(bboxJson);
+                    room.setDimensionSource(DIM_SOURCE_MANUAL);
+                    room.setDimensionConfidence(CONFIDENCE_HIGH);
+                }
+                room.setSortOrder(sort);
+                room.setConfirmationStatus("CONFIRMED");
+                room.setUpdatedAt(now);
+                roomMapper.updateById(room);
+                if (recordDiff && changed) {
+                    sceneRevisionService.recordFeedback(analysisId, revisionNo, revision.getParserVersion(),
+                        com.rsdp.entity.CadAnalysisFeedback.OBJECT_TYPE_ROOM, room.getRoomId(),
+                        com.rsdp.entity.CadAnalysisFeedback.TYPE_UPDATE,
+                        Map.of("roomType", roomType,
+                            "label", room.getLabel() != null ? room.getLabel() : "",
+                            "widthMm", room.getWidthMm() != null ? room.getWidthMm() : 0,
+                            "depthMm", room.getDepthMm() != null ? room.getDepthMm() : 0), operator);
+                }
+            } else {
+                FloorPlanRoom room = new FloorPlanRoom();
+                room.setRoomId(IdGenerator.floorPlanRoomId());
+                room.setAnalysisId(analysisId);
+                room.setAnalysisRevision(revisionNo);
+                room.setRoomType(roomType);
+                if (StringUtils.hasText(item.getLabel())) {
+                    room.setLabel(item.getLabel().trim());
+                }
+                room.setWidthMm(item.getWidthMm());
+                room.setDepthMm(item.getDepthMm());
+                room.setAreaM2(areaM2);
+                room.setBbox(bboxJson);
+                room.setDimensionSource(DIM_SOURCE_MANUAL);
+                room.setDimensionConfidence(CONFIDENCE_HIGH);
+                room.setConfirmationStatus("CONFIRMED");
+                room.setSortOrder(sort);
+                room.setCreatedAt(now);
+                room.setUpdatedAt(now);
+                roomMapper.insert(room);
+                if (recordDiff) {
+                    sceneRevisionService.recordFeedback(analysisId, revisionNo, revision.getParserVersion(),
+                        com.rsdp.entity.CadAnalysisFeedback.OBJECT_TYPE_ROOM, room.getRoomId(),
+                        com.rsdp.entity.CadAnalysisFeedback.TYPE_ADD,
+                        Map.of("roomType", roomType,
+                            "label", room.getLabel() != null ? room.getLabel() : ""), operator);
+                }
+            }
+            sort++;
+        }
+    }
+
+    /**
+     * Revision-aware 家具编辑（V20，设计文档 V1.2.3 §18.6，PUT /{analysisId}/furniture）。
+     *
+     * <p>写保护/版本校验/幂等与 rooms 同构（furniture_submit_base/hash）。
+     * 整体替换该 Revision 家具列表：已有 ID 仅可更新人工字段（category/semanticLabel/
+     * roomId/position/rotationDeg/footprintPolygon/effective 尺寸/heightMm/sortOrder；自动快照
+     * 字段不可变），未变更 → CONFIRMED、有变更 → MANUAL_EDITED；缺席 ID 软删（DELETE Diff）；
+     * 无 ID 新增（source_kind=MANUAL、服务端发号、MANUAL_ADDED；可带 derivedFromIds 记
+     * SPLIT/MERGE Diff）。<b>不</b>改 active 指针、<b>不</b>置 confirmed（Invariant 6/9）。</p>
+     *
+     * @param analysisId 分析批次 ID
+     * @param request    家具列表 + analysisRevision + baseFurnitureRevision
+     * @return {analysisRevision, furnitureRevision, furniture[]}
+     */
+    @Transactional
+    public FloorPlanFurnitureEditResponse editRevisionFurniture(String analysisId,
+                                                                FloorPlanFurnitureConfirmRequest request) {
+        // ① 锁 analysis
+        FloorPlanAnalysis analysis = analysisMapper.selectByIdForUpdate(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+        if (!STATUS_AWAITING_CONFIRM.equals(analysis.getStatus())
+            && !STATUS_CONFIRMED.equals(analysis.getStatus())) {
+            throw new BusinessException("当前状态不允许家具校正（仅识别完成待确认后可提交），当前状态: " + analysis.getStatus());
+        }
+        // ② 锁目标 revision + 工作指针/状态校验
+        Integer revisionNo = request.getAnalysisRevision();
+        FloorPlanSceneRevision revision = sceneRevisionService.lockRevision(analysisId, revisionNo);
+        if (revision == null) {
+            throw new ResourceNotFoundException("Scene Revision 不存在或不属于该分析: " + revisionNo);
+        }
+        if (!FloorPlanSceneRevisionService.revisionEquals(analysis.getWorkingAnalysisRevision(), revisionNo)) {
+            throw FloorPlanSceneRevisionService.revisionNotEditable(
+                "目标 Revision 不是当前工作 Revision（working=" + analysis.getWorkingAnalysisRevision() + "）");
+        }
+        if (!FloorPlanSceneRevisionService.EDITABLE_STATUSES.contains(revision.getRevisionStatus())) {
+            throw FloorPlanSceneRevisionService.revisionNotEditable(
+                "Revision 状态 " + revision.getRevisionStatus() + " 不允许编辑");
+        }
+
+        String operator = SecurityOperatorContext.currentUsername();
+        String submitHash = sceneRevisionService.submitHash(request.getFurniture());
+        // ③ 幂等重放
+        if (FloorPlanSceneRevisionService.revisionEquals(revision.getFurnitureSubmitBase(),
+            request.getBaseFurnitureRevision())
+            && submitHash != null && submitHash.equals(revision.getFurnitureSubmitHash())) {
+            log.info("furniture 提交幂等重放，analysisId={}，revision={}，base={}",
+                analysisId, revisionNo, request.getBaseFurnitureRevision());
+            return buildFurnitureEditResponse(revision);
+        }
+        // ④ 乐观版本校验
+        if (!FloorPlanSceneRevisionService.revisionEquals(revision.getFurnitureRevision(),
+            request.getBaseFurnitureRevision())) {
+            throw FloorPlanSceneRevisionService.versionConflict(
+                "baseFurnitureRevision=" + request.getBaseFurnitureRevision()
+                    + " 与当前 furnitureRevision=" + revision.getFurnitureRevision() + " 不一致，请刷新后重试");
+        }
+
+        List<FloorPlanFurnitureConfirmRequest.FurnitureItem> items = request.getFurniture() != null
+            ? request.getFurniture() : List.of();
+        for (FloorPlanFurnitureConfirmRequest.FurnitureItem item : items) {
+            validateFurnitureItem(item);
+        }
+
+        List<FloorPlanFurniture> existing = sceneRevisionService.listFurniture(analysisId, revisionNo);
+        Map<String, FloorPlanFurniture> existingMap = existing.stream()
+            .collect(Collectors.toMap(FloorPlanFurniture::getFurnitureId, Function.identity()));
+
+        Set<String> submittedIds = new HashSet<>();
+        for (FloorPlanFurnitureConfirmRequest.FurnitureItem item : items) {
+            if (StringUtils.hasText(item.getFurnitureId())) {
+                if (!existingMap.containsKey(item.getFurnitureId())) {
+                    throw new BusinessException("家具不存在或不属于该分析 Revision: " + item.getFurnitureId());
+                }
+                submittedIds.add(item.getFurnitureId());
+            }
+            if (StringUtils.hasText(item.getRoomId())) {
+                FloorPlanRoom room = roomMapper.selectById(item.getRoomId());
+                if (room == null || !analysisId.equals(room.getAnalysisId())
+                    || !FloorPlanSceneRevisionService.revisionEquals(room.getAnalysisRevision(), revisionNo)) {
+                    throw new BusinessException("归属房间不存在或不属于该分析 Revision: " + item.getRoomId());
+                }
+            }
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        // 缺席 ID 软删（MP 逻辑删除：deleteById 生成 SET deleted_at=now()
+        // WHERE deleted_at IS NULL；setDeletedAt+updateById 不落库）+ DELETE Diff
+        for (FloorPlanFurniture furniture : existing) {
+            if (!submittedIds.contains(furniture.getFurnitureId())) {
+                furniture.setDeletedAt(now);
+                furniture.setUpdatedAt(now);
+                furnitureMapper.deleteById(furniture.getFurnitureId());
+                sceneRevisionService.recordFeedback(analysisId, revisionNo, revision.getParserVersion(),
+                    com.rsdp.entity.CadAnalysisFeedback.OBJECT_TYPE_FURNITURE, furniture.getFurnitureId(),
+                    com.rsdp.entity.CadAnalysisFeedback.TYPE_DELETE,
+                    Map.of("category", furniture.getCategory() != null ? furniture.getCategory() : "",
+                        "semanticLabel", furniture.getSemanticLabel() != null ? furniture.getSemanticLabel() : ""),
+                    operator);
+            }
+        }
+
+        // SPLIT 检测：同一来源 ID 被多个新对象引用
+        Map<String, List<String>> sourceToTargets = new HashMap<>();
+        for (FloorPlanFurnitureConfirmRequest.FurnitureItem item : items) {
+            if (item.getDerivedFromIds() != null) {
+                for (String sourceId : item.getDerivedFromIds()) {
+                    sourceToTargets.computeIfAbsent(sourceId, k -> new ArrayList<>())
+                        .add(StringUtils.hasText(item.getFurnitureId()) ? item.getFurnitureId() : "(new)");
+                }
+            }
+        }
+
+        int sort = 0;
+        for (FloorPlanFurnitureConfirmRequest.FurnitureItem item : items) {
+            if (StringUtils.hasText(item.getFurnitureId())) {
+                FloorPlanFurniture furniture = existingMap.get(item.getFurnitureId());
+                boolean changed = applyFurnitureItem(furniture, item);
+                furniture.setSortOrder(sort);
+                if (changed) {
+                    furniture.setConfirmationStatus(FloorPlanFurniture.CONFIRM_MANUAL_EDITED);
+                    sceneRevisionService.recordFeedback(analysisId, revisionNo, revision.getParserVersion(),
+                        com.rsdp.entity.CadAnalysisFeedback.OBJECT_TYPE_FURNITURE, furniture.getFurnitureId(),
+                        com.rsdp.entity.CadAnalysisFeedback.TYPE_UPDATE,
+                        Map.of("category", furniture.getCategory() != null ? furniture.getCategory() : "",
+                            "semanticLabel",
+                            furniture.getSemanticLabel() != null ? furniture.getSemanticLabel() : ""),
+                        operator);
+                } else if (FloorPlanFurniture.CONFIRM_AUTO.equals(furniture.getConfirmationStatus())) {
+                    furniture.setConfirmationStatus(FloorPlanFurniture.CONFIRM_CONFIRMED);
+                }
+                if (item.getDerivedFromIds() != null && !item.getDerivedFromIds().isEmpty()) {
+                    furniture.setDerivedFromIds(toJson(item.getDerivedFromIds()));
+                }
+                furniture.setUpdatedAt(now);
+                furnitureMapper.updateById(furniture);
+            } else {
+                FloorPlanFurniture furniture = new FloorPlanFurniture();
+                furniture.setFurnitureId(IdGenerator.floorPlanFurnitureId());
+                furniture.setAnalysisId(analysisId);
+                furniture.setAnalysisRevision(revisionNo);
+                furniture.setSourceKind(FloorPlanFurniture.SOURCE_KIND_MANUAL);
+                applyFurnitureItem(furniture, item);
+                furniture.setSortOrder(sort);
+                furniture.setConfirmationStatus(FloorPlanFurniture.CONFIRM_MANUAL_ADDED);
+                if (item.getDerivedFromIds() != null && !item.getDerivedFromIds().isEmpty()) {
+                    furniture.setDerivedFromIds(toJson(item.getDerivedFromIds()));
+                }
+                furniture.setCreatedBy(operator);
+                furniture.setCreatedAt(now);
+                furniture.setUpdatedAt(now);
+                furnitureMapper.insert(furniture);
+                sceneRevisionService.recordFeedback(analysisId, revisionNo, revision.getParserVersion(),
+                    com.rsdp.entity.CadAnalysisFeedback.OBJECT_TYPE_FURNITURE, furniture.getFurnitureId(),
+                    com.rsdp.entity.CadAnalysisFeedback.TYPE_ADD,
+                    Map.of("category", furniture.getCategory() != null ? furniture.getCategory() : "",
+                        "semanticLabel",
+                        furniture.getSemanticLabel() != null ? furniture.getSemanticLabel() : ""),
+                    operator);
+                recordSplitMergeFeedback(analysisId, revisionNo, revision.getParserVersion(),
+                    furniture.getFurnitureId(), item.getDerivedFromIds(), sourceToTargets, operator);
+            }
+            sort++;
+        }
+
+        // 已有对象携带 derivedFromIds 的 SPLIT/MERGE Diff
+        for (FloorPlanFurnitureConfirmRequest.FurnitureItem item : items) {
+            if (StringUtils.hasText(item.getFurnitureId())
+                && item.getDerivedFromIds() != null && !item.getDerivedFromIds().isEmpty()) {
+                recordSplitMergeFeedback(analysisId, revisionNo, revision.getParserVersion(),
+                    item.getFurnitureId(), item.getDerivedFromIds(), sourceToTargets, operator);
+            }
+        }
+
+        revision.setFurnitureRevision(revision.getFurnitureRevision() + 1);
+        revision.setRevisionStatus(FloorPlanSceneRevision.STATUS_EDITING);
+        revision.setFurnitureSubmitBase(request.getBaseFurnitureRevision());
+        revision.setFurnitureSubmitHash(submitHash);
+        sceneRevisionMapper.updateByRevision(revision);
+        sceneRevisionService.applyReadinessTransition(revision);
+
+        analysis.setUpdatedAt(LocalDateTime.now());
+        analysisMapper.updateById(analysis);
+        return buildFurnitureEditResponse(sceneRevisionService.getRevision(analysisId, revisionNo));
+    }
+
+    /**
+     * 把请求项的人工可编辑字段应用到家具实体；返回是否有实质变更（自动快照字段不在此列）。
+     *
+     * <p>变更为「规范化值比较」：rotationDeg 用 compareTo（90.0 与 90.00 相等）、
+     * position/footprintPolygon 解析为数值结构后比较（忽略 JSON 文本格式与整数/小数写法）、
+     * 空串归一为 null；字段为 null 表示「保持现状」，显式空串表示清除。
+     * 避免格式差异把未变更项误判为 MANUAL_EDITED（P2-9）。</p>
+     */
+    private boolean applyFurnitureItem(FloorPlanFurniture furniture,
+                                       FloorPlanFurnitureConfirmRequest.FurnitureItem item) {
+        boolean changed = false;
+        String category = StringUtils.hasText(item.getCategory()) ? item.getCategory().trim().toUpperCase() : null;
+        if (category != null && !category.equals(furniture.getCategory())) {
+            furniture.setCategory(category);
+            changed = true;
+        }
+        if (item.getSemanticLabel() != null) {
+            String submitted = StringUtils.hasText(item.getSemanticLabel())
+                ? item.getSemanticLabel().trim() : null;
+            if (!java.util.Objects.equals(submitted, furniture.getSemanticLabel())) {
+                furniture.setSemanticLabel(submitted);
+                changed = true;
+            }
+        }
+        if (item.getRoomId() != null) {
+            String submittedRoomId = StringUtils.hasText(item.getRoomId()) ? item.getRoomId().trim() : null;
+            if (!java.util.Objects.equals(submittedRoomId, furniture.getRoomId())) {
+                furniture.setRoomId(submittedRoomId);
+                changed = true;
+            }
+        }
+        if (item.getPosition() != null) {
+            FloorPlanPoint current = parsePoint(furniture.getPosition());
+            boolean same = current != null && current.getX() != null && current.getY() != null
+                && item.getPosition().getX() != null && item.getPosition().getY() != null
+                && Double.compare(current.getX(), item.getPosition().getX()) == 0
+                && Double.compare(current.getY(), item.getPosition().getY()) == 0;
+            if (!same) {
+                furniture.setPosition(toJson(Map.of("x", item.getPosition().getX(),
+                    "y", item.getPosition().getY())));
+                changed = true;
+            }
+        }
+        if (item.getRotationDeg() != null
+            && (furniture.getRotationDeg() == null
+                || item.getRotationDeg().compareTo(furniture.getRotationDeg()) != 0)) {
+            furniture.setRotationDeg(item.getRotationDeg());
+            changed = true;
+        }
+        if (item.getFootprintPolygon() != null
+            && !item.getFootprintPolygon().equals(parsePolygon(furniture.getFootprintPolygon()))) {
+            furniture.setFootprintPolygon(toJson(item.getFootprintPolygon()));
+            changed = true;
+        }
+        if (item.getEffectiveWidthMm() != null
+            && !item.getEffectiveWidthMm().equals(furniture.getEffectiveWidthMm())) {
+            furniture.setEffectiveWidthMm(item.getEffectiveWidthMm());
+            changed = true;
+        }
+        if (item.getEffectiveDepthMm() != null
+            && !item.getEffectiveDepthMm().equals(furniture.getEffectiveDepthMm())) {
+            furniture.setEffectiveDepthMm(item.getEffectiveDepthMm());
+            changed = true;
+        }
+        if (item.getHeightMm() != null && !item.getHeightMm().equals(furniture.getHeightMm())) {
+            furniture.setHeightMm(item.getHeightMm());
+            changed = true;
+        }
+        return changed;
+    }
+
+    /** 家具提交项契约校验：枚举合法、坐标有限、轮廓闭合、尺寸非负。 */
+    private void validateFurnitureItem(FloorPlanFurnitureConfirmRequest.FurnitureItem item) {
+        if (StringUtils.hasText(item.getCategory())) {
+            String category = item.getCategory().trim().toUpperCase();
+            if (!Set.of("SOFA", "BED", "TABLE", "CHAIR", "CABINET", "OTHER", "UNKNOWN").contains(category)) {
+                throw new BusinessException("家具类别非法: " + item.getCategory());
+            }
+        }
+        if (item.getPosition() != null) {
+            validateFiniteCoordinate(item.getPosition().getX(), "position.x");
+            validateFiniteCoordinate(item.getPosition().getY(), "position.y");
+        }
+        if (item.getRotationDeg() != null && item.getRotationDeg().scale() > 2) {
+            throw new BusinessException("rotationDeg 最多保留 2 位小数");
+        }
+        if (item.getFootprintPolygon() != null && !item.getFootprintPolygon().isEmpty()) {
+            List<List<Double>> polygon = item.getFootprintPolygon();
+            for (List<Double> point : polygon) {
+                if (point == null || point.size() < 2) {
+                    throw new BusinessException("footprintPolygon 顶点坐标不完整");
+                }
+                validateFiniteCoordinate(point.get(0), "footprintPolygon");
+                validateFiniteCoordinate(point.get(1), "footprintPolygon");
+            }
+            if (polygon.size() >= 3) {
+                List<Double> first = polygon.get(0);
+                List<Double> last = polygon.get(polygon.size() - 1);
+                if (!first.get(0).equals(last.get(0)) || !first.get(1).equals(last.get(1))) {
+                    throw new BusinessException("footprintPolygon 必须为闭合多边形（首尾顶点一致）");
+                }
+            }
+        }
+        validateNonNegativeInt(item.getEffectiveWidthMm(), "effectiveWidthMm");
+        validateNonNegativeInt(item.getEffectiveDepthMm(), "effectiveDepthMm");
+        validateNonNegativeInt(item.getHeightMm(), "heightMm");
+    }
+
+    private void validateFiniteCoordinate(Double value, String field) {
+        if (value == null || !Double.isFinite(value)) {
+            throw new BusinessException(field + " 必须为有限数值");
+        }
+    }
+
+    private void validateNonNegativeInt(Integer value, String field) {
+        if (value != null && value < 0) {
+            throw new BusinessException(field + " 不能为负数");
+        }
+    }
+
+    /** SPLIT/MERGE Diff：derivedFromIds 多于 1 个来源 → MERGE；来源被多个对象引用 → SPLIT。 */
+    private void recordSplitMergeFeedback(String analysisId, Integer revisionNo, String parserVersion,
+                                          String targetId, List<String> derivedFromIds,
+                                          Map<String, List<String>> sourceToTargets, String operator) {
+        if (derivedFromIds == null || derivedFromIds.isEmpty()) {
+            return;
+        }
+        if (derivedFromIds.size() > 1) {
+            sceneRevisionService.recordFeedback(analysisId, revisionNo, parserVersion,
+                com.rsdp.entity.CadAnalysisFeedback.OBJECT_TYPE_FURNITURE, targetId,
+                com.rsdp.entity.CadAnalysisFeedback.TYPE_MERGE,
+                Map.of("sourceIds", derivedFromIds, "targetId", targetId), operator);
+        }
+        for (String sourceId : derivedFromIds) {
+            List<String> targets = sourceToTargets.getOrDefault(sourceId, List.of());
+            if (targets.size() > 1) {
+                sceneRevisionService.recordFeedback(analysisId, revisionNo, parserVersion,
+                    com.rsdp.entity.CadAnalysisFeedback.OBJECT_TYPE_FURNITURE, sourceId,
+                    com.rsdp.entity.CadAnalysisFeedback.TYPE_SPLIT,
+                    Map.of("sourceId", sourceId, "targetIds", targets), operator);
+            }
+        }
+    }
+
+    /** 家具编辑响应装配（幂等重放与正常提交共用；revisionStatus/readiness 按当前保存后状态实时计算）。 */
+    private FloorPlanFurnitureEditResponse buildFurnitureEditResponse(FloorPlanSceneRevision revision) {
+        FloorPlanFurnitureEditResponse response = new FloorPlanFurnitureEditResponse();
+        response.setAnalysisRevision(revision.getAnalysisRevision());
+        response.setFurnitureRevision(revision.getFurnitureRevision());
+        response.setRevisionStatus(revision.getRevisionStatus());
+        response.setActivationReadiness(sceneRevisionService.evaluateReadiness(revision));
+        List<FloorPlanFurniture> furniture = sceneRevisionService.listFurniture(
+            revision.getAnalysisId(), revision.getAnalysisRevision());
+        response.setFurniture(furniture.stream().map(this::toFurnitureResponse).toList());
+        return response;
+    }
+
+    /**
+     * Scene 原子激活（V20，设计文档 V1.2.3 §8.5）：显式、整版、单事务。
+     *
+     * <p>步骤：①锁 analysis ②锁目标 revision ③校验 baseActive==active_analysis_revision
+     * ④目标是 working 且 READY_TO_ACTIVATE 且无运行中解析任务 ⑤expected* 版本一致
+     * （任一不符 409）⑥Scene Activation Validator（失败 409 ACTIVATION_VALIDATION_FAILED）
+     * ⑦旧 ACTIVE → SUPERSEDED ⑧目标 → ACTIVE ⑨active 指针切换 ⑩working=NULL
+     * ⑪analysis.status=confirmed + confirmed_rooms 快照（从目标 Revision 房间生成）
+     * + preview/quality 投影同步 ⑫审计。任何失败整体回滚。</p>
+     *
+     * @param analysisId 分析批次 ID
+     * @param revisionNo 目标 Revision 序号
+     * @param request    激活请求（baseActive/expected 版本）
+     * @return 激活后的分析详情
+     */
+    @Transactional
+    public FloorPlanAnalysisResponse activateRevision(String analysisId, Integer revisionNo,
+                                                      FloorPlanActivateRequest request) {
+        // ① 锁 analysis
+        FloorPlanAnalysis analysis = analysisMapper.selectByIdForUpdate(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+        // ② 锁目标 revision
+        FloorPlanSceneRevision revision = sceneRevisionService.lockRevision(analysisId, revisionNo);
+        if (revision == null) {
+            throw new ResourceNotFoundException("Scene Revision 不存在或不属于该分析: " + revisionNo);
+        }
+        // ③ baseActive 校验（null 安全：此前无激活版本时请求须显式传 null）
+        if (!FloorPlanSceneRevisionService.revisionEquals(analysis.getActiveAnalysisRevision(),
+            request.getBaseActiveAnalysisRevision())) {
+            throw FloorPlanSceneRevisionService.versionConflict(
+                "baseActiveAnalysisRevision=" + request.getBaseActiveAnalysisRevision()
+                    + " 与当前 activeAnalysisRevision=" + analysis.getActiveAnalysisRevision() + " 不一致");
+        }
+        // ④ 工作指针 + 状态 + 运行中任务校验
+        if (!FloorPlanSceneRevisionService.revisionEquals(analysis.getWorkingAnalysisRevision(), revisionNo)) {
+            throw FloorPlanSceneRevisionService.revisionNotEditable(
+                "目标 Revision 不是当前工作 Revision（working=" + analysis.getWorkingAnalysisRevision() + "）");
+        }
+        if (!FloorPlanSceneRevision.STATUS_READY_TO_ACTIVATE.equals(revision.getRevisionStatus())) {
+            throw new BusinessException(409, "REVISION_NOT_ACTIVATABLE: Revision 状态 "
+                + revision.getRevisionStatus() + " 不允许激活（须 READY_TO_ACTIVATE）");
+        }
+        if (sceneRevisionService.hasRunningTask(analysis.getTaskId())) {
+            throw new BusinessException(409, "ANALYSIS_TASK_RUNNING: 存在仍在执行的解析任务，不允许激活");
+        }
+        // ⑤ expected 版本校验
+        if (!FloorPlanSceneRevisionService.revisionEquals(revision.getRoomRevision(),
+            request.getExpectedRoomRevision())) {
+            throw FloorPlanSceneRevisionService.versionConflict(
+                "expectedRoomRevision=" + request.getExpectedRoomRevision()
+                    + " 与当前 roomRevision=" + revision.getRoomRevision() + " 不一致");
+        }
+        if (!FloorPlanSceneRevisionService.revisionEquals(revision.getFurnitureRevision(),
+            request.getExpectedFurnitureRevision())) {
+            throw FloorPlanSceneRevisionService.versionConflict(
+                "expectedFurnitureRevision=" + request.getExpectedFurnitureRevision()
+                    + " 与当前 furnitureRevision=" + revision.getFurnitureRevision() + " 不一致");
+        }
+        // ⑥ Scene Activation Validator（事务内再次运行，不信任此前状态。
+        //    O-N1：编辑后 readiness 即时复评而非先回落 EDITING——安全性等价，
+        //    因为最终放行只以本次事务内的 Validator 结果为准）
+        FloorPlanActivationReadiness readiness = sceneRevisionService.evaluateReadiness(revision);
+        if (!readiness.isReady()) {
+            throw new BusinessException(409,
+                "ACTIVATION_VALIDATION_FAILED: " + String.join("；", readiness.getIssues()));
+        }
+
+        String operator = SecurityOperatorContext.currentUsername();
+        LocalDateTime now = LocalDateTime.now();
+        // ⑦ 旧 ACTIVE → SUPERSEDED（历史保留可审计，Invariant 8/11）
+        Integer oldActive = analysis.getActiveAnalysisRevision();
+        if (oldActive != null && !oldActive.equals(revisionNo)) {
+            FloorPlanSceneRevision oldRevision = sceneRevisionService.lockRevision(analysisId, oldActive);
+            if (oldRevision != null
+                && FloorPlanSceneRevision.STATUS_ACTIVE.equals(oldRevision.getRevisionStatus())) {
+                oldRevision.setRevisionStatus(FloorPlanSceneRevision.STATUS_SUPERSEDED);
+                sceneRevisionMapper.updateByRevision(oldRevision);
+            }
+        }
+        // ⑧ 目标 → ACTIVE
+        revision.setRevisionStatus(FloorPlanSceneRevision.STATUS_ACTIVE);
+        revision.setConfirmedAt(now);
+        revision.setActivatedAt(now);
+        revision.setActivatedBy(operator);
+        sceneRevisionMapper.updateByRevision(revision);
+
+        // ⑨⑩⑪ 指针切换 + 整版 confirmed + confirmed_rooms 快照（保持旧字段可用）+ 投影同步
+        List<FloorPlanRoom> rooms = sceneRevisionService.listRooms(analysisId, revisionNo);
+        analysis.setActiveAnalysisRevision(revisionNo);
+        analysis.setWorkingAnalysisRevision(null);
+        analysis.setStatus(STATUS_CONFIRMED);
+        analysis.setConfirmedRooms(toJson(rooms.stream().map(this::toConfirmedRoomSnapshot).toList()));
+        if (StringUtils.hasText(revision.getPreviewImageId())) {
+            analysis.setPreviewImageId(revision.getPreviewImageId());
+        }
+        if (StringUtils.hasText(revision.getQualityIssues())) {
+            analysis.setQualityIssues(revision.getQualityIssues());
+        }
+        analysis.setUpdatedAt(now);
+        updateAnalysis(analysis);
+        // ⑫ 审计
+        auditLogService.logAction("floor_plan_analysis", analysisId, "ACTIVATE_SCENE_REVISION",
+            oldActive != null ? Map.of("activeAnalysisRevision", oldActive) : null,
+            Map.of("activeAnalysisRevision", revisionNo), operator);
+        log.info("Scene Revision 已激活，analysisId={}，revision={}（旧 active={}）",
+            analysisId, revisionNo, oldActive);
+        return assembleRevisionResponse(analysis, revision);
+    }
+
+    /** confirmed_rooms 快照元素（与旧确认提交结构兼容：roomId/roomType/label/尺寸/bbox）。 */
+    private Map<String, Object> toConfirmedRoomSnapshot(FloorPlanRoom room) {
+        Map<String, Object> snapshot = new HashMap<>();
+        snapshot.put("roomId", room.getRoomId());
+        snapshot.put("roomType", room.getRoomType());
+        snapshot.put("label", room.getLabel());
+        snapshot.put("widthMm", room.getWidthMm());
+        snapshot.put("depthMm", room.getDepthMm());
+        snapshot.put("bbox", parseBBox(room.getBbox()));
+        return snapshot;
+    }
+
+    /**
+     * 派生工作 Revision（V20，POST /{analysisId}/working-revision）：从 active（无 active 则
+     * latest）复制已确认/未软删 Room+Furniture 对象（新行新对象 ID，家具以
+     * matched_from_object_id 记录来源）+ 复制自动快照/预览/质量问题引用。
+     * 已有工作 Revision 时 409 WORKING_REVISION_EXISTS。
+     *
+     * @param analysisId 分析批次 ID
+     * @return {analysisId, analysisRevision, revisionStatus}
+     */
+    @Transactional
+    public Map<String, Object> createWorkingRevision(String analysisId) {
+        FloorPlanAnalysis analysis = analysisMapper.selectByIdForUpdate(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+        if (analysis.getWorkingAnalysisRevision() != null) {
+            throw new BusinessException(409, "WORKING_REVISION_EXISTS: 已存在工作 Revision "
+                + analysis.getWorkingAnalysisRevision() + "，请先激活或继续编辑");
+        }
+        Integer sourceNo = analysis.getActiveAnalysisRevision() != null
+            ? analysis.getActiveAnalysisRevision() : analysis.getLatestAnalysisRevision();
+        if (sourceNo == null) {
+            throw new BusinessException("当前分析没有可派生的 Scene Revision");
+        }
+        FloorPlanSceneRevision source = sceneRevisionService.lockRevision(analysisId, sourceNo);
+        if (source == null) {
+            throw new ResourceNotFoundException("Scene Revision 不存在或不属于该分析: " + sourceNo);
+        }
+        String operator = SecurityOperatorContext.currentUsername();
+        FloorPlanSceneRevision derived = sceneRevisionService.deriveWorkingRevision(
+            analysis, source, operator);
+        analysis.setUpdatedAt(LocalDateTime.now());
+        analysisMapper.updateById(analysis);
+        auditLogService.logAction("floor_plan_analysis", analysisId, "DERIVE_WORKING_REVISION",
+            Map.of("sourceAnalysisRevision", sourceNo),
+            Map.of("workingAnalysisRevision", derived.getAnalysisRevision()), operator);
+        Map<String, Object> result = new HashMap<>();
+        result.put("analysisId", analysisId);
+        result.put("analysisRevision", derived.getAnalysisRevision());
+        result.put("revisionStatus", derived.getRevisionStatus());
+        return result;
+    }
+
+    /**
+     * Target Scene 切换（V20，设计文档 V1.2.3 §8.2，PUT /{analysisId}/target-scene）：
+     * 不重新上传 DWG，从 cad_object_key 读取原文件重跑 Parser，产生新 Analysis Revision
+     * （latest+1，PROCESSING，trigger=TARGET_SCENE_SWITCH，parent=base）；旧 Revision 不删不改。
+     * 异步执行，HTTP 202。
+     *
+     * @param analysisId 分析批次 ID
+     * @param request    {baseAnalysisRevision, targetId}
+     * @return {analysisId, analysisRevision, taskId, status=PROCESSING}
+     */
+    @Transactional
+    public Map<String, Object> switchTargetScene(String analysisId, FloorPlanTargetSceneRequest request) {
+        FloorPlanAnalysis analysis = analysisMapper.selectByIdForUpdate(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+        if (!FloorPlanSceneRevisionService.revisionEquals(analysis.getLatestAnalysisRevision(),
+            request.getBaseAnalysisRevision())) {
+            throw FloorPlanSceneRevisionService.versionConflict(
+                "baseAnalysisRevision=" + request.getBaseAnalysisRevision()
+                    + " 与当前 latestAnalysisRevision=" + analysis.getLatestAnalysisRevision() + " 不一致");
+        }
+        if (!StringUtils.hasText(analysis.getCadObjectKey())) {
+            throw new BusinessException(400, "TARGET_SCENE_UNSUPPORTED: 视觉识别通道不支持 Target Scene 切换");
+        }
+        FloorPlanSceneRevision baseRevision = sceneRevisionService.getRevision(
+            analysisId, request.getBaseAnalysisRevision());
+        if (baseRevision == null) {
+            throw new ResourceNotFoundException(
+                "Scene Revision 不存在或不属于该分析: " + request.getBaseAnalysisRevision());
+        }
+        if (!candidateContains(baseRevision.getTargetSceneCandidates(), request.getTargetId())) {
+            throw new BusinessException(400,
+                "TARGET_SCENE_INVALID: targetId 不属于当前 Revision 的候选列表: " + request.getTargetId());
+        }
+
+        String operator = SecurityOperatorContext.currentUsername();
+        LocalDateTime now = LocalDateTime.now();
+        // 先提取上一轮任务的用户补充说明（换挂新任务后旧 input_data 不可达）
+        String hint = extractHintFromTask(analysis.getTaskId());
+        FloorPlanSceneRevision newRevision = sceneRevisionService.createProcessingRevision(
+            analysis, FloorPlanSceneRevision.TRIGGER_TARGET_SCENE_SWITCH,
+            request.getBaseAnalysisRevision(), request.getTargetId(), operator);
+
+        String newTaskId = IdGenerator.taskId();
+        analysis.setWorkingAnalysisRevision(newRevision.getAnalysisRevision());
+        analysis.setStatus(STATUS_ANALYZING);
+        analysis.setTaskId(newTaskId);
+        analysis.setErrorMessage(null);
+        analysis.setUpdatedAt(now);
+        analysisMapper.updateById(analysis);
+
+        ImageAssets imageAsset = imageAssetsMapper.selectById(analysis.getImageId());
+        String objectKey = imageAsset != null ? imageAsset.getStoragePath() : null;
+
+        AsyncTask task = new AsyncTask();
+        task.setTaskId(newTaskId);
+        task.setTaskType(TASK_TYPE);
+        task.setStatus(STATUS_PENDING);
+        task.setProgress(0);
+        Map<String, Object> inputData = new HashMap<>();
+        inputData.put("analysisId", analysisId);
+        inputData.put("imageId", analysis.getImageId());
+        if (StringUtils.hasText(objectKey)) {
+            inputData.put("objectKey", objectKey);
+        }
+        inputData.put("cadObjectKey", analysis.getCadObjectKey());
+        inputData.put("analysisRevision", newRevision.getAnalysisRevision());
+        inputData.put("targetId", request.getTargetId());
+        if (StringUtils.hasText(hint)) {
+            inputData.put("hint", hint);
+        }
+        task.setInputData(toJson(inputData));
+        task.setCreatedBy(operator);
+        task.setCreatedAt(now);
+        asyncTaskMapper.insert(task);
+        auditLogService.logAction("floor_plan_analysis", analysisId, "TARGET_SCENE_SWITCH",
+            Map.of("baseAnalysisRevision", request.getBaseAnalysisRevision()),
+            Map.of("analysisRevision", newRevision.getAnalysisRevision(),
+                "targetId", request.getTargetId()), operator);
+
+        triggerAsyncAnalysis(newTaskId, analysisId, objectKey, hint, analysis.getCadObjectKey(), false);
+        log.info("Target Scene 切换重解析已发起，analysisId={}，revision={}，targetId={}，taskId={}",
+            analysisId, newRevision.getAnalysisRevision(), request.getTargetId(), newTaskId);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("analysisId", analysisId);
+        result.put("analysisRevision", newRevision.getAnalysisRevision());
+        result.put("taskId", newTaskId);
+        result.put("status", FloorPlanSceneRevision.STATUS_PROCESSING);
+        return result;
+    }
+
+    /** targetId 是否属于 Revision 候选列表（candidates JSON 解析失败/无候选恒 false）。 */
+    private boolean candidateContains(String candidatesJson, String targetId) {
+        if (!StringUtils.hasText(candidatesJson) || !StringUtils.hasText(targetId)) {
+            return false;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(candidatesJson);
+            if (!node.isArray()) {
+                return false;
+            }
+            for (JsonNode candidate : node) {
+                JsonNode id = candidate.get("targetId");
+                if (id != null && targetId.equals(id.asText())) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("解析 targetSceneCandidates 失败", e);
+        }
+        return false;
+    }
+
+    /**
+     * 解析成功落库（V20 新写路径，由 {@link AsyncTaskProcessor} 调用）：
+     * 房间/家具带 analysis_revision 落库 → 预览存 image_assets → Revision 快照一次性写入
+     * 并冻结（READY）→ 工作指针指向本 Revision → analysis=awaiting_confirm。
+     * 分析级 raw_result 列不再写入（Invariant 12）。
+     *
+     * @param analysisId   分析批次 ID
+     * @param revisionNo   目标 Revision
+     * @param cadResult    CAD 解析结果
+     * @param previewBytes 规范预览 PNG 字节，可空
+     * @param codeNameMode 历史代号模式标记（兼容保留）
+     */
+    @Transactional
+    public void finalizeCadParseSuccess(String analysisId, Integer revisionNo, CadParseResult cadResult,
+                                        byte[] previewBytes, boolean codeNameMode) {
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis == null) {
+            log.warn("户型图分析记录不存在，analysisId={}", analysisId);
+            return;
+        }
+        Map<String, String> parserRoomIdMap = buildCadRooms(analysisId, revisionNo, cadResult, codeNameMode);
+        buildCadFurniture(analysisId, revisionNo, cadResult, parserRoomIdMap);
+        String previewImageId = storeCadPreviewImage(analysis, previewBytes,
+            cadResult != null ? cadResult.getPreview() : null);
+        sceneRevisionService.completeCadRevision(analysis, revisionNo, cadResult, previewImageId);
+        analysisMapper.updateById(analysis);
+    }
+
+    /**
+     * 视觉通道解析成功落库（V20 新写路径）：房间带 analysis_revision 落库 →
+     * Revision 1 快照 READY（parser_version='vision'）→ analysis=awaiting_confirm。
+     *
+     * @param analysisId 分析批次 ID
+     * @param revisionNo 目标 Revision
+     * @param detected   视觉识别结果
+     */
+    @Transactional
+    public void finalizeVisionParseSuccess(String analysisId, Integer revisionNo,
+                                           FloorPlanDetectResult detected) {
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis == null) {
+            log.warn("户型图分析记录不存在，analysisId={}", analysisId);
+            return;
+        }
+        buildRooms(analysisId, revisionNo, detected);
+        sceneRevisionService.completeVisionRevision(analysis, revisionNo, detected);
+        analysisMapper.updateById(analysis);
+    }
+
+    /**
+     * 解析失败落库（V20 新写路径）：Revision → FAILED（保存诊断，不产生对象）。
+     *
+     * <p>裁决 #11（FAILED Revision 不占工作指针）：若 working 指针正指向失败 Revision
+     * （target-scene 重解析场景），则回退——父 Revision 仍处于可编辑状态
+     * （READY/EDITING/READY_TO_ACTIVATE）则回退到父 Revision，否则置 null；
+     * 同时分析状态回退（有 active → confirmed，否则 awaiting_confirm），
+     * 保证旧工作版可继续编辑。首解析/重试失败（working 未指向失败 Revision）维持
+     * analysis=failed（retry 语义不变）。</p>
+     *
+     * @param analysisId   分析批次 ID
+     * @param revisionNo   目标 Revision
+     * @param errorMessage 失败原因
+     */
+    @Transactional
+    public void finalizeParseFailure(String analysisId, Integer revisionNo, String errorMessage) {
+        sceneRevisionService.markRevisionFailed(analysisId, revisionNo);
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis == null) {
+            return;
+        }
+        if (FloorPlanSceneRevisionService.revisionEquals(analysis.getWorkingAnalysisRevision(), revisionNo)) {
+            analysis.setWorkingAnalysisRevision(resolveWorkingFallback(analysisId, revisionNo));
+            analysis.setStatus(analysis.getActiveAnalysisRevision() != null
+                ? STATUS_CONFIRMED : STATUS_AWAITING_CONFIRM);
+            analysis.setErrorMessage(sanitizeErrorMessage(errorMessage));
+        } else {
+            analysis.setStatus(STATUS_FAILED);
+            analysis.setErrorMessage(sanitizeErrorMessage(errorMessage));
+        }
+        analysis.setUpdatedAt(LocalDateTime.now());
+        updateAnalysis(analysis);
+    }
+
+    /**
+     * 失败原因收敛为可读中文摘要（BUG-5）：SQL/驱动异常细节（表名/约束名/SQL 文本/参数）
+     * 不透传给前端，完整堆栈只保留在服务端日志；业务异常（中文可读）原样透传（截 200 字）。
+     *
+     * @param errorMessage 原始异常消息
+     * @return 可透传摘要
+     */
+    private String sanitizeErrorMessage(String errorMessage) {
+        if (!StringUtils.hasText(errorMessage)) {
+            return "户型图解析失败";
+        }
+        if (errorMessage.contains("PSQLException") || errorMessage.contains("SQLException")
+            || errorMessage.contains("SQL [") || errorMessage.contains("constraint")
+            || errorMessage.contains("duplicate key") || errorMessage.contains("SQLState")) {
+            return "户型图解析结果落库失败，请稍后重试（详细原因已记录服务端日志）";
+        }
+        String message = errorMessage.replaceAll("\\s+", " ").trim();
+        return message.length() > 200 ? message.substring(0, 200) : message;
+    }
+
+    /**
+     * 工作指针回退目标（裁决 #11）：失败 Revision 的父 Revision 仍可编辑
+     * （READY/EDITING/READY_TO_ACTIVATE）则回退到父 Revision，否则 null
+     * （FAILED/无父版/父版 ACTIVE/SUPERSEDED 均不占工作指针）。
+     *
+     * @param analysisId 分析批次 ID
+     * @param revisionNo 失败 Revision 序号
+     * @return 回退 Revision 序号或 null
+     */
+    private Integer resolveWorkingFallback(String analysisId, Integer revisionNo) {
+        FloorPlanSceneRevision failed = sceneRevisionService.getRevision(analysisId, revisionNo);
+        Integer parentNo = failed != null ? failed.getParentAnalysisRevision() : null;
+        if (parentNo == null) {
+            return null;
+        }
+        FloorPlanSceneRevision parent = sceneRevisionService.getRevision(analysisId, parentNo);
+        return parent != null
+            && FloorPlanSceneRevisionService.EDITABLE_STATUSES.contains(parent.getRevisionStatus())
+            ? parentNo : null;
+    }
+
+    /**
+     * Revision 详情装配（编辑/激活/legacy 包装共用）：按目标 Revision 实时组装
+     * （Invariant 1：一次响应只来自一个 analysisRevision）。
+     *
+     * @param analysis 分析记录
+     * @param revision 目标 Revision
+     * @return 分析详情
+     */
+    private FloorPlanAnalysisResponse assembleRevisionResponse(FloorPlanAnalysis analysis,
+                                                               FloorPlanSceneRevision revision) {
+        List<FloorPlanRoom> rooms = sceneRevisionService.listRooms(
+            analysis.getAnalysisId(), revision.getAnalysisRevision());
+        List<FloorPlanFurniture> furniture = sceneRevisionService.listFurniture(
+            analysis.getAnalysisId(), revision.getAnalysisRevision());
+        return toResponse(analysis, revision, rooms, furniture);
+    }
+    /**
+     * 接口 5：软删分析批次（@TableLogic 模式），级联软删其下空间明细与家具对象
+     * （V20：全部 Revision 的对象一并级联；Scene Revision 头表无 deleted_at，保留留档）。
      *
      * @param analysisId 分析批次 ID
      */
@@ -866,6 +1939,7 @@ public class FloorPlanService {
         assertCanAccess(analysis);
 
         roomMapper.delete(new QueryWrapper<FloorPlanRoom>().eq("analysis_id", analysisId));
+        furnitureMapper.delete(new QueryWrapper<FloorPlanFurniture>().eq("analysis_id", analysisId));
         analysisMapper.deleteById(analysisId);
         auditLogService.logDelete("floor_plan_analysis", analysisId, analysis,
             SecurityOperatorContext.currentUsername());
@@ -940,15 +2014,19 @@ public class FloorPlanService {
         boolean codeNameMode = Boolean.parseBoolean(extractTaskInputField(analysis.getTaskId(), "codeNameMode"));
 
         LocalDateTime now = LocalDateTime.now();
-        // 软删上一轮残留的空间明细（识别中途失败的场景），避免重试后重复
-        roomMapper.delete(new QueryWrapper<FloorPlanRoom>().eq("analysis_id", analysisId));
+        String operator = SecurityOperatorContext.currentUsername();
+        // V20：重试产生新 Revision（latest+1，REPARSE）；旧 Revision（含残留明细）不删不改（Invariant 11）
+        FloorPlanSceneRevision reparseRevision = sceneRevisionService.createProcessingRevision(
+            analysis, FloorPlanSceneRevision.TRIGGER_REPARSE,
+            analysis.getLatestAnalysisRevision(), null, operator);
 
         String newTaskId = IdGenerator.taskId();
         analysis.setStatus(STATUS_PENDING);
         analysis.setErrorMessage(null);
         analysis.setTaskId(newTaskId);
+        analysis.setWorkingAnalysisRevision(null);
         analysis.setUpdatedAt(now);
-        analysisMapper.updateById(analysis);
+        updateAnalysis(analysis);
         auditLogService.logUpdate("floor_plan_analysis", analysisId, null, analysis,
             SecurityOperatorContext.currentUsername());
 
@@ -961,6 +2039,7 @@ public class FloorPlanService {
         inputData.put("analysisId", analysisId);
         inputData.put("imageId", analysis.getImageId());
         inputData.put("objectKey", objectKey);
+        inputData.put("analysisRevision", reparseRevision.getAnalysisRevision());
         if (StringUtils.hasText(cadObjectKey)) {
             inputData.put("cadObjectKey", cadObjectKey);
             inputData.put("codeNameMode", codeNameMode);
@@ -1029,18 +2108,35 @@ public class FloorPlanService {
         analysis.setImageId(imageId);
         analysis.setStatus(STATUS_AWAITING_CONFIRM);
         analysis.setSource(SOURCE_PUBLIC);
-        analysis.setRawResult(toJson(detected));
         analysis.setCreatedBy(null);
         analysis.setCreatedAt(now);
         analysis.setUpdatedAt(now);
         analysisMapper.insert(analysis);
         auditLogService.logCreate("floor_plan_analysis", analysisId, analysis, PUBLIC_OPERATOR);
+        // V20：视觉同步链路同样建 Revision 1（parser_version='vision'，parse_status=NULL，
+        // 快照直接 READY；分析级 raw_result 列不再写入，Invariant 12）
+        FloorPlanSceneRevision revision = new FloorPlanSceneRevision();
+        revision.setAnalysisId(analysisId);
+        revision.setAnalysisRevision(1);
+        revision.setRevisionTrigger(FloorPlanSceneRevision.TRIGGER_INITIAL_PARSE);
+        revision.setRevisionStatus(FloorPlanSceneRevision.STATUS_READY);
+        revision.setRoomRevision(1);
+        revision.setFurnitureRevision(1);
+        revision.setParserVersion("vision");
+        revision.setRawResult(toJson(detected));
+        revision.setCreatedAt(now);
+        revision.setReadyAt(now);
+        sceneRevisionMapper.insert(revision);
+        analysis.setWorkingAnalysisRevision(1);
+        analysis.setLatestAnalysisRevision(1);
+        analysisMapper.updateById(analysis);
 
         int sortOrder = 0;
         for (FloorPlanDetectResult.Room detectedRoom : detected.getRooms()) {
             FloorPlanRoom room = new FloorPlanRoom();
             room.setRoomId(IdGenerator.floorPlanRoomId());
             room.setAnalysisId(analysisId);
+            room.setAnalysisRevision(1);
             room.setRoomType(normalizeRoomType(detectedRoom.getRoomType()));
             room.setLabel(detectedRoom.getLabel());
             room.setDimensionText(detectedRoom.getDimensionText());
@@ -1088,6 +2184,18 @@ public class FloorPlanService {
      * @param detected   AI 空间识别结果
      */
     public void buildRooms(String analysisId, FloorPlanDetectResult detected) {
+        buildRooms(analysisId, 1, detected);
+    }
+
+    /**
+     * 尺寸三级提取并落空间明细（V20 Revision 化重载）：明细带 analysis_revision 落库，
+     * confirmation_status=AUTO（待人工确认）。
+     *
+     * @param analysisId       分析批次 ID
+     * @param analysisRevision 目标 Scene Revision
+     * @param detected         AI 空间识别结果
+     */
+    public void buildRooms(String analysisId, Integer analysisRevision, FloorPlanDetectResult detected) {
         LocalDateTime now = LocalDateTime.now();
         // 第②级换算上下文按批次解析一次（scaleText 为全图级标注）：解析不出可靠关系为 null
         ScaleContext scaleContext = resolveScaleConversion(analysisId, detected.getScaleText());
@@ -1096,6 +2204,7 @@ public class FloorPlanService {
             FloorPlanRoom room = new FloorPlanRoom();
             room.setRoomId(IdGenerator.floorPlanRoomId());
             room.setAnalysisId(analysisId);
+            room.setAnalysisRevision(analysisRevision);
             room.setRoomType(normalizeRoomType(detectedRoom.getRoomType()));
             room.setLabel(detectedRoom.getLabel());
             room.setDimensionText(detectedRoom.getDimensionText());
@@ -1171,15 +2280,32 @@ public class FloorPlanService {
      * @param codeNameMode 历史代号模式标记（兼容保留，当前不改变落库语义）
      */
     public void buildCadRooms(String analysisId, CadParseResult cadResult, boolean codeNameMode) {
+        buildCadRooms(analysisId, 1, cadResult, codeNameMode);
+    }
+
+    /**
+     * CAD 解析结果落空间明细（V20 Revision 化）：明细带 analysis_revision 落库，
+     * confirmation_status=AUTO；返回 Parser 侧 roomId → 落库 room_id 映射
+     * （供家具归属解析；Parser 未输出 roomId 的房间不在映射中）。
+     *
+     * @param analysisId       分析批次 ID
+     * @param analysisRevision 目标 Scene Revision
+     * @param cadResult        CAD 解析服务输出
+     * @param codeNameMode     历史代号模式标记（兼容保留）
+     * @return Parser roomId → DB roomId 映射
+     */
+    public Map<String, String> buildCadRooms(String analysisId, Integer analysisRevision,
+                                             CadParseResult cadResult, boolean codeNameMode) {
         LocalDateTime now = LocalDateTime.now();
         CadParseResult.Bounds drawingBounds = cadResult.getDrawingBounds();
         int sortOrder = 0;
+        Map<String, String> parserRoomIdMap = new HashMap<>();
 
         List<CadParseResult.Room> cadRooms = cadResult.getRooms() != null
             ? cadResult.getRooms() : List.of();
         for (CadParseResult.Room cadRoom : cadRooms) {
-            FloorPlanRoom room = newCadRoom(analysisId, cadRoom.getPolygon(), drawingBounds,
-                cadRoom.getLabelPoint(), now);
+            FloorPlanRoom room = newCadRoom(analysisId, analysisRevision, cadRoom.getPolygon(),
+                drawingBounds, cadRoom.getLabelPoint(), now);
             room.setLabel(cadRoom.getLabel());
             room.setRoomType(normalizeCadRoomType(cadRoom.getRoomType()));
             room.setWidthMm(roundMm(cadRoom.getWidthMm()));
@@ -1193,14 +2319,17 @@ public class FloorPlanService {
             }
             room.setSortOrder(sortOrder++);
             roomMapper.insert(room);
+            if (StringUtils.hasText(cadRoom.getRoomId())) {
+                parserRoomIdMap.put(cadRoom.getRoomId(), room.getRoomId());
+            }
         }
 
         List<CadParseResult.UnnamedRegion> unnamedRegions = cadResult.getUnnamedRegions() != null
             ? cadResult.getUnnamedRegions() : List.of();
         int unnamedIndex = 0;
         for (CadParseResult.UnnamedRegion region : unnamedRegions) {
-            FloorPlanRoom room = newCadRoom(analysisId, region.getPolygon(), drawingBounds,
-                region.getLabelPoint(), now);
+            FloorPlanRoom room = newCadRoom(analysisId, analysisRevision, region.getPolygon(),
+                drawingBounds, region.getLabelPoint(), now);
             room.setLabel("未命名空间 " + (++unnamedIndex));
             room.setRoomType("OTHER");
             room.setWidthMm(roundMm(region.getWidthMm()));
@@ -1209,9 +2338,84 @@ public class FloorPlanService {
             room.setDimensionConfidence(CONFIDENCE_LOW);
             room.setSortOrder(sortOrder++);
             roomMapper.insert(room);
+            // P1：Parser 为未命名空间也分配稳定 roomId，纳入家具归属映射
+            if (StringUtils.hasText(region.getRoomId())) {
+                parserRoomIdMap.put(region.getRoomId(), room.getRoomId());
+            }
         }
-        log.info("CAD 户型空间明细已落库，analysisId={}，房间数={}，未命名空间数={}",
-            analysisId, cadRooms.size(), unnamedRegions.size());
+        log.info("CAD 户型空间明细已落库，analysisId={}，revision={}，房间数={}，未命名空间数={}",
+            analysisId, analysisRevision, cadRooms.size(), unnamedRegions.size());
+        return parserRoomIdMap;
+    }
+
+    /**
+     * CAD 家具候选落库（V20，P0-B）：每件 Parser 家具候选落一行 floor_plan_furniture
+     * （analysis_revision 双条件），confirmation_status=AUTO（待人工逐件确认）。
+     * 家具归属房间按 Parser roomId → DB room_id 映射解析，无法解析（跨房间/开放空间/
+     * 目标区域外）置 null 并提示人工确认（§18.8）。UNKNOWN 类别不丢失。
+     *
+     * @param analysisId       分析批次 ID
+     * @param analysisRevision 目标 Scene Revision
+     * @param cadResult        CAD 解析服务输出
+     * @param parserRoomIdMap  Parser roomId → DB roomId 映射
+     */
+    public void buildCadFurniture(String analysisId, Integer analysisRevision, CadParseResult cadResult,
+                                  Map<String, String> parserRoomIdMap) {
+        List<CadParseResult.Furniture> items = cadResult != null && cadResult.getFurniture() != null
+            ? cadResult.getFurniture() : List.of();
+        if (items.isEmpty()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int sortOrder = 0;
+        for (CadParseResult.Furniture item : items) {
+            FloorPlanFurniture furniture = new FloorPlanFurniture();
+            furniture.setFurnitureId(IdGenerator.floorPlanFurnitureId());
+            furniture.setAnalysisId(analysisId);
+            furniture.setAnalysisRevision(analysisRevision);
+            furniture.setSourceKind(StringUtils.hasText(item.getSourceKind())
+                ? item.getSourceKind() : FloorPlanFurniture.SOURCE_KIND_INSERT);
+            furniture.setCategory(StringUtils.hasText(item.getCategory()) ? item.getCategory() : "UNKNOWN");
+            furniture.setSemanticLabel(item.getSemanticLabel());
+            furniture.setRoomId(StringUtils.hasText(item.getRoomId()) && parserRoomIdMap != null
+                ? parserRoomIdMap.get(item.getRoomId()) : null);
+            furniture.setBlockName(item.getBlockName());
+            furniture.setSourceHandles(toJson(item.getSourceHandles()));
+            furniture.setInsertPath(toJson(item.getInsertPath()));
+            furniture.setPosition(item.getPosition() != null
+                ? toJson(Map.of("x", item.getPosition().getX(), "y", item.getPosition().getY())) : null);
+            furniture.setRotationDeg(item.getRotationDeg() != null
+                ? BigDecimal.valueOf(item.getRotationDeg()) : null);
+            furniture.setFootprintPolygon(toJson(item.getFootprintPolygon()));
+            furniture.setGeometryWidthMm(roundMm(item.getGeometryWidthMm()));
+            furniture.setGeometryDepthMm(roundMm(item.getGeometryDepthMm()));
+            furniture.setAnnotatedWidthMm(roundMm(item.getAnnotatedWidthMm()));
+            furniture.setAnnotatedDepthMm(roundMm(item.getAnnotatedDepthMm()));
+            furniture.setEffectiveWidthMm(roundMm(item.getEffectiveWidthMm()));
+            furniture.setEffectiveDepthMm(roundMm(item.getEffectiveDepthMm()));
+            furniture.setHeightMm(roundMm(item.getHeightMm()));
+            furniture.setDimensionSource(item.getDimensionSource());
+            furniture.setSemanticSource(item.getSemanticSource());
+            furniture.setEvidence(toJson(item.getEvidence()));
+            furniture.setQualityFlags(toJson(item.getQualityFlags()));
+            furniture.setDetectionConfidence(item.getDetectionConfidence());
+            furniture.setCategoryConfidence(item.getCategoryConfidence());
+            furniture.setConfirmationStatus(FloorPlanFurniture.CONFIRM_AUTO);
+            // P1：候选清洗/去重分组/视觉语义分组原样落库（REJECTED/DUPLICATE 仅标记不删除）
+            furniture.setCandidateStatus(StringUtils.hasText(item.getCandidateStatus())
+                ? item.getCandidateStatus() : "VALID");
+            furniture.setGeometryFingerprint(item.getGeometryFingerprint());
+            furniture.setDuplicateGroupId(item.getDuplicateGroupId());
+            furniture.setDuplicateStatus(item.getDuplicateStatus());
+            furniture.setDuplicateCount(item.getDuplicateCount());
+            furniture.setVisionGroupId(item.getVisionGroupId());
+            furniture.setSortOrder(sortOrder++);
+            furniture.setCreatedAt(now);
+            furniture.setUpdatedAt(now);
+            furnitureMapper.insert(furniture);
+        }
+        log.info("CAD 家具候选已落库，analysisId={}，revision={}，家具数={}",
+            analysisId, analysisRevision, items.size());
     }
 
     /**
@@ -1233,7 +2437,29 @@ public class FloorPlanService {
         if (analysis == null) {
             throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
         }
+        String imageId = storeCadPreviewImage(analysis, previewBytes, preview);
+        if (imageId != null) {
+            analysis.setPreviewImageId(imageId);
+            analysis.setUpdatedAt(LocalDateTime.now());
+            analysisMapper.updateById(analysis);
+        }
+    }
 
+    /**
+     * 存储 CAD 规范预览到 image_assets 并返回图片 ID（V20：预览二进制只落 image_assets，
+     * Revision 仅保存 preview_image_id 引用；本方法不更新任何分析/Revision 列）。
+     *
+     * @param analysis     分析记录（取 createdBy 归属）
+     * @param previewBytes PNG 字节；为空返回 null
+     * @param preview      预览元数据
+     * @return 图片 ID；无预览返回 null
+     */
+    private String storeCadPreviewImage(FloorPlanAnalysis analysis, byte[] previewBytes,
+                                        CadParseResult.Preview preview) {
+        if (previewBytes == null || previewBytes.length == 0 || preview == null) {
+            log.warn("CAD 规范预览为空，跳过存储，analysisId={}", analysis.getAnalysisId());
+            return null;
+        }
         String imageId = IdGenerator.imageId();
         String objectKey = "images/cad-preview/" + imageId + ".png";
         String storagePath;
@@ -1241,7 +2467,7 @@ public class FloorPlanService {
             storagePath = storageService.store(new ByteArrayInputStream(previewBytes), objectKey,
                 previewBytes.length, "image/png");
         } catch (IOException e) {
-            log.error("CAD 规范预览存储失败，analysisId={}", analysisId, e);
+            log.error("CAD 规范预览存储失败，analysisId={}", analysis.getAnalysisId(), e);
             throw new BusinessException("CAD 规范预览存储失败");
         }
         registerStorageRollbackCleanup(storagePath);
@@ -1260,23 +2486,22 @@ public class FloorPlanService {
         asset.setUploadedBy(analysis.getCreatedBy());
         asset.setCreatedAt(now);
         imageAssetsMapper.insert(asset);
-
-        analysis.setPreviewImageId(imageId);
-        analysis.setUpdatedAt(now);
-        analysisMapper.updateById(analysis);
         auditLogService.logCreate("image_assets", imageId, asset,
             StringUtils.hasText(analysis.getCreatedBy()) ? analysis.getCreatedBy() : PUBLIC_OPERATOR);
         log.info("CAD 规范预览已存储，analysisId={}，imageId={}，size={} bytes",
-            analysisId, imageId, previewBytes.length);
+            analysis.getAnalysisId(), imageId, previewBytes.length);
+        return imageId;
     }
 
     /** 构造 CAD 通道空间明细公共字段（polygon/centroid/bbox/dimensionSource/geometrySource/时间戳）。 */
-    private FloorPlanRoom newCadRoom(String analysisId, List<List<Double>> polygon,
+    private FloorPlanRoom newCadRoom(String analysisId, Integer analysisRevision, List<List<Double>> polygon,
                                      CadParseResult.Bounds drawingBounds,
                                      CadParseResult.Point labelPoint, LocalDateTime now) {
         FloorPlanRoom room = new FloorPlanRoom();
         room.setRoomId(IdGenerator.floorPlanRoomId());
         room.setAnalysisId(analysisId);
+        room.setAnalysisRevision(analysisRevision);
+        room.setConfirmationStatus("AUTO");
         room.setPolygon(toJson(polygon));
         room.setCentroid(toJson(labelPoint != null && labelPoint.getX() != null && labelPoint.getY() != null
             ? Map.of("x", labelPoint.getX(), "y", labelPoint.getY())
@@ -1459,22 +2684,36 @@ public class FloorPlanService {
     /**
      * 按 analysisId 批量聚合未软删空间数与几何来源（列表页避免 N+1，一次查询同时产出两项）。
      *
-     * <p>几何来源（V14 列表契约）：批次下任一空间为 cad_geometry 则 cad_geometry，
-     * 否则有空间即 ai_vision；批次无空间则不写入 geometrySourceMap（列表项为 null）。</p>
+     * <p>V20 Revision 化：只统计各分析展示 Revision（working ?? active ?? latest ?? 1）的房间，
+     * 与详情默认装配口径一致；房间 analysis_revision 为 null 按 1 处理（历史数据）。</p>
      *
-     * @param analysisIds       页内分析批次 ID 列表
+     * <p>几何来源（V14 列表契约）：展示 Revision 下任一空间为 cad_geometry 则 cad_geometry，
+     * 否则有空间即 ai_vision；无空间则不写入 geometrySourceMap（列表项为 null）。</p>
+     *
+     * @param records           页内分析批次记录
      * @param roomCountMap      输出：analysisId → 空间数
      * @param geometrySourceMap 输出：analysisId → 几何来源
      */
-    private void batchRoomStats(List<String> analysisIds, Map<String, Long> roomCountMap,
+    private void batchRoomStats(List<FloorPlanAnalysis> records, Map<String, Long> roomCountMap,
                                 Map<String, String> geometrySourceMap) {
-        if (analysisIds.isEmpty()) {
+        if (records.isEmpty()) {
             return;
         }
+        Map<String, Integer> displayRevisionMap = new HashMap<>();
+        for (FloorPlanAnalysis analysis : records) {
+            displayRevisionMap.put(analysis.getAnalysisId(),
+                analysis.getWorkingAnalysisRevision() != null ? analysis.getWorkingAnalysisRevision()
+                    : analysis.getActiveAnalysisRevision() != null ? analysis.getActiveAnalysisRevision()
+                    : analysis.getLatestAnalysisRevision() != null ? analysis.getLatestAnalysisRevision() : 1);
+        }
         List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
-            .select("analysis_id", "geometry_source")
-            .in("analysis_id", analysisIds));
+            .select("analysis_id", "analysis_revision", "geometry_source")
+            .in("analysis_id", displayRevisionMap.keySet()));
         for (FloorPlanRoom room : rooms) {
+            Integer roomRevision = room.getAnalysisRevision() != null ? room.getAnalysisRevision() : 1;
+            if (!roomRevision.equals(displayRevisionMap.get(room.getAnalysisId()))) {
+                continue;
+            }
             roomCountMap.merge(room.getAnalysisId(), 1L, Long::sum);
             if (GEOMETRY_SOURCE_CAD.equals(room.getGeometrySource())) {
                 geometrySourceMap.put(room.getAnalysisId(), GEOMETRY_SOURCE_CAD);
@@ -1655,6 +2894,180 @@ public class FloorPlanService {
         });
     }
 
+    /**
+     * Revision 化详情装配（V20）：旧字段回归 + Revision 元数据/快照字段/家具/激活就绪度。
+     * 预览图取本 Revision 的 preview_image_id；质量提示与 bounds 优先 Revision 列，
+     * 回退 Revision 快照，再回退分析级旧列（历史数据兼容）。
+     *
+     * @param analysis  分析记录
+     * @param revision  展示 Revision
+     * @param rooms     该 Revision 未软删房间
+     * @param furniture 该 Revision 未软删家具
+     * @return 分析详情
+     */
+    private FloorPlanAnalysisResponse toResponse(FloorPlanAnalysis analysis, FloorPlanSceneRevision revision,
+                                                 List<FloorPlanRoom> rooms,
+                                                 List<FloorPlanFurniture> furniture) {
+        FloorPlanAnalysisResponse response = toResponse(analysis, rooms);
+        String revisionRaw = StringUtils.hasText(revision.getRawResult())
+            ? revision.getRawResult() : analysis.getRawResult();
+
+        String previewImageId = StringUtils.hasText(revision.getPreviewImageId())
+            ? revision.getPreviewImageId() : analysis.getPreviewImageId();
+        response.setPreviewImageId(previewImageId);
+        response.setPreviewUrl(previewImageId != null ? "/api/v1/images/" + previewImageId : null);
+        response.setQualityIssues(parseQualityIssuesColumn(revision.getQualityIssues(), revisionRaw));
+        response.setDrawingBounds(parseBoundsColumn(revision.getDrawingBounds(),
+            parseDrawingBounds(revisionRaw)));
+        response.setPreviewBounds(parseBoundsColumn(revision.getPreviewBounds(),
+            parsePreviewBounds(revisionRaw)));
+
+        response.setAnalysisRevision(revision.getAnalysisRevision());
+        response.setRevisionStatus(revision.getRevisionStatus());
+        response.setActiveAnalysisRevision(analysis.getActiveAnalysisRevision());
+        response.setWorkingAnalysisRevision(analysis.getWorkingAnalysisRevision());
+        response.setLatestAnalysisRevision(analysis.getLatestAnalysisRevision());
+        response.setRoomRevision(revision.getRoomRevision());
+        response.setFurnitureRevision(revision.getFurnitureRevision());
+        response.setParseStatus(revision.getParseStatus());
+        response.setCapabilities(parseJsonField(revisionRaw, "capabilities"));
+        Object unitResolution = parseJsonObject(revision.getUnitResolution());
+        response.setUnitResolution(unitResolution != null ? unitResolution
+            : parseJsonField(revisionRaw, "unitResolution"));
+        response.setTargetScene(parseJsonField(revisionRaw, "targetScene"));
+        Object candidates = parseJsonObject(revision.getTargetSceneCandidates());
+        response.setTargetSceneCandidates(candidates != null ? candidates
+            : parseJsonField(revisionRaw, "targetSceneCandidates"));
+        response.setFurniture(furniture.stream().map(this::toFurnitureResponse).toList());
+        response.setActivationReadiness(sceneRevisionService.evaluateReadiness(revision));
+        return response;
+    }
+
+    /** 质量提示：优先 Revision quality_issues 列（JSON 数组），回退快照 raw_result.qualityIssues。 */
+    private List<FloorPlanQualityIssue> parseQualityIssuesColumn(String qualityIssuesJson, String rawResult) {
+        if (StringUtils.hasText(qualityIssuesJson)) {
+            try {
+                JsonNode issuesNode = objectMapper.readTree(qualityIssuesJson);
+                if (issuesNode.isArray()) {
+                    List<FloorPlanQualityIssue> issues = new ArrayList<>();
+                    for (JsonNode node : issuesNode) {
+                        issues.add(new FloorPlanQualityIssue(
+                            textOrNull(node.get("level")), textOrNull(node.get("code")),
+                            textOrNull(node.get("message"))));
+                    }
+                    return issues;
+                }
+            } catch (Exception e) {
+                log.warn("解析 Revision 质量提示列失败，回退快照", e);
+            }
+        }
+        return parseQualityIssues(rawResult);
+    }
+
+    /** bounds 列 JSON → FloorPlanDrawingBounds；缺失/解析失败返回 fallback。 */
+    private FloorPlanDrawingBounds parseBoundsColumn(String boundsJson, FloorPlanDrawingBounds fallback) {
+        if (!StringUtils.hasText(boundsJson)) {
+            return fallback;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(boundsJson);
+            if (!node.isObject()) {
+                return fallback;
+            }
+            FloorPlanDrawingBounds bounds = new FloorPlanDrawingBounds();
+            bounds.setMinX(doubleOrNull(node.get("minX")));
+            bounds.setMinY(doubleOrNull(node.get("minY")));
+            bounds.setMaxX(doubleOrNull(node.get("maxX")));
+            bounds.setMaxY(doubleOrNull(node.get("maxY")));
+            return bounds;
+        } catch (Exception e) {
+            log.warn("解析 Revision bounds 列失败，回退快照", e);
+            return fallback;
+        }
+    }
+
+    /** 提取快照 JSON 字段为通用对象（capabilities/unitResolution/targetScene/candidates）。 */
+    private Object parseJsonField(String rawJson, String field) {
+        if (!StringUtils.hasText(rawJson)) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(rawJson).get(field);
+            return node != null && !node.isNull() ? objectMapper.convertValue(node, Object.class) : null;
+        } catch (Exception e) {
+            log.warn("解析快照字段失败，field={}", field, e);
+            return null;
+        }
+    }
+
+    /** 解析 JSON 列为通用对象；缺失/失败返回 null。 */
+    private Object parseJsonObject(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, Object.class);
+        } catch (Exception e) {
+            log.warn("解析 JSON 列失败", e);
+            return null;
+        }
+    }
+
+    /** 家具实体 → 响应（JSONB 列反序列化为契约结构）。 */
+    private FloorPlanFurnitureResponse toFurnitureResponse(FloorPlanFurniture furniture) {
+        FloorPlanFurnitureResponse response = new FloorPlanFurnitureResponse();
+        response.setFurnitureId(furniture.getFurnitureId());
+        response.setSourceKind(furniture.getSourceKind());
+        response.setCategory(furniture.getCategory());
+        response.setSemanticLabel(furniture.getSemanticLabel());
+        response.setRoomId(furniture.getRoomId());
+        response.setBlockName(furniture.getBlockName());
+        response.setSourceHandles(parseStringList(furniture.getSourceHandles()));
+        response.setInsertPath(parseStringList(furniture.getInsertPath()));
+        response.setPosition(parsePoint(furniture.getPosition()));
+        response.setRotationDeg(furniture.getRotationDeg());
+        response.setFootprintPolygon(parsePolygon(furniture.getFootprintPolygon()));
+        response.setGeometryWidthMm(furniture.getGeometryWidthMm());
+        response.setGeometryDepthMm(furniture.getGeometryDepthMm());
+        response.setAnnotatedWidthMm(furniture.getAnnotatedWidthMm());
+        response.setAnnotatedDepthMm(furniture.getAnnotatedDepthMm());
+        response.setEffectiveWidthMm(furniture.getEffectiveWidthMm());
+        response.setEffectiveDepthMm(furniture.getEffectiveDepthMm());
+        response.setHeightMm(furniture.getHeightMm());
+        response.setDimensionSource(furniture.getDimensionSource());
+        response.setSemanticSource(furniture.getSemanticSource());
+        response.setEvidence(parseStringList(furniture.getEvidence()));
+        response.setQualityFlags(parseStringList(furniture.getQualityFlags()));
+        response.setDetectionConfidence(furniture.getDetectionConfidence());
+        response.setCategoryConfidence(furniture.getCategoryConfidence());
+        response.setConfirmationStatus(furniture.getConfirmationStatus());
+        response.setCandidateStatus(furniture.getCandidateStatus());
+        response.setDuplicateGroupId(furniture.getDuplicateGroupId());
+        response.setDuplicateStatus(furniture.getDuplicateStatus());
+        response.setDuplicateCount(furniture.getDuplicateCount());
+        response.setVisionGroupId(furniture.getVisionGroupId());
+        response.setVisionConfidence(furniture.getVisionConfidence());
+        response.setMatchedFromObjectId(furniture.getMatchedFromObjectId());
+        response.setDerivedFromIds(parseStringList(furniture.getDerivedFromIds()));
+        response.setSortOrder(furniture.getSortOrder());
+        return response;
+    }
+
+    /** 解析字符串数组 JSON 列；缺失/失败返回 null（可空字段）。 */
+    private List<String> parseStringList(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+        } catch (Exception e) {
+            log.warn("解析字符串数组 JSON 失败", e);
+            return null;
+        }
+    }
+
+    /** 旧装配（分析级字段 + 房间列表）；Revision 化装配在此基础上叠加 Revision 字段。 */
     private FloorPlanAnalysisResponse toResponse(FloorPlanAnalysis analysis, List<FloorPlanRoom> rooms) {
         FloorPlanAnalysisResponse response = new FloorPlanAnalysisResponse();
         response.setAnalysisId(analysis.getAnalysisId());
@@ -1813,6 +3226,7 @@ public class FloorPlanService {
         response.setDimensionConfidence(room.getDimensionConfidence());
         response.setDimensionText(room.getDimensionText());
         response.setSortOrder(room.getSortOrder());
+        response.setConfirmationStatus(room.getConfirmationStatus());
         return response;
     }
 

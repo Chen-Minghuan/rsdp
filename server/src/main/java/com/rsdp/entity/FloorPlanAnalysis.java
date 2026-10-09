@@ -56,6 +56,18 @@ public class FloorPlanAnalysis {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    /** 当前业务正式使用的 Scene Revision（V20，仅 Scene Activation 切换）。 */
+    private Integer activeAnalysisRevision;
+
+    /** 当前正在编辑/确认的工作 Revision（V20，可空）。 */
+    private Integer workingAnalysisRevision;
+
+    /** 已创建的最大 Revision 序号（V20）。 */
+    private Integer latestAnalysisRevision;
+
+    /** CAD 原文件存储对象键（V20，target-scene 切换重解析读取用；视觉通道为空）。 */
+    private String cadObjectKey;
+
     @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;
 }

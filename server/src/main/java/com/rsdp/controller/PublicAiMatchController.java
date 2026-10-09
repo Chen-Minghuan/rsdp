@@ -7,6 +7,7 @@ import com.rsdp.dto.response.PublicAiMatchSchemeResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.dto.response.PublicCadAnalyzeResponse;
 import com.rsdp.service.PublicAiMatchService;
+import com.rsdp.service.FloorPlanFurnitureSemanticService;
 import com.rsdp.service.PublicFloorPlanCadService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -76,6 +77,20 @@ public class PublicAiMatchController {
         @PathVariable String analysisId,
         @RequestParam String accessToken) {
         return Result.ok(publicFloorPlanCadService.getAnalysis(analysisId, accessToken));
+    }
+
+    /**
+     * 按需触发家具视觉语义回填（官网游客"AI 识别家具名称"按钮，幂等）。
+     *
+     * @param analysisId  分析批次 ID
+     * @param accessToken 短期访问凭证
+     * @return 处理摘要
+     */
+    @PostMapping("/cad/{analysisId}/furniture/enrich")
+    public Result<FloorPlanFurnitureSemanticService.EnrichSummary> enrichFurniture(
+        @PathVariable String analysisId,
+        @RequestParam String accessToken) {
+        return Result.ok(publicFloorPlanCadService.enrichFurniture(analysisId, accessToken));
     }
 
     /**

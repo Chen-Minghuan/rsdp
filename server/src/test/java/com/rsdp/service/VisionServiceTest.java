@@ -83,6 +83,42 @@ class VisionServiceTest {
         when(dictService.listByType(dictType)).thenReturn(dicts);
     }
 
+    @Test
+    void classifyFurnitureObject_shouldParseVerdict() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"category\":\"SOFA\",\"semanticLabel\":\"三人沙发\",\"confidence\":0.91}"))));
+
+        VisionService.FurnitureVisionVerdict verdict =
+            visionService.classifyFurnitureObject("iso".getBytes(), "ctx".getBytes());
+
+        assertThat(verdict).isNotNull();
+        assertThat(verdict.category()).isEqualTo("SOFA");
+        assertThat(verdict.semanticLabel()).isEqualTo("三人沙发");
+        assertThat(verdict.confidence()).isEqualTo(0.91);
+    }
+
+    @Test
+    void classifyFurnitureObject_shouldFallbackUnknown_whenCategoryOutOfEnum() throws Exception {
+        stubFor(post(urlEqualTo("/chat/completions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(buildChatCompletionResponseBody(
+                    "{\"category\":\"WEIRD_THING\",\"semanticLabel\":null,\"confidence\":1.5}"))));
+
+        VisionService.FurnitureVisionVerdict verdict =
+            visionService.classifyFurnitureObject("iso".getBytes(), null);
+
+        assertThat(verdict).isNotNull();
+        assertThat(verdict.category()).isEqualTo("UNKNOWN");
+        // 置信度钳制到 [0,1]
+        assertThat(verdict.confidence()).isEqualTo(1.0);
+    }
+
     @AfterEach
     void tearDown() {
         wireMockServer.stop();

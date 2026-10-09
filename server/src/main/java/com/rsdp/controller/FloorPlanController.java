@@ -2,17 +2,23 @@ package com.rsdp.controller;
 
 import com.rsdp.common.PageResult;
 import com.rsdp.common.Result;
+import com.rsdp.dto.request.FloorPlanActivateRequest;
 import com.rsdp.dto.request.FloorPlanBatchDeleteRequest;
 import com.rsdp.dto.request.FloorPlanConfirmRequest;
+import com.rsdp.dto.request.FloorPlanFurnitureConfirmRequest;
 import com.rsdp.dto.request.FloorPlanSchemeRequest;
+import com.rsdp.dto.request.FloorPlanTargetSceneRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
+import com.rsdp.dto.response.FloorPlanFurnitureEditResponse;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.FloorPlanMatchingService;
 import com.rsdp.service.FloorPlanService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -91,19 +97,30 @@ public class FloorPlanController {
     /**
      * 接口 2：查询分析状态与空间列表（前端轮询入口，以 task 状态同步校正 analysis 状态）。
      *
-     * @param analysisId 分析批次 ID
-     * @return 分析详情（含空间列表）
+     * <p>V20 Revision 化：默认装配 revision = working ?? active ?? latest；
+     * 指定 analysisRevision 时校验其属于本分析（404）。响应含 Revision 元数据、
+     * 家具列表与激活就绪度。</p>
+     *
+     * @param analysisId       分析批次 ID
+     * @param analysisRevision 指定 Scene Revision 序号（可选）
+     * @return 分析详情（含空间/家具列表）
      */
     @GetMapping("/{analysisId}")
-    public Result<FloorPlanAnalysisResponse> getAnalysis(@PathVariable String analysisId) {
-        return Result.ok(floorPlanService.getAnalysis(analysisId));
+    public Result<FloorPlanAnalysisResponse> getAnalysis(
+        @PathVariable String analysisId,
+        @RequestParam(required = false) Integer analysisRevision) {
+        return Result.ok(floorPlanService.getAnalysis(analysisId, analysisRevision));
     }
 
     /**
      * 接口 3：人工校正，整体提交确认后的空间列表（增删改尺寸），状态 → confirmed。
      *
+     * <p>V20 Revision 化：请求携带 analysisRevision + baseRoomRevision 时走 Revision-aware
+     * 编辑（只改工作 Revision 的 Room 对象，不改 active 指针、不置 confirmed）；
+     * 不携带时为 legacy 兼容路径（仅 latest=1 允许，内部绑定 Revision 1 并隐式激活）。</p>
+     *
      * @param analysisId 分析批次 ID
-     * @param request    校正后的空间列表 + 可选比例尺
+     * @param request    校正后的空间列表 + 可选比例尺/Revision 版本
      * @return 校正后的分析详情
      */
     @PutMapping("/{analysisId}/rooms")
@@ -111,6 +128,68 @@ public class FloorPlanController {
         @PathVariable String analysisId,
         @Valid @RequestBody FloorPlanConfirmRequest request) {
         return Result.ok(floorPlanService.confirmRooms(analysisId, request));
+    }
+
+    /**
+     * 家具人工校正（V20，P0-B）：整体提交该 Analysis Revision 下最终家具列表
+     * （已有 ID 更新人工字段、缺席软删、无 ID 新增/拆分/合并），
+     * 绑定 analysisRevision + baseFurnitureRevision 双版本；409 语义见 API 设计文档。
+     *
+     * @param analysisId 分析批次 ID
+     * @param request    家具列表 + analysisRevision + baseFurnitureRevision
+     * @return {analysisRevision, furnitureRevision, furniture[]}
+     */
+    @PutMapping("/{analysisId}/furniture")
+    public Result<FloorPlanFurnitureEditResponse> confirmFurniture(
+        @PathVariable String analysisId,
+        @Valid @RequestBody FloorPlanFurnitureConfirmRequest request) {
+        return Result.ok(floorPlanService.editRevisionFurniture(analysisId, request));
+    }
+
+    /**
+     * Scene 原子激活（V20，§8.5）：单事务切换 active_analysis_revision 指针
+     * （旧 ACTIVE → SUPERSEDED，目标 → ACTIVE，analysis → confirmed）。
+     * 版本/校验失败 409 并整体回滚。
+     *
+     * @param analysisId       分析批次 ID
+     * @param analysisRevision 目标 Scene Revision 序号
+     * @param request          {baseActiveAnalysisRevision, expectedRoomRevision, expectedFurnitureRevision}
+     * @return 激活后的分析详情
+     */
+    @PostMapping("/{analysisId}/revisions/{analysisRevision}/activate")
+    public Result<FloorPlanAnalysisResponse> activateRevision(
+        @PathVariable String analysisId,
+        @PathVariable Integer analysisRevision,
+        @Valid @RequestBody FloorPlanActivateRequest request) {
+        return Result.ok(floorPlanService.activateRevision(analysisId, analysisRevision, request));
+    }
+
+    /**
+     * 派生工作 Revision（V20，§8.4.6）：从 active（无 active 则 latest）复制已确认对象
+     * 与自动快照，生成新的可编辑工作 Revision；已有工作 Revision 时 409。
+     *
+     * @param analysisId 分析批次 ID
+     * @return {analysisId, analysisRevision, revisionStatus}
+     */
+    @PostMapping("/{analysisId}/working-revision")
+    public Result<Map<String, Object>> createWorkingRevision(@PathVariable String analysisId) {
+        return Result.ok(floorPlanService.createWorkingRevision(analysisId));
+    }
+
+    /**
+     * Target Scene 切换（V20，§8.2）：不重新上传 DWG，从 cad_object_key 读原文件重跑
+     * Parser，产生新 Analysis Revision（异步，HTTP 202）；旧 Revision 不删不改。
+     *
+     * @param analysisId 分析批次 ID
+     * @param request    {baseAnalysisRevision, targetId}
+     * @return 202 {analysisId, analysisRevision, taskId, status=PROCESSING}
+     */
+    @PutMapping("/{analysisId}/target-scene")
+    public ResponseEntity<Result<Map<String, Object>>> switchTargetScene(
+        @PathVariable String analysisId,
+        @Valid @RequestBody FloorPlanTargetSceneRequest request) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+            .body(Result.ok(floorPlanService.switchTargetScene(analysisId, request)));
     }
 
     /**

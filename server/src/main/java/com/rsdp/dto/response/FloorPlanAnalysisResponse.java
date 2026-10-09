@@ -88,4 +88,43 @@ public class FloorPlanAnalysisResponse {
 
     /** CAD 规范预览对应的毫米坐标范围；缺失时前端可回退 drawingBounds。 */
     private FloorPlanDrawingBounds previewBounds;
+
+    // ===== CAD Scene Revision（V20，设计文档 V1.2.3 §8.6/§18.6）=====
+
+    /** 本次响应装配的 Analysis Revision（默认 working ?? active ?? latest）。 */
+    private Integer analysisRevision;
+
+    /** 该 Revision 状态：PROCESSING/READY/EDITING/READY_TO_ACTIVATE/ACTIVE/FAILED/SUPERSEDED。 */
+    private String revisionStatus;
+
+    private Integer activeAnalysisRevision;
+    private Integer workingAnalysisRevision;
+    private Integer latestAnalysisRevision;
+
+    /** Room 对象乐观版本（本 Revision 内独立序列）。 */
+    private Integer roomRevision;
+
+    /** Furniture 对象乐观版本（本 Revision 内独立序列）。 */
+    private Integer furnitureRevision;
+
+    /** 解析状态：SUCCESS/PARTIAL/NEEDS_REVIEW/FAILED（视觉通道为 null）。 */
+    private String parseStatus;
+
+    /** 能力声明（Parser capabilities 契约，自 Revision 快照提取）。 */
+    private Object capabilities;
+
+    /** 单位解析结果（Parser unitResolution 契约，自 Revision 快照提取）。 */
+    private Object unitResolution;
+
+    /** 目标 Scene（{targetId, selectionSource}，可空）。 */
+    private Object targetScene;
+
+    /** 目标 Scene 候选列表（自 Revision 快照提取）。 */
+    private Object targetSceneCandidates;
+
+    /** 家具对象列表（本 Revision 未软删，按 sort_order 升序）。 */
+    private List<FloorPlanFurnitureResponse> furniture;
+
+    /** 激活就绪度（实时计算；目标 Revision 为 PROCESSING/ACTIVE 等不可编辑态时仍返回当前校验结果）。 */
+    private FloorPlanActivationReadiness activationReadiness;
 }

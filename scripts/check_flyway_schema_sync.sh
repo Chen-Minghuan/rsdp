@@ -8,6 +8,19 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+MIG_DIR="server/src/main/resources/db/migration"
+shopt -s nullglob
+vfiles=( "$MIG_DIR"/V*.sql )
+if [ ${#vfiles[@]} -eq 0 ]; then
+  echo "❌ 未找到任何 V*.sql 迁移脚本"; exit 1
+fi
+duplicate_versions=$(printf '%s\n' "${vfiles[@]}" | sed -E 's@.*/V([^_]+)__.*@\1@' | sort | uniq -d)
+if [ -n "$duplicate_versions" ]; then
+  echo "❌ Flyway 迁移版本重复，必须先解决撞号："
+  printf '%s\n' "$duplicate_versions"
+  exit 1
+fi
+vfiles=( $(printf '%s\n' "${vfiles[@]}" | sort -V) )
 IMAGE="pgvector/pgvector:pg16"
 CONTAINER="rsdp-sync-check-$RANDOM"
 trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
@@ -31,12 +44,6 @@ dump_schema rsdp /tmp/rsdp_sync_a.sql
 
 echo "[3/4] 路径 B：Flyway 迁移脚本按序执行 -> 库 rsdp_b ..."
 docker exec -e PGPASSWORD=rsdp "$CONTAINER" psql -h localhost -U rsdp -d postgres -c "CREATE DATABASE rsdp_b;" >/dev/null
-MIG_DIR="server/src/main/resources/db/migration"
-shopt -s nullglob
-vfiles=( $(ls "$MIG_DIR"/V*.sql | sort -V) )
-if [ ${#vfiles[@]} -eq 0 ]; then
-  echo "❌ 未找到任何 V*.sql 迁移脚本"; exit 1
-fi
 for f in "${vfiles[@]}"; do
   echo "  applying $(basename "$f")"
   docker exec -i -e PGPASSWORD=rsdp "$CONTAINER" psql -h localhost -U rsdp -d rsdp_b -v ON_ERROR_STOP=1 -q < "$f"

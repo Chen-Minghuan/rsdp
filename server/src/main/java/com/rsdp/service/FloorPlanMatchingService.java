@@ -176,6 +176,11 @@ public class FloorPlanMatchingService {
         if (!FloorPlanService.STATUS_CONFIRMED.equals(analysis.getStatus())) {
             throw new BusinessException("分析未确认，请先在管理端人工确认空间尺寸后再生成方案，当前状态: " + analysis.getStatus());
         }
+        // V20：正式业务读取只认 active Scene Revision（§8.4.5 Active Scene 查询规则；
+        // legacy confirmed 分析经 V20 回填 active=1，不受影响）
+        if (analysis.getActiveAnalysisRevision() == null) {
+            throw new BusinessException("分析尚未激活 Scene Revision，请先完成确认并激活后再生成方案");
+        }
 
         List<String> roomIds = normalizeRoomIds(request.getRoomIds());
         if (!roomIds.isEmpty()) {
@@ -186,7 +191,9 @@ public class FloorPlanMatchingService {
         }
 
         FloorPlanRoom room = roomMapper.selectById(request.getRoomId());
-        if (room == null || !analysisId.equals(room.getAnalysisId())) {
+        if (room == null || !analysisId.equals(room.getAnalysisId())
+            || !activeRevisionOf(analysis).equals(room.getAnalysisRevision() != null
+                ? room.getAnalysisRevision() : 1)) {
             throw new BusinessException("空间不存在或不属于该分析: " + request.getRoomId());
         }
         if (room.getWidthMm() == null || room.getDepthMm() == null
@@ -243,7 +250,9 @@ public class FloorPlanMatchingService {
         Set<String> seenRspuIds = new java.util.HashSet<>();
         for (String roomId : roomIds) {
             FloorPlanRoom room = roomMapper.selectById(roomId);
-            if (room == null || !analysisId.equals(room.getAnalysisId())) {
+            if (room == null || !analysisId.equals(room.getAnalysisId())
+                || !activeRevisionOf(analysis).equals(room.getAnalysisRevision() != null
+                    ? room.getAnalysisRevision() : 1)) {
                 throw new BusinessException("空间不存在或不属于该分析: " + roomId);
             }
             if (room.getWidthMm() == null || room.getDepthMm() == null
@@ -617,5 +626,13 @@ public class FloorPlanMatchingService {
                 throw new ResourceNotFoundException("户型图分析不存在: " + analysis.getAnalysisId());
             }
         }
+    }
+
+    /**
+     * 当前生效 Scene Revision（V20 §8.4.5）：active 指针优先；分析级指针为空（超历史数据）
+     * 按 1 处理（与 V20 回填口径一致）。
+     */
+    private Integer activeRevisionOf(FloorPlanAnalysis analysis) {
+        return analysis.getActiveAnalysisRevision() != null ? analysis.getActiveAnalysisRevision() : 1;
     }
 }

@@ -633,6 +633,11 @@ class FloorPlanMatchingServiceTest {
         analysis.setStatus(status);
         analysis.setSource("admin");
         analysis.setCreatedBy(createdBy);
+        // V19：legacy confirmed 分析经回填 active=1（与 V19 存量回填口径一致）
+        if (FloorPlanService.STATUS_CONFIRMED.equals(status)) {
+            analysis.setActiveAnalysisRevision(1);
+            analysis.setLatestAnalysisRevision(1);
+        }
         return analysis;
     }
 

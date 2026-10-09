@@ -39,6 +39,18 @@ public class FloorPlanConfirmRequest {
     private String projectId;
 
     /**
+     * 目标 Analysis Revision（V20，可空）：携带时走 Revision-aware 编辑语义
+     * （必须与 baseRoomRevision 成对出现）；不携带时为 legacy 兼容路径
+     * （仅 latestAnalysisRevision=1 的分析允许，内部绑定 Revision 1 并隐式激活）。
+     */
+    private Integer analysisRevision;
+
+    /**
+     * 该 Revision 下 Room 对象乐观锁版本（V20，与 analysisRevision 成对）。
+     */
+    private Integer baseRoomRevision;
+
+    /**
      * 单个空间校正项。
      */
     @Data

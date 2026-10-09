@@ -141,6 +141,12 @@ rsdp:
     refine-max-rooms: 12          # 精修房间数上限，超出按 bbox 面积从大到小取
     # 官网同步链路精修开关：默认 false 保响应速度；识别精度评分实测时临时开 true，测完恢复 false
     refine-public-enabled: false
+    # 家具视觉语义回填（P1-C，CAD 通道）：按 visionGroupId 分组共享视觉识别（isolation 线稿
+    # + context 环境裁剪），回填 UNKNOWN/OTHER 候选的 category/semanticLabel/visionConfidence；
+    # 关闭后解析器不再输出 isolation 视图、后端不做视觉调用
+    furniture-vision-enabled: true
+    furniture-vision-max-groups: 30        # 单次分析视觉识别分组上限（按占地面积降序取）
+    furniture-vision-context-margin-mm: 600 # context 裁剪外扩边距（毫米）
     rules:                        # 尺寸硬规则，可运维调整（P0-B 规则引擎消费）
       sofa-wall-ratio: 0.75       # 沙发长度 ≤ 沙发墙 × 0.75
       sofa-tea-min-mm: 350        # 沙发→茶几最小通道

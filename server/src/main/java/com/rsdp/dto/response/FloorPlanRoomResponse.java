@@ -49,4 +49,7 @@ public class FloorPlanRoomResponse {
     private String dimensionText;
 
     private Integer sortOrder;
+
+    /** 确认状态（V20）：AUTO（自动识别未确认）/ CONFIRMED（已人工确认）。 */
+    private String confirmationStatus;
 }

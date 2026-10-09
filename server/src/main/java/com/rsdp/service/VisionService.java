@@ -1911,6 +1911,97 @@ public class VisionService {
      * @param userPrompt   用户提示词
      * @return AI 返回的文本内容
      */
+    /**
+     * 家具视觉语义判定结果（P1-C，Scene-aware Block Fallback 后续）。
+     *
+     * @param category      强约束枚举：SOFA/BED/TABLE/CHAIR/CABINET/DESK/TV_CABINET/NIGHTSTAND/BENCH/OTHER/UNKNOWN
+     * @param semanticLabel 自由文本补充（如"三人沙发"）
+     * @param confidence    置信度 0~1
+     */
+    public record FurnitureVisionVerdict(String category, String semanticLabel, Double confidence) {
+    }
+
+    /** 家具视觉语义识别的合法类别枚举（DB category 列与 Parser 词表的并集扩展）。 */
+    private static final java.util.Set<String> FURNITURE_VISION_CATEGORIES = java.util.Set.of(
+        "SOFA", "BED", "TABLE", "CHAIR", "CABINET", "DESK", "TV_CABINET", "NIGHTSTAND",
+        "BENCH", "OTHER", "UNKNOWN");
+
+    private static final String FURNITURE_SEMANTIC_SYSTEM_PROMPT = """
+        你是 CAD 家具图元识别专家。输入是家具 CAD 线稿图：第一张为家具单体线稿（isolation view，
+        旋转已归一化），第二张（如有）为该家具在户型图中的局部环境（context view）。
+        任务：判断这件家具是什么。只输出 JSON，不要任何其他文字说明。
+        """;
+
+    private static final String FURNITURE_SEMANTIC_USER_PROMPT = """
+        共 %d 张图：图 1 为家具单体线稿，图 2（如有）为周边约 600mm 环境参考。
+        请判断该家具类别：
+        category 必须从以下枚举中精确选择一个（拿不准用 OTHER，完全看不出用 UNKNOWN）：
+        SOFA（沙发）/BED（床）/TABLE（桌/茶几/餐台）/CHAIR（椅/凳）/CABINET（柜/书架/衣柜）/
+        DESK（书桌/办公桌）/TV_CABINET（电视柜）/NIGHTSTAND（床头柜）/BENCH（长凳/床尾凳）/
+        OTHER（确定是家具但不在以上类别）/UNKNOWN（无法判断）
+        semanticLabel 用中文简述具体名称（如"三人沙发"、"圆形餐桌"、"休闲单椅"、"床头柜"），
+        无法判断时输出 null。
+        confidence 为 0~1 的判断置信度（看不出具体内容给 0.3 以下）。
+
+        输出格式：{"category":"SOFA","semanticLabel":"三人沙发","confidence":0.92}
+        只输出 JSON，不要任何其他文字说明。
+        """;
+
+    /**
+     * 家具视觉语义判定（P1-C）：isolation 线稿 + context 局部环境 → 类别/语义名/置信度。
+     *
+     * <p>边界约定：视觉模型只回答"这是什么"（语义），不估算尺寸（事实来自 CAD 几何）。
+     * Mock 模式、输入为空、调用或解析失败一律返回 null，由调用方保留 UNKNOWN，绝不影响主流程。</p>
+     *
+     * @param isolationPng 家具单体线稿 PNG（块局部坐标渲染，必填）
+     * @param contextPng   局部环境裁剪 PNG（可空）
+     * @return 判定结果；无法判定时返回 null
+     */
+    public FurnitureVisionVerdict classifyFurnitureObject(byte[] isolationPng, byte[] contextPng) {
+        if (mockEnabled || isolationPng == null || isolationPng.length == 0) {
+            return null;
+        }
+        try {
+            List<String> base64Images = new java.util.ArrayList<>();
+            base64Images.add(Base64.getEncoder().encodeToString(isolationPng));
+            if (contextPng != null && contextPng.length > 0) {
+                base64Images.add(Base64.getEncoder().encodeToString(contextPng));
+            }
+            OpenAiChatRequest request = OpenAiChatRequest.builder()
+                .model(model)
+                .messages(List.of(
+                    OpenAiChatMessage.text("system", FURNITURE_SEMANTIC_SYSTEM_PROMPT),
+                    OpenAiChatMessage.multiVision("user",
+                        FURNITURE_SEMANTIC_USER_PROMPT.formatted(base64Images.size()), base64Images)
+                ))
+                .temperature(0.2)
+                .maxTokens(1024)
+                .build();
+            String json = executeChat(request, "家具视觉语义识别");
+            String category = extractJsonTextField(json, "category");
+            String label = extractJsonTextField(json, "semanticLabel");
+            Object confObj = extractJsonField(json, "confidence");
+            Double confidence = null;
+            if (confObj != null) {
+                try {
+                    confidence = Math.max(0, Math.min(1, Double.parseDouble(confObj.toString())));
+                } catch (NumberFormatException e) {
+                    log.warn("家具视觉语义置信度无法解析: {}", confObj);
+                }
+            }
+            if (category == null || !FURNITURE_VISION_CATEGORIES.contains(category)) {
+                category = "UNKNOWN";
+            }
+            if ("null".equalsIgnoreCase(String.valueOf(label))) {
+                label = null;
+            }
+            return new FurnitureVisionVerdict(category, label, confidence);
+        } catch (Exception e) {
+            log.warn("家具视觉语义识别失败（保留 UNKNOWN）", e);
+            return null;
+        }
+    }
+
     public String chatText(String systemPrompt, String userPrompt) {
         OpenAiChatRequest request = OpenAiChatRequest.builder()
             .model(model)

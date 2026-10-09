@@ -21,6 +21,8 @@ public class PublicFloorPlanCadService {
 
     private final FloorPlanService floorPlanService;
     private final PublicFloorPlanTokenService tokenService;
+    private final FloorPlanFurnitureSemanticService furnitureSemanticService;
+    private final com.rsdp.mapper.FloorPlanAnalysisMapper floorPlanAnalysisMapper;
 
     /**
      * 创建游客 CAD 异步分析并签发短期访问凭证。
@@ -52,6 +54,30 @@ public class PublicFloorPlanCadService {
         response.setReferenceImageUrl(withToken(response.getReferenceImageUrl(), accessToken));
         response.setPreviewUrl(withToken(response.getPreviewUrl(), accessToken));
         return response;
+    }
+
+    /**
+     * 按需触发家具视觉语义回填（官网游客"AI 识别家具名称"按钮）：
+     * 从对象存储读取 isolation 视图逐组识别，只处理 UNKNOWN/OTHER + AUTO 候选，幂等可重入。
+     *
+     * @param analysisId  分析批次 ID
+     * @param accessToken 短期访问凭证
+     * @return 处理摘要（候选组/识别组/采纳件数/缺图跳过组）
+     */
+    public FloorPlanFurnitureSemanticService.EnrichSummary enrichFurniture(String analysisId,
+                                                                           String accessToken) {
+        assertTokenMatches(analysisId, accessToken);
+        var analysis = floorPlanAnalysisMapper.selectById(analysisId);
+        if (analysis == null || !"public".equals(analysis.getSource())) {
+            throw new ResourceNotFoundException("游客户型分析不存在或访问凭证已失效");
+        }
+        Integer revision = analysis.getWorkingAnalysisRevision() != null
+            ? analysis.getWorkingAnalysisRevision()
+            : analysis.getActiveAnalysisRevision() != null
+                ? analysis.getActiveAnalysisRevision()
+                : analysis.getLatestAnalysisRevision();
+        return furnitureSemanticService.enrichFromStorage(analysisId,
+            revision != null ? revision : 1);
     }
 
     /**

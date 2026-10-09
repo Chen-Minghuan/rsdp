@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     id BIGSERIAL PRIMARY KEY,
     table_name VARCHAR(64) NOT NULL,
     record_id VARCHAR(64) NOT NULL,
-    action VARCHAR(16) NOT NULL,
+    action VARCHAR(64) NOT NULL,
     old_value JSONB,
     new_value JSONB,
     operator VARCHAR(64),

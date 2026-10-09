@@ -73,6 +73,9 @@ DROP TABLE IF EXISTS platform_custom_dict CASCADE;
 DROP TABLE IF EXISTS platform_customized CASCADE;
 DROP TABLE IF EXISTS platform_lead CASCADE;
 DROP TABLE IF EXISTS floor_plan_room CASCADE;
+DROP TABLE IF EXISTS floor_plan_furniture CASCADE;
+DROP TABLE IF EXISTS floor_plan_scene_revision CASCADE;
+DROP TABLE IF EXISTS cad_analysis_feedback CASCADE;
 DROP TABLE IF EXISTS floor_plan_analysis CASCADE;
 DROP TABLE IF EXISTS project CASCADE;
 DROP TABLE IF EXISTS design_order_item CASCADE;
@@ -663,6 +666,10 @@ CREATE TABLE IF NOT EXISTS floor_plan_analysis (
     project_id       VARCHAR(64),
     source_name      VARCHAR(128),
     quality_issues   JSONB,
+    active_analysis_revision  INTEGER,
+    working_analysis_revision INTEGER,
+    latest_analysis_revision  INTEGER,
+    cad_object_key     VARCHAR(256),
     FOREIGN KEY (image_id) REFERENCES image_assets(image_id),
     FOREIGN KEY (preview_image_id) REFERENCES image_assets(image_id)
 );
@@ -671,6 +678,10 @@ COMMENT ON COLUMN floor_plan_analysis.preview_image_id IS 'CAD 解析生成的�
 COMMENT ON COLUMN floor_plan_analysis.project_id IS '归属项目（可空：官网匿名/未归属）；FK 见 cross_domain_fk.sql';
 COMMENT ON COLUMN floor_plan_analysis.source_name IS '户型名称/备注（如"滨江华府 3-2-1 东边套"），历史列表辨识用';
 COMMENT ON COLUMN floor_plan_analysis.quality_issues IS '解析质量提示数组（由 raw_result 冗余提升，落库时写入，支持过滤/统计）';
+COMMENT ON COLUMN floor_plan_analysis.active_analysis_revision IS '当前业务正式使用的 Scene Revision（仅 Scene Activation 切换）';
+COMMENT ON COLUMN floor_plan_analysis.working_analysis_revision IS '当前正在编辑/确认的工作 Revision，可空';
+COMMENT ON COLUMN floor_plan_analysis.latest_analysis_revision IS '已创建的最大 Revision 序号';
+COMMENT ON COLUMN floor_plan_analysis.cad_object_key IS 'CAD 原文件存储对象键（target-scene 切换重解析读取用；视觉通道为空）';
 CREATE INDEX IF NOT EXISTS idx_fpa_project ON floor_plan_analysis(project_id, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_fpa_created ON floor_plan_analysis(created_at DESC) WHERE deleted_at IS NULL;
 
@@ -694,13 +705,134 @@ CREATE TABLE IF NOT EXISTS floor_plan_room (
     polygon          JSONB,
     centroid         JSONB,
     geometry_source  VARCHAR(32),
+    analysis_revision INTEGER NOT NULL DEFAULT 1,
+    confirmation_status VARCHAR(16) NOT NULL DEFAULT 'AUTO',
     FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
 );
 COMMENT ON COLUMN floor_plan_room.label IS '空间标签原文（CAD 通道落库；未命名空间为"未命名空间 N"）';
 COMMENT ON COLUMN floor_plan_room.polygon IS '房间外环顶点，毫米坐标 [[x,y],...]，CAD 解析通道落库';
 COMMENT ON COLUMN floor_plan_room.centroid IS '房间质心 {"x":..,"y":..}（毫米），CAD 解析通道落库';
 COMMENT ON COLUMN floor_plan_room.geometry_source IS '几何来源：ai_vision / cad_geometry';
+COMMENT ON COLUMN floor_plan_room.analysis_revision IS '所属 Scene Revision（逻辑键 analysis_id + analysis_revision + room_id）';
+COMMENT ON COLUMN floor_plan_room.confirmation_status IS '确认状态：AUTO（自动识别未确认）/ CONFIRMED（已人工确认）';
 CREATE INDEX IF NOT EXISTS idx_fpr_analysis ON floor_plan_room(analysis_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fpr_analysis_revision ON floor_plan_room(analysis_id, analysis_revision) WHERE deleted_at IS NULL;
+
+-- Scene Revision 头表（V20，设计文档 V1.2.3 §8.4.4）
+CREATE TABLE IF NOT EXISTS floor_plan_scene_revision (
+    analysis_id              VARCHAR(64) NOT NULL,
+    analysis_revision        INTEGER NOT NULL,
+    parent_analysis_revision INTEGER,
+    revision_trigger         VARCHAR(32) NOT NULL,
+    target_scene_id          VARCHAR(128),
+    parse_status             VARCHAR(16),
+    revision_status          VARCHAR(24) NOT NULL DEFAULT 'PROCESSING',
+    room_revision            INTEGER NOT NULL DEFAULT 1,
+    furniture_revision       INTEGER NOT NULL DEFAULT 1,
+    room_submit_base         INTEGER,
+    room_submit_hash         VARCHAR(64),
+    furniture_submit_base    INTEGER,
+    furniture_submit_hash    VARCHAR(64),
+    parser_version           VARCHAR(64),
+    parser_config_hash       VARCHAR(64),
+    source_profile_version   VARCHAR(64),
+    scene_version            VARCHAR(16),
+    unit_resolution          JSONB,
+    raw_result               JSONB,
+    preview_image_id         VARCHAR(64),
+    quality_issues           JSONB,
+    target_scene_candidates  JSONB,
+    drawing_bounds           JSONB,
+    preview_bounds           JSONB,
+    created_by               VARCHAR(64),
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ready_at                 TIMESTAMPTZ,
+    confirmed_at             TIMESTAMPTZ,
+    activated_at             TIMESTAMPTZ,
+    activated_by             VARCHAR(64),
+    PRIMARY KEY (analysis_id, analysis_revision),
+    FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id),
+    FOREIGN KEY (preview_image_id) REFERENCES image_assets(image_id)
+);
+COMMENT ON TABLE floor_plan_scene_revision IS '户型 Scene Revision 头表：每个 Analysis Revision 的自动解析快照/指针/对象乐观版本（设计文档 V1.2.3 §8.4.4）';
+COMMENT ON COLUMN floor_plan_scene_revision.raw_result IS '本 Revision 不可变自动解析快照（READY 后冻结；不含预览 pngBase64）';
+COMMENT ON COLUMN floor_plan_scene_revision.revision_trigger IS 'Revision 来源：INITIAL_PARSE/TARGET_SCENE_SWITCH/MANUAL_EDIT/REPARSE/LEGACY_IMPORT';
+
+-- Revision scoped 家具对象表（V20）
+CREATE TABLE IF NOT EXISTS floor_plan_furniture (
+    furniture_id           VARCHAR(64) PRIMARY KEY,
+    analysis_id            VARCHAR(64) NOT NULL,
+    analysis_revision      INTEGER NOT NULL,
+    source_kind            VARCHAR(16),
+    category               VARCHAR(16),
+    semantic_label         VARCHAR(128),
+    room_id                VARCHAR(64),
+    block_name             VARCHAR(255),
+    source_handles         JSONB,
+    insert_path            JSONB,
+    position               JSONB,
+    rotation_deg           NUMERIC(9,2),
+    footprint_polygon      JSONB,
+    geometry_width_mm      INTEGER,
+    geometry_depth_mm      INTEGER,
+    annotated_width_mm     INTEGER,
+    annotated_depth_mm     INTEGER,
+    effective_width_mm     INTEGER,
+    effective_depth_mm     INTEGER,
+    height_mm              INTEGER,
+    dimension_source       VARCHAR(32),
+    semantic_source        VARCHAR(32),
+    evidence               JSONB,
+    quality_flags          JSONB,
+    detection_confidence   VARCHAR(8),
+    category_confidence    VARCHAR(8),
+    confirmation_status    VARCHAR(16) NOT NULL DEFAULT 'AUTO',
+    matched_from_object_id VARCHAR(64),
+    derived_from_ids       JSONB,
+    sort_order             INTEGER NOT NULL DEFAULT 0,
+    created_by             VARCHAR(64),
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ,
+    deleted_at             TIMESTAMPTZ,
+    candidate_status      VARCHAR(16) NOT NULL DEFAULT 'VALID',
+    geometry_fingerprint  VARCHAR(16),
+    duplicate_group_id    VARCHAR(16),
+    duplicate_status      VARCHAR(16),
+    duplicate_count       INTEGER,
+    vision_group_id       VARCHAR(16),
+    vision_confidence     NUMERIC(4,3),
+    FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
+);
+COMMENT ON COLUMN floor_plan_furniture.candidate_status IS 'P1-A 候选清洗状态：VALID / REJECTED（尺寸或几何无效，仅标记不删除）';
+COMMENT ON COLUMN floor_plan_furniture.geometry_fingerprint IS 'P1 块定义几何指纹（局部坐标量化哈希），匿名块名碰撞防护';
+COMMENT ON COLUMN floor_plan_furniture.duplicate_group_id IS 'P1-B 去重组 ID（同块+同几何+同旋转+同位置网格的多实例成组）';
+COMMENT ON COLUMN floor_plan_furniture.duplicate_status IS 'P1-B 组内角色：PRIMARY（代表）/ DUPLICATE（重复副本，抑制展示不删除）';
+COMMENT ON COLUMN floor_plan_furniture.duplicate_count IS 'P1-B 组内实例总数';
+COMMENT ON COLUMN floor_plan_furniture.vision_group_id IS 'P1-C 视觉语义分组 ID（同块+同尺寸+同指纹，共享一次视觉识别回填全部实例）';
+COMMENT ON COLUMN floor_plan_furniture.vision_confidence IS 'P1-C 视觉语义识别置信度（0~1，qwen3-vl-plus 返回）';
+COMMENT ON TABLE floor_plan_furniture IS '户型 Scene 家具对象表（Revision scoped；逻辑键 analysis_id + analysis_revision + furniture_id）';
+CREATE INDEX IF NOT EXISTS idx_fpf_analysis_revision ON floor_plan_furniture(analysis_id, analysis_revision) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fpf_analysis_revision_id ON floor_plan_furniture(analysis_id, analysis_revision, furniture_id);
+CREATE INDEX IF NOT EXISTS idx_fpf_vision_group ON floor_plan_furniture(analysis_id, analysis_revision, vision_group_id) WHERE deleted_at IS NULL;
+
+-- CAD 分析反馈表（V20，Recognition Diff）
+CREATE TABLE IF NOT EXISTS cad_analysis_feedback (
+    feedback_id       VARCHAR(64) PRIMARY KEY,
+    analysis_id       VARCHAR(64) NOT NULL,
+    analysis_revision INTEGER NOT NULL,
+    parser_version    VARCHAR(64),
+    object_type       VARCHAR(16) NOT NULL,
+    object_id         VARCHAR(64),
+    field_name        VARCHAR(64),
+    predicted_value   TEXT,
+    confirmed_value   TEXT,
+    feedback_type     VARCHAR(24) NOT NULL,
+    detail            JSONB,
+    created_by        VARCHAR(64),
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE cad_analysis_feedback IS 'CAD 分析人工校正 Diff 反馈（ADD/DELETE/UPDATE/SPLIT/MERGE），算法改进材料';
+CREATE INDEX IF NOT EXISTS idx_caf_analysis_revision ON cad_analysis_feedback(analysis_id, analysis_revision);
 
 -- Excel AI 辅助导入批次表
 CREATE TABLE IF NOT EXISTS excel_import_batch (
@@ -1212,7 +1344,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     id BIGSERIAL PRIMARY KEY,
     table_name VARCHAR(64) NOT NULL,
     record_id VARCHAR(64) NOT NULL,
-    action VARCHAR(16) NOT NULL,
+    action VARCHAR(64) NOT NULL,
     old_value JSONB,
     new_value JSONB,
     operator VARCHAR(64),

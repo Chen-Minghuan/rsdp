@@ -76,6 +76,7 @@ public class AsyncTaskProcessor {
     private final RspuDuplicateSuspectMapper duplicateSuspectMapper;
     /** 户型图解析器注册表（CAD 户型导入 P3）：按扩展名路由 dwg/dxf → CAD，图片/PDF → 视觉识别。 */
     private final FloorPlanParserRegistry floorPlanParserRegistry;
+    private final FloorPlanFurnitureSemanticService furnitureSemanticService;
     /**
      * 户型图分析服务（延迟解析，打破 FloorPlanService ↔ AsyncTaskProcessor 循环依赖）。
      */
@@ -392,6 +393,13 @@ public class AsyncTaskProcessor {
 
         safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_ANALYZING, null, null);
 
+        // V20：目标 Scene Revision 与 targetId 取自任务 input_data（retry/target-scene 写入）；
+        // 切换前入队的旧任务（无 analysisRevision）回退 working ?? latest ?? 1（旧兼容路径完成）
+        AsyncTask taskRecord = loadTaskQuietly(taskId);
+        com.fasterxml.jackson.databind.JsonNode inputRoot = parseInputDataRoot(taskRecord);
+        Integer analysisRevision = resolveAnalysisRevision(analysisId, inputRoot);
+        String targetId = extractInputText(inputRoot, "targetId");
+
         // 双文件通道读 CAD 原文件并固定路由 CAD 解析器；单文件通道按 objectKey 扩展名路由（既有行为）
         boolean explicitCad = StringUtils.hasText(cadObjectKey);
         String sourceKey = explicitCad ? cadObjectKey : objectKey;
@@ -400,7 +408,7 @@ public class AsyncTaskProcessor {
             fileBytes = fileStream.readAllBytes();
         } catch (Exception e) {
             log.error("读取户型文件失败，taskId={}，analysisId={}，sourceKey={}", taskId, analysisId, sourceKey, e);
-            safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_FAILED, null, "读取户型图失败: " + e.getMessage());
+            safeFinalizeFailure(analysisId, analysisRevision, "读取户型图失败: " + e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
             return;
         }
@@ -420,7 +428,7 @@ public class AsyncTaskProcessor {
         try {
             FloorPlanParseResult parsed = explicitCad
                 ? floorPlanParserRegistry.resolve(FloorPlanFileType.CAD)
-                    .parse(new FloorPlanParseRequest(fileBytes, sourceKey, hint))
+                    .parse(new FloorPlanParseRequest(fileBytes, sourceKey, hint, targetId))
                 : floorPlanParserRegistry.resolveByExtension(extensionOf(objectKey))
                     .parse(new FloorPlanParseRequest(fileBytes, objectKey, hint));
 
@@ -443,39 +451,100 @@ public class AsyncTaskProcessor {
             }
             updateTaskStatus(taskId, "processing", 60, null, null);
 
-            // 空间明细落库：视觉通道尺寸三级提取 / CAD 通道真实几何直落（唯一出口均在 FloorPlanService）
-            String rawResult;
+            // V20 新写路径：房间/家具带 analysis_revision 落库 + Revision 快照一次性写入冻结
+            // （READY）+ 工作指针指向本 Revision；分析级 raw_result 列不再写入（Invariant 12）
             int roomCount;
-            // V14：CAD 通道把 qualityIssues 冗余提升到 quality_issues 列（raw_result 语义不动）；
-            // 视觉通道无质量提示概念，保持 null 不写列
-            String qualityIssuesJson = null;
             if (parsed.isCad()) {
-                FloorPlanService floorPlanService = floorPlanServiceProvider.getObject();
-                floorPlanService.buildCadRooms(analysisId, parsed.cadResult(), codeNameMode);
-                floorPlanService.storeCadPreview(
-                    analysisId, parsed.previewBytes(), parsed.cadResult().getPreview());
-                rawResult = objectMapper.writeValueAsString(parsed.cadResult());
-                qualityIssuesJson = objectMapper.writeValueAsString(
-                    parsed.cadResult().getQualityIssues() != null
-                        ? parsed.cadResult().getQualityIssues() : List.of());
+                floorPlanServiceProvider.getObject().finalizeCadParseSuccess(
+                    analysisId, analysisRevision, parsed.cadResult(), parsed.previewBytes(), codeNameMode);
                 roomCount = (parsed.cadResult().getRooms() != null ? parsed.cadResult().getRooms().size() : 0)
                     + (parsed.cadResult().getUnnamedRegions() != null
                         ? parsed.cadResult().getUnnamedRegions().size() : 0);
+
+                // P1-C 家具视觉语义：isolation 视图始终落存储（官网按需触发依赖）；
+                // 视觉语义回填（独立事务，失败不影响已落库的几何结果）：管理端自动跑，
+                // 官网游客默认不自动跑（API 成本，由用户点"AI 识别家具名称"按需触发）
+                updateTaskStatus(taskId, "processing", 80, null, null);
+                try {
+                    furnitureSemanticService.persistIsolationImages(analysisId, parsed.cadResult());
+                    if (shouldAutoEnrichFurniture(analysisId)) {
+                        furnitureSemanticService.enrichCadFurniture(
+                            analysisId, analysisRevision, parsed.cadResult(), parsed.previewBytes());
+                    } else {
+                        log.info("官网 CAD 分析跳过自动家具视觉回填（用户按需触发），analysisId={}", analysisId);
+                    }
+                } catch (Exception semanticEx) {
+                    log.warn("家具视觉语义回填失败（不影响户型几何结果），analysisId={}", analysisId, semanticEx);
+                }
             } else {
-                floorPlanServiceProvider.getObject().buildRooms(analysisId, parsed.visionResult());
-                rawResult = objectMapper.writeValueAsString(parsed.visionResult());
+                floorPlanServiceProvider.getObject().finalizeVisionParseSuccess(
+                    analysisId, analysisRevision, parsed.visionResult());
                 roomCount = parsed.visionResult().getRooms().size();
             }
 
-            safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_AWAITING_CONFIRM, rawResult, null,
-                qualityIssuesJson);
             updateTaskStatus(taskId, "done", 100, null, null);
-            log.info("户型图分析异步任务完成，taskId={}，analysisId={}，识别空间数={}",
-                taskId, analysisId, roomCount);
+            log.info("户型图分析异步任务完成，taskId={}，analysisId={}，revision={}，识别空间数={}",
+                taskId, analysisId, analysisRevision, roomCount);
         } catch (Exception e) {
             log.error("户型图空间识别失败，taskId={}，analysisId={}", taskId, analysisId, e);
-            safeUpdateAnalysis(analysisId, FloorPlanService.STATUS_FAILED, null, e.getMessage());
+            safeFinalizeFailure(analysisId, analysisRevision, e.getMessage());
             safeUpdateTaskStatus(taskId, "failed", 100, null, e.getMessage());
+        }
+    }
+
+    @org.springframework.beans.factory.annotation.Value("${rsdp.floor-plan.furniture-vision-auto-public:false}")
+    private boolean furnitureVisionAutoPublic;
+
+    /** 是否自动执行家具视觉回填：管理端恒 true；官网（source=public）由开关控制（默认 false 按需触发）。 */
+    private boolean shouldAutoEnrichFurniture(String analysisId) {
+        if (furnitureVisionAutoPublic) {
+            return true;
+        }
+        try {
+            FloorPlanAnalysis analysis = floorPlanAnalysisMapper.selectById(analysisId);
+            return analysis == null || !"public".equals(analysis.getSource());
+        } catch (Exception e) {
+            log.warn("读取分析来源失败，按管理端处理自动回填，analysisId={}", analysisId, e);
+            return true;
+        }
+    }
+
+    /** 解析目标 Scene Revision：任务 input_data 优先，回退分析 working ?? latest ?? 1。 */
+    private Integer resolveAnalysisRevision(String analysisId, com.fasterxml.jackson.databind.JsonNode inputRoot) {
+        com.fasterxml.jackson.databind.JsonNode node = inputRoot != null
+            ? inputRoot.get("analysisRevision") : null;
+        if (node != null && node.isNumber()) {
+            return node.asInt();
+        }
+        try {
+            FloorPlanAnalysis analysis = floorPlanAnalysisMapper.selectById(analysisId);
+            if (analysis != null) {
+                if (analysis.getWorkingAnalysisRevision() != null) {
+                    return analysis.getWorkingAnalysisRevision();
+                }
+                if (analysis.getLatestAnalysisRevision() != null) {
+                    return analysis.getLatestAnalysisRevision();
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取分析 Revision 指针失败，按 1 处理，analysisId={}", analysisId, e);
+        }
+        return 1;
+    }
+
+    /** 提取任务 input_data 文本字段；缺失返回 null。 */
+    private String extractInputText(com.fasterxml.jackson.databind.JsonNode inputRoot, String field) {
+        com.fasterxml.jackson.databind.JsonNode node = inputRoot != null ? inputRoot.get(field) : null;
+        return node != null && node.isTextual() && StringUtils.hasText(node.asText())
+            ? node.asText() : null;
+    }
+
+    /** 失败收尾（V20）：Revision → FAILED + analysis → failed；自身失败不中断任务状态更新。 */
+    private void safeFinalizeFailure(String analysisId, Integer analysisRevision, String errorMessage) {
+        try {
+            floorPlanServiceProvider.getObject().finalizeParseFailure(analysisId, analysisRevision, errorMessage);
+        } catch (Exception ex) {
+            log.error("户型图分析失败落库异常，analysisId={}", analysisId, ex);
         }
     }
 
