@@ -37,4 +37,17 @@ public interface FloorPlanAnalysisMapper extends BaseMapper<FloorPlanAnalysis> {
     int updateManualLayout(@Param("analysisId") String analysisId,
                            @Param("expectedRevision") long expectedRevision,
                            @Param("layoutJson") String layoutJson);
+
+    /**
+     * 已确认手画户型仅保存规划家具层，空间几何保持冻结。
+     *
+     * @return 1=保存成功，0=版本冲突或状态不允许
+     */
+    @Update("UPDATE floor_plan_analysis SET layout_json = CAST(#{layoutJson} AS jsonb), "
+        + "layout_revision = layout_revision + 1, updated_at = now() "
+        + "WHERE analysis_id = #{analysisId} AND input_mode = 'manual' AND status = 'confirmed' "
+        + "AND layout_revision = #{expectedRevision} AND deleted_at IS NULL")
+    int updateManualFurnitureLayout(@Param("analysisId") String analysisId,
+                                    @Param("expectedRevision") long expectedRevision,
+                                    @Param("layoutJson") String layoutJson);
 }

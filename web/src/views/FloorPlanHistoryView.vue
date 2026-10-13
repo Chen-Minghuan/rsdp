@@ -363,8 +363,8 @@ const columns: DataTableColumns<FloorPlanListItem> = [
       if (row.status === 'confirmed') {
         buttons.push(h(
           NButton,
-          { text: true, type: 'primary', size: 'small', onClick: () => goView(row) },
-          { default: () => '查看图纸' }
+          { text: true, type: 'primary', size: 'small', onClick: () => row.inputMode === 'manual' ? goCorrection(row) : goView(row) },
+          { default: () => row.inputMode === 'manual' ? '编辑家具布局' : '查看图纸' }
         ))
       }
       buttons.push(h(

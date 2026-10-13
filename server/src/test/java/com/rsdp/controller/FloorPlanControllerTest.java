@@ -204,4 +204,17 @@ class FloorPlanControllerTest {
             .andExpect(jsonPath("$.data.status").value("confirmed"))
             .andExpect(jsonPath("$.data.inputMode").value("manual"));
     }
+
+    @Test
+    void saveManualFurnitureLayout_shouldRouteRequest() throws Exception {
+        when(floorPlanService.saveManualFurnitureLayout(
+            org.mockito.ArgumentMatchers.eq("FPA-MANUAL"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(new ManualFloorPlanLayoutSaveResponse("FPA-MANUAL", 3L));
+
+        mockMvc.perform(put("/api/v1/floor-plan/FPA-MANUAL/layout/furniture")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedRevision\":2,\"furniture\":[]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.layoutRevision").value(3));
+    }
 }

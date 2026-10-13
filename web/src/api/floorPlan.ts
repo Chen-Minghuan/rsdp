@@ -119,6 +119,21 @@ export async function saveManualFloorPlanLayout(
   return result.data
 }
 
+/** 已确认手画户型仅保存规划家具，空间轮廓保持锁定。 */
+export async function saveManualFloorPlanFurniture(
+  analysisId: string,
+  expectedRevision: number,
+  furniture: NonNullable<ManualFloorPlanLayout['furniture']>,
+  options?: ApiOptions
+): Promise<{ analysisId: string; layoutRevision: number }> {
+  const { data: result } = await apiClient.put<ApiResult<{ analysisId: string; layoutRevision: number }>>(
+    `/v1/floor-plan/${analysisId}/layout/furniture`,
+    { expectedRevision, furniture },
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
 /** 确认手画布局，由后端重算并集并物化 floor_plan_room。 */
 export async function confirmManualFloorPlanLayout(
   analysisId: string,

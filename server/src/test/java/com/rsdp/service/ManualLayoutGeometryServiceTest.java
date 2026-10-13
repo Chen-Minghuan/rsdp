@@ -26,6 +26,36 @@ class ManualLayoutGeometryServiceTest {
     }
 
     @Test
+    void compute_unboundedLayoutShouldAcceptNegativeAndBeyondInitialViewport() {
+        var room = room("扩展办公室", List.of(rect("p1", -3000, -2000, 25_000, 8000)),
+            rect(null, -2500, -1500, 2000, 1000));
+        var layout = new ManualFloorPlanLayoutRequest.Layout(3,
+            new ManualFloorPlanLayoutRequest.Canvas(18_000, 12_000, 50, "unbounded"), List.of(room));
+
+        var computed = service.compute(layout).rooms().getFirst();
+
+        assertThat(computed.bounds()).isEqualTo(new ManualLayoutGeometryService.Bounds(-3000, -2000, 22_000, 6000));
+        assertThat(computed.placementZone().x()).isEqualTo(-2500);
+    }
+
+    @Test
+    void compute_unboundedLayoutShouldNotStopAtFormerTenKilometerGuard() {
+        var distant = room("远处空间", List.of(rect("p1", 12_000_000, -12_000_000, 4000, 3000)), null);
+        var layout = new ManualFloorPlanLayoutRequest.Layout(3,
+            new ManualFloorPlanLayoutRequest.Canvas(18_000, 12_000, 50, "unbounded"), List.of(distant));
+
+        assertThat(service.compute(layout).rooms().getFirst().bounds())
+            .isEqualTo(new ManualLayoutGeometryService.Bounds(12_000_000, -12_000_000, 12_004_000, -11_997_000));
+    }
+
+    @Test
+    void compute_legacyLayoutShouldStillRejectCanvasOverflow() {
+        var legacy = layout(room("旧版", List.of(rect("p1", -1, 0, 2000, 1000)), null));
+        assertThatThrownBy(() -> service.compute(legacy))
+            .isInstanceOf(BusinessException.class).hasMessageContaining("超出画布范围");
+    }
+
+    @Test
     void compute_overlappingRectangles_shouldBuildLShapeAndDeduplicateArea() {
         var result = service.compute(layout(room("L 型客厅", List.of(
             rect("p1", 0, 0, 4000, 2000),
@@ -156,6 +186,70 @@ class ManualLayoutGeometryServiceTest {
         assertThat(zone.x()).isEqualTo(1000);
         assertThat(zone.w()).isEqualTo(3000);
         assertThat(zone.h()).isEqualTo(2000);
+    }
+
+    @Test
+    void compute_furnitureShouldRespectRotationAndRoomBoundary() {
+        var room = room("办公室", List.of(rect("p1", 1000, 1000, 3000, 2000)), null);
+        var inside = new ManualFloorPlanLayoutRequest.Furniture(
+            "f1", "desk-straight", room.clientId(), 3000, 2000, 1600, 700, 90, null);
+        service.compute(new ManualFloorPlanLayoutRequest.Layout(2,
+            new ManualFloorPlanLayoutRequest.Canvas(20_000, 20_000, 100), List.of(room), List.of(inside)));
+        var outside = new ManualFloorPlanLayoutRequest.Furniture(
+            "f1", "desk-straight", room.clientId(), 3900, 2000, 1600, 700, 90, null);
+        assertThatThrownBy(() -> service.compute(new ManualFloorPlanLayoutRequest.Layout(2,
+            new ManualFloorPlanLayoutRequest.Canvas(20_000, 20_000, 100), List.of(room), List.of(outside))))
+            .isInstanceOf(BusinessException.class).hasMessageContaining("超出所属空间");
+    }
+
+    @Test
+    void compute_furnitureShouldRejectInvalidTemplateAndShapeParameters() {
+        var room = room("办公室", List.of(rect("p1", 0, 0, 5000, 5000)), null);
+        var invalidTemplate = new ManualFloorPlanLayoutRequest.Furniture(
+            "f1", null, room.clientId(), 2000, 2000, 1000, 1000, 0, null);
+        var invalidWing = new ManualFloorPlanLayoutRequest.Furniture(
+            "f2", "desk-l", room.clientId(), 2000, 2000, 1600, 1400, 0, 700);
+        var invalidRound = new ManualFloorPlanLayoutRequest.Furniture(
+            "f3", "table-meeting-round", room.clientId(), 2000, 2000, 1000, 900, 0, null);
+        for (var item : List.of(invalidTemplate, invalidWing, invalidRound)) {
+            assertThatThrownBy(() -> service.compute(new ManualFloorPlanLayoutRequest.Layout(2,
+                new ManualFloorPlanLayoutRequest.Canvas(20_000, 20_000, 100), List.of(room), List.of(item))))
+                .isInstanceOf(BusinessException.class);
+        }
+    }
+
+    @Test
+    void compute_referenceFurnitureShouldAcceptNewTemplatesAndCabinetHeightRanges() {
+        var room = room("办公室", List.of(rect("p1", 0, 0, 8000, 6000)), null);
+        var roundedDesk = new ManualFloorPlanLayoutRequest.Furniture(
+            "desk", "desk-l-rounded", room.clientId(), 2500, 2500, 1400, 1400, 0, 550, null);
+        var shortCabinet = new ManualFloorPlanLayoutRequest.Furniture(
+            "cabinet", "cabinet-short", room.clientId(), 5000, 2000, 1200, 450, 0, null, 900);
+        var oldHighCabinet = new ManualFloorPlanLayoutRequest.Furniture(
+            "old", "cabinet-high", room.clientId(), 6000, 4000, 1200, 450, 0, null);
+
+        var result = service.compute(new ManualFloorPlanLayoutRequest.Layout(2,
+            new ManualFloorPlanLayoutRequest.Canvas(20_000, 20_000, 100),
+            List.of(room), List.of(roundedDesk, shortCabinet, oldHighCabinet)));
+
+        assertThat(result.rooms()).hasSize(1);
+    }
+
+    @Test
+    void compute_referenceCabinetShouldRejectHeightOutsideSelectedType() {
+        var room = room("办公室", List.of(rect("p1", 0, 0, 5000, 5000)), null);
+        for (var invalid : List.of(
+            new ManualFloorPlanLayoutRequest.Furniture("low", "cabinet-low", room.clientId(),
+                2000, 2000, 1200, 450, 0, null, 401),
+            new ManualFloorPlanLayoutRequest.Furniture("short", "cabinet-short", room.clientId(),
+                2000, 2000, 1200, 450, 0, null, 400),
+            new ManualFloorPlanLayoutRequest.Furniture("high", "cabinet-high", room.clientId(),
+                2000, 2000, 1200, 450, 0, null, 1499))) {
+            assertThatThrownBy(() -> service.compute(new ManualFloorPlanLayoutRequest.Layout(2,
+                new ManualFloorPlanLayoutRequest.Canvas(20_000, 20_000, 100),
+                List.of(room), List.of(invalid))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("高度与图例类型不匹配");
+        }
     }
 
     private static ManualFloorPlanLayoutRequest.Layout layout(ManualFloorPlanLayoutRequest.Room... rooms) {

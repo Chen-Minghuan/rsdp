@@ -192,16 +192,29 @@ describe('manual layout geometry', () => {
       placementZones: [rect(100, 100, 1000, 1000), rect(3000, 1000, 1200, 1000)]
     }
 
-    expect(updateManualPlacementZone(room, 1, rect(2500, 1200, 1800, 1400), 8000, 6000)).toBe(true)
+    expect(updateManualPlacementZone(room, 1, rect(2500, 1200, 1800, 1400))).toBe(true)
     expect(room.placementZones).toEqual([
       rect(100, 100, 1000, 1000), rect(2500, 1200, 1800, 1400)
     ])
     expect(room.placementZone).toEqual(rect(100, 100, 1000, 1000))
-    expect(updateManualPlacementZone(room, 0, rect(200, 200, 1300, 1100), 8000, 6000)).toBe(true)
+    expect(updateManualPlacementZone(room, 0, rect(200, 200, 1300, 1100))).toBe(true)
     expect(room.placementZone).toEqual(rect(200, 200, 1300, 1100))
   })
 
-  it('rejects placement zone edits that cross the room or canvas without changing any zone', () => {
+  it('preserves millimeter-level numeric edits independently of the drag grid', () => {
+    const room: ManualLayoutRoom = {
+      clientId: 'precise-room', label: '精确空间', roomType: 'OFFICE',
+      parts: [{ ...rect(1000, 1000, 4000, 3000), id: 'part-1' }],
+      placementZone: rect(1200, 1200, 3000, 2000)
+    }
+
+    expect(updateManualLayoutPart(room, 'part-1', { ...room.parts[0]!, x: 1023, w: 4027 })).toBe(true)
+    expect(room.parts[0]).toMatchObject({ x: 1023, w: 4027 })
+    expect(updateManualPlacementZone(room, 0, rect(1237, 1309, 2503, 1807))).toBe(true)
+    expect(room.placementZone).toEqual(rect(1237, 1309, 2503, 1807))
+  })
+
+  it('rejects placement zone edits that cross the room without changing any zone', () => {
     const room: ManualLayoutRoom = {
       clientId: 'room-l', label: 'L 形客厅', roomType: 'LIVING_ROOM',
       parts: [
@@ -211,9 +224,18 @@ describe('manual layout geometry', () => {
       placementZone: rect(100, 100, 1000, 1000)
     }
 
-    expect(updateManualPlacementZone(room, 0, rect(1500, 1500, 2000, 2000), 6000, 5000)).toBe(false)
-    expect(updateManualPlacementZone(room, 0, rect(5000, 100, 2000, 1000), 6000, 5000)).toBe(false)
+    expect(updateManualPlacementZone(room, 0, rect(1500, 1500, 2000, 2000))).toBe(false)
+    expect(updateManualPlacementZone(room, 0, rect(5000, 100, 2000, 1000))).toBe(false)
     expect(room.placementZone).toEqual(rect(100, 100, 1000, 1000))
     expect(room.placementZones).toBeUndefined()
+  })
+
+  it('allows a placement zone at negative coordinates when it remains inside its room', () => {
+    const room: ManualLayoutRoom = {
+      clientId: 'negative-room', label: '扩展空间', roomType: 'OFFICE',
+      parts: [{ ...rect(-6000, -4000, 4000, 3000), id: 'part-1' }],
+      placementZone: rect(-5500, -3500, 1000, 1000)
+    }
+    expect(updateManualPlacementZone(room, 0, rect(-5800, -3700, 1500, 1400))).toBe(true)
   })
 })

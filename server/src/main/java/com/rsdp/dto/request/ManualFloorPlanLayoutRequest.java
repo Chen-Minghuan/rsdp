@@ -32,6 +32,7 @@ public record ManualFloorPlanLayoutRequest(
      * @param version 数据结构版本
      * @param canvas 画布参数
      * @param rooms 空间列表，草稿允许为空
+     * @param furniture 规划家具实例；旧版布局可缺省
      */
     public record Layout(
         @NotNull(message = "布局结构版本不能为空")
@@ -44,16 +45,24 @@ public record ManualFloorPlanLayoutRequest(
 
         @NotNull(message = "空间列表不能为空")
         @Size(max = 50, message = "单个布局最多支持 50 个空间")
-        List<@Valid Room> rooms
+        List<@Valid Room> rooms,
+
+        @Size(max = 300, message = "单个布局最多支持 300 件规划家具")
+        List<@Valid Furniture> furniture
     ) {
+        /** 兼容旧版服务和测试中不含规划家具的布局构造。 */
+        public Layout(Integer version, Canvas canvas, List<Room> rooms) {
+            this(version, canvas, rooms, null);
+        }
     }
 
     /**
      * 毫米坐标画布。
      *
-     * @param widthMm 画布宽度
-     * @param heightMm 画布高度
+     * @param widthMm 旧版画布宽度；无限画布模式中的起始视野宽度
+     * @param heightMm 旧版画布高度；无限画布模式中的起始视野高度
      * @param gridMm 网格吸附步长
+     * @param mode unbounded 表示不以起始视野为绘图边界
      */
     public record Canvas(
         @NotNull(message = "画布宽度不能为空")
@@ -69,8 +78,13 @@ public record ManualFloorPlanLayoutRequest(
         @NotNull(message = "网格尺寸不能为空")
         @Min(value = 10, message = "网格尺寸不能小于 10mm")
         @Max(value = 1000, message = "网格尺寸不能超过 1000mm")
-        Integer gridMm
+        Integer gridMm,
+        String mode
     ) {
+        /** 兼容旧版不含画布模式的布局。 */
+        public Canvas(Integer widthMm, Integer heightMm, Integer gridMm) {
+            this(widthMm, heightMm, gridMm, null);
+        }
     }
 
     /**
@@ -121,11 +135,9 @@ public record ManualFloorPlanLayoutRequest(
         String id,
 
         @NotNull(message = "矩形 x 坐标不能为空")
-        @Min(value = 0, message = "矩形 x 坐标不能为负数")
         Integer x,
 
         @NotNull(message = "矩形 y 坐标不能为空")
-        @Min(value = 0, message = "矩形 y 坐标不能为负数")
         Integer y,
 
         @NotNull(message = "矩形宽度不能为空")
@@ -136,5 +148,40 @@ public record ManualFloorPlanLayoutRequest(
         @Min(value = 1, message = "矩形高度必须为正数")
         Integer h
     ) {
+    }
+
+    /**
+     * 参数化规划家具。中心点、长、深均使用整数毫米；SVG 线稿不作为数据来源。
+     *
+     * @param id 实例稳定 ID
+     * @param templateId 内置图例模板 ID
+     * @param roomClientId 归属手画空间 clientId
+     * @param xMm 中心点 X
+     * @param yMm 中心点 Y
+     * @param widthMm 原始朝向长度
+     * @param depthMm 原始朝向进深
+     * @param rotationDeg 四分之一转角
+     * @param wingWidthMm L/U 形图例的侧翼桌面宽
+     * @param heightMm 柜体高度；旧实例缺省时使用图例默认高度
+     */
+    public record Furniture(
+        @NotBlank @Size(max = 64) String id,
+        @NotBlank @Size(max = 64) String templateId,
+        @NotBlank @Size(max = 64) String roomClientId,
+        @NotNull Integer xMm,
+        @NotNull Integer yMm,
+        @NotNull @Min(100) @Max(10000) Integer widthMm,
+        @NotNull @Min(100) @Max(10000) Integer depthMm,
+        @NotNull Integer rotationDeg,
+        Integer wingWidthMm,
+        @Min(100) @Max(3000) Integer heightMm
+    ) {
+        /** 兼容旧版仅保存占地与侧翼宽的实例构造。 */
+        public Furniture(String id, String templateId, String roomClientId,
+                         Integer xMm, Integer yMm, Integer widthMm, Integer depthMm,
+                         Integer rotationDeg, Integer wingWidthMm) {
+            this(id, templateId, roomClientId, xMm, yMm, widthMm, depthMm,
+                rotationDeg, wingWidthMm, null);
+        }
     }
 }

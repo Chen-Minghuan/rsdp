@@ -11,6 +11,7 @@ import com.rsdp.dto.request.FloorPlanTargetSceneRequest;
 import com.rsdp.dto.response.FloorPlanFurnitureEditResponse;
 import com.rsdp.dto.request.ManualFloorPlanCreateRequest;
 import com.rsdp.dto.request.ManualFloorPlanLayoutRequest;
+import com.rsdp.dto.request.ManualFloorPlanFurnitureSaveRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
@@ -101,6 +102,20 @@ public class FloorPlanController {
         @PathVariable String analysisId,
         @Valid @RequestBody ManualFloorPlanLayoutRequest request) {
         return Result.ok(floorPlanService.saveManualLayout(analysisId, request));
+    }
+
+    /**
+     * 已确认手画户型仅更新规划家具，不修改空间几何。
+     *
+     * @param analysisId 分析批次 ID
+     * @param request 家具完整列表和期望版本
+     * @return 保存后的新 revision
+     */
+    @PutMapping("/{analysisId}/layout/furniture")
+    public Result<ManualFloorPlanLayoutSaveResponse> saveManualFurnitureLayout(
+        @PathVariable String analysisId,
+        @Valid @RequestBody ManualFloorPlanFurnitureSaveRequest request) {
+        return Result.ok(floorPlanService.saveManualFurnitureLayout(analysisId, request));
     }
 
     /**

@@ -239,18 +239,14 @@ export function setManualPlacementZones(room: ManualLayoutRoom, zones: ManualLay
   room.placementZone = zones[0] ?? null
 }
 
-/** 仅在布置区完整处于画布和空间轮廓内时替换目标区；其他布置区不变。 */
+/** 仅在布置区完整处于空间轮廓内时替换目标区；其他布置区不变。 */
 export function updateManualPlacementZone(
   room: ManualLayoutRoom,
   index: number,
-  nextRect: ManualLayoutRect,
-  canvasWidthMm: number,
-  canvasHeightMm: number
+  nextRect: ManualLayoutRect
 ): boolean {
   const zones = manualPlacementZones(room)
-  if (index < 0 || index >= zones.length || nextRect.x < 0 || nextRect.y < 0 ||
-      nextRect.w <= 0 || nextRect.h <= 0 ||
-      nextRect.x + nextRect.w > canvasWidthMm || nextRect.y + nextRect.h > canvasHeightMm ||
+  if (index < 0 || index >= zones.length || nextRect.w <= 0 || nextRect.h <= 0 ||
       !manualRectContainedByUnion(nextRect, room.parts)) return false
   setManualPlacementZones(room, zones.map((zone, zoneIndex) => zoneIndex === index ? { ...nextRect } : { ...zone }))
   return true

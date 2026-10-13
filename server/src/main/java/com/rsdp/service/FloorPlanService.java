@@ -14,6 +14,7 @@ import com.rsdp.dto.request.FloorPlanTargetSceneRequest;
 import com.rsdp.dto.response.FloorPlanActivationReadiness;
 import com.rsdp.dto.request.ManualFloorPlanCreateRequest;
 import com.rsdp.dto.request.ManualFloorPlanLayoutRequest;
+import com.rsdp.dto.request.ManualFloorPlanFurnitureSaveRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
@@ -552,6 +553,48 @@ public class FloorPlanService {
         auditLogService.logAction("floor_plan_analysis", analysisId, "SAVE_LAYOUT",
             Map.of("layoutRevision", request.expectedRevision()),
             Map.of("layoutRevision", newRevision),
+            SecurityOperatorContext.currentUsername());
+        return new ManualFloorPlanLayoutSaveResponse(analysisId, newRevision);
+    }
+
+    /**
+     * 在已确认的手画户型上仅保存规划家具；空间几何与已物化房间保持不变。
+     *
+     * @param analysisId 分析批次 ID
+     * @param request 家具列表与乐观锁版本
+     * @return 保存后的新 revision
+     */
+    @Transactional
+    public ManualFloorPlanLayoutSaveResponse saveManualFurnitureLayout(
+        String analysisId, ManualFloorPlanFurnitureSaveRequest request) {
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis == null) throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        assertCanAccess(analysis);
+        if (!INPUT_MODE_MANUAL.equals(analysis.getInputMode()) || !STATUS_CONFIRMED.equals(analysis.getStatus())) {
+            throw new BusinessException("仅已确认的无图纸手画布局可单独保存规划家具");
+        }
+        ManualFloorPlanLayoutRequest.Layout oldLayout;
+        try {
+            oldLayout = objectMapper.readValue(analysis.getLayoutJson(), ManualFloorPlanLayoutRequest.Layout.class);
+        } catch (Exception e) {
+            log.warn("读取已确认手画布局失败，analysisId={}", analysisId, e);
+            throw new BusinessException("已确认的手画布局无法读取");
+        }
+        ManualFloorPlanLayoutRequest.Layout nextLayout = new ManualFloorPlanLayoutRequest.Layout(
+            Math.max(2, oldLayout.version()), oldLayout.canvas(), oldLayout.rooms(), request.furniture());
+        manualLayoutGeometryService.compute(nextLayout);
+        int updated = analysisMapper.updateManualFurnitureLayout(
+            analysisId, request.expectedRevision(), toJson(nextLayout));
+        if (updated != 1) {
+            FloorPlanAnalysis latest = analysisMapper.selectById(analysisId);
+            long latestRevision = latest != null && latest.getLayoutRevision() != null
+                ? latest.getLayoutRevision() : -1L;
+            throw new BusinessException("布局已在其他页面更新，请刷新后继续（当前版本 " + latestRevision + "）");
+        }
+        long newRevision = request.expectedRevision() + 1;
+        auditLogService.logAction("floor_plan_analysis", analysisId, "SAVE_FURNITURE_LAYOUT",
+            Map.of("layoutRevision", request.expectedRevision()),
+            Map.of("layoutRevision", newRevision, "furnitureCount", request.furniture().size()),
             SecurityOperatorContext.currentUsername());
         return new ManualFloorPlanLayoutSaveResponse(analysisId, newRevision);
     }

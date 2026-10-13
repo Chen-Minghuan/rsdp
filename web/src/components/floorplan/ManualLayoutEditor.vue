@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, toRaw, watch } from 'vue'
+import { useResizeObserver } from '@vueuse/core'
 import { NButton, NInput, NInputNumber, NSelect } from 'naive-ui'
+import ManualFurnitureGlyph from './ManualFurnitureGlyph.vue'
+import { cameraSize, fitCamera, zoomCameraAt } from '@/utils/manualCanvasCamera'
+import {
+  arrangeFurnitureItems, FURNITURE_ARRANGEMENT_COUNTS,
+  furnitureCatalogTemplates, furnitureById, furnitureBounds, furnitureCategories,
+  furnitureInsideRoom, furnitureOverlap, newFurnitureItem
+} from '@/utils/manualFurniture'
+import type { FurnitureArrangement, FurnitureTemplate } from '@/utils/manualFurniture'
 import {
   manualRectContainedByUnion,
   manualPlacementZones,
@@ -14,12 +23,14 @@ import {
   unionManualRects
 } from '@/utils/manualLayoutGeometry'
 import type { ManualPolygonSegment } from '@/utils/manualLayoutGeometry'
-import type { ManualFloorPlanLayout, ManualLayoutRect, ManualLayoutRoom } from '@/types/floorPlan'
+import type { ManualFloorPlanLayout, ManualFurnitureItem, ManualLayoutRect, ManualLayoutRoom } from '@/types/floorPlan'
 
 interface Props {
   layout: ManualFloorPlanLayout
   roomTypeOptions: Array<{ label: string; value: string }>
   readonly?: boolean
+  /** 户型已确认时锁定空间几何，但仍允许编辑规划家具。 */
+  geometryReadonly?: boolean
 }
 
 const props = defineProps<Props>()
@@ -27,15 +38,22 @@ const emit = defineEmits<{
   'update:layout': [layout: ManualFloorPlanLayout]
 }>()
 
-type Tool = 'select' | 'pan' | 'draw-room' | 'draw-part' | 'placement' | 'edit-parts' | 'edit-zone'
+type Tool = 'select' | 'pan' | 'draw-room' | 'draw-part' | 'placement' | 'edit-parts' | 'edit-zone' | 'furniture'
 type ResizeHandle = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw'
 const tool = ref<Tool>('select')
 const selectedRoomIds = ref<string[]>([])
 const selectedPartId = ref<string | null>(null)
 const selectedZoneIndex = ref(0)
+const selectedFurnitureId = ref<string | null>(null)
+const selectedFurnitureIds = ref<string[]>([])
+const selectedTemplateId = ref<string | null>(null)
+const furniturePreview = ref<{ id: string; xMm: number; yMm: number } | null>(null)
 const history = ref<ManualFloorPlanLayout[]>([])
 const future = ref<ManualFloorPlanLayout[]>([])
 const svgRef = ref<SVGSVGElement | null>(null)
+const propertiesRef = ref<HTMLElement | null>(null)
+const canvasPixelSize = ref({ width: 1000, height: 700 })
+const initialFitDone = ref(false)
 const zoom = ref(1)
 const panX = ref(0)
 const panY = ref(0)
@@ -46,6 +64,17 @@ const editFeedback = ref<{ type: 'error' | 'success'; message: string } | null>(
 const showPlacementZone = ref(true)
 const showWallClearances = ref(false)
 
+useResizeObserver(svgRef, entries => {
+  const size = entries[0]?.contentRect
+  if (size?.width && size.height) {
+    canvasPixelSize.value = { width: size.width, height: size.height }
+    if (!initialFitDone.value) {
+      initialFitDone.value = true
+      resetView()
+    }
+  }
+})
+
 type DragState =
   | { kind: 'draw'; startX: number; startY: number }
   | { kind: 'move-part'; roomId: string; partId: string; startX: number; startY: number; original: ManualLayoutRect }
@@ -54,11 +83,35 @@ type DragState =
   | { kind: 'move-zone'; roomId: string; zoneIndex: number; startX: number; startY: number; original: ManualLayoutRect }
   | { kind: 'resize-zone'; roomId: string; zoneIndex: number; handle: ResizeHandle; original: ManualLayoutRect }
   | { kind: 'pan'; screenX: number; screenY: number; originalX: number; originalY: number }
+  | { kind: 'move-furniture'; itemId: string; startX: number; startY: number; original: ManualFurnitureItem }
 let drag: DragState | null = null
 
 const selectedRoom = computed(() => {
   if (selectedRoomIds.value.length !== 1) return null
   return props.layout.rooms.find(room => room.clientId === selectedRoomIds.value[0]) ?? null
+})
+const geometryLocked = computed(() => props.readonly || props.geometryReadonly)
+const furnitureItems = computed(() => props.layout.furniture ?? [])
+const selectedFurniture = computed(() => selectedFurnitureIds.value.length === 1
+  ? furnitureItems.value.find(item => item.id === selectedFurnitureId.value) ?? null : null)
+const selectedFurnitureItems = computed(() => selectedFurnitureIds.value
+  .map(id => furnitureItems.value.find(item => item.id === id))
+  .filter((item): item is ManualFurnitureItem => item !== undefined))
+const selectedFurnitureTemplate = computed(() => selectedFurniture.value ? furnitureById.get(selectedFurniture.value.templateId) : null)
+const selectedFurnitureBounds = computed(() => selectedFurniture.value ? furnitureBounds(renderedFurniture(selectedFurniture.value)) : null)
+const furnitureOutsideIds = computed(() => new Set(furnitureItems.value.filter(item => {
+  const room = props.layout.rooms.find(candidate => candidate.clientId === item.roomClientId)
+  return !room || !furnitureInsideRoom(item, room)
+}).map(item => item.id)))
+const furnitureOverlapIds = computed(() => {
+  const ids = new Set<string>()
+  furnitureItems.value.forEach((item, index) => furnitureItems.value.slice(index + 1).forEach(other => {
+    if (item.roomClientId === other.roomClientId && furnitureOverlap(item, other)) {
+      ids.add(item.id)
+      ids.add(other.id)
+    }
+  }))
+  return ids
 })
 
 const selectedPart = computed(() => {
@@ -69,7 +122,6 @@ const selectedPart = computed(() => {
 const selectedZones = computed(() => selectedRoom.value ? manualPlacementZones(selectedRoom.value) : [])
 const selectedZone = computed(() => selectedZones.value[selectedZoneIndex.value] ?? selectedZones.value[0] ?? null)
 
-const canPan = computed(() => zoom.value > 1)
 const handleSize = computed(() => 180 / zoom.value)
 const resizeHandles = computed(() => {
   const part = selectedPart.value
@@ -111,8 +163,8 @@ const dimensionGuide = computed(() => {
   const offset = 300 / zoom.value
   const labelOffset = 150 / zoom.value
   const tick = 70 / zoom.value
-  const above = part.y >= offset * 2
-  const left = part.x >= offset * 2
+  const above = part.y - panY.value >= offset * 2
+  const left = part.x - panX.value >= offset * 2
   const horizontalY = above ? part.y - offset : part.y + part.h + offset
   const verticalX = left ? part.x - offset : part.x + part.w + offset
   return {
@@ -151,11 +203,24 @@ interface DimensionVisual {
   fontSize: number
 }
 
-const viewBox = computed(() => {
-  const width = props.layout.canvas.widthMm / zoom.value
-  const height = props.layout.canvas.heightMm / zoom.value
-  return `${panX.value} ${panY.value} ${width} ${height}`
+const cameraViewport = computed(() => ({
+  widthPx: canvasPixelSize.value.width,
+  heightPx: canvasPixelSize.value.height,
+  initialWidthMm: props.layout.canvas.widthMm,
+  initialHeightMm: props.layout.canvas.heightMm
+}))
+const zoomLabel = computed(() => {
+  const percent = zoom.value * 100
+  return `${percent >= 10 ? Math.round(percent) : Number(percent.toPrecision(3))}%`
 })
+const visibleSize = computed(() => cameraSize(cameraViewport.value, zoom.value))
+const viewBox = computed(() => `${panX.value} ${panY.value} ${visibleSize.value.width} ${visibleSize.value.height}`)
+const gridPixels = computed(() => props.layout.canvas.gridMm * Math.min(
+  canvasPixelSize.value.width / visibleSize.value.width,
+  canvasPixelSize.value.height / visibleSize.value.height
+))
+const showMinorGrid = computed(() => gridPixels.value >= 7)
+const showMajorGrid = computed(() => gridPixels.value * 5 >= 9)
 
 const roomResults = computed(() => new Map(
   props.layout.rooms.map(room => [room.clientId, unionManualRects(room.parts)])
@@ -202,6 +267,7 @@ const layoutProblems = computed(() => {
     })
   })
   if (overlapRoomIds.value.size > 0) problems.push('不同空间之间存在面积重叠，请调整或执行合并')
+  if (furnitureOutsideIds.value.size > 0) problems.push(`${furnitureOutsideIds.value.size} 件规划家具超出所属空间，请调整位置或尺寸`)
   return problems
 })
 
@@ -213,12 +279,16 @@ const selectedRoomNumber = computed(() => {
 
 const activeToolDescription = computed(() => ({
   select: '点选完整空间并整体拖动，外轮廓会标出每一段长度',
-  pan: '拖动画布查看放大后的其他区域',
+  pan: '拖动画布查看任意方向；也可用鼠标中键平移',
   'draw-room': '在画布上拖出一个新空间',
   'draw-part': '拖出矩形并与当前空间相交或共边',
   placement: '在空间内部框出新布置区；新画的区域会保留已有区域',
   'edit-zone': '点击布置区拖动位置；拖动四角或边中控制点调整大小',
-  'edit-parts': '选择组成块后，可单独移动、缩放或精确输入尺寸'
+  'edit-parts': '选择组成块后，可单独移动、缩放或精确输入尺寸',
+  furniture: selectedFurnitureIds.value.length > 1
+    ? `已选 ${selectedFurnitureIds.value.length} 件家具，可在右侧快捷排布`
+    : selectedTemplateId.value ? '点击空间内放置所选图例；尺寸可在右侧修改'
+      : '点击已摆放家具可拖动；Shift / Ctrl 点击可多选后快捷排布'
 }[tool.value]))
 
 watch(
@@ -237,15 +307,39 @@ watch(
 
 watch(tool, value => {
   if (value !== 'edit-parts') selectedPartId.value = null
+  if (value !== 'furniture') selectedTemplateId.value = null
 })
 
+watch(() => props.geometryReadonly, locked => {
+  if (locked && !props.readonly) tool.value = 'furniture'
+}, { immediate: true })
+
 watch(() => selectedRoom.value?.clientId, () => { selectedZoneIndex.value = 0 }, { flush: 'sync' })
+watch(selectedFurnitureId, id => {
+  if (id) propertiesRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+})
+watch(() => furnitureItems.value.map(item => item.id).join(','), () => {
+  const ids = new Set(furnitureItems.value.map(item => item.id))
+  selectedFurnitureIds.value = selectedFurnitureIds.value.filter(id => ids.has(id))
+  if (!selectedFurnitureId.value || !ids.has(selectedFurnitureId.value)) {
+    selectedFurnitureId.value = selectedFurnitureIds.value.at(-1) ?? null
+  }
+})
+
+function selectFurniture(ids: string[]) {
+  selectedFurnitureIds.value = ids
+  selectedFurnitureId.value = ids.at(-1) ?? null
+}
 
 function cloneLayout(layout = props.layout): ManualFloorPlanLayout {
   return structuredClone(toRaw(layout))
 }
 
 function commit(next: ManualFloorPlanLayout) {
+  if (!props.geometryReadonly && !props.readonly) {
+    next.version = 3
+    next.canvas.mode = 'unbounded'
+  }
   history.value.push(cloneLayout())
   if (history.value.length > 80) history.value.shift()
   future.value = []
@@ -266,12 +360,41 @@ function redo() {
   emit('update:layout', next)
 }
 
+function handleEditorKeydown(event: KeyboardEvent) {
+  if (props.readonly || !(event.ctrlKey || event.metaKey) || event.altKey) return
+  const target = event.target
+  if (target instanceof Element && target.closest('input, textarea, [contenteditable="true"]')) return
+  const key = event.key.toLowerCase()
+  if (key === 'z' && !event.shiftKey && history.value.length) {
+    event.preventDefault()
+    undo()
+  } else if (((key === 'z' && event.shiftKey) || key === 'y') && future.value.length) {
+    event.preventDefault()
+    redo()
+  }
+}
+
+function focusCanvas() {
+  svgRef.value?.focus({ preventScroll: true })
+}
+
+function handleCanvasPointerCapture(event: PointerEvent) {
+  focusCanvas()
+  if (event.button !== 1) return
+  event.preventDefault()
+  event.stopPropagation()
+  drag = { kind: 'pan', screenX: event.clientX, screenY: event.clientY,
+    originalX: panX.value, originalY: panY.value }
+  capturePointer(event)
+}
+
 function snap(value: number): number {
   const grid = props.layout.canvas.gridMm
   return Math.round(value / grid) * grid
 }
 
 function activateTool(nextTool: Tool) {
+  if (geometryLocked.value && !['furniture', 'pan', 'select'].includes(nextTool)) return
   editFeedback.value = null
   tool.value = nextTool
   if (nextTool === 'edit-parts') selectedPartId.value = null
@@ -315,9 +438,8 @@ function applyZoneEdit(roomId: string, zoneIndex: number, rect: ManualLayoutRect
   const original = manualPlacementZones(room)[zoneIndex]
   if (!original || (original.x === rect.x && original.y === rect.y &&
       original.w === rect.w && original.h === rect.h)) return
-  if (!updateManualPlacementZone(room, zoneIndex, rect,
-    props.layout.canvas.widthMm, props.layout.canvas.heightMm)) {
-    showFeedback('error', '布置区必须完整留在当前空间和画布内，本次调整已撤销')
+  if (!updateManualPlacementZone(room, zoneIndex, rect)) {
+    showFeedback('error', '布置区必须完整留在当前空间内，本次调整已撤销')
     return
   }
   commit(next)
@@ -335,8 +457,8 @@ function buildDimensionVisual(segment: ManualPolygonSegment): DimensionVisual {
   const midpointY = (segment.from.y + segment.to.y) / 2
   const candidateX = midpointX + normalX * (offset + labelOffset)
   const candidateY = midpointY + normalY * (offset + labelOffset)
-  if (candidateX < margin || candidateX > props.layout.canvas.widthMm - margin ||
-      candidateY < margin || candidateY > props.layout.canvas.heightMm - margin) {
+  if (candidateX < panX.value + margin || candidateX > panX.value + visibleSize.value.width - margin ||
+      candidateY < panY.value + margin || candidateY > panY.value + visibleSize.value.height - margin) {
     normalX *= -1
     normalY *= -1
   }
@@ -385,15 +507,14 @@ function worldPoint(event: PointerEvent): { x: number; y: number } | null {
   screenPoint.y = event.clientY
   const point = screenPoint.matrixTransform(matrix.inverse())
   return {
-    x: Math.min(props.layout.canvas.widthMm, Math.max(0, snap(point.x))),
-    y: Math.min(props.layout.canvas.heightMm, Math.max(0, snap(point.y)))
+    x: snap(point.x),
+    y: snap(point.y)
   }
 }
 
 function beginCanvasPointer(event: PointerEvent) {
   if (props.readonly) return
   if (tool.value === 'pan') {
-    if (!canPan.value) return
     drag = { kind: 'pan', screenX: event.clientX, screenY: event.clientY, originalX: panX.value, originalY: panY.value }
     capturePointer(event)
     return
@@ -401,8 +522,16 @@ function beginCanvasPointer(event: PointerEvent) {
   if (tool.value === 'select') {
     selectedRoomIds.value = []
     selectedPartId.value = null
+    selectFurniture([])
     return
   }
+  if (tool.value === 'furniture') {
+    const point = worldPoint(event)
+    if (point && selectedTemplateId.value) placeFurniture(selectedTemplateId.value, point.x, point.y)
+    else selectFurniture([])
+    return
+  }
+  if (geometryLocked.value) return
   if (tool.value === 'edit-zone') return
   if ((tool.value === 'draw-part' || tool.value === 'placement') && !selectedRoom.value) return
   const point = worldPoint(event)
@@ -423,6 +552,15 @@ function isMultiSelectEvent(event: MouseEvent | PointerEvent): boolean {
 function beginRoomMove(event: PointerEvent, room: ManualLayoutRoom) {
   event.stopPropagation()
   if (props.readonly) {
+    selectRoom(event, room)
+    return
+  }
+  if (tool.value === 'furniture') {
+    selectedRoomIds.value = [room.clientId]
+    beginCanvasPointer(event)
+    return
+  }
+  if (geometryLocked.value) {
     selectRoom(event, room)
     return
   }
@@ -529,12 +667,20 @@ function handlePointerMove(event: PointerEvent) {
     const svg = svgRef.value
     if (!svg) return
     const rect = svg.getBoundingClientRect()
-    panX.value = clampPanX(drag.originalX - ((event.clientX - drag.screenX) / rect.width) * (props.layout.canvas.widthMm / zoom.value))
-    panY.value = clampPanY(drag.originalY - ((event.clientY - drag.screenY) / rect.height) * (props.layout.canvas.heightMm / zoom.value))
+    panX.value = drag.originalX - ((event.clientX - drag.screenX) / rect.width) * visibleSize.value.width
+    panY.value = drag.originalY - ((event.clientY - drag.screenY) / rect.height) * visibleSize.value.height
     return
   }
   const point = worldPoint(event)
   if (!point) return
+  if (drag.kind === 'move-furniture') {
+    furniturePreview.value = {
+      id: drag.itemId,
+      xMm: snap(drag.original.xMm + point.x - drag.startX),
+      yMm: snap(drag.original.yMm + point.y - drag.startY)
+    }
+    return
+  }
   if (drag.kind === 'draw') {
     draftRect.value = {
       id: null,
@@ -565,21 +711,13 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
   if (drag.kind === 'move-room') {
-    const minX = Math.min(...drag.originalParts.map(part => part.x))
-    const minY = Math.min(...drag.originalParts.map(part => part.y))
-    const maxX = Math.max(...drag.originalParts.map(part => part.x + part.w))
-    const maxY = Math.max(...drag.originalParts.map(part => part.y + part.h))
-    drag.dx = Math.min(props.layout.canvas.widthMm - maxX,
-      Math.max(-minX, snap(point.x - drag.startX)))
-    drag.dy = Math.min(props.layout.canvas.heightMm - maxY,
-      Math.max(-minY, snap(point.y - drag.startY)))
+    drag.dx = snap(point.x - drag.startX)
+    drag.dy = snap(point.y - drag.startY)
     roomMoveOffset.value = { roomId: drag.roomId, dx: drag.dx, dy: drag.dy }
     return
   }
-  const x = Math.min(props.layout.canvas.widthMm - drag.original.w,
-    Math.max(0, drag.original.x + point.x - drag.startX))
-  const y = Math.min(props.layout.canvas.heightMm - drag.original.h,
-    Math.max(0, drag.original.y + point.y - drag.startY))
+  const x = drag.original.x + point.x - drag.startX
+  const y = drag.original.y + point.y - drag.startY
   draftRect.value = { ...drag.original, x: snap(x), y: snap(y) }
 }
 
@@ -589,6 +727,14 @@ function handlePointerUp() {
   drag = null
   editingZone.value = null
   if (currentDrag.kind === 'pan') return
+  if (currentDrag.kind === 'move-furniture') {
+    const preview = furniturePreview.value
+    furniturePreview.value = null
+    if (preview && (preview.xMm !== currentDrag.original.xMm || preview.yMm !== currentDrag.original.yMm)) {
+      applyFurnitureEdit(currentDrag.itemId, { xMm: preview.xMm, yMm: preview.yMm })
+    }
+    return
+  }
   if (currentDrag.kind === 'move-room') {
     roomMoveOffset.value = null
     if (currentDrag.dx === 0 && currentDrag.dy === 0) return
@@ -602,6 +748,8 @@ function handlePointerUp() {
     setManualPlacementZones(room, manualPlacementZones(room).map(zone => ({
       ...zone, x: zone.x + currentDrag.dx, y: zone.y + currentDrag.dy
     })))
+    next.furniture = (next.furniture ?? []).map(item => item.roomClientId === room.clientId
+      ? { ...item, xMm: item.xMm + currentDrag.dx, yMm: item.yMm + currentDrag.dy } : item)
     commit(next)
     showFeedback('success', '已整体移动空间，所有布置区保持相对位置')
     return
@@ -667,6 +815,7 @@ function handlePointerUp() {
 
 function selectRoom(event: PointerEvent | MouseEvent, room: ManualLayoutRoom, partId: string | null = null) {
   event.stopPropagation()
+  selectFurniture([])
   if (isMultiSelectEvent(event)) {
     selectedRoomIds.value = selectedRoomIds.value.includes(room.clientId)
       ? selectedRoomIds.value.filter(id => id !== room.clientId)
@@ -685,6 +834,7 @@ function selectRoomFromPanel(event: MouseEvent, room: ManualLayoutRoom) {
 }
 
 function mergeSelectedRooms() {
+  if (geometryLocked.value) return
   if (selectedRoomIds.value.length < 2) return
   const selected = props.layout.rooms.filter(room => selectedRoomIds.value.includes(room.clientId))
   const next = cloneLayout()
@@ -708,6 +858,8 @@ function mergeSelectedRooms() {
     placementZone: zones[0] ?? null,
     placementZones: zones
   })
+  next.furniture = (next.furniture ?? []).map(item => selectedRoomIds.value.includes(item.roomClientId)
+    ? { ...item, roomClientId: mergedId } : item)
   selectedRoomIds.value = [mergedId]
   selectedPartId.value = null
   activateTool('select')
@@ -716,6 +868,7 @@ function mergeSelectedRooms() {
 }
 
 function removeSelected() {
+  if (geometryLocked.value) return
   if (!selectedRoomIds.value.length) return
   const next = cloneLayout()
   if (selectedRoom.value && selectedPartId.value && selectedRoom.value.parts.length > 1) {
@@ -731,6 +884,7 @@ function removeSelected() {
     }
   } else {
     next.rooms = next.rooms.filter(room => !selectedRoomIds.value.includes(room.clientId))
+    next.furniture = (next.furniture ?? []).filter(item => !selectedRoomIds.value.includes(item.roomClientId))
     selectedRoomIds.value = []
     selectedPartId.value = null
   }
@@ -762,6 +916,7 @@ function makePrimaryZone(index: number) {
 }
 
 function updateSelectedRoom(field: 'label' | 'roomType', value: string) {
+  if (geometryLocked.value) return
   if (!selectedRoom.value) return
   const next = cloneLayout()
   const room = next.rooms.find(item => item.clientId === selectedRoom.value?.clientId)
@@ -770,53 +925,252 @@ function updateSelectedRoom(field: 'label' | 'roomType', value: string) {
 }
 
 function updatePart(field: 'x' | 'y' | 'w' | 'h', value: number | null) {
-  if (!selectedRoom.value || !selectedPart.value || value === null) return
+  if (geometryLocked.value) return
+  if (!selectedRoom.value || !selectedPart.value || value === null || !Number.isFinite(value)) return
   const next = cloneLayout()
   const room = next.rooms.find(item => item.clientId === selectedRoom.value?.clientId)
   const part = room?.parts.find(item => item.id === selectedPart.value?.id)
   if (!room || !part || !part.id) return
   const nextRect = { ...part }
-  const min = field === 'w' || field === 'h' ? props.layout.canvas.gridMm : 0
-  nextRect[field] = Math.max(min, snap(value))
-  nextRect.x = Math.min(nextRect.x, props.layout.canvas.widthMm - nextRect.w)
-  nextRect.y = Math.min(nextRect.y, props.layout.canvas.heightMm - nextRect.h)
+  nextRect[field] = field === 'w' || field === 'h'
+    ? Math.max(1, Math.round(value)) : Math.round(value)
   applyPartEdit(room.clientId, part.id, nextRect)
 }
 
 function updateZone(field: 'x' | 'y' | 'w' | 'h', value: number | null) {
-  if (!selectedRoom.value || !selectedZone.value || value === null) return
+  if (geometryLocked.value) return
+  if (!selectedRoom.value || !selectedZone.value || value === null || !Number.isFinite(value)) return
   const rect = { ...selectedZone.value }
-  const minimum = props.layout.canvas.gridMm
-  const snapped = snap(value)
-  if (field === 'x') rect.x = Math.max(0, Math.min(snapped, props.layout.canvas.widthMm - rect.w))
-  if (field === 'y') rect.y = Math.max(0, Math.min(snapped, props.layout.canvas.heightMm - rect.h))
-  if (field === 'w') rect.w = Math.max(minimum, Math.min(snapped, props.layout.canvas.widthMm - rect.x))
-  if (field === 'h') rect.h = Math.max(minimum, Math.min(snapped, props.layout.canvas.heightMm - rect.y))
+  const exact = Math.round(value)
+  if (field === 'x') rect.x = exact
+  if (field === 'y') rect.y = exact
+  if (field === 'w') rect.w = Math.max(1, exact)
+  if (field === 'h') rect.h = Math.max(1, exact)
   applyZoneEdit(selectedRoom.value.clientId, selectedZoneIndex.value, rect)
 }
 
-function zoomBy(factor: number) {
-  zoom.value = Math.min(4, Math.max(0.5, zoom.value * factor))
-  if (!canPan.value && tool.value === 'pan') tool.value = 'select'
-  panX.value = clampPanX(panX.value)
-  panY.value = clampPanY(panY.value)
+function zoomBy(factor: number, anchorX = canvasPixelSize.value.width / 2, anchorY = canvasPixelSize.value.height / 2) {
+  const next = zoomCameraAt({ x: panX.value, y: panY.value, zoom: zoom.value }, cameraViewport.value,
+    factor, anchorX, anchorY)
+  panX.value = next.x
+  panY.value = next.y
+  zoom.value = next.zoom
 }
 
-function clampPanX(value: number): number {
-  const max = Math.max(0, props.layout.canvas.widthMm - props.layout.canvas.widthMm / zoom.value)
-  return Math.min(max, Math.max(0, value))
-}
-
-function clampPanY(value: number): number {
-  const max = Math.max(0, props.layout.canvas.heightMm - props.layout.canvas.heightMm / zoom.value)
-  return Math.min(max, Math.max(0, value))
+function handleWheel(event: WheelEvent) {
+  const rect = svgRef.value?.getBoundingClientRect()
+  if (!rect) return
+  zoomBy(Math.exp(-event.deltaY * 0.0015), event.clientX - rect.left, event.clientY - rect.top)
 }
 
 function resetView() {
-  zoom.value = 1
-  panX.value = 0
-  panY.value = 0
-  if (tool.value === 'pan') tool.value = 'select'
+  const parts = props.layout.rooms.flatMap(room => room.parts)
+  const bounds = parts.length ? {
+    minX: Math.min(...parts.map(part => part.x)),
+    minY: Math.min(...parts.map(part => part.y)),
+    maxX: Math.max(...parts.map(part => part.x + part.w)),
+    maxY: Math.max(...parts.map(part => part.y + part.h))
+  } : undefined
+  const next = fitCamera(cameraViewport.value, bounds)
+  panX.value = next.x
+  panY.value = next.y
+  zoom.value = next.zoom
+}
+
+function renderedFurniture(item: ManualFurnitureItem): ManualFurnitureItem {
+  return furniturePreview.value?.id === item.id ? { ...item, ...furniturePreview.value } : item
+}
+
+function thumbnailItem(template: FurnitureTemplate): ManualFurnitureItem {
+  return {
+    id: `thumbnail-${template.id}`,
+    templateId: template.id,
+    roomClientId: '',
+    xMm: template.widthMm / 2,
+    yMm: template.depthMm / 2,
+    widthMm: template.widthMm,
+    depthMm: template.depthMm,
+    rotationDeg: 0,
+    ...(template.kind === 'l-desk' || template.kind === 'rounded-l-desk' || template.kind === 'u-desk' ? { wingWidthMm: 550 } : {}),
+    ...(template.heightMm ? { heightMm: template.heightMm } : {})
+  }
+}
+
+function thumbnailViewBox(template: FurnitureTemplate): string {
+  const padding = Math.max(template.widthMm, template.depthMm) * 0.09
+  return `${-padding} ${-padding} ${template.widthMm + padding * 2} ${template.depthMm + padding * 2}`
+}
+
+function chooseFurnitureTemplate(templateId: string) {
+  selectFurniture([])
+  activateTool('furniture')
+  selectedTemplateId.value = templateId
+}
+
+function placeFurniture(templateId: string, xMm: number, yMm: number) {
+  const template = furnitureById.get(templateId)
+  const room = selectedRoom.value
+  if (!template || !room) {
+    showFeedback('error', '请先选择要摆放家具的空间')
+    return
+  }
+  const item = newFurnitureItem(template, room.clientId, xMm, yMm)
+  if (!furnitureInsideRoom(item, room)) {
+    showFeedback('error', '该家具超出当前空间，请在更宽敞的位置放置或调整规格')
+    return
+  }
+  const next = cloneLayout()
+  next.version = Math.max(2, next.version) as ManualFloorPlanLayout['version']
+  next.furniture = [...(next.furniture ?? []), item]
+  commit(next)
+  selectFurniture([item.id])
+  showFeedback('success', `已放置${template.name}，可在右侧修改长宽`)
+}
+
+function beginFurnitureMove(event: PointerEvent, item: ManualFurnitureItem) {
+  event.stopPropagation()
+  if (isMultiSelectEvent(event)) {
+    const currentRoomId = selectedFurnitureItems.value[0]?.roomClientId
+    if (currentRoomId && currentRoomId !== item.roomClientId) {
+      showFeedback('error', '快捷排布只能选择同一空间内的家具')
+      return
+    }
+    selectFurniture(selectedFurnitureIds.value.includes(item.id)
+      ? selectedFurnitureIds.value.filter(id => id !== item.id)
+      : [...selectedFurnitureIds.value, item.id])
+    selectedRoomIds.value = [item.roomClientId]
+    selectedTemplateId.value = null
+    tool.value = 'furniture'
+    return
+  }
+  selectedRoomIds.value = [item.roomClientId]
+  selectFurniture([item.id])
+  selectedTemplateId.value = null
+  tool.value = 'furniture'
+  if (props.readonly) return
+  const point = worldPoint(event)
+  if (!point) return
+  drag = { kind: 'move-furniture', itemId: item.id, startX: point.x, startY: point.y, original: { ...item } }
+  capturePointer(event)
+}
+
+function applyFurnitureEdit(itemId: string, changes: Partial<ManualFurnitureItem>) {
+  const next = cloneLayout()
+  const item = next.furniture?.find(candidate => candidate.id === itemId)
+  if (!item) return
+  Object.assign(item, changes)
+  const template = furnitureById.get(item.templateId)
+  if (template && (template.kind === 'l-desk' || template.kind === 'rounded-l-desk' || template.kind === 'u-desk') &&
+    (item.wingWidthMm == null || item.wingWidthMm >= Math.min(item.widthMm, item.depthMm) / 2)) {
+    showFeedback('error', '调整后的短边需大于侧翼桌面宽的两倍')
+    return
+  }
+  if (item.heightMm != null && (!template?.heightMm || item.heightMm < (template.heightMinMm ?? 100) ||
+    item.heightMm > (template.heightMaxMm ?? 3000))) {
+    showFeedback('error', '高度不符合所选柜体图例的范围')
+    return
+  }
+  const room = next.rooms.find(candidate => candidate.clientId === item.roomClientId)
+  if (!room || !furnitureInsideRoom(item, room)) {
+    showFeedback('error', '调整后家具会超出所属空间，本次修改已撤销')
+    return
+  }
+  next.version = Math.max(2, next.version) as ManualFloorPlanLayout['version']
+  commit(next)
+}
+
+function updateFurnitureDimension(field: 'widthMm' | 'depthMm' | 'wingWidthMm' | 'heightMm', value: number | null) {
+  const item = selectedFurniture.value
+  if (!item || value === null || !Number.isFinite(value)) return
+  const rounded = Math.round(value)
+  if (field === 'heightMm') {
+    applyFurnitureEdit(item.id, { heightMm: rounded })
+    return
+  }
+  if (rounded < 100 || rounded > 10000) {
+    showFeedback('error', '家具尺寸需在 100～10000 mm 之间')
+    return
+  }
+  const template = furnitureById.get(item.templateId)
+  const isRound = template?.kind === 'round-table' || template?.kind === 'plant'
+  if (template && (template.kind === 'l-desk' || template.kind === 'rounded-l-desk' || template.kind === 'u-desk') && field !== 'wingWidthMm' &&
+    (item.wingWidthMm ?? 550) >= Math.min(field === 'widthMm' ? rounded : item.widthMm, field === 'depthMm' ? rounded : item.depthMm) / 2) {
+    showFeedback('error', '调整后的短边需大于侧翼桌面宽的两倍')
+    return
+  }
+  if (isRound && field !== 'wingWidthMm') {
+    applyFurnitureEdit(item.id, { widthMm: rounded, depthMm: rounded })
+  } else if (field === 'wingWidthMm') {
+    if (rounded >= Math.min(item.widthMm, item.depthMm) / 2) {
+      showFeedback('error', '侧翼桌面宽必须小于家具短边的一半')
+      return
+    }
+    applyFurnitureEdit(item.id, { wingWidthMm: rounded })
+  } else applyFurnitureEdit(item.id, { [field]: rounded })
+}
+
+function applyFurnitureSize(widthMm: number, depthMm: number) {
+  const item = selectedFurniture.value
+  if (!item) return
+  applyFurnitureEdit(item.id, { widthMm, depthMm })
+}
+
+function rotateSelectedFurniture() {
+  const item = selectedFurniture.value
+  if (!item) return
+  applyFurnitureEdit(item.id, { rotationDeg: ((item.rotationDeg + 90) % 360) as ManualFurnitureItem['rotationDeg'] })
+}
+
+function duplicateSelectedFurniture() {
+  const item = selectedFurniture.value
+  if (!item) return
+  const room = props.layout.rooms.find(candidate => candidate.clientId === item.roomClientId)
+  if (!room) return
+  const copy = { ...item, id: `furniture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    xMm: item.xMm + props.layout.canvas.gridMm * 2, yMm: item.yMm + props.layout.canvas.gridMm * 2 }
+  if (!furnitureInsideRoom(copy, room)) {
+    showFeedback('error', '附近空间不足，无法复制；可先移动原家具')
+    return
+  }
+  const next = cloneLayout()
+  next.furniture = [...(next.furniture ?? []), copy]
+  commit(next)
+  selectFurniture([copy.id])
+}
+
+function deleteSelectedFurniture() {
+  if (!selectedFurnitureId.value) return
+  const next = cloneLayout()
+  next.furniture = (next.furniture ?? []).filter(item => item.id !== selectedFurnitureId.value)
+  commit(next)
+  selectFurniture([])
+}
+
+function arrangeSelectedFurniture(arrangement: FurnitureArrangement) {
+  const count = FURNITURE_ARRANGEMENT_COUNTS[arrangement]
+  const chosen = selectedFurnitureItems.value
+  if (chosen.length !== count) {
+    showFeedback('error', `请先在画布上多选 ${count} 件已摆放的家具`)
+    return
+  }
+  const room = props.layout.rooms.find(candidate => candidate.clientId === chosen[0]?.roomClientId)
+  if (!room || chosen.some(item => item.roomClientId !== room.clientId)) {
+    showFeedback('error', '快捷排布只能选择同一空间内的家具')
+    return
+  }
+  const arranged = arrangeFurnitureItems(chosen, arrangement, props.layout.canvas.gridMm)
+  if (arranged.some(item => !furnitureInsideRoom(item, room))) {
+    showFeedback('error', '当前排布会使选中家具超出所属空间；请先将家具移到更宽敞的位置')
+    return
+  }
+  const positions = new Map(arranged.map(item => [item.id, { xMm: item.xMm, yMm: item.yMm }]))
+  const next = cloneLayout()
+  next.furniture = (next.furniture ?? []).map(item => positions.has(item.id)
+    ? { ...item, ...positions.get(item.id)! } : item)
+  commit(next)
+  selectedTemplateId.value = null
+  activateTool('furniture')
+  showFeedback('success', `已排布选中的 ${count} 件家具；款式、尺寸和朝向保持不变`)
 }
 
 function areaText(room: ManualLayoutRoom): string {
@@ -825,20 +1179,17 @@ function areaText(room: ManualLayoutRoom): string {
 </script>
 
 <template>
-  <div class="manual-layout-editor" :class="{ 'is-readonly': readonly }">
+  <div class="manual-layout-editor" :class="{ 'is-readonly': readonly }" @keydown="handleEditorKeydown">
     <header class="editor-topbar">
       <div>
         <span class="editor-eyebrow">LAYOUT EDITOR</span>
-        <strong>空间绘制工作台</strong>
+        <strong>{{ geometryReadonly ? '家具摆放工作台' : '空间绘制工作台' }}</strong>
       </div>
       <div class="view-controls">
-        <n-button v-if="!readonly" size="small" quaternary :disabled="!history.length" @click="undo">撤销</n-button>
-        <n-button v-if="!readonly" size="small" quaternary :disabled="!future.length" @click="redo">重做</n-button>
-        <span class="control-divider" />
         <n-button size="small" quaternary aria-label="缩小画布" @click="zoomBy(0.8)">−</n-button>
-        <span class="manual-scale">{{ Math.round(zoom * 100) }}%</span>
+        <span class="manual-scale">{{ zoomLabel }}</span>
         <n-button size="small" quaternary aria-label="放大画布" @click="zoomBy(1.25)">＋</n-button>
-        <n-button size="small" quaternary @click="resetView">适应画布</n-button>
+        <n-button size="small" quaternary @click="resetView">适应内容</n-button>
       </div>
     </header>
 
@@ -852,50 +1203,59 @@ function areaText(room: ManualLayoutRoom): string {
           class="tool-button"
           :class="{ active: tool === 'pan' }"
           :aria-pressed="tool === 'pan'"
-          :disabled="!canPan"
-          :title="canPan ? '拖动查看放大后的画布区域' : '当前已显示完整画布，放大后可使用'"
+          title="拖动查看任意方向，也可用鼠标中键平移"
           @click="activateTool('pan')"
         >
           <span class="tool-symbol">✥</span><span>移动画布</span>
         </button>
         <span class="tool-group-label">绘制</span>
-        <button class="tool-button" :class="{ active: tool === 'draw-room' }" :aria-pressed="tool === 'draw-room'" @click="activateTool('draw-room')">
+        <button class="tool-button" :class="{ active: tool === 'draw-room' }" :aria-pressed="tool === 'draw-room'" :disabled="geometryLocked" @click="activateTool('draw-room')">
           <span class="tool-symbol">□</span><span>新空间</span>
         </button>
-        <button class="tool-button" :class="{ active: tool === 'draw-part' }" :aria-pressed="tool === 'draw-part'" :disabled="!selectedRoom" @click="activateTool('draw-part')">
+        <button class="tool-button" :class="{ active: tool === 'draw-part' }" :aria-pressed="tool === 'draw-part'" :disabled="geometryLocked || !selectedRoom" @click="activateTool('draw-part')">
           <span class="tool-symbol">＋</span><span>拼形状</span>
         </button>
-        <button class="tool-button" :class="{ active: tool === 'placement' }" :aria-pressed="tool === 'placement'" :disabled="!selectedRoom" @click="activateTool('placement')">
+        <button class="tool-button" :class="{ active: tool === 'placement' }" :aria-pressed="tool === 'placement'" :disabled="geometryLocked || !selectedRoom" @click="activateTool('placement')">
           <span class="tool-symbol">▧</span><span>新增布置区</span>
         </button>
         <span class="tool-group-label">编辑</span>
-        <button class="tool-button" :class="{ active: tool === 'edit-zone' }" :aria-pressed="tool === 'edit-zone'" :disabled="!selectedRoom || !selectedZones.length" @click="activateTool('edit-zone')">
+        <button class="tool-button" :class="{ active: tool === 'edit-zone' }" :aria-pressed="tool === 'edit-zone'" :disabled="geometryLocked || !selectedRoom || !selectedZones.length" @click="activateTool('edit-zone')">
           <span class="tool-symbol">◇</span><span>调整布置区</span>
         </button>
-        <button class="tool-button" :class="{ active: tool === 'edit-parts' }" :aria-pressed="tool === 'edit-parts'" :disabled="!selectedRoom" @click="activateTool('edit-parts')">
+        <button class="tool-button" :class="{ active: tool === 'edit-parts' }" :aria-pressed="tool === 'edit-parts'" :disabled="geometryLocked || !selectedRoom" @click="activateTool('edit-parts')">
           <span class="tool-symbol">⌜</span><span>编辑轮廓</span>
         </button>
-        <button class="tool-button" :disabled="selectedRoomIds.length < 2" @click="mergeSelectedRooms">
+        <button class="tool-button" :disabled="geometryLocked || selectedRoomIds.length < 2" @click="mergeSelectedRooms">
           <span class="tool-symbol">合</span><span>{{ selectedRoomIds.length > 1 ? `合并 ${selectedRoomIds.length}` : '合并' }}</span>
         </button>
-        <button class="tool-button danger" :disabled="!selectedRoomIds.length" @click="removeSelected">
+        <button class="tool-button danger" :disabled="geometryLocked || !selectedRoomIds.length" @click="removeSelected">
           <span class="tool-symbol">×</span><span>删除</span>
+        </button>
+        <span class="tool-group-label">办公布置</span>
+        <button class="tool-button" :class="{ active: tool === 'furniture' }" :aria-pressed="tool === 'furniture'" :disabled="!selectedRoom" @click="activateTool('furniture')">
+          <span class="tool-symbol">▤</span><span>摆家具</span>
         </button>
       </aside>
 
       <section class="canvas-column">
         <div class="canvas-guide">
           <span class="guide-indicator" />
-          <span>{{ activeToolDescription }}</span>
-          <span class="guide-shortcut">按 {{ layout.canvas.gridMm }}mm 网格吸附</span>
+          <span class="guide-description">{{ activeToolDescription }}</span>
+          <span class="guide-shortcut">拖拽 {{ layout.canvas.gridMm }}mm · 输入 1mm</span>
+          <div v-if="!readonly" class="canvas-history-controls" aria-label="画布操作历史">
+            <n-button size="tiny" secondary :disabled="!history.length" title="撤销上一步（Ctrl+Z）" @click="undo">↶ 撤销</n-button>
+            <n-button size="tiny" secondary :disabled="!future.length" title="重做（Ctrl+Shift+Z）" @click="redo">↷ 重做</n-button>
+          </div>
         </div>
         <div v-if="editFeedback" class="editor-feedback" :class="editFeedback.type" role="status">
           {{ editFeedback.message }}
         </div>
-        <div class="manual-canvas-shell" :style="{ aspectRatio: `${layout.canvas.widthMm} / ${layout.canvas.heightMm}` }">
+        <div class="manual-canvas-shell">
           <svg
             ref="svgRef"
             class="manual-canvas"
+            tabindex="0"
+            aria-label="空间布局画布"
             :class="{
               'is-panning': tool === 'pan',
               'is-drawing': tool === 'draw-room' || tool === 'draw-part' || tool === 'placement',
@@ -903,21 +1263,23 @@ function areaText(room: ManualLayoutRoom): string {
             }"
             :viewBox="viewBox"
             preserveAspectRatio="xMidYMid meet"
+            @pointerdown.capture="handleCanvasPointerCapture"
             @pointerdown="beginCanvasPointer"
             @pointermove="handlePointerMove"
             @pointerup="handlePointerUp"
             @pointercancel="handlePointerUp"
+            @wheel.prevent="handleWheel"
           >
             <defs>
               <pattern id="manual-grid-small" :width="layout.canvas.gridMm" :height="layout.canvas.gridMm" patternUnits="userSpaceOnUse">
-                <path :d="`M ${layout.canvas.gridMm} 0 L 0 0 0 ${layout.canvas.gridMm}`" class="grid-minor" fill="none" />
+                <path v-if="showMinorGrid" :d="`M ${layout.canvas.gridMm} 0 L 0 0 0 ${layout.canvas.gridMm}`" class="grid-minor" fill="none" />
               </pattern>
               <pattern id="manual-grid-large" :width="layout.canvas.gridMm * 5" :height="layout.canvas.gridMm * 5" patternUnits="userSpaceOnUse">
-                <rect :width="layout.canvas.gridMm * 5" :height="layout.canvas.gridMm * 5" fill="url(#manual-grid-small)" />
-                <path :d="`M ${layout.canvas.gridMm * 5} 0 L 0 0 0 ${layout.canvas.gridMm * 5}`" class="grid-major" fill="none" />
+                <rect v-if="showMinorGrid" :width="layout.canvas.gridMm * 5" :height="layout.canvas.gridMm * 5" fill="url(#manual-grid-small)" />
+                <path v-if="showMajorGrid" :d="`M ${layout.canvas.gridMm * 5} 0 L 0 0 0 ${layout.canvas.gridMm * 5}`" class="grid-major" fill="none" />
               </pattern>
             </defs>
-            <rect width="100%" height="100%" fill="url(#manual-grid-large)" />
+            <rect :x="panX" :y="panY" :width="visibleSize.width" :height="visibleSize.height" fill="url(#manual-grid-large)" />
 
             <g
               v-for="room in layout.rooms"
@@ -964,6 +1326,21 @@ function areaText(room: ManualLayoutRoom): string {
                 :pointer-events="tool === 'edit-zone' && !readonly ? 'all' : 'none'"
                 @pointerdown="event => beginZoneMove(event, room, index)"
               />
+            </g>
+            <g v-for="item in furnitureItems" :key="item.id" @pointerdown.stop="event => beginFurnitureMove(event, item)">
+              <ManualFurnitureGlyph
+                :item="renderedFurniture(item)"
+                :selected="selectedFurnitureIds.includes(item.id)"
+                :invalid="furnitureOutsideIds.has(item.id)"
+              />
+            </g>
+            <g v-if="selectedFurniture" class="furniture-dimensions" pointer-events="none">
+              <template v-if="selectedFurnitureBounds">
+                <line :x1="selectedFurnitureBounds.x" :y1="selectedFurnitureBounds.y - 180 / zoom" :x2="selectedFurnitureBounds.x + selectedFurnitureBounds.w" :y2="selectedFurnitureBounds.y - 180 / zoom" />
+                <line :x1="selectedFurnitureBounds.x - 180 / zoom" :y1="selectedFurnitureBounds.y" :x2="selectedFurnitureBounds.x - 180 / zoom" :y2="selectedFurnitureBounds.y + selectedFurnitureBounds.h" />
+                <text :x="selectedFurnitureBounds.x + selectedFurnitureBounds.w / 2" :y="selectedFurnitureBounds.y - 260 / zoom" :font-size="145 / zoom" text-anchor="middle">{{ selectedFurnitureBounds.w.toLocaleString() }} mm</text>
+                <text :x="selectedFurnitureBounds.x - 250 / zoom" :y="selectedFurnitureBounds.y + selectedFurnitureBounds.h / 2" :font-size="145 / zoom" text-anchor="middle" :transform="`rotate(-90 ${selectedFurnitureBounds.x - 250 / zoom} ${selectedFurnitureBounds.y + selectedFurnitureBounds.h / 2})`">{{ selectedFurnitureBounds.h.toLocaleString() }} mm</text>
+              </template>
             </g>
             <g
               v-if="showPlacementZone && showWallClearances && selectedRoom && wallClearances.length"
@@ -1112,12 +1489,75 @@ function areaText(room: ManualLayoutRoom): string {
           </svg>
         </div>
         <footer class="canvas-statusbar">
-          <span>画布 {{ layout.canvas.widthMm }} × {{ layout.canvas.heightMm }}mm</span>
-          <span>{{ tool === 'edit-parts' ? '轮廓编辑模式：点击虚线组成块后调整' : tool === 'edit-zone' ? '布置区编辑模式：拖动区域或控制点' : '空间模式：拖动即整体移动' }} · Shift + 点击可多选</span>
+          <span>无限画布 · 无固定边界 · 滚轮缩放 · 中键平移</span>
+          <span>{{ tool === 'furniture' ? '规划家具：选模板后点击放置；Shift / Ctrl + 点击可多选已有家具' : tool === 'edit-parts' ? '轮廓编辑模式：点击虚线组成块后调整' : tool === 'edit-zone' ? '布置区编辑模式：拖动区域或控制点' : '空间模式：拖动即整体移动；Shift + 点击可多选空间' }}</span>
         </footer>
       </section>
 
-      <aside class="manual-properties">
+      <aside ref="propertiesRef" class="manual-properties">
+        <section v-if="selectedFurnitureItems.length > 1" class="property-section furniture-selection">
+          <div class="section-heading"><div><span>SELECTED OBJECTS</span><strong>已选 {{ selectedFurnitureItems.length }} 件家具</strong></div><b>多选</b></div>
+          <small>{{ selectedFurnitureItems.map(item => furnitureById.get(item.templateId)?.name ?? item.templateId).join(' · ') }}</small>
+          <button type="button" @click="selectFurniture([])">取消选择</button>
+        </section>
+        <section v-if="selectedFurniture && selectedFurnitureTemplate" class="property-section furniture-detail">
+          <div class="section-heading"><div><span>SELECTED OBJECT</span><strong>{{ selectedFurnitureTemplate.name }}</strong></div><b>已选家具</b></div>
+          <div class="part-grid">
+            <label><span>{{ selectedFurnitureTemplate.kind === 'round-table' || selectedFurnitureTemplate.kind === 'plant' ? '直径' : '长度' }} mm</span><n-input-number :value="selectedFurniture.widthMm" :min="100" :max="10000" :show-button="false" :disabled="readonly" @update:value="value => updateFurnitureDimension('widthMm', value)" /></label>
+            <label v-if="selectedFurnitureTemplate.kind !== 'round-table' && selectedFurnitureTemplate.kind !== 'plant'"><span>进深 mm</span><n-input-number :value="selectedFurniture.depthMm" :min="100" :max="10000" :show-button="false" :disabled="readonly" @update:value="value => updateFurnitureDimension('depthMm', value)" /></label>
+            <label v-if="selectedFurnitureTemplate.kind === 'l-desk' || selectedFurnitureTemplate.kind === 'rounded-l-desk' || selectedFurnitureTemplate.kind === 'u-desk'"><span>侧翼桌面宽 mm</span><n-input-number :value="selectedFurniture.wingWidthMm ?? 550" :min="100" :show-button="false" :disabled="readonly" @update:value="value => updateFurnitureDimension('wingWidthMm', value)" /></label>
+            <label v-if="selectedFurnitureTemplate.heightMm"><span>柜体高度 mm</span><n-input-number :value="selectedFurniture.heightMm ?? selectedFurnitureTemplate.heightMm" :min="selectedFurnitureTemplate.heightMinMm" :max="selectedFurnitureTemplate.heightMaxMm" :show-button="false" :disabled="readonly" @update:value="value => updateFurnitureDimension('heightMm', value)" /></label>
+          </div>
+          <div v-if="selectedFurnitureTemplate.sizeOptions?.length" class="furniture-size-options">
+            <span>参考常用规格 · 点击后仍可手动微调</span>
+            <div>
+              <button
+                v-for="[widthMm, depthMm] in selectedFurnitureTemplate.sizeOptions" :key="`${widthMm}-${depthMm}`"
+                type="button" :disabled="readonly" :aria-pressed="selectedFurniture.widthMm === widthMm && selectedFurniture.depthMm === depthMm"
+                @click="applyFurnitureSize(widthMm, depthMm)"
+              >
+                {{ widthMm }} × {{ depthMm }}
+              </button>
+            </div>
+          </div>
+          <span class="furniture-position">中心坐标 {{ selectedFurniture.xMm }} × {{ selectedFurniture.yMm }} mm · 朝向 {{ selectedFurniture.rotationDeg }}°</span>
+          <div v-if="!readonly" class="furniture-actions">
+            <button type="button" @click="rotateSelectedFurniture">旋转 90°</button>
+            <button type="button" @click="duplicateSelectedFurniture">复制</button>
+            <button type="button" @click="deleteSelectedFurniture">删除</button>
+          </div>
+          <small v-if="furnitureOverlapIds.has(selectedFurniture.id)" class="furniture-warning">与其他家具占地重叠，请核对摆放关系。</small>
+        </section>
+        <section v-if="!readonly" class="property-section furniture-catalog">
+          <div class="section-heading"><div><span>OFFICE OBJECTS</span><strong>办公家具图例</strong></div><b>{{ furnitureCatalogTemplates.length }} 种</b></div>
+          <small>先选空间和图例，再点击画布放置。卡片示意与画布使用同一套参数化线稿。</small>
+          <details v-for="category in furnitureCategories" :key="category" :open="category === furnitureCategories[0]">
+            <summary>{{ category }}<span>{{ furnitureCatalogTemplates.filter(entry => entry.category === category).length }} 款</span></summary>
+            <div class="furniture-template-grid">
+              <button
+                v-for="template in furnitureCatalogTemplates.filter(entry => entry.category === category)"
+                :key="template.id" type="button" :disabled="!selectedRoom"
+                :class="{ active: selectedTemplateId === template.id }"
+                :aria-pressed="selectedTemplateId === template.id"
+                :title="`${template.name} · ${template.widthMm} × ${template.depthMm} mm${template.heightMm ? ` · 高 ${template.heightMm} mm` : ''}`"
+                @click="chooseFurnitureTemplate(template.id)"
+              >
+                <svg class="furniture-template-preview" :viewBox="thumbnailViewBox(template)" aria-hidden="true">
+                  <ManualFurnitureGlyph :item="thumbnailItem(template)" />
+                </svg>
+                <span class="furniture-template-copy"><b>{{ template.name }}</b><small>{{ template.widthMm }} × {{ template.depthMm }}</small><small v-if="template.heightMm">高 {{ template.heightMinMm === 1500 ? '≥1500' : template.heightMaxMm === 400 ? '≤400' : '401–1500' }} mm</small></span>
+              </button>
+            </div>
+          </details>
+          <div class="subsection-title"><span>选中家具快捷排布</span><b>已选 {{ selectedFurnitureIds.length }} 件</b></div>
+          <small class="furniture-arrangement-hint">先将家具摆到画布，再按 Shift / Ctrl 点击多选同一空间中的家具。按选择顺序排布，只改位置，不新增或替换家具。</small>
+          <div class="furniture-preset-grid">
+            <button type="button" :disabled="selectedFurnitureIds.length !== 2" title="只重排选中的 2 件家具" @click="arrangeSelectedFurniture('pair')">双人对坐 · 2 件</button>
+            <button type="button" :disabled="selectedFurnitureIds.length !== 4" title="只重排选中的 4 件家具" @click="arrangeSelectedFurniture('island')">四人岛式 · 4 件</button>
+            <button type="button" :disabled="selectedFurnitureIds.length !== 6" title="只重排选中的 6 件家具，不自动补会议桌" @click="arrangeSelectedFurniture('meeting')">六人会议 · 6 件</button>
+            <button type="button" :disabled="selectedFurnitureIds.length !== 4" title="只重排选中的 4 件家具，不自动补前台或沙发" @click="arrangeSelectedFurniture('reception')">前台接待 · 4 件</button>
+          </div>
+        </section>
         <section class="property-section space-section">
           <div class="section-heading">
             <div><span>SPACES</span><strong>空间列表</strong></div>
@@ -1153,11 +1593,11 @@ function areaText(room: ManualLayoutRoom): string {
           </div>
           <label class="property-field">
             <span>空间名称</span>
-            <n-input :value="selectedRoom.label" size="small" :disabled="readonly" @update:value="value => updateSelectedRoom('label', value)" />
+            <n-input :value="selectedRoom.label" size="small" :disabled="geometryLocked" @update:value="value => updateSelectedRoom('label', value)" />
           </label>
           <label class="property-field">
             <span>空间类型</span>
-            <n-select :value="selectedRoom.roomType" :options="roomTypeOptions" size="small" :disabled="readonly" @update:value="value => updateSelectedRoom('roomType', value)" />
+            <n-select :value="selectedRoom.roomType" :options="roomTypeOptions" size="small" :disabled="geometryLocked" @update:value="value => updateSelectedRoom('roomType', value)" />
           </label>
           <div class="metric-grid">
             <div><span>面积</span><b>{{ areaText(selectedRoom) }}</b></div>
@@ -1171,11 +1611,11 @@ function areaText(room: ManualLayoutRoom): string {
                 <button type="button" class="zone-select" @click="selectedZoneIndex = index">
                   {{ index === 0 ? '主布置区' : `布置区 ${index + 1}` }} · {{ zone.w }} × {{ zone.h }} mm
                 </button>
-                <button v-if="index > 0 && !readonly" type="button" title="设为主布置区" @click="makePrimaryZone(index)">设主</button>
-                <button v-if="!readonly" type="button" title="删除此布置区" @click="removeSelectedZone(index)">删除</button>
+                <button v-if="index > 0 && !geometryLocked" type="button" title="设为主布置区" @click="makePrimaryZone(index)">设主</button>
+                <button v-if="!geometryLocked" type="button" title="删除此布置区" @click="removeSelectedZone(index)">删除</button>
               </div>
             </div>
-            <div v-if="!readonly && selectedZone" class="part-grid zone-grid">
+            <div v-if="!geometryLocked && selectedZone" class="part-grid zone-grid">
               <label><span>X 坐标</span><n-input-number :value="selectedZone.x" :show-button="false" @update:value="value => updateZone('x', value)" /></label>
               <label><span>Y 坐标</span><n-input-number :value="selectedZone.y" :show-button="false" @update:value="value => updateZone('y', value)" /></label>
               <label><span>宽度</span><n-input-number :value="selectedZone.w" :show-button="false" @update:value="value => updateZone('w', value)" /></label>
@@ -1203,7 +1643,7 @@ function areaText(room: ManualLayoutRoom): string {
             </div>
           </div>
 
-          <template v-if="tool === 'edit-parts' && selectedPart">
+          <template v-if="!geometryLocked && tool === 'edit-parts' && selectedPart">
             <div class="subsection-title"><span>选中形状块</span><b>mm</b></div>
             <div class="part-grid">
               <label><span>X 坐标</span><n-input-number :value="selectedPart.x" :show-button="false" :disabled="readonly" @update:value="value => updatePart('x', value)" /></label>
@@ -1233,17 +1673,16 @@ function areaText(room: ManualLayoutRoom): string {
 </template>
 
 <style scoped>
-.manual-layout-editor { min-width: 0; border: 1px solid var(--rsdp-border); background: var(--rsdp-card-bg); }
+.manual-layout-editor { --editor-workspace-height: clamp(720px, calc(100vh - 180px), 920px); min-width: 0; border: 1px solid var(--rsdp-border); background: var(--rsdp-card-bg); }
 .editor-topbar { display: flex; min-height: 56px; align-items: center; justify-content: space-between; gap: 20px; padding: 0 16px; border-bottom: 1px solid var(--rsdp-border); }
 .editor-topbar > div:first-child { display: flex; align-items: baseline; gap: 10px; }
 .editor-topbar strong { color: var(--rsdp-text); font-size: 14px; font-weight: 600; }
 .editor-eyebrow { color: var(--rsdp-text-secondary); font-family: var(--rsdp-font-mono); font-size: 10px; letter-spacing: .14em; }
 .view-controls { display: flex; align-items: center; gap: 2px; }
-.control-divider { width: 1px; height: 18px; margin: 0 6px; background: var(--rsdp-border); }
 .manual-scale { min-width: 44px; color: var(--rsdp-text-secondary); font-family: var(--rsdp-font-mono); font-size: 11px; text-align: center; white-space: nowrap; }
-.manual-workspace { display: grid; grid-template-columns: 88px minmax(0, 1fr) 320px; min-height: 620px; }
+.manual-workspace { display: grid; grid-template-columns: 88px minmax(0, 1fr) 320px; min-height: var(--editor-workspace-height); align-items: start; }
 .is-readonly .manual-workspace { grid-template-columns: minmax(0, 1fr) 320px; }
-.manual-toolrail { display: flex; flex-direction: column; gap: 3px; padding: 14px 8px; border-right: 1px solid var(--rsdp-border); background: color-mix(in srgb, var(--rsdp-bg) 78%, var(--rsdp-card-bg)); }
+.manual-toolrail { display: flex; position: sticky; top: 12px; flex-direction: column; gap: 3px; padding: 14px 8px; border-right: 1px solid var(--rsdp-border); background: color-mix(in srgb, var(--rsdp-bg) 78%, var(--rsdp-card-bg)); }
 .tool-group-label { margin: 8px 6px 4px; color: var(--rsdp-text-tertiary, var(--rsdp-text-secondary)); font-family: var(--rsdp-font-mono); font-size: 9px; letter-spacing: .12em; }
 .tool-group-label:first-child { margin-top: 0; }
 .tool-button { display: flex; min-height: 54px; align-items: center; justify-content: center; flex-direction: column; gap: 4px; border: 1px solid transparent; color: var(--rsdp-text-secondary); background: transparent; cursor: pointer; font: inherit; font-size: 11px; }
@@ -1252,14 +1691,16 @@ function areaText(room: ManualLayoutRoom): string {
 .tool-button.danger:hover:not(:disabled) { color: var(--rsdp-error); }
 .tool-button:disabled { opacity: .32; cursor: not-allowed; }
 .tool-symbol { font-family: var(--rsdp-font-mono); font-size: 17px; line-height: 1; }
-.canvas-column { display: flex; min-width: 0; flex-direction: column; background: var(--rsdp-bg); }
+.canvas-column { display: flex; position: sticky; top: 12px; height: var(--editor-workspace-height); min-width: 0; flex-direction: column; background: var(--rsdp-bg); }
 .canvas-guide, .canvas-statusbar { display: flex; min-height: 34px; align-items: center; gap: 8px; padding: 0 14px; color: var(--rsdp-text-secondary); font-size: 11px; }
 .canvas-guide { border-bottom: 1px solid var(--rsdp-border); background: var(--rsdp-card-bg); }
+.guide-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-history-controls { display: flex; flex: none; gap: 4px; margin-left: auto; }
 .editor-feedback { padding: 8px 14px; border-bottom: 1px solid; font-size: 11px; line-height: 1.5; }
 .editor-feedback.error { border-color: color-mix(in srgb, var(--rsdp-error) 45%, var(--rsdp-border)); color: var(--rsdp-error); background: color-mix(in srgb, var(--rsdp-error) 7%, var(--rsdp-card-bg)); }
 .editor-feedback.success { border-color: color-mix(in srgb, var(--rsdp-success) 45%, var(--rsdp-border)); color: var(--rsdp-success); background: color-mix(in srgb, var(--rsdp-success) 7%, var(--rsdp-card-bg)); }
-.guide-indicator { width: 6px; height: 6px; background: var(--rsdp-success); }
-.guide-shortcut { margin-left: auto; }
+.guide-indicator { width: 6px; height: 6px; flex: none; background: var(--rsdp-success); }
+.guide-shortcut { flex: none; white-space: nowrap; }
 .canvas-statusbar { justify-content: space-between; border-top: 1px solid var(--rsdp-border); font-family: var(--rsdp-font-mono); }
 .manual-canvas-shell { flex: 1; min-height: 550px; overflow: hidden; background: var(--rsdp-bg); }
 .manual-canvas { width: 100%; height: 100%; min-height: 550px; touch-action: none; user-select: none; }
@@ -1288,13 +1729,16 @@ function areaText(room: ManualLayoutRoom): string {
 .dimension-line { stroke: color-mix(in srgb, var(--rsdp-text-secondary) 76%, transparent); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .dimension-extension { stroke: color-mix(in srgb, var(--rsdp-text-secondary) 42%, transparent); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
 .dimension-text { fill: var(--rsdp-text-secondary); font-family: var(--rsdp-font-mono); font-weight: 600; letter-spacing: .02em; }
+.furniture-dimensions { fill: var(--rsdp-primary); stroke: var(--rsdp-primary); stroke-width: 1; vector-effect: non-scaling-stroke; font-family: var(--rsdp-font-mono); }
+.furniture-dimensions line { vector-effect: non-scaling-stroke; }
+.furniture-dimensions text { stroke: var(--rsdp-card-bg); stroke-width: 3px; paint-order: stroke; }
 .resize-handle { fill: var(--rsdp-card-bg); stroke: var(--rsdp-primary); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: all; }
 .resize-handle.n, .resize-handle.s { cursor: ns-resize; }
 .resize-handle.e, .resize-handle.w { cursor: ew-resize; }
 .resize-handle.ne, .resize-handle.sw { cursor: nesw-resize; }
 .resize-handle.nw, .resize-handle.se { cursor: nwse-resize; }
 .draft-rect { fill: color-mix(in srgb, var(--rsdp-primary) 12%, transparent); stroke: var(--rsdp-primary); stroke-width: 2; stroke-dasharray: 8 5; vector-effect: non-scaling-stroke; }
-.manual-properties { display: flex; min-width: 0; max-height: 688px; flex-direction: column; overflow-y: auto; border-left: 1px solid var(--rsdp-border); background: var(--rsdp-card-bg); }
+.manual-properties { display: flex; position: sticky; top: 12px; height: var(--editor-workspace-height); min-width: 0; flex-direction: column; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; border-left: 1px solid var(--rsdp-border); background: var(--rsdp-card-bg); }
 .property-section { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-bottom: 1px solid var(--rsdp-border); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .section-heading > div { display: flex; flex-direction: column; gap: 2px; }
@@ -1346,14 +1790,53 @@ function areaText(room: ManualLayoutRoom): string {
 .manual-empty p { margin: 0; font-size: 12px; line-height: 1.7; }
 .manual-problems { display: flex; flex-direction: column; gap: 7px; margin-top: auto; padding: 14px 16px; border-top: 1px solid var(--rsdp-error); color: var(--rsdp-error); font-size: 11px; line-height: 1.5; }
 .manual-problems b { color: var(--rsdp-error); }
+.furniture-catalog > small, .furniture-detail > small { color: var(--rsdp-text-secondary); font-size: 10px; line-height: 1.5; }
+.furniture-arrangement-hint { display: block; margin: 8px 0; }
+.furniture-selection { display: flex; flex-direction: column; gap: 9px; background: color-mix(in srgb, var(--rsdp-primary) 4%, var(--rsdp-card-bg)); }
+.furniture-selection small { color: var(--rsdp-text-secondary); font-size: 10px; line-height: 1.5; }
+.furniture-selection button { align-self: flex-start; padding: 5px 8px; border: 1px solid var(--rsdp-border); color: var(--rsdp-text); background: transparent; cursor: pointer; }
+.furniture-detail { background: color-mix(in srgb, var(--rsdp-primary) 4%, var(--rsdp-card-bg)); }
+.furniture-catalog details { border-top: 1px solid var(--rsdp-border); }
+.furniture-catalog summary { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 8px 0; color: var(--rsdp-text); cursor: pointer; font-size: 11px; font-weight: 600; list-style: none; }
+.furniture-catalog summary::-webkit-details-marker { display: none; }
+.furniture-catalog summary::before { content: '›'; display: inline-block; color: var(--rsdp-text-secondary); font-size: 18px; font-weight: 400; line-height: .7; transition: transform .15s ease; }
+.furniture-catalog details[open] summary::before { transform: rotate(90deg); }
+.furniture-catalog summary span { margin-left: auto; font-size: 10px; letter-spacing: 0; }
+.furniture-catalog summary:hover, .furniture-catalog summary:focus-visible { color: var(--rsdp-primary); }
+.furniture-template-grid, .furniture-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.furniture-template-grid button, .furniture-preset-grid button, .furniture-actions button { min-width: 0; padding: 8px; border: 1px solid var(--rsdp-border); color: var(--rsdp-text); background: transparent; cursor: pointer; text-align: left; }
+.furniture-template-grid button { display: flex; min-height: 66px; align-items: center; gap: 7px; padding: 5px; }
+.furniture-template-preview { width: 56px; height: 48px; flex: none; border: 1px solid var(--rsdp-border); background: color-mix(in srgb, var(--rsdp-bg) 55%, var(--rsdp-card-bg)); pointer-events: none; }
+.furniture-template-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
+.furniture-template-grid button b { overflow-wrap: anywhere; font-size: 10px; font-weight: 500; line-height: 1.35; }
+.furniture-template-grid button small { color: var(--rsdp-text-secondary); font-family: var(--rsdp-font-mono); font-size: 9px; white-space: nowrap; }
+.furniture-template-grid button:hover:not(:disabled), .furniture-preset-grid button:hover:not(:disabled) { border-color: var(--rsdp-primary); background: color-mix(in srgb, var(--rsdp-primary) 4%, var(--rsdp-card-bg)); }
+.furniture-template-grid button:focus-visible, .furniture-preset-grid button:focus-visible { outline: 2px solid var(--rsdp-primary); outline-offset: 2px; }
+.furniture-template-grid button.active { border-color: var(--rsdp-primary); color: var(--rsdp-primary); background: color-mix(in srgb, var(--rsdp-primary) 7%, transparent); }
+.furniture-template-grid button:disabled, .furniture-preset-grid button:disabled { opacity: .4; cursor: not-allowed; }
+.furniture-preset-grid button { min-height: 38px; font-size: 11px; text-align: center; }
+.furniture-position { color: var(--rsdp-text-secondary); font-family: var(--rsdp-font-mono); font-size: 10px; }
+.furniture-size-options { display: flex; flex-direction: column; gap: 7px; }
+.furniture-size-options > span { color: var(--rsdp-text-secondary); font-size: 10px; }
+.furniture-size-options > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.furniture-size-options button { padding: 5px 7px; border: 1px solid var(--rsdp-border); color: var(--rsdp-text-secondary); background: var(--rsdp-card-bg); cursor: pointer; font-family: var(--rsdp-font-mono); font-size: 9px; }
+.furniture-size-options button[aria-pressed="true"] { border-color: var(--rsdp-primary); color: var(--rsdp-primary); background: color-mix(in srgb, var(--rsdp-primary) 7%, var(--rsdp-card-bg)); }
+.furniture-size-options button:hover:not(:disabled), .furniture-size-options button:focus-visible { border-color: var(--rsdp-primary); color: var(--rsdp-primary); }
+.furniture-size-options button:disabled { opacity: .5; cursor: not-allowed; }
+.furniture-actions { display: flex; gap: 6px; }
+.furniture-actions button { flex: 1; font-size: 10px; text-align: center; }
+.furniture-detail .furniture-warning { color: var(--rsdp-warning); }
 @media (max-width: 1280px) {
   .manual-workspace { grid-template-columns: 76px minmax(0, 1fr) 280px; }
   .is-readonly .manual-workspace { grid-template-columns: minmax(0, 1fr) 280px; }
+  .guide-shortcut { display: none; }
 }
 @media (max-width: 980px) {
   .manual-workspace, .is-readonly .manual-workspace { grid-template-columns: 76px minmax(0, 1fr); }
-  .manual-properties { grid-column: 1 / -1; max-height: none; border-top: 1px solid var(--rsdp-border); border-left: 0; }
+  .manual-properties { position: static; grid-column: 1 / -1; height: auto; overflow-y: visible; border-top: 1px solid var(--rsdp-border); border-left: 0; }
   .is-readonly .manual-properties { grid-column: 1 / -1; }
+  .canvas-column, .manual-toolrail { position: static; }
+  .canvas-column { height: 680px; }
   .manual-canvas-shell, .manual-canvas { min-height: 460px; }
 }
 @media (max-width: 680px) {

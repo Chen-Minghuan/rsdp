@@ -1862,12 +1862,29 @@ POST   /api/v1/floor-plan/manual           [product:read]
 PUT    /api/v1/floor-plan/{analysisId}/layout   [登录 + 归属校验]
        # 保存 manual 草稿完整快照；expectedRevision 通过 CAS 乐观锁防止多页面覆盖。
        # 草稿阶段允许暂时不连通/重叠，便于编辑中间态；成功后 revision +1。
-       # Request: { expectedRevision, layout: { version: 1,
-       #   canvas: { widthMm, heightMm, gridMm },
+       # Request: { expectedRevision, layout: { version: 1 | 2 | 3,
+       #   canvas: { widthMm, heightMm, gridMm, mode?: "unbounded" },
        #   rooms: [{ clientId, label, roomType,
        #     parts: [{ id, x, y, w, h }], placementZone?: { x, y, w, h },
-       #     placementZones?: [{ x, y, w, h }] }] } }
+       #     placementZones?: [{ x, y, w, h }] }],
+       #   furniture?: [{ id, templateId, roomClientId, xMm, yMm, widthMm, depthMm,
+       #     rotationDeg: 0|90|180|270, wingWidthMm?, heightMm? }] } }
        # placementZones 为全部布置区，首个是主布置区；旧草稿仅有 placementZone 时按单区处理。
+       # version=2 表示含参数化规划家具；旧 version=1 无 furniture 视为空列表。
+       # version=3 + mode=unbounded：空间/布置区/家具均使用可为负的世界毫米坐标，
+       #   不受起始视野宽高限制；旧 v1/v2 布局继续按原画布边界校验，旧草稿首次编辑升级 v3。
+       #   当前 Integer 毫米坐标的技术安全范围约为 ±1000km，仅防整数/面积计算溢出，
+       #   不按视野裁切绘制，也不作为常规业务画布边界。
+       # Response: { analysisId, layoutRevision }
+
+PUT    /api/v1/floor-plan/{analysisId}/layout/furniture   [登录 + 归属校验]
+       # 仅 manual + confirmed；只替换 layout_json.furniture，不修改 rooms/parts/placementZones
+       # 或已物化的 floor_plan_room。expectedRevision 采用 CAS，成功后 revision +1。
+       # Request: { expectedRevision, furniture: [同上家具实例] }
+       # 后端校验 40 个内置模板、毫米尺寸/朝向、归属空间及家具外包矩形完全在空间内；
+       # 圆形直径一致，L/U 侧翼宽受限。柜体 heightMm 可选（旧布局兼容），
+       # 提供时需匹配底抽柜 100–400、矮柜 401–1500、高柜 1500–3000 mm；
+       # 高度不改变俯视占地。家具重叠仅前端提醒，不阻断保存。
        # Response: { analysisId, layoutRevision }
 
 POST   /api/v1/floor-plan/{analysisId}/layout/confirm   [登录 + 归属校验]

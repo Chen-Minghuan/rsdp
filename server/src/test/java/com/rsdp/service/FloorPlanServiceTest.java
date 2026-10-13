@@ -9,6 +9,7 @@ import com.rsdp.dto.FloorPlanDetectResult;
 import com.rsdp.dto.request.FloorPlanConfirmRequest;
 import com.rsdp.dto.request.ManualFloorPlanCreateRequest;
 import com.rsdp.dto.request.ManualFloorPlanLayoutRequest;
+import com.rsdp.dto.request.ManualFloorPlanFurnitureSaveRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.entity.AsyncTask;
@@ -207,6 +208,50 @@ class FloorPlanServiceTest {
             "FPA-MANUAL", new ManualFloorPlanLayoutRequest(3L, emptyManualLayout())))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("当前版本 4");
+    }
+
+    @Test
+    void saveManualFurnitureLayout_shouldPreserveConfirmedGeometry() throws Exception {
+        var sourceRoom = new ManualFloorPlanLayoutRequest.Room("room-1", "办公室", "OFFICE",
+            List.of(new ManualFloorPlanLayoutRequest.Rect("part-1", 1000, 1000, 4000, 3000)), null, null);
+        var oldLayout = new ManualFloorPlanLayoutRequest.Layout(1,
+            new ManualFloorPlanLayoutRequest.Canvas(14_000, 10_000, 100), List.of(sourceRoom));
+        FloorPlanAnalysis analysis = manualDraft("FPA-MANUAL", 4L, objectMapper.writeValueAsString(oldLayout));
+        analysis.setStatus(FloorPlanService.STATUS_CONFIRMED);
+        when(analysisMapper.selectById("FPA-MANUAL")).thenReturn(analysis);
+        when(analysisMapper.updateManualFurnitureLayout(anyString(), anyLong(), anyString())).thenReturn(1);
+        var furniture = new ManualFloorPlanLayoutRequest.Furniture(
+            "f1", "desk-straight", "room-1", 2500, 2200, 1400, 700, 0, null);
+
+        var response = floorPlanService.saveManualFurnitureLayout("FPA-MANUAL",
+            new ManualFloorPlanFurnitureSaveRequest(4L, List.of(furniture)));
+
+        assertThat(response.layoutRevision()).isEqualTo(5L);
+        ArgumentCaptor<ManualFloorPlanLayoutRequest.Layout> checked =
+            ArgumentCaptor.forClass(ManualFloorPlanLayoutRequest.Layout.class);
+        verify(manualLayoutGeometryService).compute(checked.capture());
+        assertThat(checked.getValue().rooms()).containsExactly(sourceRoom);
+        assertThat(checked.getValue().furniture()).containsExactly(furniture);
+        verify(analysisMapper).updateManualFurnitureLayout(
+            org.mockito.ArgumentMatchers.eq("FPA-MANUAL"), org.mockito.ArgumentMatchers.eq(4L),
+            org.mockito.ArgumentMatchers.contains("\"part-1\""));
+        verify(roomMapper, never()).insert(any(FloorPlanRoom.class));
+        verify(roomMapper, never()).delete(any());
+    }
+
+    @Test
+    void saveManualFurnitureLayout_shouldRejectDraftAndRevisionConflict() throws Exception {
+        var oldLayout = new ManualFloorPlanLayoutRequest.Layout(1,
+            new ManualFloorPlanLayoutRequest.Canvas(14_000, 10_000, 100), List.of());
+        FloorPlanAnalysis analysis = manualDraft("FPA-MANUAL", 4L, objectMapper.writeValueAsString(oldLayout));
+        when(analysisMapper.selectById("FPA-MANUAL")).thenReturn(analysis);
+        var request = new ManualFloorPlanFurnitureSaveRequest(3L, List.of());
+        assertThatThrownBy(() -> floorPlanService.saveManualFurnitureLayout("FPA-MANUAL", request))
+            .isInstanceOf(BusinessException.class).hasMessageContaining("仅已确认");
+        analysis.setStatus(FloorPlanService.STATUS_CONFIRMED);
+        when(analysisMapper.updateManualFurnitureLayout(anyString(), anyLong(), anyString())).thenReturn(0);
+        assertThatThrownBy(() -> floorPlanService.saveManualFurnitureLayout("FPA-MANUAL", request))
+            .isInstanceOf(BusinessException.class).hasMessageContaining("当前版本 4");
     }
 
     @Test

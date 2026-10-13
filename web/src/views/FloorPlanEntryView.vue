@@ -36,6 +36,7 @@ import {
   createManualFloorPlan,
   generateFloorPlanScheme,
   getFloorPlanAnalysis,
+  saveManualFloorPlanFurniture,
   saveManualFloorPlanLayout
 } from '@/api/floorPlan'
 import { listDicts } from '@/api/dict'
@@ -753,7 +754,7 @@ async function persistManualLayout(showSuccess = true): Promise<void> {
     return
   }
   if (!analysisId.value || !manualLayout.value || !manualDirty.value) {
-    if (showSuccess && analysisId.value) message.success('草稿已保存')
+    if (showSuccess && analysisId.value) message.success(analysisStatus.value === 'confirmed' ? '家具布局已保存' : '草稿已保存')
     return
   }
 
@@ -762,17 +763,15 @@ async function persistManualLayout(showSuccess = true): Promise<void> {
   manualDirty.value = false
   manualSaving.value = true
   manualSaveInFlight = (async () => {
-    const result = await saveManualFloorPlanLayout(
-      analysisId.value,
-      expectedRevision,
-      snapshot,
-      { signal }
-    )
+    const result = analysisStatus.value === 'confirmed'
+      ? await saveManualFloorPlanFurniture(analysisId.value, expectedRevision, snapshot.furniture ?? [], { signal })
+      : await saveManualFloorPlanLayout(analysisId.value, expectedRevision, snapshot, { signal })
     manualLayoutRevision.value = result.layoutRevision
   })()
   try {
     await manualSaveInFlight
-    if (showSuccess) message.success('草稿已保存')
+    errorMessage.value = ''
+    if (showSuccess) message.success(analysisStatus.value === 'confirmed' ? '家具布局已保存' : '草稿已保存')
   } catch (e) {
     manualDirty.value = true
     if (!axios.isCancel(e)) {
@@ -1497,8 +1496,8 @@ onUnmounted(() => {
         <header class="manual-stage-header">
           <div class="manual-stage-copy">
             <span class="manual-stage-eyebrow">STEP 02 · DRAW</span>
-            <h2>绘制空间轮廓</h2>
-            <p>先画空间外形，再按需要拼接不规则轮廓。主布置区用于计算家具可用的实际开间和进深。</p>
+            <h2>{{ analysisStatus === 'confirmed' ? '规划家具摆放' : '绘制空间轮廓与家具' }}</h2>
+            <p>{{ analysisStatus === 'confirmed' ? '空间轮廓已确认并锁定；选择办公家具图例，在空间内放置并按毫米修改尺寸。' : '先画空间外形、拼接轮廓，再选择办公家具图例。主布置区用于计算可用开间和进深。' }}</p>
           </div>
           <div class="manual-stage-meta">
             <div>
@@ -1535,7 +1534,7 @@ onUnmounted(() => {
             />
             <span v-else class="context-value muted">未归属</span>
           </div>
-          <span>V1 支持横平竖直、无孔洞的空间轮廓</span>
+          <span>{{ analysisStatus === 'confirmed' ? '空间轮廓已锁定；规划家具可继续修改' : '空间轮廓支持横平竖直、无孔洞形状' }}</span>
         </div>
 
         <ManualLayoutEditor
@@ -1543,6 +1542,7 @@ onUnmounted(() => {
           :layout="manualLayout"
           :room-type-options="roomTypeOptions"
           :readonly="readonlyMode"
+          :geometry-readonly="analysisStatus === 'confirmed'"
           @update:layout="handleManualLayoutUpdate"
         />
 
@@ -1550,14 +1550,15 @@ onUnmounted(() => {
           <div class="manual-save-state">
             <span :class="{ dirty: manualDirty || manualSaving }" />
             <div>
-              <strong>{{ manualSaving ? '正在保存布局' : manualDirty ? '布局有未保存修改' : '布局草稿已保存' }}</strong>
+              <strong>{{ manualSaving ? '正在保存布局' : manualDirty ? '布局有未保存修改' : analysisStatus === 'confirmed' ? '家具布局已保存' : '布局草稿已保存' }}</strong>
               <small>系统会在修改后自动保存，也可手动保存当前版本。</small>
             </div>
           </div>
           <div class="manual-stage-actions">
             <n-button quaternary @click="resetAll">退出并重新开始</n-button>
-            <n-button :loading="manualSaving" :disabled="!manualDirty && !manualSaving" @click="handleSaveManualDraft">保存草稿</n-button>
-            <n-button type="primary" :loading="confirming" :disabled="!manualLayout?.rooms.length" @click="handleConfirmManualLayout">
+            <n-button :loading="manualSaving" :disabled="!manualDirty && !manualSaving" @click="handleSaveManualDraft">{{ analysisStatus === 'confirmed' ? '保存家具' : '保存草稿' }}</n-button>
+            <n-button v-if="analysisStatus === 'confirmed'" type="primary" @click="currentStep = 3">返回搭配设置</n-button>
+            <n-button v-else type="primary" :loading="confirming" :disabled="!manualLayout?.rooms.length" @click="handleConfirmManualLayout">
               确认布局，进入搭配设置
             </n-button>
           </div>
@@ -1911,6 +1912,7 @@ onUnmounted(() => {
       <n-card v-if="currentStep === 3" :title="isManualFlow ? '设置搭配条件' : '生成搭配方案'">
         <n-spin :show="generating">
           <n-space vertical :size="16">
+            <n-button v-if="isManualGeometry && !readonlyMode" secondary @click="currentStep = 2">返回画布摆放家具</n-button>
             <p class="hint-text">
               系统将按空间尺寸硬规则从产品库筛选候选，再由 AI 按风格协调性终审，生成一套搭配方案（落入方案列表，可转报价单）；选择多个空间时将逐空间搭配并合并为一套方案。
             </p>

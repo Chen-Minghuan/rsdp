@@ -26,6 +26,23 @@ import java.util.Set;
 @Service
 public class ManualLayoutGeometryService {
 
+    private static final Set<String> FURNITURE_TEMPLATES = Set.of(
+        "desk-straight", "desk-l", "desk-l-rounded", "desk-u", "desk-manager",
+        "desk-manager-double", "desk-manager-l", "desk-manager-l-plain",
+        "desk-executive", "desk-executive-l", "desk-executive-l-double",
+        "desk-training", "desk-standing",
+        "counter-straight", "counter-l", "chair-office", "chair-meeting", "chair-visitor",
+        "chair-lounge", "stool-high", "table-conference-rect", "table-conference-oval",
+        "table-meeting-round", "table-meeting-square", "cabinet-low", "cabinet-short", "cabinet-high",
+        "cabinet-mobile", "shelf-open", "locker-staff", "sofa-single", "sofa-double",
+        "sofa-triple", "coffee-rect", "coffee-round", "printer-copier", "water-dispenser",
+        "plant", "whiteboard", "display-screen");
+    private static final Set<String> ROUND_TEMPLATES = Set.of(
+        "stool-high", "table-meeting-round", "coffee-round", "plant");
+    private static final Set<String> WING_TEMPLATES = Set.of(
+        "desk-l", "desk-l-rounded", "desk-u", "desk-manager-l", "desk-manager-l-plain",
+        "desk-executive-l", "desk-executive-l-double", "counter-l");
+
     /**
      * 校验完整布局并计算每个空间的派生几何。
      *
@@ -37,6 +54,23 @@ public class ManualLayoutGeometryService {
         if (layout == null || layout.canvas() == null || layout.rooms() == null) {
             throw new BusinessException("手画布局数据不完整");
         }
+        if (layout.canvas().widthMm() == null || layout.canvas().heightMm() == null
+            || layout.canvas().widthMm() <= 0 || layout.canvas().heightMm() <= 0) {
+            throw new BusinessException("起始视野尺寸无效");
+        }
+        if (layout.canvas().mode() != null && !"unbounded".equals(layout.canvas().mode())) {
+            throw new BusinessException("不支持的手画画布模式");
+        }
+        if (layout.version() != null && layout.version() >= 3
+            && !"unbounded".equals(layout.canvas().mode())) {
+            throw new BusinessException("新版手画布局缺少无界画布模式");
+        }
+        if ("unbounded".equals(layout.canvas().mode())
+            && (layout.version() == null || layout.version() < 3)) {
+            throw new BusinessException("无界画布需要布局结构版本 3");
+        }
+        boolean unbounded = layout.version() != null && layout.version() >= 3
+            && "unbounded".equals(layout.canvas().mode());
         int canvasWidth = layout.canvas().widthMm();
         int canvasHeight = layout.canvas().heightMm();
         Set<String> roomIds = new HashSet<>();
@@ -45,20 +79,78 @@ public class ManualLayoutGeometryService {
             if (!roomIds.add(room.clientId())) {
                 throw new BusinessException("空间临时 ID 重复: " + room.clientId());
             }
-            rooms.add(computeRoom(room, canvasWidth, canvasHeight));
+            rooms.add(computeRoom(room, canvasWidth, canvasHeight, unbounded));
         }
         assertRoomsDoNotOverlap(rooms);
+        validateFurniture(layout, canvasWidth, canvasHeight, unbounded);
         return new ComputedLayout(List.copyOf(rooms));
     }
 
+    private static void validateFurniture(ManualFloorPlanLayoutRequest.Layout layout,
+                                          int canvasWidth, int canvasHeight, boolean unbounded) {
+        if (layout.furniture() == null) return;
+        if (layout.furniture().size() > 300) throw new BusinessException("单个布局最多支持 300 件规划家具");
+        Map<String, ManualFloorPlanLayoutRequest.Room> roomById = new HashMap<>();
+        layout.rooms().forEach(room -> roomById.put(room.clientId(), room));
+        Set<String> ids = new HashSet<>();
+        for (var item : layout.furniture()) {
+            if (item == null || !StringUtils.hasText(item.id()) || !ids.add(item.id())) {
+                throw new BusinessException("规划家具 ID 为空或重复");
+            }
+            if (item.templateId() == null || !FURNITURE_TEMPLATES.contains(item.templateId())) {
+                throw new BusinessException("不支持的规划家具图例: " + item.templateId());
+            }
+            var room = roomById.get(item.roomClientId());
+            if (room == null) throw new BusinessException("规划家具缺少归属空间: " + item.id());
+            if (item.xMm() == null || item.yMm() == null || item.widthMm() == null
+                || item.depthMm() == null || item.rotationDeg() == null
+                || item.widthMm() < 100 || item.widthMm() > 10000
+                || item.depthMm() < 100 || item.depthMm() > 10000
+                || !Set.of(0, 90, 180, 270).contains(item.rotationDeg())) {
+                throw new BusinessException("规划家具尺寸、位置或朝向无效: " + item.id());
+            }
+            if (ROUND_TEMPLATES.contains(item.templateId()) && !item.widthMm().equals(item.depthMm())) {
+                throw new BusinessException("圆形规划家具的长宽必须相同: " + item.id());
+            }
+            if (WING_TEMPLATES.contains(item.templateId())
+                && (item.wingWidthMm() == null || item.wingWidthMm() < 100
+                    || item.wingWidthMm() >= Math.min(item.widthMm(), item.depthMm()) / 2)) {
+                throw new BusinessException("L/U 形规划家具的侧翼桌面宽无效: " + item.id());
+            }
+            if (item.heightMm() != null) {
+                boolean validCabinetHeight = switch (item.templateId()) {
+                    case "cabinet-low" -> item.heightMm() >= 100 && item.heightMm() <= 400;
+                    case "cabinet-short" -> item.heightMm() > 400 && item.heightMm() <= 1500;
+                    case "cabinet-high" -> item.heightMm() >= 1500 && item.heightMm() <= 3000;
+                    default -> false;
+                };
+                if (!validCabinetHeight) {
+                    throw new BusinessException("规划家具高度与图例类型不匹配: " + item.id());
+                }
+            }
+            boolean turned = item.rotationDeg() == 90 || item.rotationDeg() == 270;
+            int width = turned ? item.depthMm() : item.widthMm();
+            int depth = turned ? item.widthMm() : item.depthMm();
+            int left = (int) Math.floorDiv(2L * item.xMm() - width, 2);
+            int top = (int) Math.floorDiv(2L * item.yMm() - depth, 2);
+            int right = (int) Math.floorDiv(2L * item.xMm() + width + 1, 2);
+            int bottom = (int) Math.floorDiv(2L * item.yMm() + depth + 1, 2);
+            var bounds = new ManualFloorPlanLayoutRequest.Rect(null, left, top, right - left, bottom - top);
+            validateRect(bounds, canvasWidth, canvasHeight, unbounded, "规划家具 " + item.id());
+            if (coveredArea(bounds, room.parts()) != rectArea(bounds)) {
+                throw new BusinessException("规划家具超出所属空间: " + item.id());
+            }
+        }
+    }
+
     private ComputedRoom computeRoom(ManualFloorPlanLayoutRequest.Room room,
-                                     int canvasWidth, int canvasHeight) {
+                                     int canvasWidth, int canvasHeight, boolean unbounded) {
         if (room.parts() == null || room.parts().isEmpty()) {
             throw new BusinessException(roomName(room) + "至少需要一个形状块");
         }
         Set<String> partIds = new HashSet<>();
         for (ManualFloorPlanLayoutRequest.Rect part : room.parts()) {
-            validateRect(part, canvasWidth, canvasHeight, roomName(room));
+            validateRect(part, canvasWidth, canvasHeight, unbounded, roomName(room));
             if (!StringUtils.hasText(part.id())) {
                 throw new BusinessException(roomName(room) + "存在缺少 ID 的形状块");
             }
@@ -95,7 +187,7 @@ public class ManualLayoutGeometryService {
         }
         for (int index = 0; index < zones.size(); index++) {
             var zone = zones.get(index);
-            validateRect(zone, canvasWidth, canvasHeight, roomName(room) + "布置区 " + (index + 1));
+            validateRect(zone, canvasWidth, canvasHeight, unbounded, roomName(room) + "布置区 " + (index + 1));
             if (coveredArea(zone, room.parts()) != rectArea(zone)) {
                 throw new BusinessException(roomName(room) + "的布置区 " + (index + 1)
                     + " 必须完全位于空间轮廓内");
@@ -109,17 +201,23 @@ public class ManualLayoutGeometryService {
     }
 
     private static void validateRect(ManualFloorPlanLayoutRequest.Rect rect,
-                                     int canvasWidth, int canvasHeight, String owner) {
+                                     int canvasWidth, int canvasHeight, boolean unbounded, String owner) {
         if (rect == null || rect.x() == null || rect.y() == null
             || rect.w() == null || rect.h() == null) {
             throw new BusinessException(owner + "存在不完整的矩形数据");
         }
-        if (rect.x() < 0 || rect.y() < 0 || rect.w() <= 0 || rect.h() <= 0) {
+        if (rect.w() <= 0 || rect.h() <= 0) {
             throw new BusinessException(owner + "的矩形坐标或尺寸无效");
         }
         long right = (long) rect.x() + rect.w();
         long bottom = (long) rect.y() + rect.h();
-        if (right > canvasWidth || bottom > canvasHeight) {
+        // 仅保护当前 Integer 毫米坐标和 long 面积计算；不使用起始视野作为绘图边界。
+        if (unbounded && (Math.abs((long) rect.x()) > 1_000_000_000L
+            || Math.abs((long) rect.y()) > 1_000_000_000L
+            || right > 1_000_000_000L || bottom > 1_000_000_000L)) {
+            throw new BusinessException(owner + "超出毫米坐标可安全计算的范围");
+        }
+        if (!unbounded && (rect.x() < 0 || rect.y() < 0 || right > canvasWidth || bottom > canvasHeight)) {
             throw new BusinessException(owner + "超出画布范围");
         }
     }

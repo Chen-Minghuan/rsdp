@@ -98,18 +98,39 @@ export interface ManualLayoutRoom {
   placementZones?: ManualLayoutRect[]
 }
 
+/** 按真实毫米尺寸摆放的规划家具；与 CAD 自动识别家具及商品档案分离。 */
+export interface ManualFurnitureItem {
+  id: string
+  templateId: string
+  roomClientId: string
+  /** 家具中心点，毫米坐标。 */
+  xMm: number
+  yMm: number
+  widthMm: number
+  depthMm: number
+  rotationDeg: 0 | 90 | 180 | 270
+  /** L/U 形桌的侧翼桌面宽；普通家具省略，外部进深由 depthMm 控制。 */
+  wingWidthMm?: number
+  /** 柜体高度；只影响高度分型，不改变俯视占地。旧布局可缺省。 */
+  heightMm?: number
+}
+
 /** 无底图毫米画布。 */
 export interface ManualLayoutCanvas {
+  /** 旧版为绘图边界；unbounded 布局中仅表示初始视野大小。 */
   widthMm: number
   heightMm: number
   gridMm: number
+  mode?: 'unbounded'
 }
 
 /** 可自动保存和恢复的手画布局完整快照。 */
 export interface ManualFloorPlanLayout {
-  version: 1
+  version: 1 | 2 | 3
   canvas: ManualLayoutCanvas
   rooms: ManualLayoutRoom[]
+  /** 旧版布局缺失此字段时按空列表读取。 */
+  furniture?: ManualFurnitureItem[]
 }
 
 /** CAD 图纸范围（毫米坐标系，drawingBounds 归一化换算基准；Vision 通道为 null）。 */
