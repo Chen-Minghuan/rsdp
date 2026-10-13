@@ -50,4 +50,7 @@ public class FloorPlanAnalysisListItemResponse {
 
     /** 解析质量提示数（V14，quality_issues 数组长度；无提示为 0）。 */
     private Integer qualityIssueCount;
+
+    /** 输入模式：image/pdf/cad/manual。 */
+    private String inputMode;
 }

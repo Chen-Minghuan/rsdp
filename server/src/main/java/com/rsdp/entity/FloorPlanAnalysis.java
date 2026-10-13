@@ -51,6 +51,16 @@ public class FloorPlanAnalysis {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String qualityIssues;
 
+    /** 输入模式：image/pdf/cad/manual。 */
+    private String inputMode;
+
+    /** manual 手画布局草稿 JSON。 */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String layoutJson;
+
+    /** 手画布局乐观锁版本。 */
+    private Long layoutRevision;
+
     private String errorMessage;
     private String createdBy;
     private LocalDateTime createdAt;

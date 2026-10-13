@@ -1,6 +1,9 @@
 package com.rsdp.controller;
 
 import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
+import com.rsdp.dto.response.FloorPlanAnalysisResponse;
+import com.rsdp.dto.response.ManualFloorPlanCreateResponse;
+import com.rsdp.dto.response.ManualFloorPlanLayoutSaveResponse;
 import com.rsdp.exception.GlobalExceptionHandler;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.service.FloorPlanMatchingService;
@@ -18,6 +21,7 @@ import java.util.List;
 
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -66,7 +70,7 @@ class FloorPlanControllerTest {
             .andExpect(jsonPath("$.code").value(400));
     }
 
-    // ---------- V19 Scene Revision 端点 ----------
+    // ---------- V20 Scene Revision 端点 ----------
 
     @Test
     void getAnalysis_withAnalysisRevision_shouldPassThrough() throws Exception {
@@ -110,6 +114,31 @@ class FloorPlanControllerTest {
     }
 
     @Test
+    void createManualLayout_shouldReturnDraftIdentity() throws Exception {
+        when(floorPlanService.createManualLayout(org.mockito.ArgumentMatchers.any()))
+            .thenReturn(new ManualFloorPlanCreateResponse("FPA-MANUAL", "draft", 0L));
+
+        mockMvc.perform(post("/api/v1/floor-plan/manual")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"canvasWidthMm":14000,"canvasHeightMm":10000,"gridMm":100,"sourceName":"手画户型"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.analysisId").value("FPA-MANUAL"))
+            .andExpect(jsonPath("$.data.status").value("draft"))
+            .andExpect(jsonPath("$.data.layoutRevision").value(0));
+    }
+
+    @Test
+    void createManualLayout_invalidCanvas_shouldRejectRequest() throws Exception {
+        mockMvc.perform(post("/api/v1/floor-plan/manual")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"canvasWidthMm\":500,\"canvasHeightMm\":10000,\"gridMm\":100}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400));
+    }
+
+    @Test
     void activateRevision_shouldReturnActivatedDetail() throws Exception {
         when(floorPlanService.activateRevision(org.mockito.ArgumentMatchers.eq("FPA-1"),
             org.mockito.ArgumentMatchers.eq(2), org.mockito.ArgumentMatchers.any()))
@@ -148,5 +177,31 @@ class FloorPlanControllerTest {
             .andExpect(status().isAccepted())
             .andExpect(jsonPath("$.data.analysisRevision").value(2))
             .andExpect(jsonPath("$.data.status").value("PROCESSING"));
+    }
+
+    @Test
+    void saveAndConfirmManualLayout_shouldRouteRequests() throws Exception {
+        when(floorPlanService.saveManualLayout(
+            org.mockito.ArgumentMatchers.eq("FPA-MANUAL"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(new ManualFloorPlanLayoutSaveResponse("FPA-MANUAL", 2L));
+        FloorPlanAnalysisResponse confirmed = new FloorPlanAnalysisResponse();
+        confirmed.setAnalysisId("FPA-MANUAL");
+        confirmed.setStatus("confirmed");
+        confirmed.setInputMode("manual");
+        confirmed.setRooms(List.of());
+        when(floorPlanService.confirmManualLayout("FPA-MANUAL")).thenReturn(confirmed);
+
+        mockMvc.perform(put("/api/v1/floor-plan/FPA-MANUAL/layout")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"expectedRevision":1,"layout":{"version":1,"canvas":{"widthMm":14000,"heightMm":10000,"gridMm":100},"rooms":[]}}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.layoutRevision").value(2));
+
+        mockMvc.perform(post("/api/v1/floor-plan/FPA-MANUAL/layout/confirm"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.status").value("confirmed"))
+            .andExpect(jsonPath("$.data.inputMode").value("manual"));
     }
 }

@@ -52,4 +52,13 @@ public class FloorPlanRoomResponse {
 
     /** 确认状态（V20）：AUTO（自动识别未确认）/ CONFIRMED（已人工确认）。 */
     private String confirmationStatus;
+
+    /** manual_geometry 的可编辑矩形组成块。 */
+    private List<ManualFloorPlanRectResponse> shapeParts;
+
+    /** 不规则空间主布置矩形。 */
+    private ManualFloorPlanRectResponse placementZone;
+
+    /** 全部布置区；首个为主布置区。 */
+    private List<ManualFloorPlanRectResponse> placementZones;
 }

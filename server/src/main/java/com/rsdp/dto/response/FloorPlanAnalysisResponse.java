@@ -1,5 +1,6 @@
 package com.rsdp.dto.response;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -127,4 +128,13 @@ public class FloorPlanAnalysisResponse {
 
     /** 激活就绪度（实时计算；目标 Revision 为 PROCESSING/ACTIVE 等不可编辑态时仍返回当前校验结果）。 */
     private FloorPlanActivationReadiness activationReadiness;
+
+    /** 输入模式：image/pdf/cad/manual。 */
+    private String inputMode;
+
+    /** manual 手画布局完整草稿；非 manual 模式为空。 */
+    private JsonNode layout;
+
+    /** 手画布局乐观锁版本。 */
+    private Long layoutRevision;
 }

@@ -7,8 +7,8 @@
 -- 户型图分析批次表（V36 并入：一次上传一条）
 CREATE TABLE IF NOT EXISTS floor_plan_analysis (
     analysis_id      VARCHAR(64) PRIMARY KEY,
-    image_id         VARCHAR(64) NOT NULL,             -- 户型原图，指向 image_assets
-    status           VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending/analyzing/awaiting_confirm/confirmed/failed
+    image_id         VARCHAR(64),                      -- 户型原图，指向 image_assets；manual 手画模式为空
+    status           VARCHAR(16) NOT NULL DEFAULT 'pending',  -- draft/pending/analyzing/awaiting_confirm/confirmed/failed
     task_id          VARCHAR(64),                      -- 关联 async_task
     raw_result       JSONB,                            -- AI 原始识别结果（不动，留档）
     confirmed_rooms  JSONB,                            -- 人工校正后的空间列表（最终生效数据）
@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS floor_plan_analysis (
     working_analysis_revision INTEGER,                 -- V20：当前正在编辑/确认的工作 Revision，可空
     latest_analysis_revision  INTEGER,                 -- V20：已创建的最大 Revision 序号
     cad_object_key     VARCHAR(256),                   -- V20：CAD 原文件存储对象键（target-scene 重解析用；视觉通道为空）
+    input_mode       VARCHAR(16) NOT NULL DEFAULT 'image', -- image/pdf/cad/manual
+    layout_json      JSONB,                            -- manual 手画草稿（画布、组成块、主布置区）
+    layout_revision  BIGINT NOT NULL DEFAULT 0,        -- 手画草稿乐观锁版本
     FOREIGN KEY (image_id) REFERENCES image_assets(image_id),
     FOREIGN KEY (preview_image_id) REFERENCES image_assets(image_id)
 );
@@ -39,6 +42,9 @@ COMMENT ON COLUMN floor_plan_analysis.active_analysis_revision IS '当前业务�
 COMMENT ON COLUMN floor_plan_analysis.working_analysis_revision IS '当前正在编辑/确认的工作 Revision，可空';
 COMMENT ON COLUMN floor_plan_analysis.latest_analysis_revision IS '已创建的最大 Revision 序号';
 COMMENT ON COLUMN floor_plan_analysis.cad_object_key IS 'CAD 原文件存储对象键（target-scene 切换重解析读取用；视觉通道为空）';
+COMMENT ON COLUMN floor_plan_analysis.input_mode IS '户型输入模式：image/pdf/cad/manual';
+COMMENT ON COLUMN floor_plan_analysis.layout_json IS 'manual 手画布局草稿：画布、空间组成块和主布置区';
+COMMENT ON COLUMN floor_plan_analysis.layout_revision IS '手画布局乐观锁版本，每次成功保存递增';
 -- 项目维度历史查询索引（V14）
 CREATE INDEX IF NOT EXISTS idx_fpa_project ON floor_plan_analysis(project_id, created_at DESC) WHERE deleted_at IS NULL;
 -- 平台运营列表索引（V43）：运营查询无 created_by 条件、仅 orderByDesc created_at，左前缀索引用不上
@@ -66,14 +72,18 @@ CREATE TABLE IF NOT EXISTS floor_plan_room (
     geometry_source  VARCHAR(32),                      -- 几何来源（V11）：ai_vision / cad_geometry
     analysis_revision INTEGER NOT NULL DEFAULT 1,      -- V20：所属 Scene Revision（逻辑键 analysis_id + analysis_revision + room_id）
     confirmation_status VARCHAR(16) NOT NULL DEFAULT 'AUTO', -- V20：AUTO（自动识别未确认）/ CONFIRMED（已人工确认）
+    shape_parts      JSONB,                            -- manual_geometry 的可编辑矩形组成块
+    placement_zone   JSONB,                            -- 不规则空间的主布置矩形（家具尺寸规则使用）
     FOREIGN KEY (analysis_id) REFERENCES floor_plan_analysis(analysis_id)
 );
 COMMENT ON COLUMN floor_plan_room.label IS '空间标签原文（CAD 通道落库；未命名空间为"未命名空间 N"）';
 COMMENT ON COLUMN floor_plan_room.polygon IS '房间外环顶点，毫米坐标 [[x,y],...]，CAD 解析通道落库';
 COMMENT ON COLUMN floor_plan_room.centroid IS '房间质心 {"x":..,"y":..}（毫米），CAD 解析通道落库';
-COMMENT ON COLUMN floor_plan_room.geometry_source IS '几何来源：ai_vision / cad_geometry';
+COMMENT ON COLUMN floor_plan_room.geometry_source IS '几何来源：ai_vision / cad_geometry / manual_geometry';
 COMMENT ON COLUMN floor_plan_room.analysis_revision IS '所属 Scene Revision（逻辑键 analysis_id + analysis_revision + room_id）';
 COMMENT ON COLUMN floor_plan_room.confirmation_status IS '确认状态：AUTO（自动识别未确认）/ CONFIRMED（已人工确认）';
+COMMENT ON COLUMN floor_plan_room.shape_parts IS 'manual_geometry 可编辑矩形组成块；polygon 为其派生并集';
+COMMENT ON COLUMN floor_plan_room.placement_zone IS '主布置矩形，必须完全包含在空间 polygon 内';
 CREATE INDEX IF NOT EXISTS idx_fpr_analysis ON floor_plan_room(analysis_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_fpr_analysis_revision ON floor_plan_room(analysis_id, analysis_revision) WHERE deleted_at IS NULL;
 

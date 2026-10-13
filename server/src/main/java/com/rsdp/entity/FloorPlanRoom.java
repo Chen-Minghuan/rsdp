@@ -67,6 +67,14 @@ public class FloorPlanRoom {
     /** 确认状态（V20）：AUTO（自动识别未确认）/ CONFIRMED（已人工确认）。 */
     private String confirmationStatus;
 
+    /** manual_geometry 的矩形组成块 JSON。 */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String shapeParts;
+
+    /** 主布置矩形 JSON，家具尺寸硬规则读取其宽深。 */
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String placementZone;
+
     /** 人工删除误识别空间（软删，@TableLogic 模式）。 */
     @TableLogic(value = "null", delval = "now()")
     private LocalDateTime deletedAt;

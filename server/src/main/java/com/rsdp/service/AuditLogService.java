@@ -55,6 +55,8 @@ public class AuditLogService {
     /** 脱敏失败时的快照占位值（fail-closed，禁止原值落审计库）。 */
     private static final String REDACTED_SNAPSHOT = "[REDACTED]";
     private static final int MAX_SNAPSHOT_LENGTH = 32768;
+    /** 与 audit_log.action VARCHAR(16) 保持一致，避免异步写入时才暴露长度错误。 */
+    private static final int MAX_ACTION_LENGTH = 16;
 
     private final AtomicLong insertFailureCount = new AtomicLong();
 
@@ -116,6 +118,9 @@ public class AuditLogService {
      */
     public void logAction(String tableName, String recordId, String action,
                           Object oldValue, Object newValue, String operator) {
+        if (!StringUtils.hasText(action) || action.length() > MAX_ACTION_LENGTH) {
+            throw new IllegalArgumentException("审计动作码不能为空且长度不能超过 " + MAX_ACTION_LENGTH + " 个字符");
+        }
         insert(tableName, recordId, action, oldValue, newValue, operator);
     }
 

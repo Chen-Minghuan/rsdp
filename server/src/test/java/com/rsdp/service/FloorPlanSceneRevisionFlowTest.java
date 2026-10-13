@@ -97,6 +97,8 @@ class FloorPlanSceneRevisionFlowTest {
     private FloorPlanFurnitureMapper furnitureMapper;
     @Mock
     private CadAnalysisFeedbackMapper feedbackMapper;
+    @Mock
+    private ManualLayoutGeometryService manualLayoutGeometryService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private FloorPlanSceneRevisionService revisionService;
@@ -109,7 +111,8 @@ class FloorPlanSceneRevisionFlowTest {
         floorPlanService = new FloorPlanService(analysisMapper, roomMapper, asyncTaskMapper,
             imageAssetsMapper, imageUploadValidator, storageService, visionService, asyncTaskProcessor,
             auditLogService, parserRegistry, projectService, projectMapper, objectMapper,
-            transactionManager, revisionService, sceneRevisionMapper, furnitureMapper);
+            transactionManager, revisionService, sceneRevisionMapper, furnitureMapper,
+            manualLayoutGeometryService);
     }
 
     @AfterEach

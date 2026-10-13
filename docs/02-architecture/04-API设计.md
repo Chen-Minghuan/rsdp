@@ -1804,6 +1804,8 @@ POST   /api/v1/public/ai-match/scheme
 > 登录用户仅可读取本人 `floor_plan_analysis.created_by` 记录关联的 image_id/preview_image_id；
 > 游客仅可凭绑定 public 分析记录的短期 floorPlanToken 读取该记录原图/预览；无凭证、
 > 跨用户或跨分析访问统一返回 404，避免户型隐私文件仅凭 UUID 被读取。
+> V23 起增加无图纸手画模式：不创建图片资产和异步 AI 任务，以矩形组成块作为可编辑真相，
+> 确认时派生正交 polygon 并复用既有空间搭配链路。
 
 ```
 POST   /api/v1/floor-plan/analyze          [product:read]
@@ -1851,19 +1853,45 @@ POST   /api/v1/floor-plan/analyze          [product:read]
        # analysis.project_id；sourceName 为户型名称/备注（≤128 字）；官网匿名链路 project_id 恒 NULL
        # Response: { analysisId, taskId }
 
+POST   /api/v1/floor-plan/manual           [product:read]
+       # 创建无图纸手画布局草稿；不上传图片、不创建 async_task，状态直接为 draft。
+       # Request: { canvasWidthMm: 1000..100000, canvasHeightMm: 1000..100000,
+       #            gridMm: 10..1000, projectId?, sourceName? }
+       # Response: { analysisId, status: "draft", layoutRevision: 0 }
+
+PUT    /api/v1/floor-plan/{analysisId}/layout   [登录 + 归属校验]
+       # 保存 manual 草稿完整快照；expectedRevision 通过 CAS 乐观锁防止多页面覆盖。
+       # 草稿阶段允许暂时不连通/重叠，便于编辑中间态；成功后 revision +1。
+       # Request: { expectedRevision, layout: { version: 1,
+       #   canvas: { widthMm, heightMm, gridMm },
+       #   rooms: [{ clientId, label, roomType,
+       #     parts: [{ id, x, y, w, h }], placementZone?: { x, y, w, h },
+       #     placementZones?: [{ x, y, w, h }] }] } }
+       # placementZones 为全部布置区，首个是主布置区；旧草稿仅有 placementZone 时按单区处理。
+       # Response: { analysisId, layoutRevision }
+
+POST   /api/v1/floor-plan/{analysisId}/layout/confirm   [登录 + 归属校验]
+       # 仅 manual + draft 可确认。后端权威重算矩形并集，要求每个空间单一连通、无孔洞、
+       # 无点接触分叉、不同空间无正面积重叠，每个布置区均完全位于空间内。
+       # 确认后物化 floor_plan_room：polygon/areaM2 取完整空间；widthMm/depthMm 取
+       # 首个 placementZones（旧草稿取 placementZone，均未设置时默认最大组成块）；
+       # placement_zone JSONB 同时保留全部布置区；geometrySource=manual_geometry，状态 confirmed。
+       # V1 仅支持轴对齐正交轮廓，不支持斜墙、曲线、孔洞、门窗和墙体厚度。
+       # Response: 同 GET /api/v1/floor-plan/{analysisId}
+
 GET    /api/v1/floor-plan                  [登录 + 归属过滤]
        # 分析历史列表（P1）：分页 + 可选 status / projectId / unassigned 过滤，按创建时间倒序；
        # roomCount 按页内 analysisId 批量统计（避免 N+1）。
        # 归属过滤与详情同口径：平台运营（ADMIN/EDITOR）全见（含官网匿名 source=public
        # 记录），其他角色仅 created_by=本人
-       # Query: page=1&size=20（上限 100）&status?=pending|analyzing|awaiting_confirm|confirmed|failed
+       # Query: page=1&size=20（上限 100）&status?=draft|pending|analyzing|awaiting_confirm|confirmed|failed
        #        &projectId?（V14，归属项目过滤）&unassigned?=true|false
        # unassigned=true 时在数据库分页前筛选 project_id IS NULL，并忽略 projectId，
        # 确保“未归属”筛选的总数与分页结果一致
        # Response: PageResult<{ analysisId, status, source, roomCount, createdBy,
        #            createdAt, updatedAt, errorMessage,
        #            thumbnailUrl, projectId, projectName, sourceName,
-       #            geometrySource, qualityIssueCount }>
+       #            geometrySource, qualityIssueCount, inputMode }>
        # 列表项增强（V14，只加不改旧字段）：thumbnailUrl = preview_image_id 图片地址优先、
        #   回退 image_id；projectName JOIN project 取 project_name（无归属 null）；
        #   geometrySource 聚合自批次 rooms（任一 cad_geometry → cad_geometry，否则
@@ -1881,8 +1909,9 @@ GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        #            errorMessage, createdBy, createdAt, updatedAt,
        #            rooms: [{ roomId, roomType, label, polygon, labelPoint, bbox, widthMm, depthMm,
        #            areaM2, dimensionSource, dimensionConfidence, dimensionText, sortOrder,
-       #            confirmationStatus }],
+       #            confirmationStatus, shapeParts, placementZone, placementZones }],
        #            geometrySource, qualityIssues, scaleSuggestion, drawingBounds, previewBounds,
+       #            inputMode, layout, layoutRevision,
        #            analysisRevision, revisionStatus,
        #            activeAnalysisRevision, workingAnalysisRevision, latestAnalysisRevision,
        #            roomRevision, furnitureRevision, parseStatus,
@@ -1902,7 +1931,7 @@ GET    /api/v1/floor-plan/{analysisId}     [登录 + 归属校验]
        #   capabilities/unitResolution/targetScene/targetSceneCandidates 自 Revision 快照提取；
        #   activationReadiness 由 Scene Activation Validator 实时计算（ready + 阻断项 issues）
        # geometrySource（CAD 户型导入 P3，前端契约字段名不可改）：
-       #   cad_geometry（CAD 解析，编辑器隐藏标定入口）/ ai_vision（视觉识别）；
+       #   cad_geometry（CAD 解析）/ ai_vision（视觉识别）/ manual_geometry（手画派生）；
        #   判定：落库明细 geometry_source 优先，无明细按原图格式（dwg/dxf→cad_geometry）
        # qualityIssues（P3，前端契约）：CAD 质量门报告 [{level, code, message}]，
        #   视觉通道/无问题恒为空数组（非 null）；

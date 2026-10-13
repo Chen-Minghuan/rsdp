@@ -353,11 +353,11 @@ const columns: DataTableColumns<FloorPlanListItem> = [
           { default: () => '重试' }
         ))
       }
-      if (row.status === 'awaiting_confirm') {
+      if (row.status === 'draft' || row.status === 'awaiting_confirm') {
         buttons.push(h(
           NButton,
           { text: true, type: 'primary', size: 'small', onClick: () => goCorrection(row) },
-          { default: () => '去校正' }
+          { default: () => row.status === 'draft' ? '继续绘制' : '去校正' }
         ))
       }
       if (row.status === 'confirmed') {

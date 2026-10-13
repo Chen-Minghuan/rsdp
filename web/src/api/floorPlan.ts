@@ -6,6 +6,7 @@ import type {
   FloorPlanConfirmRequest,
   FloorPlanListItem,
   FloorPlanRetryResponse,
+  ManualFloorPlanLayout,
   FloorPlanSchemeRequest,
   FloorPlanSchemeResponse
 } from '@/types/floorPlan'
@@ -69,6 +70,63 @@ export async function analyzeFloorPlan(
   const { data: result } = await uploadClient.post<ApiResult<FloorPlanAnalyzeResponse>>(
     '/v1/floor-plan/analyze',
     formData,
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
+/** 无图纸手画布局建单参数。 */
+export interface ManualFloorPlanCreateRequest {
+  canvasWidthMm: number
+  canvasHeightMm: number
+  gridMm: number
+  projectId?: string | null
+  sourceName?: string
+}
+
+/** 无图纸手画布局建单结果。 */
+export interface ManualFloorPlanCreateResponse {
+  analysisId: string
+  status: 'draft'
+  layoutRevision: number
+}
+
+/** 创建不依赖图片和 AI 任务的手画布局草稿。 */
+export async function createManualFloorPlan(
+  request: ManualFloorPlanCreateRequest,
+  options?: ApiOptions
+): Promise<ManualFloorPlanCreateResponse> {
+  const { data: result } = await apiClient.post<ApiResult<ManualFloorPlanCreateResponse>>(
+    '/v1/floor-plan/manual',
+    request,
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
+/** 以 revision 乐观锁保存手画布局完整快照。 */
+export async function saveManualFloorPlanLayout(
+  analysisId: string,
+  expectedRevision: number,
+  layout: ManualFloorPlanLayout,
+  options?: ApiOptions
+): Promise<{ analysisId: string; layoutRevision: number }> {
+  const { data: result } = await apiClient.put<ApiResult<{ analysisId: string; layoutRevision: number }>>(
+    `/v1/floor-plan/${analysisId}/layout`,
+    { expectedRevision, layout },
+    { signal: options?.signal }
+  )
+  return result.data
+}
+
+/** 确认手画布局，由后端重算并集并物化 floor_plan_room。 */
+export async function confirmManualFloorPlanLayout(
+  analysisId: string,
+  options?: ApiOptions
+): Promise<FloorPlanAnalysisResponse> {
+  const { data: result } = await apiClient.post<ApiResult<FloorPlanAnalysisResponse>>(
+    `/v1/floor-plan/${analysisId}/layout/confirm`,
+    null,
     { signal: options?.signal }
   )
   return result.data

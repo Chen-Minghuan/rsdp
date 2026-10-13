@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -89,6 +90,15 @@ class AuditLogServiceTest {
         assertThat(log.getAction()).isEqualTo("DELETE");
         assertThat(log.getOldValue().toString()).contains("RSPU-TEST01");
         assertThat(log.getNewValue()).isNull();
+    }
+
+    @Test
+    void logAction_shouldRejectActionLongerThanDatabaseColumn() {
+        assertThatThrownBy(() -> auditLogService.logAction(
+            "floor_plan_analysis", "FPA-001", "SAVE_MANUAL_LAYOUT",
+            null, Map.of("layoutRevision", 1), "admin"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("16");
     }
 
     @Test

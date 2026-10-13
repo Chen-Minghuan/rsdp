@@ -18,6 +18,7 @@ import type {
 
 /** 户型图分析状态机。 */
 export type FloorPlanAnalysisStatus =
+  | 'draft'
   | 'pending'
   | 'analyzing'
   | 'awaiting_confirm'
@@ -46,7 +47,7 @@ export interface FloorPlanQualityIssue {
 /** 识别出的单个空间。 */
 export interface FloorPlanRoom {
   roomId: string
-  /** 空间类型码，引用 room_type 字典（LIVING/BEDROOM/...） */
+  /** 空间类型码，引用 room_type 字典（LIVING_ROOM/BEDROOM/...） */
   roomType: string
   /** 空间名称（如"客厅"；CAD 通道由后端给出，未命名时前端预填"未命名空间 N"引导人工命名） */
   label?: string | null
@@ -69,6 +70,46 @@ export interface FloorPlanRoom {
   /** 空间确认状态（CAD Scene 通道；AUTO=自动候选 / CONFIRMED=已确认，视觉通道缺失） */
   confirmationStatus?: RoomConfirmationStatus | null
   sortOrder?: number
+  /** 手画布局的矩形组成块（manual_geometry） */
+  shapeParts?: ManualLayoutRect[] | null
+  /** 不规则空间的主布置区 */
+  placementZone?: ManualLayoutRect | null
+  /** 手画空间的全部布置区；第一个为兼容现有尺寸规则的主布置区。 */
+  placementZones?: ManualLayoutRect[] | null
+}
+
+/** 手画布局毫米坐标矩形（坐标原点为画布左上角）。 */
+export interface ManualLayoutRect {
+  id?: string | null
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** 手画布局中的空间。 */
+export interface ManualLayoutRoom {
+  clientId: string
+  label: string
+  roomType: string
+  parts: ManualLayoutRect[]
+  placementZone?: ManualLayoutRect | null
+  /** 全部布置区；旧草稿仅有 placementZone 时按单个布置区读取。 */
+  placementZones?: ManualLayoutRect[]
+}
+
+/** 无底图毫米画布。 */
+export interface ManualLayoutCanvas {
+  widthMm: number
+  heightMm: number
+  gridMm: number
+}
+
+/** 可自动保存和恢复的手画布局完整快照。 */
+export interface ManualFloorPlanLayout {
+  version: 1
+  canvas: ManualLayoutCanvas
+  rooms: ManualLayoutRoom[]
 }
 
 /** CAD 图纸范围（毫米坐标系，drawingBounds 归一化换算基准；Vision 通道为 null）。 */
@@ -177,7 +218,7 @@ export interface FloorPlanAnalysisResponse {
   /** 图上标注反推的比例建议（后端并行开发中，未上线前恒为 undefined，前端按无建议处理） */
   scaleSuggestion?: FloorPlanScaleSuggestion | null
   /** 几何来源：cad_geometry=CAD 精确解析（尺寸来自图纸坐标，无需标定）/ ai_vision=AI 视觉识别（缺失时按此处理） */
-  geometrySource?: 'cad_geometry' | 'ai_vision' | null
+  geometrySource?: 'cad_geometry' | 'ai_vision' | 'manual_geometry' | null
   /** CAD 解析质量提示（可空/缺失） */
   qualityIssues?: FloorPlanQualityIssue[] | null
   /** CAD 图纸范围（毫米坐标系；Vision 通道为 null/缺失，polygon 叠加的归一化基准） */
@@ -204,6 +245,12 @@ export interface FloorPlanAnalysisResponse {
   activationReadiness?: SceneActivationReadiness | null
   /** 当前 Revision 的家具列表（CAD Scene 通道；视觉通道缺失） */
   furniture?: SceneFurniture[] | null
+  /** 输入模式；历史数据缺失时按 image 处理 */
+  inputMode?: FloorPlanInputMode | null
+  /** manual 模式草稿 */
+  layout?: ManualFloorPlanLayout | null
+  /** manual 草稿乐观锁版本 */
+  layoutRevision?: number | null
 }
 
 /** 上传户型图触发分析的响应（POST /floor-plan/analyze）。 */
@@ -255,8 +302,11 @@ export interface FloorPlanSchemeResponse {
 /** 分析来源：admin=管理端上传 / public=官网用户上传。 */
 export type FloorPlanSource = 'admin' | 'public'
 
+/** 户型输入模式。 */
+export type FloorPlanInputMode = 'image' | 'pdf' | 'cad' | 'manual'
+
 /** 几何来源：cad_geometry=CAD 精确解析 / ai_vision=AI 视觉识别。 */
-export type FloorPlanGeometrySource = 'ai_vision' | 'cad_geometry'
+export type FloorPlanGeometrySource = 'ai_vision' | 'cad_geometry' | 'manual_geometry'
 
 /** 分析批次列表项（GET /floor-plan 分页）。 */
 export interface FloorPlanListItem {
@@ -280,6 +330,7 @@ export interface FloorPlanListItem {
   geometrySource?: FloorPlanGeometrySource | null
   /** CAD 解析质量提示数（>0 时展示质量徽标） */
   qualityIssueCount: number
+  inputMode?: FloorPlanInputMode | null
 }
 
 /** 失败重试响应（POST /floor-plan/{analysisId}/retry，仅 failed 可重试）。 */
@@ -289,6 +340,7 @@ export interface FloorPlanRetryResponse {
 
 /** 分析状态展示文案（StatusPill 的 label 覆盖）。 */
 export const FLOOR_PLAN_STATUS_TEXT: Record<FloorPlanAnalysisStatus, string> = {
+  draft: '草稿',
   pending: '等待中',
   analyzing: '分析中',
   awaiting_confirm: '待校正',
@@ -305,5 +357,6 @@ export const FLOOR_PLAN_SOURCE_TEXT: Record<FloorPlanSource, string> = {
 /** 几何来源展示文案（历史列表「通道」列）。 */
 export const FLOOR_PLAN_GEOMETRY_SOURCE_TEXT: Record<FloorPlanGeometrySource, string> = {
   ai_vision: 'AI视觉',
-  cad_geometry: 'CAD精确'
+  cad_geometry: 'CAD精确',
+  manual_geometry: '手画布局'
 }

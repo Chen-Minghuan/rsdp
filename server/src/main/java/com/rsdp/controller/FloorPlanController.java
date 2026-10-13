@@ -8,10 +8,14 @@ import com.rsdp.dto.request.FloorPlanConfirmRequest;
 import com.rsdp.dto.request.FloorPlanFurnitureConfirmRequest;
 import com.rsdp.dto.request.FloorPlanSchemeRequest;
 import com.rsdp.dto.request.FloorPlanTargetSceneRequest;
+import com.rsdp.dto.response.FloorPlanFurnitureEditResponse;
+import com.rsdp.dto.request.ManualFloorPlanCreateRequest;
+import com.rsdp.dto.request.ManualFloorPlanLayoutRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
-import com.rsdp.dto.response.FloorPlanFurnitureEditResponse;
+import com.rsdp.dto.response.ManualFloorPlanCreateResponse;
+import com.rsdp.dto.response.ManualFloorPlanLayoutSaveResponse;
 import com.rsdp.security.SecurityOperatorContext;
 import com.rsdp.service.FloorPlanMatchingService;
 import com.rsdp.service.FloorPlanService;
@@ -71,6 +75,43 @@ public class FloorPlanController {
         @RequestParam(required = false) String projectId,
         @RequestParam(required = false) String sourceName) {
         return Result.ok(floorPlanService.analyze(image, cad, hint, projectId, sourceName));
+    }
+
+    /**
+     * 创建无图纸手画布局草稿，不上传图片、不触发 AI 任务。
+     *
+     * @param request 画布尺寸、网格、项目与户型名称
+     * @return 草稿分析 ID 与初始 revision
+     */
+    @PostMapping("/manual")
+    public Result<ManualFloorPlanCreateResponse> createManualLayout(
+        @Valid @RequestBody ManualFloorPlanCreateRequest request) {
+        return Result.ok(floorPlanService.createManualLayout(request));
+    }
+
+    /**
+     * 保存手画布局完整草稿，使用 expectedRevision 防止并发覆盖。
+     *
+     * @param analysisId 分析批次 ID
+     * @param request 完整布局快照
+     * @return 保存后的新 revision
+     */
+    @PutMapping("/{analysisId}/layout")
+    public Result<ManualFloorPlanLayoutSaveResponse> saveManualLayout(
+        @PathVariable String analysisId,
+        @Valid @RequestBody ManualFloorPlanLayoutRequest request) {
+        return Result.ok(floorPlanService.saveManualLayout(analysisId, request));
+    }
+
+    /**
+     * 确认手画布局并物化空间几何，确认后可直接进入现有方案生成链路。
+     *
+     * @param analysisId 分析批次 ID
+     * @return 已确认分析详情
+     */
+    @PostMapping("/{analysisId}/layout/confirm")
+    public Result<FloorPlanAnalysisResponse> confirmManualLayout(@PathVariable String analysisId) {
+        return Result.ok(floorPlanService.confirmManualLayout(analysisId));
     }
 
     /**

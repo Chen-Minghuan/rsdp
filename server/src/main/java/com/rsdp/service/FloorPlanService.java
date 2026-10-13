@@ -12,6 +12,8 @@ import com.rsdp.dto.request.FloorPlanActivateRequest;
 import com.rsdp.dto.request.FloorPlanFurnitureConfirmRequest;
 import com.rsdp.dto.request.FloorPlanTargetSceneRequest;
 import com.rsdp.dto.response.FloorPlanActivationReadiness;
+import com.rsdp.dto.request.ManualFloorPlanCreateRequest;
+import com.rsdp.dto.request.ManualFloorPlanLayoutRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.dto.response.FloorPlanBatchDeleteResponse;
@@ -21,6 +23,9 @@ import com.rsdp.dto.response.FloorPlanFurnitureResponse;
 import com.rsdp.dto.response.FloorPlanQualityIssue;
 import com.rsdp.dto.response.FloorPlanRoomResponse;
 import com.rsdp.dto.response.FloorPlanPoint;
+import com.rsdp.dto.response.ManualFloorPlanCreateResponse;
+import com.rsdp.dto.response.ManualFloorPlanLayoutSaveResponse;
+import com.rsdp.dto.response.ManualFloorPlanRectResponse;
 import com.rsdp.dto.response.ScaleSuggestionResponse;
 import com.rsdp.entity.AsyncTask;
 import com.rsdp.entity.FloorPlanAnalysis;
@@ -96,6 +101,7 @@ import javax.imageio.ImageIO;
 public class FloorPlanService {
 
     /** 分析状态机：pending → analyzing → awaiting_confirm → confirmed；失败为 failed。 */
+    public static final String STATUS_DRAFT = "draft";
     public static final String STATUS_PENDING = "pending";
     public static final String STATUS_ANALYZING = "analyzing";
     public static final String STATUS_AWAITING_CONFIRM = "awaiting_confirm";
@@ -120,6 +126,12 @@ public class FloorPlanService {
     /** 几何来源（floor_plan_room.geometry_source / 响应 geometrySource，前端契约不可改）。 */
     public static final String GEOMETRY_SOURCE_VISION = "ai_vision";
     public static final String GEOMETRY_SOURCE_CAD = "cad_geometry";
+    public static final String GEOMETRY_SOURCE_MANUAL = "manual_geometry";
+
+    private static final String INPUT_MODE_IMAGE = "image";
+    private static final String INPUT_MODE_PDF = "pdf";
+    private static final String INPUT_MODE_CAD = "cad";
+    private static final String INPUT_MODE_MANUAL = "manual";
 
     /** CAD 通道 room_type 合法字典码集合（CAD 服务已给字典码，越界兜底 OTHER）。 */
     private static final Set<String> VALID_ROOM_TYPES = Set.of(
@@ -155,6 +167,7 @@ public class FloorPlanService {
     private final FloorPlanSceneRevisionService sceneRevisionService;
     private final FloorPlanSceneRevisionMapper sceneRevisionMapper;
     private final FloorPlanFurnitureMapper furnitureMapper;
+    private final ManualLayoutGeometryService manualLayoutGeometryService;
 
     @Value("${rsdp.floor-plan.max-file-size-mb:10}")
     private long maxFileSizeMb;
@@ -272,6 +285,11 @@ public class FloorPlanService {
         analysis.setStatus(STATUS_PENDING);
         analysis.setTaskId(taskId);
         analysis.setSource(SOURCE_ADMIN);
+        analysis.setInputMode(switch (uploadKind) {
+            case IMAGE -> INPUT_MODE_IMAGE;
+            case PDF -> INPUT_MODE_PDF;
+            case CAD -> INPUT_MODE_CAD;
+        });
         analysis.setProjectId(accessibleProjectId);
         analysis.setSourceName(normalizedSourceName);
         if (uploadKind == ImageUploadValidator.UploadKind.CAD) {
@@ -432,6 +450,7 @@ public class FloorPlanService {
         analysis.setStatus(STATUS_PENDING);
         analysis.setTaskId(taskId);
         analysis.setSource(SOURCE_ADMIN);
+        analysis.setInputMode(INPUT_MODE_CAD);
         analysis.setProjectId(accessibleProjectId);
         analysis.setSourceName(normalizedSourceName);
         analysis.setCadObjectKey(cadPath);
@@ -471,6 +490,169 @@ public class FloorPlanService {
 
         log.info("户型图双文件分析任务已创建，analysisId={}，taskId={}", analysisId, taskId);
         return Map.of("analysisId", analysisId, "taskId", taskId);
+    }
+
+    /**
+     * 创建无图纸手画布局草稿。该路径不创建图片资产和异步 AI 任务，直接进入 draft 状态。
+     *
+     * @param request 画布、项目与户型名称
+     * @return 分析批次 ID、draft 状态与初始 revision
+     */
+    @Transactional
+    public ManualFloorPlanCreateResponse createManualLayout(ManualFloorPlanCreateRequest request) {
+        String projectId = resolveAccessibleProjectId(request.projectId());
+        String sourceName = normalizeSourceName(request.sourceName());
+        ManualFloorPlanLayoutRequest.Layout initialLayout = new ManualFloorPlanLayoutRequest.Layout(
+            1,
+            new ManualFloorPlanLayoutRequest.Canvas(
+                request.canvasWidthMm(), request.canvasHeightMm(), request.gridMm()),
+            List.of());
+
+        String analysisId = IdGenerator.floorPlanAnalysisId();
+        String operator = SecurityOperatorContext.currentUsername();
+        LocalDateTime now = LocalDateTime.now();
+        FloorPlanAnalysis analysis = new FloorPlanAnalysis();
+        analysis.setAnalysisId(analysisId);
+        analysis.setStatus(STATUS_DRAFT);
+        analysis.setSource(SOURCE_ADMIN);
+        analysis.setInputMode(INPUT_MODE_MANUAL);
+        analysis.setLayoutJson(toJson(initialLayout));
+        analysis.setLayoutRevision(0L);
+        analysis.setProjectId(projectId);
+        analysis.setSourceName(sourceName);
+        analysis.setCreatedBy(operator);
+        analysis.setCreatedAt(now);
+        analysis.setUpdatedAt(now);
+        analysisMapper.insert(analysis);
+        auditLogService.logCreate("floor_plan_analysis", analysisId, analysis, operator);
+        return new ManualFloorPlanCreateResponse(analysisId, STATUS_DRAFT, 0L);
+    }
+
+    /**
+     * 以乐观锁保存手画布局完整快照。草稿允许暂时存在重叠或不连通形状，严格几何校验在确认时执行。
+     *
+     * @param analysisId 分析批次 ID
+     * @param request 布局快照与 expectedRevision
+     * @return 保存后的新 revision
+     */
+    @Transactional
+    public ManualFloorPlanLayoutSaveResponse saveManualLayout(
+        String analysisId, ManualFloorPlanLayoutRequest request) {
+        FloorPlanAnalysis analysis = requireManualDraft(analysisId);
+        String layoutJson = toJson(request.layout());
+        int updated = analysisMapper.updateManualLayout(
+            analysisId, request.expectedRevision(), layoutJson);
+        if (updated != 1) {
+            FloorPlanAnalysis latest = analysisMapper.selectById(analysisId);
+            long latestRevision = latest != null && latest.getLayoutRevision() != null
+                ? latest.getLayoutRevision() : -1L;
+            throw new BusinessException("布局已在其他页面更新，请刷新后继续（当前版本 " + latestRevision + "）");
+        }
+        long newRevision = request.expectedRevision() + 1;
+        auditLogService.logAction("floor_plan_analysis", analysisId, "SAVE_LAYOUT",
+            Map.of("layoutRevision", request.expectedRevision()),
+            Map.of("layoutRevision", newRevision),
+            SecurityOperatorContext.currentUsername());
+        return new ManualFloorPlanLayoutSaveResponse(analysisId, newRevision);
+    }
+
+    /**
+     * 确认手画布局：后端权威重算矩形并集，校验连通性、孔洞、跨空间重叠和主布置区，
+     * 原子物化为 floor_plan_room，随后复用现有方案生成链路。
+     *
+     * @param analysisId 分析批次 ID
+     * @return 已确认的分析详情
+     */
+    @Transactional
+    public FloorPlanAnalysisResponse confirmManualLayout(String analysisId) {
+        FloorPlanAnalysis analysis = requireManualDraft(analysisId);
+        ManualFloorPlanLayoutRequest.Layout layout;
+        try {
+            layout = objectMapper.readValue(
+                analysis.getLayoutJson(), ManualFloorPlanLayoutRequest.Layout.class);
+        } catch (Exception e) {
+            log.warn("读取手画布局草稿失败，analysisId={}", analysisId, e);
+            throw new BusinessException("手画布局草稿无法读取，请重新保存后再确认");
+        }
+        if (layout.rooms() == null || layout.rooms().isEmpty()) {
+            throw new BusinessException("至少绘制一个空间后才能确认布局");
+        }
+        ManualLayoutGeometryService.ComputedLayout computed = manualLayoutGeometryService.compute(layout);
+
+        roomMapper.delete(new QueryWrapper<FloorPlanRoom>().eq("analysis_id", analysisId));
+        LocalDateTime now = LocalDateTime.now();
+        int sortOrder = 0;
+        for (ManualLayoutGeometryService.ComputedRoom computedRoom : computed.rooms()) {
+            ManualFloorPlanLayoutRequest.Room source = computedRoom.source();
+            String roomType = normalizeRoomType(source.roomType());
+            if (!VALID_ROOM_TYPES.contains(roomType)) {
+                throw new BusinessException("不支持的空间类型: " + source.roomType());
+            }
+            String label = StringUtils.hasText(source.label())
+                ? source.label().trim() : "未命名空间 " + (sortOrder + 1);
+            ManualLayoutGeometryService.Bounds bounds = computedRoom.bounds();
+            ManualFloorPlanLayoutRequest.Rect placement = computedRoom.placementZone();
+
+            FloorPlanRoom room = new FloorPlanRoom();
+            room.setRoomId(IdGenerator.floorPlanRoomId());
+            room.setAnalysisId(analysisId);
+            room.setRoomType(roomType);
+            room.setLabel(label);
+            room.setPolygon(toJson(computedRoom.polygon().stream()
+                .map(point -> List.of((double) point.x(), (double) point.y()))
+                .toList()));
+            room.setCentroid(toJson(Map.of(
+                "x", (double) computedRoom.labelPoint().x(),
+                "y", (double) computedRoom.labelPoint().y())));
+            room.setBbox(toJson(new FloorPlanBBox(
+                (double) bounds.minX() / layout.canvas().widthMm(),
+                (double) bounds.minY() / layout.canvas().heightMm(),
+                (double) (bounds.maxX() - bounds.minX()) / layout.canvas().widthMm(),
+                (double) (bounds.maxY() - bounds.minY()) / layout.canvas().heightMm())));
+            room.setWidthMm(placement.w());
+            room.setDepthMm(placement.h());
+            room.setAreaM2(BigDecimal.valueOf(computedRoom.areaMm2())
+                .divide(BigDecimal.valueOf(1_000_000L), 2, RoundingMode.HALF_UP));
+            room.setDimensionSource(DIM_SOURCE_MANUAL);
+            room.setDimensionConfidence(CONFIDENCE_HIGH);
+            room.setGeometrySource(GEOMETRY_SOURCE_MANUAL);
+            room.setAnalysisRevision(1);
+            room.setConfirmationStatus("CONFIRMED");
+            room.setShapeParts(toJson(source.parts()));
+            room.setPlacementZone(toJson(Map.of(
+                "primary", placement,
+                "zones", computedRoom.placementZones())));
+            room.setSortOrder(sortOrder++);
+            room.setCreatedAt(now);
+            room.setUpdatedAt(now);
+            roomMapper.insert(room);
+        }
+
+        analysis.setStatus(STATUS_CONFIRMED);
+        analysis.setConfirmedRooms(toJson(layout.rooms()));
+        analysis.setUpdatedAt(now);
+        analysisMapper.updateById(analysis);
+        auditLogService.logUpdate("floor_plan_analysis", analysisId, null, analysis,
+            SecurityOperatorContext.currentUsername());
+        List<FloorPlanRoom> rooms = roomMapper.selectList(new QueryWrapper<FloorPlanRoom>()
+            .eq("analysis_id", analysisId)
+            .orderByAsc("sort_order"));
+        return toResponse(analysis, rooms);
+    }
+
+    private FloorPlanAnalysis requireManualDraft(String analysisId) {
+        FloorPlanAnalysis analysis = analysisMapper.selectById(analysisId);
+        if (analysis == null) {
+            throw new ResourceNotFoundException("户型图分析不存在: " + analysisId);
+        }
+        assertCanAccess(analysis);
+        if (!INPUT_MODE_MANUAL.equals(analysis.getInputMode())) {
+            throw new BusinessException("当前记录不是无图纸手画布局");
+        }
+        if (!STATUS_DRAFT.equals(analysis.getStatus())) {
+            throw new BusinessException("当前状态不允许编辑手画布局: " + analysis.getStatus());
+        }
+        return analysis;
     }
 
     /**
@@ -612,8 +794,13 @@ public class FloorPlanService {
             item.setProjectName(StringUtils.hasText(analysis.getProjectId())
                 ? projectNameMap.get(analysis.getProjectId()) : null);
             item.setSourceName(analysis.getSourceName());
-            item.setGeometrySource(geometrySourceMap.get(analysis.getAnalysisId()));
+            String geometrySource = geometrySourceMap.get(analysis.getAnalysisId());
+            if (geometrySource == null && INPUT_MODE_MANUAL.equals(analysis.getInputMode())) {
+                geometrySource = GEOMETRY_SOURCE_MANUAL;
+            }
+            item.setGeometrySource(geometrySource);
             item.setQualityIssueCount(qualityIssueCount(analysis.getQualityIssues(), analysis.getRawResult()));
+            item.setInputMode(analysis.getInputMode());
             rows.add(item);
         }
         return rows;
@@ -740,7 +927,8 @@ public class FloorPlanService {
             revision.getAnalysisRevision());
         FloorPlanAnalysisResponse response = toResponse(analysis, revision, rooms, furniture);
         // CAD 通道尺寸来自真实几何，跳过自动标定建议（CAD 户型导入 P3）
-        if (!GEOMETRY_SOURCE_CAD.equals(response.getGeometrySource())) {
+        if (!GEOMETRY_SOURCE_CAD.equals(response.getGeometrySource())
+            && !GEOMETRY_SOURCE_MANUAL.equals(response.getGeometrySource())) {
             response.setScaleSuggestion(buildScaleSuggestion(analysis, rooms));
         }
         return response;
@@ -2108,6 +2296,7 @@ public class FloorPlanService {
         analysis.setImageId(imageId);
         analysis.setStatus(STATUS_AWAITING_CONFIRM);
         analysis.setSource(SOURCE_PUBLIC);
+        analysis.setInputMode(INPUT_MODE_IMAGE);
         analysis.setCreatedBy(null);
         analysis.setCreatedAt(now);
         analysis.setUpdatedAt(now);
@@ -2717,6 +2906,9 @@ public class FloorPlanService {
             roomCountMap.merge(room.getAnalysisId(), 1L, Long::sum);
             if (GEOMETRY_SOURCE_CAD.equals(room.getGeometrySource())) {
                 geometrySourceMap.put(room.getAnalysisId(), GEOMETRY_SOURCE_CAD);
+            } else if (GEOMETRY_SOURCE_MANUAL.equals(room.getGeometrySource())
+                && !GEOMETRY_SOURCE_CAD.equals(geometrySourceMap.get(room.getAnalysisId()))) {
+                geometrySourceMap.put(room.getAnalysisId(), GEOMETRY_SOURCE_MANUAL);
             } else {
                 geometrySourceMap.putIfAbsent(room.getAnalysisId(), GEOMETRY_SOURCE_VISION);
             }
@@ -3101,6 +3293,9 @@ public class FloorPlanService {
         response.setQualityIssues(parseQualityIssues(analysis.getRawResult()));
         response.setDrawingBounds(parseDrawingBounds(analysis.getRawResult()));
         response.setPreviewBounds(parsePreviewBounds(analysis.getRawResult()));
+        response.setInputMode(analysis.getInputMode());
+        response.setLayout(parseJsonTree(analysis.getLayoutJson()));
+        response.setLayoutRevision(analysis.getLayoutRevision());
         return response;
     }
 
@@ -3113,6 +3308,9 @@ public class FloorPlanService {
             if (StringUtils.hasText(room.getGeometrySource())) {
                 return room.getGeometrySource();
             }
+        }
+        if (INPUT_MODE_MANUAL.equals(analysis.getInputMode())) {
+            return GEOMETRY_SOURCE_MANUAL;
         }
         if (StringUtils.hasText(analysis.getImageId())) {
             ImageAssets imageAsset = imageAssetsMapper.selectById(analysis.getImageId());
@@ -3227,7 +3425,66 @@ public class FloorPlanService {
         response.setDimensionText(room.getDimensionText());
         response.setSortOrder(room.getSortOrder());
         response.setConfirmationStatus(room.getConfirmationStatus());
+        response.setShapeParts(parseManualRects(room.getShapeParts()));
+        response.setPlacementZone(parseManualRect(room.getPlacementZone()));
+        response.setPlacementZones(parsePlacementZones(room.getPlacementZone()));
         return response;
+    }
+
+    private JsonNode parseJsonTree(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(json);
+        } catch (Exception e) {
+            log.warn("解析手画布局 JSON 失败，按空布局处理", e);
+            return null;
+        }
+    }
+
+    private List<ManualFloorPlanRectResponse> parseManualRects(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, objectMapper.getTypeFactory()
+                .constructCollectionType(List.class, ManualFloorPlanRectResponse.class));
+        } catch (Exception e) {
+            log.warn("解析手画空间组成块失败", e);
+            return null;
+        }
+    }
+
+    private ManualFloorPlanRectResponse parseManualRect(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(json);
+            return objectMapper.treeToValue(node.has("primary") ? node.get("primary") : node,
+                ManualFloorPlanRectResponse.class);
+        } catch (Exception e) {
+            log.warn("解析手画空间主布置区失败", e);
+            return null;
+        }
+    }
+
+    private List<ManualFloorPlanRectResponse> parsePlacementZones(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(json);
+            if (node.has("zones") && node.get("zones").isArray()) {
+                return objectMapper.convertValue(node.get("zones"), objectMapper.getTypeFactory()
+                    .constructCollectionType(List.class, ManualFloorPlanRectResponse.class));
+            }
+            return List.of(objectMapper.treeToValue(node, ManualFloorPlanRectResponse.class));
+        } catch (Exception e) {
+            log.warn("解析手画空间布置区列表失败", e);
+            return null;
+        }
     }
 
     private FloorPlanPoint parsePoint(String json) {

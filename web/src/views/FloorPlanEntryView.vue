@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, toRaw, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import {
@@ -28,11 +28,15 @@ import StatusPill from '@/components/StatusPill.vue'
 import FloorPlanEditor from '@/components/floorplan/FloorPlanEditor.vue'
 import SceneRevisionBar from '@/components/floorplan/SceneRevisionBar.vue'
 import FurniturePanel from '@/components/floorplan/FurniturePanel.vue'
+import ManualLayoutEditor from '@/components/floorplan/ManualLayoutEditor.vue'
 import {
   analyzeFloorPlan,
+  confirmManualFloorPlanLayout,
   confirmFloorPlanRooms,
+  createManualFloorPlan,
   generateFloorPlanScheme,
-  getFloorPlanAnalysis
+  getFloorPlanAnalysis,
+  saveManualFloorPlanLayout
 } from '@/api/floorPlan'
 import { listDicts } from '@/api/dict'
 import { listProjects } from '@/api/project'
@@ -52,8 +56,10 @@ import type {
   FloorPlanDrawingBounds,
   FloorPlanQualityIssue,
   FloorPlanRoom,
+  FloorPlanInputMode,
   FloorPlanScaleCandidate,
   FloorPlanScaleSuggestion,
+  ManualFloorPlanLayout,
   RoomBBox,
   SofaWallDirection
 } from '@/types/floorPlan'
@@ -92,6 +98,7 @@ const DIMENSION_SOURCE_LABELS: Record<string, string> = {
 
 const currentStep = ref(1)
 const errorMessage = ref('')
+const entryMode = ref<'upload' | 'manual'>('upload')
 
 /** 只读查看模式（?readonly=1，历史页「查看图纸」进入）：步骤 2 全部编辑交互隐藏，仅保留查看。 */
 const readonlyMode = computed(() => route.query.readonly === '1' || route.query.readonly === 'true')
@@ -103,6 +110,9 @@ const projectOptions = ref<Array<{ label: string; value: string }>>([])
 const uploadProjectId = ref<string | null>(null)
 /** 步骤 1 上传表单填写的户型名称（sourceName，可选）。 */
 const sourceName = ref('')
+const manualCanvasWidthMm = ref(14000)
+const manualCanvasHeightMm = ref(10000)
+const manualGridMm = ref(100)
 /** 当前分析批次已归属的项目（详情接口返回；空表示未归属，确认时可补挂）。 */
 const analysisProjectId = ref<string | null>(null)
 const analysisProjectName = ref<string | null>(null)
@@ -124,7 +134,8 @@ const cadPreviewUrl = ref('')
 /** 本次上传是否为 PDF（PDF 无本地图像预览，步骤 2 左侧走占位降级，表格校正不受影响）。 */
 const pdfSource = ref(false)
 /** 几何来源（详情接口返回）：cad_geometry=CAD 精确解析 / ai_vision=AI 视觉（默认）。 */
-const geometrySource = ref<'cad_geometry' | 'ai_vision'>('ai_vision')
+const geometrySource = ref<'cad_geometry' | 'ai_vision' | 'manual_geometry'>('ai_vision')
+const inputMode = ref<FloorPlanInputMode>('image')
 /** CAD 解析质量提示（详情接口返回，可空）。 */
 const qualityIssues = ref<FloorPlanQualityIssue[]>([])
 /** CAD 图纸范围（毫米坐标系；polygon 叠加的归一化基准，Vision 通道 null）。 */
@@ -134,6 +145,21 @@ const cadViewMode = ref<'canonical' | 'reference'>('canonical')
 
 /** 是否 CAD 精确解析通道（尺寸来自图纸坐标：编辑器标定入口隐藏；有底图时走多边形叠加模式）。 */
 const isCadGeometry = computed(() => geometrySource.value === 'cad_geometry')
+const isManualGeometry = computed(() => inputMode.value === 'manual' || geometrySource.value === 'manual_geometry')
+/** 无图纸模式使用独立标题与流程语义，不复用“上传/识别”步骤。 */
+const isManualFlow = computed(() =>
+  entryMode.value === 'manual' || inputMode.value === 'manual' || geometrySource.value === 'manual_geometry'
+)
+const pageTitle = computed(() => isManualFlow.value ? '手绘空间布局' : '户型图搭配')
+const pageSubtitle = computed(() => isManualFlow.value
+  ? '从空白画布建立空间轮廓，确认实际布置范围后生成家具搭配方案'
+  : '上传户型图 → 确认识别空间 → 按尺寸生成客厅搭配方案')
+const manualFlowSteps = [
+  { number: '01', title: '画布设置', description: '尺寸与项目' },
+  { number: '02', title: '绘制布局', description: '空间与布置区' },
+  { number: '03', title: '搭配设置', description: '风格与预算' },
+  { number: '04', title: '方案完成', description: '查看搭配结果' }
+]
 const editorImageUrl = computed(() => isCadGeometry.value ? cadPreviewUrl.value : imagePreviewUrl.value)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 let localIdCounter = 0
@@ -142,6 +168,14 @@ let localIdCounter = 0
 const rooms = ref<EditableRoom[]>([])
 const selectedLocalId = ref<string | null>(null)
 const confirming = ref(false)
+
+// ---------- 步骤 2：无图纸手画布局 ----------
+const manualLayout = ref<ManualFloorPlanLayout | null>(null)
+const manualLayoutRevision = ref(0)
+const manualSaving = ref(false)
+const manualDirty = ref(false)
+let manualSaveTimer: ReturnType<typeof setTimeout> | null = null
+let manualSaveInFlight: Promise<void> | null = null
 
 // ---------- 步骤 2：手绘新空间（误识别修正 / 纯手工补框，绘制交互在 FloorPlanEditor 内） ----------
 const drawMode = ref(false)
@@ -650,6 +684,127 @@ async function handleAnalyze() {
   }
 }
 
+/** 创建无图纸布局草稿：不上传文件、不触发 AI，直接进入毫米画布。 */
+async function handleCreateManualLayout() {
+  uploading.value = true
+  errorMessage.value = ''
+  try {
+    const result = await createManualFloorPlan({
+      canvasWidthMm: manualCanvasWidthMm.value,
+      canvasHeightMm: manualCanvasHeightMm.value,
+      gridMm: manualGridMm.value,
+      projectId: uploadProjectId.value,
+      sourceName: sourceName.value.trim() || undefined
+    }, { signal })
+    analysisId.value = result.analysisId
+    inputMode.value = 'manual'
+    geometrySource.value = 'manual_geometry'
+    manualLayoutRevision.value = result.layoutRevision
+    manualLayout.value = {
+      version: 1,
+      canvas: {
+        widthMm: manualCanvasWidthMm.value,
+        heightMm: manualCanvasHeightMm.value,
+        gridMm: manualGridMm.value
+      },
+      rooms: []
+    }
+    manualDirty.value = false
+    analysisProjectId.value = uploadProjectId.value
+    analysisProjectName.value = projectOptions.value.find(option => option.value === uploadProjectId.value)?.label ?? null
+    confirmProjectId.value = uploadProjectId.value
+    currentStep.value = 2
+  } catch (e) {
+    if (axios.isCancel(e)) return
+    errorMessage.value = e instanceof Error ? e.message : '创建手画布局失败，请重试'
+  } finally {
+    uploading.value = false
+  }
+}
+
+/** 接收编辑器完整快照并延迟自动保存，连续拖动只提交最后一次状态。 */
+function handleManualLayoutUpdate(layout: ManualFloorPlanLayout) {
+  manualLayout.value = layout
+  manualDirty.value = true
+  if (manualSaveTimer) clearTimeout(manualSaveTimer)
+  manualSaveTimer = setTimeout(() => {
+    manualSaveTimer = null
+    void persistManualLayout(false).catch(() => undefined)
+  }, 1000)
+}
+
+async function handleSaveManualDraft() {
+  try {
+    await persistManualLayout(true)
+  } catch {
+    // persistManualLayout 已写入页面错误提示，按钮事件无需继续抛出。
+  }
+}
+
+/** 串行保存手画布局，避免拖动期间的旧请求覆盖新 revision。 */
+async function persistManualLayout(showSuccess = true): Promise<void> {
+  if (manualSaveTimer) {
+    clearTimeout(manualSaveTimer)
+    manualSaveTimer = null
+  }
+  if (manualSaveInFlight) {
+    await manualSaveInFlight
+    if (manualDirty.value) await persistManualLayout(showSuccess)
+    return
+  }
+  if (!analysisId.value || !manualLayout.value || !manualDirty.value) {
+    if (showSuccess && analysisId.value) message.success('草稿已保存')
+    return
+  }
+
+  const snapshot = structuredClone(toRaw(manualLayout.value))
+  const expectedRevision = manualLayoutRevision.value
+  manualDirty.value = false
+  manualSaving.value = true
+  manualSaveInFlight = (async () => {
+    const result = await saveManualFloorPlanLayout(
+      analysisId.value,
+      expectedRevision,
+      snapshot,
+      { signal }
+    )
+    manualLayoutRevision.value = result.layoutRevision
+  })()
+  try {
+    await manualSaveInFlight
+    if (showSuccess) message.success('草稿已保存')
+  } catch (e) {
+    manualDirty.value = true
+    if (!axios.isCancel(e)) {
+      errorMessage.value = e instanceof Error ? e.message : '保存手画布局失败，请重试'
+    }
+    throw e
+  } finally {
+    manualSaveInFlight = null
+    manualSaving.value = false
+  }
+}
+
+/** 强制保存最新草稿后确认，后端重算几何并转入现有搭配流程。 */
+async function handleConfirmManualLayout() {
+  confirming.value = true
+  errorMessage.value = ''
+  try {
+    await persistManualLayout(false)
+    const result = await confirmManualFloorPlanLayout(analysisId.value, { signal })
+    applyAnalysisResult(result)
+    const living = rooms.value.find(room => room.roomType === 'LIVING_ROOM' && room.roomId)
+      ?? rooms.value.find(room => room.roomId)
+    targetRoomIds.value = living?.roomId ? [living.roomId] : []
+    currentStep.value = 3
+  } catch (e) {
+    if (axios.isCancel(e)) return
+    errorMessage.value = e instanceof Error ? e.message : '确认手画布局失败，请检查红色提示后重试'
+  } finally {
+    confirming.value = false
+  }
+}
+
 /** 轮询分析状态，直到 awaiting_confirm / confirmed / failed。 */
 async function pollAnalysis(id: string) {
   if (signal.aborted) return
@@ -681,7 +836,13 @@ function applyAnalysisResult(result: FloorPlanAnalysisResponse) {
   // 自测三种 status 分支可临时在此注入假数据（如 { status:'auto', mmPerPx:3.42, basisLabel:'客厅' }）
   scaleSuggestion.value = result.scaleSuggestion ?? null
   // CAD 通道：geometrySource/qualityIssues/drawingBounds（字段缺失按 ai_vision / 无提示 / 无叠加处理）
-  geometrySource.value = result.geometrySource ?? 'ai_vision'
+  inputMode.value = result.inputMode ?? 'image'
+  geometrySource.value = result.geometrySource ?? (inputMode.value === 'manual' ? 'manual_geometry' : 'ai_vision')
+  if (inputMode.value === 'manual') {
+    manualLayout.value = result.layout ?? null
+    manualLayoutRevision.value = result.layoutRevision ?? 0
+    manualDirty.value = false
+  }
   qualityIssues.value = result.qualityIssues ?? []
   // 叠加换算锚定 previewBounds ?? drawingBounds（多候选场景 preview 范围会大于 drawingBounds）
   drawingBounds.value = result.previewBounds ?? result.drawingBounds ?? null
@@ -720,9 +881,9 @@ async function loadExistingAnalysis(id: string, rev?: number) {
     analysisId.value = id
     pdfSource.value = false
     applyAnalysisResult(result)
-    if (result.status === 'awaiting_confirm' || result.status === 'confirmed') {
+    if (result.status === 'draft' || result.status === 'awaiting_confirm' || result.status === 'confirmed') {
       currentStep.value = 2
-      applyScaleSuggestion()
+      if (result.status !== 'draft') applyScaleSuggestion()
       return
     }
     if (result.status === 'failed') {
@@ -791,7 +952,7 @@ async function handleConfirmRooms() {
       projectId: confirmProjectId.value || undefined
     }, { signal })
     // 确认后进入搭配生成，默认选中第一个客厅（否则第一个空间）
-    const living = rooms.value.find(r => r.roomType === 'LIVING' && r.roomId) ?? rooms.value.find(r => r.roomId)
+    const living = rooms.value.find(r => r.roomType === 'LIVING_ROOM' && r.roomId) ?? rooms.value.find(r => r.roomId)
     targetRoomIds.value = living?.roomId ? [living.roomId] : []
     currentStep.value = 3
   } catch (e) {
@@ -1043,6 +1204,10 @@ function resetAll() {
     clearTimeout(pollTimer)
     pollTimer = null
   }
+  if (manualSaveTimer) {
+    clearTimeout(manualSaveTimer)
+    manualSaveTimer = null
+  }
   drawMode.value = false
   mmPerPx.value = null
   calibSegments.value = []
@@ -1069,6 +1234,16 @@ function resetAll() {
   pdfSource.value = false
   cadFileList.value = []
   geometrySource.value = 'ai_vision'
+  inputMode.value = 'image'
+  entryMode.value = 'upload'
+  manualCanvasWidthMm.value = 14000
+  manualCanvasHeightMm.value = 10000
+  manualGridMm.value = 100
+  manualLayout.value = null
+  manualLayoutRevision.value = 0
+  manualSaving.value = false
+  manualDirty.value = false
+  manualSaveInFlight = null
   qualityIssues.value = []
   drawingBounds.value = null
   cadPreviewUrl.value = ''
@@ -1157,14 +1332,40 @@ onUnmounted(() => {
     pollTimer = null
   }
   disposeScene()
+  if (manualSaveTimer) {
+    clearTimeout(manualSaveTimer)
+    manualSaveTimer = null
+  }
   revokePreviewUrl()
 })
 </script>
 
 <template>
-  <PageContainer wide title="户型图搭配" subtitle="上传户型图 → 确认识别空间 → 按尺寸生成客厅搭配方案">
-    <n-space vertical :size="24">
-      <n-steps :current="currentStep" status="process">
+  <PageContainer wide :title="pageTitle" :subtitle="pageSubtitle">
+    <n-space vertical :size="isManualFlow ? 16 : 24">
+      <nav v-if="isManualFlow" class="manual-process" aria-label="手绘空间布局流程">
+        <div class="manual-process-intro">
+          <span>MANUAL MODE</span>
+          <strong>无图纸创建</strong>
+        </div>
+        <ol>
+          <li
+            v-for="(step, index) in manualFlowSteps"
+            :key="step.number"
+            :class="{
+              active: currentStep === index + 1,
+              complete: currentStep > index + 1
+            }"
+          >
+            <span class="manual-step-number">{{ currentStep > index + 1 ? '✓' : step.number }}</span>
+            <span class="manual-step-copy">
+              <strong>{{ step.title }}</strong>
+              <small>{{ step.description }}</small>
+            </span>
+          </li>
+        </ol>
+      </nav>
+      <n-steps v-else :current="currentStep" status="process">
         <n-step title="上传户型图" description="CAD 导出图或简易平面图" />
         <n-step title="空间识别" description="确认识别结果，可手工修正" />
         <n-step title="搭配生成" description="选择风格与预算" />
@@ -1176,37 +1377,71 @@ onUnmounted(() => {
       </n-alert>
 
       <!-- 步骤 1：上传 -->
-      <n-card v-if="currentStep === 1" title="上传户型图">
+      <n-card v-if="currentStep === 1" :title="entryMode === 'manual' ? '设置空白画布' : '创建空间布局'" :class="{ 'manual-create-card': entryMode === 'manual' }">
         <n-spin :show="uploading || analyzing">
           <n-space vertical :size="16">
-            <p class="hint-text">
-              单独上传户型图片走 AI 识别；图片 + CAD 一起上传走 CAD 精确解析（图片做底图叠加精确空间轮廓）；也可仅传 CAD（无底图）。识别结果均可在下一步人工修正。
-            </p>
-            <n-space vertical :size="8" align="start">
-              <span class="hint-text">户型图片（展示用，JPG / PNG / PDF ≤10MB）</span>
-              <n-upload
-                v-model:file-list="fileList"
-                :default-upload="false"
-                accept=".jpg,.jpeg,.png,.pdf"
-                :max="1"
-                :disabled="uploading || analyzing"
-                @change="handleFileChange"
-              >
-                <n-button>选择户型图片</n-button>
-              </n-upload>
-              <span class="hint-text">CAD 文件（精确数据，DWG / DXF ≤20MB，可选）</span>
-              <n-upload
-                v-model:file-list="cadFileList"
-                :default-upload="false"
-                accept=".dwg,.dxf"
-                :max="1"
-                :disabled="uploading || analyzing"
-                @change="handleCadFileChange"
-              >
-                <n-button secondary>选择 CAD 文件</n-button>
-              </n-upload>
-            </n-space>
-            <n-space align="center" :size="12">
+            <n-radio-group v-model:value="entryMode" :disabled="uploading || analyzing">
+              <n-radio-button value="upload">上传图纸识别</n-radio-button>
+              <n-radio-button value="manual">无图纸手画</n-radio-button>
+            </n-radio-group>
+
+            <template v-if="entryMode === 'upload'">
+              <p class="hint-text">
+                单独上传户型图片走 AI 识别；图片 + CAD 一起上传走 CAD 精确解析（图片做底图叠加精确空间轮廓）；也可仅传 CAD（无底图）。识别结果均可在下一步人工修正。
+              </p>
+              <n-space vertical :size="8" align="start">
+                <span class="hint-text">户型图片（展示用，JPG / PNG / PDF ≤10MB）</span>
+                <n-upload
+                  v-model:file-list="fileList"
+                  :default-upload="false"
+                  accept=".jpg,.jpeg,.png,.pdf"
+                  :max="1"
+                  :disabled="uploading || analyzing"
+                  @change="handleFileChange"
+                >
+                  <n-button>选择户型图片</n-button>
+                </n-upload>
+                <span class="hint-text">CAD 文件（精确数据，DWG / DXF ≤20MB，可选）</span>
+                <n-upload
+                  v-model:file-list="cadFileList"
+                  :default-upload="false"
+                  accept=".dwg,.dxf"
+                  :max="1"
+                  :disabled="uploading || analyzing"
+                  @change="handleCadFileChange"
+                >
+                  <n-button secondary>选择 CAD 文件</n-button>
+                </n-upload>
+              </n-space>
+            </template>
+            <template v-else>
+              <div class="manual-create-intro">
+                <span class="manual-create-index">01</span>
+                <div>
+                  <strong>定义绘图范围</strong>
+                  <p>按实际户型的大致尺度设置画布。进入工作台后，可用多个矩形拼出 L / T / U 等不规则空间。</p>
+                </div>
+              </div>
+              <div class="manual-create-grid">
+                <label class="manual-create-field">
+                  <span>画布宽度</span>
+                  <n-input-number v-model:value="manualCanvasWidthMm" :min="1000" :max="100000" :step="500" />
+                  <small>毫米 mm</small>
+                </label>
+                <label class="manual-create-field">
+                  <span>画布高度</span>
+                  <n-input-number v-model:value="manualCanvasHeightMm" :min="1000" :max="100000" :step="500" />
+                  <small>毫米 mm</small>
+                </label>
+                <label class="manual-create-field">
+                  <span>网格精度</span>
+                  <n-input-number v-model:value="manualGridMm" :min="10" :max="1000" :step="50" />
+                  <small>建议 100mm</small>
+                </label>
+              </div>
+            </template>
+
+            <n-space align="center" :size="12" :class="{ 'manual-create-meta': entryMode === 'manual' }">
               <n-select
                 v-model:value="uploadProjectId"
                 :options="projectOptions"
@@ -1224,6 +1459,7 @@ onUnmounted(() => {
               />
             </n-space>
             <n-input
+              v-if="entryMode === 'upload'"
               v-model:value="hint"
               type="textarea"
               placeholder="补充说明（可选），如：这是三室两厅，客厅朝南"
@@ -1233,6 +1469,7 @@ onUnmounted(() => {
             />
             <n-space align="center">
               <n-button
+                v-if="entryMode === 'upload'"
                 type="primary"
                 :disabled="(!selectedFile && !selectedCadFile) || uploading || analyzing"
                 :loading="uploading"
@@ -1240,14 +1477,95 @@ onUnmounted(() => {
               >
                 开始识别
               </n-button>
+              <n-button
+                v-else
+                type="primary"
+                :loading="uploading"
+                :disabled="uploading || analyzing"
+                @click="handleCreateManualLayout"
+              >
+                开始绘制
+              </n-button>
               <span v-if="analyzing" class="hint-text">{{ cadOnlyUpload ? 'CAD 解析中，正在识别空间与家具…' : 'AI 正在识别空间与尺寸，请稍候…' }}</span>
             </n-space>
           </n-space>
         </n-spin>
       </n-card>
 
-      <!-- 步骤 2：空间识别（人工校正） -->
-      <n-card v-if="currentStep === 2" title="确认空间识别结果">
+      <!-- 无图纸步骤 2：独立绘图工作台（不复用上传识别流程） -->
+      <section v-if="currentStep === 2 && isManualGeometry" class="manual-stage">
+        <header class="manual-stage-header">
+          <div class="manual-stage-copy">
+            <span class="manual-stage-eyebrow">STEP 02 · DRAW</span>
+            <h2>绘制空间轮廓</h2>
+            <p>先画空间外形，再按需要拼接不规则轮廓。主布置区用于计算家具可用的实际开间和进深。</p>
+          </div>
+          <div class="manual-stage-meta">
+            <div>
+              <span>空间数量</span>
+              <strong>{{ manualLayout?.rooms.length ?? 0 }}</strong>
+            </div>
+            <div>
+              <span>画布尺寸</span>
+              <strong>{{ manualLayout?.canvas.widthMm ?? 0 }} × {{ manualLayout?.canvas.heightMm ?? 0 }}</strong>
+            </div>
+            <div>
+              <span>保存状态</span>
+              <strong :class="{ pending: manualDirty || manualSaving }">
+                {{ manualSaving ? '保存中' : manualDirty ? '待保存' : `已保存 v${manualLayoutRevision}` }}
+              </strong>
+            </div>
+          </div>
+        </header>
+
+        <div v-if="readonlyMode" class="manual-readonly-note">当前为只读查看模式，仅展示布局。</div>
+        <div class="manual-contextbar">
+          <div>
+            <span class="context-label">归属项目</span>
+            <span v-if="analysisProjectId" class="context-value">{{ analysisProjectName ?? analysisProjectId }}</span>
+            <n-select
+              v-else-if="!readonlyMode"
+              v-model:value="confirmProjectId"
+              :options="projectOptions"
+              clearable
+              filterable
+              size="small"
+              placeholder="未归属，可在确认时补挂"
+              style="width: 260px;"
+            />
+            <span v-else class="context-value muted">未归属</span>
+          </div>
+          <span>V1 支持横平竖直、无孔洞的空间轮廓</span>
+        </div>
+
+        <ManualLayoutEditor
+          v-if="manualLayout"
+          :layout="manualLayout"
+          :room-type-options="roomTypeOptions"
+          :readonly="readonlyMode"
+          @update:layout="handleManualLayoutUpdate"
+        />
+
+        <footer v-if="!readonlyMode" class="manual-stage-footer">
+          <div class="manual-save-state">
+            <span :class="{ dirty: manualDirty || manualSaving }" />
+            <div>
+              <strong>{{ manualSaving ? '正在保存布局' : manualDirty ? '布局有未保存修改' : '布局草稿已保存' }}</strong>
+              <small>系统会在修改后自动保存，也可手动保存当前版本。</small>
+            </div>
+          </div>
+          <div class="manual-stage-actions">
+            <n-button quaternary @click="resetAll">退出并重新开始</n-button>
+            <n-button :loading="manualSaving" :disabled="!manualDirty && !manualSaving" @click="handleSaveManualDraft">保存草稿</n-button>
+            <n-button type="primary" :loading="confirming" :disabled="!manualLayout?.rooms.length" @click="handleConfirmManualLayout">
+              确认布局，进入搭配设置
+            </n-button>
+          </div>
+        </footer>
+      </section>
+
+      <!-- 图纸步骤 2：空间识别（人工校正） -->
+      <n-card v-else-if="currentStep === 2" title="确认空间识别结果">
         <n-space vertical :size="16">
           <p v-if="isCadGeometry && unitPending" class="hint-text">
             CAD 解析结果（单位待确认）：尺寸和面积按假定比例换算，尚未确认为真实物理尺寸，请核对后再作为尺寸依据。默认规范图与空间轮廓共用同一坐标系；原始阅览图仅用于核对文字和制图细节。
@@ -1581,7 +1899,7 @@ onUnmounted(() => {
             <n-button v-if="canEnterScheme" type="primary" secondary @click="advanceAfterActivation">
               进入搭配生成
             </n-button>
-            <n-button quaternary @click="resetAll">重新上传</n-button>
+            <n-button quaternary @click="resetAll">重新开始</n-button>
             <span v-if="isSceneChannel && revisionStatus !== 'ACTIVE'" class="hint-text">
               保存仅写入当前工作版本；在上方状态条完成激活后成为业务事实。
             </span>
@@ -1590,7 +1908,7 @@ onUnmounted(() => {
       </n-card>
 
       <!-- 步骤 3：搭配生成 -->
-      <n-card v-if="currentStep === 3" title="生成搭配方案">
+      <n-card v-if="currentStep === 3" :title="isManualFlow ? '设置搭配条件' : '生成搭配方案'">
         <n-spin :show="generating">
           <n-space vertical :size="16">
             <p class="hint-text">
@@ -1647,7 +1965,7 @@ onUnmounted(() => {
       </n-card>
 
       <!-- 步骤 4：完成 -->
-      <n-card v-if="currentStep === 4" title="方案已生成">
+      <n-card v-if="currentStep === 4" :title="isManualFlow ? '手绘空间搭配已生成' : '方案已生成'">
         <n-space vertical :size="16">
           <n-alert type="success" :show-icon="false">
             搭配方案已生成并落入方案列表，方案编号：<span class="rsdp-mono">{{ schemeId }}</span>
@@ -1694,7 +2012,7 @@ onUnmounted(() => {
           <n-space>
             <n-button type="primary" @click="goSchemeDetail">查看方案详情</n-button>
             <n-button :loading="addingToBasket" @click="handleAddSchemeToBasket">全部加入选品篮</n-button>
-            <n-button quaternary @click="resetAll">再上传一张户型图</n-button>
+            <n-button quaternary @click="resetAll">{{ isManualFlow ? '再画一个空间布局' : '再上传一张户型图' }}</n-button>
           </n-space>
         </n-space>
       </n-card>
@@ -1824,6 +2142,290 @@ onUnmounted(() => {
   margin: 0;
   font-size: 13px;
   color: var(--rsdp-text-secondary);
+}
+
+.manual-process {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  min-height: 86px;
+  border: 1px solid var(--rsdp-border);
+  background: var(--rsdp-card-bg);
+}
+
+.manual-process-intro {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px 20px;
+  color: #fff;
+  background: var(--rsdp-primary);
+}
+
+.manual-process-intro span {
+  font-family: var(--rsdp-font-mono);
+  font-size: 9px;
+  letter-spacing: .16em;
+  opacity: .66;
+}
+
+.manual-process-intro strong {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: .08em;
+}
+
+.manual-process ol {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.manual-process li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px 18px;
+  color: var(--rsdp-text-secondary);
+}
+
+.manual-process li:not(:last-child)::after {
+  position: absolute;
+  right: 0;
+  width: 1px;
+  height: 34px;
+  background: var(--rsdp-border);
+  content: '';
+}
+
+.manual-step-number {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border: 1px solid var(--rsdp-border);
+  color: var(--rsdp-text-secondary);
+  font-family: var(--rsdp-font-mono);
+  font-size: 10px;
+}
+
+.manual-step-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.manual-step-copy strong {
+  color: var(--rsdp-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.manual-step-copy small {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manual-process li.active {
+  background: color-mix(in srgb, var(--rsdp-primary) 5%, transparent);
+}
+
+.manual-process li.active .manual-step-number {
+  border-color: var(--rsdp-primary);
+  color: #fff;
+  background: var(--rsdp-primary);
+}
+
+.manual-process li.active .manual-step-copy strong,
+.manual-process li.complete .manual-step-copy strong {
+  color: var(--rsdp-text);
+}
+
+.manual-process li.complete .manual-step-number {
+  border-color: var(--rsdp-success);
+  color: var(--rsdp-success);
+}
+
+.manual-stage {
+  border: 1px solid var(--rsdp-border);
+  background: var(--rsdp-card-bg);
+}
+
+.manual-stage-header {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--rsdp-border);
+}
+
+.manual-stage-copy {
+  display: flex;
+  max-width: 680px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.manual-stage-eyebrow {
+  color: var(--rsdp-primary);
+  font-family: var(--rsdp-font-mono);
+  font-size: 9px;
+  letter-spacing: .16em;
+}
+
+.manual-stage-copy h2 {
+  margin: 0;
+  color: var(--rsdp-text);
+  font-family: var(--rsdp-font-display);
+  font-size: 22px;
+  font-weight: 400;
+}
+
+.manual-stage-copy p {
+  margin: 0;
+  color: var(--rsdp-text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.manual-stage-meta {
+  display: grid;
+  min-width: 420px;
+  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  border-left: 1px solid var(--rsdp-border);
+}
+
+.manual-stage-meta > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 18px;
+  border-right: 1px solid var(--rsdp-border);
+}
+
+.manual-stage-meta > div:last-child { border-right: 0; }
+.manual-stage-meta span { color: var(--rsdp-text-secondary); font-size: 10px; }
+.manual-stage-meta strong { overflow: hidden; color: var(--rsdp-text); font-family: var(--rsdp-font-mono); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.manual-stage-meta strong.pending { color: var(--rsdp-warning); }
+
+.manual-contextbar {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--rsdp-border);
+  color: var(--rsdp-text-secondary);
+  background: color-mix(in srgb, var(--rsdp-bg) 72%, var(--rsdp-card-bg));
+  font-size: 11px;
+}
+
+.manual-contextbar > div { display: flex; align-items: center; gap: 10px; }
+.context-label { font-size: 10px; letter-spacing: .08em; }
+.context-value { color: var(--rsdp-text); }
+.context-value.muted { color: var(--rsdp-text-secondary); }
+.manual-readonly-note { padding: 9px 16px; border-bottom: 1px solid var(--rsdp-border); color: var(--rsdp-text-secondary); background: var(--rsdp-info-bg); font-size: 12px; }
+
+.manual-stage-footer {
+  display: flex;
+  min-height: 74px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--rsdp-border);
+}
+
+.manual-save-state { display: flex; align-items: center; gap: 10px; }
+.manual-save-state > span { width: 7px; height: 7px; background: var(--rsdp-success); }
+.manual-save-state > span.dirty { background: var(--rsdp-warning); }
+.manual-save-state > div { display: flex; flex-direction: column; gap: 2px; }
+.manual-save-state strong { color: var(--rsdp-text); font-size: 12px; font-weight: 500; }
+.manual-save-state small { color: var(--rsdp-text-secondary); font-size: 10px; }
+.manual-stage-actions { display: flex; align-items: center; gap: 8px; }
+
+.manual-create-intro {
+  display: flex;
+  max-width: 760px;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 18px;
+  border-left: 2px solid var(--rsdp-primary);
+  background: color-mix(in srgb, var(--rsdp-primary) 4%, transparent);
+}
+
+.manual-create-index {
+  color: color-mix(in srgb, var(--rsdp-primary) 40%, transparent);
+  font-family: var(--rsdp-font-display);
+  font-size: 38px;
+  line-height: 1;
+}
+
+.manual-create-intro > div { display: flex; flex-direction: column; gap: 5px; }
+.manual-create-intro strong { color: var(--rsdp-text); font-size: 14px; font-weight: 500; }
+.manual-create-intro p { margin: 0; color: var(--rsdp-text-secondary); font-size: 12px; line-height: 1.6; }
+
+.manual-create-grid {
+  display: grid;
+  max-width: 760px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--rsdp-border);
+}
+
+.manual-create-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px;
+  border-right: 1px solid var(--rsdp-border);
+  color: var(--rsdp-text-secondary);
+  font-size: 11px;
+}
+
+.manual-create-field:last-child { border-right: 0; }
+.manual-create-field small { color: var(--rsdp-text-secondary); font-family: var(--rsdp-font-mono); font-size: 9px; }
+.manual-create-meta { padding-top: 4px; }
+
+@media (max-width: 1200px) {
+  .manual-stage-header { flex-direction: column; }
+  .manual-stage-meta { width: 100%; min-width: 0; min-height: 64px; border-top: 1px solid var(--rsdp-border); border-left: 0; }
+  .manual-stage-meta > div { padding-top: 10px; padding-bottom: 10px; }
+}
+
+@media (max-width: 900px) {
+  .manual-process { grid-template-columns: 1fr; }
+  .manual-process-intro { min-height: 54px; }
+  .manual-process li { padding: 12px 10px; }
+  .manual-step-copy small { display: none; }
+  .manual-stage-footer { align-items: flex-start; flex-direction: column; }
+  .manual-stage-actions { width: 100%; justify-content: flex-end; }
+}
+
+@media (max-width: 680px) {
+  .manual-process ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .manual-process li:nth-child(2)::after { display: none; }
+  .manual-create-grid { grid-template-columns: 1fr; }
+  .manual-create-field { border-right: 0; border-bottom: 1px solid var(--rsdp-border); }
+  .manual-create-field:last-child { border-bottom: 0; }
+  .manual-stage-meta { grid-template-columns: 1fr; }
+  .manual-stage-meta > div { border-right: 0; border-bottom: 1px solid var(--rsdp-border); }
+  .manual-stage-meta > div:last-child { border-bottom: 0; }
+  .manual-contextbar { align-items: flex-start; flex-direction: column; }
+  .manual-stage-actions { align-items: stretch; flex-direction: column; }
 }
 
 .room-layout {

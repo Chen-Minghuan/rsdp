@@ -7,6 +7,8 @@ import com.rsdp.common.PageResult;
 import com.rsdp.dto.FloorPlanBBox;
 import com.rsdp.dto.FloorPlanDetectResult;
 import com.rsdp.dto.request.FloorPlanConfirmRequest;
+import com.rsdp.dto.request.ManualFloorPlanCreateRequest;
+import com.rsdp.dto.request.ManualFloorPlanLayoutRequest;
 import com.rsdp.dto.response.FloorPlanAnalysisListItemResponse;
 import com.rsdp.dto.response.FloorPlanAnalysisResponse;
 import com.rsdp.entity.AsyncTask;
@@ -107,6 +109,9 @@ class FloorPlanServiceTest {
     private ProjectMapper projectMapper;
 
     @Mock
+    private ManualLayoutGeometryService manualLayoutGeometryService;
+
+    @Mock
     private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     @Mock
@@ -150,6 +155,102 @@ class FloorPlanServiceTest {
     }
 
     // ---------- 接口 1：上传建单 ----------
+
+    @Test
+    void createManualLayout_shouldCreateDraftWithoutImageOrAsyncTask() {
+        var response = floorPlanService.createManualLayout(
+            new ManualFloorPlanCreateRequest(14_000, 10_000, 100, null, "手画一层"));
+
+        assertThat(response.analysisId()).startsWith("FPA-");
+        assertThat(response.status()).isEqualTo(FloorPlanService.STATUS_DRAFT);
+        assertThat(response.layoutRevision()).isZero();
+        ArgumentCaptor<FloorPlanAnalysis> captor = ArgumentCaptor.forClass(FloorPlanAnalysis.class);
+        verify(analysisMapper).insert(captor.capture());
+        assertThat(captor.getValue().getInputMode()).isEqualTo("manual");
+        assertThat(captor.getValue().getImageId()).isNull();
+        assertThat(captor.getValue().getTaskId()).isNull();
+        assertThat(captor.getValue().getLayoutJson()).contains("widthMm").contains("14000");
+        verify(imageAssetsMapper, never()).insert(any(ImageAssets.class));
+        verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
+    }
+
+    @Test
+    void saveManualLayout_shouldUseRevisionCompareAndSet() {
+        FloorPlanAnalysis analysis = manualDraft("FPA-MANUAL", 3L, "{}");
+        when(analysisMapper.selectById("FPA-MANUAL")).thenReturn(analysis);
+        when(analysisMapper.updateManualLayout(anyString(), anyLong(), anyString())).thenReturn(1);
+        var request = new ManualFloorPlanLayoutRequest(3L, emptyManualLayout());
+
+        var response = floorPlanService.saveManualLayout("FPA-MANUAL", request);
+
+        assertThat(response.layoutRevision()).isEqualTo(4L);
+        verify(analysisMapper).updateManualLayout(
+            org.mockito.ArgumentMatchers.eq("FPA-MANUAL"),
+            org.mockito.ArgumentMatchers.eq(3L),
+            org.mockito.ArgumentMatchers.contains("\"rooms\":[]"));
+        verify(auditLogService).logAction(
+            org.mockito.ArgumentMatchers.eq("floor_plan_analysis"),
+            org.mockito.ArgumentMatchers.eq("FPA-MANUAL"),
+            org.mockito.ArgumentMatchers.eq("SAVE_LAYOUT"),
+            org.mockito.ArgumentMatchers.eq(Map.of("layoutRevision", 3L)),
+            org.mockito.ArgumentMatchers.eq(Map.of("layoutRevision", 4L)),
+            org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void saveManualLayout_revisionConflict_shouldReportLatestVersion() {
+        FloorPlanAnalysis analysis = manualDraft("FPA-MANUAL", 4L, "{}");
+        when(analysisMapper.selectById("FPA-MANUAL")).thenReturn(analysis);
+        when(analysisMapper.updateManualLayout(anyString(), anyLong(), anyString())).thenReturn(0);
+
+        assertThatThrownBy(() -> floorPlanService.saveManualLayout(
+            "FPA-MANUAL", new ManualFloorPlanLayoutRequest(3L, emptyManualLayout())))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("当前版本 4");
+    }
+
+    @Test
+    void confirmManualLayout_shouldMaterializePlacementDimensionsAndArea() throws Exception {
+        var part = new ManualFloorPlanLayoutRequest.Rect("part-1", 1000, 1000, 4000, 3000);
+        var placement = new ManualFloorPlanLayoutRequest.Rect(null, 1000, 1000, 3000, 2000);
+        var secondary = new ManualFloorPlanLayoutRequest.Rect(null, 3500, 2500, 1000, 1000);
+        var sourceRoom = new ManualFloorPlanLayoutRequest.Room(
+            "room-1", "客厅", "LIVING_ROOM", List.of(part), placement, List.of(placement, secondary));
+        var layout = new ManualFloorPlanLayoutRequest.Layout(
+            1, new ManualFloorPlanLayoutRequest.Canvas(14_000, 10_000, 100), List.of(sourceRoom));
+        FloorPlanAnalysis analysis = manualDraft("FPA-MANUAL", 1L, objectMapper.writeValueAsString(layout));
+        when(analysisMapper.selectById("FPA-MANUAL")).thenReturn(analysis);
+        var computedRoom = new ManualLayoutGeometryService.ComputedRoom(
+            sourceRoom,
+            List.of(
+                new ManualLayoutGeometryService.Point(1000, 1000),
+                new ManualLayoutGeometryService.Point(5000, 1000),
+                new ManualLayoutGeometryService.Point(5000, 4000),
+                new ManualLayoutGeometryService.Point(1000, 4000)),
+            placement,
+            List.of(placement, secondary),
+            12_000_000L,
+            new ManualLayoutGeometryService.Bounds(1000, 1000, 5000, 4000),
+            new ManualLayoutGeometryService.Point(2500, 2000));
+        when(manualLayoutGeometryService.compute(any()))
+            .thenReturn(new ManualLayoutGeometryService.ComputedLayout(List.of(computedRoom)));
+        when(roomMapper.selectList(any())).thenReturn(List.of());
+
+        var response = floorPlanService.confirmManualLayout("FPA-MANUAL");
+
+        assertThat(response.getStatus()).isEqualTo(FloorPlanService.STATUS_CONFIRMED);
+        ArgumentCaptor<FloorPlanRoom> roomCaptor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper).insert(roomCaptor.capture());
+        FloorPlanRoom inserted = roomCaptor.getValue();
+        assertThat(inserted.getGeometrySource()).isEqualTo("manual_geometry");
+        assertThat(inserted.getWidthMm()).isEqualTo(3000);
+        assertThat(inserted.getDepthMm()).isEqualTo(2000);
+        assertThat(inserted.getAreaM2()).isEqualByComparingTo("12.00");
+        assertThat(inserted.getShapeParts()).contains("part-1");
+        assertThat(inserted.getPlacementZone()).contains("3000");
+        assertThat(inserted.getPlacementZone()).contains("\"zones\"").contains("3500");
+        verify(analysisMapper).updateById(analysis);
+    }
 
     @Test
     void analyze_shouldCreateImageAnalysisAndTask() throws Exception {
@@ -1749,6 +1850,21 @@ class FloorPlanServiceTest {
         analysis.setSource("admin");
         analysis.setCreatedBy("anonymous");
         return analysis;
+    }
+
+    private FloorPlanAnalysis manualDraft(String analysisId, long revision, String layoutJson) {
+        FloorPlanAnalysis analysis = buildAnalysis(analysisId, FloorPlanService.STATUS_DRAFT);
+        analysis.setImageId(null);
+        analysis.setTaskId(null);
+        analysis.setInputMode("manual");
+        analysis.setLayoutRevision(revision);
+        analysis.setLayoutJson(layoutJson);
+        return analysis;
+    }
+
+    private ManualFloorPlanLayoutRequest.Layout emptyManualLayout() {
+        return new ManualFloorPlanLayoutRequest.Layout(
+            1, new ManualFloorPlanLayoutRequest.Canvas(14_000, 10_000, 100), List.of());
     }
 
     private FloorPlanRoom buildRoom(String roomId, String roomType) {
