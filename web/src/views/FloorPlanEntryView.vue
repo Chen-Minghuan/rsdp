@@ -111,9 +111,9 @@ const projectOptions = ref<Array<{ label: string; value: string }>>([])
 const uploadProjectId = ref<string | null>(null)
 /** 步骤 1 上传表单填写的户型名称（sourceName，可选）。 */
 const sourceName = ref('')
-const manualCanvasWidthMm = ref(14000)
-const manualCanvasHeightMm = ref(10000)
-const manualGridMm = ref(100)
+const DEFAULT_MANUAL_VIEW_WIDTH_MM = 18000
+const DEFAULT_MANUAL_VIEW_HEIGHT_MM = 12000
+const manualGridMm = ref(50)
 /** 当前分析批次已归属的项目（详情接口返回；空表示未归属，确认时可补挂）。 */
 const analysisProjectId = ref<string | null>(null)
 const analysisProjectName = ref<string | null>(null)
@@ -691,22 +691,24 @@ async function handleCreateManualLayout() {
   errorMessage.value = ''
   try {
     const result = await createManualFloorPlan({
-      canvasWidthMm: manualCanvasWidthMm.value,
-      canvasHeightMm: manualCanvasHeightMm.value,
+      canvasWidthMm: DEFAULT_MANUAL_VIEW_WIDTH_MM,
+      canvasHeightMm: DEFAULT_MANUAL_VIEW_HEIGHT_MM,
       gridMm: manualGridMm.value,
       projectId: uploadProjectId.value,
       sourceName: sourceName.value.trim() || undefined
     }, { signal })
     analysisId.value = result.analysisId
     inputMode.value = 'manual'
+    analysisStatus.value = 'draft'
     geometrySource.value = 'manual_geometry'
     manualLayoutRevision.value = result.layoutRevision
     manualLayout.value = {
-      version: 1,
+      version: 3,
       canvas: {
-        widthMm: manualCanvasWidthMm.value,
-        heightMm: manualCanvasHeightMm.value,
-        gridMm: manualGridMm.value
+        widthMm: DEFAULT_MANUAL_VIEW_WIDTH_MM,
+        heightMm: DEFAULT_MANUAL_VIEW_HEIGHT_MM,
+        gridMm: manualGridMm.value,
+        mode: 'unbounded'
       },
       rooms: []
     }
@@ -1235,9 +1237,7 @@ function resetAll() {
   geometrySource.value = 'ai_vision'
   inputMode.value = 'image'
   entryMode.value = 'upload'
-  manualCanvasWidthMm.value = 14000
-  manualCanvasHeightMm.value = 10000
-  manualGridMm.value = 100
+  manualGridMm.value = 50
   manualLayout.value = null
   manualLayoutRevision.value = 0
   manualSaving.value = false
@@ -1417,25 +1417,25 @@ onUnmounted(() => {
               <div class="manual-create-intro">
                 <span class="manual-create-index">01</span>
                 <div>
-                  <strong>定义绘图范围</strong>
-                  <p>按实际户型的大致尺度设置画布。进入工作台后，可用多个矩形拼出 L / T / U 等不规则空间。</p>
+                  <strong>进入无限画布</strong>
+                  <p>首次进入默认显示约 18 × 12 米的视野，仅用于方便开始绘制，不是画布边界。之后可向任意方向平移、缩放、绘制；重新打开时会适应已有内容。</p>
                 </div>
               </div>
               <div class="manual-create-grid">
-                <label class="manual-create-field">
-                  <span>画布宽度</span>
-                  <n-input-number v-model:value="manualCanvasWidthMm" :min="1000" :max="100000" :step="500" />
-                  <small>毫米 mm</small>
-                </label>
-                <label class="manual-create-field">
-                  <span>画布高度</span>
-                  <n-input-number v-model:value="manualCanvasHeightMm" :min="1000" :max="100000" :step="500" />
-                  <small>毫米 mm</small>
-                </label>
+                <div class="manual-create-field">
+                  <span>第一次打开</span>
+                  <strong>约 18 × 12 米</strong>
+                  <small>仅是默认可见范围</small>
+                </div>
+                <div class="manual-create-field">
+                  <span>绘图范围</span>
+                  <strong>无限延伸</strong>
+                  <small>不限制空间实际尺寸与位置</small>
+                </div>
                 <label class="manual-create-field">
                   <span>网格精度</span>
-                  <n-input-number v-model:value="manualGridMm" :min="10" :max="1000" :step="50" />
-                  <small>建议 100mm</small>
+                  <n-input-number v-model:value="manualGridMm" :min="10" :max="1000" :step="10" />
+                  <small>默认 50mm；数值输入可精确到 1mm</small>
                 </label>
               </div>
             </template>
@@ -1505,8 +1505,8 @@ onUnmounted(() => {
               <strong>{{ manualLayout?.rooms.length ?? 0 }}</strong>
             </div>
             <div>
-              <span>画布尺寸</span>
-              <strong>{{ manualLayout?.canvas.widthMm ?? 0 }} × {{ manualLayout?.canvas.heightMm ?? 0 }}</strong>
+              <span>画布范围</span>
+              <strong>无限延伸</strong>
             </div>
             <div>
               <span>保存状态</span>
@@ -2399,6 +2399,7 @@ onUnmounted(() => {
 }
 
 .manual-create-field:last-child { border-right: 0; }
+.manual-create-field strong { color: var(--rsdp-text); font-size: 14px; font-weight: 500; }
 .manual-create-field small { color: var(--rsdp-text-secondary); font-family: var(--rsdp-font-mono); font-size: 9px; }
 .manual-create-meta { padding-top: 4px; }
 

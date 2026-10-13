@@ -8,21 +8,21 @@ import jakarta.validation.constraints.Size;
 /**
  * 无图纸手画布局建单请求。
  *
- * @param canvasWidthMm 画布宽度（毫米）
- * @param canvasHeightMm 画布高度（毫米）
+ * @param canvasWidthMm 首次打开时的起始视野宽度（毫米），不是绘图边界
+ * @param canvasHeightMm 首次打开时的起始视野高度（毫米），不是绘图边界
  * @param gridMm 网格吸附步长（毫米）
  * @param projectId 归属项目 ID，可空
  * @param sourceName 户型名称，可空
  */
 public record ManualFloorPlanCreateRequest(
-    @NotNull(message = "画布宽度不能为空")
-    @Min(value = 1000, message = "画布宽度不能小于 1000mm")
-    @Max(value = 100000, message = "画布宽度不能超过 100000mm")
+    @NotNull(message = "起始视野宽度不能为空")
+    @Min(value = 1000, message = "起始视野宽度不能小于 1000mm")
+    @Max(value = 100000, message = "起始视野宽度不能超过 100000mm")
     Integer canvasWidthMm,
 
-    @NotNull(message = "画布高度不能为空")
-    @Min(value = 1000, message = "画布高度不能小于 1000mm")
-    @Max(value = 100000, message = "画布高度不能超过 100000mm")
+    @NotNull(message = "起始视野高度不能为空")
+    @Min(value = 1000, message = "起始视野高度不能小于 1000mm")
+    @Max(value = 100000, message = "起始视野高度不能超过 100000mm")
     Integer canvasHeightMm,
 
     @NotNull(message = "网格尺寸不能为空")

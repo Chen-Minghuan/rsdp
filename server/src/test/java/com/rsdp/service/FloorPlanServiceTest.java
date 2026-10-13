@@ -170,7 +170,8 @@ class FloorPlanServiceTest {
         assertThat(captor.getValue().getInputMode()).isEqualTo("manual");
         assertThat(captor.getValue().getImageId()).isNull();
         assertThat(captor.getValue().getTaskId()).isNull();
-        assertThat(captor.getValue().getLayoutJson()).contains("widthMm").contains("14000");
+        assertThat(captor.getValue().getLayoutJson()).contains("widthMm").contains("14000")
+            .contains("\"version\":3").contains("\"mode\":\"unbounded\"");
         verify(imageAssetsMapper, never()).insert(any(ImageAssets.class));
         verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
     }
@@ -295,6 +296,30 @@ class FloorPlanServiceTest {
         assertThat(inserted.getPlacementZone()).contains("3000");
         assertThat(inserted.getPlacementZone()).contains("\"zones\"").contains("3500");
         verify(analysisMapper).updateById(analysis);
+    }
+
+    @Test
+    void confirmManualLayout_unboundedShouldNormalizeNegativeAndBeyondViewportGeometry() throws Exception {
+        var sourceRoom = new ManualFloorPlanLayoutRequest.Room("room-1", "扩展客厅", "LIVING_ROOM",
+            List.of(new ManualFloorPlanLayoutRequest.Rect("part-1", -3000, -2000, 25_000, 8000)), null, null);
+        var layout = new ManualFloorPlanLayoutRequest.Layout(3,
+            new ManualFloorPlanLayoutRequest.Canvas(18_000, 12_000, 50, "unbounded"), List.of(sourceRoom));
+        FloorPlanAnalysis analysis = manualDraft("FPA-MANUAL", 1L, objectMapper.writeValueAsString(layout));
+        when(analysisMapper.selectById("FPA-MANUAL")).thenReturn(analysis);
+        when(manualLayoutGeometryService.compute(any())).thenAnswer(invocation ->
+            new ManualLayoutGeometryService().compute(invocation.getArgument(0)));
+        when(roomMapper.selectList(any())).thenReturn(List.of());
+
+        floorPlanService.confirmManualLayout("FPA-MANUAL");
+
+        ArgumentCaptor<FloorPlanRoom> roomCaptor = ArgumentCaptor.forClass(FloorPlanRoom.class);
+        verify(roomMapper).insert(roomCaptor.capture());
+        var bbox = objectMapper.readTree(roomCaptor.getValue().getBbox());
+        assertThat(bbox.get("x").asDouble()).isBetween(0.0, 1.0);
+        assertThat(bbox.get("y").asDouble()).isBetween(0.0, 1.0);
+        assertThat(bbox.get("x").asDouble() + bbox.get("w").asDouble()).isLessThan(1.0);
+        assertThat(bbox.get("y").asDouble() + bbox.get("h").asDouble()).isLessThan(1.0);
+        assertThat(roomCaptor.getValue().getPolygon()).contains("-3000.0").contains("22000.0");
     }
 
     @Test

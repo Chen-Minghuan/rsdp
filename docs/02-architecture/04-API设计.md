@@ -1857,6 +1857,8 @@ POST   /api/v1/floor-plan/manual           [product:read]
        # 创建无图纸手画布局草稿；不上传图片、不创建 async_task，状态直接为 draft。
        # Request: { canvasWidthMm: 1000..100000, canvasHeightMm: 1000..100000,
        #            gridMm: 10..1000, projectId?, sourceName? }
+       # canvasWidthMm/canvasHeightMm 现在表示起始视野尺寸，不是空间绘制边界；新草稿为 version=3、canvas.mode=unbounded。
+       # Web 新建入口固定传 18000×12000mm，仅首次打开空布局时作为默认可见范围；用户无需填写画布尺寸。
        # Response: { analysisId, status: "draft", layoutRevision: 0 }
 
 PUT    /api/v1/floor-plan/{analysisId}/layout   [登录 + 归属校验]
@@ -1893,6 +1895,8 @@ POST   /api/v1/floor-plan/{analysisId}/layout/confirm   [登录 + 归属校验]
        # 确认后物化 floor_plan_room：polygon/areaM2 取完整空间；widthMm/depthMm 取
        # 首个 placementZones（旧草稿取 placementZone，均未设置时默认最大组成块）；
        # placement_zone JSONB 同时保留全部布置区；geometrySource=manual_geometry，状态 confirmed。
+       # v3 房间 bbox 按全部房间的实际共同包围盒加留白归一化，负坐标及超起始视野坐标仍落在 [0,1]；
+       # 绝对毫米 polygon/shapeParts 原样保留。旧 v1/v2 仍按固定画布归一化，已确认布局的 bbox 不重算。
        # V1 仅支持轴对齐正交轮廓，不支持斜墙、曲线、孔洞、门窗和墙体厚度。
        # Response: 同 GET /api/v1/floor-plan/{analysisId}
 

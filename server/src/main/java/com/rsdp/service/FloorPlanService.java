@@ -504,9 +504,9 @@ public class FloorPlanService {
         String projectId = resolveAccessibleProjectId(request.projectId());
         String sourceName = normalizeSourceName(request.sourceName());
         ManualFloorPlanLayoutRequest.Layout initialLayout = new ManualFloorPlanLayoutRequest.Layout(
-            1,
+            3,
             new ManualFloorPlanLayoutRequest.Canvas(
-                request.canvasWidthMm(), request.canvasHeightMm(), request.gridMm()),
+                request.canvasWidthMm(), request.canvasHeightMm(), request.gridMm(), "unbounded"),
             List.of());
 
         String analysisId = IdGenerator.floorPlanAnalysisId();
@@ -622,6 +622,23 @@ public class FloorPlanService {
         }
         ManualLayoutGeometryService.ComputedLayout computed = manualLayoutGeometryService.compute(layout);
 
+        double bboxOriginX = 0;
+        double bboxOriginY = 0;
+        double bboxWidth = layout.canvas().widthMm();
+        double bboxHeight = layout.canvas().heightMm();
+        if (layout.version() >= 3 && "unbounded".equals(layout.canvas().mode())) {
+            int minX = computed.rooms().stream().mapToInt(room -> room.bounds().minX()).min().orElseThrow();
+            int minY = computed.rooms().stream().mapToInt(room -> room.bounds().minY()).min().orElseThrow();
+            int maxX = computed.rooms().stream().mapToInt(room -> room.bounds().maxX()).max().orElseThrow();
+            int maxY = computed.rooms().stream().mapToInt(room -> room.bounds().maxY()).max().orElseThrow();
+            double marginX = Math.max(500, (maxX - minX) * 0.05);
+            double marginY = Math.max(500, (maxY - minY) * 0.05);
+            bboxOriginX = minX - marginX;
+            bboxOriginY = minY - marginY;
+            bboxWidth = (maxX - minX) + marginX * 2;
+            bboxHeight = (maxY - minY) + marginY * 2;
+        }
+
         roomMapper.delete(new QueryWrapper<FloorPlanRoom>().eq("analysis_id", analysisId));
         LocalDateTime now = LocalDateTime.now();
         int sortOrder = 0;
@@ -648,10 +665,10 @@ public class FloorPlanService {
                 "x", (double) computedRoom.labelPoint().x(),
                 "y", (double) computedRoom.labelPoint().y())));
             room.setBbox(toJson(new FloorPlanBBox(
-                (double) bounds.minX() / layout.canvas().widthMm(),
-                (double) bounds.minY() / layout.canvas().heightMm(),
-                (double) (bounds.maxX() - bounds.minX()) / layout.canvas().widthMm(),
-                (double) (bounds.maxY() - bounds.minY()) / layout.canvas().heightMm())));
+                (bounds.minX() - bboxOriginX) / bboxWidth,
+                (bounds.minY() - bboxOriginY) / bboxHeight,
+                (bounds.maxX() - bounds.minX()) / bboxWidth,
+                (bounds.maxY() - bounds.minY()) / bboxHeight)));
             room.setWidthMm(placement.w());
             room.setDepthMm(placement.h());
             room.setAreaM2(BigDecimal.valueOf(computedRoom.areaMm2())
