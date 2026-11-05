@@ -12,8 +12,8 @@ import java.util.List;
 @Data
 public class ProductBatchDeleteRequest {
 
-    /** 待删除的 RSPU ID 列表（单次最多 100 个） */
+    /** 待删除的 RSPU ID 列表（单次最多 500 个，与列表页最大单页条数一致） */
     @NotEmpty(message = "待删除产品列表不能为空")
-    @Size(max = 100, message = "单次批量删除不能超过 100 个产品")
+    @Size(max = 500, message = "单次批量删除不能超过 500 个产品")
     private List<String> rspuIds;
 }

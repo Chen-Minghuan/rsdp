@@ -2,6 +2,7 @@ package com.rsdp.mapper;
 
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 /**
@@ -86,6 +87,113 @@ public interface RspuMergeMapper {
     /** 搭配关系自环清理：改指后 anchor=related 的行软删 */
     @Update("UPDATE rspu_relation SET deleted_at = now() WHERE deleted_at IS NULL AND anchor_rspu_id = related_rspu_id")
     int softDeleteSelfRelations();
+
+    /**
+     * 供应商身份改指前去重：目标已有同身份键（factory_code, source_namespace,
+     * normalized_source_product_code）记录的，删除副本记录
+     * （uk_supplier_product_ref 冲突；supplier_product_ref 无 deleted_at，物理删）。
+     */
+    @Update("DELETE FROM supplier_product_ref s WHERE s.rspu_id = #{source} AND EXISTS ("
+        + "SELECT 1 FROM supplier_product_ref t WHERE t.rspu_id = #{target} "
+        + "AND t.factory_code = s.factory_code AND t.source_namespace = s.source_namespace "
+        + "AND t.normalized_source_product_code = s.normalized_source_product_code)")
+    int deleteDuplicateSupplierProductRefs(@Param("source") String source, @Param("target") String target);
+
+    /**
+     * 供应商源商品身份改指目标：合并后副本厂型号必须命中目标 RSPU，
+     * 否则再导入时解析"命中已软删副本"按未命中处理，重导链路被 SourceCodeReusedException 卡死。
+     */
+    @Update("UPDATE supplier_product_ref SET rspu_id = #{target}, updated_at = now() WHERE rspu_id = #{source}")
+    int repointSupplierProductRefs(@Param("source") String source, @Param("target") String target);
+
+    /** 回滚记录用：产品名下供应商身份记录 ID 列表。 */
+    @Select("SELECT ref_id FROM supplier_product_ref WHERE rspu_id = #{rspuId}")
+    java.util.List<Long> listSupplierRefIds(@Param("rspuId") String rspuId);
+
+    /** 回滚记录用：anchor 侧未删搭配关系 ID 列表。 */
+    @Select("SELECT relation_id FROM rspu_relation WHERE deleted_at IS NULL AND anchor_rspu_id = #{rspuId}")
+    java.util.List<String> listAnchorRelationIds(@Param("rspuId") String rspuId);
+
+    /** 回滚记录用：related 侧未删搭配关系 ID 列表。 */
+    @Select("SELECT relation_id FROM rspu_relation WHERE deleted_at IS NULL AND related_rspu_id = #{rspuId}")
+    java.util.List<String> listRelatedRelationIds(@Param("rspuId") String rspuId);
+
+    /** 回滚记录用：产品名下工厂关联 ID 列表。 */
+    @Select("SELECT mapping_id FROM rspu_factory_mapping WHERE rspu_id = #{rspuId}")
+    java.util.List<Long> listFactoryMappingIds(@Param("rspuId") String rspuId);
+
+    /** 回滚用：恢复软删 RSPU 主档行（自定义 SQL 不受 @TableLogic 过滤）。 */
+    @Update("UPDATE rspu_master SET deleted_at = NULL, updated_at = now() WHERE rspu_id = #{rspuId}")
+    int restoreRspuRow(@Param("rspuId") String rspuId);
+
+    /** 回滚用：恢复软删变体行。 */
+    @Update("UPDATE rspu_variant SET deleted_at = NULL, updated_at = now() WHERE variant_id = #{variantId}")
+    int restoreVariantRow(@Param("variantId") String variantId);
+
+    /** 回滚用：恢复软删 RSKU 报价行。 */
+    @Update("UPDATE rsku_supply SET deleted_at = NULL, updated_at = now() WHERE rsku_id = #{rskuId}")
+    int restoreRskuRow(@Param("rskuId") String rskuId);
+
+    /** 回滚用：变体改挂回源 RSPU。 */
+    @Update("UPDATE rspu_variant SET rspu_id = #{rspuId}, updated_at = now() WHERE variant_id = #{variantId}")
+    int repointVariantTo(@Param("variantId") String variantId, @Param("rspuId") String rspuId);
+
+    /** 回滚用：图片改挂回源 RSPU（变体归属随行修正）。 */
+    @Update("UPDATE image_assets SET rspu_id = #{rspuId}, variant_id = #{variantId} WHERE image_id = #{imageId}")
+    int repointImageTo(@Param("imageId") String imageId, @Param("rspuId") String rspuId,
+                       @Param("variantId") String variantId);
+
+    /** 回滚用：供应商身份改挂回源 RSPU。 */
+    @Update("UPDATE supplier_product_ref SET rspu_id = #{rspuId}, updated_at = now() WHERE ref_id = #{refId}")
+    int repointSupplierRefTo(@Param("refId") Long refId, @Param("rspuId") String rspuId);
+
+    /** 回滚用：工厂关联改挂回源 RSPU。 */
+    @Update("UPDATE rspu_factory_mapping SET rspu_id = #{rspuId} WHERE mapping_id = #{mappingId}")
+    int repointFactoryMappingTo(@Param("mappingId") Long mappingId, @Param("rspuId") String rspuId);
+
+    /** 回滚用：供应商身份改挂回源 RSPU（仅当前仍在目标上的行；撞键物理删除的行自然跳过）。 */
+    @Update("UPDATE supplier_product_ref SET rspu_id = #{sourceId}, updated_at = now() WHERE ref_id = #{refId} AND rspu_id = #{targetId}")
+    int repointSupplierRefToIfOn(@Param("refId") Long refId, @Param("sourceId") String sourceId,
+                                 @Param("targetId") String targetId);
+
+    /** 回滚用：工厂关联改挂回源 RSPU（仅当前仍在目标上的行；去重物理删除的行自然跳过）。 */
+    @Update("UPDATE rspu_factory_mapping SET rspu_id = #{sourceId} WHERE mapping_id = #{mappingId} AND rspu_id = #{targetId}")
+    int repointFactoryMappingToIfOn(@Param("mappingId") Long mappingId, @Param("sourceId") String sourceId,
+                                    @Param("targetId") String targetId);
+
+    /** 回滚用：搭配关系 anchor 侧改回源 RSPU。 */
+    @Update("UPDATE rspu_relation SET anchor_rspu_id = #{rspuId}, updated_at = now() WHERE relation_id = #{relationId}")
+    int repointRelationAnchorTo(@Param("relationId") String relationId, @Param("rspuId") String rspuId);
+
+    /** 回滚用：搭配关系 related 侧改回源 RSPU。 */
+    @Update("UPDATE rspu_relation SET related_rspu_id = #{rspuId}, updated_at = now() WHERE relation_id = #{relationId}")
+    int repointRelationRelatedTo(@Param("relationId") String relationId, @Param("rspuId") String rspuId);
+
+    /** 合并历史：audit_log 中 action=merge 的记录（新→旧）。jsonb 明细按文本投影，
+     *  由服务层自行解析（自定义 SQL 不走实体 @TableField 的 JSONB TypeHandler，直接映射会拿不到 Map）。 */
+    @Select("SELECT id, record_id, new_value::text AS new_value_json, operator, created_at "
+        + "FROM audit_log WHERE table_name = 'rspu_master' AND action = 'UPDATE' "
+        + "AND new_value->>'action' = 'merge' ORDER BY created_at DESC LIMIT 200")
+    java.util.List<MergeHistoryRow> listMergeHistory();
+
+    /** 合并历史查询行投影（jsonb 明细为文本，服务层解析）。 */
+    @lombok.Data
+    class MergeHistoryRow {
+        private Long id;
+        private String recordId;
+        private String newValueJson;
+        private String operator;
+        private java.time.LocalDateTime createdAt;
+    }
+
+    /** 回滚标记计数：该合并是否已被回滚过。 */
+    @Select("SELECT COUNT(*) FROM audit_log WHERE table_name = 'rspu_master' AND action = 'UPDATE' "
+        + "AND new_value->>'action' = 'merge_rollback' AND (new_value->>'mergeAuditId')::bigint = #{mergeAuditId}")
+    long countRollbacksForMerge(@Param("mergeAuditId") long mergeAuditId);
+
+    /** 统计 RSPU 名下供应商身份记录数（合并预览展示用）。 */
+    @Select("SELECT COUNT(*) FROM supplier_product_ref WHERE rspu_id = #{rspuId}")
+    long countSupplierProductRefs(@Param("rspuId") String rspuId);
 
     /** 搭配关系去重：改指后同 (anchor, related, type) 只保留最早一条，其余软删 */
     @Update("UPDATE rspu_relation r SET deleted_at = now() WHERE r.deleted_at IS NULL "

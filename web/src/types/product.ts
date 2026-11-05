@@ -86,6 +86,8 @@ export interface ProductListParams {
   priceMax?: number
   /** 排序：newest=最新（默认，可不传）、price_asc=价格升序、price_desc=价格降序 */
   sort?: ProductSort
+  /** 待归类筛选：true=仅返回无业务编码或存在 pending 疑似同款配对的产品 */
+  pendingClassification?: boolean
 }
 
 /**
@@ -237,10 +239,8 @@ export interface ProductDetail {
     fabricTags?: string[]
     sceneTags: string[]
     referencePriceBand: string
-    /** 零售参考价/销售价（不加密，官网对外展示口径） */
+    /** 零售参考价/销售价（不加密，官网对外展示） */
     retailPrice?: number
-    /** 预算区间（JSON 值，结构由 AI/导入决定，如 { min, max, currency }） */
-    budgetRange?: unknown
     productLevel?: string
     warrantyYears: number
     keySpecs: Record<string, string>
@@ -321,26 +321,6 @@ export interface ProductUpdateRequest {
   keySpecs?: Record<string, string>
   /** 销售状态：active=上架、inactive=下架 */
   status?: 'active' | 'inactive'
-}
-
-/**
- * 批量导入失败明细。
- */
-export interface ProductImportFailure {
-  rowIndex: number
-  externalCode?: string
-  rspuId?: string
-  reason: string
-}
-
-/**
- * 批量导入结果。
- */
-export interface ProductImportResult {
-  totalRows: number
-  successCount: number
-  failedCount: number
-  failures: ProductImportFailure[]
 }
 
 /**
@@ -504,6 +484,18 @@ export interface ExcelAiMappingResponse {
   notes?: string
   /** 预览生成的首版 Immutable Snapshot Revision 号（P0-B2，正常为 1） */
   previewRevision?: number
+  /** 是否命中已保存的映射模板（标准模板直导：true 时映射来自模板，未调用 AI） */
+  templateHit?: boolean
+  /** 命中的映射模板名称 */
+  templateName?: string
+  /** 内嵌图片列提示：含锚定图片的列 + 数量（该列图片自动按行提取，无需映射） */
+  imageColumnHints?: ImageColumnHint[]
+}
+
+/** 内嵌图片列提示 */
+export interface ImageColumnHint {
+  header: string
+  imageCount: number
 }
 
 /**
@@ -580,6 +572,10 @@ export interface ExcelAiMappingRequest {
   previewEdits?: PreviewEdit[]
   /** 用户在「导入前全量预览」中标记跳过的 Excel 物理行号（1-based） */
   skipRows?: number[]
+  /** 确认导入时把本次映射保存为标准模板（后续同结构表头直接套用，跳过 AI 识别） */
+  saveAsTemplate?: boolean
+  /** 模板名称（saveAsTemplate=true 时必填） */
+  templateName?: string
 }
 
 /**
@@ -767,6 +763,93 @@ export interface PreviewEdit {
 
 // ==================== 同款合并（决策点②共享主档模型，M4） ====================
 
+/** 疑似同款配对单侧产品信息（归类工作台卡片展示） */
+export interface SuspectSideInfo {
+  rspuId: string
+  rspuCode: string | null
+  productName: string | null
+  /** 品类路径（JSON 数组字符串，如 ["家具","座椅"]） */
+  categoryPath: string | null
+  positioningLabel: string | null
+  colorPrimaryName: string | null
+  primaryImageUrl: string | null
+  retailPrice: number | null
+  /** 最低出厂价（价格投影；无报价为 null） */
+  minFactoryPrice: number | null
+  /** 有效报价（RSKU）数 */
+  activeRskuCount: number
+}
+
+/** 合并历史记录项（GET /products/merge/history） */
+export interface MergeHistoryItem {
+  /** 合并审计记录 ID（回滚入参） */
+  mergeAuditId: number
+  sourceRspuId: string
+  sourceRspuCode: string | null
+  sourceProductName: string | null
+  targetRspuId: string
+  changedFields?: string[]
+  movedVariants?: number
+  movedImages?: number
+  migratedRskuCount?: number
+  movedSupplierRefs?: number
+  operator: string
+  createdAt: string
+  /** 是否已被回滚 */
+  rolledBack: boolean
+}
+
+/** 疑似同款组（GET /products/merge/suspect-clusters，归类工作台聚合视图） */
+export interface SuspectCluster {
+  clusterKey: string
+  members: SuspectSideInfo[]
+  memberCount: number
+  /** 组内最高相似度 */
+  maxSimilarity: number
+  /** 组内配对数 */
+  pairCount: number
+  /** 组内配对相似度明细（算成员对基准的相似度用） */
+  pairs: { rspuId: string; matchedRspuId: string; similarity: number }[]
+}
+
+/** 全局待归类配对项（GET /products/merge/suspects，归类工作台） */
+export interface SuspectPairItem {
+  suspectId: number
+  /** 检测侧（合并时的副本） */
+  sideA: SuspectSideInfo
+  /** 命中侧（合并时的目标） */
+  sideB: SuspectSideInfo
+  /** 向量相似度（0~1，图片 embedding 余弦距离换算） */
+  similarity: number
+  createdAt: string
+}
+
+/** 批量合并单项结果 */
+export interface MergeBatchItemResult {
+  sourceRspuId: string
+  targetRspuId: string
+  ok: boolean
+  message?: string
+}
+
+/** 批量合并汇总（POST /products/merge/batch） */
+export interface MergeBatchResult {
+  succeeded: number
+  failed: number
+  results: MergeBatchItemResult[]
+}
+
+/** 变体归并结果（POST /products/{rspuId}/variants/merge） */
+export interface VariantMergeResult {
+  sourceVariantId: string
+  targetVariantId: string
+  migratedRskuCount: number
+  migratedRskuIds: string[]
+  conflictKeepTargetDeleted: string[]
+  conflictKeepSourceReplaced: string[]
+  movedImageCount: number
+}
+
 /** 疑似同款配对项（GET /products/{rspuId}/duplicate-suspects） */
 export interface DuplicateSuspectItem {
   suspectId: number
@@ -803,6 +886,8 @@ export interface MergePreviewResult {
   movedVariantCount: number
   rskuCount: number
   imageCount: number
+  /** 副本名下的供应商身份记录数（合并时改指目标） */
+  supplierRefCount?: number
 }
 
 /** 同款合并请求（POST /products/merge） */
@@ -826,6 +911,9 @@ export interface MergeResult {
   conflictKeepTargetDeleted: string[]
   conflictKeepSourceReplaced: string[]
   movedImageCount: number
-  reissuedRskuCodes: number
+  /** 改指目标的供应商身份记录数 */
+  movedSupplierRefs?: number
+  /** 与目标撞身份键被去重删除的副本身份记录数 */
+  removedDuplicateSupplierRefs?: number
   message: string
 }

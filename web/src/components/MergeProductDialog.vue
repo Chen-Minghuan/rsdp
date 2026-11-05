@@ -231,7 +231,8 @@ async function handleSubmit() {
 
             <n-alert type="info" :bordered="false" style="margin-top: 12px;">
               将迁移：RSKU 报价 {{ preview.rskuCount }} 条、变体改挂 {{ preview.movedVariantCount }} 条、
-              图片 {{ preview.imageCount }} 张；合并后副本进入回收站（可恢复期可见）。
+              图片 {{ preview.imageCount }} 张、供应商身份 {{ preview.supplierRefCount ?? 0 }} 条；
+              合并后副本进入回收站（可恢复期可见），副本厂型号将指向目标产品。
             </n-alert>
           </template>
         </n-spin>

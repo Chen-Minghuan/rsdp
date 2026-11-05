@@ -26,6 +26,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'create-variant'): void
+  /** 归并变体（归类工作台配套：源变体并入同产品另一变体） */
+  (e: 'merge-variant', row: RspuVariant): void
   (e: 'create-rsku'): void
   (e: 'batch-create-rsku'): void
   (e: 'delete-rsku', row: Rsku): void
@@ -95,6 +97,17 @@ const variantColumns: DataTableColumns<RspuVariant> = [
       return h(NTag, { type: row.status === 'active' ? 'success' : 'default', size: 'small' }, {
         default: () => (row.status === 'active' ? '有效' : row.status)
       })
+    }
+  },
+  {
+    title: '操作',
+    key: 'mergeAction',
+    width: 80,
+    render(row: RspuVariant) {
+      // 归并入口仅对有效变体开放；目标变体在父容器弹窗中选择
+      return props.canCreateVariant && row.status === 'active'
+        ? h(NButton, { size: 'small', tertiary: true, onClick: () => emit('merge-variant', row) }, { default: () => '归并' })
+        : null
     }
   }
 ]

@@ -34,6 +34,7 @@ import { getProductDetail, updateProduct, patchProductSixDimTag, deleteProduct, 
 import { addFavorite, checkFavorites, listFavoriteFolders } from '@/api/favorite'
 import { listRskuByRspu, createRsku, deleteRsku, batchCreateRskus } from '@/api/rsku'
 import { listVariantsByRspu, createVariant } from '@/api/variant'
+import { mergeVariants } from '@/api/product'
 import { listFactories } from '@/api/factory'
 import { listDicts, createDict } from '@/api/dict'
 import { createRelation, deleteRelation } from '@/api/relation'
@@ -457,6 +458,46 @@ async function loadRskuList() {
     errorMessage.value = e instanceof Error ? e.message : '加载报价失败'
   } finally {
     rskuLoading.value = false
+  }
+}
+
+// ---- 变体归并（归类工作台配套） ----
+const showVariantMergeModal = ref(false)
+const variantMergeLoading = ref(false)
+const variantMergeSource = ref<RspuVariant | null>(null)
+const variantMergeTargetId = ref<string | null>(null)
+const variantMergeTargetOptions = computed(() =>
+  variantList.value
+    .filter(v => v.variantId !== variantMergeSource.value?.variantId && v.status === 'active')
+    .map(v => ({ label: v.displayName || v.variantId, value: v.variantId }))
+)
+
+function openVariantMergeModal(row: RspuVariant) {
+  variantMergeSource.value = row
+  variantMergeTargetId.value = null
+  showVariantMergeModal.value = true
+}
+
+async function confirmVariantMerge() {
+  if (!variantMergeSource.value || !variantMergeTargetId.value) {
+    message.warning('请选择目标变体')
+    return
+  }
+  variantMergeLoading.value = true
+  try {
+    const result = await mergeVariants(rspuId.value, {
+      sourceVariantId: variantMergeSource.value.variantId,
+      targetVariantId: variantMergeTargetId.value
+    })
+    message.success(`变体归并完成：迁移报价 ${result.migratedRskuCount} 条、图片 ${result.movedImageCount} 张`)
+    showVariantMergeModal.value = false
+    await loadVariants()
+    await loadRskuList()
+  } catch (e) {
+    // 同厂同配置报价冲突等由后端阻断并返回明细，原样展示给用户
+    message.error(e instanceof Error ? e.message : '变体归并失败')
+  } finally {
+    variantMergeLoading.value = false
   }
 }
 
@@ -1120,6 +1161,7 @@ onBeforeRouteUpdate((to, from) => {
                   @batch-create-rsku="openBatchRskuModal"
                   @delete-rsku="(row: Rsku) => handleDeleteRsku(row.rskuId)"
                   @open-rsku="(row: Rsku) => router.push(`/products/${rspuId}/rsku/${row.rskuId}`)"
+                  @merge-variant="openVariantMergeModal"
                 />
               </n-tab-pane>
 
@@ -1762,6 +1804,30 @@ onBeforeRouteUpdate((to, from) => {
         <n-space justify="end">
           <n-button @click="showFavoriteFolderModal = false">取消</n-button>
           <n-button type="primary" :loading="favoriteLoading" @click="confirmAddFavorite">确认收藏</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- 变体归并弹窗（归类工作台配套：同产品下语义重复变体收口） -->
+    <n-modal
+      v-model:show="showVariantMergeModal"
+      preset="card"
+      title="归并变体"
+      style="width: 480px;"
+    >
+      <p style="margin-bottom: 12px; color: var(--rsdp-text-secondary);">
+        将「{{ variantMergeSource?.displayName || variantMergeSource?.variantId }}」的报价与图片并入目标变体，
+        源变体随后进入回收站；同工厂同配置的报价冲突需在合并后逐条处理时会阻断并提示。
+      </p>
+      <n-select
+        v-model:value="variantMergeTargetId"
+        :options="variantMergeTargetOptions"
+        placeholder="选择目标变体（保留方）"
+      />
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showVariantMergeModal = false">取消</n-button>
+          <n-button type="primary" :loading="variantMergeLoading" @click="confirmVariantMerge">确认归并</n-button>
         </n-space>
       </template>
     </n-modal>

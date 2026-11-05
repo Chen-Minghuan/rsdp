@@ -62,12 +62,6 @@ export const routes = [
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
   },
   {
-    path: '/products/import',
-    name: 'ProductImport',
-    component: () => import('@/views/ProductImportView.vue'),
-    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
-  },
-  {
     path: '/products/document-import',
     name: 'ProductDocumentImport',
     component: () => import('@/views/ProductDocumentImportView.vue'),
@@ -84,6 +78,12 @@ export const routes = [
     name: 'ProductManualEntry',
     component: () => import('@/views/ProductManualEntryView.vue'),
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+  },
+  {
+    path: '/products/classification',
+    name: 'ProductClassification',
+    component: () => import('@/views/ProductClassificationView.vue'),
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_UPDATE] }
   },
   {
     path: '/products/:rspuId',
@@ -231,12 +231,6 @@ export const routes = [
     name: 'VisualSearch',
     component: () => import('@/views/VisualSearchView.vue'),
     meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
-  },
-  {
-    path: '/rsku/import',
-    name: 'RskuImport',
-    component: () => import('@/views/RskuImportView.vue'),
-    meta: { requiresAuth: true, permissions: [PERMISSIONS.RSKU_IMPORT] }
   },
   {
     path: '/templates',

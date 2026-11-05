@@ -120,12 +120,6 @@ export const navGroups: NavGroup[] = [
         permission: PERMISSIONS.PRODUCT_IMPORT
       },
       {
-        key: 'excel-import',
-        label: 'Excel 批量导入',
-        path: '/products/import',
-        permission: PERMISSIONS.PRODUCT_IMPORT
-      },
-      {
         key: 'excel-ai-import',
         label: 'Excel AI 导入',
         path: '/products/excel-ai-import',
@@ -143,7 +137,13 @@ export const navGroups: NavGroup[] = [
         path: '/products',
         permission: PERMISSIONS.PRODUCT_READ,
         activeMatch: 'prefix',
-        activeExcludes: ['/products/document-import', '/products/excel-ai-import', '/products/import', '/products/manual-entry']
+        activeExcludes: ['/products/document-import', '/products/excel-ai-import', '/products/manual-entry', '/products/classification']
+      },
+      {
+        key: 'classification',
+        label: '归类工作台',
+        path: '/products/classification',
+        permission: PERMISSIONS.PRODUCT_UPDATE
       },
       {
         key: 'visual-search',

@@ -38,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
@@ -70,13 +71,13 @@ class RspuMergeServiceTest {
     @Mock
     private RspuMergeMapper rspuMergeMapper;
     @Mock
+    private com.rsdp.mapper.AuditLogMapper auditLogMapper;
+    @Mock
     private RspuRelationMapper rspuRelationMapper;
     @Mock
     private AuditLogService auditLogService;
     @Mock
     private RspuPriceSummaryService rspuPriceSummaryService;
-    @Mock
-    private RskuCodeService rskuCodeService;
     @Mock
     private ProductQueryService productQueryService;
     @Spy
@@ -108,7 +109,6 @@ class RspuMergeServiceTest {
             .thenReturn(List.of(scene(TGT, "LIVING")), List.of(scene(SRC, "LIVING")));
         lenient().when(imageAssetsMapper.selectList(any(QueryWrapper.class)))
             .thenReturn(List.of(image("IMG-1", "VAR-S-HIT")));
-        lenient().when(rskuCodeService.backfillCodesByRspu(TGT)).thenReturn(1);
     }
 
     private RspuMaster sourceRspu() {
@@ -270,12 +270,12 @@ class RspuMergeServiceTest {
             assertThat(result.get("migratedCount")).isEqualTo(1);
             // 图片改挂 1 张
             assertThat(result.get("movedImageCount")).isEqualTo(1);
-            assertThat(result.get("reissuedRskuCodes")).isEqualTo(1);
+            // 2026-10-14 编码规则：迁移 RSKU 保留原编码，不再置空重发
+            assertThat(result.get("reissuedRskuCodes")).isNull();
 
-            // 双投影重算 + 编码补发 + 副本软删复用 deleteProduct
+            // 双投影重算 + 副本软删复用 deleteProduct；不再触发编码补发
             verify(rspuPriceSummaryService).recalculate(SRC);
             verify(rspuPriceSummaryService).recalculate(TGT);
-            verify(rskuCodeService).backfillCodesByRspu(TGT);
             verify(productQueryService).deleteProduct(SRC);
             // 引用改指（抽查关键几项）
             verify(rspuMergeMapper).repointSchemeItems(SRC, TGT);
@@ -287,6 +287,283 @@ class RspuMergeServiceTest {
             verify(associationHelper, never()).replaceScenes(eq(TGT), any(), any(), eq(true));
             // 配对闭环（merged + dismissed 两次 update）
             verify(duplicateSuspectMapper, times(2)).update(isNull(), any(UpdateWrapper.class));
+        }
+    }
+
+
+    @Test
+    void merge_shouldRepointSupplierProductRefs() {
+        // 副本 3 条供应商身份：1 条与目标撞身份键（去重删除），2 条改指目标
+        when(rspuMergeMapper.deleteDuplicateSupplierProductRefs(SRC, TGT)).thenReturn(1);
+        when(rspuMergeMapper.repointSupplierProductRefs(SRC, TGT)).thenReturn(2);
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            when(SecurityOperatorContext.currentUsername()).thenReturn("admin");
+
+            Map<String, Object> result = mergeService.merge(request());
+
+            // 先去重（撞 uk_supplier_product_ref 的副本记录物理删）再改指目标，顺序不可颠倒
+            var order = org.mockito.Mockito.inOrder(rspuMergeMapper);
+            order.verify(rspuMergeMapper).deleteDuplicateSupplierProductRefs(SRC, TGT);
+            order.verify(rspuMergeMapper).repointSupplierProductRefs(SRC, TGT);
+            assertThat(result.get("movedSupplierRefs")).isEqualTo(2);
+            assertThat(result.get("removedDuplicateSupplierRefs")).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void mergeVariants_shouldMigrateRskuAndImagesAndSoftDeleteSource() {
+        RspuVariant source = variant("VAR-S", SRC, "M", "红", "WO");
+        RspuVariant target = variant("VAR-T", SRC, "L", "红", "WO");
+        when(rspuVariantMapper.selectById("VAR-S")).thenReturn(source);
+        when(rspuVariantMapper.selectById("VAR-T")).thenReturn(target);
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class)))
+            .thenReturn(List.of(rsku("RSKU-S-1", SRC, "VAR-S", "A001", "c1")), List.of());
+        when(imageAssetsMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(2);
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            when(SecurityOperatorContext.currentUsername()).thenReturn("admin");
+
+            com.rsdp.dto.request.VariantMergeRequest req = new com.rsdp.dto.request.VariantMergeRequest();
+            req.setSourceVariantId("VAR-S");
+            req.setTargetVariantId("VAR-T");
+            Map<String, Object> result = mergeService.mergeVariants(SRC, req);
+
+            assertThat(result.get("migratedRskuCount")).isEqualTo(1);
+            assertThat(result.get("movedImageCount")).isEqualTo(2);
+            verify(rspuVariantMapper).deleteById("VAR-S");
+            verify(rspuPriceSummaryService).recalculate(SRC);
+        }
+    }
+
+    @Test
+    void mergeVariants_shouldRejectUnresolvedRskuConflict() {
+        RspuVariant source = variant("VAR-S", SRC, "M", "红", "WO");
+        RspuVariant target = variant("VAR-T", SRC, "L", "红", "WO");
+        when(rspuVariantMapper.selectById("VAR-S")).thenReturn(source);
+        when(rspuVariantMapper.selectById("VAR-T")).thenReturn(target);
+        when(rskuSupplyMapper.selectList(any(QueryWrapper.class)))
+            .thenReturn(List.of(rsku("RSKU-S-1", SRC, "VAR-S", "A001", "c1")),
+                List.of(rsku("RSKU-T-1", SRC, "VAR-T", "A001", "c2")));
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+
+            com.rsdp.dto.request.VariantMergeRequest req = new com.rsdp.dto.request.VariantMergeRequest();
+            req.setSourceVariantId("VAR-S");
+            req.setTargetVariantId("VAR-T");
+            assertThatThrownBy(() -> mergeService.mergeVariants(SRC, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("冲突");
+            verify(rspuVariantMapper, never()).deleteById(anyString());
+        }
+    }
+
+    @Test
+    void mergeVariants_shouldRejectCrossProduct() {
+        RspuVariant source = variant("VAR-S", SRC, "M", "红", "WO");
+        RspuVariant target = variant("VAR-T", TGT, "M", "红", "WO");
+        when(rspuVariantMapper.selectById("VAR-S")).thenReturn(source);
+        when(rspuVariantMapper.selectById("VAR-T")).thenReturn(target);
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+
+            com.rsdp.dto.request.VariantMergeRequest req = new com.rsdp.dto.request.VariantMergeRequest();
+            req.setSourceVariantId("VAR-S");
+            req.setTargetVariantId("VAR-T");
+            assertThatThrownBy(() -> mergeService.mergeVariants(SRC, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("同一产品");
+        }
+    }
+
+    @Test
+    void dismissSuspect_shouldMarkDismissed() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            when(SecurityOperatorContext.currentUsername()).thenReturn("admin");
+            when(duplicateSuspectMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(1);
+
+            mergeService.dismissSuspect(9L);
+
+            verify(duplicateSuspectMapper).update(isNull(), any(UpdateWrapper.class));
+        }
+    }
+
+    @Test
+    void dismissSuspect_shouldRejectNonPlatformStaff() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+
+            assertThatThrownBy(() -> mergeService.dismissSuspect(9L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("平台运营");
+        }
+    }
+
+    @Test
+    void listAllPendingSuspects_shouldReturnBothSidesInfo() {
+        com.rsdp.entity.RspuDuplicateSuspect suspect = new com.rsdp.entity.RspuDuplicateSuspect();
+        suspect.setSuspectId(1L);
+        suspect.setRspuId(SRC);
+        suspect.setMatchedRspuId(TGT);
+        suspect.setSimilarity(java.math.BigDecimal.valueOf(0.97));
+        when(duplicateSuspectMapper.selectList(any(QueryWrapper.class))).thenReturn(List.of(suspect));
+        // 富信息版本走批量预取：产品/主图/价格投影均按集合查询
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(sourceRspu(), targetRspu()));
+
+        List<Map<String, Object>> result = mergeService.listAllPendingSuspects();
+
+        assertThat(result).hasSize(1);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sideA = (Map<String, Object>) result.get(0).get("sideA");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sideB = (Map<String, Object>) result.get(0).get("sideB");
+        assertThat(sideA.get("rspuCode")).isEqualTo("FS-MC-072-M");
+        assertThat(sideB.get("rspuCode")).isEqualTo("FS-MC-001-M");
+    }
+
+    @Test
+    void rollbackMerge_shouldRejectNonPlatformStaff() {
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(false);
+
+            assertThatThrownBy(() -> mergeService.rollbackMerge(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("平台运营");
+        }
+    }
+
+    @Test
+    void rollbackMerge_shouldRejectAlreadyRolledBack() {
+        com.rsdp.entity.AuditLog entry = mergeAuditEntry();
+        when(auditLogMapper.selectById(1L)).thenReturn(entry);
+        when(rspuMergeMapper.countRollbacksForMerge(1L)).thenReturn(1L);
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+
+            assertThatThrownBy(() -> mergeService.rollbackMerge(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已被回滚");
+        }
+    }
+
+    @Test
+    void rollbackMerge_happyPath_shouldRestoreSourceAndRepointBack() {
+        com.rsdp.entity.AuditLog entry = mergeAuditEntry();
+        when(auditLogMapper.selectById(1L)).thenReturn(entry);
+        when(rspuMergeMapper.countRollbacksForMerge(1L)).thenReturn(0L);
+        RspuMaster deletedSource = sourceRspu();
+        deletedSource.setDeletedAt(java.time.LocalDateTime.now());
+        when(rspuMapper.selectAnyById(SRC)).thenReturn(deletedSource);
+        RspuMaster target = targetRspu();
+        when(rspuMapper.selectById(TGT)).thenReturn(target);
+        when(rspuMergeMapper.restoreRspuRow(SRC)).thenReturn(1);
+        RskuSupply migrated = rsku("RSKU-S-1", TGT, "VAR-T-1", "A001", "code");
+        when(rskuSupplyMapper.selectById("RSKU-S-1")).thenReturn(migrated);
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+            when(SecurityOperatorContext.currentUsername()).thenReturn("admin");
+
+            Map<String, Object> result = mergeService.rollbackMerge(1L);
+
+            // 副本恢复 + 移动变体挂回 + 映射变体恢复 + RSKU 逆映射挂回 + 冲突双方报价恢复
+            verify(rspuMergeMapper).restoreRspuRow(SRC);
+            verify(rspuMergeMapper).repointVariantTo("VAR-S-MOVE", SRC);
+            verify(rspuMergeMapper).restoreVariantRow("VAR-S-HIT");
+            verify(rskuSupplyMapper).update(isNull(), any(UpdateWrapper.class));
+            verify(rspuMergeMapper).restoreRskuRow("RSKU-DEL-T");
+            verify(rspuMergeMapper).restoreRskuRow("RSKU-DEL-S");
+            // 目标被覆盖字段还原（合并时 description 被副本填入）
+            assertThat(target.getDescription()).isNull();
+            // 回滚审计落记录（防重复回滚标记）
+            verify(auditLogService).logUpdate(eq("rspu_master"), eq(TGT), isNull(),
+                argThat(map -> "merge_rollback".equals(((Map<?, ?>) map).get("action"))), eq("admin"));
+            assertThat(result.get("message").toString()).contains("取消合并");
+        }
+    }
+
+    @Test
+    void listMergeHistory_shouldExposeMergeDetailAndRollbackFlag() {
+        RspuMergeMapper.MergeHistoryRow row = new RspuMergeMapper.MergeHistoryRow();
+        row.setId(1L);
+        row.setRecordId(TGT);
+        row.setOperator("admin");
+        row.setNewValueJson("{\"action\":\"merge\",\"sourceRspuId\":\"RSPU-SRC\"}");
+        when(rspuMergeMapper.listMergeHistory()).thenReturn(List.of(row));
+        when(rspuMergeMapper.countRollbacksForMerge(1L)).thenReturn(0L);
+
+        List<Map<String, Object>> history = mergeService.listMergeHistory();
+
+        assertThat(history).hasSize(1);
+        assertThat(history.get(0).get("sourceRspuId")).isEqualTo(SRC);
+        assertThat(history.get(0).get("targetRspuId")).isEqualTo(TGT);
+        assertThat(history.get(0).get("rolledBack")).isEqualTo(false);
+        assertThat(history.get(0).get("operator")).isEqualTo("admin");
+    }
+
+    /** 合并审计记录测试桩（含回滚所需的迁移明细结构）。 */
+    private com.rsdp.entity.AuditLog mergeAuditEntry() {
+        com.rsdp.entity.AuditLog entry = new com.rsdp.entity.AuditLog();
+        entry.setId(1L);
+        entry.setRecordId(TGT);
+        entry.setOperator("admin");
+        Map<String, Object> detail = new java.util.HashMap<>();
+        detail.put("action", "merge");
+        detail.put("sourceRspuId", SRC);
+        detail.put("sourceRspuCode", "FS-MC-072-M");
+        detail.put("changedFields", List.of("description"));
+        Map<String, Object> before = new java.util.HashMap<>();
+        before.put("description", null);
+        detail.put("targetFieldBefore", before);
+        detail.put("movedVariantIds", List.of("VAR-S-MOVE"));
+        detail.put("variantIdMap", Map.of("VAR-S-HIT", "VAR-T-1", "VAR-S-MOVE", "VAR-S-MOVE"));
+        Map<String, Object> rsku = new java.util.HashMap<>();
+        rsku.put("migratedRskuIds", List.of("RSKU-S-1"));
+        rsku.put("conflictKeepTargetDeleted", List.of("RSKU-DEL-S"));
+        rsku.put("conflictKeepSourceReplaced", List.of("RSKU-DEL-T"));
+        detail.put("rsku", rsku);
+        detail.put("movedImageIds", List.of());
+        detail.put("supplierRefIdsBefore", List.of());
+        detail.put("factoryMappingIdsBefore", List.of());
+        detail.put("anchorRelationIdsBefore", List.of());
+        detail.put("relatedRelationIdsBefore", List.of());
+        entry.setNewValue(detail);
+        return entry;
+    }
+
+    @Test
+    void listSuspectClusters_shouldGroupConnectedPairs() {
+        // 并查集连通分组：A-B、B-C 连成一组（3 成员），D-E 独立一组
+        java.util.function.BiFunction<String, String, com.rsdp.entity.RspuDuplicateSuspect> pair = (a, b) -> {
+            com.rsdp.entity.RspuDuplicateSuspect su = new com.rsdp.entity.RspuDuplicateSuspect();
+            su.setRspuId(a);
+            su.setMatchedRspuId(b);
+            su.setSimilarity(java.math.BigDecimal.valueOf(0.97));
+            return su;
+        };
+        when(duplicateSuspectMapper.selectList(any(QueryWrapper.class)))
+            .thenReturn(List.of(pair.apply("A", "B"), pair.apply("B", "C"), pair.apply("D", "E")));
+        RspuMaster ra = new RspuMaster();
+        ra.setRspuId("A");
+        when(rspuMapper.selectBatchIds(any())).thenReturn(List.of(ra));
+
+        List<Map<String, Object>> clusters = mergeService.listSuspectClusters();
+
+        assertThat(clusters).hasSize(2);
+        assertThat(clusters.stream().map(c -> c.get("memberCount")).toList())
+            .containsExactlyInAnyOrder(3, 2);
+    }
+
+    @Test
+    void preview_shouldExposeSupplierRefCount() {
+        when(rspuMergeMapper.countSupplierProductRefs(SRC)).thenReturn(3L);
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.isPlatformStaff()).thenReturn(true);
+
+            Map<String, Object> result = mergeService.preview(request());
+
+            assertThat(result.get("supplierRefCount")).isEqualTo(3L);
         }
     }
 

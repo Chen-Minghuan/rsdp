@@ -87,6 +87,8 @@ const sortOptions: { label: string; value: ProductSort }[] = [
 ]
 // 图片资产筛选（服务 AI 搭配数据补齐：'true'=仅有 / 'false'=仅无 / null=不限）
 const hasPrimaryImage = ref<string | null>(null)
+/** 待归类筛选（归类工作台入口）：仅看无业务编码或有疑似同款配对的产品 */
+const pendingClassification = ref(false)
 const imageAssetOptions = [
   { label: '有', value: 'true' },
   { label: '无', value: 'false' }
@@ -322,6 +324,7 @@ function buildParams(includeTab: boolean): import('@/types/product').ProductList
     dimD: dimD.value || undefined,
     dimF: dimF.value || undefined,
     hasPrimaryImage: toTriBool(hasPrimaryImage.value),
+    pendingClassification: pendingClassification.value || undefined,
     statusTab: includeTab ? statusTab.value : undefined
   }
   if (isPlatformStaff.value) {
@@ -383,6 +386,7 @@ function handleReset() {
   materialTag.value = null
   createdRange.value = null
   hasPrimaryImage.value = null
+  pendingClassification.value = false
   priceMin.value = null
   priceMax.value = null
   sort.value = 'newest'
@@ -939,7 +943,10 @@ function handleBatchDelete() {
             positiveText: '确定'
           })
         }
-        loadProducts()
+        // 与恢复/彻底删除同口径：回第一页并同时刷新列表与页签计数——
+        // 大批量删除后当前页可能超出范围（空页看似"没刷新"），计数也需同步更新
+        page.value = 1
+        refreshAll()
       } catch (e: unknown) {
         errorMessage.value = e instanceof Error ? e.message : '批量删除产品失败'
       } finally {
@@ -1027,7 +1034,7 @@ onMounted(async () => {
 })
 
 // 下拉类筛选变化即刷新（文本输入与日期范围由「搜索」按钮触发）
-watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimaryImage, dimA, dimB, dimC, dimD, dimF, factoryCode, sort], () => {
+watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimaryImage, pendingClassification, dimA, dimB, dimC, dimD, dimF, factoryCode, sort], () => {
   page.value = 1
   refreshAll()
 })
@@ -1053,7 +1060,7 @@ watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimary
               <n-button type="primary" @click="handleSearch">搜索</n-button>
               <n-button @click="handleReset">重置</n-button>
               <n-button v-if="canCreateProduct" type="primary" ghost @click="router.push('/products/manual-entry')">新增</n-button>
-              <n-button v-if="canImportProduct" @click="router.push('/products/import')">批量导入</n-button>
+              <n-button v-if="canImportProduct" @click="router.push('/products/excel-ai-import')">批量导入</n-button>
               <n-button text type="primary" class="expand-toggle" @click="filtersExpanded = !filtersExpanded">
                 {{ filtersExpanded ? '收起筛选' : '展开筛选' }}
                 <span v-if="!filtersExpanded && activeAdvancedCount > 0">({{ activeAdvancedCount }})</span>
@@ -1082,6 +1089,9 @@ watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimary
           <!-- 图片资产筛选：补齐 AI 搭配数据（主图有无） -->
           <n-form-item-gi label="主图">
             <n-select v-model:value="hasPrimaryImage" :options="imageAssetOptions" placeholder="不限" clearable />
+          </n-form-item-gi>
+          <n-form-item-gi label="待归类">
+            <n-checkbox v-model:checked="pendingClassification">仅看未发码/有疑似同款</n-checkbox>
           </n-form-item-gi>
           <!-- 六维形态特征筛选：维度名与枚举项跟随已选品类（A/B/C/D/F） -->
           <n-form-item-gi
@@ -1217,7 +1227,7 @@ watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimary
             v-model:page="page"
             v-model:page-size="size"
             :item-count="total"
-            :page-sizes="[10, 20, 50]"
+            :page-sizes="[10, 20, 50, 100, 200]"
             show-size-picker
             show-quick-jumper
             @update:page="loadProducts"

@@ -1,5 +1,5 @@
 import { apiClient, uploadClient, type ApiResult } from './client'
-import type { DocumentImportResult, DocumentImportSubmitResult, DuplicateSuspectItem, ExcelAiCategoryRevisionRequest, ExcelAiCategoryRevisionResponse, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, MergePreviewResult, MergeResult, PageResult, PreviewRowImage, ProductDetail, ProductImportResult, ProductListParams, ProductSummary, ProductUpdateRequest, RspuMergeRequest, SpuStatusCounts } from '@/types/product'
+import type { DocumentImportResult, DocumentImportSubmitResult, DuplicateSuspectItem, SuspectPairItem, SuspectCluster, MergeHistoryItem, MergeBatchResult, VariantMergeResult, ExcelAiCategoryRevisionRequest, ExcelAiCategoryRevisionResponse, ExcelAiClassifyCategoriesRequest, ExcelAiClassifyCategoriesResponse, ExcelAiImportStatus, ExcelAiImportSubmitResult, ExcelAiMappingRequest, ExcelAiMappingResponse, ExcelAiPreviewDataResponse, ExcelImportRow, FactoryProductEntryResult, ManualProductEntryResult, MergePreviewResult, MergeResult, PageResult, PreviewRowImage, ProductDetail, ProductListParams, ProductSummary, ProductUpdateRequest, RspuMergeRequest, SpuStatusCounts } from '@/types/product'
 import type { ProductEntryResult } from '@/types/task'
 
 export interface ApiOptions {
@@ -182,6 +182,94 @@ export async function mergeProducts(request: RspuMergeRequest): Promise<MergeRes
 }
 
 /**
+ * 全局待归类队列（归类工作台）：所有 pending 疑似同款配对。
+ *
+ * @returns 配对列表（含双侧产品编码/品名/相似度）
+ */
+export async function listAllPendingSuspects(): Promise<SuspectPairItem[]> {
+  const { data: result } = await apiClient.get<ApiResult<SuspectPairItem[]>>(
+    '/v1/products/merge/suspects'
+  )
+  return result.data
+}
+
+/**
+ * 疑似同款组聚合（归类工作台 V2）：多个互为同款的产品按连通性聚成一组。
+ *
+ * @returns 同款组列表（members/maxSimilarity/pairCount，按最高相似度降序）
+ */
+export async function listSuspectClusters(): Promise<SuspectCluster[]> {
+  const { data: result } = await apiClient.get<ApiResult<SuspectCluster[]>>(
+    '/v1/products/merge/suspect-clusters'
+  )
+  return result.data
+}
+
+/**
+ * 合并历史（归类工作台）：历史合并记录，新→旧。
+ *
+ * @returns 合并历史列表
+ */
+export async function listMergeHistory(): Promise<MergeHistoryItem[]> {
+  const { data: result } = await apiClient.get<ApiResult<MergeHistoryItem[]>>(
+    '/v1/products/merge/history'
+  )
+  return result.data
+}
+
+/**
+ * 取消合并（回滚）：副本从回收站恢复，变体/报价/图片/供应商身份改挂回副本。
+ *
+ * @param mergeAuditId 合并审计记录 ID
+ * @returns 回滚结果
+ */
+export async function rollbackMerge(mergeAuditId: number): Promise<{ message: string }> {
+  const { data: result } = await apiClient.post<ApiResult<{ message: string }>>(
+    `/v1/products/merge/${mergeAuditId}/rollback`
+  )
+  return result.data
+}
+
+/**
+ * 人工排除疑似同款配对（确认不是同款）。
+ *
+ * @param suspectId 配对记录 ID
+ */
+export async function dismissSuspect(suspectId: number): Promise<void> {
+  await apiClient.post<ApiResult<void>>(`/v1/products/merge/suspects/${suspectId}/dismiss`)
+}
+
+/**
+ * 批量同款合并（逐项独立事务，单项失败不影响其余项）。
+ *
+ * @param items 合并项列表
+ * @returns 汇总（succeeded/failed/results）
+ */
+export async function batchMergeProducts(items: RspuMergeRequest[]): Promise<MergeBatchResult> {
+  const { data: result } = await apiClient.post<ApiResult<MergeBatchResult>>(
+    '/v1/products/merge/batch', { items }
+  )
+  return result.data
+}
+
+/**
+ * 变体归并（同一产品下语义重复变体收口）。
+ *
+ * @param rspuId 所属产品 ID
+ * @param request 源/目标变体 + RSKU 冲突裁决
+ * @returns 归并结果统计
+ */
+export async function mergeVariants(
+  rspuId: string,
+  request: { sourceVariantId: string; targetVariantId: string; rskuConflictResolutions?: Record<string, string> }
+): Promise<VariantMergeResult> {
+  const { data: result } = await apiClient.post<ApiResult<VariantMergeResult>>(
+    `/v1/products/${rspuId}/variants/merge`, request
+  )
+  return result.data
+}
+
+/**
  * 更新产品元数据。
  *
  * @param rspuId RSPU ID
@@ -251,49 +339,6 @@ export async function batchDeleteProducts(rspuIds: string[]): Promise<ProductBat
   const { data: result } = await apiClient.post<ApiResult<ProductBatchDeleteResult>>(
     '/v1/products/batch-delete',
     { rspuIds }
-  )
-  return result.data
-}
-
-/**
- * 下载产品批量导入模板文件。
- *
- * @param filename 保存文件名
- */
-export async function downloadProductImportTemplate(filename = '产品导入模板.xlsx'): Promise<void> {
-  const response = await apiClient.get('/v1/products/import-template', {
-    responseType: 'blob'
-  })
-  triggerDownload(response.data as Blob, filename)
-}
-
-function triggerDownload(blob: Blob, filename: string): void {
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  // 延迟回收：click 后同步 revoke 在 Firefox 下可能取消下载
-  setTimeout(() => window.URL.revokeObjectURL(url), 1000)
-}
-
-/**
- * 批量导入产品（RSPU）。
- *
- * @param file Excel 文件
- * @param updateIfExists 当 RSPU ID 或外部编码已存在时是否更新，false 则跳过
- * @returns 导入结果
- */
-export async function importProducts(file: File, updateIfExists: boolean): Promise<ProductImportResult> {
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('updateIfExists', String(updateIfExists))
-
-  const { data: result } = await uploadClient.post<ApiResult<ProductImportResult>>(
-    '/v1/products/import',
-    formData
   )
   return result.data
 }

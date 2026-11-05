@@ -6,7 +6,9 @@ import com.rsdp.dto.request.FactoryProductEntryRequest;
 import com.rsdp.dto.request.ManualProductEntryRequest;
 import com.rsdp.dto.request.ProductBatchDeleteRequest;
 import com.rsdp.dto.request.ProductListRequest;
+import com.rsdp.dto.request.RspuMergeBatchRequest;
 import com.rsdp.dto.request.RspuMergeRequest;
+import com.rsdp.dto.request.VariantMergeRequest;
 import com.rsdp.dto.request.ProductUpdateRequest;
 import com.rsdp.dto.request.SixDimTagPatchRequest;
 import com.rsdp.dto.response.ProductBatchDeleteResponse;
@@ -244,6 +246,117 @@ public class ProductController {
     @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
     public Result<Map<String, Object>> merge(@Valid @RequestBody RspuMergeRequest request) {
         return Result.ok(rspuMergeService.merge(request));
+    }
+
+    /**
+     * 全局待归类队列（归类工作台数据源）：所有 pending 疑似同款配对，按相似度降序。
+     *
+     * @return 配对列表（含双侧产品编码/品名/相似度）
+     */
+    @GetMapping("/merge/suspects")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<List<Map<String, Object>>> listAllPendingSuspects() {
+        return Result.ok(rspuMergeService.listAllPendingSuspects());
+    }
+
+    /**
+     * 疑似同款组聚合（归类工作台 V2）：pending 配对按连通性并查集分组，
+     * 多个互为同款的产品聚成一组，供组内一键合并到选定目标。
+     *
+     * @return 同款组列表（members/maxSimilarity/pairCount，按最高相似度降序）
+     */
+    @GetMapping("/merge/suspect-clusters")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<List<Map<String, Object>>> listSuspectClusters() {
+        return Result.ok(rspuMergeService.listSuspectClusters());
+    }
+
+    /**
+     * 人工排除疑似同款配对（确认不是同款）。仅平台员工可执行（服务内强制）。
+     *
+     * @param suspectId 配对记录 ID
+     * @return 空结果
+     */
+    @PostMapping("/merge/suspects/{suspectId}/dismiss")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<Void> dismissSuspect(@PathVariable Long suspectId) {
+        rspuMergeService.dismissSuspect(suspectId);
+        return Result.ok();
+    }
+
+    /**
+     * 批量同款合并（归类工作台）：逐项执行既有单对合并（每项独立事务，
+     * 单项失败不影响其余项），返回逐项结果。
+     *
+     * @param request 合并项列表
+     * @return 汇总（succeeded/failed/results）
+     */
+    @PostMapping("/merge/batch")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<Map<String, Object>> mergeBatch(@Valid @RequestBody RspuMergeBatchRequest request) {
+        List<Map<String, Object>> results = new java.util.ArrayList<>();
+        int succeeded = 0;
+        for (RspuMergeRequest item : request.getItems()) {
+            Map<String, Object> itemResult = new java.util.LinkedHashMap<>();
+            itemResult.put("sourceRspuId", item.getSourceRspuId());
+            itemResult.put("targetRspuId", item.getTargetRspuId());
+            try {
+                rspuMergeService.merge(item);
+                itemResult.put("ok", true);
+                succeeded++;
+            } catch (RuntimeException e) {
+                // 单项失败（冲突未裁决/守卫拦截等）不中断批量：记录原因继续
+                itemResult.put("ok", false);
+                itemResult.put("message", e.getMessage());
+            }
+            results.add(itemResult);
+        }
+        Map<String, Object> summary = new java.util.LinkedHashMap<>();
+        summary.put("succeeded", succeeded);
+        summary.put("failed", results.size() - succeeded);
+        summary.put("results", results);
+        return Result.ok(summary);
+    }
+
+    /**
+     * 合并历史（归类工作台「合并历史」）：audit_log 中 action=merge 的记录，新→旧。
+     *
+     * @return 合并历史列表（副本/目标/迁移统计/操作人/时间/是否已回滚）
+     */
+    @GetMapping("/merge/history")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<List<Map<String, Object>>> listMergeHistory() {
+        return Result.ok(rspuMergeService.listMergeHistory());
+    }
+
+    /**
+     * 取消合并（回滚）：按合并审计记录的迁移明细精确逆向，副本从回收站恢复、
+     * 变体/报价/图片/供应商身份等改挂回副本，目标被字段归并覆盖的值还原。
+     * 仅平台员工可执行（服务内强制）；已回滚过的记录重复回滚返回 400。
+     *
+     * @param mergeAuditId 合并审计记录 ID
+     * @return 回滚结果
+     */
+    @PostMapping("/merge/{mergeAuditId}/rollback")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<Map<String, Object>> rollbackMerge(@PathVariable long mergeAuditId) {
+        return Result.ok(rspuMergeService.rollbackMerge(mergeAuditId));
+    }
+
+    /**
+     * 变体归并（同一 RSPU 下语义重复变体收口）：源变体报价/图片改挂目标变体，
+     * 冲突需逐条裁决，源变体软删。仅平台员工可执行（服务内强制）。
+     *
+     * @param rspuId  所属产品 ID
+     * @param request 源/目标变体 + RSKU 冲突裁决
+     * @return 归并结果统计
+     */
+    @PostMapping("/{rspuId}/variants/merge")
+    @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
+    public Result<Map<String, Object>> mergeVariants(
+            @PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
+            @Valid @RequestBody VariantMergeRequest request) {
+        return Result.ok(rspuMergeService.mergeVariants(rspuId, request));
     }
 
     /**
