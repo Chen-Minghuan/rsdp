@@ -86,10 +86,6 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/document-import").hasAuthority(Permissions.PRODUCT_IMPORT)
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/document-import/*").hasAuthority(Permissions.PRODUCT_IMPORT)
 
-                // 导入模板：按最小权限显式授权（必须放在对应通配规则之前）
-                .requestMatchers(HttpMethod.GET, "/api/v1/products/import-template").hasAuthority(Permissions.PRODUCT_IMPORT)
-                .requestMatchers(HttpMethod.GET, "/api/v1/rsku/import-template").hasAuthority(Permissions.RSKU_IMPORT)
-
                 // RSKU 读接口：必须放在产品/工厂读通配规则之前
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_READ)
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/rsku/*").hasAuthority(Permissions.RSKU_READ)
@@ -146,14 +142,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry/by-regions").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/factory-entry").hasAuthority(Permissions.PRODUCT_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/manual-entry").hasAuthority(Permissions.PRODUCT_CREATE)
-                .requestMatchers(HttpMethod.POST, "/api/v1/products/import").hasAuthority(Permissions.PRODUCT_IMPORT)
 
                 // RSKU 写接口：必须放在产品写通配规则之前
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/rsku/batch").hasAuthority(Permissions.RSKU_CREATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/rsku").hasAuthority(Permissions.RSKU_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/products/*/rsku/**").hasAuthority(Permissions.RSKU_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/sku/**").hasAuthority(Permissions.RSKU_DELETE)
-                .requestMatchers("/api/v1/rsku/import").hasAuthority(Permissions.RSKU_IMPORT)
 
                 // 产品关系、变体与工厂关联
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/relations").hasAuthority(Permissions.PRODUCT_UPDATE)

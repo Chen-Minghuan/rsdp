@@ -28,8 +28,6 @@ public final class Permissions {
     public static final String RSKU_CREATE = "rsku:create";
     public static final String RSKU_UPDATE = "rsku:update";
     public static final String RSKU_DELETE = "rsku:delete";
-    public static final String RSKU_IMPORT = "rsku:import";
-
     // 报价单
     public static final String QUOTE_READ = "quote:read";
     public static final String QUOTE_GENERATE = "quote:generate";

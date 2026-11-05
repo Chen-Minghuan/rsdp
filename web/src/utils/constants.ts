@@ -28,8 +28,6 @@ export const PERMISSIONS = {
   RSKU_CREATE: 'rsku:create',
   RSKU_UPDATE: 'rsku:update',
   RSKU_DELETE: 'rsku:delete',
-  RSKU_IMPORT: 'rsku:import',
-
   QUOTE_READ: 'quote:read',
   QUOTE_GENERATE: 'quote:generate',
   QUOTE_EXPORT: 'quote:export',

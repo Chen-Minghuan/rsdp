@@ -25,6 +25,7 @@ DROP TABLE IF EXISTS rspu_price_summary CASCADE;
 DROP TABLE IF EXISTS rsku_supply CASCADE;
 DROP TABLE IF EXISTS supplier_product_ref CASCADE;
 DROP TABLE IF EXISTS excel_import_sensitive_value CASCADE;
+DROP TABLE IF EXISTS excel_import_mapping_template CASCADE;
 DROP TABLE IF EXISTS excel_import_attempt_item CASCADE;
 DROP TABLE IF EXISTS excel_import_attempt CASCADE;
 DROP TABLE IF EXISTS excel_import_product_group CASCADE;
@@ -144,7 +145,6 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     scene_tags JSONB,
     reference_price_band VARCHAR(16),
     product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华
-    budget_range JSONB,
     warranty_years INTEGER,
     key_specs JSONB,
     status VARCHAR(16) DEFAULT 'active',
@@ -183,14 +183,13 @@ CREATE TABLE IF NOT EXISTS rspu_code_counter (
     PRIMARY KEY (category_code, style_code)
 );
 
--- RSKU 编码流水计数器
+-- RSKU 编码流水计数器（V25 起维度为 rspu_code + factory_code，不再含材质）
 CREATE TABLE IF NOT EXISTS rsku_code_counter (
     rspu_code VARCHAR(32) NOT NULL,
     factory_code VARCHAR(16) NOT NULL,
-    material_code VARCHAR(16) NOT NULL,
     sequence_value BIGINT NOT NULL DEFAULT 1,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (rspu_code, factory_code, material_code)
+    PRIMARY KEY (rspu_code, factory_code)
 );
 
 -- RSPU 多场景关联表
@@ -409,20 +408,12 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     warranty_years INTEGER,
     shipping_from VARCHAR(128),
     shipping_warehouse_id VARCHAR(64),
-    structure_strength_rating VARCHAR(32),
-    flame_retardant_capability VARCHAR(32),
-    factory_photo_path TEXT,
-    factory_credit_score INTEGER,
-    on_time_rate DECIMAL(5, 4),
-    quality_return_rate DECIMAL(5, 4),
     diff_notes TEXT,
     quote_confidence VARCHAR(16),
     price_updated DATE,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     currency_code VARCHAR(8) NOT NULL DEFAULT 'CNY',
     tax_included BOOLEAN,
-    price_unit VARCHAR(32),
-    moq_unit VARCHAR(32),
     quote_date DATE,
     effective_from DATE,
     effective_to DATE,
@@ -881,13 +872,28 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     confirmed_at TIMESTAMPTZ,
     import_policy JSONB,                                -- 导入 Policy UI 草稿（§45/§47.1.5）
     retention_hold BOOLEAN NOT NULL DEFAULT FALSE,      -- 审计/争议保留标记（§44），GC 必须跳过
-    snapshot_archive_summary JSONB NOT NULL DEFAULT '{}'::jsonb  -- 过期归档非敏感摘要（§44/§45），仅受限 GC 函数写入
+    snapshot_archive_summary JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 过期归档非敏感摘要（§44/§45），仅受限 GC 函数写入
+    header_signature VARCHAR(64)                      -- 表头指纹（V26 映射模板直导）
     -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加；
     -- preview_revision / confirmed_revision 的指针 FK 在 excel_import_preview_revision 建表后追加
 );
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
 CREATE INDEX IF NOT EXISTS idx_import_batch_stale ON excel_import_batch(updated_at) WHERE status = 'importing';
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_created_by ON excel_import_batch(created_by);
+
+-- Excel 导入映射模板（V26 并入：标准模板直导，表头指纹命中跳过 AI 映射）
+CREATE TABLE IF NOT EXISTS excel_import_mapping_template (
+    template_id VARCHAR(64) PRIMARY KEY,
+    template_name VARCHAR(128) NOT NULL,
+    header_signature VARCHAR(64) NOT NULL,
+    column_mapping JSONB NOT NULL,
+    price_column_roles JSONB,
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_import_mapping_template_signature
+    ON excel_import_mapping_template(header_signature);
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_factory ON excel_import_batch(factory_code);
 
 -- Excel 行级导入记录表（V2 新增）
@@ -2126,7 +2132,8 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('style', 'IO', '工业风LOFT', 14),
 ('style', 'FN', '法式复古南洋', 15),
 ('style', 'HH', '混搭风', 16),
-('style', 'DL', '国外顶尖大牌搭配', 17)
+('style', 'DL', '国外顶尖大牌搭配', 17),
+('style', 'TBD', '待识别', 99)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 办公家具职级
@@ -3807,7 +3814,6 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('rsku:create', '新增报价'),
 ('rsku:update', '编辑报价'),
 ('rsku:delete', '删除报价'),
-('rsku:import', '批量导入报价'),
 ('quote:read', '查看报价单'),
 ('quote:generate', '生成报价单'),
 ('quote:export', '导出报价单'),
@@ -3863,7 +3869,7 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'FACTORY_ADMIN'
-  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'product:import', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
+  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'product:import', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'capability:read')
 ON CONFLICT DO NOTHING;
 
 -- DESIGNER：方案/报价 + 产品集自建 + 只读

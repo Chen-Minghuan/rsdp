@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, h } from 'vue'
+import { ref, onMounted, computed, h, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NCard,
@@ -29,8 +29,7 @@ const userStore = useUserStore()
 
 const canCreateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_CREATE))
 const canUpdateFactory = computed(() => userStore.hasPermission(PERMISSIONS.FACTORY_UPDATE))
-const canImportRsku = computed(() => userStore.hasPermission(PERMISSIONS.RSKU_IMPORT))
-const showManagementCard = computed(() => canCreateFactory.value || canImportRsku.value)
+const showManagementCard = computed(() => canCreateFactory.value)
 
 const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
@@ -49,15 +48,34 @@ const searchKeyword = ref('')
 const page = ref(1)
 const pageSize = ref(10)
 
+const filterLevel = ref<string | null>(null)
+const filterScene = ref<string | null>(null)
+const filterRegion = ref<string | null>(null)
+
+/** 空间场景/地区筛选项：取当前工厂数据中的去重值（自由文本标签，不维护字典） */
+const sceneOptions = computed(() =>
+  [...new Set(factories.value.map(f => f.homeCommercialTag).filter(Boolean) as string[])]
+    .map(v => ({ label: v, value: v }))
+)
+const regionOptions = computed(() =>
+  [...new Set(factories.value.map(f => f.region).filter(Boolean) as string[])]
+    .map(v => ({ label: v, value: v }))
+)
+
 const filteredFactories = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
-  if (!keyword) return factories.value
-  return factories.value.filter(f =>
-    (f.factoryName?.toLowerCase().includes(keyword)) ||
-    (f.factoryCode?.toLowerCase().includes(keyword)) ||
-    (f.region?.toLowerCase().includes(keyword))
-  )
+  return factories.value.filter(f => {
+    if (filterLevel.value && f.factoryLevel !== filterLevel.value) return false
+    if (filterScene.value && f.homeCommercialTag !== filterScene.value) return false
+    if (filterRegion.value && f.region !== filterRegion.value) return false
+    if (!keyword) return true
+    return (f.factoryName?.toLowerCase().includes(keyword)) ||
+      (f.factoryCode?.toLowerCase().includes(keyword)) ||
+      (f.region?.toLowerCase().includes(keyword))
+  })
 })
+
+watch([searchKeyword, filterLevel, filterScene, filterRegion], () => { page.value = 1 })
 
 const pagedFactories = computed(() => {
   const start = (page.value - 1) * pageSize.value
@@ -117,21 +135,44 @@ const columns: DataTableColumns<Factory> = [
       )
     }
   },
+  {
+    title: '空间场景',
+    key: 'homeCommercialTag',
+    width: 110,
+    render(row: Factory) {
+      return row.homeCommercialTag
+        ? h(NTag, { size: 'small', type: 'warning', bordered: false }, { default: () => row.homeCommercialTag })
+        : '-'
+    }
+  },
   { title: '地区', key: 'region', width: 120 },
   { title: '联系人', key: 'contactPerson', width: 120 },
   { title: '联系电话', key: 'contactPhone', width: 140 },
   {
     title: '操作',
     key: 'actions',
-    width: 100,
+    width: 150,
     render(row: Factory) {
-      return canEditFactory(row)
-        ? h(
-            NButton,
-            { size: 'small', onClick: () => router.push(`/factories/${row.factoryCode}`) },
-            { default: () => '编辑' }
-          )
-        : null
+      return h(
+        NSpace,
+        { size: 6 },
+        {
+          default: () => [
+            h(
+              NButton,
+              { size: 'small', tertiary: true, onClick: () => router.push(`/factories/${row.factoryCode}`) },
+              { default: () => '查看' }
+            ),
+            canEditFactory(row)
+              ? h(
+                  NButton,
+                  { size: 'small', onClick: () => router.push(`/factories/${row.factoryCode}`) },
+                  { default: () => '编辑' }
+                )
+              : null
+          ]
+        }
+      )
     }
   }
 ]
@@ -267,18 +308,36 @@ onMounted(() => {
             <n-button v-if="canCreateFactory" type="primary" :loading="submitting" @click="handleSubmit">
               创建工厂
             </n-button>
-            <n-button v-if="canImportRsku" @click="router.push('/rsku/import')">
-              批量导入 RSKU 报价
-            </n-button>
           </n-space>
         </n-card>
 
-        <n-space>
+        <n-space align="center" wrap>
           <n-input
             v-model:value="searchKeyword"
             placeholder="搜索工厂名称/代码/地区"
             clearable
-            style="width: 280px;"
+            style="width: 260px;"
+          />
+          <n-select
+            v-model:value="filterLevel"
+            :options="levelSelectOptions"
+            placeholder="主等级"
+            clearable
+            style="width: 150px;"
+          />
+          <n-select
+            v-model:value="filterScene"
+            :options="sceneOptions"
+            placeholder="空间场景"
+            clearable
+            style="width: 150px;"
+          />
+          <n-select
+            v-model:value="filterRegion"
+            :options="regionOptions"
+            placeholder="地区"
+            clearable
+            style="width: 130px;"
           />
         </n-space>
 

@@ -38,7 +38,10 @@ INSERT INTO category_dict (dict_type, dict_code, dict_name, sort_order) VALUES
 ('style', 'IO', '工业风LOFT', 14),
 ('style', 'FN', '法式复古南洋', 15),
 ('style', 'HH', '混搭风', 16),
-('style', 'DL', '国外顶尖大牌搭配', 17)
+('style', 'DL', '国外顶尖大牌搭配', 17),
+-- TBD（待识别）：风格缺失/未归一时的 RSPU 编码风格段保留码（2026-10-14 编码规则改造），
+-- 不参与业务风格筛选语义，仅保证任何款式都能发放业务编码
+('style', 'TBD', '待识别', 99)
 ON CONFLICT (dict_type, dict_code) DO NOTHING;
 
 -- 办公家具职级
@@ -1661,7 +1664,6 @@ INSERT INTO sys_permission (permission_code, permission_name) VALUES
 ('rsku:create', '新增报价'),
 ('rsku:update', '编辑报价'),
 ('rsku:delete', '删除报价'),
-('rsku:import', '批量导入报价'),
 ('quote:read', '查看报价单'),
 ('quote:generate', '生成报价单'),
 ('quote:export', '导出报价单'),
@@ -1717,7 +1719,7 @@ INSERT INTO sys_role_permission (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM sys_role r, sys_permission p
 WHERE r.role_code = 'FACTORY_ADMIN'
-  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'product:import', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'rsku:import', 'capability:read')
+  AND p.permission_code IN ('product:read', 'product:create', 'product:update', 'product:import', 'factory:read', 'factory:update', 'rsku:read', 'rsku:create', 'rsku:update', 'rsku:delete', 'capability:read')
 ON CONFLICT DO NOTHING;
 
 -- DESIGNER：方案/报价 + 产品集自建 + 只读

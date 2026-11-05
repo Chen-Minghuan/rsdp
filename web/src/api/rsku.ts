@@ -1,5 +1,5 @@
-import { apiClient, uploadClient, type ApiResult } from './client'
-import type { PriceHistory, Rsku, RskuBatchCreateRequest, RskuBatchCreateResult, RskuCreateRequest, RskuImportResult, RskuPriceUpdateRequest } from '@/types/rsku'
+import { apiClient, type ApiResult } from './client'
+import type { PriceHistory, Rsku, RskuBatchCreateRequest, RskuBatchCreateResult, RskuCreateRequest, RskuPriceUpdateRequest } from '@/types/rsku'
 import type { ApiOptions } from './product'
 
 /**
@@ -57,44 +57,3 @@ export async function deleteRsku(rskuId: string): Promise<void> {
   await apiClient.delete<ApiResult<void>>(`/v1/sku/${rskuId}`)
 }
 
-/**
- * 下载 RSKU 报价导入模板。
- *
- * @param filename 保存文件名
- */
-export async function downloadRskuImportTemplate(filename = 'RSKU导入模板.xlsx'): Promise<void> {
-  const response = await apiClient.get('/v1/rsku/import-template', {
-    responseType: 'blob'
-  })
-  triggerDownload(response.data as Blob, filename)
-}
-
-function triggerDownload(blob: Blob, filename: string): void {
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  // 延迟回收：click 后同步 revoke 在 Firefox 下可能取消下载
-  setTimeout(() => window.URL.revokeObjectURL(url), 1000)
-}
-
-/**
- * 批量导入 RSKU 报价。
- *
- * @param file Excel 文件
- * @param updateIfExists 存在时是否更新价格
- */
-export async function importRskus(file: File, updateIfExists: boolean): Promise<RskuImportResult> {
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('updateIfExists', String(updateIfExists))
-
-  const { data: result } = await uploadClient.post<ApiResult<RskuImportResult>>(
-    '/v1/rsku/import',
-    formData
-  )
-  return result.data
-}

@@ -115,23 +115,3 @@ export interface PriceHistory {
   createdAt: string
 }
 
-/**
- * RSKU 导入失败明细。
- */
-export interface RskuImportFailure {
-  rowIndex: number
-  rspuId?: string
-  factoryCode?: string
-  variantId?: string
-  reason: string
-}
-
-/**
- * RSKU 批量导入结果。
- */
-export interface RskuImportResult {
-  totalRows: number
-  successCount: number
-  failedCount: number
-  failures: RskuImportFailure[]
-}
