@@ -3,9 +3,9 @@
 <mapper namespace="com.rsdp.mapper.RskuCodeMapper">
 
     <select id="allocateSequence" resultType="java.lang.Long">
-        INSERT INTO rsku_code_counter (rspu_code, factory_code, material_code, sequence_value, updated_at)
-        VALUES (#{rspuCode}, #{factoryCode}, #{materialCode}, 1, CURRENT_TIMESTAMP)
-        ON CONFLICT (rspu_code, factory_code, material_code)
+        INSERT INTO rsku_code_counter (rspu_code, factory_code, sequence_value, updated_at)
+        VALUES (#{rspuCode}, #{factoryCode}, 1, CURRENT_TIMESTAMP)
+        ON CONFLICT (rspu_code, factory_code)
         DO UPDATE SET sequence_value = rsku_code_counter.sequence_value + 1,
                       updated_at = CURRENT_TIMESTAMP
         RETURNING sequence_value

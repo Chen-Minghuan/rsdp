@@ -534,7 +534,7 @@ class ProductServiceTest {
         assertThat(rspuCaptor.getValue().getPositioningLabel()).isEqualTo("MC");
         assertThat(rspuCaptor.getValue().getProductLevel()).isEqualTo("A");
 
-        verify(rspuCodeService, times(1)).tryAssignCode(anyString(), eq("FS"), eq("MC"), isNull());
+        verify(rspuCodeService, times(1)).tryAssignCode(anyString(), eq("FS"), eq("MC"));
         // 录入场景必须走 createVariantForEntry（跳过数据权限校验），禁止走 createVariant
         verify(rspuVariantService, times(1)).createVariantForEntry(anyString(), any());
         verify(rspuVariantService, never()).createVariant(anyString(), any());
@@ -937,10 +937,10 @@ class ProductServiceTest {
     }
 
     @Test
-    void createManualEntry_withoutSizeCode_shouldSucceedAndReturnNullRspuCode() throws Exception {
-        // 不传 sizeCode：tryAssignCode 容错返回 null，录入照常成功、响应含 rspuCode=null
+    void createManualEntry_assignCodeFails_shouldSucceedAndReturnNullRspuCode() throws Exception {
+        // 发号失败（如品类码未配字典）：tryAssignCode 容错返回 null，录入照常成功、响应含 rspuCode=null
         when(dictService.listByType("category")).thenReturn(categoryDicts());
-        when(rspuCodeService.tryAssignCode(anyString(), anyString(), anyString(), isNull())).thenReturn(null);
+        when(rspuCodeService.tryAssignCode(anyString(), anyString(), anyString())).thenReturn(null);
         com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
         variantResponse.setVariantId("VAR-003");
         when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
@@ -961,9 +961,9 @@ class ProductServiceTest {
     }
 
     @Test
-    void createManualEntry_withSizeCode_shouldReturnRspuCode() throws Exception {
+    void createManualEntry_assignCodeSucceeds_shouldReturnRspuCode() throws Exception {
         when(dictService.listByType("category")).thenReturn(categoryDicts());
-        when(rspuCodeService.tryAssignCode(anyString(), eq("FS"), eq("MC"), eq("M"))).thenReturn("FS-MC-001-M");
+        when(rspuCodeService.tryAssignCode(anyString(), eq("FS"), eq("MC"))).thenReturn("FS-MC-0001");
         com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
         variantResponse.setVariantId("VAR-004");
         when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);
@@ -978,15 +978,15 @@ class ProductServiceTest {
 
         Map<String, Object> result = productService.createManualEntry(request, null);
 
-        assertThat(result.get("rspuCode")).isEqualTo("FS-MC-001-M");
+        assertThat(result.get("rspuCode")).isEqualTo("FS-MC-0001");
     }
 
     @Test
-    void createFactoryEntry_withoutSizeCode_shouldSucceedAndReturnNullRspuCode() throws Exception {
-        // 工厂录入不传 sizeCode：录入照常成功、响应含 rspuCode=null
+    void createFactoryEntry_assignCodeFails_shouldSucceedAndReturnNullRspuCode() throws Exception {
+        // 工厂录入发号失败：录入照常成功、响应含 rspuCode=null
         when(dictService.listByType("category")).thenReturn(categoryDicts());
         when(userFactoryService.getFactoryCodesByUsername(anyString())).thenReturn(List.of("A004"));
-        when(rspuCodeService.tryAssignCode(anyString(), anyString(), anyString(), isNull())).thenReturn(null);
+        when(rspuCodeService.tryAssignCode(anyString(), anyString(), anyString())).thenReturn(null);
         com.rsdp.dto.response.RspuVariantResponse variantResponse = new com.rsdp.dto.response.RspuVariantResponse();
         variantResponse.setVariantId("VAR-F02");
         when(rspuVariantService.createVariantForEntry(anyString(), any())).thenReturn(variantResponse);

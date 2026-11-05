@@ -157,7 +157,7 @@ class ExcelAiImportCategoryRevisionTest {
     void setUp() {
         lenient().when(excelImportRowService.initRow(anyString(), anyInt(), anyString(), anyMap(), any()))
             .thenAnswer(inv -> System.nanoTime());
-        lenient().when(rspuCodeService.assignCode(anyString(), anyString(), anyString(), anyString()))
+        lenient().when(rspuCodeService.assignCode(anyString(), anyString(), anyString()))
             .thenReturn("FS-MC-001-M");
         lenient().when(factoryLeadTimeRuleService.calculateLeadTime(anyString(), any(), any(), anyString(), anyInt()))
             .thenReturn(null);

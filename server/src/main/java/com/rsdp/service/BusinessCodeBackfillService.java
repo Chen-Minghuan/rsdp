@@ -1,18 +1,13 @@
 package com.rsdp.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.BusinessCodeBackfillReport;
-import com.rsdp.dto.Dimensions;
 import com.rsdp.entity.CategoryDict;
 import com.rsdp.entity.RspuMaster;
-import com.rsdp.entity.RspuVariant;
 import com.rsdp.entity.RskuSupply;
 import com.rsdp.mapper.RspuMapper;
-import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.RskuSupplyMapper;
 import com.rsdp.util.DictNormalizes;
-import com.rsdp.util.SizeSpecParser;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -43,15 +38,13 @@ import java.util.Map;
  *       {@code RskuCodeService.assignCode} 的既有编码短路双重保证绝不重写。</li>
  * </ul>
  *
- * <p>RSPU 发号参数解析（ADR 007 §13.1：尺寸码必须显式传入或由数据推断，不允许默认 X）：</p>
+ * <p>RSPU 发号参数解析（2026-10-14 编码规则）：</p>
  * <ol>
  *   <li>品类码：{@code rspu_master.category_code}，须存在于 category 字典；</li>
  *   <li>风格/职级码：{@code positioning_label} 经 style/grade 字典归一
- *       （字典码忽略大小写 → 字典名精确匹配，覆盖存量中文标签），未归一（含「待识别」）跳过；</li>
- *   <li>尺寸码：优先取变体显式 {@code size_code}（经 size 字典归一）；
- *       缺失时按变体 dimensions JSON / sizeText 解析最大边毫米数，
- *       走 {@link RspuCodeService#inferSizeCodeFromMm} 阈值推断（字典感知降级）；
- *       仍无法确定则跳过，绝不默认 X。</li>
+ *       （字典码忽略大小写 → 字典名精确匹配，覆盖存量中文标签）；
+ *       未归一（含「待识别」）不再跳过——传原文给发号服务降级 TBD 段照常发号；</li>
+ *   <li>款式编码不再含尺寸段，变体尺寸解析不参与发号。</li>
  * </ol>
  *
  * <p>工程特性（对齐 {@link SupplierIdentityBackfillService} 既有风格）：</p>
@@ -79,9 +72,7 @@ public class BusinessCodeBackfillService {
     /** 跳过原因：品类码不在 category 字典。 */
     public static final String REASON_CATEGORY_NOT_IN_DICT = "CATEGORY_NOT_IN_DICT";
     /** 跳过原因：风格/职级码无法由 positioning_label 归一。 */
-    public static final String REASON_STYLE_UNRESOLVED = "STYLE_UNRESOLVED";
     /** 跳过原因：尺寸码无法确定（变体无显式 size_code 且无法按尺寸推断；ADR 007 §13.1 禁止默认 X）。 */
-    public static final String REASON_SIZE_UNRESOLVED = "SIZE_UNRESOLVED";
     /** 跳过原因：所属 RSPU 不存在（含已软删）。 */
     public static final String REASON_RSPU_MISSING = "RSPU_MISSING";
     /** 跳过原因：所属 RSPU 尚无业务编码（RSPU 阶段被跳过或发号失败）。 */
@@ -89,32 +80,25 @@ public class BusinessCodeBackfillService {
     /** 跳过原因：工厂代码缺失。 */
     public static final String REASON_FACTORY_MISSING = "FACTORY_MISSING";
     /** 跳过原因：材质码缺失。 */
-    public static final String REASON_MATERIAL_MISSING = "MATERIAL_MISSING";
     /** 跳过原因：发号调用失败（reason 前缀，后接异常信息）。 */
     public static final String REASON_ASSIGN_FAILED = "ASSIGN_FAILED";
 
     private final RspuMapper rspuMapper;
-    private final RspuVariantMapper rspuVariantMapper;
     private final RskuSupplyMapper rskuSupplyMapper;
     private final DictService dictService;
     private final RspuCodeService rspuCodeService;
     private final RskuCodeService rskuCodeService;
-    private final ObjectMapper objectMapper;
 
     public BusinessCodeBackfillService(RspuMapper rspuMapper,
-                                       RspuVariantMapper rspuVariantMapper,
                                        RskuSupplyMapper rskuSupplyMapper,
                                        DictService dictService,
                                        RspuCodeService rspuCodeService,
-                                       RskuCodeService rskuCodeService,
-                                       ObjectMapper objectMapper) {
+                                       RskuCodeService rskuCodeService) {
         this.rspuMapper = rspuMapper;
-        this.rspuVariantMapper = rspuVariantMapper;
         this.rskuSupplyMapper = rskuSupplyMapper;
         this.dictService = dictService;
         this.rspuCodeService = rspuCodeService;
         this.rskuCodeService = rskuCodeService;
-        this.objectMapper = objectMapper;
     }
 
     /**
@@ -182,35 +166,19 @@ public class BusinessCodeBackfillService {
         List<CategoryDict> categoryDict = dictService.listByType("category");
         List<CategoryDict> styleDict = dictService.listByType("style");
         List<CategoryDict> gradeDict = dictService.listByType("grade");
-        List<CategoryDict> sizeDict = dictService.listByType("size");
 
         for (List<RspuMaster> batch : partition(candidates, batchSize)) {
             acc.batches++;
-            Map<String, List<RspuVariant>> variantsByRspu = loadVariants(batch);
             for (RspuMaster rspu : batch) {
-                processRspu(rspu, variantsByRspu.getOrDefault(rspu.getRspuId(), List.of()),
-                    categoryDict, styleDict, gradeDict, sizeDict, operator, acc);
+                processRspu(rspu, categoryDict, styleDict, gradeDict, operator, acc);
             }
         }
     }
 
-    /** 批量装载本批 RSPU 的未软删变体（消除逐 RSPU 查询的 N+1）。 */
-    private Map<String, List<RspuVariant>> loadVariants(List<RspuMaster> batch) {
-        Map<String, List<RspuVariant>> byRspu = new LinkedHashMap<>();
-        List<String> rspuIds = batch.stream().map(RspuMaster::getRspuId).toList();
-        List<RspuVariant> variants = rspuVariantMapper.selectList(new QueryWrapper<RspuVariant>()
-            .select("variant_id", "rspu_id", "size_code", "size_text", "dimensions")
-            .in("rspu_id", rspuIds));
-        for (RspuVariant variant : variants) {
-            byRspu.computeIfAbsent(variant.getRspuId(), k -> new ArrayList<>()).add(variant);
-        }
-        return byRspu;
-    }
-
     /** 单条 RSPU 处理：解析发号参数 → 发号（dryRun 只分类）。 */
-    private void processRspu(RspuMaster rspu, List<RspuVariant> variants,
+    private void processRspu(RspuMaster rspu,
                              List<CategoryDict> categoryDict, List<CategoryDict> styleDict,
-                             List<CategoryDict> gradeDict, List<CategoryDict> sizeDict,
+                             List<CategoryDict> gradeDict,
                              String operator, Accumulator acc) {
         String categoryCode = StringUtils.hasText(rspu.getCategoryCode())
             ? rspu.getCategoryCode().trim().toUpperCase() : null;
@@ -222,29 +190,22 @@ public class BusinessCodeBackfillService {
             skipRspu(acc, rspu, REASON_CATEGORY_NOT_IN_DICT, "品类码不在 category 字典: " + categoryCode);
             return;
         }
+        // 风格/职级未归一不再拦截：发号服务降级 TBD 段照常发号（2026-10-14 编码规则，
+        // 款式编码已不含尺寸段）；归一成功时传归一码，失败传原文由发号服务降级
         String styleCode = resolveStyleCode(rspu.getPositioningLabel(), styleDict, gradeDict);
-        if (styleCode == null) {
-            skipRspu(acc, rspu, REASON_STYLE_UNRESOLVED,
-                "风格/职级码未归一: " + rspu.getPositioningLabel());
-            return;
-        }
-        String sizeCode = resolveSizeCode(variants, sizeDict);
-        if (sizeCode == null) {
-            skipRspu(acc, rspu, REASON_SIZE_UNRESOLVED,
-                "尺寸码无法确定（变体无 size_code 且无法按尺寸推断；禁止默认 X）");
-            return;
-        }
+        String effectiveStyle = styleCode != null ? styleCode : rspu.getPositioningLabel();
 
         if (acc.dryRun) {
             acc.rspuAssigned++;
             acc.addEntry(BusinessCodeBackfillReport.Entry.TYPE_RSPU, rspu.getRspuId(),
                 BusinessCodeBackfillReport.Entry.OUTCOME_ASSIGNED, null, null,
-                String.format("dryRun: 会发号（%s-%s-***-%s）", categoryCode, styleCode, sizeCode));
+                String.format("dryRun: 会发号（%s-%s-****）", categoryCode,
+                    styleCode != null ? styleCode : "TBD"));
             return;
         }
         try {
             String code = rspuCodeService.assignCode(
-                rspu.getRspuId(), categoryCode, styleCode, sizeCode, operator);
+                rspu.getRspuId(), categoryCode, effectiveStyle, operator);
             acc.rspuAssigned++;
             acc.addEntry(BusinessCodeBackfillReport.Entry.TYPE_RSPU, rspu.getRspuId(),
                 BusinessCodeBackfillReport.Entry.OUTCOME_ASSIGNED, code, null, "发号并写库");
@@ -263,69 +224,6 @@ public class BusinessCodeBackfillService {
             return code;
         }
         return DictNormalizes.normalizeOrNull(positioningLabel, gradeDict);
-    }
-
-    /**
-     * 尺寸码解析：变体显式 size_code（字典归一）优先；
-     * 缺失时按变体 dimensions JSON / sizeText 最大边毫米数走
-     * {@link RspuCodeService#inferSizeCodeFromMm} 阈值推断；仍无法确定返回 null。
-     *
-     * <p>尺寸解析胶水逻辑与 {@code AiRecognitionPersistenceService#inferSizeCodeFromVariants}
-     * 口径一致（纯解析逻辑副本，避免改动 AI 识别链路及其既有测试；后续可收敛为公共方法）。</p>
-     */
-    private String resolveSizeCode(List<RspuVariant> variants, List<CategoryDict> sizeDict) {
-        for (RspuVariant variant : variants) {
-            String explicit = DictNormalizes.normalizeOrNull(variant.getSizeCode(), sizeDict);
-            if (explicit != null) {
-                return explicit;
-            }
-        }
-        long maxMm = 0;
-        for (RspuVariant variant : variants) {
-            maxMm = Math.max(maxMm, maxVariantDimensionMm(variant));
-        }
-        return maxMm > 0 ? rspuCodeService.inferSizeCodeFromMm(maxMm) : null;
-    }
-
-    /** 单个变体的最大边毫米数（dimensions JSON 优先，sizeText 解析兜底；解析失败按 0）。 */
-    private long maxVariantDimensionMm(RspuVariant variant) {
-        long max = maxFromDimensionsJson(variant.getDimensions());
-        if (max <= 0 && StringUtils.hasText(variant.getSizeText())) {
-            for (SizeSpecParser.SizeSpec spec : SizeSpecParser.parse(variant.getSizeText(), null)) {
-                Dimensions dims = spec.dimensions();
-                if (dims != null) {
-                    max = Math.max(max, maxOf(dims));
-                }
-            }
-        }
-        return max;
-    }
-
-    private long maxFromDimensionsJson(String dimensionsJson) {
-        if (!StringUtils.hasText(dimensionsJson)) {
-            return 0;
-        }
-        try {
-            Dimensions dims = objectMapper.readValue(dimensionsJson, Dimensions.class);
-            return maxOf(dims);
-        } catch (Exception e) {
-            log.debug("变体 dimensions JSON 解析失败，按无尺寸处理: {}", dimensionsJson);
-            return 0;
-        }
-    }
-
-    /** 尺寸对象的最大边（统一换算毫米）。 */
-    private long maxOf(Dimensions dims) {
-        long max = Math.max(dims.getW() != null ? dims.getW() : 0,
-            Math.max(dims.getD() != null ? dims.getD() : 0, dims.getH() != null ? dims.getH() : 0));
-        String unit = dims.getUnit() != null ? dims.getUnit().trim().toLowerCase() : "mm";
-        double factor = switch (unit) {
-            case "cm" -> 10.0;
-            case "m" -> 1000.0;
-            case "inch" -> 25.4;
-            default -> 1.0;
-        };
-        return Math.round(max * factor);
     }
 
     // ---- RSKU 阶段 ----
@@ -365,10 +263,6 @@ public class BusinessCodeBackfillService {
             skipRsku(acc, rsku, REASON_FACTORY_MISSING, "工厂代码为空");
             return;
         }
-        if (!StringUtils.hasText(rsku.getMaterialCode())) {
-            skipRsku(acc, rsku, REASON_MATERIAL_MISSING, "材质码为空");
-            return;
-        }
         if (owner == null) {
             skipRsku(acc, rsku, REASON_RSPU_MISSING, "所属 RSPU 不存在或已软删: " + rsku.getRspuId());
             return;
@@ -383,14 +277,13 @@ public class BusinessCodeBackfillService {
             acc.rskuAssigned++;
             acc.addEntry(BusinessCodeBackfillReport.Entry.TYPE_RSKU, rsku.getRskuId(),
                 BusinessCodeBackfillReport.Entry.OUTCOME_ASSIGNED, null, null,
-                String.format("dryRun: 会发号（%s-%s-%s-***）",
-                    owner.getRspuCode(), rsku.getFactoryCode().trim().toUpperCase(),
-                    rsku.getMaterialCode().trim().toUpperCase()));
+                String.format("dryRun: 会发号（%s-%s-***）",
+                    owner.getRspuCode(), rsku.getFactoryCode().trim().toUpperCase()));
             return;
         }
         try {
             String code = rskuCodeService.assignCode(rsku.getRskuId(), rsku.getRspuId(),
-                rsku.getFactoryCode(), rsku.getMaterialCode(), operator);
+                rsku.getFactoryCode(), operator);
             acc.rskuAssigned++;
             acc.addEntry(BusinessCodeBackfillReport.Entry.TYPE_RSKU, rsku.getRskuId(),
                 BusinessCodeBackfillReport.Entry.OUTCOME_ASSIGNED, code, null, "发号并写库");

@@ -25,6 +25,10 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link RskuCodeService} 单元测试。
+ *
+ * <p>编码规则（2026-10-14 起）：{rspu_code}-{工厂}-{流水3位}；材质段已剔除，
+ * 计数维度为（rspu_code, factory_code）。fixture 中的 FS-MC-001-M 为历史 4 段
+ * RSPU 编码，验证新老格式混存时发号不受影响。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class RskuCodeServiceTest {
@@ -51,24 +55,23 @@ class RskuCodeServiceTest {
         return rspu;
     }
 
-    private RskuSupply rskuWithoutCode(String rskuId, String materialCode) {
+    private RskuSupply rskuWithoutCode(String rskuId) {
         RskuSupply rsku = new RskuSupply();
         rsku.setRskuId(rskuId);
         rsku.setRspuId("RSPU-TEST01");
         rsku.setFactoryCode("A004");
-        rsku.setMaterialCode(materialCode);
         return rsku;
     }
 
     @Test
     void tryAssignCode_shouldReturnNullWhenRspuHasNoCode() {
-        // 所属 RSPU 无 rspu_code（如 Excel AI 导入风格缺失暂不发号）：容错返回 null 而不是抛异常
+        // 所属 RSPU 无 rspu_code：容错返回 null 而不是抛异常
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-TEST01");
-        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rskuWithoutCode("RSKU-TEST01", "PE"));
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rskuWithoutCode("RSKU-TEST01"));
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
 
-        String code = rskuCodeService.tryAssignCode("RSKU-TEST01", "RSPU-TEST01", "A004", "PE");
+        String code = rskuCodeService.tryAssignCode("RSKU-TEST01", "RSPU-TEST01", "A004");
 
         assertThat(code).isNull();
         verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
@@ -76,17 +79,17 @@ class RskuCodeServiceTest {
 
     @Test
     void tryAssignCode_shouldAssignWhenRspuHasCode() {
-        // RSPU 有码：正常发号并落库
-        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rskuWithoutCode("RSKU-TEST01", "PE"));
+        // RSPU 有码：正常发号并落库（新格式：rspu_code-工厂-流水，无材质段）
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rskuWithoutCode("RSKU-TEST01"));
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspuWithCode());
-        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004", "PE")).thenReturn(1L);
+        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004")).thenReturn(1L);
 
-        String code = rskuCodeService.tryAssignCode("RSKU-TEST01", "RSPU-TEST01", "A004", "PE");
+        String code = rskuCodeService.tryAssignCode("RSKU-TEST01", "RSPU-TEST01", "A004");
 
-        assertThat(code).isEqualTo("FS-MC-001-M-A004-PE-001");
+        assertThat(code).isEqualTo("FS-MC-001-M-A004-001");
         ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
         verify(rskuSupplyMapper).updateById(captor.capture());
-        assertThat(captor.getValue().getRskuCode()).isEqualTo("FS-MC-001-M-A004-PE-001");
+        assertThat(captor.getValue().getRskuCode()).isEqualTo("FS-MC-001-M-A004-001");
     }
 
     @Test
@@ -96,21 +99,21 @@ class RskuCodeServiceTest {
         rspu.setRspuId("RSPU-TEST01");
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspu);
 
-        assertThatThrownBy(() -> rskuCodeService.assignCode("RSKU-TEST01", "RSPU-TEST01", "A004", "PE"))
+        assertThatThrownBy(() -> rskuCodeService.assignCode("RSKU-TEST01", "RSPU-TEST01", "A004"))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("尚未生成业务编码");
     }
 
     @Test
     void assignCode_shouldReturnExistingCodeDirectly() {
-        // 已有 rsku_code 直接返回，幂等不重复发号
-        RskuSupply rsku = rskuWithoutCode("RSKU-TEST01", "PE");
-        rsku.setRskuCode("FS-MC-001-M-A004-PE-003");
+        // 已有 rsku_code 直接返回，幂等不重复发号（发放后永不变更）
+        RskuSupply rsku = rskuWithoutCode("RSKU-TEST01");
+        rsku.setRskuCode("FS-MC-001-M-A004-003");
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rsku);
 
-        String code = rskuCodeService.assignCode("RSKU-TEST01", "RSPU-TEST01", "A004", "PE");
+        String code = rskuCodeService.assignCode("RSKU-TEST01", "RSPU-TEST01", "A004");
 
-        assertThat(code).isEqualTo("FS-MC-001-M-A004-PE-003");
+        assertThat(code).isEqualTo("FS-MC-001-M-A004-003");
         verify(rspuMapper, never()).selectById(anyString());
         verify(rskuSupplyMapper, never()).updateById(any(RskuSupply.class));
     }
@@ -118,37 +121,37 @@ class RskuCodeServiceTest {
     @Test
     void assignCode_shouldWriteAuditLogWithOperator() {
         // P1-3：发号改写 rsku_code 记 logUpdate 审计（旧值 null → 新编码），操作人显式传入
-        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rskuWithoutCode("RSKU-TEST01", "PE"));
+        when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(rskuWithoutCode("RSKU-TEST01"));
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspuWithCode());
-        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004", "PE")).thenReturn(1L);
+        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004")).thenReturn(1L);
 
-        String code = rskuCodeService.assignCode("RSKU-TEST01", "RSPU-TEST01", "A004", "PE", "editor01");
+        String code = rskuCodeService.assignCode("RSKU-TEST01", "RSPU-TEST01", "A004", "editor01");
 
-        assertThat(code).isEqualTo("FS-MC-001-M-A004-PE-001");
+        assertThat(code).isEqualTo("FS-MC-001-M-A004-001");
         ArgumentCaptor<Object> oldCaptor = ArgumentCaptor.forClass(Object.class);
         ArgumentCaptor<Object> newCaptor = ArgumentCaptor.forClass(Object.class);
         verify(auditLogService).logUpdate(org.mockito.ArgumentMatchers.eq("rsku_supply"),
             org.mockito.ArgumentMatchers.eq("RSKU-TEST01"),
             oldCaptor.capture(), newCaptor.capture(), org.mockito.ArgumentMatchers.eq("editor01"));
         assertThat(((RskuSupply) oldCaptor.getValue()).getRskuCode()).isNull();
-        assertThat(((RskuSupply) newCaptor.getValue()).getRskuCode()).isEqualTo("FS-MC-001-M-A004-PE-001");
+        assertThat(((RskuSupply) newCaptor.getValue()).getRskuCode()).isEqualTo("FS-MC-001-M-A004-001");
     }
 
     @Test
     void backfillCodesByRspu_shouldBackfillPendingRsku() {
         // 补发该 RSPU 下 rsku_code 为空的 RSKU
-        RskuSupply pending = rskuWithoutCode("RSKU-TEST01", "PE");
+        RskuSupply pending = rskuWithoutCode("RSKU-TEST01");
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(pending));
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(pending);
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspuWithCode());
-        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004", "PE")).thenReturn(1L);
+        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004")).thenReturn(1L);
 
         int backfilled = rskuCodeService.backfillCodesByRspu("RSPU-TEST01");
 
         assertThat(backfilled).isEqualTo(1);
         ArgumentCaptor<RskuSupply> captor = ArgumentCaptor.forClass(RskuSupply.class);
         verify(rskuSupplyMapper).updateById(captor.capture());
-        assertThat(captor.getValue().getRskuCode()).isEqualTo("FS-MC-001-M-A004-PE-001");
+        assertThat(captor.getValue().getRskuCode()).isEqualTo("FS-MC-001-M-A004-001");
     }
 
     @Test
@@ -164,19 +167,20 @@ class RskuCodeServiceTest {
 
     @Test
     void backfillCodesByRspu_shouldContinueWhenSingleFails() {
-        // 单条补发失败（如材质码缺失）仅告警跳过，不影响其余记录补发
-        RskuSupply ok = rskuWithoutCode("RSKU-TEST01", "PE");
-        RskuSupply bad = rskuWithoutCode("RSKU-TEST02", null);
+        // 单条补发失败（如工厂代码为空）仅告警跳过，不影响其余记录补发
+        RskuSupply ok = rskuWithoutCode("RSKU-TEST01");
+        RskuSupply bad = rskuWithoutCode("RSKU-TEST02");
+        bad.setFactoryCode(null);
         when(rskuSupplyMapper.selectList(any())).thenReturn(List.of(bad, ok));
         when(rskuSupplyMapper.selectById("RSKU-TEST01")).thenReturn(ok);
         when(rskuSupplyMapper.selectById("RSKU-TEST02")).thenReturn(bad);
         when(rspuMapper.selectById("RSPU-TEST01")).thenReturn(rspuWithCode());
-        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004", "PE")).thenReturn(1L);
+        when(rskuCodeMapper.allocateSequence("FS-MC-001-M", "A004")).thenReturn(1L);
 
         int backfilled = rskuCodeService.backfillCodesByRspu("RSPU-TEST01");
 
         assertThat(backfilled).isEqualTo(1);
-        assertThat(ok.getRskuCode()).isEqualTo("FS-MC-001-M-A004-PE-001");
+        assertThat(ok.getRskuCode()).isEqualTo("FS-MC-001-M-A004-001");
         assertThat(bad.getRskuCode()).isNull();
     }
 }

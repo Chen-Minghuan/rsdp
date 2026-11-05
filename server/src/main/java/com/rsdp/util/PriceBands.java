@@ -3,10 +3,10 @@ package com.rsdp.util;
 import java.math.BigDecimal;
 
 /**
- * 出厂价价格带分档的共享实现（4.3 批⑤：RskuService / RskuImportService /
- * ExcelAiImportService 三处副本收敛）。
+ * 出厂价价格带分档的共享实现（4.3 批⑤：RskuService /
+ * ExcelAiImportService 两处副本收敛）。
  *
- * <p>阈值口径（与三处既有实现一致，纯搬移不改行为）：
+ * <p>阈值口径（与两处既有实现一致，纯搬移不改行为）：
  * &lt; 1000 → low；1000 ≤ x &lt; 5000 → mid；≥ 5000 → high。
  * 注意是严格小于（历史注释曾误写 &lt;=，以代码为准）。</p>
  */

@@ -140,6 +140,15 @@ public final class IdGenerator {
     }
 
     /**
+     * 生成 Excel 导入映射模板主键。
+     *
+     * @return {@code TPL-<完整 UUID>}
+     */
+    public static String mappingTemplateId() {
+        return generate("TPL");
+    }
+
+    /**
      * 生成 Excel 导入 Preview 产品组主键（P0-B1，v3.3 §21 excel_import_product_group.group_id）。
      *
      * @return {@code PGROUP-<完整 UUID>}

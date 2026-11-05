@@ -4,21 +4,17 @@ import com.rsdp.security.SecurityOperatorContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.dto.AiLabels;
-import com.rsdp.dto.Dimensions;
 import com.rsdp.entity.AiRecognition;
 import com.rsdp.entity.ImageAssets;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.RspuScene;
 import com.rsdp.entity.RspuStyle;
-import com.rsdp.entity.RspuVariant;
 import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.AiRecognitionMapper;
 import com.rsdp.mapper.ImageAssetsMapper;
 import com.rsdp.mapper.RspuMapper;
 import com.rsdp.mapper.RspuSceneMapper;
 import com.rsdp.mapper.RspuStyleMapper;
-import com.rsdp.mapper.RspuVariantMapper;
-import com.rsdp.util.SizeSpecParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -47,7 +43,6 @@ public class AiRecognitionPersistenceService {
     private final AuditLogService auditLogService;
     private final DictResolverService dictResolverService;
     private final RspuCodeService rspuCodeService;
-    private final RspuVariantMapper rspuVariantMapper;
     private final RskuCodeService rskuCodeService;
     private final ObjectMapper objectMapper;
 
@@ -215,7 +210,7 @@ public class AiRecognitionPersistenceService {
         rspu.setStatus("active");
 
         // AI 识别后尝试生成 RSPU 业务编码；无法推断尺寸或风格时留空不阻断
-        assignRspuCodeIfPossible(rspu, labels, styleCode, operator);
+        assignRspuCodeIfPossible(rspu, styleCode, operator);
 
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
@@ -266,12 +261,11 @@ public class AiRecognitionPersistenceService {
     /**
      * AI 识别补全风格后补发 RSPU 业务编码（rspu_code 为空时）。
      *
-     * <p>品类用 rspu.category_code，风格用新补的风格码（无则用现有定位标签），
-     * 尺寸码用 {@link RspuCodeService#inferSizeCode} 的 AI 尺寸推断 + 字典感知降级能力；
-     * 推断不出尺寸/风格留空不阻断。assignCode 本身幂等
+     * <p>品类用 rspu.category_code，风格用新补的风格码（无则用现有定位标签；
+     * 缺失/未归一由发号服务降级为 TBD 段）。assignCode 本身幂等
      * （已有 code 直接返回），发号失败（含非业务异常）捕获降级仅记日志，不影响识别主流程。</p>
      */
-    private void assignRspuCodeIfPossible(RspuMaster rspu, AiLabels labels, String styleCode, String operator) {
+    private void assignRspuCodeIfPossible(RspuMaster rspu, String styleCode, String operator) {
         if (StringUtils.hasText(rspu.getRspuCode())) {
             return;
         }
@@ -279,23 +273,10 @@ public class AiRecognitionPersistenceService {
         if (!StringUtils.hasText(categoryCode)) {
             return;
         }
-        String inferredSizeCode = rspuCodeService.inferSizeCode(labels);
-        if (!StringUtils.hasText(inferredSizeCode)) {
-            // OCR 无尺寸时按变体尺寸回退（dimensions JSON / sizeText 经 SizeSpecParser 解析）
-            inferredSizeCode = inferSizeCodeFromVariants(rspu.getRspuId());
-        }
-        if (!StringUtils.hasText(inferredSizeCode)) {
-            log.info("无法推断尺寸码，暂不生成业务编码，rspuId={}", rspu.getRspuId());
-            return;
-        }
         String effectiveStyleCode = StringUtils.hasText(styleCode) ? styleCode : rspu.getPositioningLabel();
-        if (!StringUtils.hasText(effectiveStyleCode) || "待识别".equals(effectiveStyleCode)) {
-            log.info("无法确定风格码，暂不生成业务编码，rspuId={}", rspu.getRspuId());
-            return;
-        }
         try {
             String code = rspuCodeService.assignCode(rspu.getRspuId(), categoryCode,
-                effectiveStyleCode, inferredSizeCode, operator);
+                effectiveStyleCode, operator);
             // assignCode 内部已落库；同步到当前实体，避免后续 updateById 用旧快照覆盖
             rspu.setRspuCode(code);
             log.info("AI 识别补全风格后补发 RSPU 业务编码成功，rspuId={}，rspuCode={}", rspu.getRspuId(), code);
@@ -311,69 +292,6 @@ public class AiRecognitionPersistenceService {
             // 非业务异常（基础设施故障等）同样降级：不中断识别结果落库
             log.warn("AI 识别后补发 RSPU 业务编码异常，rspuId={}", rspu.getRspuId(), e);
         }
-    }
-
-    /**
-     * 从变体尺寸回退推断尺寸码：取该 RSPU 全部未删除变体的 dimensions JSON
-     * （{"w","d","h","unit"}）与 sizeText（经 SizeSpecParser 解析）中的最大边毫米数，
-     * 再走 {@link RspuCodeService#inferSizeCodeFromMm} 阈值推断。无任何可用尺寸返回 null。
-     *
-     * @param rspuId RSPU ID
-     * @return 尺寸码或 null
-     */
-    private String inferSizeCodeFromVariants(String rspuId) {
-        List<RspuVariant> variants = rspuVariantMapper.selectList(
-            new QueryWrapper<RspuVariant>().eq("rspu_id", rspuId));
-        long maxMm = 0;
-        for (RspuVariant variant : variants) {
-            maxMm = Math.max(maxMm, maxVariantDimensionMm(variant));
-        }
-        return maxMm > 0 ? rspuCodeService.inferSizeCodeFromMm(maxMm) : null;
-    }
-
-    /**
-     * 单个变体的最大边毫米数（dimensions JSON 优先，sizeText 解析兜底；解析失败按 0）。
-     */
-    private long maxVariantDimensionMm(RspuVariant variant) {
-        long max = maxFromDimensionsJson(variant.getDimensions());
-        if (max <= 0 && StringUtils.hasText(variant.getSizeText())) {
-            for (SizeSpecParser.SizeSpec spec : SizeSpecParser.parse(variant.getSizeText(), null)) {
-                Dimensions dims = spec.dimensions();
-                if (dims != null) {
-                    max = Math.max(max, maxOf(dims));
-                }
-            }
-        }
-        return max;
-    }
-
-    private long maxFromDimensionsJson(String dimensionsJson) {
-        if (!StringUtils.hasText(dimensionsJson)) {
-            return 0;
-        }
-        try {
-            Dimensions dims = objectMapper.readValue(dimensionsJson, Dimensions.class);
-            return maxOf(dims);
-        } catch (Exception e) {
-            log.debug("变体 dimensions JSON 解析失败，按无尺寸处理: {}", dimensionsJson);
-            return 0;
-        }
-    }
-
-    /**
-     * 尺寸对象的最大边（统一换算毫米）。
-     */
-    private long maxOf(Dimensions dims) {
-        long max = Math.max(dims.getW() != null ? dims.getW() : 0,
-            Math.max(dims.getD() != null ? dims.getD() : 0, dims.getH() != null ? dims.getH() : 0));
-        String unit = dims.getUnit() != null ? dims.getUnit().trim().toLowerCase() : "mm";
-        double factor = switch (unit) {
-            case "cm" -> 10.0;
-            case "m" -> 1000.0;
-            case "inch" -> 25.4;
-            default -> 1.0;
-        };
-        return Math.round(max * factor);
     }
 
     /**

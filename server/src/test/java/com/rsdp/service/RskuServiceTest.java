@@ -49,7 +49,7 @@ class RskuServiceTest {
         var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
         lenient().when(dataScopeHelper.canAccessRskuFactory(any())).thenReturn(true);
-        lenient().when(rskuCodeService.tryAssignCode(anyString(), anyString(), anyString(), anyString()))
+        lenient().when(rskuCodeService.tryAssignCode(anyString(), anyString(), anyString()))
             .thenReturn("FS-MC-001-M-F001-PE-001");
     }
 
@@ -247,7 +247,7 @@ class RskuServiceTest {
         when(rspuVariantService.findById("RSPU-TEST01-V001")).thenReturn(variant);
         when(factoryService.getFactoryCapableLevels("F001")).thenReturn(List.of("S", "A"));
         when(dictService.listByType("factory_level")).thenReturn(factoryLevelDicts());
-        when(rskuCodeService.tryAssignCode(anyString(), anyString(), anyString(), anyString()))
+        when(rskuCodeService.tryAssignCode(anyString(), anyString(), anyString()))
             .thenReturn(null);
 
         String rskuId = rskuService.createRsku(request);

@@ -270,7 +270,7 @@ public class ProductService {
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), request.getSixDimTags(),
             request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs(),
             request.getProductName());
-        String rspuCode = assignRspuCode(rspu, request.getSizeCode());
+        String rspuCode = assignRspuCode(rspu);
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
             request.getSizeCode(), request.getDimensions(), request.getColorCode(),
@@ -326,7 +326,7 @@ public class ProductService {
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), null,
             request.getProductLevel(), request.getWarrantyYears(), null,
             request.getProductName());
-        String rspuCode = assignRspuCode(rspu, request.getSizeCode());
+        String rspuCode = assignRspuCode(rspu);
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
             request.getSizeCode(), request.getDimensions(), request.getColorCode(),
@@ -469,15 +469,13 @@ public class ProductService {
     /**
      * 容错生成并写入 RSPU 业务编码（rspu_code）。
      *
-     * <p>手工/工厂录入链路不调 AI，尺寸码可选：发号失败（如未传尺寸码）仅留空不中断录入。</p>
+     * <p>手工/工厂录入链路不调 AI：风格缺失/未归一时风格段降级 TBD 照常发号；
+     * 发号失败仅留空不中断录入。</p>
      *
      * @return 发放的编码；null 表示发号失败，rspu_code 留空
      */
-    private String assignRspuCode(RspuMaster rspu, String rawSizeCode) {
-        String sizeCode = StringUtils.hasText(rawSizeCode)
-            ? rawSizeCode.trim().toUpperCase()
-            : null;
-        return rspuCodeService.tryAssignCode(rspu.getRspuId(), rspu.getCategoryCode(), rspu.getPositioningLabel(), sizeCode);
+    private String assignRspuCode(RspuMaster rspu) {
+        return rspuCodeService.tryAssignCode(rspu.getRspuId(), rspu.getCategoryCode(), rspu.getPositioningLabel());
     }
 
     /**
