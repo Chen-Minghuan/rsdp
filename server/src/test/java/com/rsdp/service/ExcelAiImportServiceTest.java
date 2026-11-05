@@ -106,6 +106,8 @@ class ExcelAiImportServiceTest {
     @Mock
     private ExcelImportBatchMapper batchMapper;
     @Mock
+    private com.rsdp.mapper.ExcelImportMappingTemplateMapper mappingTemplateMapper;
+    @Mock
     private VisionService visionService;
     @Mock
     private RspuMapper rspuMapper;
@@ -178,7 +180,7 @@ class ExcelAiImportServiceTest {
     void setUp() {
         lenient().when(excelImportRowService.initRow(anyString(), anyInt(), anyString(), anyMap(), any()))
             .thenAnswer(inv -> System.nanoTime());
-        lenient().when(rspuCodeService.assignCode(anyString(), anyString(), anyString(), anyString()))
+        lenient().when(rspuCodeService.assignCode(anyString(), anyString(), anyString()))
             .thenReturn("FS-MC-001-M");
         lenient().when(factoryLeadTimeRuleService.calculateLeadTime(anyString(), any(), any(), anyString(), anyInt()))
             .thenReturn(null);
@@ -351,6 +353,96 @@ class ExcelAiImportServiceTest {
         // P1-7：previewMapping 不再持有方法级事务，批次写入使用编程式事务
         verify(transactionManager, times(1)).getTransaction(any());
         verify(transactionManager, times(1)).commit(any());
+    }
+
+    @Test
+    void previewMapping_templateHit_shouldSkipAiAndUseTemplateMapping() throws IOException {
+        // V26 标准模板直导：表头指纹命中已保存模板 → 不调 AI，映射/响应标记来自模板
+        byte[] excelBytes = createMinimalExcelBytes();
+        MockMultipartFile file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        com.rsdp.entity.ExcelImportMappingTemplate template = new com.rsdp.entity.ExcelImportMappingTemplate();
+        template.setTemplateId("TPL-1");
+        template.setTemplateName("标准报价模板");
+        template.setColumnMapping("{\"品类\":\"categoryCode\",\"名称\":\"productName\"}");
+        when(mappingTemplateMapper.selectOne(any())).thenReturn(template);
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/BATCH-TEST.xlsx");
+        when(dictService.listByType("category")).thenReturn(List.of(createDict("category", "FS", "沙发")));
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            ExcelImportBatch batch = inv.getArgument(0);
+            batch.setBatchId("BATCH-TEST");
+            return 1;
+        });
+
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+
+            ExcelAiMappingResponse response = excelAiImportService.previewMapping(file);
+
+            assertEquals(Boolean.TRUE, response.getTemplateHit());
+            assertEquals("标准报价模板", response.getTemplateName());
+            assertEquals("categoryCode", response.getSuggestedMapping().get("品类"));
+            assertEquals("productName", response.getSuggestedMapping().get("名称"));
+        }
+
+        // 命中模板：AI 识别一次都不调用
+        verify(visionService, never()).chatText(anyString(), anyString());
+        // 批次仍正常落库（携带表头指纹供确认时保存模板用）
+        ArgumentCaptor<ExcelImportBatch> batchCaptor = ArgumentCaptor.forClass(ExcelImportBatch.class);
+        verify(batchMapper).insert(batchCaptor.capture());
+        assertNotNull(batchCaptor.getValue().getHeaderSignature(), "批次应记录表头指纹");
+    }
+
+    @Test
+    void confirmAndImport_saveAsTemplate_shouldUpsertMappingTemplate() {
+        // V26：确认导入勾选「保存为模板」→ 按批次表头指纹新增映射模板（映射 + 价格列角色）
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-X");
+        batch.setStatus("pending");
+        batch.setPreviewRows("[]");
+        batch.setPriceColumns("[]");
+        batch.setHeaderSignature("sig-1");
+        when(batchMapper.selectById("BATCH-X")).thenReturn(batch);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId("BATCH-X");
+        request.setMapping(Map.of("名称", "productName"));
+        request.setSaveAsTemplate(true);
+        request.setTemplateName("标准报价模板");
+
+        excelAiImportService.confirmAndImport(request);
+
+        ArgumentCaptor<com.rsdp.entity.ExcelImportMappingTemplate> captor =
+            ArgumentCaptor.forClass(com.rsdp.entity.ExcelImportMappingTemplate.class);
+        verify(mappingTemplateMapper).insert(captor.capture());
+        assertEquals("标准报价模板", captor.getValue().getTemplateName());
+        assertEquals("sig-1", captor.getValue().getHeaderSignature());
+        assertTrue(captor.getValue().getColumnMapping().contains("productName"));
+        // 导入受理流程不受影响
+        verify(asyncTaskProcessor).processExcelImport(anyString(), eq("BATCH-X"));
+    }
+
+    @Test
+    void confirmAndImport_saveAsTemplateWithoutName_shouldReject() {
+        ExcelImportBatch batch = new ExcelImportBatch();
+        batch.setBatchId("BATCH-X");
+        batch.setStatus("pending");
+        batch.setPreviewRows("[]");
+        batch.setPriceColumns("[]");
+        batch.setHeaderSignature("sig-1");
+        when(batchMapper.selectById("BATCH-X")).thenReturn(batch);
+
+        ExcelAiMappingRequest request = new ExcelAiMappingRequest();
+        request.setBatchId("BATCH-X");
+        request.setMapping(Map.of("名称", "productName"));
+        request.setSaveAsTemplate(true);
+
+        BusinessException e = assertThrows(BusinessException.class,
+            () -> excelAiImportService.confirmAndImport(request));
+        assertTrue(e.getMessage().contains("模板名称"), "异常信息: " + e.getMessage());
+        verify(mappingTemplateMapper, never())
+            .insert(any(com.rsdp.entity.ExcelImportMappingTemplate.class));
     }
 
     @Test
@@ -4030,6 +4122,165 @@ class ExcelAiImportServiceTest {
         assertEquals("__PRICE__:价格", m.invoke(excelAiImportService, "价格"));
         // 价格带类表头仍映射参考价格带
         assertEquals("referencePriceBand", m.invoke(excelAiImportService, "价格带"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void isEmbeddedImageHeader_shouldCoverStandardTemplateImageColumns() throws Exception {
+        // 标准模板图片列「主图URL/详情图URLs」必须被识别为图片列（图片列主图候选判定、
+        // 清洗页商品卡片取图都依赖它；此前缺失导致锚定图片全部非候选、预览全量"无图"）
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod("isEmbeddedImageHeader", String.class);
+        m.setAccessible(true);
+
+        assertEquals(Boolean.TRUE, m.invoke(excelAiImportService, "主图URL"));
+        assertEquals(Boolean.TRUE, m.invoke(excelAiImportService, "详情图URLs"));
+        assertEquals(Boolean.TRUE, m.invoke(excelAiImportService, "产品图样"));
+        assertEquals(Boolean.FALSE, m.invoke(excelAiImportService, "型号"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void postProcessMapping_shouldKeepUrlMappingForHybridImageColumns() throws Exception {
+        // 混合图片列「主图URL」：URL 字段映射必须保留（内嵌提取与 URL 下载并行）；
+        // 纯内嵌图片列「产品图样」的误映射仍被丢弃（既有行为不变）
+        Class<?> processedClass = Class.forName("com.rsdp.service.ExcelAiImportService$ProcessedMapping");
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
+            "postProcessMapping", java.util.Map.class, java.util.Map.class, java.util.Map.class);
+        m.setAccessible(true);
+
+        java.util.Map<String, String> aiMapping = new java.util.HashMap<>(java.util.Map.of(
+            "主图URL", "primaryImageUrl",
+            "产品图样", "primaryImageUrl",
+            "型号", "externalCode"));
+        java.util.Map<Integer, String> cleanHeaders = java.util.Map.of(
+            0, "型号", 1, "主图URL", 2, "产品图样");
+        java.util.Map<Integer, String> mergedHeaders = cleanHeaders;
+
+        Object result = m.invoke(excelAiImportService, aiMapping, cleanHeaders, mergedHeaders);
+        java.lang.reflect.Method mappingAccessor = processedClass.getDeclaredMethod("mapping");
+        mappingAccessor.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, String> mapping = (java.util.Map<String, String>) mappingAccessor.invoke(result);
+
+        assertEquals("primaryImageUrl", mapping.get("主图URL"), "混合图片列应保留 URL 映射");
+        assertNull(mapping.get("产品图样"), "纯内嵌图片列的误映射仍应丢弃");
+        assertEquals("externalCode", mapping.get("型号"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void resolveRskuProductLevel_shouldFallbackToFactoryPrimaryLevel() throws Exception {
+        // 报价侧等级兜底（2026-11-05）：行内 → 请求默认 → 工厂主等级，全空才 null
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
+            "resolveRskuProductLevel", com.rsdp.dto.excel.ProductImportRow.class, String.class,
+            String.class, java.util.Map.class, java.util.List.class);
+        m.setAccessible(true);
+        java.util.Map<String, java.util.List<CategoryDict>> dictCache = java.util.Map.of(
+            "factory_level", java.util.List.of(createDict("factory_level", "S", "豪华"), createDict("factory_level", "A", "高端")));
+        com.rsdp.entity.FactoryMaster factory = new com.rsdp.entity.FactoryMaster();
+        factory.setFactoryCode("A034");
+        factory.setFactoryLevel("A");
+        when(factoryMasterMapper.selectById("A034")).thenReturn(factory);
+
+        // 行内值优先
+        com.rsdp.dto.excel.ProductImportRow row = new com.rsdp.dto.excel.ProductImportRow();
+        row.setProductLevel("s");
+        java.util.List<String> issues = new java.util.ArrayList<>();
+        assertEquals("S", m.invoke(excelAiImportService, row, null, "A034", dictCache, issues));
+        assertEquals(0, issues.size());
+
+        // 行内/默认均空 → 工厂主等级兜底 + 行级提示
+        row.setProductLevel(null);
+        assertEquals("A", m.invoke(excelAiImportService, row, null, "A034", dictCache, issues));
+        assertEquals(1, issues.size());
+        assertTrue(issues.get(0).contains("工厂主等级"), issues.get(0));
+
+        // 请求默认值优先于工厂主等级
+        issues.clear();
+        assertEquals("S", m.invoke(excelAiImportService, row, "S", "A034", dictCache, issues));
+        assertEquals(0, issues.size());
+
+        // 无工厂上下文 → null（不兜底）
+        assertNull(m.invoke(excelAiImportService, row, null, null, dictCache, issues));
+    }
+
+    @org.junit.jupiter.api.Test
+    void applyAttemptOutcomeToResult_shouldKeepRowIssuesAndMergeItemFailures() throws Exception {
+        // 空心成功修复（2026-11-05）：行级问题（报价失败等 rowIssues）不再被 Attempt 聚合丢弃；
+        // AttemptItem 行级失败按 行号+原因 去重并入，失败计数不被问题明细撑大
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
+            "applyAttemptOutcomeToResult", ExcelImportAttempt.class, com.rsdp.dto.response.ExcelAiImportResult.class);
+        m.setAccessible(true);
+
+        com.rsdp.dto.response.ExcelAiImportResult result = new com.rsdp.dto.response.ExcelAiImportResult();
+        result.setSuccessCount(100);
+        result.setFailedCount(2);
+        result.setFailures(new java.util.ArrayList<>(java.util.List.of(
+            new com.rsdp.dto.response.ExcelAiImportFailure(0, "图片提取失败：部分图片未提取"),
+            new com.rsdp.dto.response.ExcelAiImportFailure(5, "产品等级未提供，报价按工厂主等级 A 兜底"))));
+        ExcelImportAttempt attempt = new ExcelImportAttempt();
+        attempt.setAttemptId("ATT-1");
+        attempt.setResultSummary("{\"rowsSucceeded\":100,\"rowsFailed\":2,\"rowsSkipped\":0}");
+        when(attemptService.aggregateItemFailures("ATT-1")).thenReturn(java.util.List.of(
+            new com.rsdp.dto.response.ExcelAiImportFailure(5, "产品等级未提供，报价按工厂主等级 A 兜底"),
+            new com.rsdp.dto.response.ExcelAiImportFailure(7, "校验失败: 品类码不存在")));
+
+        m.invoke(excelAiImportService, attempt, result);
+
+        assertEquals(2, result.getFailedCount(), "失败计数维持 Attempt 权威口径");
+        assertEquals(3, result.getFailures().size(), "批次级问题+行级问题+去重后的行级失败");
+        assertTrue(result.getFailures().stream().anyMatch(f -> f.getReason().contains("工厂主等级")),
+            "行级报价问题必须保留在失败明细里");
+    }
+
+    @org.junit.jupiter.api.Test
+    void normalizeRowStylesWithFallback_shouldDegradeUnresolvedStyles() throws Exception {
+        // 风格容错（2026-11-04）：未识别风格词降级待识别，不再整行失败
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod(
+            "normalizeRowStylesWithFallback", com.rsdp.dto.excel.ProductImportRow.class, java.util.Map.class, java.util.List.class);
+        m.setAccessible(true);
+        java.util.Map<String, java.util.List<com.rsdp.entity.CategoryDict>> dictCache = java.util.Map.of(
+            "style", java.util.List.of(createDict("style", "MC", "中古风")));
+        java.util.List<String> issues = new java.util.ArrayList<>();
+
+        // 全部未识别：置空（createRspu 兜底待识别）
+        com.rsdp.dto.excel.ProductImportRow all = new com.rsdp.dto.excel.ProductImportRow();
+        all.setPositioningLabel("轻奢");
+        m.invoke(excelAiImportService, all, dictCache, issues);
+        assertNull(all.getPositioningLabel());
+        assertEquals(1, issues.size());
+
+        // 部分可识别：保留可识别值，剔除未识别值并记问题
+        issues.clear();
+        com.rsdp.dto.excel.ProductImportRow partial = new com.rsdp.dto.excel.ProductImportRow();
+        partial.setPositioningLabel("中古风,轻奢");
+        m.invoke(excelAiImportService, partial, dictCache, issues);
+        assertEquals("中古风", partial.getPositioningLabel());
+        assertEquals(1, issues.size());
+
+        // 全部可识别：原样不动、无问题
+        issues.clear();
+        com.rsdp.dto.excel.ProductImportRow ok = new com.rsdp.dto.excel.ProductImportRow();
+        ok.setPositioningLabel("中古风");
+        m.invoke(excelAiImportService, ok, dictCache, issues);
+        assertEquals("中古风", ok.getPositioningLabel());
+        assertEquals(0, issues.size());
+    }
+
+    @org.junit.jupiter.api.Test
+    void fuzzyMatchStandardField_shouldMapImageUrlHeadersToImageUrlFields() throws Exception {
+        java.lang.reflect.Method m = ExcelAiImportService.class.getDeclaredMethod("fuzzyMatchStandardField", String.class);
+        m.setAccessible(true);
+
+        // 含「图」+「url/链接」特征：单元格是链接文字，映射图片 URL 字段（修复"主图URL被丢弃"误伤）
+        assertEquals("primaryImageUrl", m.invoke(excelAiImportService, "主图URL"));
+        assertEquals("primaryImageUrl", m.invoke(excelAiImportService, "图片链接"));
+        assertEquals("detailImageUrls", m.invoke(excelAiImportService, "详情图URLs"));
+        // 表头清洗剥离英文后缀后的形态（clean("主图URL")→"主图"）同样命中：
+        // 混合列由 postProcessMapping 的 URL 承载豁免保留映射，纯内嵌列仍被丢弃
+        assertEquals("primaryImageUrl", m.invoke(excelAiImportService, "主图"));
+        assertEquals("detailImageUrls", m.invoke(excelAiImportService, "详情图"));
+        assertEquals("detailImageUrls", m.invoke(excelAiImportService, "附图"));
+        // 纯图片列（内嵌图片）仍不映射，走内嵌提取
+        assertNull(m.invoke(excelAiImportService, "产品图样"));
+        assertNull(m.invoke(excelAiImportService, "PICTURE"));
     }
 
     @org.junit.jupiter.api.Test
