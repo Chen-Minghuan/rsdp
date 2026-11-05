@@ -70,12 +70,6 @@ public class RskuCreateRequest {
     /** 是否含税（Quote 基础口径）。 */
     private Boolean taxIncluded;
 
-    /** 计价单位（Quote 基础口径）。 */
-    private String priceUnit;
-
-    /** 起订量单位。 */
-    private String moqUnit;
-
     /** 报价日期。 */
     private java.time.LocalDate quoteDate;
 

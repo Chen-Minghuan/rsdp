@@ -44,12 +44,6 @@ public class RskuSupply {
     private Integer warrantyYears;
     private String shippingFrom;
     private String shippingWarehouseId;
-    private String structureStrengthRating;
-    private String flameRetardantCapability;
-    private String factoryPhotoPath;
-    private Integer factoryCreditScore;
-    private BigDecimal onTimeRate;
-    private BigDecimal qualityReturnRate;
     private String diffNotes;
     private String quoteConfidence;
     private LocalDate priceUpdated;
@@ -68,10 +62,6 @@ public class RskuSupply {
     private String currencyCode;
     /** 是否含税（Quote 基础口径之一） */
     private Boolean taxIncluded;
-    /** 计价单位（Quote 基础口径之一） */
-    private String priceUnit;
-    /** 起订量单位 */
-    private String moqUnit;
     /** 报价日期 */
     private LocalDate quoteDate;
     /** 生效日期 */

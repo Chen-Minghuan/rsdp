@@ -168,8 +168,7 @@ public class RskuService {
 
         // 生成并写入 RSKU 业务编码（容错发号：所属 RSPU 未发号等原因导致发号失败时不阻断创建，
         // 价格等供应数据先入库，业务编码待 RSPU 发号后由 RskuCodeService.backfillCodesByRspu 补发）
-        String rskuCode = rskuCodeService.tryAssignCode(rsku.getRskuId(), request.getRspuId(), request.getFactoryCode(),
-            rsku.getMaterialCode());
+        String rskuCode = rskuCodeService.tryAssignCode(rsku.getRskuId(), request.getRspuId(), request.getFactoryCode());
         if (rskuCode == null) {
             log.warn("RSKU 无码创建，rsku_code 留空待补发，rskuId={}，rspuId={}，factoryCode={}（所属 RSPU 无 rspu_code 或发号失败）",
                 rsku.getRskuId(), request.getRspuId(), request.getFactoryCode());
@@ -238,8 +237,6 @@ public class RskuService {
             rsku.setCurrencyCode(request.getCurrencyCode().trim().toUpperCase());
         }
         rsku.setTaxIncluded(request.getTaxIncluded());
-        rsku.setPriceUnit(request.getPriceUnit());
-        rsku.setMoqUnit(request.getMoqUnit());
         rsku.setQuoteDate(request.getQuoteDate());
         rsku.setEffectiveFrom(request.getEffectiveFrom());
         rsku.setEffectiveTo(request.getEffectiveTo());
@@ -335,7 +332,7 @@ public class RskuService {
             }
         }
 
-        // 与 RskuImportService.updateExistingRsku 同语义：仅更新请求中显式有值的字段；
+        // 仅更新请求中显式有值的字段；
         // manualCorrectionPolicy=preserve（§47.1.5 默认）：/factoryPrice 存在活跃人工修正标记时
         // Excel/AI 导入不覆盖价格（§34.1：manual_override_fields 是唯一当前事实源）
         boolean priceChanged = request.getFactoryPrice() != null
@@ -373,12 +370,9 @@ public class RskuService {
             locked.setLeadTimeDays(request.getLeadTimeDays());
             nonQuoteDirty = true;
         }
-        // MOQ / MOQ 单位属 quoteValueSame 比较字段（quote 事实）：NO_OP 时不写
+        // MOQ 属 quoteValueSame 比较字段（quote 事实）：NO_OP 时不写
         if (request.getMoq() != null && !quoteFactFrozen) {
             locked.setMoq(request.getMoq());
-        }
-        if (StringUtils.hasText(request.getMoqUnit()) && !quoteFactFrozen) {
-            locked.setMoqUnit(request.getMoqUnit());
         }
         if (StringUtils.hasText(request.getShippingFrom())
             && !request.getShippingFrom().equals(locked.getShippingFrom())) {
@@ -406,9 +400,6 @@ public class RskuService {
             }
             if (request.getTaxIncluded() != null) {
                 locked.setTaxIncluded(request.getTaxIncluded());
-            }
-            if (StringUtils.hasText(request.getPriceUnit())) {
-                locked.setPriceUnit(request.getPriceUnit());
             }
         }
         if (!quoteFactFrozen || validityUpdateOnly) {
@@ -498,10 +489,6 @@ public class RskuService {
         if (request.getMoq() != null && !request.getMoq().equals(existing.getMoq())) {
             return false;
         }
-        if (StringUtils.hasText(request.getMoqUnit())
-            && !request.getMoqUnit().equals(existing.getMoqUnit())) {
-            return false;
-        }
         if (request.getEffectiveFrom() != null
             && !request.getEffectiveFrom().equals(existing.getEffectiveFrom())) {
             return false;
@@ -511,17 +498,13 @@ public class RskuService {
     }
 
     /**
-     * Quote 基础口径一致性（§47.1.5：currency_code + price_unit + tax_included）。
+     * Quote 基础口径一致性（§47.1.5：currency_code + tax_included）。
      * 请求字段为 null 视为「未提供」，以既有值为准（不产生口径差异）。
      */
     private boolean quoteBasisSame(RskuCreateRequest request, RskuSupply existing) {
         if (StringUtils.hasText(request.getCurrencyCode())
             && !request.getCurrencyCode().trim().toUpperCase()
                 .equals(existing.getCurrencyCode() == null ? "CNY" : existing.getCurrencyCode())) {
-            return false;
-        }
-        if (StringUtils.hasText(request.getPriceUnit())
-            && !request.getPriceUnit().equals(existing.getPriceUnit())) {
             return false;
         }
         // null 与 false 是不同材料（§38.1 同口径）；请求未提供（null）时不构成差异
@@ -612,6 +595,17 @@ public class RskuService {
         throw new BusinessException("请为产品或变体设置产品等级，或在报价中指定产品等级");
     }
 
+    /**
+     * 解析材质码：请求显式值 → 变体材质码 → null。
+     *
+     * <p>2026-11-04 起允许为空：RSKU 业务编码（V25 起为 rspu_code-工厂-流水）不再含材质段，
+     * 材质是报价属性而非编码要素；报价册无材质信息时材质码留空（材质说明/变体原文仍可携带），
+     * 不再阻断报价建档（此前抛错导致无材质列的报价册全批 RSKU 静默失败）。</p>
+     *
+     * @param requestMaterialCode 请求材质码（可空）
+     * @param variant             关联变体（可空）
+     * @return 归一后的材质码；无法解析时返回 null
+     */
     private String resolveMaterialCode(String requestMaterialCode, RspuVariant variant) {
         if (StringUtils.hasText(requestMaterialCode)) {
             return requestMaterialCode.trim().toUpperCase();
@@ -619,7 +613,7 @@ public class RskuService {
         if (variant != null && StringUtils.hasText(variant.getMaterialCode())) {
             return variant.getMaterialCode().trim().toUpperCase();
         }
-        throw new BusinessException("材质码不能为空，无法生成 RSKU 业务编码");
+        return null;
     }
 
     private void validateProductLevel(String level) {
@@ -742,8 +736,6 @@ public class RskuService {
         copy.setStatus(source.getStatus());
         copy.setCurrencyCode(source.getCurrencyCode());
         copy.setTaxIncluded(source.getTaxIncluded());
-        copy.setPriceUnit(source.getPriceUnit());
-        copy.setMoqUnit(source.getMoqUnit());
         copy.setQuoteDate(source.getQuoteDate());
         copy.setEffectiveFrom(source.getEffectiveFrom());
         copy.setEffectiveTo(source.getEffectiveTo());

@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     scene_tags JSONB,                              -- AI识别适用场景标签
     reference_price_band VARCHAR(16),              -- 参考价格带 low/mid/high
     product_level VARCHAR(16),                     -- 产品档次：经济型/中端/高端/轻奢/豪华
-    budget_range JSONB,                            -- 预算区间 [800, 3500]
     warranty_years INTEGER,                        -- 款式级典型质保年限
     key_specs JSONB,                               -- 关键规格：框架材质、海绵密度等
     status VARCHAR(16) DEFAULT 'active',           -- active/discontinued/draft
@@ -64,14 +63,14 @@ CREATE TABLE IF NOT EXISTS rspu_code_counter (
     PRIMARY KEY (category_code, style_code)
 );
 
--- RSKU 编码流水计数器（按 RSPU 业务编码+工厂+材质维度生成流水号）
+-- RSKU 编码流水计数器（按 RSPU 业务编码+工厂维度生成流水号；V25 起剔除材质维度，
+-- 材质是报价属性而非供应单元身份，不再进入业务编码）
 CREATE TABLE IF NOT EXISTS rsku_code_counter (
     rspu_code VARCHAR(32) NOT NULL,
     factory_code VARCHAR(16) NOT NULL,
-    material_code VARCHAR(16) NOT NULL,
     sequence_value BIGINT NOT NULL DEFAULT 1,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (rspu_code, factory_code, material_code)
+    PRIMARY KEY (rspu_code, factory_code)
 );
 
 -- RSPU 多场景关联表（一个款式可适用于多个场景）
@@ -151,12 +150,6 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     warranty_years INTEGER,                        -- 工厂对该变体的质保年限
     shipping_from VARCHAR(128),                    -- 发货地（省/市，快速展示用）
     shipping_warehouse_id VARCHAR(64),             -- 关联 factory_warehouse
-    structure_strength_rating VARCHAR(32),         -- 家用结构/商用结构/需验证
-    flame_retardant_capability VARCHAR(32),        -- 可做有案例/可做无案例/不可做
-    factory_photo_path TEXT,                       -- 该厂实拍图路径
-    factory_credit_score INTEGER,                  -- 履约评分 0-100
-    on_time_rate DECIMAL(5, 4),                    -- 准时率
-    quality_return_rate DECIMAL(5, 4),             -- 退货率
     diff_notes TEXT,                               -- 差异备注：旋转底座、加宽 2cm 等
     quote_confidence VARCHAR(16),                  -- high/mid/low
     price_updated DATE,
@@ -167,8 +160,6 @@ CREATE TABLE IF NOT EXISTS rsku_supply (
     status VARCHAR(16) NOT NULL DEFAULT 'active',  -- RSKU 状态机（§36，V22）
     currency_code VARCHAR(8) NOT NULL DEFAULT 'CNY',  -- 报价币种（§34，V22）
     tax_included BOOLEAN,                          -- 是否含税（§34，V22）
-    price_unit VARCHAR(32),                        -- 计价单位（§34，V22）
-    moq_unit VARCHAR(32),                          -- 起订量单位（§34，V22）
     quote_date DATE,                               -- 报价日期（§34，V22）
     effective_from DATE,                           -- 生效日期（§34，V22）
     effective_to DATE,                             -- 失效日期（§34，V22）

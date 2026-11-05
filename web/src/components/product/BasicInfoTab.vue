@@ -75,10 +75,6 @@ const sceneNames = computed(() =>
 const keySpecPairs = computed(() => toKeyValuePairs(rspu.value.keySpecs))
 const keySpecRaw = computed(() => toRawText(rspu.value.keySpecs))
 
-/** 预算区间键值对。 */
-const budgetPairs = computed(() => toKeyValuePairs(rspu.value.budgetRange))
-const budgetRaw = computed(() => toRawText(rspu.value.budgetRange))
-
 /** HSV 数组转 CSS 颜色（s/v 兼容 0-1 与 0-100 两种取值）。 */
 const primaryColorCss = computed(() => {
   const hsv = rspu.value.colorPrimaryHsv
@@ -190,15 +186,6 @@ const primaryColorCss = computed(() => {
         <n-descriptions-item label="产品等级">{{ rspu.productLevel || '-' }}</n-descriptions-item>
         <n-descriptions-item label="质保年限">
           {{ rspu.warrantyYears != null ? `${rspu.warrantyYears} 年` : '-' }}
-        </n-descriptions-item>
-        <n-descriptions-item label="预算区间" :span="3">
-          <template v-if="budgetPairs">
-            <div v-for="pair in budgetPairs" :key="pair.key" class="kv-line">
-              <span class="kv-key">{{ pair.key }}</span>
-              <span>{{ pair.value }}</span>
-            </div>
-          </template>
-          <template v-else>{{ budgetRaw || '-' }}</template>
         </n-descriptions-item>
       </n-descriptions>
     </section>

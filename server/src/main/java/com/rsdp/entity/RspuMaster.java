@@ -62,10 +62,6 @@ public class RspuMaster {
 
     private String productLevel;
 
-    @JsonRawValue
-    @TableField(typeHandler = JsonbTypeHandler.class)
-    private String budgetRange;
-
     private Integer warrantyYears;
 
     @JsonRawValue
