@@ -254,9 +254,35 @@ POST   /api/v1/products/merge
        #        rskuConflictResolutions: { 副本rskuId: "keepSource"|"keepTarget" }——目标已有同(变体,工厂,supplier_configuration_key)报价时必须逐条裁决；不同供应配置可并存，
        #          未裁决整体 400 拒绝（单事务回滚，不产生半合并状态）
        # Response: { sourceRspuId, targetRspuId, changedFields, movedVariantCount, migratedCount, migratedRskuIds,
-       #             conflictKeepTargetDeleted, conflictKeepSourceReplaced, movedImageCount, reissuedRskuCodes, message }
+       #             conflictKeepTargetDeleted, conflictKeepSourceReplaced, movedImageCount,
+       #             movedSupplierRefs, removedDuplicateSupplierRefs, message }
        # 说明：守卫 source≠target/双方非识别中；变体按 uk_variant_attrs 同 key 自动映射或改挂；
        #       图片改挂主键不变（pgvector 向量无需重建）；scheme_item/收藏/产品集/工厂关联/搭配关系/识别历史等
+       #       supplier_product_ref 供应商身份同身份键去重后改指目标（2026-10-14 P0 修复，
+       #       合并后副本厂型号再导入命中目标而非空坟）；
+       #       迁移 RSKU 保留原 rsku_code（2026-10-14 编码规则：发放后永不变更，不再置空重发）
+
+GET    /api/v1/products/merge/suspects
+       # 全局待归类队列（2026-10-14 归类工作台 P2；product:update）：所有 pending 疑似同款配对，按相似度降序
+       # Response: [{ suspectId, rspuId, rspuCode, productName, matchedRspuId, matchedRspuCode,
+       #              matchedProductName, similarity, createdAt }]
+
+POST   /api/v1/products/merge/suspects/{suspectId}/dismiss
+       # 人工排除疑似同款配对（确认不是同款，2026-10-14 P2；product:update + 服务内强制平台员工）
+       # Response: 空；配对状态 pending → dismissed
+
+POST   /api/v1/products/merge/batch
+       # 批量同款合并（2026-10-14 P2；product:update）：逐项执行单对合并（每项独立事务，单项失败不影响其余项）
+       # Request: { items: [{ sourceRspuId, targetRspuId, takeSourceFields?, rskuConflictResolutions? }] }
+       # Response: { succeeded, failed, results: [{ sourceRspuId, targetRspuId, ok, message? }] }
+
+POST   /api/v1/products/{rspuId}/variants/merge
+       # 变体归并（2026-10-14 P2；product:update + 服务内强制平台员工）：同一 RSPU 下语义重复变体收口，
+       # 源变体 RSKU（同厂同供应配置冲突须 rskuConflictResolutions 逐条裁决）与图片改挂目标变体，源变体软删
+       # Request: { sourceVariantId, targetVariantId, rskuConflictResolutions? }
+       # Response: { sourceVariantId, targetVariantId, migratedRskuCount, migratedRskuIds,
+       #             conflictKeepTargetDeleted, conflictKeepSourceReplaced, movedImageCount }
+
        #       引用全部改指目标；双投影重算；rsku_code 置空重发（旧码记审计）；
        #       副本最后走既有 deleteProduct 软删（回收站可见，级联/审计/向量清理复用既有链路）
 
@@ -293,28 +319,12 @@ DELETE /api/v1/products/{rspuId}/permanent
        #       产品被方案明细（scheme_item）引用时拒绝彻底删除（返回 400，提示列出具体引用方案，
        #       区分使用中/已删除并引导到方案回收站彻底删除），需先处理相关方案
 
-GET    /api/v1/products/import-template
-       # 下载产品批量导入 Excel 模板（已实现，文件名「产品导入模板.xlsx」）
-       # 模板双 Sheet：Sheet1「产品导入模板」仅表头（反射读取 ProductImportRow @ExcelProperty 生成，
-       #   必填列品类码红色加粗、建议列橙色加粗，无示例数据行）；Sheet2「填写说明」图例 + 逐列要求/示例
-       # Response: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
-
-POST   /api/v1/products/import
-       # 产品（RSPU）批量导入（已实现）
-       # Request: multipart/form-data
-       #   file: File (必填, Excel .xlsx/.xls 或 CSV, ≤10MB, 单次 ≤500 行)
-       #   updateIfExists: boolean (可选, 默认 false, true=存在时更新, false=跳过)
-       # Response: {
-       #   totalRows: number,
-       #   successCount: number,
-       #   failedCount: number,
-       #   failures: [{ rowIndex, externalCode?, rspuId?, reason }]
-       #   warnings: [{ rowIndex, externalCode?, rspuId?, reason }]  # 行级警告（如场景标签未归一已降级采集），不影响该行成功，不计 failedCount
-       # }
-       # 说明：
-       #   - 一行对应一个 RSPU 及其可选默认变体
-       #   - 按 RSPU ID → 外部编码顺序匹配已有产品
-       #   - 图片 URL 仅支持 http/https，下载失败只记录失败明细，不影响产品数据写入
+~~GET    /api/v1/products/import-template~~ 已下线（2026-11-03 导入入口合并）
+~~POST   /api/v1/products/import~~ 已下线（2026-11-03 导入入口合并）
+       # 说明：固定模板「Excel 批量导入」链路（仅建 RSPU 不建 RSKU）已整体并入
+       #   Excel AI 导入（/excel-ai-import/**），前后端入口与实现同步删除；
+       #   标准导入模板改为前端静态文件（web/public/templates/产品导入标准模板.xlsx），
+       #   同结构表头可经 excel_import_mapping_template 免 AI 直导（V26）
 
 POST   /api/v1/products/document-import
        # PDF 产品目录批量导入（已实现；阶段 3.1 起为异步批次化：提交即返回，不再同步跑完全程）
@@ -370,8 +380,13 @@ POST   /api/v1/products/excel-ai-import/preview
        #   sheetIndex: number,                            // 回显本次解析的工作表
        #   sheets: [{ index: number, name: string, rowCount: number }],  // 工作簿全部工作表（rowCount 为近似行数）
        #   standardFields: [{ label: string, value: string }]  // 可映射标准字段清单（ExcelAiStandardFields 下发；前端硬编码仅作兜底）
+       #   templateHit: boolean,                    // 2026-10-14 标准模板直导：表头指纹命中已保存映射模板
+       #   templateName: string                     // 命中模板的名称（templateHit=true 时返回）
        # }
        # 说明：
+       #   - 映射模板直导（V26，2026-10-14）：清洗合并后表头按列序取 SHA-256 指纹，
+       #     命中 excel_import_mapping_template 时跳过 AI 识别，直接使用模板固化的映射与价格列角色；
+       #     未命中走 AI 识别原链路。批次记录 header_signature（供确认时保存模板）
        #   - 支持单行/多行表头：先清洗表头（去掉英文备注、括号单位），再合并父子表头
        #   - 表头定位：关键词密度扫描（型号/价格/图片/序号/类别/ITEM/NO 等 ≥2 个）定位真表头行，
        #     其前低密度行视为公司标题行跳过（如曼柯行1-3标题、行5表头）
@@ -414,6 +429,8 @@ POST   /api/v1/products/excel-ai-import/import
        #     updateIfExists: boolean        // externalCode 已存在时：true 复用并更新已有 RSPU，false（默认）跳过该行
        #     categoryMapping: { [rawValue: string]: string }  // 用户确认的品类映射（原始值 → 字典码），行级解析最高优先；导入后写回别名库
        #     previewEdits: [{ rowIndex: number, header: string, value: string|null }]  // 数据清洗阶段对原始单元格的编辑；按 rowIndex + header 定位覆盖，优先级高于 forward fill
+       #     saveAsTemplate: boolean,       // 2026-10-14 标准模板直导：true 时把本次确认映射+价格列角色按批次表头指纹 upsert 为映射模板
+       #     templateName: string           // saveAsTemplate=true 时必填（≤128 字符），否则 400
        #   }
        # Response（3.2 异步化契约变更，不再同步返回导入结果）: {
        #   batchId: string,
