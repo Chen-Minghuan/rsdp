@@ -74,4 +74,21 @@ public class ExcelAiMappingResponse {
      * 后续 mode/categoryHint/candidates/rowCategorySelections 修改经编辑命令推进）。
      */
     private Long previewRevision;
+
+    /**
+     * 是否命中已保存的映射模板（标准模板直导，V26）：true 时映射/价格列角色来自模板，
+     * 未调用 AI 识别。
+     */
+    private Boolean templateHit;
+
+    /**
+     * 命中的映射模板名称（templateHit=true 时返回，供前端展示"已套用模板"标识）。
+     */
+    private String templateName;
+
+    /**
+     * 内嵌图片列提示（2026-11-05）：含锚定图片的列 + 图片数量，
+     * 映射确认页据此提示「该列图片自动提取，无需映射」。
+     */
+    private List<ImageColumnHint> imageColumnHints = new ArrayList<>();
 }

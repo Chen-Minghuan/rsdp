@@ -137,6 +137,18 @@ public class ExcelAiMappingRequest {
     private Map<String, String> categoryMapping = new HashMap<>();
 
     /**
+     * 确认导入时把本次映射保存为标准模板（V26 标准模板直导）：
+     * true 且 templateName 非空时，按批次表头指纹 upsert excel_import_mapping_template，
+     * 后续同结构表头上传直接套用，跳过 AI 映射识别。
+     */
+    private boolean saveAsTemplate;
+
+    /**
+     * 模板名称（saveAsTemplate=true 时必填，如「XX 工厂标准报价模板」）。
+     */
+    @Size(max = 128)
+    private String templateName;
+    /**
      * 用户在「导入前全量预览」中对原始单元格的编辑项。
      * 后端在导入前按 rowIndex + header 定位并覆盖原始数据行对应值。
      */

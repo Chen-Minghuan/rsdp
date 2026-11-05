@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     confirmed_at TIMESTAMPTZ,
     import_policy JSONB,                                -- 导入 Policy UI 草稿（§45/§47.1.5）
     retention_hold BOOLEAN NOT NULL DEFAULT FALSE,      -- 审计/争议保留标记（§44），GC 必须跳过
-    snapshot_archive_summary JSONB NOT NULL DEFAULT '{}'::jsonb  -- 过期归档非敏感摘要（§44/§45），仅受限 GC 函数写入
+    snapshot_archive_summary JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 过期归档非敏感摘要（§44/§45），仅受限 GC 函数写入
+    header_signature VARCHAR(64)                      -- 表头指纹（V26 映射模板直导）：清洗后表头有序列表 SHA-256
     -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加；
     -- preview_revision / confirmed_revision 的指针 FK 在本文件 excel_import_preview_revision 建表后追加
 );
@@ -519,3 +520,19 @@ ON excel_import_attempt_item(batch_id, preview_revision, group_id);
 
 COMMENT ON TABLE excel_import_attempt_item IS 'Import AttemptItem（v3.3 §49.2）：一次 Attempt 内一个 ProductGroup 的 Runtime 结果与恢复 Checkpoint；终态 imported/partial/rejected/skipped 与领域写入同一事务落地（§31/§50.2），failed 为可重试技术失败';
 COMMENT ON COLUMN excel_import_attempt_item.checkpoint IS '当前 Group 的可恢复执行阶段（§49.2.2：validated/identity_resolved/persisting/committed）；「已完成」判定只依赖 status 终态';
+
+-- Excel 导入映射模板（V26 并入，录入链路改造 P1：标准模板直导）
+-- 表头指纹（清洗后表头有序列表 SHA-256）命中时跳过 AI 映射调用，直接使用模板映射与价格列角色
+CREATE TABLE IF NOT EXISTS excel_import_mapping_template (
+    template_id VARCHAR(64) PRIMARY KEY,
+    template_name VARCHAR(128) NOT NULL,
+    header_signature VARCHAR(64) NOT NULL,          -- 清洗后表头有序列表 SHA-256（模板指纹）
+    column_mapping JSONB NOT NULL,                  -- 表头 → 标准字段（与批次 column_mapping 同构）
+    price_column_roles JSONB,                       -- 价格列表头 → 角色（factory/sales/none），可空
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_import_mapping_template_signature
+    ON excel_import_mapping_template(header_signature);
+COMMENT ON TABLE excel_import_mapping_template IS 'Excel 导入字段映射模板（标准模板直导）：表头指纹命中时跳过 AI 映射';

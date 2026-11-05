@@ -63,6 +63,8 @@ public class ExcelImportBatch {
     private Long confirmedRevision;
     private String confirmedBy;
     private LocalDateTime confirmedAt;
+    /** 表头指纹（V26 映射模板直导）：清洗后表头有序列表 SHA-256，预览时写入 */
+    private String headerSignature;
     /** 导入 Policy 的 UI 草稿（§45/§47.1.5） */
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String importPolicy;
