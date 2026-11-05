@@ -42,6 +42,7 @@ application-local.properties
 # 备份与脚本输出
 backups/
 *.dump
+output/
 
 # 操作系统文件
 .DS_Store
