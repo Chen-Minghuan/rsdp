@@ -729,6 +729,7 @@ class ProductQueryServiceTest {
         // 外键依赖顺序：导入引用置空 → AI 识别 → 弱引用表 → 变体/RSKU 子表 → 图片/RSKU/变体 → 主表
         verify(productPurgeMapper).nullifyImportRowRspuRefs("RSPU-DEL01");
         verify(productPurgeMapper).nullifyImportRowVariantRefs("RSPU-DEL01");
+        verify(productPurgeMapper).deleteSupplierProductRefs("RSPU-DEL01");
         verify(productPurgeMapper).deleteAiRecognitions("RSPU-DEL01");
         verify(productPurgeMapper).deleteCollectionItems("RSPU-DEL01");
         verify(productPurgeMapper).deleteSchemeCandidates("RSPU-DEL01");

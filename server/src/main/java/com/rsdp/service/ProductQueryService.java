@@ -242,6 +242,12 @@ public class ProductQueryService {
             String keyword = "%" + request.getKeyword().trim() + "%";
             wrapper.and(w -> w.like("product_name", keyword).or().like("category_path", keyword).or().like("rspu_id", keyword));
         }
+        // 待归类筛选（归类工作台）：无业务编码或存在 pending 疑似同款配对
+        if (Boolean.TRUE.equals(request.getPendingClassification())) {
+            wrapper.and(w -> w.isNull("rspu_code").or().exists(
+                "SELECT 1 FROM rspu_duplicate_suspect ds WHERE ds.status = 'pending'"
+                    + " AND (ds.rspu_id = rspu_master.rspu_id OR ds.matched_rspu_id = rspu_master.rspu_id)"));
+        }
 
         return wrapper;
     }
@@ -828,9 +834,10 @@ public class ProductQueryService {
         }
 
         // 按外键依赖顺序物理删除关联行（风格/场景关联在软删时已清除，此处幂等补刀）：
-        // ① 导入历史置空引用（保留导入记录本身）
+        // ① 导入历史置空引用（保留导入记录本身）+ 供应商身份记录（fk ON DELETE RESTRICT，必删）
         productPurgeMapper.nullifyImportRowRspuRefs(rspuId);
         productPurgeMapper.nullifyImportRowVariantRefs(rspuId);
+        productPurgeMapper.deleteSupplierProductRefs(rspuId);
         // ② AI 识别记录（解除对 image_assets 的引用）
         productPurgeMapper.deleteAiRecognitions(rspuId);
         // ③ 无实体的弱引用表

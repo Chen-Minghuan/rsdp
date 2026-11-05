@@ -70,4 +70,10 @@ public class ProductListRequest {
      * 价格排序口径同 {@link #priceMin}，价格为 null 的排在最后。
      */
     private String sort;
+
+    /**
+     * 待归类筛选（归类工作台入口）：true 时只返回需要人工归一的产品——
+     * 未发放业务编码（rspu_code 为空）或存在 pending 疑似同款配对。
+     */
+    private Boolean pendingClassification;
 }

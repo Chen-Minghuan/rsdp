@@ -59,6 +59,16 @@ public interface ProductPurgeMapper {
     int nullifyImportRowVariantRefs(String rspuId);
 
     /**
+     * 物理删除供应商源商品身份记录（fk_supplier_product_ref_rspu 为 ON DELETE RESTRICT，
+     * 不先清理则主表物理删除必被外键拦截）。
+     *
+     * @param rspuId RSPU ID
+     * @return 影响行数
+     */
+    @Delete("DELETE FROM supplier_product_ref WHERE rspu_id = #{rspuId}")
+    int deleteSupplierProductRefs(String rspuId);
+
+    /**
      * 物理删除 AI 识别记录（同时解除对 image_assets.image_id 的引用）。
      *
      * @param rspuId RSPU ID
