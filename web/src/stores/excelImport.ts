@@ -66,6 +66,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   const defaultProductLevel = ref<string | null>(null)
   /** 默认材质码（material 字典码）；价格列与行内材质均无法识别时使用 */
   const defaultMaterialCode = ref<string | null>(null)
+  /** 确认导入时把本次映射保存为标准模板（V26：后续同结构表头跳过 AI 识别直接套用） */
+  const saveAsTemplate = ref(false)
+  const templateName = ref<string>('')
 
   /** 导入前全量预览数据（原始表头视角，兼容旧接口） */
   const previewData = ref<PreviewDataRow[]>([])
@@ -206,6 +209,12 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     }
     if (file.size > MAX_FILE_SIZE_BYTES) {
       errorMessage.value = 'Excel 文件大小不能超过 500MB'
+      return
+    }
+    // 报价归属工厂在上传时确定（按厂录入流程）：产品身份（supplier_product_ref）
+    // 与报价（RSKU）都归到该工厂下，同厂同型号再导入才能命中查重复用
+    if (!defaultFactoryCode.value) {
+      errorMessage.value = '请先选择本次导入的报价归属工厂'
       return
     }
 
@@ -721,6 +730,10 @@ export const useExcelImportStore = defineStore('excelImport', () => {
       errorMessage.value = '存在出厂价价格列，必须选择默认工厂编码'
       return
     }
+    if (saveAsTemplate.value && !templateName.value.trim()) {
+      errorMessage.value = '保存为模板时必须填写模板名称'
+      return
+    }
 
     // 新模式：清洗页表格当前值即最终输入（§17 只提交 rowCategorySelections，suggested 不提交）；
     // 跳过行不上传（后端按 skipRows 过滤）
@@ -762,7 +775,9 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         selectedPriceColumns: selectedPriceColumns.value,
         priceColumnSelections,
         previewEdits: Object.values(previewEdits.value),
-        skipRows: Array.from(skippedRows.value)
+        skipRows: Array.from(skippedRows.value),
+        saveAsTemplate: saveAsTemplate.value,
+        templateName: saveAsTemplate.value ? templateName.value.trim() : undefined
       }, uploadAbortController.signal)
 
       // confirm 已异步化（阶段 3.2）：接口立即返回受理状态，导入在后台批次执行；
@@ -1028,6 +1043,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultMoq.value = 1
     defaultProductLevel.value = null
     defaultMaterialCode.value = null
+    saveAsTemplate.value = false
+    templateName.value = ''
     previewData.value = []
     previewEdits.value = {}
     skippedRows.value = new Set()
@@ -1084,6 +1101,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     defaultMoq,
     defaultProductLevel,
     defaultMaterialCode,
+    saveAsTemplate,
+    templateName,
     previewData,
     previewGroups,
     productHeaders,

@@ -3,11 +3,13 @@ import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { NSelect, NTag, NInput, NUpload, NButton, NSpace, NProgress, useMessage, useDialog, type DataTableColumns } from 'naive-ui'
+import type { SelectFilter } from 'naive-ui'
 import { listDicts } from '@/api/dict'
 import { listFactories } from '@/api/factory'
 import { getExcelAiImportRows } from '@/api/product'
 import { useExcelImportStore } from '@/stores/excelImport'
 import ExcelCleanReviewView from '@/components/excel-import/ExcelCleanReviewView.vue'
+import ExcelSourcePreview from '@/components/excel-import/ExcelSourcePreview.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
@@ -53,12 +55,24 @@ const {
   defaultMoq,
   defaultProductLevel,
   defaultMaterialCode,
+  saveAsTemplate,
+  templateName,
   hasSelectedFile,
   pendingTaskCount,
   batchRecovering,
   batchProgress
 } = storeToRefs(store)
 const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, uploadRowImage, removeRowImage, cloneRowImages, setGroupCategory, setGroupsCategory, resetRowCategoryState } = store
+
+/** 下载标准导入模板（静态文件，web/public/templates 下） */
+function downloadStandardTemplate() {
+  const link = document.createElement('a')
+  link.href = '/templates/产品导入标准模板.xlsx'
+  link.download = '产品导入标准模板.xlsx'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
 
 // 兜底可映射字段清单：优先使用 preview 响应下发的 standardFields（后端 ExcelAiStandardFields）。
 // 同步义务：字段真实出处是后端 ExcelAiImportService 的 AI 映射提示词标准字段列表，
@@ -98,6 +112,51 @@ const categoryOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
 const materialOptions = ref<DictItem[]>([])
 const factoryOptions = ref<Factory[]>([])
+
+/** 工厂等级展示顺序与名称（S→A→B→C→其他） */
+const FACTORY_LEVEL_ORDER: Record<string, number> = { S: 0, A: 1, B: 2, C: 3 }
+const FACTORY_LEVEL_NAMES: Record<string, string> = { S: 'S级战略厂', A: 'A级核心厂', B: 'B级合作厂', C: 'C级备选厂' }
+
+/**
+ * 工厂选择器选项：按等级分组 + 组内按编码排序；
+ * label 含名称/编码，地区作为辅助描述，搜索对三者全文匹配（NSelect filter 默认按 label）。
+ */
+const factorySelectOptions = computed(() => {
+  const groups = new Map<string, Factory[]>()
+  for (const f of factoryOptions.value) {
+    const key = f.factoryLevel && FACTORY_LEVEL_ORDER[f.factoryLevel] != null ? f.factoryLevel : 'Z'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(f)
+  }
+  return [...groups.entries()]
+    .sort((a, b) => (FACTORY_LEVEL_ORDER[a[0]] ?? 9) - (FACTORY_LEVEL_ORDER[b[0]] ?? 9))
+    .map(([level, factories]) => ({
+      type: 'group' as const,
+      label: `${FACTORY_LEVEL_NAMES[level] ?? '其他'}（${factories.length}）`,
+      key: `group-${level}`,
+      children: factories
+        .sort((a, b) => a.factoryCode.localeCompare(b.factoryCode))
+        .map(f => ({
+          label: `${f.factoryName}（${f.factoryCode}）${f.region ? ` · ${f.region}` : ''}`,
+          value: f.factoryCode
+        }))
+    }))
+})
+
+/** 工厂搜索：对名称/编码/地区全文忽略大小写匹配（分组选项的 label 已含三段信息） */
+const factorySelectFilter: SelectFilter = (pattern, option) => {
+  if (!pattern.trim()) return true
+  const label = typeof option.label === 'string' ? option.label : ''
+  return label.toLowerCase().includes(pattern.trim().toLowerCase())
+}
+
+// 选定报价归属工厂后，用工厂档案预填发货地等工厂字段（第 4 步仍可修改）
+watch(defaultFactoryCode, (code) => {
+  const factory = factoryOptions.value.find(f => f.factoryCode === code)
+  if (factory) {
+    defaultShippingFrom.value = factory.shippingFrom || factory.region || ''
+  }
+})
 
 /** 商品品类下拉选项（全量有效字典：AI 可选范围受限，人工修改可选全部品类） */
 const categorySelectOptions = computed(() =>
@@ -394,10 +453,29 @@ async function handlePasteRowImages(targetRowIndex: number) {
   }
 }
 
+/** 内嵌图片列提示映射：表头 → 图片数量（后端预览时锚点扫描下发） */
+const imageColumnHintMap = computed(() =>
+  new Map((mappingResponse.value?.imageColumnHints ?? []).map(h => [h.header, h.imageCount]))
+)
+
+/** 原始表头列渲染：含内嵌图片的列带"自动提取"提示标 */
+function renderHeaderWithImageHint(header: string) {
+  const count = imageColumnHintMap.value.get(header)
+  if (!count) return header
+  return h(NSpace, { align: 'center', size: 4, wrap: false }, {
+    default: () => [
+      h('span', null, header),
+      h(NTag, { size: 'tiny', type: 'success', bordered: false, title: '该列内嵌图片在导入时自动按行提取为主图/详情图，无需映射为 URL 字段' },
+        { default: () => `🖼 ${count} 张图自动提取` })
+    ]
+  })
+}
+
 const mappingColumns = computed<DataTableColumns<{ header: string; value: string }>>(() => [
   {
     title: 'Excel 原始表头',
-    key: 'header'
+    key: 'header',
+    render: (row) => renderHeaderWithImageHint(row.header)
   },
   {
     title: '映射到系统字段',
@@ -488,7 +566,8 @@ const categoryMappingColumns = computed<DataTableColumns<CategoryMappingItem>>((
 const unmappedColumnsColumns = computed<DataTableColumns<UnmappedColumnInfo>>(() => [
   {
     title: 'Excel 原始表头',
-    key: 'header'
+    key: 'header',
+    render: (row) => renderHeaderWithImageHint(row.header)
   },
   {
     title: '样例值',
@@ -514,6 +593,23 @@ const unmappedColumnsColumns = computed<DataTableColumns<UnmappedColumnInfo>>(()
 // ===== 数据清洗（步骤 3） =====
 /** 只看「商品品类未确定」的行（Step 3→4 被拦截时自动开启） */
 const showOnlyUndetermined = ref(false)
+/** 失败重导：只看失败行过滤（行号来自上次导入失败明细） */
+const showOnlyFailed = ref(false)
+const failedRowIndexes = computed(() =>
+  (importResult.value?.failures ?? []).map(f => f.rowIndex).filter(n => n > 0)
+)
+
+/** 处理失败行：回数据清洗页并只看失败行；修正后重新导入时以更新模式提交
+ * （Attempt 治理对「同 Revision + 同 Policy」的重放不会重跑，更新模式换新 Policy 才真正重试失败行） */
+function handleFixFailedRows() {
+  showOnlyFailed.value = true
+  updateIfExists.value = true
+  currentStep.value = 3
+}
+
+watch(() => currentStep.value, (step) => {
+  if (step === 1) showOnlyFailed.value = false
+})
 
 /** 图片预览弹窗状态 */
 const imagePreviewVisible = ref(false)
@@ -626,10 +722,10 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
 <template>
   <n-space vertical :size="24" style="padding: 24px;">
     <n-steps :current="currentStep" status="process">
-      <n-step title="上传 Excel" description="选择产品目录文件" />
-      <n-step title="确认字段映射" description="AI 识别结果，可手动调整" />
+      <n-step title="上传 Excel" description="选择归属工厂与报价册文件" />
+      <n-step title="确认字段映射" description="模板/AI 建议，可手动调整" />
       <n-step title="数据清洗" description="预览并编辑原始数据" />
-      <n-step title="执行导入" description="生成 RSPU 并异步识别" />
+      <n-step title="执行导入" description="生成 RSPU/变体/RSKU 报价，有主图产品异步识别" />
     </n-steps>
 
     <n-alert v-if="errorMessage" type="error" closable @close="errorMessage = ''">
@@ -641,10 +737,30 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
 
     <!-- 步骤 1：上传 -->
     <n-card v-if="currentStep === 1" title="上传 Excel 产品目录">
+      <template #header-extra>
+        <n-button size="small" tertiary @click="downloadStandardTemplate">
+          下载标准导入模板
+        </n-button>
+      </template>
       <n-space vertical :size="16">
         <p style="color: #666;">
           支持 .xlsx / .xls / .csv（最大 500MB，单次最多 500 行数据）。系统会自动识别表头语义，并提取 Excel 内嵌图片作为主图。
+          建议先下载「标准导入模板」按格式整理工厂报价表；首次导入时把映射保存为模板，之后同结构表格免 AI 识别直接导入。
         </p>
+        <n-space align="center" wrap>
+          <span><span class="required-star">*</span>报价归属工厂</span>
+          <n-select
+            v-model:value="defaultFactoryCode"
+            :options="factorySelectOptions"
+            placeholder="搜索工厂名称 / 编码 / 地区"
+            filterable
+            :filter="factorySelectFilter"
+            style="width: 360px;"
+          />
+          <n-text depth="3" style="font-size: 12px;">
+            导入的产品身份与出厂价报价都归到该工厂下；同厂同型号再次导入会自动识别为同一产品
+          </n-text>
+        </n-space>
         <n-upload
           v-model:file-list="fileList"
           :default-upload="false"
@@ -691,9 +807,28 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             <n-tag type="info" :bordered="false">{{ currentSheetName }}</n-tag>
           </n-space>
 
-          <n-alert type="info" :show-icon="false">
+          <n-alert v-if="mappingResponse?.templateHit" type="success" :show-icon="false">
+            已套用映射模板「{{ mappingResponse.templateName }}」（表头结构匹配，未调用 AI 识别）。请检查映射是否符合预期。
+          </n-alert>
+          <n-alert v-else type="info" :show-icon="false">
             AI 已根据表头和样例数据推荐字段映射。请检查并调整；品类通过下方「导入方式」确定：单一品类整批默认一个品类，混合品类由 AI 在你选的候选品类中逐行预填。
           </n-alert>
+
+          <!-- 原表预览：原始表格前 5 行（含内嵌图），供录入人确认每列映射去向 -->
+          <n-collapse v-if="mappingResponse && mappingResponse.previewRows?.length">
+            <n-collapse-item name="source-preview">
+              <template #header>
+                <span style="font-size: 13px;">
+                  原表预览（前 {{ mappingResponse.previewRows.length }} 行 · 对照确认每列映射到哪个字段）
+                </span>
+              </template>
+              <ExcelSourcePreview
+                :batch-id="mappingResponse.batchId"
+                :headers="mappingResponse.headers"
+                :rows="mappingResponse.previewRows"
+              />
+            </n-collapse-item>
+          </n-collapse>
 
           <!-- 导入方式（§4：per-sheet，放在 Step 2 顶部；SINGLE 复用 categoryHint，不并存两套品类选择） -->
           <div>
@@ -801,6 +936,8 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
 
           <ExcelCleanReviewView
             v-model:show-only-undetermined="showOnlyUndetermined"
+            v-model:show-only-failed="showOnlyFailed"
+            :failed-row-indexes="failedRowIndexes"
             :preview-data="previewData"
             :preview-groups="previewGroups"
             :product-headers="productHeaders"
@@ -846,7 +983,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
           确认价格列角色与默认工厂信息，然后点击「开始导入」。
         </n-alert>
 
-        <n-card v-if="mappingResponse?.priceColumns && mappingResponse.priceColumns.length > 0" title="价格列（每列将创建一个变体 + RSKU）" size="small">
+        <n-card v-if="mappingResponse?.priceColumns && mappingResponse.priceColumns.length > 0" title="价格列（出厂价列按 材质 × 尺寸 创建变体 + RSKU 报价；销售价不建变体）" size="small">
           <n-space vertical :size="12">
             <n-alert type="info" :show-icon="false">
               出厂价 = 生成工厂报价（RSKU）；销售价 = 仅记录为产品参考零售价；不导入 = 跳过该价格列。
@@ -876,14 +1013,15 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
               </span>
               <n-select
                 v-model:value="defaultFactoryCode"
-                :options="factoryOptions.map(f => ({ label: `${f.factoryName}（${f.factoryCode}）`, value: f.factoryCode }))"
-                placeholder="请选择工厂"
+                :options="factorySelectOptions"
+                placeholder="搜索工厂名称 / 编码 / 地区"
                 clearable
                 filterable
-                style="width: 260px;"
+                :filter="factorySelectFilter"
+                style="width: 320px;"
               />
               <n-text v-if="factoryRequired" depth="3" style="font-size: 12px;">
-                存在出厂价价格列时必填（用于生成工厂报价 RSKU）
+                上传时已选定，可在此修改；存在出厂价价格列时必填（用于生成工厂报价 RSKU）
               </n-text>
             </n-space>
             <n-space align="center" wrap>
@@ -914,6 +1052,21 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             <n-text depth="3" style="font-size: 12px;">
               默认产品等级：行内无产品等级时使用，报价（RSKU）创建必填等级；默认材质：价格列与行内材质均无法识别时使用
             </n-text>
+          </n-space>
+        </n-card>
+
+        <n-card title="映射模板" size="small">
+          <n-space align="center">
+            <n-checkbox v-model:checked="saveAsTemplate">
+              保存为映射模板（下次同结构表头直接套用，跳过 AI 识别）
+            </n-checkbox>
+            <n-input
+              v-if="saveAsTemplate"
+              v-model:value="templateName"
+              placeholder="模板名称，如：XX 工厂标准报价模板"
+              style="width: 320px;"
+              :maxlength="128"
+            />
           </n-space>
         </n-card>
 
@@ -981,6 +1134,24 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             @click="handleReimportWithUpdate"
           >
             以更新模式重新导入
+          </n-button>
+        </div>
+      </n-alert>
+
+      <n-alert
+        v-if="importResult.failedCount > 0"
+        type="error"
+        :show-icon="true"
+        style="margin-top: 16px;"
+      >
+        {{ importResult.failedCount }} 行导入失败。可回到数据清洗页只看失败行，修正数据后直接重新导入（成功行按身份自动更新/跳过，不会重复建档）。
+        <div style="margin-top: 8px;">
+          <n-button
+            type="primary"
+            size="small"
+            @click="handleFixFailedRows"
+          >
+            处理失败行
           </n-button>
         </div>
       </n-alert>

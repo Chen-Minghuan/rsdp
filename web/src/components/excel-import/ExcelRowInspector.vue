@@ -299,7 +299,7 @@ function isGroupSkipped(group: PreviewDataGroup): boolean {
               <img
                 :src="getExcelAiPreviewImageUrl(mappingResponse!.batchId, key)"
                 title="用户覆盖图片"
-                style="width: 64px; height: 64px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 2px solid #52c41a;"
+                style="width: 64px; height: 64px; object-fit: contain; border-radius: 4px; cursor: pointer; border: 2px solid #52c41a;"
                 @click="$emit('previewImage', getExcelAiPreviewImageUrl(mappingResponse!.batchId, key))"
               >
               <n-button
@@ -317,7 +317,7 @@ function isGroupSkipped(group: PreviewDataGroup): boolean {
               v-if="img.thumbnailBase64"
               :src="img.thumbnailBase64"
               :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '')"
-              :style="{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', border: '1px solid #999', opacity: getOverrideKeys(group!.representativeRowIndex).length ? 0.4 : 1 }"
+              :style="{ width: '64px', height: '64px', objectFit: 'contain', borderRadius: '4px', cursor: 'pointer', border: '1px solid #999', opacity: getOverrideKeys(group!.representativeRowIndex).length ? 0.4 : 1 }"
               @click="$emit('previewImage', img.thumbnailBase64)"
             >
             <div
@@ -390,7 +390,7 @@ function isGroupSkipped(group: PreviewDataGroup): boolean {
                     <img
                       :src="getExcelAiPreviewImageUrl(mappingResponse!.batchId, key)"
                       title="用户覆盖图片"
-                      style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; cursor: pointer; border: 2px solid #52c41a;"
+                      style="width: 48px; height: 48px; object-fit: contain; border-radius: 4px; cursor: pointer; border: 2px solid #52c41a;"
                       @click="$emit('previewImage', getExcelAiPreviewImageUrl(mappingResponse!.batchId, key))"
                     >
                     <n-button
@@ -408,7 +408,7 @@ function isGroupSkipped(group: PreviewDataGroup): boolean {
                     v-if="img.thumbnailBase64"
                     :src="img.thumbnailBase64"
                     :title="img.columnHeader + (img.primaryCandidate ? '（主图候选）' : '')"
-                    :style="{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', border: '1px solid #999', opacity: getOverrideKeys(variant.rowIndex).length ? 0.4 : 1 }"
+                    :style="{ width: '48px', height: '48px', objectFit: 'contain', borderRadius: '4px', cursor: 'pointer', border: '1px solid #999', opacity: getOverrideKeys(variant.rowIndex).length ? 0.4 : 1 }"
                     @click="$emit('previewImage', img.thumbnailBase64)"
                   >
                   <div

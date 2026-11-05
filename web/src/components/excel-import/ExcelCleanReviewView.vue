@@ -19,6 +19,9 @@ interface Props {
   skippedRows: Set<number>
   undeterminedCategoryRowIndexes: number[]
   showOnlyUndetermined: boolean
+  /** 失败重导：只看上次导入失败的行（行号集合来自结果页失败明细） */
+  showOnlyFailed: boolean
+  failedRowIndexes: number[]
   mappingResponse: import('@/types/product').ExcelAiMappingResponse | null
   standardFieldOptions: { label: string; value: string }[]
   copiedImageRowIndex: number | null
@@ -28,6 +31,7 @@ const props = defineProps<Props>()
 
 const emit = defineEmits<{
   'update:showOnlyUndetermined': [value: boolean]
+  'update:showOnlyFailed': [value: boolean]
   'update:previewEdit': [payload: { rowIndex: number; header: string; value: string | null }]
   'toggleSkipRow': [rowIndex: number]
   // P0-1：组级品类设置（组内全部非跳过行）
@@ -85,6 +89,11 @@ function clearCheckedGroups() {
 
 const filteredGroups = computed(() => {
   let groups = props.previewGroups
+  if (props.showOnlyFailed && props.failedRowIndexes.length > 0) {
+    groups = groups.filter(g =>
+      g.variants.some(v => props.failedRowIndexes.includes(v.rowIndex))
+    )
+  }
   if (props.showOnlyUndetermined) {
     groups = groups.filter(g =>
       g.variants.some(v => props.undeterminedCategoryRowIndexes.includes(v.rowIndex))
@@ -139,6 +148,13 @@ watch(searchKeyword, resetToFirstDisplayed)
 function selectGroup(externalCode: string) {
   currentGroupExternalCode.value = externalCode
 }
+
+/** 当前商品在展示列表中的位次（1-based；0 = 未选中） */
+const currentGroupOrdinal = computed(() => {
+  if (currentGroupExternalCode.value == null) return 0
+  const idx = displayedGroups.value.findIndex(g => g.externalCode === currentGroupExternalCode.value)
+  return idx >= 0 ? idx + 1 : 0
+})
 
 function goPrevious() {
   const displayed = displayedGroups.value
@@ -259,6 +275,10 @@ function onDeleteRowImage(rowIndex: number, tempImageKey: string) {
 function onUpdateShowOnlyUndetermined(value: boolean) {
   emit('update:showOnlyUndetermined', value)
 }
+
+function onUpdateShowOnlyFailed(value: boolean) {
+  emit('update:showOnlyFailed', value)
+}
 </script>
 
 <template>
@@ -276,6 +296,9 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
         <n-checkbox :checked="showOnlyUndetermined" @update:checked="onUpdateShowOnlyUndetermined">
           只看未确定商品
         </n-checkbox>
+        <n-checkbox v-if="failedRowIndexes.length > 0" :checked="showOnlyFailed" @update:checked="onUpdateShowOnlyFailed">
+          只看失败行（{{ failedRowIndexes.length }}）
+        </n-checkbox>
       </n-space>
       <n-space>
         <n-input
@@ -286,6 +309,9 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
           style="width: 220px;"
         />
         <n-button size="small" :disabled="!currentGroup" @click="goPrevious">上一条</n-button>
+        <span v-if="currentGroupOrdinal > 0" style="color: #999; font-size: 12px;">
+          第 {{ currentGroupOrdinal }} / {{ displayedGroups.length }} 条
+        </span>
         <n-button size="small" :disabled="!currentGroup" @click="goNext">下一条</n-button>
       </n-space>
     </n-space>
@@ -324,12 +350,16 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
         <n-empty v-if="displayedGroups.length === 0" description="没有可展示的商品" />
         <n-list v-else hoverable clickable style="max-height: 600px; overflow-y: auto;">
           <n-list-item
-            v-for="group in displayedGroups"
+            v-for="(group, index) in displayedGroups"
             :key="group.externalCode || group.representativeRowIndex"
             :class="{ 'review-item-active': currentGroupExternalCode === group.externalCode }"
             @click="selectGroup(group.externalCode)"
           >
             <n-space align="center" style="width: 100%;">
+              <!-- 序号：当前列表内的展示位次（筛选后重新编号），便于人工核对进度 -->
+              <span style="color: #999; font-size: 12px; min-width: 30px; text-align: right; flex-shrink: 0;">
+                {{ index + 1 }}
+              </span>
               <n-checkbox
                 v-if="categoryMode"
                 :checked="checkedGroupKeys.has(groupKey(group))"
@@ -339,7 +369,7 @@ function onUpdateShowOnlyUndetermined(value: boolean) {
               <img
                 v-if="groupThumbnail(group)"
                 :src="groupThumbnail(group)!"
-                style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; flex-shrink: 0;"
+                style="width: 48px; height: 48px; object-fit: contain; border-radius: 4px; flex-shrink: 0;"
               >
               <div
                 v-else
