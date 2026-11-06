@@ -1,52 +1,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NDescriptions, NDescriptionsItem, NTag } from 'naive-ui'
 import type { ProductDetail, OcrResult } from '@/types/product'
-import type { DictItem } from '@/types/dict'
-import { getSixDimSchema, formatSixDimValue } from '@/utils/sixDimLabels'
 import { toKeyValuePairs, toRawText, safeParseJson } from '@/utils/jsonDisplay'
 
 /**
- * 产品详情「基本信息」页签：分组 descriptions 展示全部 RSPU 元数据。
+ * 产品详情「概览」页签：只展示左侧身份卡与顶部指标条未覆盖的信息
+ * （颜色明细、价格与规格、产品描述、关键规格、识别原文兜底），空值分组整体不渲染。
  */
 const props = defineProps<{
   detail: ProductDetail
-  styleOptions: DictItem[]
-  materialOptions: DictItem[]
-  fabricOptions: DictItem[]
-  sceneOptions: DictItem[]
 }>()
 
 const rspu = computed(() => props.detail.rspu)
-
-const sixDimSchema = computed(() => getSixDimSchema(rspu.value.categoryCode))
-
-/** 六维标签动态维度键（A–D/F，按品类 schema 动态生成）。
- *  E 维（表面材质）与材质标签同源，由「材质标签」行展示，此处不再重复显示。 */
-const sixDimKeys = computed(() => Object.keys(sixDimSchema.value.dims).filter(k => k !== 'E'))
-
-function resolveDictName(options: DictItem[], code: string) {
-  return options.find(d => d.dictCode === code)?.dictName || code
-}
-
-const styleTags = computed(() => {
-  const codes = props.detail.styleCodes?.length
-    ? props.detail.styleCodes
-    : (rspu.value.positioningLabel ? [rspu.value.positioningLabel] : [])
-  return codes.map(code => ({ code, name: resolveDictName(props.styleOptions, code) }))
-})
-
-const materialNames = computed(() =>
-  Array.isArray(rspu.value.materialTags)
-    ? rspu.value.materialTags.map(code => resolveDictName(props.materialOptions, code))
-    : []
-)
-
-const fabricNames = computed(() =>
-  Array.isArray(rspu.value.fabricTags)
-    ? rspu.value.fabricTags.map(code => resolveDictName(props.fabricOptions, code))
-    : []
-)
 
 /** AI 识别记录中最近一条 OCR 材质原文（识别记录按时间倒序，取首个带材质描述的）。 */
 const ocrMaterialDescription = computed(() => {
@@ -61,21 +26,26 @@ const ocrMaterialDescription = computed(() => {
 })
 
 /** 材质/面料标签未收录时的识别原文兜底。 */
-const showMaterialFallback = computed(() =>
-  materialNames.value.length === 0 || fabricNames.value.length === 0
-)
-
-const sceneNames = computed(() =>
-  Array.isArray(rspu.value.sceneTags)
-    ? rspu.value.sceneTags.map(code => resolveDictName(props.sceneOptions, code))
-    : []
-)
+const showMaterialFallback = computed(() => {
+  const hasMaterial = Array.isArray(rspu.value.materialTags) && rspu.value.materialTags.length > 0
+  const hasFabric = Array.isArray(rspu.value.fabricTags) && rspu.value.fabricTags.length > 0
+  return (!hasMaterial || !hasFabric) && ocrMaterialDescription.value
+})
 
 /** 关键规格键值对（JSON 友好渲染）。 */
 const keySpecPairs = computed(() => toKeyValuePairs(rspu.value.keySpecs))
 const keySpecRaw = computed(() => toRawText(rspu.value.keySpecs))
 
-/** HSV 数组转 CSS 颜色（s/v 兼容 0-1 与 0-100 两种取值）。 */
+const hasColorInfo = computed(() =>
+  Boolean(rspu.value.colorPrimaryName || rspu.value.colorSecondary
+    || (Array.isArray(rspu.value.colorPrimaryHsv) && rspu.value.colorPrimaryHsv.length))
+)
+
+const hasSpecInfo = computed(() =>
+  rspu.value.referencePriceBand || rspu.value.productLevel || rspu.value.warrantyYears != null
+)
+
+/** 主色色块（HSV → CSS，s/v 兼容 0-1 与 0-100 两种取值）。 */
 const primaryColorCss = computed(() => {
   const hsv = rspu.value.colorPrimaryHsv
   if (!Array.isArray(hsv) || hsv.length < 3) return null
@@ -88,134 +58,75 @@ const primaryColorCss = computed(() => {
   }
   return `hsl(${h}, ${s}%, ${Math.min(100, Math.max(0, v * 0.6 + 20))}%)`
 })
+
+const isEmpty = computed(() =>
+  !hasColorInfo.value && !hasSpecInfo.value && !rspu.value.description
+  && !keySpecPairs.value && !keySpecRaw.value && !showMaterialFallback.value
+)
 </script>
 
 <template>
-  <div class="basic-info-tab">
-    <section class="info-group">
-      <h3 class="info-group-title">编码信息</h3>
-      <n-descriptions bordered :column="3" label-placement="left" size="small">
-        <n-descriptions-item label="RSPU ID">{{ rspu.rspuId }}</n-descriptions-item>
-        <n-descriptions-item label="业务编码">{{ rspu.rspuCode || '-' }}</n-descriptions-item>
-        <n-descriptions-item label="历史外部编码">{{ rspu.externalCode || '-' }}</n-descriptions-item>
-      </n-descriptions>
-    </section>
+  <div class="overview-tab">
+    <span v-if="isEmpty" class="empty-text">暂无更多产品信息，可通过「编辑元数据」补充。</span>
 
-    <section class="info-group">
-      <h3 class="info-group-title">分类与风格</h3>
-      <n-descriptions bordered :column="2" label-placement="left" size="small">
-        <n-descriptions-item label="品类">{{ rspu.categoryPath }}</n-descriptions-item>
-        <n-descriptions-item label="风格">
-          <template v-if="styleTags.length">
-            <n-tag
-              v-for="(tag, index) in styleTags"
-              :key="tag.code"
-              size="small"
-              :type="index === 0 ? 'primary' : 'default'"
-              style="margin-right: 6px;"
-            >
-              {{ tag.name }}{{ index === 0 ? '（主）' : '' }}
-            </n-tag>
-          </template>
-          <template v-else>-</template>
-        </n-descriptions-item>
-        <n-descriptions-item v-if="rspu.sixDimTags" label="六维标签" :span="2">
-          <n-descriptions bordered :column="1" size="small">
-            <n-descriptions-item
-              v-for="key in sixDimKeys"
-              :key="key"
-              :label="sixDimSchema.dims[key]?.label ?? `维度 ${key}`"
-            >
-              {{ formatSixDimValue(rspu.sixDimTags?.[key]) }}
-            </n-descriptions-item>
-          </n-descriptions>
-        </n-descriptions-item>
-      </n-descriptions>
-    </section>
-
-    <section class="info-group">
+    <section v-if="hasColorInfo" class="info-group">
       <h3 class="info-group-title">颜色</h3>
-      <n-descriptions bordered :column="3" label-placement="left" size="small">
-        <n-descriptions-item label="主色">
-          <span class="color-cell">
+      <div class="kv-grid">
+        <div v-if="rspu.colorPrimaryName || primaryColorCss" class="kv-item">
+          <span class="kv-label">主色</span>
+          <span class="kv-value color-cell">
             <span v-if="primaryColorCss" class="color-swatch" :style="{ backgroundColor: primaryColorCss }" />
             {{ rspu.colorPrimaryName || '-' }}
           </span>
-        </n-descriptions-item>
-        <n-descriptions-item label="辅色">{{ rspu.colorSecondary || '-' }}</n-descriptions-item>
-        <n-descriptions-item label="主色 HSV">
-          {{ Array.isArray(rspu.colorPrimaryHsv) && rspu.colorPrimaryHsv.length ? rspu.colorPrimaryHsv.join(', ') : '-' }}
-        </n-descriptions-item>
-      </n-descriptions>
+        </div>
+        <div v-if="rspu.colorSecondary" class="kv-item">
+          <span class="kv-label">辅色</span>
+          <span class="kv-value">{{ rspu.colorSecondary }}</span>
+        </div>
+        <div v-if="Array.isArray(rspu.colorPrimaryHsv) && rspu.colorPrimaryHsv.length" class="kv-item">
+          <span class="kv-label">主色 HSV</span>
+          <span class="kv-value mono">{{ rspu.colorPrimaryHsv.join(', ') }}</span>
+        </div>
+      </div>
     </section>
 
-    <section class="info-group">
-      <h3 class="info-group-title">材质·面料·场景</h3>
-      <n-descriptions bordered :column="2" label-placement="left" size="small">
-        <n-descriptions-item label="材质">
-          <template v-if="materialNames.length">
-            <n-tag v-for="name in materialNames" :key="name" size="small" style="margin-right: 6px;">{{ name }}</n-tag>
-          </template>
-          <template v-else>-</template>
-        </n-descriptions-item>
-        <n-descriptions-item label="面料">
-          <template v-if="fabricNames.length">
-            <n-tag v-for="name in fabricNames" :key="name" size="small" style="margin-right: 6px;">{{ name }}</n-tag>
-          </template>
-          <template v-else>-</template>
-        </n-descriptions-item>
-        <n-descriptions-item label="场景">
-          <template v-if="sceneNames.length">
-            <n-tag v-for="name in sceneNames" :key="name" size="small" style="margin-right: 6px;">{{ name }}</n-tag>
-          </template>
-          <template v-else>-</template>
-        </n-descriptions-item>
-        <n-descriptions-item v-if="showMaterialFallback && ocrMaterialDescription" label="识别原文">
-          <span class="empty-text">{{ ocrMaterialDescription }}（未收录进字典）</span>
-        </n-descriptions-item>
-      </n-descriptions>
-    </section>
-
-    <section class="info-group">
+    <section v-if="hasSpecInfo" class="info-group">
       <h3 class="info-group-title">价格与规格</h3>
-      <n-descriptions bordered :column="3" label-placement="left" size="small">
-        <n-descriptions-item label="销售价（零售价）">
-          {{ rspu.retailPrice != null ? `¥ ${Number(rspu.retailPrice).toFixed(2)}` : '-' }}
-        </n-descriptions-item>
-        <n-descriptions-item label="参考价格带">{{ rspu.referencePriceBand || '-' }}</n-descriptions-item>
-        <n-descriptions-item label="产品等级">{{ rspu.productLevel || '-' }}</n-descriptions-item>
-        <n-descriptions-item label="质保年限">
-          {{ rspu.warrantyYears != null ? `${rspu.warrantyYears} 年` : '-' }}
-        </n-descriptions-item>
-      </n-descriptions>
+      <div class="kv-grid">
+        <div v-if="rspu.referencePriceBand" class="kv-item">
+          <span class="kv-label">参考价格带</span>
+          <span class="kv-value">{{ rspu.referencePriceBand }}</span>
+        </div>
+        <div v-if="rspu.productLevel" class="kv-item">
+          <span class="kv-label">产品等级</span>
+          <span class="kv-value">{{ rspu.productLevel }}</span>
+        </div>
+        <div v-if="rspu.warrantyYears != null" class="kv-item">
+          <span class="kv-label">质保年限</span>
+          <span class="kv-value">{{ rspu.warrantyYears }} 年</span>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="showMaterialFallback" class="info-group">
+      <h3 class="info-group-title">识别原文</h3>
+      <p class="fallback-text">{{ ocrMaterialDescription }}<span class="fallback-hint">（未收录进字典）</span></p>
     </section>
 
     <section v-if="rspu.description" class="info-group">
       <h3 class="info-group-title">产品描述</h3>
-      <n-descriptions bordered :column="1" label-placement="left" size="small">
-        <n-descriptions-item label="材质解析/配置说明">
-          <pre class="description-pre">{{ rspu.description }}</pre>
-        </n-descriptions-item>
-      </n-descriptions>
+      <pre class="description-pre">{{ rspu.description }}</pre>
     </section>
 
-    <section class="info-group">
+    <section v-if="keySpecPairs || keySpecRaw" class="info-group">
       <h3 class="info-group-title">关键规格</h3>
-      <n-descriptions v-if="keySpecPairs" bordered :column="2" label-placement="left" size="small">
-        <n-descriptions-item v-for="pair in keySpecPairs" :key="pair.key" :label="pair.key">
-          {{ pair.value }}
-        </n-descriptions-item>
-      </n-descriptions>
-      <span v-else class="empty-text">{{ keySpecRaw || '暂无关键规格' }}</span>
-    </section>
-
-    <section class="info-group">
-      <h3 class="info-group-title">系统信息</h3>
-      <n-descriptions bordered :column="3" label-placement="left" size="small">
-        <n-descriptions-item label="来源模型">{{ rspu.sourceAgentVersion || '-' }}</n-descriptions-item>
-        <n-descriptions-item label="创建时间">{{ rspu.createdAt }}</n-descriptions-item>
-        <n-descriptions-item label="更新时间">{{ rspu.updatedAt }}</n-descriptions-item>
-      </n-descriptions>
+      <div v-if="keySpecPairs" class="kv-grid">
+        <div v-for="pair in keySpecPairs" :key="pair.key" class="kv-item">
+          <span class="kv-label">{{ pair.key }}</span>
+          <span class="kv-value">{{ pair.value }}</span>
+        </div>
+      </div>
+      <span v-else class="empty-text">{{ keySpecRaw }}</span>
     </section>
   </div>
 </template>
@@ -236,6 +147,34 @@ const primaryColorCss = computed(() => {
   color: var(--rsdp-text);
 }
 
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 24px;
+}
+
+.kv-item {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.kv-label {
+  flex-shrink: 0;
+  min-width: 72px;
+  color: var(--rsdp-text-secondary);
+}
+
+.kv-value {
+  color: var(--rsdp-text);
+  word-break: break-all;
+}
+
+.kv-value.mono {
+  font-family: var(--rsdp-font-mono);
+}
+
 .color-cell {
   display: inline-flex;
   align-items: center;
@@ -250,19 +189,20 @@ const primaryColorCss = computed(() => {
   border-radius: 3px;
 }
 
-.kv-line {
-  display: flex;
-  gap: 12px;
+.empty-text {
+  color: var(--rsdp-text-secondary);
+  font-size: 13px;
+}
+
+.fallback-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--rsdp-text-secondary);
   line-height: 1.8;
 }
 
-.kv-key {
-  min-width: 80px;
-  color: var(--rsdp-text-secondary);
-}
-
-.empty-text {
-  color: var(--rsdp-text-secondary);
+.fallback-hint {
+  color: var(--rsdp-warning);
 }
 
 .description-pre {
@@ -270,6 +210,7 @@ const primaryColorCss = computed(() => {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.8;
+  font-size: 13px;
   font-family: inherit;
   color: var(--rsdp-text);
 }

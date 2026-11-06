@@ -7,6 +7,7 @@ import {
   NCard,
   NCheckbox,
   NDivider,
+  NDropdown,
   NForm,
   NFormItem,
   NInput,
@@ -15,19 +16,19 @@ import {
   NSelect,
   NSpace,
   NSpin,
-  NTabs,
-  NTabPane,
+  NTag,
   useDialog,
-  useMessage
+  useMessage,
+  type DropdownOption
 } from 'naive-ui'
 import PageContainer from '@/components/PageContainer.vue'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import ProductPicker from '@/components/ProductPicker.vue'
 import DimsEditor from '@/components/DimsEditor.vue'
-import DetailHero from '@/components/product/DetailHero.vue'
+import StatusPill from '@/components/StatusPill.vue'
+import ProductSidePanel from '@/components/product/ProductSidePanel.vue'
 import BasicInfoTab from '@/components/product/BasicInfoTab.vue'
 import VariantRskuTab from '@/components/product/VariantRskuTab.vue'
-import ImageGalleryTab from '@/components/product/ImageGalleryTab.vue'
 import RelationTab from '@/components/product/RelationTab.vue'
 import AiInsightTab from '@/components/product/AiInsightTab.vue'
 import { getProductDetail, updateProduct, patchProductSixDimTag, deleteProduct, reRecognizeProduct } from '@/api/product'
@@ -182,7 +183,6 @@ const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const detail = ref<ProductDetail | null>(null)
-const activeTab = ref('basic')
 
 const rskuList = ref<Rsku[]>([])
 const rskuLoading = ref(false)
@@ -427,6 +427,44 @@ const minFactoryPrice = computed(() => {
     .filter((p): p is number => p != null)
   return prices.length ? Math.min(...prices) : undefined
 })
+
+function statusText(status: string): string {
+  if (status === 'active') return '上架中'
+  if (status === 'inactive') return '已下架'
+  if (status === 'processing') return '识别中'
+  return status || '-'
+}
+
+const confidenceTextMap: Record<string, string> = {
+  high: '置信度 高',
+  mid: '置信度 中',
+  low: '置信度 低'
+}
+
+function confidenceText(confidence: string): string {
+  return confidenceTextMap[confidence] || (confidence ? `置信度 ${confidence}` : '置信度 -')
+}
+
+/** 头部「更多操作」下拉：低频/高危操作收敛，主按钮区只留收藏与编辑。 */
+const moreActionOptions = computed<DropdownOption[]>(() => {
+  const options: DropdownOption[] = []
+  if (canUpdateProduct.value && canManageProduct.value && canReRecognize.value) {
+    options.push({ label: reRecognizeLabel.value, key: 'reRecognize' })
+  }
+  if (isPlatformStaff.value) {
+    options.push({ label: '合并到同款产品', key: 'merge' })
+  }
+  if (canDeleteProduct.value && canManageProduct.value) {
+    options.push({ label: '删除产品', key: 'delete' })
+  }
+  return options
+})
+
+function handleMoreAction(key: string | number) {
+  if (key === 'reRecognize') handleReRecognize()
+  else if (key === 'merge') showMergeDialog.value = true
+  else if (key === 'delete') handleDeleteProduct()
+}
 
 function validateRspuId(): boolean {
   if (!rspuId.value?.trim()) {
@@ -1052,7 +1090,6 @@ onBeforeRouteUpdate((to, from) => {
   }
   if (nextId !== from.params.rspuId) {
     rspuId.value = nextId
-    activeTab.value = 'basic'
     loadDetail()
     loadRskuList()
     loadVariants()
@@ -1080,36 +1117,19 @@ onBeforeRouteUpdate((to, from) => {
           <n-button
             v-if="canUpdateProduct && canManageProduct"
             size="small"
+            type="primary"
             @click="openEditModal"
           >
             编辑元数据
           </n-button>
-          <n-button
-            v-if="canUpdateProduct && canManageProduct && canReRecognize"
-            size="small"
-            type="info"
-            :loading="reRecognizing"
-            @click="handleReRecognize"
+          <n-dropdown
+            v-if="moreActionOptions.length"
+            trigger="click"
+            :options="moreActionOptions"
+            @select="handleMoreAction"
           >
-            {{ reRecognizeLabel }}
-          </n-button>
-          <n-button
-            v-if="isPlatformStaff"
-            size="small"
-            type="primary"
-            ghost
-            @click="showMergeDialog = true"
-          >
-            合并到同款产品
-          </n-button>
-          <n-button
-            v-if="canDeleteProduct && canManageProduct"
-            size="small"
-            type="error"
-            @click="handleDeleteProduct"
-          >
-            删除产品
-          </n-button>
+            <n-button size="small" :loading="reRecognizing">更多操作 ▾</n-button>
+          </n-dropdown>
         </template>
       </n-space>
     </template>
@@ -1129,25 +1149,59 @@ onBeforeRouteUpdate((to, from) => {
 
       <n-spin :show="loading">
         <template v-if="detail">
-          <DetailHero
-            :detail="detail"
-            :style-options="styleOptions"
-            :min-factory-price="minFactoryPrice"
-          />
+          <div class="detail-layout">
+            <aside class="detail-side">
+              <ProductSidePanel
+                :detail="detail"
+                :style-options="styleOptions"
+                :material-options="materialOptions"
+                :fabric-options="fabricOptions"
+                :scene-options="sceneOptions"
+              />
+            </aside>
 
-          <n-card :bordered="true">
-            <n-tabs v-model:value="activeTab" type="line" animated>
-              <n-tab-pane name="basic" tab="基本信息">
-                <BasicInfoTab
-                  :detail="detail"
-                  :style-options="styleOptions"
-                  :material-options="materialOptions"
-                  :fabric-options="fabricOptions"
-                  :scene-options="sceneOptions"
+            <div class="detail-main">
+              <div class="status-row">
+                <StatusPill :value="statusText(detail.rspu.status)" />
+                <StatusPill
+                  :value="detail.rspu.aestheticsConfidence"
+                  :label="confidenceText(detail.rspu.aestheticsConfidence)"
                 />
-              </n-tab-pane>
+                <n-tag v-if="detail.rspu.productLevel" type="info" size="small">
+                  {{ detail.rspu.productLevel }} 级
+                </n-tag>
+              </div>
 
-              <n-tab-pane name="variant-rsku" tab="变体与报价">
+              <div class="metric-strip">
+                <div class="metric">
+                  <span class="metric-label">最低出厂价</span>
+                  <span class="metric-value metric-price">
+                    {{ minFactoryPrice != null ? `¥${Number(minFactoryPrice).toFixed(2)}` : '-' }}
+                  </span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">销售价</span>
+                  <span class="metric-value">
+                    {{ detail.rspu.retailPrice != null ? `¥${Number(detail.rspu.retailPrice).toFixed(2)}` : '-' }}
+                  </span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">工厂报价</span>
+                  <span class="metric-value">{{ rskuList.length }} 条</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">变体</span>
+                  <span class="metric-value">{{ variantList.length }} 个</span>
+                </div>
+              </div>
+
+              <section class="detail-section">
+                <h2 class="section-title">概览</h2>
+                <BasicInfoTab :detail="detail" />
+              </section>
+
+              <section class="detail-section">
+                <h2 class="section-title">变体与报价</h2>
                 <VariantRskuTab
                   :variant-list="variantList"
                   :variant-loading="variantLoading"
@@ -1163,13 +1217,10 @@ onBeforeRouteUpdate((to, from) => {
                   @open-rsku="(row: Rsku) => router.push(`/products/${rspuId}/rsku/${row.rskuId}`)"
                   @merge-variant="openVariantMergeModal"
                 />
-              </n-tab-pane>
+              </section>
 
-              <n-tab-pane name="images" tab="图片">
-                <ImageGalleryTab :images="detail.images" :variant-list="variantList" />
-              </n-tab-pane>
-
-              <n-tab-pane name="relations" tab="搭配关系">
+              <section class="detail-section">
+                <h2 class="section-title">搭配关系</h2>
                 <RelationTab
                   :official-matches="detail.officialMatches || []"
                   :matched-by="detail.matchedBy || []"
@@ -1179,16 +1230,17 @@ onBeforeRouteUpdate((to, from) => {
                   @delete-relation="handleDeleteRelation"
                   @open-product="(id: string) => router.push(`/products/${id}`)"
                 />
-              </n-tab-pane>
+              </section>
 
-              <n-tab-pane v-if="isPlatformStaff" name="ai" tab="AI 识别">
+              <section v-if="isPlatformStaff" class="detail-section">
+                <h2 class="section-title">AI 识别</h2>
                 <AiInsightTab
                   :style-matches="detail.styleMatches || []"
                   :recognitions="detail.recognitions || []"
                 />
-              </n-tab-pane>
-            </n-tabs>
-          </n-card>
+              </section>
+            </div>
+          </div>
         </template>
       </n-spin>
     </n-space>
@@ -1843,6 +1895,94 @@ onBeforeRouteUpdate((to, from) => {
 </template>
 
 <style scoped>
+/* 左图右文双栏：左栏回答"这是什么产品"，右栏承载业务数据与操作 */
+.detail-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.detail-side {
+  position: sticky;
+  top: 16px;
+}
+
+.detail-main {
+  min-width: 0;
+}
+
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  margin-bottom: 16px;
+  background: var(--rsdp-border);
+  border: 1px solid var(--rsdp-border);
+  border-radius: var(--rsdp-radius);
+  overflow: hidden;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  background: var(--rsdp-card-bg);
+}
+
+.metric-label {
+  font-size: 12px;
+  color: var(--rsdp-text-secondary);
+}
+
+.metric-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+}
+
+.metric-price {
+  color: var(--rsdp-price);
+  font-family: var(--rsdp-font-mono);
+  font-weight: 700;
+}
+
+.detail-section {
+  padding: 16px 0;
+  border-top: 1px solid var(--rsdp-border);
+}
+
+.detail-section:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.section-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--rsdp-text);
+}
+
+@media (max-width: 900px) {
+  .detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-side {
+    position: static;
+  }
+}
+
 .six-dim-edit-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

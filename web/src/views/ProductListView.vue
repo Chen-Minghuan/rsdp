@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, h, onMounted, watch, computed } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NAlert,
@@ -40,6 +41,7 @@ import { listDicts } from '@/api/dict'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
 import { useUserStore } from '@/stores/user'
 import { useSelectionStore, describeAddManyResult, MAX_SELECTION_ITEMS } from '@/stores/selection'
+import { useProductListQueryStore } from '@/stores/productListQuery'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { useRequestAbort } from '@/composables/useRequestAbort'
@@ -55,6 +57,18 @@ const userStore = useUserStore()
 const selectionStore = useSelectionStore()
 const signal = useRequestAbort()
 
+// 查询条件与分页提升为 Pinia store（应用级单例）：
+// 跳转详情页后列表组件卸载，返回时从 store 原样恢复，不再重置为默认 10 条/页
+const listQueryStore = useProductListQueryStore()
+const {
+  page, size,
+  keyword, supplierCode, rspuCode,
+  categoryCode, productLevel, styleCode, sceneCode, materialTag,
+  createdRange, priceMin, priceMax, hasPrimaryImage, pendingClassification, sort,
+  dimA, dimB, dimC, dimD, dimF,
+  statusTab, filtersExpanded
+} = storeToRefs(listQueryStore)
+
 const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_DELETE))
 const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_UPDATE))
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
@@ -65,30 +79,13 @@ const isPlatformStaff = computed(() => userStore.isPlatformStaff)
 const factoryCodes = computed(() => userStore.userInfo?.factoryCodes || [])
 
 // ---------- 搜索条件 ----------
-const keyword = ref('')
-const supplierCode = ref('')
-const rspuCode = ref('')
-// 高级筛选（默认折叠）
-const categoryCode = ref<string | null>(null)
-const productLevel = ref<string | null>(null)
-const styleCode = ref<string | null>(null)
-const sceneCode = ref<string | null>(null)
-const materialTag = ref<string | null>(null)
-const createdRange = ref<[number, number] | null>(null)
-// 价格区间（闭区间；平台员工按最低出厂价、其他角色按零售参考价，后端自动区分）
-const priceMin = ref<number | null>(null)
-const priceMax = ref<number | null>(null)
-// 排序（默认最新）
-const sort = ref<ProductSort>('newest')
+// （keyword/supplierCode/rspuCode/高级筛选/六维/分页等已提升到 listQueryStore，见上方 storeToRefs）
 const sortOptions: { label: string; value: ProductSort }[] = [
   { label: '最新', value: 'newest' },
   { label: '价格升序', value: 'price_asc' },
   { label: '价格降序', value: 'price_desc' }
 ]
-// 图片资产筛选（服务 AI 搭配数据补齐：'true'=仅有 / 'false'=仅无 / null=不限）
-const hasPrimaryImage = ref<string | null>(null)
-/** 待归类筛选（归类工作台入口）：仅看无业务编码或有疑似同款配对的产品 */
-const pendingClassification = ref(false)
+// 图片资产筛选选项（'true'=仅有 / 'false'=仅无 / null=不限）
 const imageAssetOptions = [
   { label: '有', value: 'true' },
   { label: '无', value: 'false' }
@@ -100,11 +97,6 @@ function toTriBool(value: string | null): boolean | undefined {
 }
 
 // ---------- 六维形态特征筛选（A/B/C/D/F，E 维不枚举不参与筛选） ----------
-const dimA = ref<string | null>(null)
-const dimB = ref<string | null>(null)
-const dimC = ref<string | null>(null)
-const dimD = ref<string | null>(null)
-const dimF = ref<string | null>(null)
 const sixDimFilterKeys = ['A', 'B', 'C', 'D', 'F'] as const
 const sixDimRefs: Record<(typeof sixDimFilterKeys)[number], typeof dimA> = { A: dimA, B: dimB, C: dimC, D: dimD, F: dimF }
 /** 原始六维字典（一次拉全，按已选品类的 parentCode 过滤） */
@@ -134,9 +126,6 @@ const styleOptions = ref<{ label: string; value: string }[]>([])
 const sceneOptions = ref<{ label: string; value: string }[]>([])
 const materialOptions = ref<{ label: string; value: string }[]>([])
 
-/** 高级筛选区默认折叠。 */
-const filtersExpanded = ref(false)
-
 /** 已生效的高级筛选数量，用于折叠状态下提示。 */
 const activeAdvancedCount = computed(
   () =>
@@ -159,7 +148,6 @@ const activeAdvancedCount = computed(
 )
 
 // ---------- 状态页签 ----------
-const statusTab = ref<SpuStatusTab>('onSale')
 const counts = ref<SpuStatusCounts>({ onSale: 0, inWarehouse: 0, soldOut: 0, recycled: 0 })
 
 const tabs: { key: SpuStatusTab; label: string; countKey: keyof SpuStatusCounts }[] = [
@@ -176,8 +164,6 @@ const loading = ref(false)
 const errorMessage = ref('')
 const products = ref<ProductSummary[]>([])
 const total = ref(0)
-const page = ref(1)
-const size = ref(10)
 const selectedRowKeys = ref<string[]>([])
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
 
@@ -376,24 +362,7 @@ function handleSearch() {
 }
 
 function handleReset() {
-  keyword.value = ''
-  supplierCode.value = ''
-  rspuCode.value = ''
-  categoryCode.value = null
-  productLevel.value = null
-  styleCode.value = null
-  sceneCode.value = null
-  materialTag.value = null
-  createdRange.value = null
-  hasPrimaryImage.value = null
-  pendingClassification.value = false
-  priceMin.value = null
-  priceMax.value = null
-  sort.value = 'newest'
-  sixDimFilterKeys.forEach(k => {
-    sixDimRefs[k].value = null
-  })
-  page.value = 1
+  listQueryStore.reset()
   refreshAll()
 }
 
