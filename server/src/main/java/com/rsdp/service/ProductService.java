@@ -269,7 +269,7 @@ public class ProductService {
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), request.getSixDimTags(),
             request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs(),
-            request.getProductName());
+            request.getProductName(), request.getExternalCode());
         String rspuCode = assignRspuCode(rspu);
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
@@ -325,7 +325,7 @@ public class ProductService {
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), null,
             request.getProductLevel(), request.getWarrantyYears(), null,
-            request.getProductName());
+            request.getProductName(), null);
         String rspuCode = assignRspuCode(rspu);
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
@@ -349,7 +349,7 @@ public class ProductService {
                                           List<String> materialTags, List<String> fabricTags, List<String> sceneTags,
                                           Object sixDimTags,
                                           String productLevel, Integer warrantyYears, Object keySpecs,
-                                          String productName) {
+                                          String productName, String externalCode) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -358,6 +358,7 @@ public class ProductService {
         rspu.setCategoryPath(CategoryPaths.resolve(rspu.getCategoryCode()));
         rspu.setPositioningLabel(positioningLabel.trim().toUpperCase());
         rspu.setProductName(StringUtils.hasText(productName) ? productName.trim() : null);
+        rspu.setExternalCode(StringUtils.hasText(externalCode) ? externalCode.trim() : null);
         rspu.setColorPrimaryName(colorPrimaryName);
         rspu.setMaterialTags(toJson(materialTags));
         rspu.setFabricTags(toJson(fabricTags));

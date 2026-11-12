@@ -30,6 +30,9 @@ public class ProductListRequest {
     /** SPU 业务编码模糊搜索（rspu_code）。 */
     private String rspuCode;
 
+    /** 外部编码精确匹配（导入来源型号；office 等外部系统按此判定更新目标）。 */
+    private String externalCode;
+
     /** 供应商编码模糊搜索（存在该工厂 RSKU 报价的产品）。 */
     private String supplierCode;
 

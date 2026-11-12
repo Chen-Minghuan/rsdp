@@ -181,6 +181,9 @@ public class ProductQueryService {
         if (StringUtils.hasText(request.getCategoryCode())) {
             wrapper.eq("category_code", request.getCategoryCode());
         }
+        if (StringUtils.hasText(request.getExternalCode())) {
+            wrapper.eq("external_code", request.getExternalCode().trim());
+        }
         if (StringUtils.hasText(request.getPositioningLabel())) {
             wrapper.exists(
                 "SELECT 1 FROM rspu_style s WHERE s.rspu_id = rspu_master.rspu_id AND s.style_code = {0}",

@@ -27,6 +27,9 @@ public class FactoryProductEntryRequest {
     /** 商品名称（可选），如「云屿三人位沙发」 */
     private String productName;
 
+    /** 外部编码（可选，供应商型号；外部系统转发录入时用于标识与后续更新查找） */
+    private String externalCode;
+
     private String colorPrimaryName;
 
     /**
