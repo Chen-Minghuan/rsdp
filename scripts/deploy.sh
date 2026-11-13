@@ -72,7 +72,7 @@ case "${1:-check}" in
     deploy)
         check
         for image in "rsdp-server:$IMAGE_TAG" "rsdp-web:$IMAGE_TAG" "rsdp-cad-parser:$IMAGE_TAG" \
-                     "pgvector/pgvector:pg16" "redis:7-alpine" "quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z"; do
+                     "pgvector/pgvector:pg16" "redis:7-alpine" "bitnamilegacy/minio:2025.2.28"; do
             docker image inspect "$image" >/dev/null
         done
         exec 9>"$DEPLOY_ROOT/release/deploy.lock"
@@ -98,8 +98,9 @@ case "${1:-check}" in
         web_port=$(compose "$release/compose.deploy.yaml" port web 80)
         curl --fail --silent --output /dev/null "http://$web_port/"
         curl --fail --silent --output /dev/null "http://$server_port/api/v1/public/products"
+        # RSDP 未自定义认证入口点，匿名访问受保护接口由 Spring Security 返回 403（office 为 401）
         code=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://$server_port/api/v1/auth/me")
-        test "$code" = 401 || { echo "匿名认证检查失败：HTTP $code" >&2; exit 1; }
+        test "$code" = 401 -o "$code" = 403 || { echo "匿名认证检查失败：HTTP $code" >&2; exit 1; }
         printf '%s\n' "$IMAGE_TAG" > "$DEPLOY_ROOT/release/current-image-tag"
         compose "$release/compose.deploy.yaml" ps
         echo "已部署 $IMAGE_TAG；本机入口 http://$web_port，公网经 HTTPS 反向代理。"

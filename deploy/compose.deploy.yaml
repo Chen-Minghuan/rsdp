@@ -35,7 +35,9 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
+    # 官方 quay.io/minio 与 Docker Hub minio/minio 已停止公开分发（2025），
+    # 生产改用 Bitnami legacy 同版本镜像；默认命令即 minio server，数据目录 /bitnami/minio/data
+    image: bitnamilegacy/minio:2025.2.28
     restart: unless-stopped
     expose:
       - "9000"
@@ -43,8 +45,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in the server .env}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in the server .env}
     volumes:
-      - ${RSDP_DATA_DIR:-/opt/rsdp/data}/minio:/data
-    command: server /data
+      # 宿主目录需先 chown 1001:1001（Bitnami 容器以非 root 运行）
+      - ${RSDP_DATA_DIR:-/opt/rsdp/data}/minio:/bitnami/minio/data
 
   cad-parser:
     build:
