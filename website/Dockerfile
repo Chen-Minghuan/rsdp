@@ -6,7 +6,9 @@ FROM node:20-alpine AS deps
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# 注意：不拷贝 pnpm-workspace.yaml（仅含 allowBuilds，无 packages 字段，
+# pnpm 会按 workspace 校验而失败；容器内按独立项目安装）
+COPY package.json pnpm-lock.yaml ./
 RUN npm config set registry https://registry.npmmirror.com \
     && npm install -g pnpm@9 \
     && pnpm config set registry https://registry.npmmirror.com \
