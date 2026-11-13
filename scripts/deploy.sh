@@ -71,7 +71,7 @@ case "${1:-check}" in
         ;;
     deploy)
         check
-        for image in "rsdp-server:$IMAGE_TAG" "rsdp-web:$IMAGE_TAG" "rsdp-cad-parser:$IMAGE_TAG" \
+        for image in "rsdp-server:$IMAGE_TAG" "rsdp-web:$IMAGE_TAG" "rsdp-website:$IMAGE_TAG" "rsdp-cad-parser:$IMAGE_TAG" \
                      "pgvector/pgvector:pg16" "redis:7-alpine" "bitnamilegacy/minio:2025.2.28"; do
             docker image inspect "$image" >/dev/null
         done
@@ -96,7 +96,9 @@ case "${1:-check}" in
         compose "$release/compose.deploy.yaml" up -d --no-build --pull never --wait --wait-timeout 420
         server_port=$(compose "$release/compose.deploy.yaml" port server 8081)
         web_port=$(compose "$release/compose.deploy.yaml" port web 80)
+        website_port=$(compose "$release/compose.deploy.yaml" port website 3000)
         curl --fail --silent --output /dev/null "http://$web_port/"
+        curl --fail --silent --output /dev/null "http://$website_port/"
         curl --fail --silent --output /dev/null "http://$server_port/api/v1/public/products"
         # RSDP 未自定义认证入口点，匿名访问受保护接口由 Spring Security 返回 403（office 为 401）
         code=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://$server_port/api/v1/auth/me")

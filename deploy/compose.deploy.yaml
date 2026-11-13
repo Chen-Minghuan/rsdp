@@ -126,3 +126,25 @@ services:
     depends_on:
       server:
         condition: service_healthy
+
+  # 用户端官网（Nuxt 3 SSR，www.rooom.vip 入口）
+  website:
+    build:
+      context: ../website
+    image: rsdp-website:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RSDP_WEBSITE_PORT:-3102}:3000"
+    environment:
+      TZ: Asia/Shanghai
+      # SSR 服务端请求后端的绝对地址（容器内网）；浏览器端走同源 /api，由外层 Nginx 转发
+      NUXT_PUBLIC_API_BASE: http://server:8081
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1:3000/']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      server:
+        condition: service_healthy
