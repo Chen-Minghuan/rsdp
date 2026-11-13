@@ -1,4 +1,4 @@
--- V22：户型家具 P1（Scene-aware Block Fallback 后续）——候选清洗/去重分组/视觉语义分组字段
+-- V21：户型家具 P1（Scene-aware Block Fallback 后续）——候选清洗/去重分组/视觉语义分组字段
 -- 契约来源：rsdp-cad-parser P1（candidateStatus/duplicateGroupId/duplicateStatus/duplicateCount/
 -- visionGroupId/geometryFingerprint），vision_confidence 由后端视觉语义回填。
 -- 设计约定：REJECTED/DUPLICATE 仅标记不物理删除，供人工复核与 Scene 修正后恢复。

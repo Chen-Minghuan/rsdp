@@ -1,4 +1,4 @@
--- V20：CAD Scene Revision 模型（设计文档 V1.2.3 §8 Target Scene/Revision、§41 数据库长期建议）
+-- V19：CAD Scene Revision 模型（设计文档 V1.2.3 §8 Target Scene/Revision、§41 数据库长期建议）
 -- 1) floor_plan_analysis 增加 active/working/latest Revision 指针与 CAD 原文件对象键
 -- 2) floor_plan_room 增加 analysis_revision / confirmation_status（Revision scoped 对象）
 -- 3) 新增 floor_plan_scene_revision（Revision 头表 + 不可变自动解析快照）
