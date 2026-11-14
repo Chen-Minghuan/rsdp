@@ -4584,7 +4584,7 @@ public class ExcelAiImportService {
                 createdNewRspu = false;
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
-                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache, expectAiTask);
+                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache, expectAiTask, request.getDefaultFactoryCode());
                 saveStylesAndScenes(rspuId, row, dictCache, rowIssues, importCache);
                 createdNewRspu = true;
             }
@@ -6594,7 +6594,7 @@ public class ExcelAiImportService {
      */
     private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
                               List<String> rowIssues, String defaultProductLevel,
-                              BatchImportCache importCache, boolean expectAiTask) {
+                              BatchImportCache importCache, boolean expectAiTask, String entryFactoryCode) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -6635,6 +6635,8 @@ public class ExcelAiImportService {
         rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
+        // INTEG-001：录入归属打标（谁录入谁负责）——带工厂上下文的导入归该厂，平台导入归 PLATFORM
+        dataScopeHelper.applyOwnershipOnCreate(rspu, entryFactoryCode);
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
         // 暂存行事务内新建的 RSPU，提交成功后并入批次缓存——同批次后序同编码行

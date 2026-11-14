@@ -82,6 +82,8 @@ public class FactoryMaster {
     private String sourceType;
 
     private String status;
+    /** 工厂级公共库开关：关=仅自家已报价+被放行产品；开=可见全库减黑名单（V28/INTEG-001） */
+    private Boolean publicCatalogEnabled;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 

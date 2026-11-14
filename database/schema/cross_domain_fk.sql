@@ -107,3 +107,8 @@ ALTER TABLE recommendation_score_config DROP CONSTRAINT IF EXISTS fk_recommendat
 ALTER TABLE recommendation_score_config
     ADD CONSTRAINT fk_recommendation_config_created_by FOREIGN KEY (created_by) REFERENCES sys_user(user_id);
 
+
+-- 02_product → 03_factory：RSPU 录入归属工厂外键（V28/INTEG-001，factory_master 在 03 创建需后置）
+ALTER TABLE rspu_master DROP CONSTRAINT IF EXISTS fk_rspu_owner_factory;
+ALTER TABLE rspu_master
+    ADD CONSTRAINT fk_rspu_owner_factory FOREIGN KEY (owner_factory_code) REFERENCES factory_master(factory_code);

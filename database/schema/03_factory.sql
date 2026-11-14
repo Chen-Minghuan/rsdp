@@ -51,8 +51,35 @@ CREATE TABLE IF NOT EXISTS factory_master (
     status VARCHAR(16) DEFAULT 'active',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
-    deleted_at TIMESTAMPTZ
+    deleted_at TIMESTAMPTZ,
+    public_catalog_enabled BOOLEAN NOT NULL DEFAULT TRUE  -- 工厂级公共库开关：关=仅自家已报价+被放行产品（V28/INTEG-001，列位置与增量 ALTER 追加一致）
 );
+
+-- 整批放行（V28/INTEG-001）：owner 厂授权目标厂在其公共库开关关闭时仍可见 owner 厂全部产品（含新品）
+CREATE TABLE IF NOT EXISTS factory_catalog_grant (
+    id BIGSERIAL PRIMARY KEY,
+    owner_factory_code VARCHAR(16) NOT NULL REFERENCES factory_master(factory_code),
+    granted_factory_code VARCHAR(16) NOT NULL REFERENCES factory_master(factory_code),
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (owner_factory_code, granted_factory_code),
+    CONSTRAINT ck_grant_not_self CHECK (owner_factory_code <> granted_factory_code)
+);
+
+-- 黑名单（V28/INTEG-001）：浏览厂屏蔽目标厂全部产品，优先级高于公共库开关与整批放行（不遮蔽自家已报价产品）
+CREATE TABLE IF NOT EXISTS factory_catalog_block (
+    id BIGSERIAL PRIMARY KEY,
+    factory_code VARCHAR(16) NOT NULL REFERENCES factory_master(factory_code),
+    blocked_factory_code VARCHAR(16) NOT NULL REFERENCES factory_master(factory_code),
+    created_by VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (factory_code, blocked_factory_code),
+    CONSTRAINT ck_block_not_self CHECK (factory_code <> blocked_factory_code)
+);
+
+COMMENT ON COLUMN factory_master.public_catalog_enabled IS '工厂级公共库开关：关=仅自家已报价+被放行产品；开=可见全库（减黑名单）';
+COMMENT ON TABLE factory_catalog_grant IS '整批放行：owner 厂授权目标厂在其公共库开关关闭时仍可见 owner 厂全部产品（含新品）';
+COMMENT ON TABLE factory_catalog_block IS '黑名单：浏览厂屏蔽目标厂全部产品，优先级高于公共库开关与整批放行（不遮蔽自家已报价产品）';
 
 COMMENT ON COLUMN factory_master.factory_level IS '工厂层级: S级战略厂/A级核心厂/B级合作厂/C级备选厂，由 capacity_tier_score 自动计算或手动指定';
 

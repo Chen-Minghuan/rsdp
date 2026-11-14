@@ -72,6 +72,10 @@ public class RspuMaster {
     private String sourceAgentVersion;
     /** 录入人（sys_user.user_id）；历史未知行留 NULL（V3） */
     private String createdBy;
+    /** 录入归属类型：PLATFORM=平台录入，FACTORY=工厂录入（V28/INTEG-001） */
+    private String ownerType;
+    /** 录入工厂编码（owner_type=FACTORY 时必填）；上下架/维护权判定依据 */
+    private String ownerFactoryCode;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 

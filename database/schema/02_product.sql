@@ -34,9 +34,17 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     deleted_at TIMESTAMPTZ,
     created_by VARCHAR(64),                        -- 录入人（sys_user.user_id，V3 增量并入；历史未知行留 NULL）
     manual_override_fields JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 字段级人工修正权威标记（v3.3 §34.1，Flyway V14）
+    owner_type VARCHAR(16) NOT NULL DEFAULT 'PLATFORM',  -- 录入归属类型：PLATFORM=平台录入，FACTORY=工厂录入（V28/INTEG-001）
+    owner_factory_code VARCHAR(16),                      -- 录入工厂编码（owner_type=FACTORY 时必填；外键后置 cross_domain_fk.sql，factory_master 在 03 创建）
     CONSTRAINT ck_rspu_manual_override_fields_object
-        CHECK (jsonb_typeof(manual_override_fields) = 'object')
+        CHECK (jsonb_typeof(manual_override_fields) = 'object'),
+    CONSTRAINT ck_rspu_owner
+        CHECK ((owner_type = 'FACTORY' AND owner_factory_code IS NOT NULL)
+            OR (owner_type <> 'FACTORY' AND owner_factory_code IS NULL))
 );
+CREATE INDEX IF NOT EXISTS idx_rspu_owner_factory ON rspu_master(owner_factory_code);
+COMMENT ON COLUMN rspu_master.owner_type IS '录入归属类型：PLATFORM=平台录入，FACTORY=工厂录入（INTEG-001）';
+COMMENT ON COLUMN rspu_master.owner_factory_code IS '录入工厂编码（owner_type=FACTORY 时必填），上下架/维护权判定依据';
 COMMENT ON COLUMN rspu_master.manual_override_fields IS '字段级人工修正权威标记（§34.1）：JSON Pointer → {active, correctedBy, correctedAt, source}；Excel/AI/重试不得覆盖 active 字段';
 
 -- RSPU 多风格关联表（一个款式可属于多个风格）

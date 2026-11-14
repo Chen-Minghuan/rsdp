@@ -106,6 +106,8 @@ public class ProductQueryService {
     private final StorageService storageService;
     private final ProductPurgeMapper productPurgeMapper;
     private final RspuPriceSummaryService rspuPriceSummaryService;
+    /** 工厂可见性统一收口（V28/INTEG-001：放行/黑名单/公共库开关）。 */
+    private final CatalogVisibilityService catalogVisibilityService;
     /** §42.3/§43 规则 12：聚合成本投影防反推统一裁决（输出与筛选/排序同一口径）。 */
     private final com.rsdp.supplychain.security.CostSummaryAccess costSummaryAccess;
 
@@ -143,9 +145,10 @@ public class ProductQueryService {
         }
 
         if (isFullView) {
-            // 全库去重视图：自有 RSKU / 工厂能力覆盖条件下推到 SQL，由分页插件在库内分页，
-            // 不再 selectList 全量候选进 JVM 后手工过滤分页（见 applyFullViewFilter）
-            applyFullViewFilter(wrapper, userFactoryCodes);
+            // V28/INTEG-001：全库视图 = 全量 − 黑名单（自家已报价保留）。
+            // 取代旧"工厂能力覆盖隐藏"口径——用户定稿：公共库开关打开即看全库所有工厂商品，
+            // 竞品级隐藏经黑名单显式配置，不再按能力自动隐藏。
+            catalogVisibilityService.applyProductVisibility(wrapper, userFactoryCodes, true);
         }
 
         Page<RspuMaster> pageParam = new Page<>(request.getPage(), request.getSize());
@@ -446,7 +449,9 @@ public class ProductQueryService {
             return false;
         }
         SysUser currentUser = getCurrentSysUser();
-        return currentUser != null && Boolean.TRUE.equals(currentUser.getViewFullCatalog());
+        // 全库资格 = 用户级 view_full_catalog 且任一关联厂的公共库开关开启（V28/INTEG-001）
+        return currentUser != null && Boolean.TRUE.equals(currentUser.getViewFullCatalog())
+            && catalogVisibilityService.isPublicCatalogEnabled(userFactoryCodes);
     }
 
     private SysUser getCurrentSysUser() {
@@ -474,16 +479,31 @@ public class ProductQueryService {
         if (SecurityOperatorContext.isPlatformStaff() || SecurityOperatorContext.isCurrentUserDesigner()) {
             return true;
         }
+        List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
+            SecurityOperatorContext.currentUsername()
+        );
+        // V28/INTEG-001：工厂账号详情可见性与列表同一口径（自家 ∪ 放行 ∪ 全库资格 − 黑名单）。
+        // 非 active 产品仍只对自家已报价曝光（半成品不外泄），不受放行/开关放宽。
+        if (SecurityOperatorContext.isCurrentUserFactoryAdmin() && !factoryCodes.isEmpty()) {
+            if (!"active".equals(rspu.getStatus())) {
+                return isSelfSuppliedFor(rspu, factoryCodes);
+            }
+            SysUser currentUser = getCurrentSysUser();
+            boolean fullEligible = currentUser != null && Boolean.TRUE.equals(currentUser.getViewFullCatalog())
+                && catalogVisibilityService.isPublicCatalogEnabled(factoryCodes);
+            return catalogVisibilityService.canViewProduct(rspu, factoryCodes, fullEligible);
+        }
         // 复核机制已移除：active 即全体登录用户可见（原「已确认」口径）
         if ("active".equals(rspu.getStatus())) {
             return true;
         }
-        List<String> factoryCodes = userFactoryService.getFactoryCodesByUsername(
-            SecurityOperatorContext.currentUsername()
-        );
         if (factoryCodes.isEmpty()) {
             return false;
         }
+        return isSelfSuppliedFor(rspu, factoryCodes);
+    }
+
+    private boolean isSelfSuppliedFor(RspuMaster rspu, List<String> factoryCodes) {
         Long count = rskuSupplyMapper.selectCount(
             new QueryWrapper<RskuSupply>()
                 .eq("rspu_id", rspu.getRspuId())
@@ -501,6 +521,11 @@ public class ProductQueryService {
             wrapper.apply("1 = 0");
             return;
         }
+        if (SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
+            // V28/INTEG-001：工厂账号私有视图 = 自家已报价 ∪ 整批放行 − 黑名单（可见性统一收口）
+            catalogVisibilityService.applyProductVisibility(wrapper, factoryCodes, false);
+            return;
+        }
         List<Object> rspuIdObjs = rskuSupplyMapper.selectObjs(
             new QueryWrapper<RskuSupply>()
                 .select("DISTINCT rspu_id")
@@ -516,60 +541,6 @@ public class ProductQueryService {
         } else {
             wrapper.in("rspu_id", rspuIds);
         }
-    }
-
-    /**
-     * 全库去重视图过滤（条件下推 SQL，配合分页插件在库内分页）。
-     *
-     * <p>保留两类产品，其余（被本工厂能力覆盖且非自有）剔除：
-     * <ul>
-     *   <li>自有产品：存在本工厂任一未删除 RSKU（EXISTS rsku_supply）；</li>
-     *   <li>未被能力覆盖的产品（NOT EXISTS factory_product_capability），覆盖判定为三级通配：
-     *     <ul>
-     *       <li>品类级：能力行 style_code 为空即覆盖整个品类（material_code 忽略，与历史 Java 实现一致）；</li>
-     *       <li>品类+风格级：style_code 命中且 material_code 为空；</li>
-     *       <li>精确级：style_code 命中且 material_code 命中 material_tags JSONB 数组任一元素。</li>
-     *     </ul>
-     *   </li>
-     * </ul>
-     *
-     * <p>边界语义与历史 Java 实现（CapabilityMatcher）对齐：能力行 category_code 为空（NULL/空白）
-     * 时该行不参与覆盖；产品 positioning_label 为 NULL 时风格级/精确级比较不成立（SQL NULL 比较
-     * 结果为 UNKNOWN，与 Java hasText 判空后跳过一致）；material_tags 非法 JSON 在 Java 实现中
-     * 视为空数组，SQL 中 JSONB 列类型保证存储即合法 JSON，非数组值 @> 不命中，结果一致。</p>
-     *
-     * @param wrapper      查询构造器
-     * @param factoryCodes 当前用户关联的工厂编码（full 视图入口已保证非空，见 isFullViewEligible）
-     */
-    private void applyFullViewFilter(QueryWrapper<RspuMaster> wrapper, List<String> factoryCodes) {
-        String factoryIn = toSqlInList(factoryCodes);
-        String coveredByCapability =
-            "SELECT 1 FROM factory_product_capability cap"
-                + " WHERE cap.factory_code IN (" + factoryIn + ")"
-                + " AND NULLIF(BTRIM(cap.category_code), '') IS NOT NULL"
-                + " AND cap.category_code = rspu_master.category_code"
-                + " AND (NULLIF(BTRIM(cap.style_code), '') IS NULL"
-                + " OR (cap.style_code = rspu_master.positioning_label"
-                + " AND (NULLIF(BTRIM(cap.material_code), '') IS NULL"
-                + " OR rspu_master.material_tags @> jsonb_build_array(cap.material_code))))";
-        wrapper.and(w -> w
-            .exists("SELECT 1 FROM rsku_supply rs WHERE rs.rspu_id = rspu_master.rspu_id"
-                + " AND rs.factory_code IN (" + factoryIn + ") AND rs.deleted_at IS NULL")
-            .or()
-            .notExists(coveredByCapability));
-    }
-
-    /**
-     * 拼接 SQL IN 片段（单引号成对转义）。仅用于工厂编码等来自数据归属的内部编码，
-     * 不用于用户自由文本。
-     *
-     * @param values 编码列表（非空）
-     * @return 形如 {@code 'A001', 'A002'} 的 IN 片段
-     */
-    private String toSqlInList(List<String> values) {
-        return values.stream()
-            .map(v -> "'" + v.replace("'", "''") + "'")
-            .collect(Collectors.joining(", "));
     }
 
     private Map<String, String> batchPrimaryImageUrls(List<String> rspuIds) {
@@ -907,7 +878,8 @@ public class ProductQueryService {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 
-        dataScopeHelper.assertCanAccessRspu(rspuId);
+        // INTEG-001：元数据/上下架谁录入谁负责（owner 归属判定），取代原 RSKU 报价归属口径
+        dataScopeHelper.assertCanManageRspu(rspu);
 
         RspuMaster oldSnapshot = snapshot(rspu);
         String oldPositioningLabel = rspu.getPositioningLabel();

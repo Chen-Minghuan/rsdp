@@ -269,7 +269,7 @@ public class ProductService {
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), request.getSixDimTags(),
             request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs(),
-            request.getProductName(), request.getExternalCode());
+            request.getProductName(), request.getExternalCode(), request.getFactoryCode());
         String rspuCode = assignRspuCode(rspu);
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
@@ -325,7 +325,7 @@ public class ProductService {
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), null,
             request.getProductLevel(), request.getWarrantyYears(), null,
-            request.getProductName(), null);
+            request.getProductName(), null, null);
         String rspuCode = assignRspuCode(rspu);
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
@@ -349,7 +349,7 @@ public class ProductService {
                                           List<String> materialTags, List<String> fabricTags, List<String> sceneTags,
                                           Object sixDimTags,
                                           String productLevel, Integer warrantyYears, Object keySpecs,
-                                          String productName, String externalCode) {
+                                          String productName, String externalCode, String entryFactoryCode) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -371,6 +371,8 @@ public class ProductService {
         rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
+        // INTEG-001：录入归属打标（谁录入谁负责）——factory-entry 归请求工厂，手工录入按当前账号身份
+        dataScopeHelper.applyOwnershipOnCreate(rspu, entryFactoryCode);
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
         insertStyleSceneAssociations(rspu, sceneTags);

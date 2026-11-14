@@ -156,6 +156,9 @@ class ProductQueryServiceTest {
     @Mock
     private com.rsdp.service.RspuAssociationHelper associationHelper;
 
+    @Mock
+    private CatalogVisibilityService catalogVisibilityService;
+
     @InjectMocks
     private ProductQueryService productQueryService;
 
@@ -887,10 +890,12 @@ class ProductQueryServiceTest {
 
         assertThat(result.getRows()).hasSize(1);
         assertThat(result.getRows().get(0).getRspuId()).isEqualTo("RSPU-OWN01");
+        // V28/INTEG-001：工厂账号 own 视图委托可见性收口（自家 ∪ 放行 − 黑名单）
+        verify(catalogVisibilityService).applyProductVisibility(any(), eq(List.of("F001")), eq(false));
     }
 
     @Test
-    void listProducts_viewModeFull_shouldPushDownFactoryScopeAndCapabilityFilterToSql() {
+    void listProducts_viewModeFull_shouldDelegateToCatalogVisibility() {
         authenticateFactoryAdmin("factory");
         when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
 
@@ -898,6 +903,8 @@ class ProductQueryServiceTest {
         user.setUsername("factory");
         user.setViewFullCatalog(true);
         when(sysUserMapper.selectByUsername("factory")).thenReturn(user);
+        // V28/INTEG-001：全库资格 = 用户级开关 且 厂级公共库开关开
+        when(catalogVisibilityService.isPublicCatalogEnabled(List.of("F001"))).thenReturn(true);
 
         ProductListRequest request = new ProductListRequest();
         request.setViewMode("full");
@@ -917,18 +924,42 @@ class ProductQueryServiceTest {
         PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
 
         assertThat(result.getRows()).hasSize(1);
-        // 全库视图不再拉全量候选进 JVM：自有 RSKU 与能力覆盖条件下推到分页 SQL
+        // 全库视图委托可见性收口（全量 − 黑名单），不再拉全量候选进 JVM
         verify(rspuMapper, never()).selectList(any());
+        verify(catalogVisibilityService).applyProductVisibility(any(), eq(List.of("F001")), eq(true));
+    }
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
-        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
-        String sqlSegment = captor.getValue().getSqlSegment();
-        assertThat(sqlSegment).contains("EXISTS");
-        assertThat(sqlSegment).contains("rsku_supply");
-        assertThat(sqlSegment).contains("NOT EXISTS");
-        assertThat(sqlSegment).contains("factory_product_capability");
-        assertThat(sqlSegment).contains("'F001'");
+    @Test
+    void listProducts_viewModeFull_factoryToggleOff_shouldFallbackToOwn() {
+        // V28/INTEG-001：用户级开关开但厂级公共库开关关，同样回退 own 视图
+        authenticateFactoryAdmin("factory");
+        when(userFactoryService.getFactoryCodesByUsername("factory")).thenReturn(List.of("F001"));
+
+        SysUser user = new SysUser();
+        user.setUsername("factory");
+        user.setViewFullCatalog(true);
+        when(sysUserMapper.selectByUsername("factory")).thenReturn(user);
+        when(catalogVisibilityService.isPublicCatalogEnabled(List.of("F001"))).thenReturn(false);
+
+        ProductListRequest request = new ProductListRequest();
+        request.setViewMode("full");
+        request.setSize(10L);
+
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-OWN01");
+        rspu.setCategoryCode("FS");
+        rspu.setPositioningLabel("MC");
+
+        Page<RspuMaster> page = new Page<>(1, 10, 1);
+        page.setRecords(List.of(rspu));
+
+        when(rspuMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(imageAssetsMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
+
+        assertThat(result.getRows()).hasSize(1);
+        verify(catalogVisibilityService).applyProductVisibility(any(), eq(List.of("F001")), eq(false));
     }
 
     @Test
@@ -946,8 +977,6 @@ class ProductQueryServiceTest {
         request.setViewMode("full");
         request.setSize(10L);
 
-        when(rskuSupplyMapper.selectObjs(any())).thenReturn(List.of("RSPU-OWN01"));
-
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-OWN01");
         rspu.setCategoryCode("FS");
@@ -962,16 +991,8 @@ class ProductQueryServiceTest {
         PageResult<ProductSummaryResponse> result = productQueryService.listProducts(request);
 
         assertThat(result.getRows()).hasSize(1);
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<QueryWrapper<RspuMaster>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
-        verify(rspuMapper).selectPage(any(Page.class), captor.capture());
-        String sqlSegment = captor.getValue().getSqlSegment();
-        // 回退 own：按本厂 RSKU 的 rspu_id 过滤，且不附加全库能力覆盖条件
-        verify(rskuSupplyMapper, times(1)).selectObjs(any());
-        assertThat(sqlSegment).contains("rspu_id");
-        assertThat(sqlSegment).doesNotContain("factory_product_capability");
-        assertThat(sqlSegment).doesNotContain("review_status");
+        // 回退 own：委托可见性收口（非全库资格），不走全库过滤
+        verify(catalogVisibilityService).applyProductVisibility(any(), eq(List.of("F001")), eq(false));
     }
 
     @Test
@@ -1007,15 +1028,16 @@ class ProductQueryServiceTest {
         rspu.setPositioningLabel("MC");
 
         when(rspuMapper.selectById(eq("RSPU-OTHER"))).thenReturn(rspu);
-        doThrow(new BusinessException("只能编辑自己工厂已报价的产品"))
-            .when(dataScopeHelper).assertCanAccessRspu("RSPU-OTHER");
+        // INTEG-001：维护权改按录入归属（谁录入谁负责）
+        doThrow(new BusinessException("只能维护本厂录入的产品"))
+            .when(dataScopeHelper).assertCanManageRspu(rspu);
 
         ProductUpdateRequest request = new ProductUpdateRequest();
         request.setColorPrimaryName("黑色");
 
         assertThatThrownBy(() -> productQueryService.updateProduct("RSPU-OTHER", request))
             .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("只能编辑自己工厂已报价的产品");
+            .hasMessageContaining("只能维护本厂录入的产品");
     }
 
     @Test

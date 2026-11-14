@@ -246,4 +246,84 @@ class DataScopeHelperTest {
 
         assertThat(wrapper.getSqlSegment()).contains("1 = 0");
     }
+
+    // ==================== INTEG-001：录入归属（谁录入谁负责） ====================
+
+    @Test
+    void assertCanManageRspu_platformStaff_shouldPass() {
+        authenticate("admin", "ADMIN");
+        com.rsdp.entity.RspuMaster rspu = new com.rsdp.entity.RspuMaster();
+        rspu.setRspuId("RSPU-1");
+        rspu.setOwnerType("FACTORY");
+        rspu.setOwnerFactoryCode("F001");
+        dataScopeHelper.assertCanManageRspu(rspu);
+    }
+
+    @Test
+    void assertCanManageRspu_ownerFactoryAdmin_shouldPass() {
+        authenticate("factory", "FACTORY_ADMIN");
+        when(dataScopeContext.currentDataScope()).thenReturn(DataScope.FACTORY_LIST);
+        when(dataScopeContext.currentFactoryCodes()).thenReturn(List.of("F001"));
+        com.rsdp.entity.RspuMaster rspu = new com.rsdp.entity.RspuMaster();
+        rspu.setRspuId("RSPU-1");
+        rspu.setOwnerType("FACTORY");
+        rspu.setOwnerFactoryCode("F001");
+        dataScopeHelper.assertCanManageRspu(rspu);
+    }
+
+    @Test
+    void assertCanManageRspu_otherFactoryOwned_shouldThrow() {
+        authenticate("factory", "FACTORY_ADMIN");
+        when(dataScopeContext.currentDataScope()).thenReturn(DataScope.FACTORY_LIST);
+        when(dataScopeContext.currentFactoryCodes()).thenReturn(List.of("F001"));
+        com.rsdp.entity.RspuMaster rspu = new com.rsdp.entity.RspuMaster();
+        rspu.setRspuId("RSPU-2");
+        rspu.setOwnerType("FACTORY");
+        rspu.setOwnerFactoryCode("F002");
+        assertThatThrownBy(() -> dataScopeHelper.assertCanManageRspu(rspu))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("只能维护本厂录入的产品");
+    }
+
+    @Test
+    void assertCanManageRspu_platformOwned_shouldThrowForFactoryAdmin() {
+        authenticate("factory", "FACTORY_ADMIN");
+        when(dataScopeContext.currentDataScope()).thenReturn(DataScope.FACTORY_LIST);
+        when(dataScopeContext.currentFactoryCodes()).thenReturn(List.of("F001"));
+        com.rsdp.entity.RspuMaster rspu = new com.rsdp.entity.RspuMaster();
+        rspu.setRspuId("RSPU-3");
+        rspu.setOwnerType("PLATFORM");
+        assertThatThrownBy(() -> dataScopeHelper.assertCanManageRspu(rspu))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("只能维护本厂录入的产品");
+    }
+
+    @Test
+    void applyOwnershipOnCreate_factoryAdmin_shouldStampFactory() {
+        authenticate("factory", "FACTORY_ADMIN");
+        when(dataScopeContext.currentFactoryCodes()).thenReturn(List.of("F001", "F002"));
+        com.rsdp.entity.RspuMaster rspu = new com.rsdp.entity.RspuMaster();
+        dataScopeHelper.applyOwnershipOnCreate(rspu, "F002");
+        assertThat(rspu.getOwnerType()).isEqualTo("FACTORY");
+        assertThat(rspu.getOwnerFactoryCode()).isEqualTo("F002");
+    }
+
+    @Test
+    void applyOwnershipOnCreate_factoryAdminWithoutPreferred_shouldUseFirstFactory() {
+        authenticate("factory", "FACTORY_ADMIN");
+        when(dataScopeContext.currentFactoryCodes()).thenReturn(List.of("F001"));
+        com.rsdp.entity.RspuMaster rspu = new com.rsdp.entity.RspuMaster();
+        dataScopeHelper.applyOwnershipOnCreate(rspu, null);
+        assertThat(rspu.getOwnerType()).isEqualTo("FACTORY");
+        assertThat(rspu.getOwnerFactoryCode()).isEqualTo("F001");
+    }
+
+    @Test
+    void applyOwnershipOnCreate_platformStaff_shouldStampPlatform() {
+        authenticate("admin", "ADMIN");
+        com.rsdp.entity.RspuMaster rspu = new com.rsdp.entity.RspuMaster();
+        dataScopeHelper.applyOwnershipOnCreate(rspu, "F001");
+        assertThat(rspu.getOwnerType()).isEqualTo("PLATFORM");
+        assertThat(rspu.getOwnerFactoryCode()).isNull();
+    }
 }

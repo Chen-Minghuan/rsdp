@@ -177,6 +177,13 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/restore").hasAuthority(Permissions.PRODUCT_DELETE)
 
                 // 工厂写接口
+                // 可见性配置（INTEG-001）：放行/黑名单的增删归 factory:update，必须放在
+                // DELETE /factories/**（factory:delete，平台专属）之前，否则工厂管理员无法撤黑名单
+                .requestMatchers(HttpMethod.PATCH, "/api/v1/factories/*/catalog-config").hasAuthority(Permissions.FACTORY_UPDATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/factories/*/catalog-grants").hasAuthority(Permissions.FACTORY_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/*/catalog-grants/*").hasAuthority(Permissions.FACTORY_UPDATE)
+                .requestMatchers(HttpMethod.POST, "/api/v1/factories/*/catalog-blocks").hasAuthority(Permissions.FACTORY_UPDATE)
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/*/catalog-blocks/*").hasAuthority(Permissions.FACTORY_UPDATE)
                 .requestMatchers(HttpMethod.POST, "/api/v1/factories").hasAuthority(Permissions.FACTORY_CREATE)
                 .requestMatchers(HttpMethod.PUT, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_UPDATE)
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/factories/**").hasAuthority(Permissions.FACTORY_DELETE)
