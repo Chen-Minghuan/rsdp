@@ -59,6 +59,34 @@ FROM sys_user u
 WHERE u.username = 'factory'
 ON CONFLICT (user_id, factory_code) DO NOTHING;
 
+-- =================== rsdp-office 服务账号（工装子项目读写主库商品用） ===================
+-- 密码：rsdp-office-dev-2026!（仅开发库；office 侧经 RSDP_MAIN_USERNAME/PASSWORD 配置注入）。
+-- 注意：ON CONFLICT 必须 DO NOTHING —— 重复执行种子脚本时绝不能覆盖已修改的密码。
+
+-- 工装供应商工厂（office 转发录入的商品归属此工厂）
+INSERT INTO factory_master (factory_code, factory_name, factory_level, region, status) VALUES
+('A034', 'RSDP Office 工装供应商', 'A', '广东', 'active')
+ON CONFLICT (factory_code) DO NOTHING;
+
+-- 服务账号：工厂管理员 + 关联 A034 + view_full_catalog（office 侧读全库、写本厂）
+INSERT INTO sys_user (user_id, username, password_hash, nickname, company_name, group_name, status, view_full_catalog) VALUES
+('USER-OFFICE-SVC-00001', 'rsdp-office', '$2y$10$7IbB35GjYBXgXTWfOQAHceiSb8PmbzhSICwGqupP55N1bqVZkr5Wm', '工装服务账号', 'RSDP Office', '平台对接组', 'active', true)
+ON CONFLICT (username) DO NOTHING;
+
+INSERT INTO sys_user_role (user_id, role_id)
+SELECT 'USER-OFFICE-SVC-00001', r.role_id FROM sys_role r WHERE r.role_code = 'FACTORY_ADMIN'
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+INSERT INTO sys_user_factory (user_id, factory_code)
+VALUES ('USER-OFFICE-SVC-00001', 'A034')
+ON CONFLICT (user_id, factory_code) DO NOTHING;
+
+-- 能力等级声明：office 转发录入默认 B 级（rsdp.main.default-product-level），A 级为主等级
+INSERT INTO factory_level_capability (factory_code, level_code, is_primary) VALUES
+('A034', 'A', true),
+('A034', 'B', false)
+ON CONFLICT DO NOTHING;
+
 -- =================== 演示数据（演示工厂 / 产品 / 报价） ===================
 -- 前置条件：scripts/seed-demo-data.sh 已将对应图片复制到 server/data/uploads/images/
 -- 说明：本段幂等，可重复执行（ON CONFLICT DO NOTHING / UPDATE WHERE）
