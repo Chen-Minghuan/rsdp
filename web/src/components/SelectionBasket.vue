@@ -146,7 +146,7 @@ function handleClear() {
       <n-drawer-content title="选品篮" closable>
         <n-empty
           v-if="selectionStore.count === 0"
-          description="选品篮为空，去产品库/收藏夹/以图搜图挑几件吧"
+          description="选品篮为空，去商品列表或收藏夹挑几件吧"
           style="margin-top: 60px;"
         />
 

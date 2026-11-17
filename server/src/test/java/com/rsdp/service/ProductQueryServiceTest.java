@@ -66,6 +66,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ProductQueryServiceTest {
 
+    @Mock
+    private CatalogSearchService catalogSearchService;
+
     @BeforeEach
     void setSecurityContext() {
         var user = User.withUsername("admin").password("").roles("ADMIN").build();
@@ -197,6 +200,29 @@ class ProductQueryServiceTest {
         wo.setDictCode("WO");
         wo.setDictName("实木");
         return List.of(wo);
+    }
+
+    @Test
+    void semanticProductListCountsMatchesBeforeAddingSort() {
+        ProductListRequest request = new ProductListRequest();
+        request.setKeyword("木椅子");
+        request.setSemantic(true);
+        when(catalogSearchService.match("木椅子", null, false))
+            .thenReturn(new CatalogSearchService.Match("木椅子", List.of("RSPU-TEST01")));
+        when(rspuMapper.selectCount(any())).thenAnswer(call -> {
+            QueryWrapper<?> wrapper = call.getArgument(0);
+            assertThat(wrapper.getSqlSegment()).contains("product_name ILIKE").doesNotContain("ORDER BY");
+            return 1L;
+        });
+        when(rspuMapper.selectPage(any(Page.class), any())).thenAnswer(call -> {
+            Page<RspuMaster> page = call.getArgument(0);
+            QueryWrapper<?> wrapper = call.getArgument(1);
+            assertThat(page.searchCount()).isFalse();
+            assertThat(wrapper.getSqlSegment()).contains("ORDER BY CASE", "array_position");
+            return page;
+        });
+
+        assertThat(productQueryService.listProducts(request).getTotal()).isEqualTo(1);
     }
 
     @Test

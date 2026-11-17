@@ -41,6 +41,9 @@ import static org.mockito.Mockito.when;
 class PublicCatalogServiceTest {
 
     @Mock
+    private CatalogSearchService catalogSearchService;
+
+    @Mock
     private RspuMapper rspuMapper;
 
     @Mock
@@ -71,6 +74,27 @@ class PublicCatalogServiceTest {
         rspu.setRetailPrice(new BigDecimal("4680.00"));
         rspu.setStatus("active");
         return rspu;
+    }
+
+    @Test
+    void semanticPublicListCountsBeforeSortingWithBoundParameters() {
+        when(catalogSearchService.match("木椅子", null, true))
+            .thenReturn(new CatalogSearchService.Match("木椅子", List.of("RSPU-1")));
+        when(rspuMapper.selectCount(any())).thenAnswer(call -> {
+            QueryWrapper<?> wrapper = call.getArgument(0);
+            assertThat(wrapper.getSqlSegment()).contains("status =", "product_name ILIKE").doesNotContain("ORDER BY");
+            return 1L;
+        });
+        when(rspuMapper.selectPage(any(Page.class), any())).thenAnswer(call -> {
+            Page<RspuMaster> page = call.getArgument(0);
+            QueryWrapper<?> wrapper = call.getArgument(1);
+            assertThat(page.searchCount()).isFalse();
+            assertThat(wrapper.getSqlSegment()).contains("ORDER BY CASE", "array_position");
+            return page;
+        });
+
+        assertThat(publicCatalogService.searchProducts(1, 12, null, null, null, null,
+            null, null, null, "木椅子", null, null, true, null).getTotal()).isEqualTo(1);
     }
 
     @Test

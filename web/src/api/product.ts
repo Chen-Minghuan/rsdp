@@ -97,6 +97,14 @@ export async function listProducts(params: ProductListParams, options?: ApiOptio
   return result.data
 }
 
+/** 上传参考图，返回商品列表可用于分页和筛选的临时搜索 ID。 */
+export async function startProductImageSearch(image: File, options?: ApiOptions): Promise<string> {
+  const body = new FormData()
+  body.append('image', image)
+  const { data: result } = await uploadClient.post<ApiResult<string>>('/v1/products/image-search', body, options)
+  return result.data
+}
+
 /**
  * 商品列表状态页签统计（出售中/仓库中/已售罄/回收站）。
  *

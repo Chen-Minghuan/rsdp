@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.agent.config.MarketingAgentProperties;
 import com.rsdp.agent.domain.MarketingProductQueryService;
 import com.rsdp.agent.domain.ProductSearchCriteria;
+import com.rsdp.agent.domain.ProductSearchItem;
 import com.rsdp.agent.domain.ProductSearchResult;
 import com.rsdp.agent.domain.ProductVisibilityPolicy;
 import com.rsdp.entity.RspuMaster;
@@ -90,6 +91,23 @@ class MarketingProductQueryServiceTest {
         variant.setDimensions(dimensionsJson);
         variant.setSizeText(sizeText);
         return variant;
+    }
+
+    @Test
+    void namedProductRanksAheadOfOtherCandidatesWhenVectorRecallIsUnavailable() {
+        ProductSearchCriteria criteria = new ProductSearchCriteria();
+        criteria.setSearchText("帮我推荐云朵沙发");
+        criteria.setBudgetMax(new BigDecimal("20000"));
+        when(rspuMapper.selectList(any(QueryWrapper.class))).thenReturn(
+            List.of(rspu("named", "云朵沙发")),
+            List.of(rspu("other", "另一款沙发")));
+        when(rspuMapper.selectCount(any(QueryWrapper.class))).thenReturn(1L);
+
+        ProductSearchResult result = service.search(criteria);
+
+        assertThat(result.getItems()).extracting(ProductSearchItem::getRspuId).containsExactly("named", "other");
+        assertThat(result.getItems()).extracting(ProductSearchItem::isNameMatched).containsExactly(true, false);
+        assertThat(result.getTotalMatched()).isEqualTo(2);
     }
 
     @Test

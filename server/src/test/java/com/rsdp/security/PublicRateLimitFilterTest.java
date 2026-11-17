@@ -87,6 +87,24 @@ class PublicRateLimitFilterTest {
     }
 
     @Test
+    void shouldLimitPublicImageUploadAndKeywordRecallWhileKeepingPlainReadsAvailable() throws Exception {
+        properties.setCatalogSearchPermits(1);
+        assertThat(perform("/api/v1/public/products/image-search", "POST", "1.2.3.4", 2).getStatus())
+            .isEqualTo(429);
+        for (int i = 0; i < 2; i++) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/public/products");
+            request.setRemoteAddr("1.2.3.4");
+            request.addParameter("keyword", "沙发");
+            request.addParameter("semantic", "true");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            filter.doFilter(request, response, new MockFilterChain());
+            assertThat(response.getStatus()).isEqualTo(i == 0 ? 200 : 429);
+        }
+        assertThat(perform("/api/v1/public/products", "GET", "1.2.3.4", 10).getStatus())
+            .isEqualTo(200);
+    }
+
+    @Test
     void shouldNotLimitOtherPublicReads() throws Exception {
         MockHttpServletResponse response = perform("/api/v1/public/products", "GET", "1.2.3.4", 20);
 

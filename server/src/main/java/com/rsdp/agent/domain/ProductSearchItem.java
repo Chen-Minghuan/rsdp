@@ -14,6 +14,9 @@ import java.util.List;
 @Data
 public class ProductSearchItem {
 
+    /** 本轮自然语言直接命中商品名称。 */
+    private boolean nameMatched;
+
     private String rspuId;
 
     private String productName;

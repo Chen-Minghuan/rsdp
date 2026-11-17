@@ -12,6 +12,7 @@ import {
   NFormItemGi,
   NGrid,
   NInput,
+  NInputGroup,
   NInputNumber,
   NModal,
   NPagination,
@@ -28,6 +29,7 @@ import {
 } from 'naive-ui'
 import {
   listProducts,
+  startProductImageSearch,
   getProductStatusCounts,
   updateProductStatus,
   deleteProduct,
@@ -62,7 +64,7 @@ const signal = useRequestAbort()
 const listQueryStore = useProductListQueryStore()
 const {
   page, size,
-  keyword, supplierCode, rspuCode,
+  keyword, imageSearchId, supplierCode, rspuCode,
   categoryCode, productLevel, styleCode, sceneCode, materialTag,
   createdRange, priceMin, priceMax, hasPrimaryImage, pendingClassification, sort,
   dimA, dimB, dimC, dimD, dimF,
@@ -73,6 +75,8 @@ const canDeleteProduct = computed(() => userStore.hasPermission(PERMISSIONS.PROD
 const canUpdateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_UPDATE))
 const canImportProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_IMPORT))
 const canCreateProduct = computed(() => userStore.hasPermission(PERMISSIONS.PRODUCT_CREATE))
+const imageInput = ref<HTMLInputElement | null>(null)
+const uploadingSearchImage = ref(false)
 const canGenerateQuote = computed(() => userStore.hasPermission(PERMISSIONS.QUOTE_GENERATE))
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
 const isPlatformStaff = computed(() => userStore.isPlatformStaff)
@@ -291,7 +295,9 @@ function buildParams(includeTab: boolean): import('@/types/product').ProductList
   const params: import('@/types/product').ProductListParams = {
     page: page.value,
     size: size.value,
-    keyword: keyword.value.trim() || undefined,
+    keyword: imageSearchId.value ? undefined : keyword.value.trim() || undefined,
+    semantic: !imageSearchId.value && Boolean(keyword.value.trim()) ? true : undefined,
+    imageSearchId: imageSearchId.value,
     supplierCode: supplierCode.value.trim() || undefined,
     rspuCode: rspuCode.value.trim() || undefined,
     categoryCode: categoryCode.value || undefined,
@@ -328,35 +334,83 @@ function buildParams(includeTab: boolean): import('@/types/product').ProductList
   return params
 }
 
+let listRequest = 0
+
 async function loadProducts() {
+  const request = ++listRequest
   loading.value = true
   errorMessage.value = ''
   try {
     const result = await listProducts(buildParams(true), { signal })
+    if (request !== listRequest) return
     products.value = result.rows
     total.value = result.total
     refreshFavoritedStatus()
   } catch (e) {
+    if (request !== listRequest) return
     errorMessage.value = e instanceof Error ? e.message : '加载产品列表失败'
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
+let countsRequest = 0
+
 async function loadCounts() {
+  const request = ++countsRequest
   try {
-    counts.value = await getProductStatusCounts(buildParams(false), { signal })
+    const result = await getProductStatusCounts(buildParams(false), { signal })
+    if (request === countsRequest) counts.value = result
   } catch (e) {
     console.error('加载状态统计失败', e)
   }
 }
 
 function refreshAll() {
-  loadProducts()
-  loadCounts()
+  if (keyword.value.trim()) {
+    // 商品列表先生成语义候选，页签统计复用这次召回。
+    const load = loadProducts()
+    const request = listRequest
+    countsRequest++
+    void load.then(() => {
+      if (request === listRequest && !signal.aborted) void loadCounts()
+    })
+  } else {
+    void loadProducts()
+    void loadCounts()
+  }
 }
 
 function handleSearch() {
+  if (uploadingSearchImage.value) return
+  if (keyword.value.trim()) imageSearchId.value = undefined
+  page.value = 1
+  refreshAll()
+}
+
+async function handleImageSearch(event: Event) {
+  const input = event.target as HTMLInputElement
+  const image = input.files?.[0]
+  input.value = ''
+  if (!image || uploadingSearchImage.value) return
+  uploadingSearchImage.value = true
+  try {
+    const id = await startProductImageSearch(image, { signal })
+    if (signal.aborted) return
+    imageSearchId.value = id
+    keyword.value = ''
+    if (isRecycledTab.value || statusTab.value === 'soldOut') statusTab.value = 'onSale'
+    page.value = 1
+    refreshAll()
+  } catch (e) {
+    if (!signal.aborted) message.error(e instanceof Error ? e.message : '图片搜索失败')
+  } finally {
+    uploadingSearchImage.value = false
+  }
+}
+
+function clearImageSearch() {
+  imageSearchId.value = undefined
   page.value = 1
   refreshAll()
 }
@@ -993,7 +1047,10 @@ onMounted(async () => {
   viewMode.value = isPlatformStaff.value || !isFactoryAdmin.value || viewFullCatalog.value ? 'full' : 'own'
   // 支持从首页分级导航等入口带筛选参数进入
   const query = route.query
-  if (typeof query.keyword === 'string') keyword.value = query.keyword
+  if (typeof query.keyword === 'string') {
+    keyword.value = query.keyword
+    imageSearchId.value = undefined
+  }
   if (typeof query.positioningLabel === 'string') styleCode.value = query.positioningLabel
   if (typeof query.sceneCode === 'string') sceneCode.value = query.sceneCode
   if (typeof query.materialTag === 'string') materialTag.value = query.materialTag
@@ -1015,8 +1072,12 @@ watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimary
       <!-- 搜索行 -->
       <n-form label-placement="left" label-width="80" :show-feedback="false">
         <n-grid :cols="4" :x-gap="24" :y-gap="12">
-          <n-form-item-gi label="商品名称">
-            <n-input v-model:value="keyword" placeholder="请输入商品名称" clearable @keydown.enter="handleSearch" />
+          <n-form-item-gi label="搜商品">
+            <n-input-group>
+              <n-input v-model:value="keyword" placeholder="商品名或描述，如中古风沙发" :maxlength="300" clearable @keydown.enter="handleSearch" />
+              <n-button :loading="uploadingSearchImage" @click="imageInput?.click()">搜图</n-button>
+            </n-input-group>
+            <input ref="imageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" hidden @change="handleImageSearch">
           </n-form-item-gi>
           <n-form-item-gi label="供应商编码">
             <n-input v-model:value="supplierCode" placeholder="请输入供应商编码" clearable @keydown.enter="handleSearch" />
@@ -1027,6 +1088,7 @@ watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimary
           <n-form-item-gi>
             <n-space align="center">
               <n-button type="primary" @click="handleSearch">搜索</n-button>
+              <n-tag v-if="imageSearchId" closable @close="clearImageSearch">参考图搜索</n-tag>
               <n-button @click="handleReset">重置</n-button>
               <n-button v-if="canCreateProduct" type="primary" ghost @click="router.push('/products/manual-entry')">新增</n-button>
               <n-button v-if="canImportProduct" @click="router.push('/products/excel-ai-import')">批量导入</n-button>

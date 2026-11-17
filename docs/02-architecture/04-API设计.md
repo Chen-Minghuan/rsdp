@@ -142,7 +142,9 @@ GET    /api/v1/products
        # 产品列表（分页+多条件筛选，已实现）
        # Query: page, size, categoryCode, positioningLabel（风格码）, sceneCode,
        #        materialTag（材质码）, status,
-       #        keyword（搜 category_path 或 rspu_id）,
+       #        keyword（搜 product_name、category_path 或 rspu_id，最多 300 字符）,
+       #        semantic=true（商品列表结合名称匹配与描述向量召回；默认 false）,
+       #        imageSearchId（参考图搜索 ID；与 keyword 同传时以图片为准）,
        #        viewMode: "own" | "full" (可选, 默认 own),
        #        factoryCode: string (可选, 工厂管理员可指定本厂编码),
        #        rspuCode: string (可选, SPU 业务编码 rspu_code 模糊),
@@ -166,6 +168,8 @@ GET    /api/v1/products
        # Response: { total, page, size, rows: [ProductSummary...] }
        # 说明：
        #   - positioningLabel / sceneCode / materialTag 均按字典码精确查询
+       #   - 语义搜索优先显示商品名精确命中，再显示包含或点名命中、内部字段命中、
+       #     相似候选。全部结果复用列表筛选和数据权限。向量服务异常时保留字段匹配
        #   - own：仅返回当前用户所属工厂已录入 RSKU 的 RSPU（工厂管理员/业务员）
        #   - full：平台全量 RSPU，按 `factory_product_capability` 能力覆盖去重，
        #     对已被本厂能力覆盖且本厂未报价的 RSPU 进行折叠隐藏；
@@ -184,6 +188,11 @@ GET    /api/v1/products/status-counts
        # Query: 同产品列表（statusTab 忽略，统计复用其余过滤条件）
        # Response: { onSale, inWarehouse, soldOut, recycled }
        # 说明：soldOut 当前无业务概念恒为 0；recycled 为全库软删除总数（不叠加搜索条件）
+
+POST   /api/v1/products/image-search
+       # 需 product:read。multipart/form-data，字段 image（图片，最大 10 MB）
+       # Response data: string，作为 imageSearchId 传入商品列表和页签统计
+       # 单实例临时 ID，最长保留 30 分钟。候选缓存只保存款式 ID
 
 GET    /api/v1/products/{rspuId}
        # 产品详情（含图片、AI 识别记录、官方搭配与适配来源，已实现）
@@ -1674,15 +1683,21 @@ GET    /api/v1/public/products
        # 公开商品分页列表（仅 status=active；红线：绝不包含 RSKU 工厂报价字段）
        # Query: page=1&size=12（上限 50）&category=SF&seatCount=3&color=米白&material=布艺
        #        &priceMin=1000&priceMax=5000&sort=newest|price_asc|price_desc
-       #        &keyword=云朵&style=MC&scene=LIVING
+       #        &keyword=云朵&style=MC&scene=LIVING&semantic=true&imageSearchId=<参考图搜索 ID>
        #        seatCount 匹配变体 dimensions JSONB 的 seat_count/seatCount 键；
        #        价格区间为零售参考价 retail_price（不加密），非工厂报价；
-       #        keyword 仅模糊商品名称 product_name（不泄露内部编码字段）；
+       #        keyword 最多 300 字符，默认仅模糊商品名称。semantic=true 时名称优先、向量补充；
+       #        imageSearchId 有值时按参考图排序并叠加目录筛选（如指定价格则在结果内按价格排序）；
        #        style 走 rspu_style 关联表 EXISTS，scene 走 rspu_scene 关联表 EXISTS，
        #        三者均可空、可叠加，不影响现有参数行为
        # Response: PageResult<{ rspuId, rspuCode, productName, categoryCode, categoryPath,
        #            positioningLabel, colorPrimaryName, materialTags[], retailPrice,
        #            primaryImageUrl, variantCount, createdAt }>
+
+POST   /api/v1/public/products/image-search
+       # 公开参考图搜索。multipart/form-data，字段 image（图片，最大 10 MB）
+       # Response data: string，传入公开列表的 imageSearchId，可用于继续分页和筛选
+       # 仅召回在售款式。ID 最长保留 30 分钟。官网语义关键词查询和参考图上传各自按 IP 限流
 
 GET    /api/v1/public/products/{rspuId}
        # 公开商品详情（仅 status=active，下架/不存在返回 code=404「商品不存在或已下架」）

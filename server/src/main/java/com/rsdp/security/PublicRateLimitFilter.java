@@ -15,6 +15,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -24,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>登录接口有 LoginAttemptService 防爆破，而免登录的公开付费接口（AI 户型搭配，
  * 每次调用消耗 DashScope 额度）与留资写入接口此前无任何频控，可被脚本刷量。
- * 本过滤器对这两类接口按「规则名 + 客户端 IP」做固定窗口计数限流，超限返回 429。</p>
+ * 官网语义搜款也消耗付费模型额度。相关端点按路径和客户端 IP 做固定窗口限流。</p>
  *
  * <p>单实例内存实现（ConcurrentHashMap + 惰性过期清理），与当前单后端部署形态匹配。</p>
  *
@@ -38,6 +39,7 @@ public class PublicRateLimitFilter extends OncePerRequestFilter {
 
     private static final String AI_MATCH_PREFIX = "/api/v1/public/ai-match/";
     private static final String LEADS_PATH = "/api/v1/public/leads";
+    private static final String PRODUCTS_PATH = "/api/v1/public/products";
     private static final long CLEANUP_INTERVAL_MS = 300_000;
     private static final int MAX_ENTRIES = 10_000;
 
@@ -86,7 +88,7 @@ public class PublicRateLimitFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 匹配限流规则：AI 户型搭配写端点 + 留资提交（仅 POST），其余公开读取接口不限。
+     * 匹配户型搭配、留资和商品向量检索的限流规则。
      * 游客 CAD 状态轮询为 GET，不消耗 AI 额度且必须携带短期凭证，因此不计入限流。
      *
      * @param request 当前请求
@@ -99,6 +101,19 @@ public class PublicRateLimitFilter extends OncePerRequestFilter {
         }
         if (LEADS_PATH.equals(uri) && "POST".equalsIgnoreCase(request.getMethod())) {
             return properties.getLeadsPermits();
+        }
+        if ((PRODUCTS_PATH + "/image-search").equals(uri) && "POST".equalsIgnoreCase(request.getMethod())) {
+            return properties.getCatalogSearchPermits();
+        }
+        if (PRODUCTS_PATH.equals(uri) && "GET".equalsIgnoreCase(request.getMethod())
+            && StringUtils.hasText(request.getParameter("keyword"))) {
+            String semantic = request.getParameter("semantic");
+            if (semantic != null && switch (semantic.trim().toLowerCase(Locale.ROOT)) {
+                case "true", "on", "yes", "1" -> true;
+                default -> false;
+            }) {
+                return properties.getCatalogSearchPermits();
+            }
         }
         return null;
     }

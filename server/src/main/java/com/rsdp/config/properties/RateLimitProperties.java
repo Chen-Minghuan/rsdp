@@ -27,6 +27,9 @@ public class RateLimitProperties {
     /** 留资提交（POST /api/v1/public/leads）每 IP 每窗口允许次数。 */
     private int leadsPermits = 5;
 
+    /** 官网关键词语义检索与参考图上传每 IP 每窗口的允许次数（分别计数）。 */
+    private int catalogSearchPermits = 30;
+
     /** 窗口时长（秒），固定窗口到期后计数重置。 */
     private int windowSeconds = 60;
 }

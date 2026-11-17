@@ -2,6 +2,7 @@ package com.rsdp.dto.request;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -23,7 +24,15 @@ public class ProductListRequest {
     private String materialTag;
     private String status;
     private String productLevel;
+    @Size(max = 300)
     private String keyword;
+
+    /** 关键词同时用于名称匹配和语义召回。 */
+    private boolean semantic;
+
+    /** 参考图检索 ID，由图片上传接口生成。 */
+    @Size(max = 36)
+    private String imageSearchId;
     private String viewMode;
     private String factoryCode;
 

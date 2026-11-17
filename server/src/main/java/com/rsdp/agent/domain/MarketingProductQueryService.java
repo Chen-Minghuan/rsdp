@@ -94,16 +94,44 @@ public class MarketingProductQueryService {
             ? normalizeCategoryCode(criteria.getCategoryCode().trim()) : null;
         boolean hasSizeFilter = criteria.getMaxWidthMm() != null || criteria.getMinWidthMm() != null
             || criteria.getMaxDepthMm() != null;
+        List<RspuMaster> named = findNamedProducts(criteria, categoryCode, hasSizeFilter, topN);
 
         // 2. 向量通道（P2）：不可用 → 纯结构化（P1 行为）
         List<String> vectorRanked = properties.isVectorRecallEnabled()
             ? vectorChannelRankedIds(criteria, categoryCode, topN) : List.of();
         if (vectorRanked.isEmpty()) {
             return structuredSearch(criteria, styleCode, materialCode, colorCode, categoryCode,
-                hasSizeFilter, topN, false);
+                hasSizeFilter, topN, named);
         }
         return fusedSearch(criteria, styleCode, materialCode, colorCode, categoryCode,
-            hasSizeFilter, topN, vectorRanked);
+            hasSizeFilter, topN, vectorRanked, named);
+    }
+
+    private List<RspuMaster> findNamedProducts(ProductSearchCriteria criteria, String categoryCode,
+                                                boolean hasSizeFilter, int topN) {
+        if (!StringUtils.hasText(criteria.getSearchText())) {
+            return List.of();
+        }
+        String text = criteria.getSearchText().trim();
+        QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
+        visibilityPolicy.applyScope(wrapper);
+        if (StringUtils.hasText(categoryCode)) wrapper.eq("category_code", categoryCode);
+        if (criteria.getBudgetMax() != null) wrapper.le("retail_price", criteria.getBudgetMax());
+        wrapper.apply("length(btrim(product_name)) >= 2 AND ("
+            + "strpos(lower({0}), lower(btrim(product_name))) > 0"
+            + " OR strpos(lower(product_name), lower({0})) > 0)", text);
+        if (hasSizeFilter) {
+            wrapper.exists("SELECT 1 FROM rspu_variant v WHERE v.rspu_id = rspu_master.rspu_id"
+                + " AND v.deleted_at IS NULL");
+        }
+        wrapper.orderByDesc("length(btrim(product_name))", "created_at").orderByAsc("rspu_id")
+            .last("LIMIT " + (hasSizeFilter ? SIZE_FILTER_PREFETCH_LIMIT : topN));
+        List<RspuMaster> hits = rspuMapper.selectList(wrapper);
+        if (hasSizeFilter) hits = filterByWidthMm(hits, criteria);
+        return hits.stream()
+            .sorted(java.util.Comparator.comparingInt(product ->
+                product.getProductName().trim().equalsIgnoreCase(text) ? 0 : 1))
+            .limit(topN).toList();
     }
 
     /**
@@ -112,10 +140,12 @@ public class MarketingProductQueryService {
     private ProductSearchResult structuredSearch(ProductSearchCriteria criteria,
                                                  String styleCode, String materialCode, String colorCode,
                                                  String categoryCode, boolean hasSizeFilter, int topN,
-                                                 boolean vectorChannelUsed) {
+                                                 List<RspuMaster> named) {
         QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
         visibilityPolicy.applyScope(wrapper);
         applyConditions(wrapper, criteria, styleCode, materialCode, colorCode, categoryCode);
+        Set<String> namedIds = named.stream().map(RspuMaster::getRspuId).collect(Collectors.toSet());
+        if (!namedIds.isEmpty()) wrapper.notIn("rspu_id", namedIds);
 
         List<RspuMaster> rspus;
         int totalMatched;
@@ -133,13 +163,15 @@ public class MarketingProductQueryService {
             wrapper.orderByDesc("created_at").last("LIMIT " + topN);
             rspus = rspuMapper.selectList(wrapper);
         }
-        List<ProductSearchItem> items = assembleItems(rspus, describeMatchedConditions(criteria));
+        List<RspuMaster> ordered = java.util.stream.Stream.concat(named.stream(), rspus.stream()).limit(topN).toList();
+        List<ProductSearchItem> items = assembleItems(ordered, describeMatchedConditions(criteria));
+        items.forEach(item -> item.setNameMatched(namedIds.contains(item.getRspuId())));
         applyStructuredRankScores(items);
 
         ProductSearchResult result = new ProductSearchResult();
         result.setItems(items);
-        result.setTotalMatched(totalMatched);
-        result.setVectorChannelUsed(vectorChannelUsed);
+        result.setTotalMatched(totalMatched + named.size());
+        result.setVectorChannelUsed(false);
         return result;
     }
 
@@ -154,7 +186,7 @@ public class MarketingProductQueryService {
     private ProductSearchResult fusedSearch(ProductSearchCriteria criteria,
                                             String styleCode, String materialCode, String colorCode,
                                             String categoryCode, boolean hasSizeFilter, int topN,
-                                            List<String> vectorRanked) {
+                                            List<String> vectorRanked, List<RspuMaster> named) {
         // 1. 结构化通道候选窗（rank = 结果位置）
         QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
         visibilityPolicy.applyScope(wrapper);
@@ -189,13 +221,15 @@ public class MarketingProductQueryService {
         }
         Map<String, RspuMaster> byId = unionHits.stream()
             .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
-        List<RspuMaster> ordered = fused.keySet().stream()
-            .map(byId::get).filter(r -> r != null).toList();
+        Set<String> namedIds = named.stream().map(RspuMaster::getRspuId).collect(Collectors.toSet());
+        List<RspuMaster> ordered = java.util.stream.Stream.concat(named.stream(), fused.keySet().stream()
+            .filter(id -> !namedIds.contains(id)).map(byId::get).filter(r -> r != null)).toList();
 
         int totalMatched = ordered.size();
         List<RspuMaster> page = ordered.stream().limit(topN).toList();
         List<ProductSearchItem> items = assembleItems(page, describeMatchedConditions(criteria));
         for (ProductSearchItem item : items) {
+            item.setNameMatched(namedIds.contains(item.getRspuId()));
             Double score = fused.get(item.getRspuId());
             if (score != null) {
                 item.setRankScore(BigDecimal.valueOf(score).setScale(4, RoundingMode.HALF_UP));
@@ -280,6 +314,9 @@ public class MarketingProductQueryService {
         }
         if (StringUtils.hasText(criteria.getKeyword())) {
             parts.add(criteria.getKeyword().trim());
+        }
+        if (StringUtils.hasText(criteria.getSearchText())) {
+            parts.add(criteria.getSearchText().trim());
         }
         return String.join(" ", parts);
     }

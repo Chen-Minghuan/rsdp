@@ -46,6 +46,9 @@ public class ProductSearchCriteria {
     /** 关键词（product_name / positioning_label 模糊匹配）。 */
     private String keyword;
 
+    /** 本轮自然语言，用于识别点名的款式与补充语义召回。 */
+    private String searchText;
+
     /** 返回条数上限；null 时用 properties.searchTopN。 */
     private Integer topN;
 }

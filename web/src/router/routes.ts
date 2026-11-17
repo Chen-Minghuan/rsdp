@@ -227,12 +227,6 @@ export const routes = [
     meta: { requiresAuth: true }
   },
   {
-    path: '/visual-search',
-    name: 'VisualSearch',
-    component: () => import('@/views/VisualSearchView.vue'),
-    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_READ] }
-  },
-  {
     path: '/templates',
     name: 'TemplateLibrary',
     component: () => import('@/views/TemplateLibraryView.vue'),

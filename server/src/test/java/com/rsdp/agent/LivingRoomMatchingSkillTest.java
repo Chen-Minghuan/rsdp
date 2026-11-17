@@ -74,7 +74,7 @@ class LivingRoomMatchingSkillTest {
     }
 
     private SkillContext ctx(List<AgentConfirmedItem> confirmed, RequirementConstraints constraints) {
-        return new SkillContext("SES-1", "RUN-1", constraints, confirmed, Map.of(), tools);
+        return new SkillContext("SES-1", "RUN-1", null, constraints, confirmed, Map.of(), tools);
     }
 
     @Test
