@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { NModal } from 'naive-ui'
 
 /**
  * 图片放大镜：鼠标悬停时显示取镜框 + 右侧放大细节面板。
@@ -117,6 +118,12 @@ function onMove(e: MouseEvent) {
 function onLeave() {
   lensActive.value = false
 }
+
+function openViewer() {
+  if (!props.clickViewer) return
+  lensActive.value = false
+  showViewer.value = true
+}
 </script>
 
 <template>
@@ -135,15 +142,19 @@ function onLeave() {
       draggable="false"
       @load="onLoad"
       @error="onError"
-      @click="clickViewer && (showViewer = true)"
+      @click="openViewer"
     >
     <div v-if="lensActive" class="magnifier-lens" :style="lensStyle" />
     <div v-if="lensActive" class="magnifier-panel" :style="panelStyle" />
 
-    <!-- 点击看大图 -->
-    <div v-if="showViewer" class="magnifier-viewer" @click="showViewer = false">
-      <img :src="displaySrc" :alt="alt" class="magnifier-viewer-img">
-    </div>
+    <!-- 大图弹窗挂到 body，与详情侧栏的 sticky 层级解耦。 -->
+    <n-modal v-if="clickViewer" v-model:show="showViewer" to="body" transform-origin="center">
+      <div class="magnifier-viewer" role="dialog" aria-modal="true" aria-label="产品图片预览">
+        <button type="button" aria-label="关闭图片预览" class="magnifier-viewer-close" @click="showViewer = false">
+          <img :src="displaySrc" :alt="alt" class="magnifier-viewer-img" draggable="false">
+        </button>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -189,18 +200,16 @@ function onLeave() {
   z-index: 10;
 }
 
-.magnifier-viewer {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.75);
+.magnifier-viewer-close {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
   cursor: zoom-out;
-  z-index: 1000;
 }
 
 .magnifier-viewer-img {
+  display: block;
   max-width: 92vw;
   max-height: 92vh;
   object-fit: contain;
