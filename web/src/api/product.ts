@@ -460,11 +460,12 @@ export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signa
  *
  * @param batchId 预览批次号
  */
-export async function getExcelAiPreviewData(batchId: string): Promise<ExcelAiPreviewDataResponse> {
+export async function getExcelAiPreviewData(batchId: string, mapping?: Record<string, string>): Promise<ExcelAiPreviewDataResponse> {
   // 预览接口只返回轻量图片元数据，缩略图按行懒加载，超时保持默认即可
-  const { data: result } = await apiClient.get<ApiResult<ExcelAiPreviewDataResponse>>(
-    `/v1/products/excel-ai-import/${batchId}/preview-data`
-  )
+  const path = `/v1/products/excel-ai-import/${batchId}/preview-data`
+  const { data: result } = mapping
+    ? await apiClient.post<ApiResult<ExcelAiPreviewDataResponse>>(path, mapping)
+    : await apiClient.get<ApiResult<ExcelAiPreviewDataResponse>>(path)
   return result.data
 }
 

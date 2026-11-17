@@ -85,6 +85,13 @@ export const useExcelImportStore = defineStore('excelImport', () => {
   /** 用户在数据清洗页对每行图片的覆盖：rowIndex → 临时图片 key 列表 */
   const rowImageOverrides = ref<Record<number, string[]>>({})
 
+  function setPreviewLayout(response: import('@/types/product').ExcelAiPreviewDataResponse) {
+    previewData.value = response.rows
+    previewGroups.value = response.groups ?? []
+    productHeaders.value = response.productHeaders ?? []
+    variantHeaders.value = response.variantHeaders ?? []
+  }
+
   const selectedFile = computed(() => {
     const item = fileList.value[0]
     return item?.file ?? null
@@ -109,6 +116,17 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         && !systemFilteredRows.value.has(row.rowIndex)
         && !rowCategorySelections.value[row.rowIndex])
       .map(row => row.rowIndex)
+  })
+
+  /** 需要在确认导入时补默认等级的有效数据行。 */
+  const missingProductLevelRowCount = computed(() => {
+    const headers = Object.keys(confirmedMapping.value).filter(header =>
+      confirmedMapping.value[header]?.split(',').some(field => field.trim() === 'productLevel')
+    )
+    return previewData.value.filter(row =>
+      !row.systemExcluded && !systemFilteredRows.value.has(row.rowIndex) && !skippedRows.value.has(row.rowIndex)
+      && !headers.some(header => getPreviewCellValue(row, header)?.trim())
+    ).length
   })
 
   let uploadAbortController: AbortController | null = null
@@ -291,10 +309,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    */
   async function loadPreviewData(batchId: string) {
     const response = await getExcelAiPreviewData(batchId)
-    previewData.value = response.rows
-    previewGroups.value = response.groups ?? []
-    productHeaders.value = response.productHeaders ?? []
-    variantHeaders.value = response.variantHeaders ?? []
+    setPreviewLayout(response)
     previewEdits.value = {}
     skippedRows.value = new Set()
     const overrides: Record<number, string[]> = {}
@@ -325,11 +340,19 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    * @param rowIndex Excel 物理行号（1-based）
    */
   function toggleSkipRow(rowIndex: number) {
+    setRowsSkipped([rowIndex], !skippedRows.value.has(rowIndex))
+  }
+
+  /** 设置所选商品的全部变体行是否参与本次导入。 */
+  function setRowsSkipped(rowIndexes: number[], skipped: boolean) {
+    if (rowIndexes.length === 0) return
     const next = new Set(skippedRows.value)
-    if (next.has(rowIndex)) {
-      next.delete(rowIndex)
-    } else {
-      next.add(rowIndex)
+    for (const rowIndex of rowIndexes) {
+      if (skipped) {
+        next.add(rowIndex)
+      } else {
+        next.delete(rowIndex)
+      }
     }
     skippedRows.value = next
     categoryRevisionDirty.value = true
@@ -442,6 +465,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         selections[Number(rowIndexKey)] = code
       }
     }
+    const rowsToSkip = Array.from(skippedRows.value)
     try {
       const response = await applyExcelAiCategoryRevision(batchId, {
         expectedRevision: currentRevision.value,
@@ -452,11 +476,15 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         categoryMapping: Object.keys(categoryMapping).length > 0 ? categoryMapping : undefined,
         rowCategorySelections: selections,
         previewEdits: Object.values(previewEdits.value),
-        skipRows: Array.from(skippedRows.value)
+        skipRows: rowsToSkip
       })
       currentRevision.value = response.previewRevision
       // 后端按 §26.1 收敛兜底链计算的最终品类为权威值：null 表示仍未确定
       const next: Record<number, string> = {}
+      // 快照省略跳过行；保留其选择，返回清洗页恢复商品时可继续使用。
+      for (const rowIndex of rowsToSkip) {
+        if (selections[rowIndex]) next[rowIndex] = selections[rowIndex]
+      }
       for (const row of response.rows) {
         if (row.finalCategoryCode) {
           next[row.rowIndex] = row.finalCategoryCode
@@ -820,6 +848,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    * 先校验导入方式配置（§22），再触发候选集约束的行级品类预分类（SINGLE 不调 AI）。
    */
   async function handleGoToCleanStep() {
+    const batchId = mappingResponse.value?.batchId
+    if (!batchId || uploading.value) return
     if (!categoryMode.value) {
       errorMessage.value = '请选择导入方式（单一品类 / 混合品类）'
       return
@@ -834,13 +864,25 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     }
     // P0-B2：导入方式/默认品类/候选品类是一次 Revision 变更（09 §16 + v3.3 §4.1 规则 1），
     // 进入清洗页前先物化（首次或变更后）；409 冲突时停留本页并提示刷新
-    if (currentRevision.value == null || categoryRevisionDirty.value) {
-      const ok = await materializeCategoryRevision()
-      if (!ok) return
+    uploading.value = true
+    try {
+      if (currentRevision.value == null || categoryRevisionDirty.value) {
+        const ok = await materializeCategoryRevision()
+        if (!ok) return
+      }
+      const mapping: Record<string, string> = {}
+      for (const [header, field] of Object.entries(confirmedMapping.value)) {
+        if (field) mapping[header] = field
+      }
+      setPreviewLayout(await getExcelAiPreviewData(batchId, mapping))
+      errorMessage.value = ''
+      currentStep.value = 3
+      await classifyRowCategories()
+    } catch (e) {
+      errorMessage.value = e instanceof Error ? e.message : '加载确认映射的清洗预览失败'
+    } finally {
+      uploading.value = false
     }
-    errorMessage.value = ''
-    currentStep.value = 3
-    await classifyRowCategories()
   }
 
   /**
@@ -853,6 +895,12 @@ export const useExcelImportStore = defineStore('excelImport', () => {
    * @return false 表示被拦截（未确定品类或物化失败），由视图展示未确定行（如开启「只看未确定商品」过滤）
    */
   async function handleGoToConfirmStep(): Promise<boolean> {
+    if (skippedRows.value.size > 0 && !previewData.value.some(row =>
+      !skippedRows.value.has(row.rowIndex) && !row.systemExcluded && !systemFilteredRows.value.has(row.rowIndex)
+    )) {
+      errorMessage.value = '没有可导入的商品，请至少恢复一件商品后继续'
+      return false
+    }
     if (categoryMode.value && categoryRevisionDirty.value) {
       const ok = await materializeCategoryRevision()
       if (!ok) return false
@@ -1087,6 +1135,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     currentRevision,
     categoryRevisionDirty,
     undeterminedCategoryRowIndexes,
+    missingProductLevelRowCount,
     updateIfExists,
     importResult,
     taskList,
@@ -1122,6 +1171,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     loadPreviewData,
     updatePreviewEdit,
     toggleSkipRow,
+    setRowsSkipped,
     isSkippedRow,
     setRowCategory,
     setGroupCategory,

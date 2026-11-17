@@ -428,6 +428,7 @@ public class ExcelAiImportService {
             mappingResult.priceColumns = processed.priceColumns();
             inferSplitModuleColumn(mappingResult.mapping, mergedHeaders, dataRows);
         }
+        refineProductColumnMappings(mappingResult.mapping, cleanHeaders, mergedHeaders, dataRows);
 
         // 原始文件对象键与批次主键统一：新批次用同一 batchId 命名（A10）；
         // 存量批次 storage_path 已记录不受影响，生命周期清理按 storage_path 删除，口径不变
@@ -1482,6 +1483,11 @@ public class ExcelAiImportService {
      * @return 全量预览数据
      */
     public ExcelAiPreviewDataResponse getPreviewData(String batchId) {
+        return getPreviewData(batchId, null);
+    }
+
+    /** 按当前选定的字段映射生成清洗预览；缺省时使用批次初始映射。 */
+    public ExcelAiPreviewDataResponse getPreviewData(String batchId, Map<String, String> confirmedMapping) {
         ExcelImportBatch batch = batchMapper.selectById(batchId);
         if (batch == null) {
             throw new BusinessException("导入批次不存在: " + batchId);
@@ -1499,7 +1505,8 @@ public class ExcelAiImportService {
             return response;
         }
 
-        Map<String, String> mapping = loadColumnMapping(batch);
+        Map<String, String> mapping = confirmedMapping != null && !confirmedMapping.isEmpty()
+            ? sanitizeMapping(confirmedMapping) : loadColumnMapping(batch);
 
         // 预览阶段同时需要图片与物理布局：一次性读取文件字节，避免重复从 storage 拉取/解析
         byte[] fileBytes = null;
@@ -1538,6 +1545,7 @@ public class ExcelAiImportService {
         Map<Integer, List<String>> rowOverrideImages = loadRowOverrideImages(batchId);
 
         List<PreviewDataRow> rows = new ArrayList<>();
+        Map<Integer, String> groupingCodes = new HashMap<>();
         for (int i = 0; i < rawDataRows.size(); i++) {
             Map<String, String> rawRow = rawDataRows.get(i);
             PreviewDataRow row = new PreviewDataRow();
@@ -1554,6 +1562,10 @@ public class ExcelAiImportService {
                 rawValues.put(header, rawRow.getOrDefault(header, ""));
                 mappedFieldByHeader.put(header, mapping.get(header));
             }
+            String groupingCode = resolveRowGroupingCode(rawRow, mapping);
+            if (StringUtils.hasText(groupingCode)) {
+                groupingCodes.put(displayRowIndex, groupingCode);
+            }
             row.setRawValues(rawValues);
             row.setMappedFieldByHeader(mappedFieldByHeader);
             row.setImages(buildPreviewRowImages(batch.getBatchId(), displayRowIndex, sheetIndex, headers, imageColumns,
@@ -1563,8 +1575,7 @@ public class ExcelAiImportService {
         }
         response.setRows(rows);
 
-        // 按商品（externalCode）聚合预览行，供新版商品校验视图使用
-        List<PreviewDataGroup> groups = buildPreviewDataGroups(rows, mapping, headers);
+        List<PreviewDataGroup> groups = buildPreviewDataGroups(rows, mapping, headers, groupingCodes);
         response.setGroups(groups);
         response.setProductHeaders(headers.stream()
             .filter(h -> isProductLevelHeader(h, mapping))
@@ -1576,13 +1587,13 @@ public class ExcelAiImportService {
     }
 
     /**
-     * 按 externalCode 把 PreviewDataRow 聚合成 PreviewDataGroup。
+     * 按型号或纵向合并的商品名称把预览行聚合成商品组。
      *
      * <p>没有 externalCode 且被判定为说明/空行的数据不进入商品组，避免页脚、空白行、重复表头行
      * 在清洗页显示为「第 X 行」商品。</p>
      */
     private List<PreviewDataGroup> buildPreviewDataGroups(List<PreviewDataRow> rows, Map<String, String> mapping,
-                                                          List<String> headers) {
+                                                          List<String> headers, Map<Integer, String> groupingCodes) {
         Map<String, List<PreviewDataRow>> grouped = new LinkedHashMap<>();
         Map<String, String> groupKeyByModelAndName = new HashMap<>();
         String lastCode = null;
@@ -1593,7 +1604,7 @@ public class ExcelAiImportService {
             if (row.isSystemExcluded()) {
                 continue;
             }
-            String externalCode = resolveRowExternalCode(row, mapping);
+            String externalCode = groupingCodes.get(row.getRowIndex());
             boolean hasCode = StringUtils.hasText(externalCode);
             if (!StringUtils.hasText(externalCode)) {
                 // 无外部编码的行：若是说明/空行/重复表头，直接跳过；否则按行号兜底保留
@@ -3235,7 +3246,7 @@ public class ExcelAiImportService {
             })
             .map(Map.Entry::getKey)
             .toList();
-        if (physicalLayout == null || freeTextHeaders.isEmpty()) {
+        if (physicalLayout == null) {
             return;
         }
         // 物理行号 -> 逻辑数据行索引（dataRowPhysicalIndexes 与 dataRows 顺序一一对应）
@@ -3249,6 +3260,23 @@ public class ExcelAiImportService {
         for (String header : freeTextHeaders) {
             fillDownWithinMergedRanges(dataRows, physicalToLogical,
                 physicalLayout.mergedRangesByHeader().getOrDefault(header, List.of()), header);
+        }
+        markMergedProductGroups(dataRows, mapping, physicalLayout, physicalToLogical);
+    }
+
+    private void markMergedProductGroups(List<Map<String, String>> rows, Map<String, String> mapping,
+                                         PhysicalLayout layout, Map<Integer, Integer> physicalToLogical) {
+        for (String header : layout.orderedHeaders()) {
+            if (!mapsField(mapping.get(header), "productName")) continue;
+            for (RowRange range : layout.mergedRangesByHeader().getOrDefault(header, List.of())) {
+                Integer first = physicalToLogical.get(range.startRow());
+                if (first == null || !StringUtils.hasText(rows.get(first).get(header))) continue;
+                String group = "MERGED_NAME:" + range.startRow() + ":" + header;
+                for (int physicalRow = range.startRow(); physicalRow <= range.endRow(); physicalRow++) {
+                    Integer index = physicalToLogical.get(physicalRow);
+                    if (index != null) rows.get(index).putIfAbsent("__mergedProductGroup__", group);
+                }
+            }
         }
     }
 
@@ -3466,6 +3494,53 @@ public class ExcelAiImportService {
             result.put(entry.getKey(), entry.getValue());
         }
         return result;
+    }
+
+    private void refineProductColumnMappings(Map<String, String> mapping, Map<Integer, String> cleanHeaders,
+                                             Map<Integer, String> originalHeaders,
+                                             List<Map<Integer, String>> dataRows) {
+        boolean hasLevel = mapping.values().stream().anyMatch(fields -> mapsField(fields, "productLevel"));
+        Integer seriesColumn = null;
+        Integer modelColumn = null;
+        for (var entry : cleanHeaders.entrySet()) {
+            int column = entry.getKey();
+            String original = originalHeaders.get(column);
+            String clean = entry.getValue();
+            if (!hasLevel && Set.of("产品定位", "产品等级", "等级").contains(clean)) {
+                List<String> values = dataRows.stream().map(row -> row.get(column))
+                    .filter(StringUtils::hasText).map(String::trim).filter(value -> !clean.equals(value)).distinct().toList();
+                if (!values.isEmpty() && values.stream().allMatch(value -> value.matches("(?i)[SABC]"))) {
+                    mapping.put(original, "productLevel");
+                    hasLevel = true;
+                }
+            }
+            if (Set.of("系列名", "系列名称").contains(clean)
+                && dataRows.stream().anyMatch(row -> StringUtils.hasText(row.get(column)))) {
+                seriesColumn = column;
+            }
+            if (Set.of("产品型号", "商品型号").contains(clean)
+                && dataRows.stream().anyMatch(row -> StringUtils.hasText(row.get(column)))) {
+                modelColumn = column;
+            }
+        }
+        if (seriesColumn == null || mapping.values().stream().anyMatch(fields -> mapsField(fields, "productName"))) {
+            return;
+        }
+        String seriesHeader = originalHeaders.get(seriesColumn);
+        if (modelColumn == null) {
+            mapping.put(seriesHeader, "productName");
+            return;
+        }
+        String modelHeader = originalHeaders.get(modelColumn);
+        boolean modelProvidesCode = mapsField(mapping.get(modelHeader), "externalCode");
+        boolean hasCode = mapping.values().stream().anyMatch(fields -> mapsField(fields, "externalCode"));
+        mapping.put(modelHeader, modelProvidesCode || !hasCode
+            ? "externalCode,productName" : "productName");
+        mapping.remove(seriesHeader, "categoryCode");
+    }
+
+    private boolean mapsField(String fields, String target) {
+        return fields != null && Arrays.stream(fields.split(",")).map(String::trim).anyMatch(target::equals);
     }
 
     private String fuzzyMatchStandardField(String cleanHeader) {
@@ -4322,6 +4397,17 @@ public class ExcelAiImportService {
         return name;
     }
 
+    private String resolveRowGroupingCode(Map<String, String> row, Map<String, String> mapping) {
+        String externalCode = resolveRowExternalCode(row, mapping);
+        return StringUtils.hasText(externalCode) ? externalCode : mergedProductKey(row, resolveRowProductName(row, mapping));
+    }
+
+    private String mergedProductKey(Map<String, String> row, String productName) {
+        String marker = row.get("__mergedProductGroup__");
+        return StringUtils.hasText(marker) && StringUtils.hasText(productName)
+            ? marker + ":" + productName.trim() : null;
+    }
+
     private String modelAndNameIdentity(String externalCode, Map<String, String> row,
                                         Map<String, String> mapping) {
         boolean combinedColumn = mapping.values().stream().anyMatch(fields -> fields != null
@@ -4505,6 +4591,9 @@ public class ExcelAiImportService {
 
         // 同型号连续行归入上一产品的 RSPU（规格模块共享产品主图，不再创建独立产品）
         String groupKey = trim(row.getExternalCode());
+        if (!StringUtils.hasText(groupKey)) {
+            groupKey = mergedProductKey(dataRow, row.getProductName());
+        }
         boolean sameProduct = currentGroup != null && StringUtils.hasText(groupKey)
             && groupKey.equals(currentGroup.externalCode);
 
@@ -4557,7 +4646,7 @@ public class ExcelAiImportService {
             log.debug("第 {} 行与上一产品同型号（{}），归入已有 RSPU {}", rowIndex, groupKey, rspuId);
         } else {
             // updateIfExists 开关：源商品编码命中已有身份（未软删）时，true 复用并更新已有 RSPU，false 跳过该行
-            RspuMaster existing = findRspuByIdentity(groupKey, request, importCache);
+            RspuMaster existing = findRspuByIdentity(trim(row.getExternalCode()), request, importCache);
             if (existing != null && !request.isUpdateIfExists()) {
                 log.debug("第 {} 行外部编码 {} 已存在，按配置跳过", rowIndex, groupKey);
                 return RowResult.skipped("已存在，跳过: " + groupKey);
@@ -5218,9 +5307,8 @@ public class ExcelAiImportService {
         if (rows.isEmpty()) {
             return response;
         }
-        // 与正式导入同口径的型号/品名/类别列向下填充（纵向合并单元格语义）；
-        // 分类只依赖结构性字段，description/materialTags 自由文本下填不参与，免读原始文件重建物理布局
-        forwardFillKeyColumns(rows, mapping, null);
+        // 复用正式导入的纵向合并分组规则，保证人工选定品类能应用到同组变体。
+        forwardFillKeyColumns(rows, mapping, loadPhysicalLayout(batch));
         Map<String, List<CategoryDict>> dictCache = Map.of("category", categories);
         List<String> groupKeys = computeLogicalGroupKeys(rows, mapping);
 
@@ -5300,7 +5388,8 @@ public class ExcelAiImportService {
                                                                     Map<String, String> mapping,
                                                                     String sheetName) {
         List<Map<String, String>> rows = loadRawDataRows(batch);
-        SnapshotGroupsBuild build = buildSnapshotGroups(rows, mapping, null, null, null, false);
+        forwardFillKeyColumns(rows, mapping, loadPhysicalLayout(batch));
+        SnapshotGroupsBuild build = buildSnapshotGroups(rows, mapping, null, null, null);
         return previewSnapshotService.createNextRevision(
             new ExcelImportPreviewSnapshotService.CreateRevisionCommand(
                 batch.getBatchId(), null,
@@ -5371,7 +5460,7 @@ public class ExcelAiImportService {
         }
 
         SnapshotGroupsBuild build = buildSnapshotGroups(rows, mapping, selections,
-            request.getCategoryMapping(), mode == CategoryMode.SINGLE ? categoryHint : null, true);
+            request.getCategoryMapping(), mode == CategoryMode.SINGLE ? categoryHint : null);
 
         ExcelImportPreviewRevision revision = previewSnapshotService.createNextRevision(
             new ExcelImportPreviewSnapshotService.CreateRevisionCommand(
@@ -5635,14 +5724,9 @@ public class ExcelAiImportService {
                                                     Map<String, String> mapping,
                                                     Map<Integer, String> selections,
                                                     Map<String, String> categoryMapping,
-                                                    String singleDefaultCategory,
-                                                    boolean prepared) {
+                                                    String singleDefaultCategory) {
         if (rows.isEmpty()) {
             return new SnapshotGroupsBuild(List.of(), List.of());
-        }
-        // 与 classify / 正式导入同口径的型号/品名/类别列向下填充（纵向合并单元格语义）
-        if (!prepared) {
-            forwardFillKeyColumns(rows, mapping, null);
         }
         List<String> groupKeys = computeLogicalGroupKeys(rows, mapping);
         // 仅在存在品类输入（行级选择或 SINGLE 默认品类）时才做归一解析；
@@ -6069,9 +6153,9 @@ public class ExcelAiImportService {
             }
         }
 
-        // 与正式导入同口径的行准备：forward-fill（仅结构性字段，免读原始文件重建物理布局）→ 预览编辑 → 跳过行过滤
+        // 与正式导入同口径的行准备：合并单元格处理 → 预览编辑 → 跳过行过滤
         List<Map<String, String>> rows = loadRawDataRows(batch);
-        forwardFillKeyColumns(rows, mapping, null);
+        forwardFillKeyColumns(rows, mapping, loadPhysicalLayout(batch));
         applyPreviewEdits(rows, request.getPreviewEdits());
         Set<Integer> skipRowSet = request.getSkipRows() != null ? new HashSet<>(request.getSkipRows()) : Set.of();
         rows = rows.stream()
@@ -6182,7 +6266,7 @@ public class ExcelAiImportService {
                 keys.add(null);
                 continue;
             }
-            String code = resolveRowExternalCode(row, mapping);
+            String code = resolveRowGroupingCode(row, mapping);
             if (!StringUtils.hasText(code)) {
                 keys.add("EMPTY-" + (seq++));
                 lastCode = null;

@@ -596,6 +596,11 @@ GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
        #     其他模板沿用型号分组；型号与中文品名相连时拆分（如 MJ-S96欧拉沙发）。
        #     确认导入前，同一型号对应不同品名会报错并给出源行号；旧归一版本批次需重新上传
 
+POST   /api/v1/products/excel-ai-import/{batchId}/preview-data
+       # 按确认后的字段映射重建清洗预览，响应同 GET
+       # Body 为原始表头到系统字段的映射，例如 {"名称":"productName","规格尺寸":"dimensions"}
+       # 名称列只映射到产品名称时，同一个纵向合并单元格内的多行仍归到同一商品
+
 POST   /api/v1/products/excel-ai-import/{batchId}/rows/{sourceRowIndex}/clone-images-to/{targetRowIndex}
        # 数据清洗：将源行的全部图片克隆到目标行的覆盖图列表（已实现）
        # 说明：
