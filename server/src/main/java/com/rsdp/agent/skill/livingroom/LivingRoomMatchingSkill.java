@@ -142,6 +142,7 @@ public class LivingRoomMatchingSkill implements AgentSkill {
 
             ProductSearchCriteria criteria = new ProductSearchCriteria();
             criteria.setCategoryCode(categoryCode);
+            criteria.setSearchText(ctx.userMessage());
             if (constraints != null) {
                 criteria.setStyle(constraints.getStyle());
                 criteria.setMaterial(constraints.getMaterial());
@@ -176,6 +177,7 @@ public class LivingRoomMatchingSkill implements AgentSkill {
                 }
                 items.add(item);
             }
+            items.sort(java.util.Comparator.comparing(ProductSearchItem::isNameMatched).reversed());
             if (items.isEmpty()) {
                 continue;
             }

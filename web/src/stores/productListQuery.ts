@@ -16,6 +16,7 @@ export const useProductListQueryStore = defineStore('productListQuery', () => {
 
   // ---------- 搜索条件（文本，由「搜索」按钮触发） ----------
   const keyword = ref('')
+  const imageSearchId = ref<string>()
   const supplierCode = ref('')
   const rspuCode = ref('')
 
@@ -47,6 +48,7 @@ export const useProductListQueryStore = defineStore('productListQuery', () => {
   function reset() {
     page.value = 1
     keyword.value = ''
+    imageSearchId.value = undefined
     supplierCode.value = ''
     rspuCode.value = ''
     categoryCode.value = null
@@ -69,7 +71,7 @@ export const useProductListQueryStore = defineStore('productListQuery', () => {
 
   return {
     page, size,
-    keyword, supplierCode, rspuCode,
+    keyword, imageSearchId, supplierCode, rspuCode,
     categoryCode, productLevel, styleCode, sceneCode, materialTag,
     createdRange, priceMin, priceMax, hasPrimaryImage, pendingClassification, sort,
     dimA, dimB, dimC, dimD, dimF,

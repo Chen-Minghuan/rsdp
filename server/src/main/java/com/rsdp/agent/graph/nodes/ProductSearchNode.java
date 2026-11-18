@@ -47,6 +47,7 @@ public class ProductSearchNode extends AbstractAgentNode {
         FloorPlanRoomFact activeRoom = ctx.getFloorPlanContext() != null
             ? ctx.getFloorPlanContext().activeRoom() : null;
         ProductSearchCriteria criteria = constraintComposer.compose(ctx.getConstraints(), activeRoom);
+        criteria.setSearchText(ctx.getUserMessage());
         ProductSearchResult result = queryService.search(criteria);
         ctx.setSearchCriteria(criteria);
         ctx.setSearchResult(result);

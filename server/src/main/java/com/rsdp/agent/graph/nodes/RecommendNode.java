@@ -98,6 +98,15 @@ public class RecommendNode extends AbstractAgentNode {
                 .toList();
         }
 
+        // 点名且通过硬约束的商品优先展示，即使模型未生成推荐理由。
+        Map<String, RecommendReasoner.ScoredCandidate> scoredById = scored.stream()
+            .collect(Collectors.toMap(item -> item.candidate().getRspuId(), Function.identity(), (a, b) -> a));
+        scored = java.util.stream.Stream.concat(
+                candidates.stream().filter(ProductSearchItem::isNameMatched)
+                    .map(item -> scoredById.getOrDefault(item.getRspuId(), new RecommendReasoner.ScoredCandidate(item, null))),
+                scored.stream().filter(item -> !item.candidate().isNameMatched()))
+            .limit(RecommendReasoner.MAX_CARDS).toList();
+
         // 2. 落批次 + 条目（主体选品：batchType=primary；query_criteria 附向量通道留痕）
         AgentRecommendBatch batch = new AgentRecommendBatch();
         batch.setBatchId(IdGenerator.generate("RCB"));

@@ -60,6 +60,8 @@ export interface ProductListParams {
   status?: string
   productLevel?: string
   keyword?: string
+  semantic?: boolean
+  imageSearchId?: string
   viewMode?: 'own' | 'full'
   factoryCode?: string
   /** SPU 业务编码模糊搜索 */

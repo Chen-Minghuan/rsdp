@@ -99,6 +99,15 @@ public class ExcelAiImportController {
         return Result.ok(excelAiImportService.getPreviewData(batchId));
     }
 
+    /** 按确认映射计算清洗页分组，不改写批次的初始映射。 */
+    @PostMapping("/{batchId}/preview-data")
+    @PreAuthorize("hasAuthority('product:import')")
+    public Result<ExcelAiPreviewDataResponse> previewWithMapping(
+        @PathVariable @NotBlank String batchId, @RequestBody Map<String, String> mapping) {
+        excelAiImportService.getAccessibleBatch(batchId);
+        return Result.ok(excelAiImportService.getPreviewData(batchId, mapping));
+    }
+
     /**
      * 行级品类预分类（进入数据清洗页时调用，幂等）。
      *

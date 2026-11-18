@@ -110,6 +110,7 @@ public class ProductQueryService {
     private final CatalogVisibilityService catalogVisibilityService;
     /** §42.3/§43 规则 12：聚合成本投影防反推统一裁决（输出与筛选/排序同一口径）。 */
     private final com.rsdp.supplychain.security.CostSummaryAccess costSummaryAccess;
+    private final CatalogSearchService catalogSearchService;
 
     /**
      * 分页查询产品列表。
@@ -117,8 +118,8 @@ public class ProductQueryService {
      * <p>支持工厂管理员视角：
      * <ul>
      *   <li>{@code viewMode=own}：仅返回当前用户关联工厂已录入 RSKU 的产品。</li>
-     *   <li>{@code viewMode=full}：在 {@code view_full_catalog=true} 时返回全库中
-     *       未被本工厂能力覆盖的产品（始终保留自己已有的产品）；未开启该开关的工厂账号
+     *   <li>{@code viewMode=full}：在用户和厂级公共库开关均开启时返回允许查看的公共商品，
+     *       按工厂黑名单过滤并保留自家已报价商品；未取得全库资格的工厂账号
      *       请求 {@code full} 时服务端强制回退为 {@code own} 视图（默认严格隔离口径）。</li>
      * </ul>
      *
@@ -129,30 +130,15 @@ public class ProductQueryService {
         if ("recycled".equals(request.getStatusTab())) {
             return listRecycledProducts(request);
         }
-        List<String> userFactoryCodes = resolveUserFactoryCodes(request.getFactoryCode());
-        String viewMode = resolveViewMode(request.getViewMode());
-        boolean isFullView = "full".equals(viewMode) && isFullViewEligible(userFactoryCodes);
-        if ("full".equals(viewMode) && !isFullView && SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
-            // 口径（决策点①）：默认严格隔离——未开启 view_full_catalog 的工厂账号忽略
-            // viewMode=full，服务端强制回退 own 视图，避免无任何归属过滤看到全库
-            viewMode = "own";
-        }
-
-        QueryWrapper<RspuMaster> wrapper = buildListWrapper(request, viewMode);
-
-        if ("own".equals(viewMode)) {
-            applyOwnProductFilter(wrapper, userFactoryCodes);
-        }
-
-        if (isFullView) {
-            // V28/INTEG-001：全库视图 = 全量 − 黑名单（自家已报价保留）。
-            // 取代旧"工厂能力覆盖隐藏"口径——用户定稿：公共库开关打开即看全库所有工厂商品，
-            // 竞品级隐藏经黑名单显式配置，不再按能力自动隐藏。
-            catalogVisibilityService.applyProductVisibility(wrapper, userFactoryCodes, true);
-        }
-
+        CatalogSearchService.Match match = searchMatch(request);
+        CatalogSearchQuery wrapper = scopedListWrapper(request, match);
         Page<RspuMaster> pageParam = new Page<>(request.getPage(), request.getSize());
-        applyListSort(wrapper, request.getSort());
+        if (match != null) {
+            // 分页插件会保留含绑定参数的 ORDER BY；统计必须在添加相关性排序前执行。
+            pageParam.setTotal(rspuMapper.selectCount(wrapper));
+            pageParam.setSearchCount(false);
+        }
+        applyListSort(wrapper, request.getSort(), match);
         Page<RspuMaster> page = rspuMapper.selectPage(pageParam, wrapper);
 
         List<String> rspuIds = page.getRecords().stream().map(RspuMaster::getRspuId).toList();
@@ -178,8 +164,33 @@ public class ProductQueryService {
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
     }
 
-    private QueryWrapper<RspuMaster> buildListWrapper(ProductListRequest request, String viewMode) {
-        QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
+    private CatalogSearchService.Match searchMatch(ProductListRequest request) {
+        if (StringUtils.hasText(request.getImageSearchId())
+            || (request.isSemantic() && StringUtils.hasText(request.getKeyword()))) {
+            return catalogSearchService.match(request.getKeyword(), request.getImageSearchId(), false);
+        }
+        return null;
+    }
+
+    private CatalogSearchQuery scopedListWrapper(ProductListRequest request, CatalogSearchService.Match match) {
+        List<String> factoryCodes = resolveUserFactoryCodes(request.getFactoryCode());
+        String viewMode = resolveViewMode(request.getViewMode());
+        boolean full = "full".equals(viewMode) && isFullViewEligible(factoryCodes);
+        if ("full".equals(viewMode) && !full && SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
+            viewMode = "own";
+        }
+        CatalogSearchQuery wrapper = buildListWrapper(request, viewMode, match);
+        if ("own".equals(viewMode)) {
+            applyOwnProductFilter(wrapper, factoryCodes);
+        } else if (full) {
+            catalogVisibilityService.applyProductVisibility(wrapper, factoryCodes, true);
+        }
+        return wrapper;
+    }
+
+    private CatalogSearchQuery buildListWrapper(ProductListRequest request, String viewMode,
+                                               CatalogSearchService.Match match) {
+        CatalogSearchQuery wrapper = new CatalogSearchQuery();
 
         if (StringUtils.hasText(request.getCategoryCode())) {
             wrapper.eq("category_code", request.getCategoryCode());
@@ -244,7 +255,9 @@ public class ProductQueryService {
         applyStatusTab(wrapper, request.getStatusTab());
         applyPrimaryImageFilter(wrapper, request.getHasPrimaryImage());
         applyPriceRangeFilter(wrapper, request.getPriceMin(), request.getPriceMax());
-        if (StringUtils.hasText(request.getKeyword())) {
+        if (match != null) {
+            wrapper.applyMatch(match, true);
+        } else if (StringUtils.hasText(request.getKeyword())) {
             String keyword = "%" + request.getKeyword().trim() + "%";
             wrapper.and(w -> w.like("product_name", keyword).or().like("category_path", keyword).or().like("rspu_id", keyword));
         }
@@ -343,8 +356,17 @@ public class ProductQueryService {
      * @param wrapper 查询构造器
      * @param sort    newest / price_asc / price_desc（可空，未知值回退 newest）
      */
-    private void applyListSort(QueryWrapper<RspuMaster> wrapper, String sort) {
+    private void applyListSort(CatalogSearchQuery wrapper, String sort, CatalogSearchService.Match match) {
         String mode = StringUtils.hasText(sort) ? sort.trim() : "newest";
+        if (match != null) {
+            String secondary = switch (mode) {
+                case "price_asc" -> priceColumnExpression() + " ASC NULLS LAST, created_at DESC";
+                case "price_desc" -> priceColumnExpression() + " DESC NULLS LAST, created_at DESC";
+                default -> "created_at DESC";
+            };
+            wrapper.orderByMatch(match, true, secondary, mode.equals("price_asc") || mode.equals("price_desc"));
+            return;
+        }
         switch (mode) {
             // NULLS LAST 需内联进 ORDER BY，列表达式为服务端常量拼接（无用户输入），无注入面
             case "price_asc" -> wrapper.last(
@@ -395,13 +417,7 @@ public class ProductQueryService {
      * @return 各页签数量
      */
     public ProductStatusCountsResponse statusCounts(ProductListRequest request) {
-        List<String> userFactoryCodes = resolveUserFactoryCodes(request.getFactoryCode());
-        String viewMode = resolveViewMode(request.getViewMode());
-
-        QueryWrapper<RspuMaster> base = buildListWrapper(request, viewMode);
-        if ("own".equals(viewMode)) {
-            applyOwnProductFilter(base, userFactoryCodes);
-        }
+        QueryWrapper<RspuMaster> base = scopedListWrapper(request, searchMatch(request));
 
         QueryWrapper<RspuMaster> onSale = base.clone();
         onSale.eq("status", "active");

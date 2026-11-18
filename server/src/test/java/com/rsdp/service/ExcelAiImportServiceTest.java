@@ -3231,6 +3231,42 @@ class ExcelAiImportServiceTest {
     }
 
     @Test
+    void previewMappingUsesModelNameAndGradeFromSourceColumns() throws IOException {
+        byte[] bytes;
+        try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+             var out = new java.io.ByteArrayOutputStream()) {
+            var sheet = workbook.createSheet("皮椅");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("系列名");
+            header.createCell(1).setCellValue("产品型号");
+            header.createCell(2).setCellValue("产品定位");
+            var first = sheet.createRow(1);
+            first.createCell(0).setCellValue("雅序");
+            first.createCell(1).setCellValue("YH-1");
+            first.createCell(2).setCellValue("C");
+            var second = sheet.createRow(2);
+            second.createCell(0).setCellValue("雅哲");
+            second.createCell(1).setCellValue("YH-2");
+            second.createCell(2).setCellValue("B");
+            workbook.write(out);
+            bytes = out.toByteArray();
+        }
+        var file = new MockMultipartFile("test.xlsx", "test.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes);
+        when(visionService.chatText(anyString(), anyString())).thenReturn("""
+            {"mapping":{"系列名":"categoryCode","产品型号":"externalCode","产品定位":"positioningLabel"},"categoryGuess":"FS"}
+            """);
+        when(storageService.store(any(), anyString(), anyLong(), anyString())).thenReturn("excel-imports/test.xlsx");
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenReturn(1);
+
+        ExcelAiMappingResponse result = excelAiImportService.previewMapping(file);
+
+        assertEquals("externalCode,productName", result.getSuggestedMapping().get("产品型号"));
+        assertNull(result.getSuggestedMapping().get("系列名"));
+        assertEquals("productLevel", result.getSuggestedMapping().get("产品定位"));
+    }
+
+    @Test
     void previewMapping_shouldFilterImageUrlMappingForImageKeywordHeaders() throws IOException {
         // P1-8：「产品图片」这类图片关键字表头同样识别为内嵌图片列，过滤掉 AI 误映射的 URL 字段
         byte[] excelBytes = createExcelWithImageKeywordHeader();
@@ -4697,6 +4733,71 @@ class ExcelAiImportServiceTest {
         assertEquals(1, modelGroups.size());
         assertEquals(2, modelGroups.get(0).getVariants().size());
         assertTrue(response.getProductHeaders().contains("型号品名 ITEM NO/DESCRIPTION"));
+    }
+
+    @Test
+    void getPreviewData_shouldGroupOnlyRowsInTheSameMergedProductName() throws IOException {
+        byte[] excelBytes;
+        try (var out = new java.io.ByteArrayOutputStream();
+             var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sheet = workbook.createSheet();
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("名称");
+            header.createCell(1).setCellValue("规格尺寸");
+            for (int rowIndex = 1; rowIndex <= 5; rowIndex++) {
+                var row = sheet.createRow(rowIndex);
+                if (rowIndex == 1 || rowIndex == 4) {
+                    row.createCell(0).setCellValue("迈克");
+                }
+                row.createCell(1).setCellValue((500 + rowIndex * 300) + "*930*970");
+            }
+            sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(1, 3, 0, 0));
+            sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(4, 5, 0, 0));
+            workbook.write(out);
+            excelBytes = out.toByteArray();
+        }
+        var file = new MockMultipartFile("sofa.xlsx", "sofa.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+        when(visionService.chatText(anyString(), anyString())).thenReturn(
+            "{\"mapping\":{\"名称\":\"externalCode,productName\",\"规格尺寸\":\"dimensions\"},\"categoryGuess\":\"SF\"}");
+        when(storageService.store(any(), anyString(), anyLong(), anyString()))
+            .thenReturn("excel-imports/BATCH-TEST.xlsx");
+        var saved = new java.util.concurrent.atomic.AtomicReference<ExcelImportBatch>();
+        when(batchMapper.insert(any(ExcelImportBatch.class))).thenAnswer(inv -> {
+            saved.set(inv.getArgument(0));
+            return 1;
+        });
+        ExcelAiMappingResponse preview;
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            preview = excelAiImportService.previewMapping(file);
+        }
+        when(batchMapper.selectById(preview.getBatchId())).thenReturn(saved.get());
+        when(storageService.get(anyString())).thenAnswer(inv -> new ByteArrayInputStream(excelBytes));
+
+        Map<String, String> mapping = Map.of("名称", "productName", "规格尺寸", "dimensions");
+        var data = excelAiImportService.getPreviewData(preview.getBatchId(), mapping);
+
+        assertEquals(List.of(3, 2), data.getGroups().stream().map(group -> group.getVariants().size()).toList());
+        assertTrue(data.getGroups().stream().allMatch(group -> "迈克".equals(group.getProductRawValues().get("名称"))));
+        assertTrue(data.getGroups().stream().noneMatch(group ->
+            org.springframework.util.StringUtils.hasText(group.getExternalCode())));
+
+        var category = new CategoryDict();
+        category.setDictCode("SF");
+        when(dictService.listByType("category")).thenReturn(List.of(category));
+        var revision = new com.rsdp.dto.request.ExcelAiCategoryRevisionRequest();
+        revision.setCategoryMode(com.rsdp.dto.request.CategoryMode.SINGLE);
+        revision.setCategoryHint("SF");
+        revision.setMapping(mapping);
+        try (var ignored = mockStatic(SecurityOperatorContext.class)) {
+            when(SecurityOperatorContext.currentUserId()).thenReturn("user-1");
+            excelAiImportService.applyCategoryRevision(preview.getBatchId(), revision);
+        }
+        var command = ArgumentCaptor.forClass(ExcelImportPreviewSnapshotService.CreateRevisionCommand.class);
+        verify(previewSnapshotService, times(2)).createNextRevision(command.capture());
+        assertEquals(List.of(3, 2), command.getValue().getGroups().stream()
+            .map(group -> group.getNormalizedPayload().path("rows").size()).toList());
     }
 
     @Test

@@ -123,7 +123,7 @@ public class CompanionMatchNode extends AbstractAgentNode {
         }
 
         SkillResult result = skill.execute(new SkillContext(
-            ctx.getSessionId(), ctx.getRunId(), ctx.getConstraints(), confirmed, Map.of(), readTools));
+            ctx.getSessionId(), ctx.getRunId(), ctx.getUserMessage(), ctx.getConstraints(), confirmed, Map.of(), readTools));
         List<SkillResult.CompanionGroup> groups = result.groups() != null ? result.groups() : List.of();
         if (groups.isEmpty()) {
             log.info("配套推荐无结果，trace={}，runId={}", result.trace(), ctx.getRunId());

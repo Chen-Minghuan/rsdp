@@ -146,12 +146,6 @@ export const navGroups: NavGroup[] = [
         permission: PERMISSIONS.PRODUCT_UPDATE
       },
       {
-        key: 'visual-search',
-        label: '以图搜图',
-        path: '/visual-search',
-        permission: PERMISSIONS.PRODUCT_READ
-      },
-      {
         key: 'favorites',
         label: '我的收藏',
         path: '/favorites',

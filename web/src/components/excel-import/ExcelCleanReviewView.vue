@@ -34,6 +34,7 @@ const emit = defineEmits<{
   'update:showOnlyFailed': [value: boolean]
   'update:previewEdit': [payload: { rowIndex: number; header: string; value: string | null }]
   'toggleSkipRow': [rowIndex: number]
+  'setRowsSkipped': [rowIndexes: number[], skipped: boolean]
   // P0-1：组级品类设置（组内全部非跳过行）
   'setGroupCategory': [rowIndexes: number[], value: string | null]
   // P0-2/§13：勾选多组后批量设置品类
@@ -45,15 +46,14 @@ const emit = defineEmits<{
   'pasteRowImages': [targetRowIndex: number]
 }>()
 
-const currentGroupExternalCode = ref<string | null>(null)
+const currentGroupRowIndex = ref<number | null>(null)
 const searchKeyword = ref('')
 
-/** 批量设置品类（§13）：勾选的商品组 key 集合与待应用的品类 */
-const checkedGroupKeys = ref<Set<string | number>>(new Set())
+const checkedGroupKeys = ref<Set<number>>(new Set())
 const batchCategoryCode = ref<string | null>(null)
 
-function groupKey(group: PreviewDataGroup): string | number {
-  return group.externalCode || group.representativeRowIndex
+function groupKey(group: PreviewDataGroup): number {
+  return group.representativeRowIndex
 }
 
 function toggleGroupChecked(group: PreviewDataGroup, checked: boolean) {
@@ -87,6 +87,19 @@ function clearCheckedGroups() {
   checkedGroupKeys.value = new Set()
 }
 
+function isGroupSkipped(group: PreviewDataGroup) {
+  return group.variants.every(variant => props.skippedRows.has(variant.rowIndex))
+}
+
+const checkedSkippedGroups = computed(() => checkedGroups.value.filter(isGroupSkipped))
+const skippedGroupCount = computed(() => props.previewGroups.filter(isGroupSkipped).length)
+
+function setCheckedGroupsSkipped(skipped: boolean) {
+  const groups = skipped ? checkedGroups.value : checkedSkippedGroups.value
+  emit('setRowsSkipped', groups.flatMap(group => group.variants.map(variant => variant.rowIndex)), skipped)
+  clearCheckedGroups()
+}
+
 const filteredGroups = computed(() => {
   let groups = props.previewGroups
   if (props.showOnlyFailed && props.failedRowIndexes.length > 0) {
@@ -117,67 +130,38 @@ const filteredGroups = computed(() => {
 
 const displayedGroups = computed(() => filteredGroups.value)
 
-const currentGroup = computed(() => {
-  if (currentGroupExternalCode.value == null) return null
-  return props.previewGroups.find(g => g.externalCode === currentGroupExternalCode.value) ?? null
-})
-
-function resetToFirstDisplayed() {
-  const displayed = displayedGroups.value
-  if (displayed.length === 0) {
-    currentGroupExternalCode.value = null
-    return
+watch(displayedGroups, (groups) => {
+  const keys = groups.map(groupKey)
+  checkedGroupKeys.value = new Set(keys.filter(key => checkedGroupKeys.value.has(key)))
+  if (currentGroupRowIndex.value == null || !keys.includes(currentGroupRowIndex.value)) {
+    currentGroupRowIndex.value = keys[0] ?? null
   }
-  const exists = displayed.some(g => g.externalCode === currentGroupExternalCode.value)
-  if (!exists) {
-    currentGroupExternalCode.value = displayed[0].externalCode
-  }
-}
-
-watch(() => props.previewGroups.length, (len) => {
-  if (len === 0) {
-    currentGroupExternalCode.value = null
-    return
-  }
-  resetToFirstDisplayed()
 }, { immediate: true })
 
-watch(() => props.showOnlyUndetermined, resetToFirstDisplayed)
-watch(searchKeyword, resetToFirstDisplayed)
-
-function selectGroup(externalCode: string) {
-  currentGroupExternalCode.value = externalCode
-}
+const currentGroup = computed(() =>
+  displayedGroups.value.find(group => groupKey(group) === currentGroupRowIndex.value) ?? null
+)
 
 /** 当前商品在展示列表中的位次（1-based；0 = 未选中） */
-const currentGroupOrdinal = computed(() => {
-  if (currentGroupExternalCode.value == null) return 0
-  const idx = displayedGroups.value.findIndex(g => g.externalCode === currentGroupExternalCode.value)
-  return idx >= 0 ? idx + 1 : 0
-})
+const currentGroupOrdinal = computed(() =>
+  displayedGroups.value.findIndex(group => groupKey(group) === currentGroupRowIndex.value) + 1
+)
 
 function goPrevious() {
-  const displayed = displayedGroups.value
-  if (!currentGroup.value || displayed.length === 0) return
-  const idx = displayed.findIndex(g => g.externalCode === currentGroupExternalCode.value)
-  if (idx > 0) {
-    currentGroupExternalCode.value = displayed[idx - 1].externalCode
+  if (currentGroupOrdinal.value > 1) {
+    currentGroupRowIndex.value = groupKey(displayedGroups.value[currentGroupOrdinal.value - 2])
   }
 }
 
 function goNext() {
-  const displayed = displayedGroups.value
-  if (!currentGroup.value || displayed.length === 0) return
-  const idx = displayed.findIndex(g => g.externalCode === currentGroupExternalCode.value)
-  if (idx >= 0 && idx < displayed.length - 1) {
-    currentGroupExternalCode.value = displayed[idx + 1].externalCode
+  if (currentGroupOrdinal.value > 0 && currentGroupOrdinal.value < displayedGroups.value.length) {
+    currentGroupRowIndex.value = groupKey(displayedGroups.value[currentGroupOrdinal.value])
   }
 }
 
 function groupStatus(group: PreviewDataGroup): { text: string; type: 'default' | 'success' | 'warning' | 'info' } {
-  const allSkipped = group.variants.every(v => props.skippedRows.has(v.rowIndex))
-  if (allSkipped) {
-    return { text: '已跳过', type: 'default' }
+  if (isGroupSkipped(group)) {
+    return { text: '已取消导入', type: 'default' }
   }
   const hasUndetermined = group.variants.some(v => props.undeterminedCategoryRowIndexes.includes(v.rowIndex))
   if (hasUndetermined) {
@@ -291,7 +275,7 @@ function onUpdateShowOnlyFailed(value: boolean) {
           {{ undeterminedCategoryRowIndexes.length }} 行商品品类未确定
         </n-tag>
         <n-tag v-if="skippedRows.size > 0" type="warning">
-          已跳过 {{ skippedRows.size }} 行
+          <template v-if="skippedGroupCount > 0">已取消 {{ skippedGroupCount }} 件商品 · </template>已跳过 {{ skippedRows.size }} 行
         </n-tag>
         <n-checkbox :checked="showOnlyUndetermined" @update:checked="onUpdateShowOnlyUndetermined">
           只看未确定商品
@@ -316,8 +300,7 @@ function onUpdateShowOnlyFailed(value: boolean) {
       </n-space>
     </n-space>
 
-    <!-- 批量设置品类（P0-2/§13）：勾选商品组后一次性设置，展开为组内全部非跳过行 -->
-    <n-space v-if="categoryMode" align="center" wrap style="padding: 0 4px;">
+    <n-space v-if="displayedGroups.length > 0" align="center" wrap style="padding: 0 4px;">
       <n-checkbox
         :checked="checkedGroupKeys.size > 0 && checkedGroupKeys.size === displayedGroups.length"
         :indeterminate="checkedGroupKeys.size > 0 && checkedGroupKeys.size < displayedGroups.length"
@@ -328,8 +311,9 @@ function onUpdateShowOnlyFailed(value: boolean) {
         全选当前列表
       </n-checkbox>
       <template v-if="checkedGroupKeys.size > 0">
-        <n-tag type="info" :bordered="false">已选择 {{ checkedGroupKeys.size }} 组（{{ checkedRowCount }} 行）</n-tag>
+        <n-tag type="info" :bordered="false">已选择 {{ checkedGroupKeys.size }} 件商品</n-tag>
         <n-select
+          v-if="categoryMode"
           v-model:value="batchCategoryCode"
           :options="categorySelectOptions"
           placeholder="批量设置商品品类"
@@ -337,8 +321,14 @@ function onUpdateShowOnlyFailed(value: boolean) {
           size="small"
           style="width: 200px;"
         />
-        <n-button size="small" type="primary" :disabled="!batchCategoryCode" @click="applyBatchCategory">
+        <n-button v-if="categoryMode" size="small" type="primary" :disabled="!batchCategoryCode || checkedRowCount === 0" @click="applyBatchCategory">
           应用到所选
+        </n-button>
+        <n-button v-if="checkedRowCount > 0" size="small" type="warning" secondary @click="setCheckedGroupsSkipped(true)">
+          取消导入所选商品
+        </n-button>
+        <n-button v-if="checkedSkippedGroups.length > 0" size="small" @click="setCheckedGroupsSkipped(false)">
+          恢复导入所选商品
         </n-button>
         <n-button size="small" @click="clearCheckedGroups">清除选择</n-button>
       </template>
@@ -351,9 +341,9 @@ function onUpdateShowOnlyFailed(value: boolean) {
         <n-list v-else hoverable clickable style="max-height: 600px; overflow-y: auto;">
           <n-list-item
             v-for="(group, index) in displayedGroups"
-            :key="group.externalCode || group.representativeRowIndex"
-            :class="{ 'review-item-active': currentGroupExternalCode === group.externalCode }"
-            @click="selectGroup(group.externalCode)"
+            :key="groupKey(group)"
+            :class="{ 'review-item-active': currentGroupRowIndex === groupKey(group) }"
+            @click="currentGroupRowIndex = groupKey(group)"
           >
             <n-space align="center" style="width: 100%;">
               <!-- 序号：当前列表内的展示位次（筛选后重新编号），便于人工核对进度 -->
@@ -361,8 +351,8 @@ function onUpdateShowOnlyFailed(value: boolean) {
                 {{ index + 1 }}
               </span>
               <n-checkbox
-                v-if="categoryMode"
                 :checked="checkedGroupKeys.has(groupKey(group))"
+                :aria-label="`选择 ${primaryIdentifier(group)}`"
                 @click.stop
                 @update:checked="(checked: boolean) => toggleGroupChecked(group, checked)"
               />
@@ -410,6 +400,7 @@ function onUpdateShowOnlyFailed(value: boolean) {
           :copied-image-row-index="copiedImageRowIndex"
           @update:preview-edit="onPreviewEdit"
           @toggle-skip-row="$emit('toggleSkipRow', $event)"
+          @set-rows-skipped="(rowIndexes, skipped) => $emit('setRowsSkipped', rowIndexes, skipped)"
           @set-group-category="onSetGroupCategory"
           @preview-image="$emit('previewImage', $event)"
           @upload-row-image="onUploadRowImage"

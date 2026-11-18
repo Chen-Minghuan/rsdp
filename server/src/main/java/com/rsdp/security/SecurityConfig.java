@@ -135,6 +135,7 @@ public class SecurityConfig {
                 // 检索/推荐接口
                 .requestMatchers(HttpMethod.POST, "/api/v1/matching/**").hasAuthority(Permissions.PRODUCT_READ)
                 .requestMatchers(HttpMethod.POST, "/api/v1/retrieval/**").hasAuthority(Permissions.PRODUCT_READ)
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/image-search").hasAuthority(Permissions.PRODUCT_READ)
 
                 // 产品录入与批量导入
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/entry").hasAuthority(Permissions.PRODUCT_CREATE)

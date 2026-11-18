@@ -36,6 +36,7 @@ const {
   rowCategorySelections,
   rowCategorySourceTags,
   undeterminedCategoryRowIndexes,
+  missingProductLevelRowCount,
   updateIfExists,
   importResult,
   taskList,
@@ -62,7 +63,7 @@ const {
   batchRecovering,
   batchProgress
 } = storeToRefs(store)
-const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, uploadRowImage, removeRowImage, cloneRowImages, setGroupCategory, setGroupsCategory, resetRowCategoryState } = store
+const { handlePreview, handleSwitchSheet, handleImport, handleReimportWithUpdate, clearAll, handleGoToCleanStep, handleGoToConfirmStep, updatePreviewEdit, toggleSkipRow, setRowsSkipped, uploadRowImage, removeRowImage, cloneRowImages, setGroupCategory, setGroupsCategory, resetRowCategoryState } = store
 
 /** 下载标准导入模板（静态文件，web/public/templates 下） */
 function downloadStandardTemplate() {
@@ -624,12 +625,18 @@ function handleUpdatePreviewEdit(payload: { rowIndex: number; header: string; va
   updatePreviewEdit(payload.rowIndex, payload.header, payload.value)
 }
 
+const confirmingCleanReview = ref(false)
+
 /** 数据清洗 → 确认导入：先物化品类编辑命令为新 Revision；被拦截（仍有未确定品类行）时自动切到「只看未确定商品」 */
 async function goToConfirmStep() {
-  if (!(await handleGoToConfirmStep())) {
-    if (undeterminedCategoryRowIndexes.value.length > 0) {
+  if (confirmingCleanReview.value) return
+  confirmingCleanReview.value = true
+  try {
+    if (!(await handleGoToConfirmStep()) && undeterminedCategoryRowIndexes.value.length > 0) {
       showOnlyUndetermined.value = true
     }
+  } finally {
+    confirmingCleanReview.value = false
   }
 }
 
@@ -928,7 +935,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
 
     <!-- 步骤 3：数据清洗 -->
     <n-card v-if="currentStep === 3" title="数据清洗">
-      <n-spin :show="uploading">
+      <n-spin :show="uploading || confirmingCleanReview">
         <n-space vertical :size="16">
           <n-alert type="info" :show-icon="false">
             左侧选择商品，右侧检查商品字段与变体信息。编辑结果会应用到本次导入。
@@ -955,6 +962,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
             :copied-image-row-index="copiedImageRowIndex"
             @update:preview-edit="handleUpdatePreviewEdit"
             @toggle-skip-row="toggleSkipRow"
+            @set-rows-skipped="setRowsSkipped"
             @set-group-category="setGroupCategory"
             @set-groups-category="setGroupsCategory"
             @preview-image="previewImage"
@@ -965,10 +973,10 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
           />
 
           <n-space>
-            <n-button @click="currentStep = 2">
+            <n-button :disabled="confirmingCleanReview" @click="currentStep = 2">
               上一步
             </n-button>
-            <n-button type="primary" @click="goToConfirmStep">
+            <n-button type="primary" :loading="confirmingCleanReview" @click="goToConfirmStep">
               下一步：确认导入
             </n-button>
           </n-space>
@@ -1007,6 +1015,9 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
 
         <n-card title="默认工厂信息" size="small">
           <n-space vertical :size="12">
+            <n-alert v-if="missingProductLevelRowCount > 0 && !defaultProductLevel" type="warning">
+              有 {{ missingProductLevelRowCount }} 行缺少产品等级，请选择默认产品等级后再导入。
+            </n-alert>
             <n-space align="center" wrap>
               <span class="factory-field-label">
                 <span v-if="factoryRequired" class="required-star">*</span>工厂编码
@@ -1031,7 +1042,9 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
               <n-input-number v-model:value="defaultMoq" placeholder="默认 MOQ（可选）" :min="1" style="width: 140px;" />
             </n-space>
             <n-space align="center" wrap>
-              <span class="factory-field-label">产品等级</span>
+              <span class="factory-field-label">
+                <span v-if="missingProductLevelRowCount > 0" class="required-star">*</span>产品等级
+              </span>
               <n-select
                 v-model:value="defaultProductLevel"
                 :options="productLevelOptions.map(d => ({ label: d.dictName, value: d.dictCode }))"
@@ -1050,7 +1063,7 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
               />
             </n-space>
             <n-text depth="3" style="font-size: 12px;">
-              默认产品等级：行内无产品等级时使用，报价（RSKU）创建必填等级；默认材质：价格列与行内材质均无法识别时使用
+              默认产品等级只填补空值。原表各行已填的等级优先。默认材质用于价格列和数据行均无法识别材质时。
             </n-text>
           </n-space>
         </n-card>
@@ -1074,7 +1087,12 @@ const rowDetailColumns: DataTableColumns<ExcelImportRow> = [
           <n-button @click="currentStep = 3">
             上一步
           </n-button>
-          <n-button type="primary" :loading="uploading" @click="handleImport">
+          <n-button
+            type="primary"
+            :loading="uploading"
+            :disabled="missingProductLevelRowCount > 0 && !defaultProductLevel"
+            @click="handleImport"
+          >
             开始导入
           </n-button>
         </n-space>

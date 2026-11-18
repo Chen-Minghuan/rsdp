@@ -17,6 +17,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -25,6 +26,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -157,6 +159,24 @@ class ExcelAiImportControllerTest {
             .andExpect(jsonPath("$.data.rows[0].mappedFieldByHeader.名称").value("productName"));
 
         verify(excelAiImportService, times(1)).getPreviewData("BATCH-001");
+    }
+
+    @Test
+    void previewData_shouldUseConfirmedMappingAfterCheckingBatchAccess() throws Exception {
+        Map<String, String> mapping = Map.of("名称", "productName");
+        ExcelAiPreviewDataResponse response = new ExcelAiPreviewDataResponse();
+        response.setTotalRows(3);
+        when(excelAiImportService.getPreviewData("BATCH-001", mapping)).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/products/excel-ai-import/BATCH-001/preview-data")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"名称\":\"productName\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.totalRows").value(3));
+
+        var calls = org.mockito.Mockito.inOrder(excelAiImportService);
+        calls.verify(excelAiImportService).getAccessibleBatch("BATCH-001");
+        calls.verify(excelAiImportService).getPreviewData("BATCH-001", mapping);
     }
 
     @Test

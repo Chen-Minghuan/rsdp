@@ -50,6 +50,7 @@ public class PublicCatalogService {
     private final ImageAssetsMapper imageAssetsMapper;
     private final DictService dictService;
     private final ObjectMapper objectMapper;
+    private final CatalogSearchService catalogSearchService;
 
     /**
      * 公开商品分页列表（仅在售 active 产品）。
@@ -72,15 +73,29 @@ public class PublicCatalogService {
             String seatCount, String color, String material,
             BigDecimal priceMin, BigDecimal priceMax, String sort,
             String keyword, String style, String scene) {
+        return searchProducts(page, size, category, seatCount, color, material, priceMin, priceMax,
+            sort, keyword, style, scene, false, null);
+    }
+
+    /** 公开目录搜索，支持以名称和描述搜款或按参考图筛选。 */
+    public PageResult<PublicProductItemResponse> searchProducts(int page, int size, String category,
+            String seatCount, String color, String material,
+            BigDecimal priceMin, BigDecimal priceMax, String sort,
+            String keyword, String style, String scene, boolean semantic, String imageSearchId) {
         int safePage = Math.max(1, page);
         int safeSize = Math.max(1, Math.min(size, MAX_PAGE_SIZE));
 
-        QueryWrapper<RspuMaster> wrapper = new QueryWrapper<>();
+        CatalogSearchService.Match match = StringUtils.hasText(imageSearchId)
+            || (semantic && StringUtils.hasText(keyword))
+            ? catalogSearchService.match(keyword, imageSearchId, true) : null;
+        CatalogSearchQuery wrapper = new CatalogSearchQuery();
         wrapper.eq("status", STATUS_ACTIVE);
         if (StringUtils.hasText(category)) {
             wrapper.eq("category_code", category.trim());
         }
-        if (StringUtils.hasText(keyword)) {
+        if (match != null) {
+            wrapper.applyMatch(match, false);
+        } else if (StringUtils.hasText(keyword)) {
             wrapper.like("product_name", keyword.trim());
         }
         if (StringUtils.hasText(style)) {
@@ -112,13 +127,26 @@ public class PublicCatalogService {
         if (priceMax != null) {
             wrapper.le("retail_price", priceMax);
         }
-        switch (sort == null ? "" : sort) {
-            case "price_asc" -> wrapper.orderByAsc("retail_price");
-            case "price_desc" -> wrapper.orderByDesc("retail_price");
-            default -> wrapper.orderByDesc("created_at");
+        Page<RspuMaster> pageParam = new Page<>(safePage, safeSize);
+        String mode = sort == null ? "" : sort;
+        if (match != null) {
+            pageParam.setTotal(rspuMapper.selectCount(wrapper));
+            pageParam.setSearchCount(false);
+            String secondary = switch (mode) {
+                case "price_asc" -> "retail_price ASC NULLS LAST, created_at DESC";
+                case "price_desc" -> "retail_price DESC NULLS LAST, created_at DESC";
+                default -> "created_at DESC";
+            };
+            wrapper.orderByMatch(match, false, secondary, mode.equals("price_asc") || mode.equals("price_desc"));
+        } else {
+            switch (mode) {
+                case "price_asc" -> wrapper.orderByAsc("retail_price");
+                case "price_desc" -> wrapper.orderByDesc("retail_price");
+                default -> wrapper.orderByDesc("created_at");
+            }
         }
 
-        Page<RspuMaster> pageResult = rspuMapper.selectPage(new Page<>(safePage, safeSize), wrapper);
+        Page<RspuMaster> pageResult = rspuMapper.selectPage(pageParam, wrapper);
         List<RspuMaster> records = pageResult.getRecords();
         if (records.isEmpty()) {
             return PageResult.of(pageResult.getTotal(), safePage, safeSize, List.of());

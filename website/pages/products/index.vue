@@ -25,6 +25,7 @@ function queryString(key: string): string | undefined {
 const filters = computed(() => ({
   sort: queryString('sort') || 'newest',
   keyword: queryString('keyword'),
+  imageSearchId: queryString('imageSearchId'),
   category: queryString('category'),
   style: queryString('style'),
   scene: queryString('scene'),
@@ -170,6 +171,8 @@ function fetchProducts(targetPage: number) {
     size: PAGE_SIZE,
     sort: f.sort,
     keyword: f.keyword ?? '',
+    semantic: f.keyword && !f.imageSearchId ? 'true' : 'false',
+    imageSearchId: f.imageSearchId ?? '',
     category: f.category ?? '',
     style: f.style ?? '',
     scene: f.scene ?? '',
@@ -196,10 +199,11 @@ watch(firstPage, (val) => {
 
 async function loadMore() {
   if (loadingMore.value || products.value.length >= total.value) return
+  const currentFilters = filters.value
   loadingMore.value = true
   try {
     const next = await fetchProducts(page.value + 1)
-    if (next) {
+    if (next && currentFilters === filters.value) {
       enteringIds.value = next.rows.map(r => r.rspuId)
       products.value = [...products.value, ...next.rows]
       page.value += 1
@@ -218,6 +222,7 @@ const activeChips = computed(() => {
     chips.push({ key: 'sort', label: sortOptions.find(o => o.value === f.sort)?.label ?? f.sort })
   }
   if (f.keyword) chips.push({ key: 'keyword', label: `搜索：${f.keyword}` })
+  if (f.imageSearchId) chips.push({ key: 'imageSearchId', label: '参考图搜索' })
   if (f.category) chips.push({ key: 'category', label: currentCategory.value?.dictName ?? f.category })
   if (f.style) chips.push({ key: 'style', label: styleOptions.find(o => o.value === f.style)?.label ?? f.style })
   if (f.scene) chips.push({ key: 'scene', label: sceneOptions.value.find(o => o.value === f.scene)?.label ?? f.scene })
@@ -424,7 +429,9 @@ useHead({ title: computed(() => `${pageTitle.value} — rooom.vip 家居全案`)
           <div class="sk-block sk-line" style="width: 38%" />
         </div>
       </div>
-      <div v-if="!products.length && !pending" class="empty">暂无符合条件的商品</div>
+      <div v-if="!products.length && !pending" class="empty">
+        {{ filters.imageSearchId && !firstPage ? '无法加载参考图搜索结果，请重新上传图片' : '暂无符合条件的商品' }}
+      </div>
 
       <!-- 加载更多 -->
       <div v-if="total > 0" class="more-wrap">

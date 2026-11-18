@@ -97,6 +97,14 @@ export async function listProducts(params: ProductListParams, options?: ApiOptio
   return result.data
 }
 
+/** 上传参考图，返回商品列表可用于分页和筛选的临时搜索 ID。 */
+export async function startProductImageSearch(image: File, options?: ApiOptions): Promise<string> {
+  const body = new FormData()
+  body.append('image', image)
+  const { data: result } = await uploadClient.post<ApiResult<string>>('/v1/products/image-search', body, options)
+  return result.data
+}
+
 /**
  * 商品列表状态页签统计（出售中/仓库中/已售罄/回收站）。
  *
@@ -452,11 +460,12 @@ export async function confirmExcelAiImport(request: ExcelAiMappingRequest, signa
  *
  * @param batchId 预览批次号
  */
-export async function getExcelAiPreviewData(batchId: string): Promise<ExcelAiPreviewDataResponse> {
+export async function getExcelAiPreviewData(batchId: string, mapping?: Record<string, string>): Promise<ExcelAiPreviewDataResponse> {
   // 预览接口只返回轻量图片元数据，缩略图按行懒加载，超时保持默认即可
-  const { data: result } = await apiClient.get<ApiResult<ExcelAiPreviewDataResponse>>(
-    `/v1/products/excel-ai-import/${batchId}/preview-data`
-  )
+  const path = `/v1/products/excel-ai-import/${batchId}/preview-data`
+  const { data: result } = mapping
+    ? await apiClient.post<ApiResult<ExcelAiPreviewDataResponse>>(path, mapping)
+    : await apiClient.get<ApiResult<ExcelAiPreviewDataResponse>>(path)
   return result.data
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { CategoryNode, SceneItem } from '~/types/api'
 
 /**
@@ -45,25 +45,63 @@ function toggleMenu(menu: 'categories' | 'rooms') {
 
 const route = useRoute()
 
-// ---------- 搜索框（回车/按钮 → /products?keyword=xxx） ----------
-
 const searchKeyword = ref('')
+const searchImageInput = ref<HTMLInputElement | null>(null)
+const uploadingSearchImage = ref(false)
+const searchError = ref('')
+const { post } = usePublicApi()
 
-/** 已在列表页时合并现有 query（route.query 变化触发列表自动刷新），否则只带 keyword 跳转。 */
-function submitSearch() {
-  const kw = searchKeyword.value.trim()
+watch(() => route.query.keyword, (value) => {
+  searchKeyword.value = typeof value === 'string' ? value : ''
+}, { immediate: true })
+
+/** 已在商品页时保留当前筛选。 */
+function searchQuery() {
   const query: Record<string, string> = {}
   if (route.path === '/products') {
     for (const [k, v] of Object.entries(route.query)) {
       if (typeof v === 'string') query[k] = v
     }
   }
+  return query
+}
+
+function submitSearch() {
+  if (uploadingSearchImage.value) return
+  searchError.value = ''
+  const kw = searchKeyword.value.trim()
+  const query = searchQuery()
+  delete query.imageSearchId
   if (kw) {
     query.keyword = kw
   } else {
     delete query.keyword
   }
   navigateTo({ path: '/products', query })
+}
+
+async function submitImageSearch(event: Event) {
+  const input = event.target as HTMLInputElement
+  const image = input.files?.[0]
+  input.value = ''
+  if (!image || uploadingSearchImage.value) return
+  uploadingSearchImage.value = true
+  searchError.value = ''
+  try {
+    const form = new FormData()
+    form.append('image', image)
+    const imageSearchId = await post<string>('/api/v1/public/products/image-search', form)
+    if (!imageSearchId) throw new Error('图片搜索失败，请重试')
+    const query = searchQuery()
+    query.imageSearchId = imageSearchId
+    delete query.keyword
+    searchKeyword.value = ''
+    await navigateTo({ path: '/products', query })
+  } catch (error) {
+    searchError.value = error instanceof Error ? error.message : '图片搜索失败，请重试'
+  } finally {
+    uploadingSearchImage.value = false
+  }
 }
 
 // ---------- 心愿单（全站抽屉，挂载于 app.vue） ----------
@@ -107,10 +145,13 @@ const activeNav = computed(() => {
           <span class="brand-name">rooom.vip</span>
           <span class="brand-sub">家居全案</span>
         </a>
-        <div class="search">
-          <input v-model="searchKeyword" placeholder="搜索商品、系列或空间灵感，试试「三人沙发」" @keyup.enter="submitSearch">
-          <button type="button" @click="submitSearch">搜索</button>
-        </div>
+        <form class="search" role="search" @submit.prevent="submitSearch">
+          <input v-model="searchKeyword" type="search" maxlength="300" aria-label="商品名称或描述" placeholder="搜商品名称或描述，如奶油风三人沙发">
+          <input ref="searchImageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" hidden @change="submitImageSearch">
+          <button class="image-search" type="button" :disabled="uploadingSearchImage" @click="searchImageInput?.click()">{{ uploadingSearchImage ? '搜图中' : '搜图' }}</button>
+          <button type="submit" :disabled="uploadingSearchImage">搜索</button>
+          <small v-if="searchError" class="search-error" role="alert">{{ searchError }}</small>
+        </form>
         <div class="hd-links">
           <a>门店</a><i />
           <template v-if="designerLoggedIn">
@@ -214,6 +255,7 @@ header {
 
 /* 搜索框：直角细线 + 墨底按钮 */
 .search {
+  position: relative;
   flex: 1;
   max-width: 520px;
   display: flex;
@@ -223,8 +265,9 @@ header {
   height: 42px;
 }
 
-.search input {
+.search input[type='search'] {
   flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
   outline: none;
@@ -241,7 +284,8 @@ header {
   border: none;
   background: var(--ink);
   color: #fff;
-  padding: 0 26px;
+  padding: 0 14px;
+  white-space: nowrap;
   height: 42px;
   font-size: 12px;
   cursor: pointer;
@@ -250,6 +294,24 @@ header {
 
 .search button:hover {
   background: var(--accent-deep);
+}
+
+.search .image-search {
+  color: var(--ink);
+  background: var(--card);
+  border-left: 1px solid var(--line);
+}
+
+.search .image-search:hover { background: var(--bg); }
+
+.search-error {
+  position: absolute;
+  inset: 100% 0 auto;
+  z-index: 1;
+  padding: 8px 12px;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
 }
 
 /* 头部右侧：纯文字链，1px 细线分隔 */
@@ -353,9 +415,23 @@ header {
 }
 
 @media (max-width: 767px) {
-  .hd-links,
-  .search {
+  .hd-links {
     display: none;
+  }
+
+  .hd {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-block: 12px;
+  }
+
+  .search {
+    flex: 1 0 100%;
+    max-width: none;
+  }
+
+  .search input[type='search'] {
+    padding-inline: 10px;
   }
 
   .nav-inner {

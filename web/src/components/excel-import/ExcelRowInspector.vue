@@ -25,6 +25,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   'update:previewEdit': [payload: { rowIndex: number; header: string; value: string | null }]
   'toggleSkipRow': [rowIndex: number]
+  'setRowsSkipped': [rowIndexes: number[], skipped: boolean]
   // P0-1：品类按「商品组」设置——组内全部非跳过行一次写入，消灭只改代表行的死胡同
   'setGroupCategory': [rowIndexes: number[], value: string | null]
   'previewImage': [src: string]
@@ -41,7 +42,7 @@ const descriptionHeader = computed(() => {
   return props.productHeaders.find(h => props.group!.productMappedFieldByHeader[h] === 'description') ?? null
 })
 
-watch(() => props.group?.externalCode, () => {
+watch(() => props.group?.representativeRowIndex, () => {
   editedValues.value = {}
 }, { immediate: true })
 
@@ -347,14 +348,14 @@ function isGroupSkipped(group: PreviewDataGroup): boolean {
               v-if="!isGroupSkipped(group!)"
               size="tiny"
               type="warning"
-              @click="group!.variants.forEach(v => $emit('toggleSkipRow', v.rowIndex))"
+              @click="$emit('setRowsSkipped', group!.variants.map(v => v.rowIndex), true)"
             >
               跳过全部变体
             </n-button>
             <n-button
               v-else
               size="tiny"
-              @click="group!.variants.forEach(v => $emit('toggleSkipRow', v.rowIndex))"
+              @click="$emit('setRowsSkipped', group!.variants.map(v => v.rowIndex), false)"
             >
               恢复全部变体
             </n-button>

@@ -7,6 +7,7 @@ import com.rsdp.dto.response.PublicProductDetailResponse;
 import com.rsdp.dto.response.PublicProductItemResponse;
 import com.rsdp.dto.response.PublicSceneResponse;
 import com.rsdp.service.PublicCatalogService;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -46,6 +47,8 @@ public class PublicCatalogController {
      * @param keyword   商品名称模糊匹配
      * @param style     风格/定位标签筛选（rspu_style 关联）
      * @param scene     场景编码筛选（rspu_scene 关联）
+     * @param semantic  启用描述向量召回
+     * @param imageSearchId 参考图的临时搜索 ID
      * @return 分页商品列表
      */
     @GetMapping("/products")
@@ -59,9 +62,16 @@ public class PublicCatalogController {
         @RequestParam(required = false) BigDecimal priceMin,
         @RequestParam(required = false) BigDecimal priceMax,
         @RequestParam(required = false) String sort,
-        @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) @Size(max = 300) String keyword,
         @RequestParam(required = false) String style,
-        @RequestParam(required = false) String scene) {
+        @RequestParam(required = false) String scene,
+        @RequestParam(defaultValue = "false") boolean semantic,
+        @RequestParam(required = false) @Size(max = 36) String imageSearchId) {
+        if (semantic || imageSearchId != null) {
+            return Result.ok(publicCatalogService.searchProducts(
+                page, size, category, seatCount, color, material, priceMin, priceMax, sort,
+                keyword, style, scene, semantic, imageSearchId));
+        }
         return Result.ok(publicCatalogService.listProducts(
             page, size, category, seatCount, color, material, priceMin, priceMax, sort,
             keyword, style, scene));
