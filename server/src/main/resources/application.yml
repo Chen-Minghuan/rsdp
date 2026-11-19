@@ -70,6 +70,10 @@ mybatis-plus:
   type-handlers-package: com.rsdp.config.typehandler
 
 rsdp:
+  office-catalog:
+    username: "${RSDP_OFFICE_CATALOG_USERNAME:}"
+    workspace-id: "${RSDP_OFFICE_CATALOG_WORKSPACE_ID:}"
+    factory-code: "${RSDP_OFFICE_CATALOG_FACTORY_CODE:}"
   ai:
     # 通义千问 VL 兼容 OpenAI 格式
     base-url: https://dashscope.aliyuncs.com/compatible-mode/v1

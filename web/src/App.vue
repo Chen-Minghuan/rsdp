@@ -122,8 +122,14 @@ function groupDropdownOptions(group: NavGroup): DropdownOption[] {
 
 const userDropdownOptions = computed(() => {
   const options: { label: string; key: string; disabled?: boolean }[] = [
-    { label: `账号类型：${userStore.accountTypeLabel}`, key: 'account-type', disabled: true },
-    { label: `角色：${userStore.roles.join(', ') || '-'}`, key: 'role', disabled: true },
+    {
+      label: isFactoryAdmin.value
+        ? `企业归属：${userStore.companyId ? '企业成员' : '未加入企业团队'}`
+        : `账号类型：${userStore.accountTypeLabel}`,
+      key: 'account-type',
+      disabled: true
+    },
+    { label: `角色：${userStore.roles.map(role => role === ROLES.FACTORY_ADMIN ? '工厂管理员' : role).join(', ') || '-'}`, key: 'role', disabled: true },
     { label: '个人中心', key: 'user-center' }
   ]
   if (isFactoryAdmin.value) {
@@ -212,13 +218,13 @@ async function openConsult() {
               <n-button quaternary class="user-button">
                 {{ userStore.displayName }}
                 <n-tag
-                  v-if="userStore.accountType !== 'tourist'"
-                  :type="userStore.accountType === 'company' ? 'success' : 'info'"
+                  v-if="isFactoryAdmin || userStore.accountType !== 'tourist'"
+                  :type="!isFactoryAdmin && userStore.accountType === 'company' ? 'success' : 'info'"
                   size="tiny"
                   :bordered="false"
                   style="margin-left: 6px;"
                 >
-                  {{ userStore.accountTypeLabel }}
+                  {{ isFactoryAdmin ? '工厂管理员' : userStore.accountTypeLabel }}
                 </n-tag>
               </n-button>
             </n-dropdown>

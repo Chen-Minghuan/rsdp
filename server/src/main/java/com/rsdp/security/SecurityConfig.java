@@ -9,6 +9,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -40,6 +41,20 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final SecurityUserDetailsService userDetailsService;
 
+    private static boolean isOfficeCatalogReadRequest(jakarta.servlet.http.HttpServletRequest request) {
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        if ("POST".equals(request.getMethod())) {
+            return "/api/v1/auth/logout".equals(path);
+        }
+        if (!"GET".equals(request.getMethod())) {
+            return false;
+        }
+        return "/api/v1/auth/me".equals(path)
+            || path.matches("/api/v1/products(?:/[A-Za-z0-9_-]+(?:/(?:variants|rsku))?)?")
+            || path.matches("/api/v1/(?:dicts|images)/[A-Za-z0-9_-]+")
+            || path.matches("/api/v1/products/office/batches(?:/[A-Za-z0-9_-]+/status)?");
+    }
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
@@ -49,6 +64,17 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // 公开接口
                 .requestMatchers("/api/v1/auth/login").permitAll()
+                .requestMatchers(request -> SecurityOperatorContext.hasAuthority("ROLE_OFFICE_CATALOG_READER")
+                    && !isOfficeCatalogReadRequest(request)).denyAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/office", "/api/v1/products/office/**").denyAll()
+                .requestMatchers(HttpMethod.PUT, "/api/v1/products/office/**").denyAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/entry", "/api/v1/products/entry/**",
+                    "/api/v1/products/manual-entry")
+                .access((authentication, context) -> new AuthorizationDecision(SecurityOperatorContext.isPlatformStaff()
+                    && SecurityOperatorContext.hasAuthority(Permissions.PRODUCT_CREATE)))
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/document-import")
+                .access((authentication, context) -> new AuthorizationDecision(SecurityOperatorContext.isPlatformStaff()
+                    && SecurityOperatorContext.hasAuthority(Permissions.PRODUCT_IMPORT)))
                 .requestMatchers("/api/v1/auth/register").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/images/**").permitAll()
                 // 订单邀请公开页（免登录，token 自校验）

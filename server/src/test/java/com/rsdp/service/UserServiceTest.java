@@ -193,6 +193,42 @@ class UserServiceTest {
     }
 
     @Test
+    void createFactoryAdmin_shouldRequireFactoryEvenWhenCompanyNameIsSet() {
+        UserCreateRequest request = new UserCreateRequest();
+        request.setUsername("weihao-product");
+        request.setRoleCode("FACTORY_ADMIN");
+        request.setCompanyName("伟豪");
+        request.setFactoryCodes(List.of(" "));
+        when(sysUserMapper.selectByUsername("weihao-product")).thenReturn(null);
+        when(sysRoleMapper.selectByRoleCode("FACTORY_ADMIN"))
+            .thenReturn(buildRole(2L, "FACTORY_ADMIN", "工厂管理员"));
+
+        assertThatThrownBy(() -> userService.createUser(request))
+            .hasMessage("工厂管理员至少需要关联一家工厂");
+        verify(sysUserMapper, never()).insert(any(SysUser.class));
+    }
+
+    @Test
+    void editingFactoryAdminCompany_shouldPreserveBindingWhenFactoriesAreOmitted() {
+        String userId = "USER-FACTORY";
+        when(sysUserMapper.selectById(userId)).thenReturn(buildUser(userId, "weihao-product", "伟豪录入员"));
+        when(sysRoleMapper.selectByRoleCode("FACTORY_ADMIN"))
+            .thenReturn(buildRole(2L, "FACTORY_ADMIN", "工厂管理员"));
+        when(userRoleService.getRoleCodesByUserId(userId)).thenReturn(List.of("FACTORY_ADMIN"));
+        when(userFactoryService.getFactoryCodesByUserId(userId)).thenReturn(List.of("B001"));
+        UserUpdateRequest request = new UserUpdateRequest();
+        request.setRoleCode("FACTORY_ADMIN");
+        request.setCompanyName("伟豪");
+
+        assertThat(userService.updateUser(userId, request).getFactoryCodes()).containsExactly("B001");
+        verify(userFactoryService, never()).resetFactories(eq(userId), any());
+
+        request.setFactoryCodes(List.of());
+        assertThatThrownBy(() -> userService.updateUser(userId, request))
+            .hasMessage("工厂管理员至少需要关联一家工厂");
+    }
+
+    @Test
     void updateUser_shouldUpdateCompanyAndGroupWhenProvided() {
         SysUser existing = buildUser("USER-009", "designer", "设计师");
         existing.setCompanyName("旧企业");

@@ -86,20 +86,17 @@ POST   /api/v1/products/entry/by-regions
 
 POST   /api/v1/products/factory-entry
        # 工厂单条录入（原子创建 RSPU + 默认变体 + 图片 + 首条 RSKU）
+       # Header: Idempotency-Key（必填，1–64 位字母、数字、下划线或短横线）
        # Request: multipart/form-data
-       #   images: File[] (必填, 第一张为主图, 单张 ≤20MB)
-       #   factoryCode: string (必填, 当前用户所属工厂编码)
-       #   categoryCode: string (必填, 如 FS/DT/CB)
-       #   styleCode: string (必填, 如 MC/IT)
-       #   materialCode: string (必填, 如 WO/PE)
-       #   variantName?: string (变体名, 默认"")
-       #   price?: number (出厂价)
-       #   moq?: number (最小起订量)
-       #   leadTimeDays?: number (交期天数)
+       #   request: application/json
+       #     productName、externalCode（厂内型号）、factoryCode、categoryCode、positioningLabel、
+       #     productLevel、variantDisplayName、variantMaterialCode、factoryPrice（大于 0）必填
+       #     moq、leadTimeDays 等报价字段可选
+       #   images: File[]（可选，第一张为主图，单张 ≤10MB）
        # Response: { rspuId, variantId, rskuId, imageIds: string[], rspuCode: string|null }
        #           （rspuCode 为发放的 RSPU 业务编码；未传 sizeCode 等发号失败时为 null，录入照常成功）
        # 说明：
-       #   - 仅 `FACTORY_ADMIN` 或拥有 `product:create` 权限的用户可调用
+       #   - 仅拥有 `product:create` 权限的 `FACTORY_ADMIN` 可调用
        #   - 必须属于 `factoryCode` 指定工厂，否则返回 403
        #   - 同一张图片同时作为主图写入 `image_assets`，并用于创建首条 RSKU
 
@@ -496,8 +493,8 @@ POST   /api/v1/products/excel-ai-import/import
        #   - SINGLE/MIXED + expectedRevision：category-revision 同时接收 previewEdits 与 skipRows，
        #     在创建新 Revision 前应用单元格修正并剔除跳过行；源行加密存于敏感值表，
        #     normalized_payload 只保存引用。confirm 校验 mapping_hash，异步执行从已确认
-       #     Revision 解密并校验 HMAC 后读取源行；confirm 请求里的 previewEdits/skipRows
-       #     不再改变该 Revision 的执行输入。无 Revision 的旧批次沿用原请求级处理。
+       #     Revision 解密并校验 HMAC 后读取源行。确认请求携带非空 previewEdits 时返回 409，
+       #     请先保存新版本。跳过行以确认的 Revision 为准。无 Revision 的旧批次沿用原请求级处理。
        #   - 旧路径 previewEdits：在 forwardFillKeyColumns 后按 rowIndex + header 覆盖；
        #     找不到的行/列仅记日志跳过，不阻断导入
        #   - 工厂身份（FACTORY_ADMIN，数据范围 FACTORY_LIST）导入的归属规则（阶段 1.3）：
@@ -589,7 +586,7 @@ GET    /api/v1/products/excel-ai-import/{batchId}/preview-data
        # 说明：
        #   - 以原始表头为视角返回全量数据行，避免复合映射列（如「型号品名」同时映射到
        #     externalCode 与 productName）在编辑时产生歧义
-       #   - 前端数据清洗页的编辑以 (rowIndex, header) 为键，通过 previewEdits 在 import 接口回传
+       #   - 前端数据清洗页的编辑以 (rowIndex, header) 为键，通过 previewEdits 在 category-revision 提交
        #   - 横向合并表头覆盖但实际有数据的列以「未命名列+Excel 列字母」保留（如未命名列C）；
        #     同一模块字段可由互斥的多列填入，空单元格不会覆盖另一列的非空值
        #   - 「型号品名」复合列按型号+品名组织，同款跨页重复起始行会归到同一组；
@@ -621,6 +618,17 @@ GET    /api/v1/products/excel-ai-import/{batchId}
        #   failures: [{ rowIndex, reason }]  // rowIndex 为 Excel 物理行号；rowIndex=0 为批次级问题（如图片提取截断）
        # }
 ```
+
+### Office 商品录入与本厂维护（INTEG-002）
+
+伟豪员工使用各自的 RSDP 工厂管理员账号录入。Office 的专用连接账号验证工作区和工厂后读取目录与历史批次。首次录入与后续操作各自记录。
+
+- 伟豪员工通过 RSDP `POST /api/v1/products/factory-entry` 与原生 Excel 确认入库。单条请求必填 `Idempotency-Key`、厂内型号和商品名，回执以工厂与账号隔离。Excel 工厂账号必须携带确认预览版本。已登记的同厂型号在商品回收后仍绑定原主档，单条及 Excel 均提示联系平台恢复。
+- 首次录入账号和渠道在主档保存。列表在权限允许时返回 `entryActorName` 与 `entryActorUsername`，详情的 `entrySource` 包含首次时间、工厂与可用批次。Office 连接身份不读取录入人个人信息。
+- Office 专用角色 `OFFICE_CATALOG_READER` 关联一家工厂。允许目录、规格、图片以及授权历史的读取。历史接口为 `GET /api/v1/products/office/batches` 与 `GET /api/v1/products/office/batches/{batchId}/status`，按配置的连接账号、工作区、工厂与原操作人校验。
+- 已移除旧 `POST/PUT /api/v1/products/office/**` 的处理器，权限层继续拦截。Office 端旧录入页面退回商品库，新批次在 RSDP 录入中心操作。
+- 商品列表支持 `viewMode=managed`、`rspuId` 和 `sourceChannel`。授权详情返回 `entrySource`，可见目录返回来源渠道和核验过的录入工厂。
+- 历史 Office 来源使用 OFFICE_LEGACY。目录可显示由建档审计确认的 sourceFactoryName。它描述首次录入来源，维护权继续由已核验的主档归属校验。
 
 ### 图片访问
 
@@ -1379,10 +1387,13 @@ POST   /api/v1/admin/users
        # 创建用户
        # Request: { username, nickname?, companyName?, groupName?, password, roleCode,
        #            factoryCodes?: string[], viewFullCatalog? }
+       # FACTORY_ADMIN 必须提供至少一个有效的 factoryCode，companyName 用于资料显示。
        # Response: UserAdminResponse
 
 PUT    /api/v1/admin/users/{userId}
-       # 编辑用户（字段缺省/null 时不覆盖原值）
+       # 账号资料字段缺省/null 时不覆盖原值。
+       # 新授予 FACTORY_ADMIN 时须提供工厂关联。保留该角色时，省略 factoryCodes 沿用原绑定。
+       # 提供 factoryCodes 时按新列表重置，FACTORY_ADMIN 至少保留一个工厂。
        # Request: { nickname?, companyName?, groupName?, roleCode, factoryCodes?: string[],
        #            viewFullCatalog? }
        # Response: UserAdminResponse

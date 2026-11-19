@@ -107,6 +107,7 @@ public class UserService {
         if (role == null) {
             throw new BusinessException("角色不存在: " + request.getRoleCode());
         }
+        requireFactoryBinding(request.getRoleCode(), request.getFactoryCodes());
 
         SysUser user = new SysUser();
         user.setUserId(IdGenerator.userId());
@@ -161,6 +162,12 @@ public class UserService {
         List<String> existingRoleCodes = userRoleService.getRoleCodesByUserId(userId);
         String existingRoleCode = existingRoleCodes.isEmpty() ? null : existingRoleCodes.get(0);
         boolean roleChanged = !request.getRoleCode().equals(existingRoleCode);
+        boolean preserveFactoryBinding = ("FACTORY_ADMIN".equals(request.getRoleCode())
+            || "OFFICE_CATALOG_READER".equals(request.getRoleCode()))
+            && !roleChanged && request.getFactoryCodes() == null;
+        if (!preserveFactoryBinding) {
+            requireFactoryBinding(request.getRoleCode(), request.getFactoryCodes());
+        }
 
         if (request.getNickname() != null) {
             user.setNickname(request.getNickname());
@@ -178,7 +185,9 @@ public class UserService {
         sysUserMapper.updateById(user);
 
         userRoleService.assignRole(userId, role.getRoleId());
-        userFactoryService.resetFactories(userId, request.getFactoryCodes());
+        if (!preserveFactoryBinding) {
+            userFactoryService.resetFactories(userId, request.getFactoryCodes());
+        }
 
         if (roleChanged) {
             incrementTokenVersion(userId);
@@ -186,6 +195,17 @@ public class UserService {
         permissionService.clearPermissionCache(userId);
 
         return toResponse(user);
+    }
+
+    private void requireFactoryBinding(String roleCode, List<String> factoryCodes) {
+        if ("FACTORY_ADMIN".equals(roleCode) && (factoryCodes == null
+            || factoryCodes.stream().noneMatch(code -> code != null && !code.isBlank()))) {
+            throw new BusinessException("工厂管理员至少需要关联一家工厂");
+        }
+        if ("OFFICE_CATALOG_READER".equals(roleCode) && (factoryCodes == null
+            || factoryCodes.size() != 1 || factoryCodes.getFirst() == null || factoryCodes.getFirst().isBlank())) {
+            throw new BusinessException("Office 目录读取服务须关联一家工厂");
+        }
     }
 
     /**

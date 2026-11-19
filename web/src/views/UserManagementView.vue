@@ -71,6 +71,7 @@ const form = reactive<UserForm>({
   viewFullCatalog: false
 })
 const factoryOptions = ref<{ label: string; value: string }[]>([])
+const factoryLabels = computed(() => new Map(factoryOptions.value.map(({ value, label }) => [value, label])))
 
 const showResetPasswordModal = ref(false)
 const resetPasswordUser = ref<User | null>(null)
@@ -89,6 +90,7 @@ const roleOptions = [
   { label: '系统管理员', value: 'ADMIN' },
   { label: '编辑员', value: 'EDITOR' },
   { label: '工厂管理员', value: 'FACTORY_ADMIN' },
+  { label: 'Office 目录读取服务', value: 'OFFICE_CATALOG_READER' },
   { label: '设计师', value: 'DESIGNER' },
   { label: '普通用户', value: 'USER' }
 ]
@@ -97,7 +99,7 @@ const columns: DataTableColumns<User> = [
   { title: '用户名', key: 'username' },
   { title: '昵称', key: 'nickname' },
   {
-    title: '企业',
+    title: '企业名称',
     key: 'companyName',
     render: (row: User) => row.companyName || '—'
   },
@@ -107,6 +109,14 @@ const columns: DataTableColumns<User> = [
     render: (row: User) => row.groupName || '—'
   },
   { title: '角色', key: 'roleName' },
+  {
+    title: '关联工厂',
+    key: 'factoryCodes',
+    minWidth: 140,
+    render: (row: User) => row.factoryCodes?.length
+      ? row.factoryCodes.map(code => factoryLabels.value.get(code) ?? code).join('、')
+      : '—'
+  },
   { title: '状态', key: 'status' },
   {
     title: '全库视图',
@@ -200,6 +210,10 @@ async function saveUser() {
   try {
     await formRef.value?.validate()
   } catch {
+    return
+  }
+  if (['FACTORY_ADMIN', 'OFFICE_CATALOG_READER'].includes(form.roleCode) && !form.factoryCodes.length) {
+    message.warning('此角色至少需要关联一家工厂')
     return
   }
   try {
@@ -309,7 +323,7 @@ onMounted(() => {
   <n-card title="用户管理">
     <n-space vertical>
       <n-space>
-        <n-input v-model:value="keyword" placeholder="搜索用户名/昵称/企业/分组" @keydown.enter="loadUsers" />
+        <n-input v-model:value="keyword" placeholder="搜索用户名/昵称/企业名称/分组" @keydown.enter="loadUsers" />
         <n-button type="primary" @click="loadUsers">搜索</n-button>
         <n-button v-if="canCreateUser" @click="openCreate">+ 新增用户</n-button>
       </n-space>
@@ -334,8 +348,8 @@ onMounted(() => {
         <n-form-item label="昵称">
           <n-input v-model:value="form.nickname" placeholder="请输入昵称" />
         </n-form-item>
-        <n-form-item label="企业">
-          <n-input v-model:value="form.companyName" placeholder="请输入企业名称（可选）" maxlength="128" />
+        <n-form-item label="企业名称">
+          <n-input v-model:value="form.companyName" placeholder="账号显示资料（可选）" maxlength="128" />
         </n-form-item>
         <n-form-item label="分组">
           <n-input v-model:value="form.groupName" placeholder="请输入团队分组（可选）" maxlength="64" />
@@ -352,13 +366,13 @@ onMounted(() => {
             multiple
             filterable
             clearable
-            placeholder="请选择该用户可管理的工厂（工厂管理员必选）"
+            placeholder="选择可管理的工厂（工厂管理员必选）"
             :options="factoryOptions"
           />
         </n-form-item>
         <n-form-item label="全库视图">
           <n-switch v-model:value="form.viewFullCatalog" />
-          <span style="color: #999; font-size: 12px; margin-left: 8px;">开启后可在产品库查看全平台去重后的产品</span>
+          <span style="color: #666; font-size: 12px; margin-left: 8px;">扩大可查看的商品范围，仍遵循目录可见性规则</span>
         </n-form-item>
       </n-form>
       <n-space justify="end">
