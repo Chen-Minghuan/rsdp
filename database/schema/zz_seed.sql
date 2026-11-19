@@ -1952,3 +1952,17 @@ INSERT INTO platform_content (content_id, code, title, content_type, content) VA
 ('CONT-HOME-SERVICE-CARDS', 'home_service_cards', '首页服务卡', 'rich_text',
  '[{"title":"送货服务","desc":"珠三角 48 小时达，全国物流可追踪"},{"title":"安装服务","desc":"专业师傅上门，安装完毕清理现场"},{"title":"退换保障","desc":"30 天无理由退换（定制款除外）"},{"title":"免费设计","desc":"AI 户型搭配 + 设计师 1v1 复核"}]')
 ON CONFLICT (code) DO NOTHING;
+
+
+-- Dedicated role for the Office catalog connection. The deployment switches the account after read verification.
+INSERT INTO sys_role (role_code, role_name)
+VALUES ('OFFICE_CATALOG_READER', 'Office 目录读取服务')
+ON CONFLICT (role_code) DO NOTHING;
+
+INSERT INTO sys_role_permission (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM sys_role r
+CROSS JOIN sys_permission p
+WHERE r.role_code = 'OFFICE_CATALOG_READER'
+  AND p.permission_code = 'product:read'
+ON CONFLICT DO NOTHING;

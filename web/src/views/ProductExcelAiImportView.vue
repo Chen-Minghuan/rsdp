@@ -11,6 +11,7 @@ import { useExcelImportStore } from '@/stores/excelImport'
 import ExcelCleanReviewView from '@/components/excel-import/ExcelCleanReviewView.vue'
 import ExcelSourcePreview from '@/components/excel-import/ExcelSourcePreview.vue'
 import StatusPill from '@/components/StatusPill.vue'
+import { useUserStore } from '@/stores/user'
 import type { TaskItem } from '@/types/task'
 import type { DictItem } from '@/types/dict'
 import type { Factory } from '@/types/factory'
@@ -113,6 +114,15 @@ const categoryOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
 const materialOptions = ref<DictItem[]>([])
 const factoryOptions = ref<Factory[]>([])
+const userStore = useUserStore()
+const factoryOnly = computed(() => userStore.hasRole('FACTORY_ADMIN') && !userStore.isPlatformStaff)
+const boundFactories = computed(() => userStore.userInfo?.factoryCodes ?? [])
+
+watch([factoryOnly, boundFactories, defaultFactoryCode], ([scoped, codes, selected]) => {
+  if (!scoped) return
+  if (codes.length === 1) defaultFactoryCode.value = codes[0]
+  else if (selected && !codes.includes(selected)) defaultFactoryCode.value = ''
+}, { immediate: true })
 
 /** 工厂等级展示顺序与名称（S→A→B→C→其他） */
 const FACTORY_LEVEL_ORDER: Record<string, number> = { S: 0, A: 1, B: 2, C: 3 }
@@ -125,6 +135,7 @@ const FACTORY_LEVEL_NAMES: Record<string, string> = { S: 'S级战略厂', A: 'A�
 const factorySelectOptions = computed(() => {
   const groups = new Map<string, Factory[]>()
   for (const f of factoryOptions.value) {
+    if (factoryOnly.value && !boundFactories.value.includes(f.factoryCode)) continue
     const key = f.factoryLevel && FACTORY_LEVEL_ORDER[f.factoryLevel] != null ? f.factoryLevel : 'Z'
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(f)

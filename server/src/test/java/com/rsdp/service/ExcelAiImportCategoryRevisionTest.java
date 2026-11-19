@@ -64,6 +64,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -441,6 +442,28 @@ class ExcelAiImportCategoryRevisionTest {
     // ------------------------------------------------------------------
     // 确认导入的 Snapshot 接管（§4.1 规则 3/4 + §47 乐观锁）
     // ------------------------------------------------------------------
+
+    @Test
+    void confirm_rejectsChangesOutsideTheSavedRevisionBeforeAttemptLookup() {
+        var batch = batchWithRows("B-EDIT", List.of(row("型号", "A-1", "名称", "原名称")));
+        batch.setPreviewRevision(2L);
+        when(batchMapper.selectById("B-EDIT")).thenReturn(batch);
+        var request = baseConfirmRequest("B-EDIT", CategoryMode.SINGLE);
+        request.setExpectedRevision(2L);
+        var edit = new com.rsdp.dto.request.PreviewEdit();
+        edit.setRowIndex(2);
+        edit.setHeader("名称");
+        edit.setValue("未确认的名称");
+        request.setPreviewEdits(List.of(edit));
+
+        BusinessException rejectedEdit = assertThrows(BusinessException.class,
+            () -> excelAiImportService.confirmAndImport(request));
+        assertEquals(409, rejectedEdit.getCode());
+        assertTrue(rejectedEdit.getMessage().contains("新的预览版本"));
+
+        verifyNoInteractions(attemptService);
+        verify(batchMapper, never()).claimForImport(anyString());
+    }
 
     @Test
     void confirm_withExpectedRevision_conflict409_beforeClaim() {

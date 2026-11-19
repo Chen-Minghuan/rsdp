@@ -8,6 +8,7 @@ import org.springframework.validation.FieldError;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
@@ -31,6 +32,12 @@ public class GlobalExceptionHandler {
     public Result<Void> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("非法参数: {}", e.getMessage());
         return Result.badRequest(e.getMessage());
+    }
+
+    /** 返回缺少必填请求头的客户端错误。 */
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<Result<Void>> handleMissingRequestHeader(MissingRequestHeaderException e) {
+        return ResponseEntity.badRequest().body(Result.badRequest("缺少请求头: " + e.getHeaderName()));
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)

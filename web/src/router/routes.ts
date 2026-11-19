@@ -47,7 +47,7 @@ export const routes = [
     path: '/entry',
     name: 'ProductEntry',
     component: () => import('@/views/ProductEntryView.vue'),
-    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE], roles: [ROLES.ADMIN, ROLES.EDITOR] }
   },
   {
     path: '/factory-entry',
@@ -65,7 +65,7 @@ export const routes = [
     path: '/products/document-import',
     name: 'ProductDocumentImport',
     component: () => import('@/views/ProductDocumentImportView.vue'),
-    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT] }
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_IMPORT], roles: [ROLES.ADMIN, ROLES.EDITOR] }
   },
   {
     path: '/products/excel-ai-import',
@@ -77,7 +77,7 @@ export const routes = [
     path: '/products/manual-entry',
     name: 'ProductManualEntry',
     component: () => import('@/views/ProductManualEntryView.vue'),
-    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE] }
+    meta: { requiresAuth: true, permissions: [PERMISSIONS.PRODUCT_CREATE], roles: [ROLES.ADMIN, ROLES.EDITOR] }
   },
   {
     path: '/products/classification',

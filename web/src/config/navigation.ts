@@ -99,13 +99,15 @@ export const navGroups: NavGroup[] = [
         key: 'entry',
         label: '新品录入',
         path: '/entry',
-        permission: PERMISSIONS.PRODUCT_CREATE
+        permission: PERMISSIONS.PRODUCT_CREATE,
+        roles: [ROLES.ADMIN, ROLES.EDITOR]
       },
       {
         key: 'manual-entry',
         label: '手工录入',
         path: '/products/manual-entry',
-        permission: PERMISSIONS.PRODUCT_CREATE
+        permission: PERMISSIONS.PRODUCT_CREATE,
+        roles: [ROLES.ADMIN, ROLES.EDITOR]
       },
       {
         key: 'factory-entry',
@@ -117,7 +119,8 @@ export const navGroups: NavGroup[] = [
         key: 'document-import',
         label: 'PDF 导入',
         path: '/products/document-import',
-        permission: PERMISSIONS.PRODUCT_IMPORT
+        permission: PERMISSIONS.PRODUCT_IMPORT,
+        roles: [ROLES.ADMIN, ROLES.EDITOR]
       },
       {
         key: 'excel-ai-import',

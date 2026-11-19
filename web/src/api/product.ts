@@ -357,10 +357,11 @@ export async function batchDeleteProducts(rspuIds: string[]): Promise<ProductBat
  * @param formData multipart/form-data，包含 request (JSON 字符串) 与 images
  * @returns 创建结果
  */
-export async function factoryEntry(formData: FormData): Promise<FactoryProductEntryResult> {
+export async function factoryEntry(formData: FormData, requestId: string): Promise<FactoryProductEntryResult> {
   const { data: result } = await uploadClient.post<ApiResult<FactoryProductEntryResult>>(
     '/v1/products/factory-entry',
-    formData
+    formData,
+    { headers: { 'Idempotency-Key': requestId } }
   )
   return result.data
 }

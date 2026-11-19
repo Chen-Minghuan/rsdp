@@ -71,6 +71,7 @@ import com.rsdp.mapper.RspuStyleMapper;
 import com.rsdp.mapper.RspuVariantMapper;
 import com.rsdp.mapper.VariantCodeMapper;
 import com.rsdp.security.SecurityOperatorContext;
+import com.rsdp.security.Permissions;
 import com.rsdp.security.SecurityUser;
 import com.rsdp.security.datascope.DataScope;
 import com.rsdp.security.datascope.DataScopeHelper;
@@ -477,6 +478,22 @@ public class ExcelAiImportService {
         if (batch == null) {
             throw new BusinessException("导入批次不存在: " + request.getBatchId());
         }
+        if (StringUtils.hasText(batch.getOfficeActorId())) {
+            throw new com.rsdp.exception.ForbiddenException("旧 Office 批次仅可查询，请在 RSDP 重新预览原表");
+        }
+        if (request.getExpectedRevision() != null && request.getCategoryMode() == null) {
+            throw new BusinessException("确认预览版本时必须指定导入方式");
+        }
+        if (SecurityOperatorContext.isCurrentUserFactoryAdmin() && !SecurityOperatorContext.isPlatformStaff()) {
+            List<String> factories = dataScopeContext.currentFactoryCodes();
+            if (!StringUtils.hasText(request.getDefaultFactoryCode()) && factories.size() == 1) {
+                request.setDefaultFactoryCode(factories.getFirst());
+            }
+            if (!StringUtils.hasText(request.getDefaultFactoryCode()) || request.getCategoryMode() == null
+                || request.getExpectedRevision() == null) {
+                throw new BusinessException("请确认本次导入的工厂和预览版本");
+            }
+        }
         // 能在抢占前完成的前置校验全部前置：校验失败不应把批次推进 importing（P1-1）
         Map<String, String> mapping = sanitizeMapping(request.getMapping());
         if (mapping == null || mapping.isEmpty()) {
@@ -501,6 +518,7 @@ public class ExcelAiImportService {
         if (defaultFactoryCode != null && !dataScopeHelper.canAccessFactory(defaultFactoryCode)) {
             throw new BusinessException("无权使用该工厂: " + defaultFactoryCode);
         }
+        request.setDefaultFactoryCode(defaultFactoryCode);
         // 保存模板请求的前置校验（P1-1 口径：能在抢占前完成的校验不进入 claim 后流程）
         if (request.isSaveAsTemplate() && !StringUtils.hasText(request.getTemplateName())) {
             throw new BusinessException("保存为模板时必须填写模板名称");
@@ -510,6 +528,9 @@ public class ExcelAiImportService {
         // P0-B2：携带 expectedRevision 时切换到 Snapshot 链路——乐观锁校验 +
         // 完整性/唯一性直接读 Snapshot 固化的 finalCategoryCode 并以快照值覆盖请求的行级选择
         boolean snapshotPath = request.getCategoryMode() != null && request.getExpectedRevision() != null;
+        if (snapshotPath && request.getPreviewEdits() != null && !request.getPreviewEdits().isEmpty()) {
+            throw new BusinessException(409, "请先将单元格修改保存为新的预览版本，再确认导入");
+        }
 
         // P0-F（§47.1.5/§50.0 Replay-first）：snapshot 路径先物化 Policy（补齐默认值 +
         // 未知枚举拒绝），再按 batch + expectedRevision + policy_hash 查找既有 Attempt——
@@ -587,7 +608,7 @@ public class ExcelAiImportService {
                 }
             }
             String taskId = createExcelImportTask(batch, request,
-                newAttempt != null ? newAttempt.getAttemptId() : null);
+                newAttempt != null ? newAttempt.getAttemptId() : null, SecurityOperatorContext.currentUserId());
             if (newAttempt != null) {
                 attemptService.rebindTask(newAttempt.getAttemptId(), taskId);
             }
@@ -666,7 +687,7 @@ public class ExcelAiImportService {
                 throw new BusinessException("批次正在导入中，请稍后重试: " + batch.getStatus());
             }
         }
-        String taskId = createExcelImportTask(batch, request, existing.getAttemptId());
+        String taskId = createExcelImportTask(batch, request, existing.getAttemptId(), existing.getCreatedBy());
         attemptService.rebindTask(existing.getAttemptId(), taskId);
         auditLogService.logUpdate("excel_import_batch", batch.getBatchId(),
             Map.of("status", String.valueOf(batch.getStatus())), Map.of("status", "importing"),
@@ -701,7 +722,7 @@ public class ExcelAiImportService {
         ImportTaskInput taskInput = readImportRequest(taskId);
         ExcelAiMappingRequest request = taskInput.request();
         Map<String, String> mapping = sanitizeMapping(request.getMapping());
-        Authentication previousAuthentication = installBatchOperatorContext(batch);
+        Authentication previousAuthentication = SecurityContextHolder.getContext().getAuthentication();
         // P0-F（§49.1/§50.1）：Attempt 治理链路的执行入口——不可变 Policy 校验 +
         // lease CAS 抢占（重复投递/僵尸任务直接短路，不重复执行）
         ExcelImportAttempt attempt = null;
@@ -753,7 +774,25 @@ public class ExcelAiImportService {
                     attemptCtx = buildAttemptContext(attempt, taskId, confirmedSnapshot);
                 }
             }
-            return doConfirmImport(batch, request, mapping, confirmedRows, attemptCtx);
+            String actorId = taskInput.actor() == null ? null : taskInput.actor().path("actorId").asText(null);
+            if (!StringUtils.hasText(actorId) && attempt != null) {
+                actorId = attempt.getCreatedBy();
+            }
+            if (!StringUtils.hasText(actorId)) {
+                actorId = batch.getConfirmedBy() != null ? batch.getConfirmedBy() : batch.getCreatedBy();
+            }
+            installBatchOperatorContext(batch, actorId, taskInput.actor() != null && taskInput.actor().hasNonNull("actorId"));
+            if (StringUtils.hasText(batch.getOfficeActorId())) {
+                throw new com.rsdp.exception.ForbiddenException("旧 Office 批次仅可查询，请在 RSDP 重新预览原表");
+            }
+            if (taskInput.actor() != null && taskInput.actor().hasNonNull("actorId")
+                && StringUtils.hasText(request.getDefaultFactoryCode())
+                && !dataScopeHelper.canAccessFactory(request.getDefaultFactoryCode())) {
+                throw new com.rsdp.exception.ForbiddenException("录入账号已失去此工厂的导入权限");
+            }
+            var actor = taskInput.actor() != null ? taskInput.actor()
+                : ProductEntrySource.actor(objectMapper, sysUserMapper, actorId);
+            return doConfirmImport(batch, request, mapping, confirmedRows, attemptCtx, actor);
         } catch (AttemptLeaseLostException e) {
             // §49.1/§50.1：租约已易主——当前行事务已回滚，不改批次/Attempt 状态，
             // 由新持有者继续执行与收尾；本次投递安静结束
@@ -837,7 +876,8 @@ public class ExcelAiImportService {
     }
 
     /** 异步任务 input_data 还原结果：确认请求 + Attempt ID（P0-F，旧任务为 null）。 */
-    private record ImportTaskInput(ExcelAiMappingRequest request, String attemptId) {
+    private record ImportTaskInput(ExcelAiMappingRequest request, String attemptId,
+                                   com.fasterxml.jackson.databind.node.ObjectNode actor) {
     }
 
     /**
@@ -860,7 +900,8 @@ public class ExcelAiImportService {
             com.fasterxml.jackson.databind.JsonNode attemptNode = root.get("attemptId");
             return new ImportTaskInput(
                 objectMapper.treeToValue(requestNode, ExcelAiMappingRequest.class),
-                attemptNode != null && attemptNode.isTextual() ? attemptNode.asText() : null);
+                attemptNode != null && attemptNode.isTextual() ? attemptNode.asText() : null,
+                root.get("actor") instanceof com.fasterxml.jackson.databind.node.ObjectNode actor ? actor : null);
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -877,7 +918,7 @@ public class ExcelAiImportService {
      * @return 任务 ID
      */
     private String createExcelImportTask(ExcelImportBatch batch, ExcelAiMappingRequest request,
-                                         String attemptId) {
+                                         String attemptId, String actorId) {
         String taskId = IdGenerator.taskId();
         AsyncTask task = new AsyncTask();
         task.setTaskId(taskId);
@@ -894,6 +935,7 @@ public class ExcelAiImportService {
             Map<String, Object> input = new HashMap<>();
             input.put("batchId", batch.getBatchId());
             input.put("request", request);
+            input.put("actor", ProductEntrySource.actor(objectMapper, sysUserMapper, actorId));
             if (attemptId != null) {
                 input.put("attemptId", attemptId);
             }
@@ -917,7 +959,8 @@ public class ExcelAiImportService {
                 throw e;
             }
             if ("failed".equals(existing.getStatus())) {
-                asyncTaskMapper.resetFailedForRetry(existing.getTaskId(), inputData);
+                asyncTaskMapper.resetFailedForRetry(existing.getTaskId(),
+                    StringUtils.hasText(existing.getInputData()) ? existing.getInputData() : inputData);
             }
             log.info("复用既有导入任务（幂等键命中）: attemptId={}, taskId={}, status={}",
                 attemptId, existing.getTaskId(), existing.getStatus());
@@ -998,16 +1041,17 @@ public class ExcelAiImportService {
      * @param batch 导入批次（createdBy 为 sys_user.user_id）
      * @return 重建前的 Authentication（通常为 null），用于执行后还原
      */
-    private Authentication installBatchOperatorContext(ExcelImportBatch batch) {
-        Authentication previous = SecurityContextHolder.getContext().getAuthentication();
+    private void installBatchOperatorContext(ExcelImportBatch batch, String userId, boolean strict) {
         try {
-            String userId = batch.getCreatedBy();
             if (!StringUtils.hasText(userId)) {
-                return previous;
+                return;
             }
             SysUser user = sysUserMapper.selectById(userId);
             if (user == null || !StringUtils.hasText(user.getUsername())) {
-                return previous;
+                if (strict) {
+                    throw new com.rsdp.exception.ForbiddenException("录入账号已不存在");
+                }
+                return;
             }
             List<SimpleGrantedAuthority> authorities = new ArrayList<>();
             for (String roleCode : userRoleService.getRoleCodesByUsername(user.getUsername())) {
@@ -1016,15 +1060,21 @@ public class ExcelAiImportService {
             for (String permission : permissionService.getPermissionsByUserId(userId)) {
                 authorities.add(new SimpleGrantedAuthority(permission));
             }
+            if (strict && (!"active".equals(user.getStatus())
+                || authorities.stream().noneMatch(authority -> Permissions.PRODUCT_IMPORT.equals(authority.getAuthority())))) {
+                throw new com.rsdp.exception.ForbiddenException("录入账号已停用或没有商品导入权限");
+            }
             SecurityUser securityUser = new SecurityUser(user.getUserId(), user.getUsername(),
                 user.getPasswordHash() != null ? user.getPasswordHash() : "", authorities);
             SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(securityUser, null, authorities));
         } catch (Exception e) {
+            if (strict) {
+                throw e;
+            }
             // 上下文重建失败不阻断导入：降级为匿名执行（审计操作人降级、数据权限按最严口径）
             log.warn("重建导入批次操作人上下文失败，按匿名身份执行，batchId={}", batch.getBatchId(), e);
         }
-        return previous;
     }
 
     /**
@@ -1090,7 +1140,8 @@ public class ExcelAiImportService {
     private ExcelAiImportResult doConfirmImport(ExcelImportBatch batch, ExcelAiMappingRequest request,
                                                 Map<String, String> mapping,
                                                 List<Map<String, String>> confirmedRows,
-                                                AttemptContext attemptCtx) {
+                                                AttemptContext attemptCtx,
+                                                com.fasterxml.jackson.databind.node.ObjectNode entryActor) {
         List<Map<String, String>> sourceRows = confirmedRows != null ? confirmedRows : loadRawDataRows(batch);
         if (sourceRows.isEmpty()) {
             throw new BusinessException("Excel 数据为空，无法导入");
@@ -1116,12 +1167,6 @@ public class ExcelAiImportService {
 
         // 统一行准备：snapshot 路径直用 Revision 固化源行；旧批次兼容预处理
         // （下填/单元格修正/组字段聚合/跳过行过滤）集中在 prepareLegacyRows 入口
-        if (confirmedRows != null) {
-            // 失败重导修正通道：snapshot 路径同样应用清洗页单元格编辑（与旧路径
-            // prepareLegacyRows 同语义）——编辑只作用于从库中重新读出的执行副本，
-            // 不写回 Revision，不破坏快照不可变性
-            applyPreviewEdits(sourceRows, request.getPreviewEdits());
-        }
         RowPreparation preparation = confirmedRows != null
             ? new RowPreparation(sourceRows, physicalLayout,
                 (row, rowIndex, ordinal) -> resolveDisplayRowIndex(row, rowIndex) - 1)
@@ -1163,6 +1208,8 @@ public class ExcelAiImportService {
         // （supplier_product_ref 优先 + 受限 legacy fallback，§9 Phase 3），
         // 未命中编码行内 miss 时仍实时单查回填
         BatchImportCache importCache = preloadBatchCache(rawDataRows, mapping, request);
+        importCache.entryActor = entryActor;
+        importCache.sourceBatch = batch;
         // 3.4 批次级预载续：字典别名（category/size/color/material/scene）与工厂交期规则
         // 各一把查询进内存，行内别名解析/交期匹配不再逐值/逐行查库
         importCache.aliasByType.putAll(safeAliases(dictAliasService.loadAliases(
@@ -4302,8 +4349,7 @@ public class ExcelAiImportService {
             .map(SupplierIdentityResolutionService.ResolvedIdentity::getRspuId)
             .distinct()
             .toList();
-        // @TableLogic 自动排除软删：ref 指向已软删 RSPU 时视为未命中（不缓存），
-        // 行内 miss 单查会走同一解析逻辑并 negative 缓存
+        // @TableLogic 自动排除软删；行内单查会区分型号从未录入和原商品在回收站。
         Map<String, RspuMaster> rspuById = rspuMapper.selectBatchIds(resolvedRspuIds).stream()
             .collect(Collectors.toMap(RspuMaster::getRspuId, r -> r, (a, b) -> a));
         // 多个编码可能解析到同一 RSPU（ref 归一命中），变体/图片预载按 rspu_id 去重
@@ -4634,6 +4680,9 @@ public class ExcelAiImportService {
         String defaultMaterialCode = resolveDefaultMaterialCode(request, dictCache, rowIssues);
         String rspuId;
         boolean createdNewRspu;
+        ExcelImportBatch sourceBatch = importCache.sourceBatch;
+        boolean factoryEntry = SecurityOperatorContext.isCurrentUserFactoryAdmin()
+            && !SecurityOperatorContext.isPlatformStaff();
         // 新建 RSPU 时预判本行是否会产生 AI 识别任务（判定口径与下方建任务条件一致：
         // 新建 RSPU 无既有图片可查重，allowPrimary 且有产品图且（有 primary 标记图或
         // 非严格主图模式首图兜底）时必新登记主图 → 必建识别任务），供 createRspu
@@ -4652,12 +4701,17 @@ public class ExcelAiImportService {
                 return RowResult.skipped("已存在，跳过: " + groupKey);
             }
             if (existing != null) {
+                if (factoryEntry && (!Boolean.TRUE.equals(existing.getOwnerVerified())
+                    || !"FACTORY".equals(existing.getOwnerType())
+                    || !Objects.equals(request.getDefaultFactoryCode(), existing.getOwnerFactoryCode()))) {
+                    throw new BusinessException(409, "仅可批量更新已核验归属的本厂商品");
+                }
                 rspuId = existing.getRspuId();
                 // 归属分流（阶段 1.3）：平台员工（ALL）保持全量更新共享字段；
                 // 非 ALL（FACTORY_LIST 等）命中已有 RSPU 时按归属收窄——
                 // 本厂已报价的共管产品仅补空缺（不覆盖已有值，categoryCode 不可改）；
                 // 非本厂已报价产品跳过共享信息更新，仅继续本行本厂 RSKU 报价登记
-                if (dataScopeHelper.currentDataScope() == DataScope.ALL) {
+                if (factoryEntry || dataScopeHelper.currentDataScope() == DataScope.ALL) {
                     // §34.1（P0-F）：同事务重读 manual_override_fields（不用 Preview/缓存的
                     // 过期标记覆盖并发人工修正），活跃标记字段不被 Excel/AI 覆盖
                     String freshOverrideFields = loadManualOverrideFields(rspuId, existing);
@@ -4673,7 +4727,8 @@ public class ExcelAiImportService {
                 createdNewRspu = false;
                 log.debug("第 {} 行外部编码 {} 已存在，复用并更新已有 RSPU {}", rowIndex, groupKey, rspuId);
             } else {
-                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache, expectAiTask, request.getDefaultFactoryCode());
+                rspuId = createRspu(row, dictCache, rowIssues, defaultProductLevel, importCache,
+                    expectAiTask && !factoryEntry, request.getDefaultFactoryCode(), sourceBatch);
                 saveStylesAndScenes(rspuId, row, dictCache, rowIssues, importCache);
                 createdNewRspu = true;
             }
@@ -6678,7 +6733,8 @@ public class ExcelAiImportService {
      */
     private String createRspu(ProductImportRow row, Map<String, List<CategoryDict>> dictCache,
                               List<String> rowIssues, String defaultProductLevel,
-                              BatchImportCache importCache, boolean expectAiTask, String entryFactoryCode) {
+                              BatchImportCache importCache, boolean expectAiTask, String entryFactoryCode,
+                              ExcelImportBatch sourceBatch) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -6721,6 +6777,11 @@ public class ExcelAiImportService {
         rspu.setUpdatedAt(LocalDateTime.now());
         // INTEG-001：录入归属打标（谁录入谁负责）——带工厂上下文的导入归该厂，平台导入归 PLATFORM
         dataScopeHelper.applyOwnershipOnCreate(rspu, entryFactoryCode);
+        var actor = importCache.entryActor != null ? importCache.entryActor
+            : ProductEntrySource.actor(objectMapper, sysUserMapper, rspu.getCreatedBy());
+        ProductEntrySource.apply(rspu, actor, "ROOMVIP_EXCEL",
+            sourceBatch == null ? null : sourceBatch.getBatchId(),
+            sourceBatch == null ? null : sourceBatch.getCreatedBy());
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
         // 暂存行事务内新建的 RSPU，提交成功后并入批次缓存——同批次后序同编码行
@@ -7388,7 +7449,13 @@ public class ExcelAiImportService {
         String factoryCode = StringUtils.hasText(request.getDefaultFactoryCode())
             ? request.getDefaultFactoryCode().trim() : null;
         RspuMaster found = supplierIdentityResolutionService.resolve(factoryCode, null, key)
-            .map(identity -> rspuMapper.selectById(identity.getRspuId()))
+            .map(identity -> {
+                RspuMaster product = rspuMapper.selectById(identity.getRspuId());
+                if (product == null) {
+                    supplierIdentityResolutionService.rejectRecycledProduct(identity);
+                }
+                return product;
+            })
             .orElse(null);
         importCache.rspuByExternalCode.put(key, found);
         return found;
@@ -8454,6 +8521,8 @@ public class ExcelAiImportService {
      * 与原来「每行实时单查」的可见性语义保持一致。</p>
      */
     private static class BatchImportCache {
+        private com.fasterxml.jackson.databind.node.ObjectNode entryActor;
+        private ExcelImportBatch sourceBatch;
         /** external_code（trim 后）→ 未软删 RSPU；value 为 null 表示本批次已确认不存在（negative cache） */
         final Map<String, RspuMaster> rspuByExternalCode = new HashMap<>();
         /** 行事务内新建、尚未提交的 RSPU（key 同主缓存），commitRow 时并入 */

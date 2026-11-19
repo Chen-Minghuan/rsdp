@@ -782,6 +782,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
     uploadAbortController = new AbortController()
 
     try {
+      const revision = categoryMode.value ? (currentRevision.value ?? undefined) : undefined
       const submit = await confirmExcelAiImport({
         batchId: mappingResponse.value.batchId,
         mapping,
@@ -789,7 +790,7 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         categoryHint: categoryHint.value ?? undefined,
         categoryMode: categoryMode.value ?? undefined,
         // P0-B2：确认导入基于当前 Snapshot Revision（乐观锁）；后端以快照固化的行级品类为准
-        expectedRevision: categoryMode.value ? (currentRevision.value ?? undefined) : undefined,
+        expectedRevision: revision,
         candidateCategoryCodes: categoryMode.value === 'MIXED' ? [...candidateCategoryCodes.value] : undefined,
         rowCategorySelections: Object.keys(rowCategorySelectionsPayload).length > 0
           ? rowCategorySelectionsPayload
@@ -802,8 +803,8 @@ export const useExcelImportStore = defineStore('excelImport', () => {
         defaultMaterialCode: defaultMaterialCode.value || undefined,
         selectedPriceColumns: selectedPriceColumns.value,
         priceColumnSelections,
-        previewEdits: Object.values(previewEdits.value),
-        skipRows: Array.from(skippedRows.value),
+        previewEdits: revision === undefined ? Object.values(previewEdits.value) : undefined,
+        skipRows: revision === undefined ? Array.from(skippedRows.value) : undefined,
         saveAsTemplate: saveAsTemplate.value,
         templateName: saveAsTemplate.value ? templateName.value.trim() : undefined
       }, uploadAbortController.signal)

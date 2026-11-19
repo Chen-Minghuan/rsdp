@@ -358,3 +358,14 @@ CREATE TABLE IF NOT EXISTS office_catalog_receipt (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (factory_code, workspace_id, actor_id, request_id)
 );
+
+
+CREATE TABLE IF NOT EXISTS factory_product_entry_receipt (
+    factory_code VARCHAR(16) NOT NULL,
+    actor_id VARCHAR(64) NOT NULL,
+    request_id VARCHAR(64) NOT NULL,
+    request_sha256 CHAR(64) NOT NULL,
+    result_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (factory_code, actor_id, request_id)
+);

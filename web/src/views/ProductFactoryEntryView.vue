@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import {
   NCard,
@@ -46,12 +46,14 @@ const fabricOptions = ref<DictItem[]>([])
 const productLevelOptions = ref<DictItem[]>([])
 
 const fileList = ref<UploadFileInfo[]>([])
+let lastSubmission: { signature: string; requestId: string } | undefined
 
 const form = ref({
   // RSPU
   categoryCode: null as string | null,
   positioningLabel: null as string | null,
   productName: '',
+  externalCode: '',
   colorPrimaryName: null as string | null,
   materialTags: [] as string[],
   fabricTags: [] as string[],
@@ -91,6 +93,9 @@ const factoryOptions = computed(() => {
 })
 
 const isFactoryAdmin = computed(() => userStore.hasRole(ROLES.FACTORY_ADMIN))
+watch(factoryOptions, options => {
+  if (options.length === 1) form.value.factoryCode = options[0].value
+}, { immediate: true })
 
 function validateDimensions(value: string | null): boolean {
   if (!value || value.trim().length === 0) return true
@@ -108,6 +113,8 @@ function validateDimensions(value: string | null): boolean {
 }
 
 const step1Rules: FormRules = {
+  productName: { required: true, whitespace: true, message: '请输入商品名称', trigger: 'blur' },
+  externalCode: { required: true, whitespace: true, message: '请输入厂内型号', trigger: 'blur' },
   categoryCode: { required: true, message: '请选择品类', trigger: 'change' },
   positioningLabel: { required: true, message: '请选择风格定位', trigger: 'change' },
   productLevel: { required: true, message: '请选择产品等级', trigger: 'change' },
@@ -254,6 +261,7 @@ function buildDimensionsJson(): string | undefined {
 }
 
 async function handleSubmit() {
+  if (submitting.value) return
   try {
     await step2FormRef.value?.validate()
   } catch {
@@ -271,7 +279,8 @@ async function handleSubmit() {
   const request = {
     categoryCode: form.value.categoryCode!,
     positioningLabel: form.value.positioningLabel!,
-    productName: form.value.productName || undefined,
+    productName: form.value.productName.trim(),
+    externalCode: form.value.externalCode.trim(),
     colorPrimaryName: form.value.colorPrimaryName || undefined,
     materialTags: form.value.materialTags,
     fabricTags: form.value.fabricTags,
@@ -297,13 +306,19 @@ async function handleSubmit() {
   }
 
   const formData = new FormData()
-  formData.append('request', new Blob([JSON.stringify(request)], { type: 'application/json' }))
+  const requestJson = JSON.stringify(request)
+  const signature = JSON.stringify([requestJson, files.map(file => [file.name, file.size, file.lastModified])])
+  if (!lastSubmission || lastSubmission.signature !== signature) {
+    const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+    lastSubmission = { signature, requestId }
+  }
+  formData.append('request', new Blob([requestJson], { type: 'application/json' }))
   files.forEach(file => formData.append('images', file))
 
   submitting.value = true
   errorMessage.value = ''
   try {
-    const result = await factoryEntry(formData)
+    const result = await factoryEntry(formData, lastSubmission.requestId)
     createdRspuId.value = result.rspuId
     showSuccessModal.value = true
     message.success(`录入成功：RSPU ${result.rspuId}`)
@@ -322,6 +337,7 @@ function resetForm() {
     categoryCode: null,
     positioningLabel: null,
     productName: '',
+    externalCode: '',
     colorPrimaryName: null,
     materialTags: [],
     fabricTags: [],
@@ -334,7 +350,7 @@ function resetForm() {
     colorCode: null,
     variantMaterialCode: null,
     materialMix: [],
-    factoryCode: null,
+    factoryCode: factoryOptions.value.length === 1 ? factoryOptions.value[0].value : null,
     factorySku: null,
     factoryPrice: null,
     moq: null,
@@ -344,6 +360,7 @@ function resetForm() {
     quoteConfidence: null
   }
   fileList.value = []
+  lastSubmission = undefined
   currentStep.value = 1
 }
 
@@ -408,8 +425,11 @@ function viewCreatedProduct() {
           />
         </n-form-item>
 
-        <n-form-item label="商品名称">
-          <n-input v-model:value="form.productName" placeholder="如：云屿三人位沙发（可选）" />
+        <n-form-item label="商品名称" path="productName">
+          <n-input v-model:value="form.productName" maxlength="255" placeholder="如：云屿三人位沙发" />
+        </n-form-item>
+        <n-form-item label="厂内型号" path="externalCode">
+          <n-input v-model:value="form.externalCode" maxlength="64" placeholder="与 Excel 导入使用相同的型号" />
         </n-form-item>
 
         <n-form-item label="主色">

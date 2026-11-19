@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -54,6 +55,7 @@ public class ProductController {
     private static final long MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 
     private final ProductService productService;
+    private final com.rsdp.service.FactoryProductEntrySubmission factorySubmission;
     private final ProductQueryService productQueryService;
     private final RspuMergeService rspuMergeService;
     private final ImageUploadValidator imageUploadValidator;
@@ -131,6 +133,7 @@ public class ProductController {
     /**
      * 工厂单条录入新产品（事务内不调用 AI；主图 AI 裁剪在事务提交后异步执行）。
      *
+     * @param requestId 幂等请求编号
      * @param request 录入请求
      * @param images  产品图片，可选
      * @return 创建结果
@@ -139,12 +142,13 @@ public class ProductController {
     @PostMapping("/factory-entry")
     @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_CREATE + "') and hasRole('FACTORY_ADMIN')")
     public Result<Map<String, Object>> factoryEntry(
+        @RequestHeader("Idempotency-Key") String requestId,
         @Valid @RequestPart("request") FactoryProductEntryRequest request,
         @RequestParam(value = "images", required = false) List<MultipartFile> images) throws IOException {
         if (images != null && !images.isEmpty()) {
             validateImages(images);
         }
-        return Result.ok(productService.createFactoryEntry(request, images));
+        return Result.ok(factorySubmission.create(request, images, requestId));
     }
 
     /**

@@ -4,6 +4,7 @@ import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.RspuFactoryMapping;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.SupplierProductRef;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.RspuFactoryMappingMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -16,11 +17,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -88,6 +91,22 @@ class SupplierIdentityResolutionServiceTest {
     }
 
     // ---------- ref 优先 ----------
+
+    @Test
+    void recycledProductKeepsItsIdentityAndRequiresRestoration() {
+        var identity = new SupplierIdentityResolutionService.ResolvedIdentity(
+            "RSPU-1", SupplierIdentityResolutionService.ResolutionSource.SUPPLIER_PRODUCT_REF, 11L);
+        var product = rspu("RSPU-1", "MJ-S96");
+        product.setDeletedAt(LocalDateTime.now());
+        when(rspuMapper.selectAnyById("RSPU-1")).thenReturn(product);
+
+        assertThatThrownBy(() -> resolutionService.rejectRecycledProduct(identity))
+            .isInstanceOfSatisfying(BusinessException.class, error -> assertThat(error.getCode()).isEqualTo(409))
+            .hasMessageContaining("回收站").hasMessageContaining("恢复原商品");
+
+        product.setDeletedAt(null);
+        resolutionService.rejectRecycledProduct(identity);
+    }
 
     @Test
     void resolve_shouldHitSupplierRefFirst() {

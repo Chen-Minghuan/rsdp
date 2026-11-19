@@ -5,6 +5,7 @@ import com.rsdp.entity.FactoryMaster;
 import com.rsdp.entity.RspuFactoryMapping;
 import com.rsdp.entity.RspuMaster;
 import com.rsdp.entity.SupplierProductRef;
+import com.rsdp.exception.BusinessException;
 import com.rsdp.mapper.FactoryMasterMapper;
 import com.rsdp.mapper.RspuFactoryMappingMapper;
 import com.rsdp.mapper.RspuMapper;
@@ -114,6 +115,14 @@ public class SupplierIdentityResolutionService {
 
         // 2. 受限 legacy fallback（factory context 可验证 + 该工厂下唯一无歧义）
         return resolveLegacyFallback(factory, rawSourceProductCode.trim());
+    }
+
+    /** 保留回收商品的型号身份，并提示从回收站恢复原商品。 */
+    public void rejectRecycledProduct(ResolvedIdentity identity) {
+        RspuMaster product = rspuMapper.selectAnyById(identity.getRspuId());
+        if (product != null && product.getDeletedAt() != null) {
+            throw new BusinessException(409, "本厂该型号的商品在回收站，请联系平台从回收站恢复原商品后再维护");
+        }
     }
 
     /**
