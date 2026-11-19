@@ -58,15 +58,18 @@ public class CatalogVisibilityService {
                                        List<String> viewerFactories, boolean fullViewEligible) {
         String selfSupplied = selfSuppliedExists(viewerFactories);
         String notBlockedOrSelf = notBlockedOrSelfSql(viewerFactories);
+        String verifiedOwner = "rspu_master.owner_verified = TRUE AND rspu_master.owner_factory_code IN ("
+            + toSqlInList(viewerFactories) + ")";
         if (fullViewEligible) {
             // 全库：全部 − 黑名单（自家已报价保留）
-            wrapper.and(w -> w.exists(selfSupplied).or().apply(notBlockedOrSelf));
+            wrapper.and(w -> w.exists(selfSupplied).or().apply(verifiedOwner).or()
+                .nested(n -> n.eq("rspu_master.status", "active").apply(notBlockedOrSelf)));
         } else {
             // 私有视图：自家已报价 ∪（被放行归属 − 黑名单）
             String grantedOwners = "SELECT owner_factory_code FROM factory_catalog_grant"
                 + " WHERE granted_factory_code IN (" + toSqlInList(viewerFactories) + ")";
-            wrapper.and(w -> w.exists(selfSupplied)
-                .or().nested(n -> n
+            wrapper.and(w -> w.exists(selfSupplied).or().apply(verifiedOwner)
+                .or().nested(n -> n.eq("rspu_master.status", "active")
                     .apply("rspu_master.owner_factory_code IN (" + grantedOwners + ")")
                     .apply(notBlockedOrSelf)));
         }
@@ -79,7 +82,9 @@ public class CatalogVisibilityService {
         if (viewerFactories.isEmpty()) {
             return false;
         }
-        if (isSelfSupplied(rspu.getRspuId(), viewerFactories)) {
+        if ((Boolean.TRUE.equals(rspu.getOwnerVerified()) && rspu.getOwnerFactoryCode() != null
+            && viewerFactories.contains(rspu.getOwnerFactoryCode()))
+            || isSelfSupplied(rspu.getRspuId(), viewerFactories)) {
             return true;
         }
         String owner = rspu.getOwnerFactoryCode();

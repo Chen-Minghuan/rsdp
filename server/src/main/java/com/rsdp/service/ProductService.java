@@ -74,6 +74,7 @@ public class ProductService {
     private final RspuAssociationHelper associationHelper;
     private final DictService dictService;
     private final ObjectMapper objectMapper;
+    private final com.rsdp.mapper.SysUserMapper sysUserMapper;
     private final RspuVariantService rspuVariantService;
     private final RskuService rskuService;
     private final UserFactoryService userFactoryService;
@@ -165,6 +166,8 @@ public class ProductService {
         rspu.setCreatedBy(SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
+        dataScopeHelper.applyOwnershipOnCreate(rspu, null);
+        recordEntry(rspu, "ROOMVIP_IMAGE");
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
@@ -269,7 +272,8 @@ public class ProductService {
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), request.getSixDimTags(),
             request.getProductLevel(), request.getWarrantyYears(), request.getKeySpecs(),
-            request.getProductName(), request.getExternalCode(), request.getFactoryCode());
+            request.getProductName(), request.getExternalCode(), request.getFactoryCode(),
+            request.getDescription(), request.getRetailPrice(), "ROOMVIP_FACTORY");
         String rspuCode = assignRspuCode(rspu);
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
@@ -325,7 +329,7 @@ public class ProductService {
             request.getCategoryCode(), request.getPositioningLabel(), request.getColorPrimaryName(),
             request.getMaterialTags(), request.getFabricTags(), request.getSceneTags(), null,
             request.getProductLevel(), request.getWarrantyYears(), null,
-            request.getProductName(), null, null);
+            request.getProductName(), null, null, null, null, "ROOMVIP_MANUAL");
         String rspuCode = assignRspuCode(rspu);
         String variantId = createDefaultVariantForEntry(
             rspu.getRspuId(), rspu.getProductLevel(), request.getVariantDisplayName(),
@@ -349,7 +353,8 @@ public class ProductService {
                                           List<String> materialTags, List<String> fabricTags, List<String> sceneTags,
                                           Object sixDimTags,
                                           String productLevel, Integer warrantyYears, Object keySpecs,
-                                          String productName, String externalCode, String entryFactoryCode) {
+                                          String productName, String externalCode, String entryFactoryCode,
+                                          String description, java.math.BigDecimal retailPrice, String sourceChannel) {
         String rspuId = IdGenerator.rspuId();
 
         RspuMaster rspu = new RspuMaster();
@@ -373,10 +378,18 @@ public class ProductService {
         rspu.setUpdatedAt(LocalDateTime.now());
         // INTEG-001：录入归属打标（谁录入谁负责）——factory-entry 归请求工厂，手工录入按当前账号身份
         dataScopeHelper.applyOwnershipOnCreate(rspu, entryFactoryCode);
+        rspu.setDescription(description);
+        rspu.setRetailPrice(retailPrice);
+        recordEntry(rspu, sourceChannel);
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
         insertStyleSceneAssociations(rspu, sceneTags);
         return rspu;
+    }
+
+    private void recordEntry(RspuMaster product, String channel) {
+        ProductEntrySource.apply(product,
+            ProductEntrySource.actor(objectMapper, sysUserMapper, product.getCreatedBy()), channel, null, null);
     }
 
     /**
@@ -663,6 +676,8 @@ public class ProductService {
         rspu.setCreatedBy(createdByUserId != null ? createdByUserId : SecurityOperatorContext.currentUserId());
         rspu.setCreatedAt(LocalDateTime.now());
         rspu.setUpdatedAt(LocalDateTime.now());
+        dataScopeHelper.applyOwnershipOnCreate(rspu, null);
+        recordEntry(rspu, createdByUserId == null ? "ROOMVIP_IMAGE" : "ROOMVIP_DOCUMENT");
         rspuMapper.insert(rspu);
         auditLogService.logCreate("rspu_master", rspuId, rspu, SecurityOperatorContext.currentUsername());
 
@@ -828,12 +843,11 @@ public class ProductService {
     }
 
     /**
-     * 重新触发产品 AI 识别（识别中产品的手动重试入口）。
+     * 为已建档商品提交 AI 识别或重试。
      *
      * <p>识别任务失败或被收割器标记失败后，RSPU 停留在 processing（识别中），
-     * 本方法按 {@link #createEntry(List, String)} 的范式重新发起识别：
-     * RSPU 置回 processing、新建 product_entry 异步任务、
-     * 事务提交后投递执行。识别成功/失败后由异步链路正常翻转状态。</p>
+     * 新建 product_entry 任务并在事务提交后投递。保留在售或下架状态；
+     * 原本待识别的草稿继续由异步链路在成功后完成入库。</p>
      *
      * @param rspuId RSPU ID
      * @return 包含 taskId 的映射
@@ -844,8 +858,8 @@ public class ProductService {
         if (rspu == null) {
             throw new BusinessException("产品不存在: " + rspuId);
         }
-        // 数据归属：平台员工均可，工厂仅可重识别本厂已报价产品
-        dataScopeHelper.assertCanAccessRspu(rspuId);
+        // 工厂维护权以已核验录入归属为准。
+        dataScopeHelper.assertCanManageRspu(rspu);
 
         ImageAssets primaryImage = imageAssetsMapper.selectOne(new QueryWrapper<ImageAssets>()
             .eq("rspu_id", rspuId)
@@ -865,14 +879,6 @@ public class ProductService {
         if (hasInflightTask) {
             throw new BusinessException("该产品已有识别任务在执行中，请稍后再试");
         }
-
-        // RSPU 置回识别中，等异步识别结果翻转
-        RspuMaster oldSnapshot = new RspuMaster();
-        org.springframework.beans.BeanUtils.copyProperties(rspu, oldSnapshot);
-        rspu.setStatus("processing");
-        rspu.setUpdatedAt(LocalDateTime.now());
-        rspuMapper.updateById(rspu);
-        auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, SecurityOperatorContext.currentUsername());
 
         String taskId = IdGenerator.taskId();
         AsyncTask task = new AsyncTask();
@@ -923,7 +929,7 @@ public class ProductService {
         }
     }
 
-    private void validateFactoryEntryOwnership(String factoryCode) {
+    void validateFactoryEntryOwnership(String factoryCode) {
         List<String> userFactories = userFactoryService.getFactoryCodesByUsername(
             SecurityOperatorContext.currentUsername()
         );

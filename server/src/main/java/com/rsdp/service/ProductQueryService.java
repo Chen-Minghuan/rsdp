@@ -6,6 +6,7 @@ import com.rsdp.security.datascope.DataScopeHelper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsdp.common.PageResult;
 import com.rsdp.dto.request.ProductListRequest;
@@ -64,6 +65,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Objects;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -83,6 +85,7 @@ public class ProductQueryService {
     private static final Set<String> SIX_DIM_KEYS = Set.of("A", "B", "C", "D", "E", "F");
 
     private final RspuMapper rspuMapper;
+    private final com.rsdp.mapper.FactoryMasterMapper factoryMasterMapper;
     private final ImageAssetsMapper imageAssetsMapper;
     private final AiRecognitionMapper aiRecognitionMapper;
     private final RspuStyleMapper rspuStyleMapper;
@@ -157,11 +160,54 @@ public class ProductQueryService {
                 e -> (long) e.getValue().getActiveRskuCount(),
                 (a, b) -> a));
 
+        Map<String, String> ownerNames = ownerFactoryNames(page.getRecords());
+        boolean platformStaff = SecurityOperatorContext.isPlatformStaff();
+        List<String> sourceFactories = SecurityOperatorContext.isCurrentUserFactoryAdmin()
+            && SecurityOperatorContext.hasAuthority(com.rsdp.security.Permissions.PRODUCT_UPDATE)
+            ? resolveUserFactoryCodes(null) : List.of();
         List<ProductSummaryResponse> rows = page.getRecords().stream()
-            .map(rspu -> toSummary(rspu, primaryImageUrlMap, factoryCodeMap, priceSummaryMap, rskuCountMap))
+            .map(rspu -> {
+                ProductSummaryResponse row = toSummary(rspu, primaryImageUrlMap, factoryCodeMap, priceSummaryMap, rskuCountMap);
+                if (row.getOwnerFactoryCode() != null) {
+                    row.setOwnerFactoryName(ownerNames.get(row.getOwnerFactoryCode()));
+                }
+                if (platformStaff || (row.getOwnerFactoryCode() != null
+                    && sourceFactories.contains(row.getOwnerFactoryCode()))) {
+                    JsonNode source = readEntrySource(rspu);
+                    if (source != null) {
+                        row.setEntryActorName(source.path("actorName").asText(null));
+                        row.setEntryActorUsername(source.path("actorUsername").asText(null));
+                        row.setEntryActorKind(source.path("actorKind").asText(null));
+                    }
+                }
+                return row;
+            })
             .collect(Collectors.toList());
 
         return PageResult.of(page.getTotal(), page.getCurrent(), page.getSize(), rows);
+    }
+
+    private JsonNode readEntrySource(RspuMaster rspu) {
+        if (!StringUtils.hasText(rspu.getEntryProvenance())) return null;
+        try {
+            return objectMapper.readTree(rspu.getEntryProvenance());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("商品录入来源无法读取，rspuId={}", rspu.getRspuId());
+            return null;
+        }
+    }
+
+    private String legacySourceFactoryName(RspuMaster rspu, JsonNode source) {
+        if (!"OFFICE_LEGACY".equals(rspu.getSourceChannel()) || source == null) return null;
+        return source.path("factoryName").asText(null);
+    }
+
+    private Map<String, String> ownerFactoryNames(List<RspuMaster> products) {
+        List<String> codes = products.stream().filter(product -> Boolean.TRUE.equals(product.getOwnerVerified()))
+            .map(RspuMaster::getOwnerFactoryCode).filter(Objects::nonNull).distinct().toList();
+        if (codes.isEmpty()) return Map.of();
+        return factoryMasterMapper.selectBatchIds(codes).stream().collect(Collectors.toMap(
+            com.rsdp.entity.FactoryMaster::getFactoryCode, com.rsdp.entity.FactoryMaster::getFactoryName));
     }
 
     private CatalogSearchService.Match searchMatch(ProductListRequest request) {
@@ -176,11 +222,24 @@ public class ProductQueryService {
         List<String> factoryCodes = resolveUserFactoryCodes(request.getFactoryCode());
         String viewMode = resolveViewMode(request.getViewMode());
         boolean full = "full".equals(viewMode) && isFullViewEligible(factoryCodes);
-        if ("full".equals(viewMode) && !full && SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
+        if ("full".equals(viewMode) && !full && hasFactoryCatalogScope()) {
             viewMode = "own";
         }
         CatalogSearchQuery wrapper = buildListWrapper(request, viewMode, match);
-        if ("own".equals(viewMode)) {
+        if ("managed".equals(viewMode)) {
+            if (hasFactoryCatalogScope() && !factoryCodes.isEmpty()) {
+                wrapper.eq("owner_type", "FACTORY").in("owner_factory_code", factoryCodes)
+                    .and(scope -> {
+                        scope.eq("owner_verified", true);
+                        if (SecurityOperatorContext.hasAuthority("ROLE_OFFICE_CATALOG_READER")) {
+                            scope.or(history -> history.eq("source_channel", "OFFICE_LEGACY")
+                                .apply("rspu_master.entry_provenance ->> 'factoryCode' = rspu_master.owner_factory_code"));
+                        }
+                    });
+            } else {
+                wrapper.apply("1 = 0");
+            }
+        } else if ("own".equals(viewMode)) {
             applyOwnProductFilter(wrapper, factoryCodes);
         } else if (full) {
             catalogVisibilityService.applyProductVisibility(wrapper, factoryCodes, true);
@@ -197,6 +256,12 @@ public class ProductQueryService {
         }
         if (StringUtils.hasText(request.getExternalCode())) {
             wrapper.eq("external_code", request.getExternalCode().trim());
+        }
+        if (StringUtils.hasText(request.getRspuId())) {
+            wrapper.eq("rspu_id", request.getRspuId().trim());
+        }
+        if (StringUtils.hasText(request.getSourceChannel())) {
+            wrapper.eq("source_channel", request.getSourceChannel().trim());
         }
         if (StringUtils.hasText(request.getPositioningLabel())) {
             wrapper.exists(
@@ -228,7 +293,7 @@ public class ProductQueryService {
             wrapper.eq("status", request.getStatus());
         } else if (!SecurityOperatorContext.isPlatformStaff()
             && !SecurityOperatorContext.isCurrentUserDesigner()
-            && !"own".equals(viewMode)) {
+            && !"own".equals(viewMode) && !"managed".equals(viewMode)) {
             // 复核机制移除后的等价口径：非平台员工/设计师在「全库视图」未显式指定状态时
             // 只看 active 成品（原「强制已确认」语义；识别中的半成品不对外曝光）
             wrapper.eq("status", "active");
@@ -451,14 +516,14 @@ public class ProductQueryService {
             return "own";
         }
         String mode = viewMode.trim().toLowerCase();
-        if ("own".equals(mode) || "full".equals(mode)) {
+        if ("own".equals(mode) || "full".equals(mode) || "managed".equals(mode)) {
             return mode;
         }
         return "own";
     }
 
     private boolean isFullViewEligible(List<String> userFactoryCodes) {
-        if (!SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
+        if (!hasFactoryCatalogScope()) {
             return false;
         }
         if (userFactoryCodes.isEmpty()) {
@@ -468,6 +533,11 @@ public class ProductQueryService {
         // 全库资格 = 用户级 view_full_catalog 且任一关联厂的公共库开关开启（V28/INTEG-001）
         return currentUser != null && Boolean.TRUE.equals(currentUser.getViewFullCatalog())
             && catalogVisibilityService.isPublicCatalogEnabled(userFactoryCodes);
+    }
+
+    private boolean hasFactoryCatalogScope() {
+        return SecurityOperatorContext.isCurrentUserFactoryAdmin()
+            || SecurityOperatorContext.hasAuthority("ROLE_OFFICE_CATALOG_READER");
     }
 
     private SysUser getCurrentSysUser() {
@@ -491,6 +561,32 @@ public class ProductQueryService {
      * @param rspu 产品主档
      * @return 是否可见
      */
+    /** 校验主档维护权限，厂商关联报价不授予款式编辑权。 */
+    public void requireManaged(String rspuId) {
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+        dataScopeHelper.assertCanManageRspu(rspu);
+    }
+
+    /** 校验主档可见性，供子资源读取入口复用。 */
+    public void requireVisible(String rspuId) {
+        RspuMaster rspu = rspuMapper.selectById(rspuId);
+        if (rspu == null || !canViewProduct(rspu)) {
+            throw new ResourceNotFoundException("产品不存在: " + rspuId);
+        }
+    }
+
+    private boolean canViewOwnEntrySource(RspuMaster rspu) {
+        return SecurityOperatorContext.isCurrentUserFactoryAdmin()
+            && SecurityOperatorContext.hasAuthority(com.rsdp.security.Permissions.PRODUCT_UPDATE)
+            && Boolean.TRUE.equals(rspu.getOwnerVerified())
+            && rspu.getOwnerFactoryCode() != null
+            && userFactoryService.getFactoryCodesByUsername(SecurityOperatorContext.currentUsername())
+                .contains(rspu.getOwnerFactoryCode());
+    }
+
     private boolean canViewProduct(RspuMaster rspu) {
         if (SecurityOperatorContext.isPlatformStaff() || SecurityOperatorContext.isCurrentUserDesigner()) {
             return true;
@@ -500,9 +596,11 @@ public class ProductQueryService {
         );
         // V28/INTEG-001：工厂账号详情可见性与列表同一口径（自家 ∪ 放行 ∪ 全库资格 − 黑名单）。
         // 非 active 产品仍只对自家已报价曝光（半成品不外泄），不受放行/开关放宽。
-        if (SecurityOperatorContext.isCurrentUserFactoryAdmin() && !factoryCodes.isEmpty()) {
+        if (hasFactoryCatalogScope() && !factoryCodes.isEmpty()) {
             if (!"active".equals(rspu.getStatus())) {
-                return isSelfSuppliedFor(rspu, factoryCodes);
+                return (Boolean.TRUE.equals(rspu.getOwnerVerified()) && rspu.getOwnerFactoryCode() != null
+                    && factoryCodes.contains(rspu.getOwnerFactoryCode()))
+                    || isSelfSuppliedFor(rspu, factoryCodes);
             }
             SysUser currentUser = getCurrentSysUser();
             boolean fullEligible = currentUser != null && Boolean.TRUE.equals(currentUser.getViewFullCatalog())
@@ -510,7 +608,8 @@ public class ProductQueryService {
             return catalogVisibilityService.canViewProduct(rspu, factoryCodes, fullEligible);
         }
         // 复核机制已移除：active 即全体登录用户可见（原「已确认」口径）
-        if ("active".equals(rspu.getStatus())) {
+        if ("active".equals(rspu.getStatus())
+            && !SecurityOperatorContext.hasAuthority("ROLE_OFFICE_CATALOG_READER")) {
             return true;
         }
         if (factoryCodes.isEmpty()) {
@@ -537,7 +636,7 @@ public class ProductQueryService {
             wrapper.apply("1 = 0");
             return;
         }
-        if (SecurityOperatorContext.isCurrentUserFactoryAdmin()) {
+        if (hasFactoryCatalogScope()) {
             // V28/INTEG-001：工厂账号私有视图 = 自家已报价 ∪ 整批放行 − 黑名单（可见性统一收口）
             catalogVisibilityService.applyProductVisibility(wrapper, factoryCodes, false);
             return;
@@ -633,6 +732,18 @@ public class ProductQueryService {
 
         ProductDetailResponse response = new ProductDetailResponse();
         response.setRspu(rspu);
+        if (rspu.getOwnerFactoryCode() != null) {
+            response.setOwnerFactoryName(ownerFactoryNames(List.of(rspu)).get(rspu.getOwnerFactoryCode()));
+        }
+        boolean showEntrySource = SecurityOperatorContext.isPlatformStaff() || canViewOwnEntrySource(rspu);
+        if (!showEntrySource) {
+            rspu.setCreatedBy(null);
+        }
+        if (showEntrySource || "OFFICE_LEGACY".equals(rspu.getSourceChannel())) {
+            JsonNode entrySource = readEntrySource(rspu);
+            response.setSourceFactoryName(legacySourceFactoryName(rspu, entrySource));
+            if (showEntrySource) response.setEntrySource(entrySource);
+        }
         response.setImages(images);
         response.setRecognitions(recognitions);
         response.setStyleMatches(styleMatches);
@@ -1081,7 +1192,7 @@ public class ProductQueryService {
             throw new ResourceNotFoundException("产品不存在: " + rspuId);
         }
 
-        dataScopeHelper.assertCanAccessRspu(rspuId);
+        dataScopeHelper.assertCanManageRspu(rspu);
 
         RspuMaster oldSnapshot = snapshot(rspu);
 
@@ -1297,6 +1408,15 @@ public class ProductQueryService {
         ProductSummaryResponse summary = new ProductSummaryResponse();
         summary.setRspuId(rspu.getRspuId());
         summary.setRspuCode(rspu.getRspuCode());
+        summary.setExternalCode(rspu.getExternalCode());
+        summary.setSourceChannel(rspu.getSourceChannel());
+        if ("OFFICE_LEGACY".equals(rspu.getSourceChannel())) {
+            summary.setSourceFactoryName(legacySourceFactoryName(rspu, readEntrySource(rspu)));
+        }
+        summary.setOwnerVerified(Boolean.TRUE.equals(rspu.getOwnerVerified()));
+        if (summary.isOwnerVerified()) {
+            summary.setOwnerFactoryCode(rspu.getOwnerFactoryCode());
+        }
         summary.setProductName(rspu.getProductName());
         summary.setCategoryCode(rspu.getCategoryCode());
         summary.setCategoryPath(rspu.getCategoryPath());

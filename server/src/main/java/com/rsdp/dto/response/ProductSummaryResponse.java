@@ -18,6 +18,15 @@ public class ProductSummaryResponse {
     private String categoryPath;
     private String positioningLabel;
     private String productName;
+    private String externalCode;
+    private String sourceChannel;
+    private String entryActorName;
+    private String entryActorUsername;
+    private String entryActorKind;
+    private String ownerFactoryCode;
+    private String ownerFactoryName;
+    private String sourceFactoryName;
+    private boolean ownerVerified;
     private String colorPrimaryName;
     private String status;
     private String aestheticsConfidence;

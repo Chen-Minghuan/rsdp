@@ -48,6 +48,7 @@ import { PERMISSIONS, ROLES } from '@/utils/constants'
 import HoverZoomImage from '@/components/HoverZoomImage.vue'
 import { useRequestAbort } from '@/composables/useRequestAbort'
 import type { ProductSort, ProductSummary, SpuStatusCounts, SpuStatusTab } from '@/types/product'
+import { entryActorLabel, hasVerifiedFactoryOwner, sourceLabel, sourceOptions } from '@/utils/catalogSource'
 import type { DictItem } from '@/types/dict'
 import dayjs from 'dayjs'
 
@@ -167,6 +168,7 @@ const isRecycledTab = computed(() => statusTab.value === 'recycled')
 const loading = ref(false)
 const errorMessage = ref('')
 const products = ref<ProductSummary[]>([])
+const sourceChannel = ref<string | null>(null)
 const total = ref(0)
 const selectedRowKeys = ref<string[]>([])
 const hasSelection = computed(() => selectedRowKeys.value.length > 0)
@@ -299,6 +301,7 @@ function buildParams(includeTab: boolean): import('@/types/product').ProductList
     semantic: !imageSearchId.value && Boolean(keyword.value.trim()) ? true : undefined,
     imageSearchId: imageSearchId.value,
     supplierCode: supplierCode.value.trim() || undefined,
+    sourceChannel: sourceChannel.value || undefined,
     rspuCode: rspuCode.value.trim() || undefined,
     categoryCode: categoryCode.value || undefined,
     productLevel: productLevel.value || undefined,
@@ -498,6 +501,11 @@ function canDeleteRow(row: ProductSummary): boolean {
   return factoryCodes.value.some(c => codes.includes(c))
 }
 
+function canManageRow(row: ProductSummary): boolean {
+  return canUpdateProduct.value
+    && (isPlatformStaff.value || (isFactoryAdmin.value && hasVerifiedFactoryOwner(row, factoryCodes.value)))
+}
+
 /** 已勾选且当前用户有权删除的行（无权限的行由后端逐条返回失败明细，前端只提交可删行） */
 const deletableSelectedKeys = computed(() => {
   if (!hasSelection.value) return [] as string[]
@@ -548,6 +556,22 @@ const baseColumns: DataTableColumns<ProductSummary> = [
           },
           row.productName || formatCategoryPath(row.categoryPath)
         )
+      ])
+    }
+  },
+  {
+    title: '录入人 / 来源',
+    key: 'sourceChannel',
+    width: 175,
+    ellipsis: { tooltip: true },
+    render(row) {
+      const actor = entryActorLabel(row.entryActorName, row.entryActorUsername, row.entryActorKind)
+      const source = sourceLabel(row.sourceChannel, row.sourceFactoryName || row.ownerFactoryName || row.ownerFactoryCode,
+        Boolean(row.sourceFactoryName) || row.ownerVerified)
+      if (!actor) return source
+      return h('div', [
+        h('div', actor),
+        h('div', { style: { fontSize: '12px', color: '#626975' } }, source),
       ])
     }
   },
@@ -651,7 +675,7 @@ const baseColumns: DataTableColumns<ProductSummary> = [
       return h(NSwitch, {
         value: row.status === 'active',
         size: 'small',
-        disabled: !canUpdateProduct.value || isReadOnlyFullCatalog.value,
+        disabled: !canManageRow(row),
         onUpdateValue: (value: boolean) => handleToggleStatus(row, value)
       })
     }
@@ -706,7 +730,7 @@ const baseColumns: DataTableColumns<ProductSummary> = [
             { default: () => (inBasket ? '已入篮' : '入篮') }
           )
         )
-        if (canUpdateProduct.value && !isReadOnlyFullCatalog.value) {
+        if (canManageRow(row)) {
           buttons.push(
             h(
               NButton,
@@ -1060,7 +1084,7 @@ onMounted(async () => {
 })
 
 // 下拉类筛选变化即刷新（文本输入与日期范围由「搜索」按钮触发）
-watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimaryImage, pendingClassification, dimA, dimB, dimC, dimD, dimF, factoryCode, sort], () => {
+watch([sourceChannel, categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimaryImage, pendingClassification, dimA, dimB, dimC, dimD, dimF, factoryCode, sort], () => {
   page.value = 1
   refreshAll()
 })
@@ -1149,6 +1173,9 @@ watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimary
             </n-space>
           </n-form-item-gi>
           <!-- 排序（默认最新，变化即刷新） -->
+          <n-form-item-gi label="录入来源">
+            <n-select v-model:value="sourceChannel" clearable :options="sourceOptions" placeholder="全部来源" />
+          </n-form-item-gi>
           <n-form-item-gi label="排序">
             <n-select v-model:value="sort" :options="sortOptions" />
           </n-form-item-gi>
@@ -1187,7 +1214,7 @@ watch([categoryCode, productLevel, styleCode, sceneCode, materialTag, hasPrimary
       </n-alert>
 
       <n-alert v-if="isReadOnlyFullCatalog" type="info" :show-icon="true" style="margin-top: 12px;">
-        当前为全库去重只读视图，仅支持查看详情与生成报价单；编辑、回收等维护操作需切换到自己的产品视图或由平台运营人员执行。
+        当前展示授权公共库。已核验归属本厂的商品可编辑和上下架，其他工厂的商品仅供查看。
       </n-alert>
 
       <!-- 列表区 -->

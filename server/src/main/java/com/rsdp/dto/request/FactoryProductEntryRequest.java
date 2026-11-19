@@ -24,10 +24,16 @@ public class FactoryProductEntryRequest {
     @NotBlank(message = "风格定位不能为空")
     private String positioningLabel;
 
-    /** 商品名称（可选），如「云屿三人位沙发」 */
+    /** 商品名称，如「云屿三人位沙发」。 */
     private String productName;
 
-    /** 外部编码（可选，供应商型号；外部系统转发录入时用于标识与后续更新查找） */
+    @jakarta.validation.constraints.Size(max = 4000)
+    private String description;
+
+    @jakarta.validation.constraints.PositiveOrZero
+    private BigDecimal retailPrice;
+
+    /** 厂内型号，用于单条录入与 Excel 导入识别同一商品。 */
     private String externalCode;
 
     private String colorPrimaryName;

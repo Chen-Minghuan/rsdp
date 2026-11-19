@@ -268,6 +268,7 @@ class DataScopeHelperTest {
         rspu.setRspuId("RSPU-1");
         rspu.setOwnerType("FACTORY");
         rspu.setOwnerFactoryCode("F001");
+        rspu.setOwnerVerified(true);
         dataScopeHelper.assertCanManageRspu(rspu);
     }
 

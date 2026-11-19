@@ -66,6 +66,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ProductQueryServiceTest {
 
+    @Mock private com.rsdp.mapper.FactoryMasterMapper factoryMasterMapper;
+
     @Mock
     private CatalogSearchService catalogSearchService;
 
@@ -433,6 +435,25 @@ class ProductQueryServiceTest {
         assertThat(detail.getImages()).isEmpty();
         assertThat(detail.getRecognitions()).isEmpty();
         assertThat(detail.getStyleMatches()).isEmpty();
+    }
+
+    @Test
+    void getProductDetail_shouldShowHistoricalFactoryWithoutExposingServiceAccountToSharedReaders() {
+        SecurityContextHolder.clearContext();
+        RspuMaster rspu = new RspuMaster();
+        rspu.setRspuId("RSPU-LEGACY");
+        rspu.setStatus("active");
+        rspu.setOwnerVerified(false);
+        rspu.setSourceChannel("OFFICE_LEGACY");
+        rspu.setEntryProvenance("""
+            {"factoryName":"伟豪","actorId":"LEGACY-SERVICE","actorKind":"SERVICE_ACCOUNT"}
+            """);
+        when(rspuMapper.selectById("RSPU-LEGACY")).thenReturn(rspu);
+
+        ProductDetailResponse detail = productQueryService.getProductDetail("RSPU-LEGACY");
+
+        assertThat(detail.getSourceFactoryName()).isEqualTo("伟豪");
+        assertThat(detail.getEntrySource()).isNull();
     }
 
     @Test

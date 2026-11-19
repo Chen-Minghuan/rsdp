@@ -14,6 +14,9 @@ import java.util.List;
 public class ProductDetailResponse {
 
     private RspuMaster rspu;
+    private String ownerFactoryName;
+    private String sourceFactoryName;
+    private com.fasterxml.jackson.databind.JsonNode entrySource;
     private List<ImageAssets> images;
     private List<AiRecognition> recognitions;
     private List<ProductStyleMatchResponse> styleMatches;

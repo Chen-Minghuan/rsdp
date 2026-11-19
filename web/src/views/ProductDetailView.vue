@@ -43,6 +43,7 @@ import { useUserStore } from '@/stores/user'
 import { PERMISSIONS, ROLES } from '@/utils/constants'
 import { getSixDimSchema } from '@/utils/sixDimLabels'
 import type { ProductDetail, ProductSummary, ProductUpdateRequest } from '@/types/product'
+import { entryActorLabel, hasVerifiedFactoryOwner, sourceLabel } from '@/utils/catalogSource'
 import type { DictItem } from '@/types/dict'
 import type { Rsku, RskuBatchCreateRequest, RskuBatchCreateResult, RskuBatchFactoryQuote, RskuCreateRequest } from '@/types/rsku'
 import type { Factory } from '@/types/factory'
@@ -140,19 +141,16 @@ async function confirmAddFavorite() {
 }
 
 // 平台运营人员（ADMIN/EDITOR）即使开启全库视图也不应只读
-const isReadOnly = computed(() => userStore.userInfo?.viewFullCatalog === true && !isPlatformStaff.value)
-
-// 工厂管理员仅当本厂已对该 RSPU 报价时才可维护
-const isAssociated = computed(() => {
-  if (isPlatformStaff.value) return true
-  const codes = factoryCodes.value
-  if (codes.length === 0) return false
-  return rskuList.value.some(r => codes.includes(r.factoryCode))
-})
+const hasOwnProduct = computed(() =>
+  isFactoryAdmin.value && hasVerifiedFactoryOwner(detail.value?.rspu, factoryCodes.value)
+)
+const isReadOnly = computed(() =>
+  userStore.userInfo?.viewFullCatalog === true && !isPlatformStaff.value && !hasOwnProduct.value
+)
 
 // 综合数据范围后的可维护判定（用于 RSPU 级写操作）
 const canManageProduct = computed(() =>
-  !isReadOnly.value && isAssociated.value
+  isPlatformStaff.value || hasOwnProduct.value
 )
 
 // 新增报价按钮：工厂管理员只要有本厂关联即可为本 RSPU 录入首条报价
@@ -591,16 +589,12 @@ async function loadDicts() {
   }
 }
 
-/** 产品是否处于可重新识别状态（识别中，或从未走过 AI 识别且有主图的产品）。 */
+/** 支持用主图发起识别或重试，任务状态独立于商品销售状态。 */
 const canReRecognize = computed(() => {
   const rspu = detail.value?.rspu
   if (!rspu) return false
-  if (rspu.status === 'processing') return true
-  // 从未走过 AI 识别的产品（无识别来源版本）也可手动触发识别回填，
-  // 消除与 AI 录入产品的能力差（识别只补空缺 + 写向量 + 同款检测，不覆盖人工已填字段）
-  const neverRecognized = rspu.status === 'active' && !rspu.sourceAgentVersion
   const hasPrimaryImage = (detail.value?.images ?? []).some(img => img.primary)
-  return neverRecognized && hasPrimaryImage
+  return ['processing', 'active', 'inactive'].includes(rspu.status) && hasPrimaryImage
 })
 /** 按钮文案：从未识别的产品显示「AI 识别」，其余为「重新识别」。 */
 const reRecognizeLabel = computed(() => {
@@ -1163,6 +1157,14 @@ onBeforeRouteUpdate((to, from) => {
             <div class="detail-main">
               <div class="status-row">
                 <StatusPill :value="statusText(detail.rspu.status)" />
+                <n-tag size="small" :bordered="false">
+                  {{ sourceLabel(detail.rspu.sourceChannel, detail.sourceFactoryName || detail.ownerFactoryName || detail.rspu.ownerFactoryCode, Boolean(detail.sourceFactoryName) || detail.rspu.ownerVerified) }}
+                </n-tag>
+                <span v-if="detail.entrySource">
+                  {{ detail.entrySource.actorKind === 'SERVICE_ACCOUNT' ? '' : '录入人 ' }}{{ entryActorLabel(detail.entrySource.actorName, detail.entrySource.actorUsername, detail.entrySource.actorKind) || '待核验' }} · {{ detail.entrySource.recordedAt }}
+                  <template v-if="detail.entrySource.actorKind === 'SERVICE_ACCOUNT'"> · 个人录入人未记录</template>
+                  <template v-if="detail.entrySource.batchId"> · 批次 {{ detail.entrySource.batchId }}</template>
+                </span>
                 <StatusPill
                   :value="detail.rspu.aestheticsConfidence"
                   :label="confidenceText(detail.rspu.aestheticsConfidence)"

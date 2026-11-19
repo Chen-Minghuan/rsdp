@@ -21,6 +21,8 @@ public class RskuResponse {
     private String factoryName;
     private List<String> factoryCapableLevels;
     private String factorySku;
+    private String supplierConfigurationKey;
+    private Integer quoteVersion;
     private BigDecimal factoryPrice;
     private String priceBand;
     private String productLevel;

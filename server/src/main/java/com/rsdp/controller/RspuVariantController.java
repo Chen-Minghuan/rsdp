@@ -3,6 +3,7 @@ package com.rsdp.controller;
 import com.rsdp.common.Result;
 import com.rsdp.dto.request.RspuVariantCreateRequest;
 import com.rsdp.dto.response.RspuVariantResponse;
+import com.rsdp.service.ProductQueryService;
 import com.rsdp.service.RspuVariantService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -28,6 +29,7 @@ import java.util.List;
 @Validated
 public class RspuVariantController {
 
+    private final ProductQueryService productQueryService;
     private final RspuVariantService variantService;
 
     /**
@@ -41,6 +43,7 @@ public class RspuVariantController {
     @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_UPDATE + "')")
     public Result<RspuVariantResponse> createVariant(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                                      @Valid @RequestBody RspuVariantCreateRequest request) {
+        productQueryService.requireManaged(rspuId);
         return Result.ok(variantService.createVariant(rspuId, request));
     }
 
@@ -53,6 +56,7 @@ public class RspuVariantController {
     @GetMapping
     @PreAuthorize("hasAuthority('" + Permissions.PRODUCT_READ + "')")
     public Result<List<RspuVariantResponse>> listVariants(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
+        productQueryService.requireVisible(rspuId);
         return Result.ok(variantService.listVariantsByRspu(rspuId));
     }
 }

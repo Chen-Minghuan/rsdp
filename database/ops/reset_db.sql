@@ -158,6 +158,25 @@ CREATE TABLE IF NOT EXISTS rspu_master (
     CONSTRAINT ck_rspu_manual_override_fields_object
         CHECK (jsonb_typeof(manual_override_fields) = 'object')
 );
+-- 录入证据与 Office 商品命令的持久化回执。存量 V28 推断归属保留待核验。
+ALTER TABLE rspu_master ADD COLUMN IF NOT EXISTS owner_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE rspu_master ADD COLUMN IF NOT EXISTS source_channel VARCHAR(32);
+ALTER TABLE rspu_master ADD COLUMN IF NOT EXISTS entry_provenance JSONB;
+COMMENT ON COLUMN rspu_master.owner_verified IS '归属在后端建档时核验或经平台核证；V28 首报价回填仅作线索';
+COMMENT ON COLUMN rspu_master.source_channel IS '首次建档渠道，后续编辑不改写';
+COMMENT ON COLUMN rspu_master.entry_provenance IS '首次录入的可信主体和请求信息；仅授权接口可读';
+
+CREATE TABLE IF NOT EXISTS office_catalog_receipt (
+    factory_code VARCHAR(16) NOT NULL,
+    workspace_id VARCHAR(64) NOT NULL,
+    actor_id VARCHAR(64) NOT NULL,
+    request_id VARCHAR(64) NOT NULL,
+    request_sha256 CHAR(64) NOT NULL,
+    result_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (factory_code, workspace_id, actor_id, request_id)
+);
+
 COMMENT ON COLUMN rspu_master.manual_override_fields IS '字段级人工修正权威标记（§34.1）：JSON Pointer → {active, correctedBy, correctedAt, source}；Excel/AI/重试不得覆盖 active 字段';
 
 -- RSPU 多风格关联表
@@ -877,6 +896,10 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加；
     -- preview_revision / confirmed_revision 的指针 FK 在 excel_import_preview_revision 建表后追加
 );
+
+ALTER TABLE excel_import_batch ADD COLUMN IF NOT EXISTS office_workspace_id VARCHAR(64);
+ALTER TABLE excel_import_batch ADD COLUMN IF NOT EXISTS office_actor_id VARCHAR(64);
+ALTER TABLE excel_import_batch ADD COLUMN IF NOT EXISTS office_actor_name VARCHAR(128);
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
 CREATE INDEX IF NOT EXISTS idx_import_batch_stale ON excel_import_batch(updated_at) WHERE status = 'importing';
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_created_by ON excel_import_batch(created_by);

@@ -8,6 +8,7 @@ import com.rsdp.exception.BusinessException;
 import com.rsdp.security.JwtAuthenticationFilter;
 import com.rsdp.security.Permissions;
 import com.rsdp.service.RskuService;
+import com.rsdp.service.ProductQueryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +47,9 @@ class RskuControllerTest {
 
     @MockBean
     private RskuService rskuService;
+
+    @MockBean
+    private ProductQueryService productQueryService;
 
     @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;

@@ -173,6 +173,7 @@ public class DataScopeHelper {
         if (dataScopeContext.currentDataScope() == DataScope.FACTORY_LIST) {
             java.util.List<String> codes = dataScopeContext.currentFactoryCodes();
             if ("FACTORY".equals(rspu.getOwnerType())
+                && Boolean.TRUE.equals(rspu.getOwnerVerified())
                 && rspu.getOwnerFactoryCode() != null
                 && codes.contains(rspu.getOwnerFactoryCode())) {
                 return;
@@ -205,9 +206,12 @@ public class DataScopeHelper {
         if (owner != null) {
             rspu.setOwnerType("FACTORY");
             rspu.setOwnerFactoryCode(owner);
+            rspu.setOwnerVerified(preferredFactoryCode != null && preferredFactoryCode.equals(owner)
+                || dataScopeContext.currentFactoryCodes().size() == 1);
         } else {
             rspu.setOwnerType("PLATFORM");
             rspu.setOwnerFactoryCode(null);
+            rspu.setOwnerVerified(true);
         }
     }
 

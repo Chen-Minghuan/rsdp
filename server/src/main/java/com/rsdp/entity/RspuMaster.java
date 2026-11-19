@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonRawValue;
 import com.rsdp.config.typehandler.JsonbTypeHandler;
 import lombok.Data;
@@ -76,6 +77,11 @@ public class RspuMaster {
     private String ownerType;
     /** 录入工厂编码（owner_type=FACTORY 时必填）；上下架/维护权判定依据 */
     private String ownerFactoryCode;
+    private Boolean ownerVerified;
+    private String sourceChannel;
+    @JsonIgnore
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private String entryProvenance;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 

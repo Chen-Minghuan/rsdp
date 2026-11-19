@@ -661,6 +661,13 @@ public class RskuService {
      */
     @Transactional
     public void updateRskuPrice(String rspuId, String rskuId, BigDecimal newPrice, String changeReason) {
+        updateRskuPrice(rspuId, rskuId, newPrice, changeReason, null);
+    }
+
+    /** 按精确报价版本修改当前产品所属的工厂报价。 */
+    @Transactional
+    public void updateRskuPrice(String rspuId, String rskuId, BigDecimal newPrice, String changeReason,
+                                Integer expectedQuoteVersion) {
         RskuSupply rsku = rskuSupplyMapper.selectById(rskuId);
         if (rsku == null) {
             throw new ResourceNotFoundException("RSKU 不存在: " + rskuId);
@@ -680,6 +687,9 @@ public class RskuService {
         RskuSupply locked = rskuSupplyMapper.selectAliveByIdForUpdate(rskuId);
         if (locked == null) {
             throw new ResourceNotFoundException("RSKU 不存在或已被删除: " + rskuId);
+        }
+        if (expectedQuoteVersion != null && !expectedQuoteVersion.equals(locked.getQuoteVersion())) {
+            throw new BusinessException(409, "报价已被修改，请刷新后再提交");
         }
         RskuSupply oldSnapshot = snapshot(locked);
         BigDecimal oldPrice = locked.getFactoryPrice();
@@ -786,6 +796,8 @@ public class RskuService {
         response.setVariantId(rsku.getVariantId());
         response.setFactoryCode(rsku.getFactoryCode());
         response.setFactorySku(rsku.getFactorySku());
+        response.setSupplierConfigurationKey(rsku.getSupplierConfigurationKey());
+        response.setQuoteVersion(rsku.getQuoteVersion());
         // 出厂价按角色掩码：仅平台运营人员与本厂管理员可见，设计师/普通用户返回 null
         response.setFactoryPrice(dataScopeHelper.canViewFactoryPrice(rsku.getFactoryCode())
             ? rsku.getFactoryPrice() : null);

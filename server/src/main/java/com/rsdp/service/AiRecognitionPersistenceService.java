@@ -207,13 +207,26 @@ public class AiRecognitionPersistenceService {
         // 图片向量由 pgvector 向量存储接管（ProductVectorStore）；style_vector 列已于 V15 退役删除
         rspu.setAestheticsConfidence(labels.getConfidence());
         rspu.setSourceAgentVersion(modelName);
-        rspu.setStatus("active");
+        String previousStatus = rspu.getStatus();
+        rspu.setStatus(null);
 
         // AI 识别后尝试生成 RSPU 业务编码；无法推断尺寸或风格时留空不阻断
         assignRspuCodeIfPossible(rspu, styleCode, operator);
 
         rspu.setUpdatedAt(LocalDateTime.now());
         rspuMapper.updateById(rspu);
+        String persistedStatus = previousStatus;
+        if ("processing".equals(previousStatus)) {
+            int activated = rspuMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<RspuMaster>()
+                .eq("rspu_id", rspuId).eq("status", "processing").set("status", "active"));
+            if (activated == 1) {
+                persistedStatus = "active";
+            } else {
+                RspuMaster current = rspuMapper.selectById(rspuId);
+                persistedStatus = current == null ? previousStatus : current.getStatus();
+            }
+        }
+        rspu.setStatus(persistedStatus);
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, resolveOperator(operator));
         return rspu.getProductName();
     }
@@ -334,7 +347,10 @@ public class AiRecognitionPersistenceService {
         RspuMaster oldSnapshot = snapshot(rspu);
         rspu.setSourceAgentVersion(modelName);
         rspu.setUpdatedAt(LocalDateTime.now());
+        String previousStatus = rspu.getStatus();
+        rspu.setStatus(null);
         rspuMapper.updateById(rspu);
+        rspu.setStatus(previousStatus);
         auditLogService.logUpdate("rspu_master", rspuId, oldSnapshot, rspu, resolveOperator(operator));
     }
 

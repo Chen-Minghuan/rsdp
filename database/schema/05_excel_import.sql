@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS excel_import_batch (
     -- 外键在 sys_user 表创建后通过 ALTER TABLE 添加；
     -- preview_revision / confirmed_revision 的指针 FK 在本文件 excel_import_preview_revision 建表后追加
 );
+
+ALTER TABLE excel_import_batch ADD COLUMN IF NOT EXISTS office_workspace_id VARCHAR(64);
+ALTER TABLE excel_import_batch ADD COLUMN IF NOT EXISTS office_actor_id VARCHAR(64);
+ALTER TABLE excel_import_batch ADD COLUMN IF NOT EXISTS office_actor_name VARCHAR(128);
 CREATE INDEX IF NOT EXISTS idx_excel_import_batch_status ON excel_import_batch(status);
 -- 僵死批次收割索引（V43）：reapStaleImporting WHERE status='importing' AND (updated_at IS NULL OR updated_at < ?)
 CREATE INDEX IF NOT EXISTS idx_import_batch_stale ON excel_import_batch(updated_at) WHERE status = 'importing';

@@ -1102,8 +1102,7 @@ class ProductServiceTest {
     }
 
     @Test
-    void reRecognize_shouldResetRspuAndCreateTask() {
-        // 重新识别：RSPU 置回 processing、新建 product_entry 任务并投递
+    void reRecognize_shouldPreserveSalesStatusAndCreateTask() {
         authenticateWithRoles("admin", "ADMIN");
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-1");
@@ -1122,9 +1121,8 @@ class ProductServiceTest {
 
         assertThat(result).containsKeys("taskId", "message");
 
-        ArgumentCaptor<RspuMaster> rspuCaptor = ArgumentCaptor.forClass(RspuMaster.class);
-        verify(rspuMapper).updateById(rspuCaptor.capture());
-        assertThat(rspuCaptor.getValue().getStatus()).isEqualTo("processing");
+        verify(rspuMapper, never()).updateById(any(RspuMaster.class));
+        assertThat(rspu.getStatus()).isEqualTo("active");
 
         ArgumentCaptor<AsyncTask> taskCaptor = ArgumentCaptor.forClass(AsyncTask.class);
         verify(asyncTaskMapper).insert(taskCaptor.capture());
@@ -1134,8 +1132,7 @@ class ProductServiceTest {
         assertThat(task.getInputData()).contains("\"rspuId\":\"RSPU-1\"")
             .contains("\"imageId\":\"IMG-1\"");
 
-        verify(dataScopeHelper).assertCanAccessRspu("RSPU-1");
-        verify(auditLogService).logUpdate(eq("rspu_master"), eq("RSPU-1"), any(), any(), anyString());
+        verify(dataScopeHelper).assertCanManageRspu(rspu);
         verify(asyncTaskProcessor).processProductEntry(anyString(), eq("RSPU-1"), eq("IMG-1"), eq("images/IMG-1.jpg"));
     }
 
@@ -1184,16 +1181,16 @@ class ProductServiceTest {
 
     @Test
     void reRecognize_shouldRejectWhenFactoryCannotAccessRspu() {
-        // 非本厂已报价产品：数据归属校验拒绝
+        // 非本厂可信录入产品：维护权校验拒绝
         RspuMaster rspu = new RspuMaster();
         rspu.setRspuId("RSPU-1");
         when(rspuMapper.selectById("RSPU-1")).thenReturn(rspu);
-        doThrow(new BusinessException("只能维护本厂已报价的产品: RSPU-1"))
-            .when(dataScopeHelper).assertCanAccessRspu("RSPU-1");
+        doThrow(new BusinessException("只能维护本厂录入的产品: RSPU-1"))
+            .when(dataScopeHelper).assertCanManageRspu(rspu);
 
         assertThatThrownBy(() -> productService.reRecognize("RSPU-1"))
             .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("只能维护本厂已报价的产品");
+            .hasMessageContaining("只能维护本厂录入的产品");
         verify(asyncTaskMapper, never()).insert(any(AsyncTask.class));
     }
 

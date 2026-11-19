@@ -51,6 +51,7 @@ export interface FactoryProductEntryForm {
  * 产品列表查询参数。
  */
 export interface ProductListParams {
+  sourceChannel?: string
   page?: number
   size?: number
   categoryCode?: string
@@ -116,6 +117,14 @@ export interface SpuStatusCounts {
  * 产品列表项。
  */
 export interface ProductSummary {
+  sourceChannel?: string
+  entryActorName?: string
+  entryActorUsername?: string
+  entryActorKind?: string
+  ownerFactoryCode?: string
+  ownerFactoryName?: string
+  sourceFactoryName?: string
+  ownerVerified?: boolean
   rspuId: string
   rspuCode?: string
   categoryCode: string
@@ -219,7 +228,20 @@ export interface ProductStyleMatch {
  * 产品详情。
  */
 export interface ProductDetail {
+  ownerFactoryName?: string
+  sourceFactoryName?: string
+  entrySource?: {
+    actorId: string
+    actorName?: string
+    actorUsername?: string
+    actorKind?: string
+    batchId?: string
+    recordedAt: string
+  }
   rspu: {
+    sourceChannel?: string
+    ownerFactoryCode?: string
+    ownerVerified?: boolean
     rspuId: string
     rspuCode?: string
     /** 外部编码（导入来源编码） */

@@ -7,6 +7,7 @@ import com.rsdp.dto.request.RskuPriceUpdateRequest;
 import com.rsdp.dto.response.RskuBatchCreateResponse;
 import com.rsdp.dto.response.RskuResponse;
 import com.rsdp.security.Permissions;
+import com.rsdp.service.ProductQueryService;
 import com.rsdp.service.RskuService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -32,6 +33,7 @@ import java.util.List;
 @Validated
 public class RskuController {
 
+    private final ProductQueryService productQueryService;
     private final RskuService rskuService;
 
     /**
@@ -43,6 +45,7 @@ public class RskuController {
     @GetMapping
     @PreAuthorize("hasAuthority('" + Permissions.RSKU_READ + "')")
     public Result<List<RskuResponse>> list(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId) {
+        productQueryService.requireVisible(rspuId);
         return Result.ok(rskuService.listByRspu(rspuId));
     }
 
@@ -57,6 +60,7 @@ public class RskuController {
     @PreAuthorize("hasAuthority('" + Permissions.RSKU_READ + "')")
     public Result<RskuResponse> detail(@PathVariable @NotBlank(message = "RSPU ID 不能为空") String rspuId,
                                        @PathVariable @NotBlank(message = "RSKU ID 不能为空") String rskuId) {
+        productQueryService.requireVisible(rspuId);
         return Result.ok(rskuService.getRsku(rspuId, rskuId));
     }
 

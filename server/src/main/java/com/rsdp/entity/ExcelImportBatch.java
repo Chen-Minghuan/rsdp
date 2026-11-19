@@ -74,6 +74,9 @@ public class ExcelImportBatch {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private String snapshotArchiveSummary;
 
+    private String officeWorkspaceId;
+    private String officeActorId;
+    private String officeActorName;
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

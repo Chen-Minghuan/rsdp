@@ -453,7 +453,10 @@ class AiRecognitionPersistenceServiceTest {
         rspu.setRspuId("RSPU-TEST01");
         rspu.setCategoryCode("FS");
         rspu.setPositioningLabel("待识别");
+        rspu.setStatus("processing");
         when(rspuMapper.selectById(eq("RSPU-TEST01"))).thenReturn(rspu);
+        when(rspuMapper.update(org.mockito.ArgumentMatchers.isNull(), any(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class)))
+            .thenReturn(1);
         when(rspuStyleMapper.selectCount(any())).thenReturn(1L);
         when(rspuSceneMapper.selectCount(any())).thenReturn(1L);
 
